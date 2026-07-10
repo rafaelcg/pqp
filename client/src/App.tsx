@@ -9,7 +9,10 @@ import { Link } from "react-router-dom";
 import type { Channel, Server, User } from "@pqp/shared";
 import { MessageComposer } from "@/components/chat/message-composer";
 import { MessageList } from "@/components/chat/message-list";
-import { AppLoadingShell } from "@/components/layout/app-loading-shell";
+import {
+  AppBootstrapError,
+  AppLoadingShell,
+} from "@/components/layout/app-loading-shell";
 import { ChannelList } from "@/components/layout/channel-list";
 import { ChannelMembersPanel } from "@/components/layout/channel-members-panel";
 import { InvitePanel } from "@/components/layout/invite-panel";
@@ -167,6 +170,8 @@ function MainAppContent({
     defaultLocalSettings,
   );
   const [bootstrapReady, setBootstrapReady] = useState(false);
+  const [bootstrapError, setBootstrapError] = useState<string | null>(null);
+  const [bootstrapAttempt, setBootstrapAttempt] = useState(0);
   const [channelsLoading, setChannelsLoading] = useState(false);
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [, setTick] = useState(0);
@@ -221,79 +226,95 @@ function MainAppContent({
     }
 
     async function init() {
-      const authToken = await resolveToken();
-      if (!authToken || cancelled) {
-        return;
-      }
-      setToken(authToken);
+      setBootstrapReady(false);
+      setBootstrapError(null);
 
-      const me = await fetchMe(authToken);
-      if (cancelled) {
-        return;
-      }
-      setUser(me);
-      chat.setCurrentUserId(me.id);
-
-      const { servers: serverList } = await fetchServers(authToken);
-      if (cancelled) {
-        return;
-      }
-      setServers(serverList);
-
-      let initialChannelId: string | null = null;
-
-      if (serverList.length > 0) {
-        const first = serverList[0]!;
-        setSelectedServerId(first.id);
-        setChannelsLoading(true);
-        try {
-          const { channels: channelList } = await fetchChannels(
-            authToken,
-            first.id,
-          );
-          if (cancelled) {
-            return;
-          }
-          setChannels(channelList);
-          const general = channelList.find((c) => c.type === "text");
-          if (general) {
-            initialChannelId = general.id;
-            setSelectedChannelId(general.id);
-            setMessagesLoading(true);
-          }
-        } finally {
-          if (!cancelled) {
-            setChannelsLoading(false);
-          }
-        }
-      }
-
-      if (!cancelled) {
-        setBootstrapReady(true);
-      }
-
-      transport.onMessage((message) => {
-        if (
-          message.type === "message-broadcast" ||
-          message.type === "reaction-broadcast" ||
-          message.type === "presence-update"
-        ) {
-          chat.handleServerMessage(message);
+      try {
+        const authToken = await resolveToken();
+        if (!authToken || cancelled) {
           return;
         }
-        voice.handleSignaling(message);
-      });
+        setToken(authToken);
 
-      transport.onError((message) => setRealtimeError(message));
-
-      transport.onReady(() => {
-        setRealtimeError(null);
-        if (initialChannelId) {
-          void bootstrapChannel(initialChannelId, authToken);
+        const me = await fetchMe(authToken);
+        if (cancelled) {
+          return;
         }
-      });
+        setUser(me);
+        chat.setCurrentUserId(me.id);
 
-      transport.connect(authToken);
+        const { servers: serverList } = await fetchServers(authToken);
+        if (cancelled) {
+          return;
+        }
+        setServers(serverList);
+
+        let initialChannelId: string | null = null;
+
+        if (serverList.length > 0) {
+          const first = serverList[0]!;
+          setSelectedServerId(first.id);
+          setChannelsLoading(true);
+          try {
+            const { channels: channelList } = await fetchChannels(
+              authToken,
+              first.id,
+            );
+            if (cancelled) {
+              return;
+            }
+            setChannels(channelList);
+            const general = channelList.find((c) => c.type === "text");
+            if (general) {
+              initialChannelId = general.id;
+              setSelectedChannelId(general.id);
+              setMessagesLoading(true);
+            }
+          } finally {
+            if (!cancelled) {
+              setChannelsLoading(false);
+            }
+          }
+        }
+
+        if (cancelled) {
+          return;
+        }
+
+        setBootstrapReady(true);
+
+        transport.onMessage((message) => {
+          if (
+            message.type === "message-broadcast" ||
+            message.type === "reaction-broadcast" ||
+            message.type === "presence-update"
+          ) {
+            chat.handleServerMessage(message);
+            return;
+          }
+          voice.handleSignaling(message);
+        });
+
+        transport.onError((message) => setRealtimeError(message));
+
+        transport.onReady(() => {
+          setRealtimeError(null);
+          if (initialChannelId) {
+            void bootstrapChannel(initialChannelId, authToken);
+          }
+        });
+
+        transport.connect(authToken);
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+        setBootstrapError(
+          error instanceof Error
+            ? error.message
+            : "Failed to load servers from the API",
+        );
+      }
     }
 
     void init();
@@ -303,7 +324,7 @@ function MainAppContent({
       transport.disconnect();
       voice.leave();
     };
-  }, [resolveToken, transport, chat, voice, refresh]);
+  }, [resolveToken, transport, chat, voice, refresh, bootstrapAttempt]);
 
   async function loadChannels(serverId: string) {
     const authToken = token ?? (await resolveToken());
@@ -589,6 +610,18 @@ function MainAppContent({
     setSelectedServerId(serverId);
     void loadChannels(serverId);
     setMembersOpen(true);
+  }
+
+  if (bootstrapError) {
+    return (
+      <AppBootstrapError
+        message={bootstrapError}
+        onRetry={() => {
+          setBootstrapError(null);
+          setBootstrapAttempt((n) => n + 1);
+        }}
+      />
+    );
   }
 
   if (!bootstrapReady) {

@@ -1,9 +1,11 @@
+import { Link } from "react-router-dom";
 import {
   ChannelListSkeleton,
   MessageListSkeleton,
   ServerRailSkeleton,
   Skeleton,
 } from "@/components/ui/skeleton";
+import { Button } from "@/components/ui/button";
 
 interface AppLoadingShellProps {
   label?: string;
@@ -59,6 +61,44 @@ export function AppLoadingShell({
           <p className="text-xs uppercase tracking-[0.2em] text-paper-muted">
             {label}
           </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+interface AppBootstrapErrorProps {
+  message: string;
+  onRetry: () => void;
+}
+
+export function AppBootstrapError({ message, onRetry }: AppBootstrapErrorProps) {
+  return (
+    <div className="relative flex h-full flex-col items-start justify-end overflow-hidden p-8 sm:p-12">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_80%_10%,oklch(0.35_0.12_25/0.2),transparent_45%)]" />
+      <div className="relative z-10 max-w-lg">
+        <Link
+          to="/"
+          className="mb-3 inline-block text-xs uppercase tracking-[0.28em] text-signal"
+        >
+          pqp.gg
+        </Link>
+        <h1 className="font-display text-4xl font-extrabold leading-[0.95] sm:text-5xl">
+          Can&apos;t reach the API
+        </h1>
+        <p className="mt-4 text-paper-muted">{message}</p>
+        <p className="mt-3 text-sm text-paper-muted">
+          The marketing site on Cloudflare Pages is static. Sign-in works via
+          Clerk, but servers need a hosted API (Railway/Docker) with{" "}
+          <code className="text-signal">VITE_API_URL</code> and{" "}
+          <code className="text-signal">VITE_WS_URL</code> set at build time.
+          See <code className="text-signal">docs/DEPLOY.md</code>.
+        </p>
+        <div className="mt-8 flex flex-wrap gap-3">
+          <Button onClick={onRetry}>Try again</Button>
+          <Button variant="secondary" asChild>
+            <Link to="/">Back to home</Link>
+          </Button>
         </div>
       </div>
     </div>

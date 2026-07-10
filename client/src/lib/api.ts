@@ -1,26 +1,79 @@
 import type { Channel, Invite, Message, Server, User } from "@pqp/shared";
 import { getApiBaseUrl } from "./utils";
 
+const API_TIMEOUT_MS = 12_000;
+
+function apiUnreachableMessage(cause?: string): string {
+  const base = getApiBaseUrl();
+  if (!base) {
+    return (
+      cause ??
+      "No API backend at this origin. Host the API (e.g. Railway) and set VITE_API_URL / VITE_WS_URL, then rebuild."
+    );
+  }
+  return cause ?? `Cannot reach API at ${base}`;
+}
+
 export async function apiFetch<T>(
   path: string,
   token: string,
   options?: RequestInit,
 ): Promise<T> {
-  const response = await fetch(`${getApiBaseUrl()}${path}`, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-      ...options?.headers,
-    },
-  });
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(
+    () => controller.abort(),
+    API_TIMEOUT_MS,
+  );
 
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    throw new Error((body as { error?: string }).error ?? "Request failed");
+  if (options?.signal) {
+    if (options.signal.aborted) {
+      controller.abort();
+    } else {
+      options.signal.addEventListener("abort", () => controller.abort(), {
+        once: true,
+      });
+    }
   }
 
-  return response.json() as Promise<T>;
+  try {
+    const response = await fetch(`${getApiBaseUrl()}${path}`, {
+      ...options,
+      signal: controller.signal,
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+        ...options?.headers,
+      },
+    });
+
+    const contentType = response.headers.get("content-type") ?? "";
+    if (!contentType.includes("application/json")) {
+      throw new Error(
+        apiUnreachableMessage(
+          "API returned a non-JSON response (static host has no /api).",
+        ),
+      );
+    }
+
+    if (!response.ok) {
+      const body = (await response.json().catch(() => ({}))) as {
+        error?: string;
+      };
+      throw new Error(body.error ?? "Request failed");
+    }
+
+    return response.json() as Promise<T>;
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new Error(apiUnreachableMessage("API request timed out."));
+    }
+    if (error instanceof TypeError) {
+      throw new Error(apiUnreachableMessage("Network error reaching API."));
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
 }
 
 export function fetchMe(token: string) {
