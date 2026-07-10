@@ -3,7 +3,7 @@
 [![CI](https://github.com/rafaelcg/pqp/actions/workflows/ci.yml/badge.svg)](https://github.com/rafaelcg/pqp/actions/workflows/ci.yml)
 [![Deploy Web](https://github.com/rafaelcg/pqp/actions/workflows/deploy-web.yml/badge.svg)](https://github.com/rafaelcg/pqp/actions/workflows/deploy-web.yml)
 
-> Hosted static site: Cloudflare Pages (see [docs/DEPLOY.md](./docs/DEPLOY.md)). API/WebSocket are separate (e.g. Railway).
+> Hosted static site: [pqp-3yr.pages.dev](https://pqp-3yr.pages.dev) (Cloudflare Pages). See [docs/DEPLOY.md](./docs/DEPLOY.md). API/WebSocket are separate (e.g. Railway).
 
 Real-time voice + text chat. Full mesh WebRTC per voice channel. Clerk auth. Postgres persistence. Self-host or use [pqp.gg](https://pqp.gg).
 

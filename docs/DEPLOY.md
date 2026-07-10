@@ -88,16 +88,13 @@ SPA fallback: `client/public/_redirects` → `/* /index.html 200` (copied into `
 
 ## Pages URL
 
-After the first successful deploy, Cloudflare assigns something like:
+First deploy succeeded. Project name: **`pqp`**.
 
-- `https://pqp.pages.dev`
-- or a custom domain (e.g. `https://pqp.gg`) attached in the Pages project settings
-
-Check:
+- Production: [https://pqp-3yr.pages.dev](https://pqp-3yr.pages.dev)
+- Attach a custom domain (e.g. `pqp.gg`) in Cloudflare → Workers & Pages → pqp → Custom domains
 
 ```bash
 wrangler pages deployment list --project-name=pqp
-# or open the Cloudflare dashboard → Workers & Pages → pqp
 ```
 
 ## What this deploy does *not* include
