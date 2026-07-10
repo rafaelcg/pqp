@@ -1,0 +1,70 @@
+name: Electron
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+concurrency:
+  group: electron-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            platform: mac
+          - os: windows-latest
+            platform: win
+          - os: ubuntu-latest
+            platform: linux
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build shared
+        run: pnpm --filter @pqp/shared build
+
+      - name: Build client
+        env:
+          VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.VITE_CLERK_PUBLISHABLE_KEY || 'pk_test_ci_placeholder' }}
+          VITE_DEV_AUTH_BYPASS: "true"
+        run: pnpm --filter @pqp/client build
+
+      - name: Package Electron (unsigned)
+        working-directory: electron
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: pnpm exec electron-builder --${{ matrix.platform }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pqp-electron-${{ matrix.platform }}
+          path: |
+            electron/release/*.*
+            electron/release/*/*
+          if-no-files-found: warn
+          retention-days: 14

@@ -1,0 +1,31 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: pqp
+      POSTGRES_PASSWORD: pqp
+      POSTGRES_DB: pqp
+    volumes:
+      - pqp_pg:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pqp"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build: .
+    ports:
+      - "3001:3001"
+    environment:
+      DATABASE_URL: postgresql://pqp:pqp@postgres:5432/pqp
+      CLERK_SECRET_KEY: ${CLERK_SECRET_KEY}
+      PORT: 3001
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pqp_pg:

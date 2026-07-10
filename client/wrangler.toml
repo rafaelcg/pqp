@@ -1,0 +1,5 @@
+# Cloudflare Pages — static marketing + SPA shell (client only).
+# API / WebSocket live elsewhere (e.g. Railway). See docs/DEPLOY.md.
+name = "pqp"
+compatibility_date = "2026-07-01"
+pages_build_output_dir = "dist"

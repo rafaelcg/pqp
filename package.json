@@ -1,0 +1,18 @@
+{
+  "name": "pqp",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm run --parallel --filter @pqp/client --filter @pqp/server dev",
+    "build": "pnpm run -r --filter=!@pqp/electron build",
+    "start": "pnpm --filter @pqp/server start",
+    "electron:dev": "pnpm --filter @pqp/electron dev",
+    "electron:dist": "pnpm --filter @pqp/client build && pnpm --filter @pqp/electron dist",
+    "clerk:login": "clerk auth login",
+    "clerk:init": "cd client && clerk init --app app_3GKdeu8xQ3JCXb7fNkY4jPe4pBT -y",
+    "clerk:env": "cd client && clerk env pull && clerk env pull --file ../.env",
+    "clerk:doctor": "clerk doctor"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3"
+  }
+}

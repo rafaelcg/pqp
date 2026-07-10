@@ -1,0 +1,239 @@
+@import "tailwindcss";
+
+@theme {
+  --color-ink: oklch(0.16 0.012 250);
+  --color-ink-2: oklch(0.2 0.014 250);
+  --color-ink-3: oklch(0.24 0.016 250);
+  --color-ink-4: oklch(0.3 0.018 250);
+  --color-paper: oklch(0.93 0.015 95);
+  --color-paper-muted: oklch(0.72 0.02 95);
+  --color-signal: oklch(0.88 0.19 125);
+  --color-signal-dim: oklch(0.75 0.14 125);
+  --color-danger: oklch(0.65 0.2 25);
+  --color-warning: oklch(0.8 0.14 85);
+  --color-success: oklch(0.72 0.14 150);
+
+  --color-background: var(--color-ink);
+  --color-foreground: var(--color-paper);
+  --color-muted: var(--color-paper-muted);
+  --color-panel: var(--color-ink-2);
+  --color-panel-hover: var(--color-ink-3);
+  --color-rail: oklch(0.13 0.012 250);
+  --color-channel: var(--color-ink-2);
+  --color-accent: var(--color-signal);
+  --color-accent-hover: var(--color-signal-dim);
+
+  --font-sans: "Instrument Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Unbounded", "Instrument Sans", sans-serif;
+  --font-brand: "Dela Gothic One", "Unbounded", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: var(--font-sans);
+  background:
+    radial-gradient(1200px 600px at 10% -10%, oklch(0.22 0.04 125 / 0.35), transparent 55%),
+    radial-gradient(900px 500px at 100% 0%, oklch(0.22 0.03 250 / 0.4), transparent 50%),
+    var(--color-ink);
+  color: var(--color-paper);
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+.font-display {
+  font-family: var(--font-display);
+  letter-spacing: -0.03em;
+}
+
+.font-brand {
+  font-family: var(--font-brand);
+  letter-spacing: -0.02em;
+}
+
+::selection {
+  background: oklch(0.88 0.19 125 / 0.35);
+}
+
+/* Electron macOS hiddenInset drag region */
+.desktop-drag {
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+
+.desktop-no-drag {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+.markdown-body p {
+  margin: 0;
+}
+
+.markdown-body p + p {
+  margin-top: 0.35rem;
+}
+
+.markdown-body code {
+  background: var(--color-ink);
+  padding: 0.1rem 0.35rem;
+  border-radius: 0.25rem;
+  font-size: 0.875em;
+  color: var(--color-signal);
+}
+
+.markdown-body a {
+  color: var(--color-signal);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.markdown-body strong {
+  font-weight: 600;
+  color: var(--color-paper);
+}
+
+.markdown-body em {
+  font-style: italic;
+}
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes hero-drift {
+  from {
+    transform: scale(1.05) translate3d(0, 0, 0);
+  }
+  to {
+    transform: scale(1.12) translate3d(0, -1.5%, 0);
+  }
+}
+
+.animate-rise {
+  --stagger: 0;
+  animation: rise-in 0.65s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation-delay: calc(var(--stagger) * 70ms);
+}
+
+.hero-parallax {
+  animation: hero-drift 18s cubic-bezier(0.25, 1, 0.5, 1) both;
+  will-change: transform;
+}
+
+.hero-grain {
+  opacity: 0.28;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 180px 180px;
+}
+
+.cta-lift {
+  transition:
+    transform 0.22s cubic-bezier(0.16, 1, 0.3, 1),
+    background-color 0.22s ease,
+    box-shadow 0.22s ease,
+    color 0.22s ease;
+}
+
+.cta-lift:hover {
+  transform: translateY(-2px);
+}
+
+.cta-lift:active {
+  transform: translateY(0);
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.28s ease both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-rise,
+  .animate-fade-in,
+  .hero-parallax {
+    animation: none;
+  }
+
+  .cta-lift,
+  .cta-lift:hover,
+  .cta-lift:active {
+    transition: none;
+    transform: none;
+  }
+}
+
+.safe-pb {
+  padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+}
+
+.legal-prose h2 {
+  font-family: var(--font-display);
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin-top: 2rem;
+  color: var(--color-paper);
+}
+
+.legal-prose p,
+.legal-prose li {
+  color: oklch(0.82 0.015 95);
+}
+
+.legal-prose ul {
+  list-style: disc;
+  padding-left: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.legal-prose a {
+  color: var(--color-signal);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.legal-prose strong {
+  color: var(--color-paper);
+  font-weight: 600;
+}
+
+.emoji-mart-shell em-emoji-picker {
+  --rgb-background: 36, 40, 48;
+  --rgb-input: 28, 32, 40;
+  --rgb-color: 232, 228, 214;
+  --rgb-accent: 196, 232, 72;
+  --color-border: oklch(0.3 0.018 250);
+  --font-family: var(--font-sans);
+  border: none;
+  height: 340px;
+}

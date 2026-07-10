@@ -1,0 +1,51 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+**/dist/
+release/
+**/release/
+*.tsbuildinfo
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+*.local
+client/.env
+server/.env
+
+# Electron
+electron/release/
+electron/dist/
+electron/node_modules/
+*.dmg
+*.exe
+*.AppImage
+*.deb
+*.snap
+*.blockmap
+*.yml.asc
+
+# Logs & OS
+logs/
+*.log
+.DS_Store
+Thumbs.db
+
+# Editors / tooling
+.cursor/
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Wrangler / Cloudflare
+.wrangler/
+.dev.vars
+.mf/
+
+# Test / coverage
+coverage/
+.nyc_output/

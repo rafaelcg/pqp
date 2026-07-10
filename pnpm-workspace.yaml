@@ -1,0 +1,11 @@
+packages:
+  - server
+  - client
+  - electron
+  - packages/shared
+
+allowBuilds:
+  "@clerk/shared": true
+  esbuild: true
+  electron: true
+  electron-winstaller: true

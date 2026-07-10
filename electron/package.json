@@ -1,0 +1,98 @@
+{
+  "name": "@pqp/electron",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Desktop shell for pqp",
+  "author": "pqp",
+  "main": "main.js",
+  "scripts": {
+    "dev": "electron .",
+    "start": "electron .",
+    "prepack": "node scripts/ensure-client-dist.js",
+    "predist": "node scripts/ensure-client-dist.js",
+    "pack": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --dir",
+    "dist": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder",
+    "dist:mac": "node scripts/ensure-client-dist.js && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac",
+    "dist:win": "node scripts/ensure-client-dist.js && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win",
+    "dist:linux": "node scripts/ensure-client-dist.js && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --linux"
+  },
+  "devDependencies": {
+    "electron": "^34.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "gg.pqp.app",
+    "productName": "pqp",
+    "copyright": "Copyright © pqp contributors",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "lib/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../client/dist",
+        "to": "client",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "protocols": [
+      {
+        "name": "pqp",
+        "schemes": [
+          "pqp"
+        ]
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.social-networking",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "identity": null,
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
+      "extendInfo": {
+        "CFBundleURLTypes": [
+          {
+            "CFBundleURLName": "pqp",
+            "CFBundleURLSchemes": [
+              "pqp"
+            ]
+          }
+        ],
+        "NSMicrophoneUsageDescription": "pqp needs microphone access for voice channels.",
+        "NSCameraUsageDescription": "pqp needs camera access for video in voice channels."
+      }
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "signAndEditExecutable": false
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Network",
+      "mimeTypes": [
+        "x-scheme-handler/pqp"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}
