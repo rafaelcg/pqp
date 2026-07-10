@@ -105,3 +105,8 @@ wrangler pages deployment list --project-name=pqp
 - Electron code signing (CI uploads **unsigned** builds)
 
 Wire the SPA to a live API later with `VITE_API_URL` and `VITE_WS_URL` secrets, then re-run **Deploy Web**.
+
+## CI deploy status
+
+- **Local first deploy:** done via Wrangler OAuth → [https://pqp-3yr.pages.dev](https://pqp-3yr.pages.dev)
+- **GitHub Actions Deploy Web:** requires `CLOUDFLARE_API_TOKEN` (OAuth login is not available on runners). Until that secret is set, the workflow fails fast with a clear error. Account ID and Clerk publishable key are already configured as repo secrets when set via setup.

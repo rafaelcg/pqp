@@ -47,10 +47,22 @@ jobs:
           VITE_DEV_AUTH_BYPASS: "false"
         run: pnpm --filter @pqp/client build
 
+      # Install wrangler outside the pnpm workspace (npm + workspace:* fails in client/)
       - name: Deploy to Cloudflare Pages
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          workingDirectory: client
-          command: pages deploy dist --project-name=pqp --commit-dirty=true
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "::error::Missing secret CLOUDFLARE_API_TOKEN. Create a Pages Edit token and run: gh secret set CLOUDFLARE_API_TOKEN"
+            exit 1
+          fi
+          if [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "::error::Missing secret CLOUDFLARE_ACCOUNT_ID"
+            exit 1
+          fi
+          TMP="$(mktemp -d)"
+          cd "$TMP"
+          npm init -y >/dev/null
+          npm install wrangler@4 --no-fund --no-audit
+          npx wrangler pages deploy "$GITHUB_WORKSPACE/client/dist" --project-name=pqp --commit-dirty=true
