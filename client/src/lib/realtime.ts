@@ -15,6 +15,17 @@ const PING_INTERVAL_MS = 25_000;
 const PONG_TIMEOUT_MS = 10_000;
 const RECONNECT_BASE_DELAY_MS = 1_000;
 const RECONNECT_MAX_DELAY_MS = 30_000;
+// Bound the offline outbound queues so a long disconnect can't grow memory
+// without limit; overflow drops the oldest entries.
+const MAX_CHAT_QUEUE = 200;
+const MAX_VOICE_QUEUE = 100;
+
+function enqueueBounded<T>(queue: T[], message: T, max: number) {
+  queue.push(message);
+  if (queue.length > max) {
+    queue.splice(0, queue.length - max);
+  }
+}
 
 export interface RealtimeTransport {
   connect(tokenProvider: TokenProvider): void;
@@ -233,7 +244,7 @@ export function createRealtimeTransport(): RealtimeTransport {
       socket.send(JSON.stringify(message));
       return;
     }
-    chatQueue.push(message);
+    enqueueBounded(chatQueue, message, MAX_CHAT_QUEUE);
   }
 
   function sendOrQueueVoice(message: VoiceClientMessage) {
@@ -241,7 +252,9 @@ export function createRealtimeTransport(): RealtimeTransport {
       socket.send(JSON.stringify(message));
       return;
     }
-    voiceQueue.push(message);
+    // Voice signaling is ephemeral (peer ids reset on rejoin), so a small cap
+    // is plenty — stale entries would just be ignored server-side anyway.
+    enqueueBounded(voiceQueue, message, MAX_VOICE_QUEUE);
   }
 
   return {
