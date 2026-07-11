@@ -21,10 +21,14 @@ export interface RealtimeTransport {
   disconnect(): void;
   sendChat(message: ChatClientMessage): void;
   sendVoice(message: VoiceClientMessage): void;
+  // Each on* setter holds a SINGLE handler and replaces any previous one — they
+  // do not accumulate listeners. Re-registering (e.g. on a bootstrap retry) is
+  // therefore idempotent, and auto-reconnects reuse the already-registered
+  // handler without re-subscribing, so no side effect fires twice per event.
   onMessage(handler: MessageHandler): void;
   onReady(handler: () => void): void;
   onError(handler: (message: string) => void): void;
-  /** Fired when an established connection is lost (before reconnect attempts). */
+  /** Fired once when an established connection is lost (before reconnect attempts). */
   onClose(handler: () => void): void;
   isConnected(): boolean;
 }
