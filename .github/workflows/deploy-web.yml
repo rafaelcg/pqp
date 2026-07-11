@@ -6,7 +6,6 @@ on:
   workflow_run:
     workflows: [CI]
     types: [completed]
-    branches: [main]
   workflow_dispatch:
 
 concurrency:
@@ -18,8 +17,9 @@ jobs:
     name: Build & deploy Cloudflare Pages
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    # Skip when triggered by a failed CI run; always run on manual dispatch.
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    # Gate the branch here rather than in the workflow_run filter: only a
+    # successful CI run on main deploys. Manual dispatch always runs.
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main') }}
     permissions:
       contents: read
       deployments: write
