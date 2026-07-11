@@ -1,0 +1,93 @@
+name: Provision TURN
+
+# One-shot: create Cloudflare Realtime TURN key and set Railway API env.
+# Requires secrets: CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, RAILWAY_TOKEN,
+# RAILWAY_PROJECT_ID, RAILWAY_ENVIRONMENT_ID, RAILWAY_SERVICE_ID
+
+on:
+  workflow_dispatch:
+
+jobs:
+  provision:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Create Cloudflare TURN key
+        id: turn
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CLOUDFLARE_API_TOKEN:-}" ] || [ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
+            echo "::error::Missing CLOUDFLARE_API_TOKEN or CLOUDFLARE_ACCOUNT_ID"
+            exit 1
+          fi
+
+          RESP=$(curl -sS -X POST \
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/calls/turn_keys" \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d '{"name":"pqp-production-turn"}')
+
+          OK=$(echo "$RESP" | jq -r '.success')
+          if [ "$OK" != "true" ]; then
+            echo "::error::Failed to create TURN key"
+            echo "$RESP" | jq '{success, errors}'
+            exit 1
+          fi
+
+          UID=$(echo "$RESP" | jq -r '.result.uid')
+          KEY=$(echo "$RESP" | jq -r '.result.key')
+          if [ -z "$UID" ] || [ "$UID" = "null" ] || [ -z "$KEY" ] || [ "$KEY" = "null" ]; then
+            echo "::error::TURN key response missing uid/key"
+            exit 1
+          fi
+
+          echo "key_id=$UID" >> "$GITHUB_OUTPUT"
+          echo "api_token=$KEY" >> "$GITHUB_OUTPUT"
+          echo "Created Cloudflare TURN key uid=${UID:0:8}…"
+
+      - name: Set Railway TURN env
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
+          RAILWAY_ENVIRONMENT_ID: ${{ secrets.RAILWAY_ENVIRONMENT_ID }}
+          RAILWAY_SERVICE_ID: ${{ secrets.RAILWAY_SERVICE_ID }}
+          TURN_KEY_ID: ${{ steps.turn.outputs.key_id }}
+          TURN_API_TOKEN: ${{ steps.turn.outputs.api_token }}
+        run: |
+          set -euo pipefail
+          # Railway GraphQL variable upsert
+          upsert() {
+            local name="$1"
+            local value="$2"
+            curl -sS https://backboard.railway.com/graphql/v2 \
+              -H "Authorization: Bearer ${RAILWAY_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -H "User-Agent: RailwayCLI/4.0.0" \
+              -d "$(jq -n \
+                --arg projectId "$RAILWAY_PROJECT_ID" \
+                --arg environmentId "$RAILWAY_ENVIRONMENT_ID" \
+                --arg serviceId "$RAILWAY_SERVICE_ID" \
+                --arg name "$name" \
+                --arg value "$value" \
+                '{
+                  query: "mutation variableUpsert($input: VariableUpsertInput!) { variableUpsert(input: $input) }",
+                  variables: {
+                    input: {
+                      projectId: $projectId,
+                      environmentId: $environmentId,
+                      serviceId: $serviceId,
+                      name: $name,
+                      value: $value
+                    }
+                  }
+                }')" | jq '{data, errors}'
+          }
+
+          upsert CLOUDFLARE_TURN_KEY_ID "$TURN_KEY_ID"
+          upsert CLOUDFLARE_TURN_API_TOKEN "$TURN_API_TOKEN"
+          echo "Railway TURN variables set (values not logged)."

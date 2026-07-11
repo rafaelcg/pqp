@@ -73,6 +73,7 @@ interface VoicePanelProps {
   onJoin: () => void;
   onLeave: () => void;
   onToggleMute: () => void;
+  onRetryPeer?: (peerId: string) => void;
 }
 
 export function VoicePanel({
@@ -90,6 +91,7 @@ export function VoicePanel({
   onJoin,
   onLeave,
   onToggleMute,
+  onRetryPeer,
 }: VoicePanelProps) {
   const showWarning = remotePeers.length >= MESH_VOICE_WARNING;
   const speaking = new Set(speakingPeerIds);
@@ -198,6 +200,16 @@ export function VoicePanel({
                     >
                       {peer.connectionState}
                     </span>
+                    {peer.connectionState === "failed" && onRetryPeer && (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        className="h-6 px-2 text-[10px]"
+                        onClick={() => onRetryPeer(peer.peerId)}
+                      >
+                        Retry
+                      </Button>
+                    )}
                     <PeerAudio
                       peerId={peer.peerId}
                       stream={peer.stream}

@@ -74,7 +74,7 @@ export async function handleApi(
     }
 
     if (req.method === "GET" && pathname === "/api/ice-servers") {
-      sendJson(res, 200, { iceServers: getIceServers() });
+      sendJson(res, 200, { iceServers: await getIceServers() });
       return;
     }
 

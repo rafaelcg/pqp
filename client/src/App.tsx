@@ -586,6 +586,18 @@ function MainAppContent({
   }
 
   async function handleJoinVoice(channelId: string) {
+    const authToken = token ?? (await resolveToken());
+    if (authToken) {
+      try {
+        const { iceServers } = await fetchIceServers(authToken);
+        if (iceServers.length > 0) {
+          voice.setIceServers(iceServers);
+        }
+      } catch {
+        // Keep previously fetched / default ICE servers
+      }
+    }
+
     await voice.join(channelId, {
       inputDeviceId: localSettings.inputDeviceId,
       inputVolume: localSettings.inputVolume,
@@ -915,6 +927,9 @@ function MainAppContent({
                 onJoin={() => void handleJoinVoice(selectedChannel.id)}
                 onLeave={() => voice.leave()}
                 onToggleMute={() => voice.toggleMute()}
+                onRetryPeer={(peerId) => {
+                  void voice.retryPeer(peerId);
+                }}
               />
             </div>
             {chatPane}

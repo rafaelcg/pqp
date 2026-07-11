@@ -345,6 +345,11 @@ export function createVoiceController(transport: RealtimeTransport) {
         return;
       }
       iceServers = servers as RTCIceServer[];
+      manager?.setIceServers(iceServers);
+    },
+
+    async retryPeer(peerId: string) {
+      await manager?.retryPeer(peerId);
     },
 
     async join(voiceChannelId: string, options?: VoiceAudioOptions) {

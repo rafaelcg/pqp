@@ -24,6 +24,7 @@ export interface PeerIdentity {
 const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
   { urls: "stun:stun.l.google.com:19302" },
   { urls: "stun:stun1.l.google.com:19302" },
+  { urls: "stun:stun.cloudflare.com:3478" },
 ];
 
 export function getDefaultIceServers(): RTCIceServer[] {
@@ -34,9 +35,20 @@ export function getDefaultIceServers(): RTCIceServer[] {
     | string
     | undefined;
 
-  if (turnUrl && turnUsername && turnCredential) {
+  if (
+    turnUrl &&
+    turnUsername &&
+    turnCredential &&
+    !turnUrl.includes("example.com") &&
+    !turnUsername.includes("your-") &&
+    !turnCredential.includes("your-")
+  ) {
+    const urls = turnUrl
+      .split(",")
+      .map((u) => u.trim())
+      .filter(Boolean);
     servers.push({
-      urls: turnUrl,
+      urls: urls.length === 1 ? urls[0]! : urls,
       username: turnUsername,
       credential: turnCredential,
     });
@@ -45,13 +57,24 @@ export function getDefaultIceServers(): RTCIceServer[] {
   return servers;
 }
 
-function mapIceState(state: RTCIceConnectionState): PeerConnectionState {
-  if (state === "connected" || state === "completed") {
+function mapPeerState(
+  connectionState: RTCPeerConnectionState,
+  iceState: RTCIceConnectionState,
+): PeerConnectionState {
+  if (
+    connectionState === "connected" ||
+    iceState === "connected" ||
+    iceState === "completed"
+  ) {
     return "connected";
   }
-  if (state === "failed" || state === "disconnected" || state === "closed") {
+  if (connectionState === "failed" || iceState === "failed") {
     return "failed";
   }
+  if (connectionState === "closed" || iceState === "closed") {
+    return "failed";
+  }
+  // "disconnected" is often transient — keep showing connecting so UI can recover
   return "connecting";
 }
 
@@ -71,11 +94,16 @@ interface ManagedPeer {
   userId?: string;
   displayName?: string;
   avatarUrl?: string | null;
+  iceRestartTimer: ReturnType<typeof setTimeout> | null;
+  iceRestartAttempts: number;
 }
+
+const MAX_ICE_RESTARTS = 3;
 
 export interface PeerConnectionManager {
   setLocalStream(stream: MediaStream): void;
   replaceLocalTrack(stream: MediaStream): Promise<void>;
+  setIceServers(servers: RTCIceServer[]): void;
   connectToPeer(remotePeerId: string, identity?: PeerIdentity): void;
   setPeerIdentity(remotePeerId: string, identity: PeerIdentity): void;
   handleOffer(from: string, sdp: string): Promise<void>;
@@ -84,6 +112,7 @@ export interface PeerConnectionManager {
     from: string,
     candidate: RTCIceCandidateInit | null,
   ): Promise<void>;
+  retryPeer(remotePeerId: string): Promise<void>;
   removePeer(remotePeerId: string): void;
   dispose(): void;
   onPeerStateChange(handler: PeerStateChangeHandler): void;
@@ -97,6 +126,7 @@ export function createPeerConnectionManager(
   const peers = new Map<string, ManagedPeer>();
   let localStream: MediaStream | null = null;
   let stateHandler: PeerStateChangeHandler | null = null;
+  let currentIceServers = iceServers;
 
   function emitState() {
     const remotePeers: RemotePeer[] = [...peers.values()].map((peer) => ({
@@ -119,23 +149,55 @@ export function createPeerConnectionManager(
     peer.avatarUrl = identity.avatarUrl;
   }
 
-  function createPeerConnection(
-    remotePeerId: string,
-    identity?: PeerIdentity,
-  ): ManagedPeer {
-    const pc = new RTCPeerConnection({ iceServers });
+  function clearIceRestartTimer(peer: ManagedPeer) {
+    if (peer.iceRestartTimer) {
+      clearTimeout(peer.iceRestartTimer);
+      peer.iceRestartTimer = null;
+    }
+  }
 
-    const managed: ManagedPeer = {
-      peerId: remotePeerId,
-      pc,
-      makingOffer: false,
-      ignoreOffer: false,
-      isSettingRemoteAnswerPending: false,
-      connectionState: "connecting",
-      stream: null,
-      pendingCandidates: [],
-    };
-    applyIdentity(managed, identity);
+  async function restartIce(peer: ManagedPeer) {
+    if (peer.iceRestartAttempts >= MAX_ICE_RESTARTS) {
+      peer.connectionState = "failed";
+      emitState();
+      return;
+    }
+    if (!isImpolite(localPeerId, peer.peerId)) {
+      // Polite peer waits for impolite to restart (avoids glare)
+      return;
+    }
+    peer.iceRestartAttempts += 1;
+    peer.connectionState = "connecting";
+    emitState();
+    try {
+      peer.makingOffer = true;
+      await peer.pc.setLocalDescription(
+        await peer.pc.createOffer({ iceRestart: true }),
+      );
+      send({
+        type: "offer",
+        from: localPeerId,
+        to: peer.peerId,
+        sdp: peer.pc.localDescription!.sdp,
+      });
+    } catch {
+      peer.connectionState = "failed";
+      emitState();
+    } finally {
+      peer.makingOffer = false;
+    }
+  }
+
+  function scheduleIceRestart(peer: ManagedPeer) {
+    clearIceRestartTimer(peer);
+    peer.iceRestartTimer = setTimeout(() => {
+      peer.iceRestartTimer = null;
+      void restartIce(peer);
+    }, 1500);
+  }
+
+  function wirePeerConnection(managed: ManagedPeer, remotePeerId: string) {
+    const { pc } = managed;
 
     pc.onicecandidate = (event) => {
       send({
@@ -147,17 +209,66 @@ export function createPeerConnectionManager(
     };
 
     pc.ontrack = (event) => {
-      const stream = event.streams[0];
-      if (stream) {
-        managed.stream = stream;
-        emitState();
+      const stream = event.streams[0] ?? new MediaStream([event.track]);
+      managed.stream = stream;
+      emitState();
+    };
+
+    pc.onconnectionstatechange = () => {
+      managed.connectionState = mapPeerState(
+        pc.connectionState,
+        pc.iceConnectionState,
+      );
+      if (pc.connectionState === "connected") {
+        managed.iceRestartAttempts = 0;
+        clearIceRestartTimer(managed);
+      } else if (pc.connectionState === "failed") {
+        scheduleIceRestart(managed);
       }
+      emitState();
     };
 
     pc.oniceconnectionstatechange = () => {
-      managed.connectionState = mapIceState(pc.iceConnectionState);
+      managed.connectionState = mapPeerState(
+        pc.connectionState,
+        pc.iceConnectionState,
+      );
+      if (
+        pc.iceConnectionState === "connected" ||
+        pc.iceConnectionState === "completed"
+      ) {
+        managed.iceRestartAttempts = 0;
+        clearIceRestartTimer(managed);
+      } else if (pc.iceConnectionState === "failed") {
+        scheduleIceRestart(managed);
+      }
       emitState();
     };
+  }
+
+  function createPeerConnection(
+    remotePeerId: string,
+    identity?: PeerIdentity,
+  ): ManagedPeer {
+    const pc = new RTCPeerConnection({
+      iceServers: currentIceServers,
+      iceCandidatePoolSize: 4,
+    });
+
+    const managed: ManagedPeer = {
+      peerId: remotePeerId,
+      pc,
+      makingOffer: false,
+      ignoreOffer: false,
+      isSettingRemoteAnswerPending: false,
+      connectionState: "connecting",
+      stream: null,
+      pendingCandidates: [],
+      iceRestartTimer: null,
+      iceRestartAttempts: 0,
+    };
+    applyIdentity(managed, identity);
+    wirePeerConnection(managed, remotePeerId);
 
     if (localStream) {
       for (const track of localStream.getTracks()) {
@@ -168,10 +279,12 @@ export function createPeerConnectionManager(
     return managed;
   }
 
-  async function negotiateAsImpolite(peer: ManagedPeer) {
+  async function negotiateAsImpolite(peer: ManagedPeer, iceRestart = false) {
     try {
       peer.makingOffer = true;
-      await peer.pc.setLocalDescription(await peer.pc.createOffer());
+      await peer.pc.setLocalDescription(
+        await peer.pc.createOffer(iceRestart ? { iceRestart: true } : undefined),
+      );
       send({
         type: "offer",
         from: localPeerId,
@@ -206,18 +319,25 @@ export function createPeerConnectionManager(
 
     if (description.type === "offer") {
       peer.isSettingRemoteAnswerPending = true;
-      await peer.pc.setLocalDescription(await peer.pc.createAnswer());
-      peer.isSettingRemoteAnswerPending = false;
-      send({
-        type: "answer",
-        from: localPeerId,
-        to: peer.peerId,
-        sdp: peer.pc.localDescription!.sdp,
-      });
+      try {
+        await peer.pc.setLocalDescription(await peer.pc.createAnswer());
+        send({
+          type: "answer",
+          from: localPeerId,
+          to: peer.peerId,
+          sdp: peer.pc.localDescription!.sdp,
+        });
+      } finally {
+        peer.isSettingRemoteAnswerPending = false;
+      }
     }
 
     for (const candidate of peer.pendingCandidates) {
-      await peer.pc.addIceCandidate(candidate);
+      try {
+        await peer.pc.addIceCandidate(candidate);
+      } catch {
+        // Candidate may be obsolete after restart — ignore
+      }
     }
     peer.pendingCandidates = [];
   }
@@ -235,7 +355,11 @@ export function createPeerConnectionManager(
       return;
     }
 
-    await peer.pc.addIceCandidate(candidate);
+    try {
+      await peer.pc.addIceCandidate(candidate);
+    } catch {
+      // Ignore stale candidates
+    }
   }
 
   return {
@@ -254,6 +378,23 @@ export function createPeerConnectionManager(
           await sender.replaceTrack(nextTrack);
         } else if (nextTrack) {
           peer.pc.addTrack(nextTrack, stream);
+        }
+      }
+    },
+
+    setIceServers(servers: RTCIceServer[]) {
+      if (servers.length === 0) {
+        return;
+      }
+      currentIceServers = servers;
+      for (const peer of peers.values()) {
+        try {
+          peer.pc.setConfiguration({
+            iceServers: currentIceServers,
+            iceCandidatePoolSize: 4,
+          });
+        } catch {
+          // setConfiguration may fail mid-negotiation — retry path handles it
         }
       }
     },
@@ -322,12 +463,41 @@ export function createPeerConnectionManager(
       await addCandidate(peer, candidate);
     },
 
+    async retryPeer(remotePeerId: string) {
+      const peer = peers.get(remotePeerId);
+      if (!peer) {
+        return;
+      }
+      peer.iceRestartAttempts = 0;
+      // Manual retry: always re-offer; perfect negotiation resolves glare.
+      const previous = peers.get(remotePeerId);
+      const preservedIdentity: PeerIdentity | undefined = previous?.userId
+        ? {
+            userId: previous.userId,
+            displayName: previous.displayName ?? "Peer",
+            avatarUrl: previous.avatarUrl ?? null,
+          }
+        : undefined;
+
+      if (previous) {
+        clearIceRestartTimer(previous);
+        previous.pc.close();
+        peers.delete(remotePeerId);
+      }
+
+      const managed = createPeerConnection(remotePeerId, preservedIdentity);
+      peers.set(remotePeerId, managed);
+      emitState();
+      await negotiateAsImpolite(managed, true);
+    },
+
     removePeer(remotePeerId: string) {
       const peer = peers.get(remotePeerId);
       if (!peer) {
         return;
       }
 
+      clearIceRestartTimer(peer);
       peer.pc.close();
       peers.delete(remotePeerId);
       emitState();
@@ -335,6 +505,7 @@ export function createPeerConnectionManager(
 
     dispose() {
       for (const peer of peers.values()) {
+        clearIceRestartTimer(peer);
         peer.pc.close();
       }
       peers.clear();

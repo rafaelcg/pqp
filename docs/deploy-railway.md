@@ -35,13 +35,47 @@ Also add `https://pqp-3yr.pages.dev` (and any custom domain) to your Clerk app�
 
 ## TURN
 
-For voice across different networks, set on the **Railway API** (preferred):
+Cross-network mesh voice **requires a working TURN server**. STUN alone is not enough when peers are on different NATs.
 
-- `TURN_URL` — e.g. `turn:turn.example.com:3478` (comma-separated for multiple)
-- `TURN_USERNAME`
-- `TURN_CREDENTIAL`
+Set one of these on the **Railway API** (preferred — never bake secrets into Pages):
 
-The client fetches these from `GET /api/ice-servers` at bootstrap. If unset, the API falls back to public STUN + Metered Open Relay so mesh voice still works across NATs.
+### Option A — Cloudflare Realtime TURN (recommended)
+
+1. Cloudflare Dashboard → **Realtime** → **TURN** → create a TURN key
+2. Copy the key **UID** and the key **API token** (shown once)
+3. On Railway:
+
+```bash
+railway variables set CLOUDFLARE_TURN_KEY_ID=<uid>
+railway variables set CLOUDFLARE_TURN_API_TOKEN=<token>
+```
+
+The API fetches short-lived `iceServers` via Cloudflare’s credential API and serves them at `GET /api/ice-servers`.
+
+### Option B — Metered / Open Relay
+
+1. Sign up at [metered.ca](https://www.metered.ca/tools/openrelay) and create an API key
+2. Set on Railway:
+
+```bash
+railway variables set METERED_API_KEY=<key>
+# optional if using a Metered app domain:
+railway variables set METERED_DOMAIN=<appname>
+```
+
+### Option C — Static TURN credentials
+
+```bash
+railway variables set TURN_URL=turn:turn.example.com:3478
+railway variables set TURN_USERNAME=...
+railway variables set TURN_CREDENTIAL=...
+```
+
+`TURN_URL` may be comma-separated for multiple URLs (UDP + TCP + TLS).
+
+The client fetches ICE config from `GET /api/ice-servers` at bootstrap and again on each voice join. If no TURN is configured, the API returns public STUN only and cross-NAT calls will show **FAILED**.
+
+> Note: The old static Open Relay credentials (`openrelayproject` / `openrelayproject`) no longer work reliably — do not rely on them.
 
 ## What you get
 
