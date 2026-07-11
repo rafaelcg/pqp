@@ -86,6 +86,23 @@ function sendBroadcast(
   }
 }
 
+/**
+ * Broadcast a message deletion to everyone currently viewing the channel.
+ * Called from the HTTP moderation endpoint, so there is no sender socket.
+ */
+export function broadcastMessageDeleted(channelId: string, messageId: string) {
+  const payload: ChatServerMessage = {
+    type: "message-deleted",
+    channelId,
+    messageId,
+  };
+  for (const conn of connections.values()) {
+    if (conn.socket.readyState === 1 && conn.channelId === channelId) {
+      conn.socket.send(JSON.stringify(payload));
+    }
+  }
+}
+
 export async function handleChatMessage(
   session: { socket: WebSocket; user: DbUser },
   raw: unknown,

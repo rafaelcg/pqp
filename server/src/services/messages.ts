@@ -76,6 +76,39 @@ export async function createMessage(
   };
 }
 
+export async function getMessageForModeration(
+  messageId: string,
+): Promise<{ authorId: string; channelId: string; serverId: string } | null> {
+  const result = await getPool().query<{
+    author_id: string;
+    channel_id: string;
+    server_id: string;
+  }>(
+    `SELECT m.author_id, m.channel_id, c.server_id
+     FROM messages m
+     JOIN channels c ON c.id = m.channel_id
+     WHERE m.id = $1`,
+    [messageId],
+  );
+  const row = result.rows[0];
+  if (!row) {
+    return null;
+  }
+  return {
+    authorId: row.author_id,
+    channelId: row.channel_id,
+    serverId: row.server_id,
+  };
+}
+
+export async function deleteMessage(messageId: string): Promise<boolean> {
+  const result = await getPool().query(
+    `DELETE FROM messages WHERE id = $1`,
+    [messageId],
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
 export function mapMessage(
   m: DbMessage & { reactions?: MessageReaction[] },
 ) {

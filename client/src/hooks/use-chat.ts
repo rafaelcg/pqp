@@ -176,6 +176,19 @@ export function createChatController(transport: RealtimeTransport) {
         return;
       }
 
+      if (message.type === "message-deleted") {
+        const broadcast = message as {
+          type: "message-deleted";
+          channelId: string;
+          messageId: string;
+        };
+        if (broadcast.channelId === channelId) {
+          messages = messages.filter((m) => m.id !== broadcast.messageId);
+          emit();
+        }
+        return;
+      }
+
       if (message.type === "presence-update") {
         const update = message as PresenceUpdate;
         if (update.channelId === channelId) {

@@ -36,6 +36,7 @@ import {
   createChannel,
   createServer,
   deleteChannel,
+  deleteMessage,
   fetchChannels,
   fetchIceServers,
   fetchMe,
@@ -322,6 +323,7 @@ function MainAppContent({
           if (
             message.type === "message-broadcast" ||
             message.type === "reaction-broadcast" ||
+            message.type === "message-deleted" ||
             message.type === "presence-update"
           ) {
             chat.handleServerMessage(message);
@@ -569,6 +571,22 @@ function MainAppContent({
     }
   }
 
+  async function handleDeleteMessage(messageId: string) {
+    const authToken = token ?? (await resolveToken());
+    if (!authToken) {
+      return;
+    }
+    try {
+      await deleteMessage(authToken, messageId);
+      // The server broadcasts message-deleted to the channel, which removes it
+      // from the list; nothing else to do here.
+    } catch (error) {
+      setRealtimeError(
+        error instanceof Error ? error.message : "Failed to delete message",
+      );
+    }
+  }
+
   async function handleLeaveServer(serverId: string) {
     const authToken = token ?? (await resolveToken());
     if (!authToken) {
@@ -743,9 +761,11 @@ function MainAppContent({
         currentUserId={user?.id ?? null}
         channelId={selectedChannel.id}
         isLoading={messagesLoading}
+        canManage={!!canManage}
         onToggleReaction={(messageId, emoji) =>
           chat.toggleReaction(messageId, emoji)
         }
+        onDeleteMessage={(messageId) => void handleDeleteMessage(messageId)}
       />
       <MessageComposer
         onSend={(body) => chat.sendMessage(body)}
@@ -981,6 +1001,7 @@ function MainAppContent({
         serverName={selectedServer?.name ?? null}
         token={token}
         isOwner={selectedServer?.role === "owner"}
+        canManage={!!canManage}
         currentUserId={user?.id ?? null}
         onClose={() => setMembersOpen(false)}
         onMention={(displayName) => {

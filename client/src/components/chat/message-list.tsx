@@ -17,7 +17,9 @@ interface MessageListProps {
   currentUserId: string | null;
   channelId?: string | null;
   isLoading?: boolean;
+  canManage?: boolean;
   onToggleReaction: (messageId: string, emoji: string) => void;
+  onDeleteMessage?: (messageId: string) => void;
 }
 
 export function MessageList({
@@ -25,7 +27,9 @@ export function MessageList({
   currentUserId,
   channelId = null,
   isLoading = false,
+  canManage = false,
   onToggleReaction,
+  onDeleteMessage,
 }: MessageListProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const [pickerMessageId, setPickerMessageId] = useState<string | null>(null);
@@ -87,6 +91,25 @@ export function MessageList({
             onSelect: () => onToggleReaction(message.id, emoji),
           })),
         ];
+
+        const canDelete =
+          !!onDeleteMessage &&
+          (message.authorId === currentUserId || canManage);
+        if (canDelete) {
+          items.push(
+            { id: "sep-delete", label: "", separator: true },
+            {
+              id: "delete",
+              label: "Delete message",
+              danger: true,
+              onSelect: () => {
+                if (window.confirm("Delete this message?")) {
+                  onDeleteMessage?.(message.id);
+                }
+              },
+            },
+          );
+        }
 
         return (
           <ContextMenu key={message.id} items={items}>

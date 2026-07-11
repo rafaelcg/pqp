@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   addChannelMemberSchema,
+  banMemberSchema,
   createChannelSchema,
   createInviteSchema,
   createServerSchema,
@@ -12,7 +13,20 @@ import { resolveAuthUser } from "../auth/clerk.js";
 import { handleCors, HttpError, readJsonBody, sendError, sendJson } from "../lib/http.js";
 import { rateLimit } from "../lib/rate-limit.js";
 import { createInvite, getInviteByCode, listInvites, mapInvite, redeemInvite } from "../services/invites.js";
-import { createMessage, listMessages, mapMessage } from "../services/messages.js";
+import {
+  deleteMessage,
+  getMessageForModeration,
+  createMessage,
+  listMessages,
+  mapMessage,
+} from "../services/messages.js";
+import {
+  banMember,
+  kickMember,
+  listBans,
+  unbanMember,
+} from "../services/moderation.js";
+import { broadcastMessageDeleted } from "../ws/chat.js";
 import {
   addChannelMember,
   createChannel,
@@ -249,6 +263,106 @@ export async function handleApi(
       }
       const body = updateMemberRoleSchema.parse(await readJsonBody(req));
       await updateMemberRole(serverId, targetUserId, body.role);
+      json(200, { ok: true });
+      return;
+    }
+
+    // Kick a member (owner/admin). Owners can't be kicked; only an owner may
+    // kick an admin; nobody kicks themselves here (use /leave).
+    if (memberRoleMatch && req.method === "DELETE") {
+      const serverId = memberRoleMatch[1]!;
+      const targetUserId = memberRoleMatch[2]!;
+      const actorRole = await getMemberRole(serverId, user.id);
+      const targetRole = await getMemberRole(serverId, targetUserId);
+      if (actorRole !== "owner" && actorRole !== "admin") {
+        fail(403, "Forbidden");
+        return;
+      }
+      if (targetUserId === user.id) {
+        fail(400, "Use leave to remove yourself");
+        return;
+      }
+      if (!targetRole) {
+        fail(404, "Member not found");
+        return;
+      }
+      if (targetRole === "owner") {
+        fail(403, "Cannot kick the owner");
+        return;
+      }
+      if (targetRole === "admin" && actorRole !== "owner") {
+        fail(403, "Only the owner can kick an admin");
+        return;
+      }
+      await kickMember(serverId, targetUserId);
+      json(200, { ok: true });
+      return;
+    }
+
+    const serverBansMatch = pathname.match(/^\/api\/servers\/([^/]+)\/bans$/);
+    if (serverBansMatch) {
+      const serverId = serverBansMatch[1]!;
+      if (!(await canManageServer(serverId, user.id))) {
+        fail(403, "Forbidden");
+        return;
+      }
+      if (req.method === "GET") {
+        json(200, { bans: await listBans(serverId) });
+        return;
+      }
+      if (req.method === "POST") {
+        const body = banMemberSchema.parse(await readJsonBody(req));
+        const actorRole = await getMemberRole(serverId, user.id);
+        const targetRole = await getMemberRole(serverId, body.userId);
+        if (body.userId === user.id) {
+          fail(400, "You cannot ban yourself");
+          return;
+        }
+        if (targetRole === "owner") {
+          fail(403, "Cannot ban the owner");
+          return;
+        }
+        if (targetRole === "admin" && actorRole !== "owner") {
+          fail(403, "Only the owner can ban an admin");
+          return;
+        }
+        await banMember(serverId, body.userId, user.id, body.reason);
+        json(200, { ok: true });
+        return;
+      }
+    }
+
+    const serverBanMatch = pathname.match(
+      /^\/api\/servers\/([^/]+)\/bans\/([^/]+)$/,
+    );
+    if (serverBanMatch && req.method === "DELETE") {
+      const serverId = serverBanMatch[1]!;
+      const targetUserId = serverBanMatch[2]!;
+      if (!(await canManageServer(serverId, user.id))) {
+        fail(403, "Forbidden");
+        return;
+      }
+      await unbanMember(serverId, targetUserId);
+      json(200, { ok: true });
+      return;
+    }
+
+    // Delete a message: the author, or an owner/admin of the server.
+    const messageMatch = pathname.match(/^\/api\/messages\/([^/]+)$/);
+    if (messageMatch && req.method === "DELETE") {
+      const messageId = messageMatch[1]!;
+      const message = await getMessageForModeration(messageId);
+      if (!message) {
+        fail(404, "Message not found");
+        return;
+      }
+      const isAuthor = message.authorId === user.id;
+      if (!isAuthor && !(await canManageServer(message.serverId, user.id))) {
+        fail(403, "Forbidden");
+        return;
+      }
+      await deleteMessage(messageId);
+      broadcastMessageDeleted(message.channelId, messageId);
       json(200, { ok: true });
       return;
     }

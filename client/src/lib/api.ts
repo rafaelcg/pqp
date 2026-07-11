@@ -272,3 +272,49 @@ export function leaveServer(token: string, serverId: string) {
     method: "POST",
   });
 }
+
+export function kickMember(token: string, serverId: string, userId: string) {
+  return apiFetch<{ ok: boolean }>(
+    `/api/servers/${serverId}/members/${userId}`,
+    token,
+    { method: "DELETE" },
+  );
+}
+
+export function banMember(
+  token: string,
+  serverId: string,
+  userId: string,
+  reason?: string | null,
+) {
+  return apiFetch<{ ok: boolean }>(`/api/servers/${serverId}/bans`, token, {
+    method: "POST",
+    body: JSON.stringify({ userId, reason: reason ?? null }),
+  });
+}
+
+export function unbanMember(token: string, serverId: string, userId: string) {
+  return apiFetch<{ ok: boolean }>(
+    `/api/servers/${serverId}/bans/${userId}`,
+    token,
+    { method: "DELETE" },
+  );
+}
+
+export function listBans(token: string, serverId: string) {
+  return apiFetch<{
+    bans: Array<{
+      userId: string;
+      displayName: string;
+      tag: string | null;
+      reason: string | null;
+      createdAt: string;
+    }>;
+  }>(`/api/servers/${serverId}/bans`, token);
+}
+
+export function deleteMessage(token: string, messageId: string) {
+  return apiFetch<{ ok: boolean }>(`/api/messages/${messageId}`, token, {
+    method: "DELETE",
+  });
+}
