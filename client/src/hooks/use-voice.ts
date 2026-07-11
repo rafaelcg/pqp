@@ -271,8 +271,13 @@ export function createVoiceController(transport: RealtimeTransport) {
           delete next[message.voiceChannelId];
           state.occupancy = next;
         }
-        // Track peers of the room we're actually in, as a signaling allowlist.
+        // Rebuild the signaling allowlist from the room's authoritative roster
+        // snapshot (not just append), so a stale id from a missed/out-of-order
+        // peer-left can't linger as a trusted signaling source. Safe against
+        // dropping a valid peer: the server sends peer-joined before the roster
+        // on the same ordered socket, and only our own room's roster resets it.
         if (message.voiceChannelId === state.voiceChannelId) {
+          knownPeerIds.clear();
           for (const participant of message.participants) {
             if (participant.peerId !== state.peerId) {
               knownPeerIds.add(participant.peerId);
