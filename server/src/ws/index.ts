@@ -58,7 +58,7 @@ export function handleWsConnection(socket: WebSocket) {
       clearTimeout(authTimeout);
       setAuthenticatedSocket(socket, resolved.user);
       socket.send(JSON.stringify({ type: "ready" }));
-      sendAllVoiceRosters(socket);
+      void sendAllVoiceRosters(socket, resolved.user);
       return;
     }
 

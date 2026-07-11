@@ -95,6 +95,7 @@ interface ManagedPeer {
   displayName?: string;
   avatarUrl?: string | null;
   iceRestartTimer: ReturnType<typeof setTimeout> | null;
+  politeRestartFallback: ReturnType<typeof setTimeout> | null;
   iceRestartAttempts: number;
 }
 
@@ -154,6 +155,10 @@ export function createPeerConnectionManager(
       clearTimeout(peer.iceRestartTimer);
       peer.iceRestartTimer = null;
     }
+    if (peer.politeRestartFallback) {
+      clearTimeout(peer.politeRestartFallback);
+      peer.politeRestartFallback = null;
+    }
   }
 
   async function restartIce(peer: ManagedPeer) {
@@ -163,7 +168,48 @@ export function createPeerConnectionManager(
       return;
     }
     if (!isImpolite(localPeerId, peer.peerId)) {
-      // Polite peer waits for impolite to restart (avoids glare)
+      // Normally the impolite peer drives the restart (avoids glare). But if
+      // only our side detected the failure, waiting forever strands the call —
+      // so after a grace period the polite peer restarts anyway.
+      if (peer.politeRestartFallback) {
+        return;
+      }
+      peer.politeRestartFallback = setTimeout(() => {
+        peer.politeRestartFallback = null;
+        if (peer.pc.iceConnectionState === "failed" || peer.pc.connectionState === "failed") {
+          void forceRestartIce(peer);
+        }
+      }, 4000);
+      return;
+    }
+    peer.iceRestartAttempts += 1;
+    peer.connectionState = "connecting";
+    emitState();
+    try {
+      peer.makingOffer = true;
+      await peer.pc.setLocalDescription(
+        await peer.pc.createOffer({ iceRestart: true }),
+      );
+      send({
+        type: "offer",
+        from: localPeerId,
+        to: peer.peerId,
+        sdp: peer.pc.localDescription!.sdp,
+      });
+    } catch {
+      peer.connectionState = "failed";
+      emitState();
+    } finally {
+      peer.makingOffer = false;
+    }
+  }
+
+  // Used by the polite-peer fallback: restart regardless of politeness once the
+  // impolite side has clearly failed to.
+  async function forceRestartIce(peer: ManagedPeer) {
+    if (peer.iceRestartAttempts >= MAX_ICE_RESTARTS) {
+      peer.connectionState = "failed";
+      emitState();
       return;
     }
     peer.iceRestartAttempts += 1;
@@ -265,6 +311,7 @@ export function createPeerConnectionManager(
       stream: null,
       pendingCandidates: [],
       iceRestartTimer: null,
+      politeRestartFallback: null,
       iceRestartAttempts: 0,
     };
     applyIdentity(managed, identity);
