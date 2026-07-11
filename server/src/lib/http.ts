@@ -33,24 +33,25 @@ function allowedOrigins(): string[] | null {
 
 function corsHeaders(req: IncomingMessage): Record<string, string> {
   const configured = allowedOrigins();
-  const requestOrigin = req.headers.origin;
-  let allowOrigin = "*";
-
-  if (configured) {
-    allowOrigin =
-      requestOrigin && configured.includes(requestOrigin)
-        ? requestOrigin
-        : configured[0]!;
-  }
-
   const headers: Record<string, string> = {
-    "Access-Control-Allow-Origin": allowOrigin,
     "Access-Control-Allow-Headers": "Content-Type, Authorization",
     "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
   };
-  if (configured) {
-    // Caches must key on Origin once responses vary by it.
-    headers.Vary = "Origin";
+
+  if (!configured) {
+    // No allowlist: permissive (fine for local dev / self-host).
+    headers["Access-Control-Allow-Origin"] = "*";
+    return headers;
+  }
+
+  // Allowlisted: only echo ACAO for an origin that is actually allowed. For a
+  // disallowed (or missing) origin, omit ACAO so the browser blocks it —
+  // echoing a *different* allowed origin would be an incorrect per-request
+  // decision and just produces confusing failures.
+  const requestOrigin = req.headers.origin;
+  headers.Vary = "Origin";
+  if (requestOrigin && configured.includes(requestOrigin)) {
+    headers["Access-Control-Allow-Origin"] = requestOrigin;
   }
   return headers;
 }
