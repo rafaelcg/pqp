@@ -7,8 +7,9 @@ import { WebSocketServer } from "ws";
 import { handleApi } from "./api/index.js";
 import { getPool, initDb } from "./db.js";
 import { sendError } from "./lib/http.js";
+import { logEvent } from "./lib/log.js";
 import { sweepRateLimits } from "./lib/rate-limit.js";
-import { handleWsConnection } from "./ws/index.js";
+import { getSocketUser, handleWsConnection } from "./ws/index.js";
 
 const PORT = Number(process.env.PORT ?? 3001);
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -105,6 +106,10 @@ wss.on("connection", (socket) => {
 const heartbeat = setInterval(() => {
   for (const client of wss.clients) {
     if (socketLiveness.get(client) === false) {
+      // Reaping a socket that missed the previous heartbeat — log it so a
+      // mystery "kicked out" can be traced to a missed pong vs a real close.
+      const user = getSocketUser(client);
+      logEvent("ws.heartbeatTerminate", { userId: user?.id });
       client.terminate();
       continue;
     }
