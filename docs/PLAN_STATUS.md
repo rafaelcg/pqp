@@ -1,5 +1,7 @@
 # Plan status
 
+> **Handover (2026-07-11):** live URLs, known voice issue, secrets checklist → [`HANDOVER.md`](./HANDOVER.md). Agent quickstart → [`../CLAUDE.md`](../CLAUDE.md).
+
 ## Original roadmap
 
 | Phase | Status | Notes |
@@ -7,10 +9,10 @@
 | 0 Shell + docs | Done | Monorepo, Tailwind, ARCHITECTURE |
 | 1 Auth + DB + API | Done | Clerk, Postgres, servers/channels |
 | 2 Text chat | Done | WS + markdown + presence |
-| 3 Voice per channel | Done | Mesh + chat on voice channels |
-| 4 Self-host / Railway | Done | Docker Compose + docs |
+| 3 Voice per channel | Done-ish | Mesh + chat on voice channels; **cross-NAT FAILED** still open (see HANDOVER) |
+| 4 Self-host / Railway | Done | Docker Compose + docs; hosted Pages + Railway live |
 | 5 SFU | Deferred | Mesh for now; CF Realtime / LiveKit later |
-| 6 Electron + billing | Partial | Electron shell + billing docs; no Stripe UI |
+| 6 Electron + billing | Partial | Electron shell + CI artifacts + billing docs; no Stripe UI |
 
 ## Added since roadmap
 
@@ -30,9 +32,10 @@
 
 ## Still open (recommended order)
 
-1. **Channel rename UI** + private-channel member picker in the app
-2. **Promote/demote admins** UI (API exists)
-3. **SFU voice** (Phase 5)
-4. **Electron packaging** + deep links
-5. **Plus/Pro billing** (Clerk Billing)
-6. **Message search / reactions / DMs** — out of original scope
+1. **Cross-NAT mesh voice** — remote peer FAILED (TURN/ICE); may be mid-fix elsewhere
+2. **Channel rename UI** + private-channel member picker in the app
+3. **Promote/demote admins** UI (API exists)
+4. **SFU voice** (Phase 5)
+5. **Electron packaging** + deep links
+6. **Plus/Pro billing** (Clerk Billing)
+7. **Message search / reactions / DMs** — out of original scope
