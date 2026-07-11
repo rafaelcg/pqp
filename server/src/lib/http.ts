@@ -44,13 +44,16 @@ function corsHeaders(req: IncomingMessage): Record<string, string> {
     return headers;
   }
 
-  // Allowlisted: only echo ACAO for an origin that is actually allowed. For a
-  // disallowed (or missing) origin, omit ACAO so the browser blocks it —
-  // echoing a *different* allowed origin would be an incorrect per-request
-  // decision and just produces confusing failures.
+  // Allowlist configured. A request with no Origin header is not a browser
+  // CORS request (CLI, server-to-server, same-origin) — CORS can't restrict it
+  // anyway, so stay permissive to preserve prior behavior. When an Origin is
+  // present, only echo it if allowed; a disallowed Origin gets no ACAO so the
+  // browser blocks it (echoing a *different* allowed origin would be wrong).
   const requestOrigin = req.headers.origin;
   headers.Vary = "Origin";
-  if (requestOrigin && configured.includes(requestOrigin)) {
+  if (!requestOrigin) {
+    headers["Access-Control-Allow-Origin"] = "*";
+  } else if (configured.includes(requestOrigin)) {
     headers["Access-Control-Allow-Origin"] = requestOrigin;
   }
   return headers;
