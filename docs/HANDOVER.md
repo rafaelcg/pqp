@@ -79,6 +79,31 @@ A full app audit produced a batch of security, robustness, and hygiene fixes:
 New env names: `CLERK_AUTHORIZED_PARTIES`, `CORS_ALLOWED_ORIGINS`,
 `DATABASE_SSL` / `PG_POOL_MAX`.
 
+### Voice random-disconnect investigation (2026-07-11)
+
+Reported: two phones in the same voice channel (WiFi, screen on, foreground)
+get kicked out of the call at random, uncorrelated times.
+
+- **Observability added:** the server now logs greppable WS/voice lifecycle
+  lines — `ws.connect` / `ws.auth` / `ws.close` (with close code + `wasInVoice`)
+  / `ws.heartbeatTerminate` / `voice.join|leave|roomFull` (`server/src/lib/log.ts`).
+  Next repro, `railway logs | grep '\[pqp\]'` names the cause (client close vs
+  heartbeat reap vs proxy-injected 1006).
+- **Repro tool:** `pnpm soak:voice` (`scripts/voice-soak.mjs`) spawns the
+  server, joins N simulated clients to a voice room, and soaks the connections.
+  A local 70s soak of 2 idle clients showed **zero drops** — so the cause is
+  not a plain server bug; it points at real-network latency and/or the Railway
+  edge proxy, which localhost doesn't have.
+- **Client hardening (the fix):** the keepalive was dropping a healthy link
+  after a single 10s pong gap — each phone's independent timer explains the
+  random uncorrelated drops. Now it tolerates missed pongs
+  (`MAX_MISSED_PONGS`, ~40s) before declaring the link dead, handles
+  `visibilitychange`, and — most importantly — a brief WS reconnect now
+  **auto-rejoins the voice room** (`voice.notifyReconnected`) instead of
+  ejecting the user (`client/src/lib/realtime.ts`, `client/src/hooks/use-voice.ts`).
+  Verified: the transport survives 30s of silence (old code dropped at 10s),
+  still detects a truly dead link, and reconnects.
+
 ## Resolved (2026-07-11)
 
 **Cross-NAT mesh: remote peer FAILED** — fixed via ExpressTURN on Railway (`TURN_URL` / `TURN_USERNAME` / `TURN_CREDENTIAL` → `/api/ice-servers`) plus client Retry and ICE restart. Dead Open Relay creds removed.
