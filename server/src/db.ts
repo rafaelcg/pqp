@@ -14,6 +14,11 @@ export function getPool(): pg.Pool {
       throw new Error("DATABASE_URL is required");
     }
     pool = new pg.Pool({ connectionString });
+    // Idle-client errors (Postgres restart, network blip) are emitted on the
+    // pool; without a listener they crash the process.
+    pool.on("error", (error) => {
+      console.error("[db] idle client error:", error);
+    });
   }
   return pool;
 }

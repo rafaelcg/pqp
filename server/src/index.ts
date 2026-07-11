@@ -79,9 +79,32 @@ const httpServer = createServer(async (req, res) => {
 
 const wss = new WebSocketServer({ server: httpServer, path: "/ws" });
 
+// Protocol-level heartbeat: browsers auto-reply pong, so this both reaps dead
+// connections and keeps proxy idle timers (e.g. Railway edge) from closing
+// quiet sockets.
+const HEARTBEAT_INTERVAL_MS = 30_000;
+const socketLiveness = new WeakMap<import("ws").WebSocket, boolean>();
+
 wss.on("connection", (socket) => {
+  socketLiveness.set(socket, true);
+  socket.on("pong", () => {
+    socketLiveness.set(socket, true);
+  });
   handleWsConnection(socket);
 });
+
+const heartbeat = setInterval(() => {
+  for (const client of wss.clients) {
+    if (socketLiveness.get(client) === false) {
+      client.terminate();
+      continue;
+    }
+    socketLiveness.set(client, false);
+    client.ping();
+  }
+}, HEARTBEAT_INTERVAL_MS);
+
+wss.on("close", () => clearInterval(heartbeat));
 
 async function main() {
   await initDb();
@@ -90,6 +113,16 @@ async function main() {
     console.log(`WebSocket: ws://localhost:${PORT}/ws`);
   });
 }
+
+// Last-resort guards: log instead of letting a stray rejection take down
+// every connected WebSocket (Railway restarts show up client-side as
+// "connection closed" for all users at once).
+process.on("unhandledRejection", (reason) => {
+  console.error("[process] unhandled rejection:", reason);
+});
+process.on("uncaughtException", (error) => {
+  console.error("[process] uncaught exception:", error);
+});
 
 main().catch((error) => {
   console.error("Failed to start server:", error);
