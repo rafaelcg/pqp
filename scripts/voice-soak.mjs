@@ -84,7 +84,18 @@ try {
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${TOKEN}` },
     body: JSON.stringify({ name: "Soak" }),
   });
-  const voice = (await res.json()).channels.find((c) => c.type === "voice");
+  if (!res.ok) {
+    throw new Error(`create server failed: HTTP ${res.status} ${await res.text()}`);
+  }
+  const body = await res.json();
+  const voice = Array.isArray(body.channels)
+    ? body.channels.find((c) => c.type === "voice")
+    : undefined;
+  if (!voice) {
+    throw new Error(
+      `no voice channel in create-server response: ${JSON.stringify(body)}`,
+    );
+  }
   log(`voice channel ${voice.id}; connecting ${CLIENTS} clients`);
 
   const clients = [];
