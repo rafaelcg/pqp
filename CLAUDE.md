@@ -83,7 +83,7 @@ CI workflows: `.github/workflows/ci.yml`, `deploy-web.yml`, `electron.yml`.
 
 ## Pitfalls already hit
 
-1. **Cross-NAT voice FAILED** — STUN-only is not enough. Configure TURN on Railway; client uses `/api/ice-servers`. Old static Open Relay creds are unreliable. **Active issue (2026-07-11):** remote peer can still show FAILED across NATs — another agent may be mid-fix; check dirty tree / recent commits before overlapping.
+1. **Cross-NAT voice FAILED** — STUN-only is not enough; dead Open Relay creds were unreliable. **Fixed (2026-07-11):** Railway `TURN_*` (ExpressTURN) via `/api/ice-servers`, plus client Retry / ICE restart. Retest: hard-refresh both clients and rejoin voice.
 2. **Clerk `getToken` remount loop** — unstable token getter in React deps caused remount storms; keep token access stable (ref / memoized callback), don’t put a fresh `getToken` identity in effect deps every render.
 3. **Pages without API URLs** — empty `VITE_API_URL` / `VITE_WS_URL` makes `/app` hit same-origin Pages (no API). Set GH secrets and redeploy web.
 4. **Clerk origins** — allow Pages + API origins in the Clerk dashboard.
@@ -93,7 +93,6 @@ CI workflows: `.github/workflows/ci.yml`, `deploy-web.yml`, `electron.yml`.
 
 ## Agent norms
 
-- Prefer docs-only or scoped commits when another agent has a dirty voice-fix tree.
 - Do not invent secret values in docs or commits.
 - Point humans to `docs/CLERK_SETUP.md` for Clerk CLI setup; `docs/voice-backends.md` for SFU notes.
 - Update `docs/HANDOVER.md` + `docs/PLAN_STATUS.md` when phase status changes.

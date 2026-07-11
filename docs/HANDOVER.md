@@ -39,7 +39,7 @@ Never commit `.env`. Template: [`.env.example`](../.env.example).
 | 0 Shell + docs | Done |
 | 1 Auth + DB + API | Done |
 | 2 Text chat | Done |
-| 3 Voice (mesh) | Done-ish — see **known issue** |
+| 3 Voice (mesh) | Done (cross-NAT FIXED 2026-07-11) |
 | 4 Self-host / Railway + Pages | Done (live) |
 | 5 SFU | **Deferred** (stubs → mesh fallback) |
 | 6 Electron + billing | **Partial** (shell + CI artifacts; no Stripe UI) |
@@ -52,15 +52,14 @@ Detail and “still open” list: [`PLAN_STATUS.md`](./PLAN_STATUS.md).
 - Channel **topics / icons**
 - **Avatar presets**
 - Fix: Clerk **`getToken` remount loop**
-- Production voice plumbing: ICE via `/api/ice-servers`, TURN_* on Railway, Open Relay / Metered / Cloudflare TURN options documented
+- Production voice plumbing: ICE via `/api/ice-servers`, Railway `TURN_*` (ExpressTURN); Metered / Cloudflare TURN still supported as alternatives
+- **Fix (2026-07-11):** cross-NAT mesh voice — real TURN + client Retry / ICE restart; dead Open Relay removed
 
-## Known issue (active)
+## Resolved (2026-07-11)
 
-**Cross-NAT mesh: remote peer shows FAILED.**
+**Cross-NAT mesh: remote peer FAILED** — fixed via ExpressTURN on Railway (`TURN_URL` / `TURN_USERNAME` / `TURN_CREDENTIAL` → `/api/ice-servers`) plus client Retry and ICE restart. Dead Open Relay creds removed.
 
-- Root cause class: ICE / TURN not completing across NATs (STUN-only or bad/expired TURN).
-- Preferred fix path: Railway TURN env → `/api/ice-servers` → client refresh on voice join.
-- **Another agent may be mid-fix** (dirty working tree possible under `client/src/hooks/use-voice.ts`, `peer-connection-manager.ts`, `server/src/services/ice.ts`, etc.). Prefer docs-only or non-overlapping commits; coordinate before rewriting voice ICE.
+**Retest:** hard-refresh both clients, leave and rejoin the voice channel.
 
 ## CI / secrets checklist (names only)
 
@@ -80,9 +79,9 @@ Do **not** put `CLERK_SECRET_KEY`, `DATABASE_URL`, or TURN credentials in Pages/
 
 **Env names:** `DATABASE_URL`, `CLERK_SECRET_KEY`, `PORT` (optional), and one ICE path:
 
+- `TURN_URL` + `TURN_USERNAME` + `TURN_CREDENTIAL` (production: ExpressTURN), or
 - `CLOUDFLARE_TURN_KEY_ID` + `CLOUDFLARE_TURN_API_TOKEN`, or
-- `METERED_API_KEY` (+ optional `METERED_DOMAIN`), or
-- `TURN_URL` + `TURN_USERNAME` + `TURN_CREDENTIAL`
+- `METERED_API_KEY` (+ optional `METERED_DOMAIN`)
 
 ## Auth notes
 
@@ -104,9 +103,8 @@ Do **not** put `CLERK_SECRET_KEY`, `DATABASE_URL`, or TURN credentials in Pages/
 
 ## Suggested next work (priority)
 
-1. Finish **cross-NAT voice** (TURN + ICE) — unblock FAILED peers
-2. Channel rename UI + private-channel member picker
-3. Promote/demote admins UI
-4. Electron packaging / deep links polish
-5. SFU (Phase 5) when mesh limits hurt
-6. Clerk Billing (Plus/Pro) when ready
+1. Channel rename UI + private-channel member picker
+2. Promote/demote admins UI
+3. Electron packaging / deep links polish
+4. SFU (Phase 5) when mesh limits hurt
+5. Clerk Billing (Plus/Pro) when ready
