@@ -5,8 +5,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 import { handleApi } from "./api/index.js";
-import { initDb } from "./db.js";
+import { getPool, initDb } from "./db.js";
 import { sendError } from "./lib/http.js";
+import { sweepRateLimits } from "./lib/rate-limit.js";
 import { handleWsConnection } from "./ws/index.js";
 
 const PORT = Number(process.env.PORT ?? 3001);
@@ -54,8 +55,16 @@ const httpServer = createServer(async (req, res) => {
   const pathname = url.pathname;
 
   if (pathname === "/health") {
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ ok: true }));
+    // Report unhealthy if the DB is unreachable so the platform can restart /
+    // route away instead of serving a process with a dead pool.
+    try {
+      await getPool().query("SELECT 1");
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+    } catch {
+      res.writeHead(503, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: false, error: "database unavailable" }));
+    }
     return;
   }
 
@@ -79,9 +88,36 @@ const httpServer = createServer(async (req, res) => {
 
 const wss = new WebSocketServer({ server: httpServer, path: "/ws" });
 
+// Protocol-level heartbeat: browsers auto-reply pong, so this both reaps dead
+// connections and keeps proxy idle timers (e.g. Railway edge) from closing
+// quiet sockets.
+const HEARTBEAT_INTERVAL_MS = 30_000;
+const socketLiveness = new WeakMap<import("ws").WebSocket, boolean>();
+
 wss.on("connection", (socket) => {
+  socketLiveness.set(socket, true);
+  socket.on("pong", () => {
+    socketLiveness.set(socket, true);
+  });
   handleWsConnection(socket);
 });
+
+const heartbeat = setInterval(() => {
+  for (const client of wss.clients) {
+    if (socketLiveness.get(client) === false) {
+      client.terminate();
+      continue;
+    }
+    socketLiveness.set(client, false);
+    client.ping();
+  }
+}, HEARTBEAT_INTERVAL_MS);
+
+wss.on("close", () => clearInterval(heartbeat));
+
+// Drop expired rate-limit windows so the map doesn't grow unbounded.
+const rateLimitSweep = setInterval(() => sweepRateLimits(), 60_000);
+rateLimitSweep.unref?.();
 
 async function main() {
   await initDb();
@@ -90,6 +126,16 @@ async function main() {
     console.log(`WebSocket: ws://localhost:${PORT}/ws`);
   });
 }
+
+// Last-resort guards: log instead of letting a stray rejection take down
+// every connected WebSocket (Railway restarts show up client-side as
+// "connection closed" for all users at once).
+process.on("unhandledRejection", (reason) => {
+  console.error("[process] unhandled rejection:", reason);
+});
+process.on("uncaughtException", (error) => {
+  console.error("[process] uncaught exception:", error);
+});
 
 main().catch((error) => {
   console.error("Failed to start server:", error);

@@ -46,6 +46,9 @@ jobs:
             exit 1
           fi
 
+          # Mask the credential so it can never surface in logs via a later step.
+          echo "::add-mask::$KEY"
+
           echo "key_id=$UID" >> "$GITHUB_OUTPUT"
           echo "api_token=$KEY" >> "$GITHUB_OUTPUT"
           echo "Created Cloudflare TURN key uid=${UID:0:8}…"

@@ -36,6 +36,7 @@ import {
   createChannel,
   createServer,
   deleteChannel,
+  deleteMessage,
   fetchChannels,
   fetchIceServers,
   fetchMe,
@@ -229,10 +230,15 @@ function MainAppContent({
     const chat = chatRef.current;
     const voice = voiceRef.current;
 
-    async function bootstrapChannel(channelId: string, authToken: string) {
+    async function bootstrapChannel(channelId: string) {
       setMessagesLoading(true);
       chat.joinChannel(channelId);
       try {
+        // Resolve a fresh token — on reconnect the bootstrap one has expired.
+        const authToken = await resolveTokenRef.current();
+        if (!authToken || cancelled) {
+          return;
+        }
         const { messages } = await fetchMessages(authToken, channelId);
         if (cancelled) {
           return;
@@ -317,6 +323,7 @@ function MainAppContent({
           if (
             message.type === "message-broadcast" ||
             message.type === "reaction-broadcast" ||
+            message.type === "message-deleted" ||
             message.type === "presence-update"
           ) {
             chat.handleServerMessage(message);
@@ -327,14 +334,24 @@ function MainAppContent({
 
         transport.onError((message) => setRealtimeError(message));
 
-        transport.onReady(() => {
-          setRealtimeError(null);
-          if (initialChannelId) {
-            void bootstrapChannel(initialChannelId, authToken);
+        transport.onClose(() => {
+          // The server dropped our voice peer with the socket; reset local
+          // voice state so the user can rejoin after the reconnect.
+          if (voice.getState().status !== "idle") {
+            voice.leave();
           }
         });
 
-        transport.connect(authToken);
+        transport.onReady(() => {
+          setRealtimeError(null);
+          // On reconnect, rejoin whatever channel the user is in now.
+          const channelId = chat.getChannelId() ?? initialChannelId;
+          if (channelId) {
+            void bootstrapChannel(channelId);
+          }
+        });
+
+        transport.connect(() => resolveTokenRef.current());
       } catch (error) {
         if (cancelled) {
           return;
@@ -554,6 +571,22 @@ function MainAppContent({
     }
   }
 
+  async function handleDeleteMessage(messageId: string) {
+    const authToken = token ?? (await resolveToken());
+    if (!authToken) {
+      return;
+    }
+    try {
+      await deleteMessage(authToken, messageId);
+      // The server broadcasts message-deleted to the channel, which removes it
+      // from the list; nothing else to do here.
+    } catch (error) {
+      setRealtimeError(
+        error instanceof Error ? error.message : "Failed to delete message",
+      );
+    }
+  }
+
   async function handleLeaveServer(serverId: string) {
     const authToken = token ?? (await resolveToken());
     if (!authToken) {
@@ -728,9 +761,11 @@ function MainAppContent({
         currentUserId={user?.id ?? null}
         channelId={selectedChannel.id}
         isLoading={messagesLoading}
+        canManage={!!canManage}
         onToggleReaction={(messageId, emoji) =>
           chat.toggleReaction(messageId, emoji)
         }
+        onDeleteMessage={(messageId) => void handleDeleteMessage(messageId)}
       />
       <MessageComposer
         onSend={(body) => chat.sendMessage(body)}
@@ -966,6 +1001,7 @@ function MainAppContent({
         serverName={selectedServer?.name ?? null}
         token={token}
         isOwner={selectedServer?.role === "owner"}
+        canManage={!!canManage}
         currentUserId={user?.id ?? null}
         onClose={() => setMembersOpen(false)}
         onMention={(displayName) => {

@@ -12,18 +12,32 @@ concurrency:
 
 jobs:
   build:
-    name: Install, typecheck, build
+    name: Install, typecheck, build, test
     runs-on: ubuntu-latest
     timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: pqp
+          POSTGRES_PASSWORD: pqp
+          POSTGRES_DB: pqp
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U pqp"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup pnpm
+        # Version comes from the root package.json "packageManager" field.
         uses: pnpm/action-setup@v4
-        with:
-          version: 10
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -39,6 +53,11 @@ jobs:
 
       - name: Build server
         run: pnpm --filter @pqp/server build
+
+      - name: Test server
+        env:
+          DATABASE_URL: postgres://pqp:pqp@localhost:5432/pqp
+        run: pnpm --filter @pqp/server test
 
       - name: Typecheck / build client
         env:

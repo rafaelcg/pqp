@@ -2,13 +2,14 @@ import { randomUUID } from "node:crypto";
 import type { WebSocket } from "ws";
 import {
   isClientRelayMessage,
+  MESH_VOICE_LIMIT,
   voiceClientMessageSchema,
   type VoiceParticipant,
   type VoiceSignalingMessage,
 } from "@pqp/shared";
 import type { DbUser } from "../db.js";
 import { getChannel } from "../services/servers.js";
-import { isChannelMember } from "../services/users.js";
+import { isChannelMember, isServerMember, listServerMemberIds } from "../services/users.js";
 import { forEachAuthenticatedSocket } from "./sockets.js";
 
 interface VoicePeer {
@@ -18,6 +19,7 @@ interface VoicePeer {
   displayName: string;
   avatarUrl: string | null;
   voiceChannelId: string;
+  serverId: string;
 }
 
 const peers = new Map<string, VoicePeer>();
@@ -54,14 +56,26 @@ function broadcastToRoom(
   }
 }
 
-function broadcastRoster(voiceChannelId: string) {
+// Roster/occupancy is only for members of the server that owns the voice
+// channel — not every authenticated socket on the instance (which would leak
+// cross-server presence and, worse, hand out the peer IDs used for signaling).
+async function broadcastRoster(voiceChannelId: string, serverId: string) {
   const message: VoiceSignalingMessage = {
     type: "voice-roster",
     voiceChannelId,
     participants: getRoomPeers(voiceChannelId).map(toParticipant),
   };
-  forEachAuthenticatedSocket((socket) => {
-    send(socket, message);
+  let memberIds: Set<string>;
+  try {
+    memberIds = new Set(await listServerMemberIds(serverId));
+  } catch (error) {
+    console.error("[voice] failed to load members for roster:", error);
+    return;
+  }
+  forEachAuthenticatedSocket((socket, user) => {
+    if (memberIds.has(user.id)) {
+      send(socket, message);
+    }
   });
 }
 
@@ -77,11 +91,11 @@ function removePeer(peerId: string) {
   if (!peer) {
     return;
   }
-  const { voiceChannelId } = peer;
+  const { voiceChannelId, serverId } = peer;
   peers.delete(peerId);
   socketToPeerId.delete(peer.socket);
   broadcastToRoom(voiceChannelId, { type: "peer-left", peerId });
-  broadcastRoster(voiceChannelId);
+  void broadcastRoster(voiceChannelId, serverId);
 }
 
 export function removeVoicePeerBySocket(socket: WebSocket) {
@@ -91,15 +105,32 @@ export function removeVoicePeerBySocket(socket: WebSocket) {
   }
 }
 
-/** Send current voice occupancy for every active room (e.g. after auth). */
-export function sendAllVoiceRosters(socket: WebSocket) {
-  const byChannel = new Map<string, VoiceParticipant[]>();
+/**
+ * Send current voice occupancy to a newly authenticated socket — but only for
+ * servers the connecting user actually belongs to.
+ */
+export async function sendAllVoiceRosters(socket: WebSocket, user: DbUser) {
+  const byChannel = new Map<
+    string,
+    { serverId: string; participants: VoiceParticipant[] }
+  >();
   for (const peer of peers.values()) {
-    const list = byChannel.get(peer.voiceChannelId) ?? [];
-    list.push(toParticipant(peer));
-    byChannel.set(peer.voiceChannelId, list);
+    const entry = byChannel.get(peer.voiceChannelId) ?? {
+      serverId: peer.serverId,
+      participants: [],
+    };
+    entry.participants.push(toParticipant(peer));
+    byChannel.set(peer.voiceChannelId, entry);
   }
-  for (const [voiceChannelId, participants] of byChannel) {
+  for (const [voiceChannelId, { serverId, participants }] of byChannel) {
+    try {
+      if (!(await isServerMember(serverId, user.id))) {
+        continue;
+      }
+    } catch (error) {
+      console.error("[voice] roster membership check failed:", error);
+      continue;
+    }
     send(socket, {
       type: "voice-roster",
       voiceChannelId,
@@ -131,6 +162,21 @@ export async function handleVoiceMessage(
       return;
     }
 
+    // Enforce the mesh ceiling server-side. Above it, each client would carry
+    // one Opus uplink per peer and quality collapses — reject instead.
+    const roomIsFull =
+      getRoomPeers(payload.voiceChannelId).filter(
+        (p) => p.socket !== socket,
+      ).length >= MESH_VOICE_LIMIT;
+    if (roomIsFull) {
+      send(socket, {
+        type: "voice-room-full",
+        voiceChannelId: payload.voiceChannelId,
+        limit: MESH_VOICE_LIMIT,
+      });
+      return;
+    }
+
     if (existingPeerId) {
       removePeer(existingPeerId);
     }
@@ -143,6 +189,7 @@ export async function handleVoiceMessage(
       displayName: user.display_name,
       avatarUrl: user.avatar_url,
       voiceChannelId: payload.voiceChannelId,
+      serverId: channel.server_id,
     };
     peers.set(peerId, peer);
     socketToPeerId.set(socket, peerId);
@@ -165,7 +212,7 @@ export async function handleVoiceMessage(
       { type: "peer-joined", peer: self },
       peerId,
     );
-    broadcastRoster(payload.voiceChannelId);
+    void broadcastRoster(payload.voiceChannelId, channel.server_id);
     return;
   }
 
@@ -184,11 +231,20 @@ export async function handleVoiceMessage(
     return;
   }
 
-  if (!peers.has(payload.from) || payload.from !== existingPeerId) {
+  const fromPeer = peers.get(payload.from);
+  if (!fromPeer || payload.from !== existingPeerId) {
     return;
   }
 
-  if (!peers.has(payload.to)) {
+  const toPeer = peers.get(payload.to);
+  if (!toPeer) {
+    return;
+  }
+
+  // Only relay signaling between peers in the same voice room. Without this a
+  // member of one room could open a WebRTC connection to a peer in another
+  // room/server and pull their microphone audio.
+  if (fromPeer.voiceChannelId !== toPeer.voiceChannelId) {
     return;
   }
 

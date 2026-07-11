@@ -58,7 +58,7 @@ export function handleWsConnection(socket: WebSocket) {
       clearTimeout(authTimeout);
       setAuthenticatedSocket(socket, resolved.user);
       socket.send(JSON.stringify({ type: "ready" }));
-      sendAllVoiceRosters(socket);
+      void sendAllVoiceRosters(socket, resolved.user);
       return;
     }
 
@@ -67,10 +67,23 @@ export function handleWsConnection(socket: WebSocket) {
       return;
     }
 
-    await Promise.all([
-      handleChatMessage(session, parsed),
-      handleVoiceMessage(session, parsed),
-    ]);
+    // Client keepalive: lets browsers detect half-open connections and keeps
+    // proxy idle timers reset.
+    if ((parsed as { type?: string }).type === "ping") {
+      socket.send(JSON.stringify({ type: "pong" }));
+      return;
+    }
+
+    // A throwing handler (e.g. transient DB error) must not become an
+    // unhandled rejection — that kills the process and drops every client.
+    try {
+      await Promise.all([
+        handleChatMessage(session, parsed),
+        handleVoiceMessage(session, parsed),
+      ]);
+    } catch (error) {
+      console.error("[ws] message handler failed:", error);
+    }
   });
 
   socket.on("close", () => {

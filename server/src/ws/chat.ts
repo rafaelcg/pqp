@@ -12,6 +12,7 @@ import {
   toggleReaction,
 } from "../services/reactions.js";
 import { isChannelMember } from "../services/users.js";
+import { rateLimit } from "../lib/rate-limit.js";
 
 interface ChatConnection {
   socket: WebSocket;
@@ -85,6 +86,23 @@ function sendBroadcast(
   }
 }
 
+/**
+ * Broadcast a message deletion to everyone currently viewing the channel.
+ * Called from the HTTP moderation endpoint, so there is no sender socket.
+ */
+export function broadcastMessageDeleted(channelId: string, messageId: string) {
+  const payload: ChatServerMessage = {
+    type: "message-deleted",
+    channelId,
+    messageId,
+  };
+  for (const conn of connections.values()) {
+    if (conn.socket.readyState === 1 && conn.channelId === channelId) {
+      conn.socket.send(JSON.stringify(payload));
+    }
+  }
+}
+
 export async function handleChatMessage(
   session: { socket: WebSocket; user: DbUser },
   raw: unknown,
@@ -118,6 +136,10 @@ export async function handleChatMessage(
 
   if (payload.type === "message-create") {
     const createMsg = messageCreateMessageSchema.parse(payload);
+    // Throttle sends per user so a single socket can't flood the channel/DB.
+    if (!rateLimit(`ws-msg:${conn.user.id}`, 20, 10_000).allowed) {
+      return;
+    }
     if (!(await isChannelMember(createMsg.channelId, conn.user.id))) {
       return;
     }
@@ -145,6 +167,9 @@ export async function handleChatMessage(
 
   if (payload.type === "reaction-toggle") {
     const reactionMsg = reactionToggleMessageSchema.parse(payload);
+    if (!rateLimit(`ws-react:${conn.user.id}`, 40, 10_000).allowed) {
+      return;
+    }
     if (!(await isChannelMember(reactionMsg.channelId, conn.user.id))) {
       return;
     }

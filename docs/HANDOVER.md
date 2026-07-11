@@ -55,6 +55,30 @@ Detail and “still open” list: [`PLAN_STATUS.md`](./PLAN_STATUS.md).
 - Production voice plumbing: ICE via `/api/ice-servers`, Railway `TURN_*` (ExpressTURN); Metered / Cloudflare TURN still supported as alternatives
 - **Fix (2026-07-11):** cross-NAT mesh voice — real TURN + client Retry / ICE restart; dead Open Relay removed
 
+### Audit hardening (2026-07-11)
+
+A full app audit produced a batch of security, robustness, and hygiene fixes:
+
+- **Realtime disconnects fixed:** WS heartbeat (server ping/pong) + client
+  auto-reconnect with backoff and fresh-token resolution; WS handlers wrapped
+  in try/catch and `pool.on("error")` + process guards so one bad message no
+  longer crashes the server (which had shown as "Realtime connection closed").
+- **Voice signaling scoped to rooms:** relay and rosters were instance-wide
+  (cross-server mic-audio eavesdropping risk); now room/member scoped, with a
+  client peer allowlist. Mesh cap enforced server-side; mic released on join
+  timeout; old peer managers disposed on rejoin.
+- **Auth/abuse:** `DEV_AUTH_BYPASS` ignored in production, request body size
+  cap, per-user rate limits (API + WS), Clerk `authorizedParties`, CORS
+  allowlist (`CORS_ALLOWED_ORIGINS`).
+- **Moderation added:** kick, ban (blocks rejoin), and message delete (live).
+- **Infra:** Dockerfile pins pnpm 10 + non-root + `.dockerignore`; pg pool
+  config; `/health` checks the DB.
+- **Tests + CI:** vitest suite (unit + DB-backed ACL/moderation) run in CI
+  against a Postgres service; `deploy-web` gated on CI success.
+
+New env names: `CLERK_AUTHORIZED_PARTIES`, `CORS_ALLOWED_ORIGINS`,
+`DATABASE_SSL` / `PG_POOL_MAX`.
+
 ## Resolved (2026-07-11)
 
 **Cross-NAT mesh: remote peer FAILED** — fixed via ExpressTURN on Railway (`TURN_URL` / `TURN_USERNAME` / `TURN_CREDENTIAL` → `/api/ice-servers`) plus client Retry and ICE restart. Dead Open Relay creds removed.

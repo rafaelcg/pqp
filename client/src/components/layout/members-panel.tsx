@@ -4,7 +4,7 @@ import {
   type ContextMenuItemDef,
 } from "@/components/ui/context-menu";
 import { Button } from "@/components/ui/button";
-import { fetchMembers, updateMemberRole } from "@/lib/api";
+import { banMember, fetchMembers, kickMember, updateMemberRole } from "@/lib/api";
 
 interface MemberRow {
   id: string;
@@ -20,6 +20,7 @@ interface MembersPanelProps {
   serverName: string | null;
   token: string | null;
   isOwner: boolean;
+  canManage?: boolean;
   currentUserId: string | null;
   onClose: () => void;
   onMention?: (displayName: string) => void;
@@ -31,6 +32,7 @@ export function MembersPanel({
   serverName,
   token,
   isOwner,
+  canManage = false,
   currentUserId,
   onClose,
   onMention,
@@ -78,6 +80,33 @@ export function MembersPanel({
       );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to update role");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function removeMember(
+    member: MemberRow,
+    mode: "kick" | "ban",
+  ) {
+    if (!token || !serverId) {
+      return;
+    }
+    const verb = mode === "ban" ? "Ban" : "Kick";
+    if (!window.confirm(`${verb} ${member.displayName}?`)) {
+      return;
+    }
+    setBusyId(member.id);
+    setError(null);
+    try {
+      if (mode === "ban") {
+        await banMember(token, serverId, member.id);
+      } else {
+        await kickMember(token, serverId, member.id);
+      }
+      setMembers((prev) => prev.filter((m) => m.id !== member.id));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : `Failed to ${mode} member`);
     } finally {
       setBusyId(null);
     }
@@ -136,6 +165,33 @@ export function MembersPanel({
                   disabled: busyId === member.id,
                 });
               }
+            }
+
+            // Kick/ban: owner can act on members and admins; an admin can act
+            // only on plain members. Never on the owner or yourself.
+            const canModerate =
+              canManage &&
+              member.role !== "owner" &&
+              member.id !== currentUserId &&
+              (isOwner || member.role === "member");
+            if (canModerate) {
+              items.push(
+                { id: "sep-mod", label: "", separator: true },
+                {
+                  id: "kick",
+                  label: "Kick from server",
+                  danger: true,
+                  onSelect: () => void removeMember(member, "kick"),
+                  disabled: busyId === member.id,
+                },
+                {
+                  id: "ban",
+                  label: "Ban from server",
+                  danger: true,
+                  onSelect: () => void removeMember(member, "ban"),
+                  disabled: busyId === member.id,
+                },
+              );
             }
 
             return (

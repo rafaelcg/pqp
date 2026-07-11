@@ -123,6 +123,10 @@ export function createVoiceController(transport: RealtimeTransport) {
     { analyser: AnalyserNode; dispose: () => void }
   >();
   const speakingTracker = createSpeakingTracker();
+  // Peers the server has told us are in *our* room. Signaling from anyone else
+  // is dropped so a stray/cross-room offer can never open a mic connection.
+  const knownPeerIds = new Set<string>();
+  let joinGeneration = 0;
   let audioOptions: VoiceAudioOptions = {
     inputDeviceId: "",
     inputVolume: 1,
@@ -267,14 +271,45 @@ export function createVoiceController(transport: RealtimeTransport) {
           delete next[message.voiceChannelId];
           state.occupancy = next;
         }
+        // Rebuild the signaling allowlist from the room's authoritative roster
+        // snapshot (not just append), so a stale id from a missed/out-of-order
+        // peer-left can't linger as a trusted signaling source. Safe against
+        // dropping a valid peer: the server sends peer-joined before the roster
+        // on the same ordered socket, and only our own room's roster resets it.
+        if (message.voiceChannelId === state.voiceChannelId) {
+          knownPeerIds.clear();
+          for (const participant of message.participants) {
+            if (participant.peerId !== state.peerId) {
+              knownPeerIds.add(participant.peerId);
+            }
+          }
+        }
+        emit();
+        break;
+      case "voice-room-full":
+        clearJoinTimeout();
+        stopMicPipeline(pipeline);
+        pipeline = null;
+        state.error = `This voice channel is full (max ${message.limit}).`;
+        state.status = "idle";
         emit();
         break;
       case "welcome":
+        // Drop a welcome that arrives after we already gave up (join timeout)
+        // or left — otherwise it would flip us back to "connected" with no mic.
+        if (state.status !== "joining") {
+          transport.sendVoice({ type: "leave-voice-room" });
+          return;
+        }
         clearJoinTimeout();
+        knownPeerIds.clear();
         state.peerId = message.peerId;
         state.status = "connected";
         state.voiceChannelId = message.voiceChannelId;
         state.self = message.self;
+        // Rejoin/channel-switch: tear the old mesh down before building a new
+        // one, or its peer connections and ICE-restart timers leak.
+        manager?.dispose();
         manager = createPeerConnectionManager(
           message.peerId,
           sendRelay,
@@ -289,15 +324,18 @@ export function createVoiceController(transport: RealtimeTransport) {
           emit();
         });
         for (const peer of message.peers) {
+          knownPeerIds.add(peer.peerId);
           manager.connectToPeer(peer.peerId, toIdentity(peer));
         }
         startSpeakingLoop();
         emit();
         break;
       case "peer-joined":
+        knownPeerIds.add(message.peer.peerId);
         manager?.connectToPeer(message.peer.peerId, toIdentity(message.peer));
         break;
       case "peer-left":
+        knownPeerIds.delete(message.peerId);
         manager?.removePeer(message.peerId);
         {
           const entry = remoteAnalysers.get(message.peerId);
@@ -308,12 +346,21 @@ export function createVoiceController(transport: RealtimeTransport) {
         }
         break;
       case "offer":
+        if (!knownPeerIds.has(message.from)) {
+          return;
+        }
         void manager?.handleOffer(message.from, message.sdp);
         break;
       case "answer":
+        if (!knownPeerIds.has(message.from)) {
+          return;
+        }
         void manager?.handleAnswer(message.from, message.sdp);
         break;
       case "ice-candidate":
+        if (!knownPeerIds.has(message.from)) {
+          return;
+        }
         void manager?.handleIceCandidate(message.from, message.candidate);
         break;
     }
@@ -365,8 +412,14 @@ export function createVoiceController(transport: RealtimeTransport) {
       }
 
       clearJoinTimeout();
+      const generation = ++joinGeneration;
       joinTimeoutId = setTimeout(() => {
-        if (state.status === "joining") {
+        if (state.status === "joining" && generation === joinGeneration) {
+          // Release the mic so the browser recording indicator clears, and
+          // tell the server to drop us if the room ever registered the join.
+          stopMicPipeline(pipeline);
+          pipeline = null;
+          transport.sendVoice({ type: "leave-voice-room" });
           state.error =
             "Voice connection timed out. Is the server running and WebSocket connected?";
           state.status = "idle";
@@ -405,6 +458,8 @@ export function createVoiceController(transport: RealtimeTransport) {
 
     leave() {
       clearJoinTimeout();
+      joinGeneration++;
+      knownPeerIds.clear();
       stopSpeakingLoop();
       disposeRemoteAnalysers();
       transport.sendVoice({ type: "leave-voice-room" });

@@ -1,0 +1,16 @@
+.git
+.github
+**/node_modules
+**/dist
+**/release
+*.log
+.env
+.env.*
+**/.env
+**/.env.*
+.vscode
+.idea
+electron/release
+client/dist
+server/dist
+packages/shared/dist

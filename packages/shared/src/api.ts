@@ -156,6 +156,11 @@ export const addChannelMemberSchema = z.object({
   userId: z.string().uuid(),
 });
 
+export const banMemberSchema = z.object({
+  userId: z.string().uuid(),
+  reason: z.string().max(500).nullable().optional(),
+});
+
 export type User = z.infer<typeof userSchema>;
 export type Server = z.infer<typeof serverSchema>;
 export type Channel = z.infer<typeof channelSchema>;

@@ -14,8 +14,36 @@ export interface AuthUser {
 
 export const DEV_AUTH_TOKEN = "dev-local-token";
 
+let warnedAboutBypassInProd = false;
+
 export function isDevAuthBypassEnabled(): boolean {
-  return process.env.DEV_AUTH_BYPASS === "true";
+  if (process.env.DEV_AUTH_BYPASS !== "true") {
+    return false;
+  }
+  // Never honor the shared dev token in production, no matter how the env is
+  // set — a single misconfigured variable would otherwise open the whole API.
+  if (process.env.NODE_ENV === "production") {
+    if (!warnedAboutBypassInProd) {
+      warnedAboutBypassInProd = true;
+      console.error(
+        "[auth] DEV_AUTH_BYPASS=true ignored because NODE_ENV=production",
+      );
+    }
+    return false;
+  }
+  return true;
+}
+
+function getAuthorizedParties(): string[] | undefined {
+  const raw = process.env.CLERK_AUTHORIZED_PARTIES;
+  if (!raw) {
+    return undefined;
+  }
+  const parties = raw
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  return parties.length > 0 ? parties : undefined;
 }
 
 export async function resolveAuthUser(
@@ -65,6 +93,8 @@ export async function verifyAuthHeader(
   try {
     const payload = await verifyToken(token, {
       secretKey: process.env.CLERK_SECRET_KEY,
+      // Reject tokens minted for a different origin/app when configured.
+      authorizedParties: getAuthorizedParties(),
     });
 
     const clerkId = payload.sub;

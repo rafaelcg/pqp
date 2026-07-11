@@ -76,6 +76,14 @@ export async function redeemInvite(
       throw new Error("Invite has no uses left");
     }
 
+    const banned = await client.query(
+      `SELECT 1 FROM server_bans WHERE server_id = $1 AND user_id = $2`,
+      [invite.server_id, userId],
+    );
+    if (banned.rows.length > 0) {
+      throw new Error("You are banned from this server");
+    }
+
     await client.query(
       `INSERT INTO server_members (server_id, user_id, role)
        VALUES ($1, $2, 'member')
