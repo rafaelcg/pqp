@@ -79,4 +79,19 @@ describe.skipIf(!hasDb)("channel access + moderation (DB-backed)", () => {
       invites.redeemInvite(invite.code, member.id),
     ).rejects.toThrow(/banned/i);
   });
+
+  it("supports pre-emptive bans of users who were never members", async () => {
+    const owner = await makeUser("PreOwner");
+    const stranger = await makeUser("Stranger");
+    const { server } = await servers.createServer("Preemptive", owner.id);
+    const invite = await invites.createInvite(server.id, owner.id, {});
+
+    expect(await users.isServerMember(server.id, stranger.id)).toBe(false);
+    // Banning a non-member succeeds and blocks a future join.
+    await moderation.banMember(server.id, stranger.id, owner.id, null);
+    expect(await moderation.isBanned(server.id, stranger.id)).toBe(true);
+    await expect(
+      invites.redeemInvite(invite.code, stranger.id),
+    ).rejects.toThrow(/banned/i);
+  });
 });

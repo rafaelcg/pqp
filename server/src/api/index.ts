@@ -45,6 +45,7 @@ import { getIceServers } from "../services/ice.js";
 import {
   canManageServer,
   getMemberRole,
+  getUserById,
   isChannelMember,
   isServerMember,
   leaveServer,
@@ -312,12 +313,19 @@ export async function handleApi(
       }
       if (req.method === "POST") {
         const body = banMemberSchema.parse(await readJsonBody(req));
-        const actorRole = await getMemberRole(serverId, user.id);
-        const targetRole = await getMemberRole(serverId, body.userId);
         if (body.userId === user.id) {
           fail(400, "You cannot ban yourself");
           return;
         }
+        // The user must exist (server_bans has an FK to users), but need NOT be
+        // a current member — pre-emptive bans are supported.
+        const target = await getUserById(body.userId);
+        if (!target) {
+          fail(404, "User not found");
+          return;
+        }
+        const actorRole = await getMemberRole(serverId, user.id);
+        const targetRole = await getMemberRole(serverId, body.userId);
         if (targetRole === "owner") {
           fail(403, "Cannot ban the owner");
           return;
@@ -326,6 +334,7 @@ export async function handleApi(
           fail(403, "Only the owner can ban an admin");
           return;
         }
+        // targetRole may be null here (non-member) — that is a valid ban.
         await banMember(serverId, body.userId, user.id, body.reason);
         json(200, { ok: true });
         return;
