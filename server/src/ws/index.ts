@@ -1,13 +1,16 @@
 import type { WebSocket } from "ws";
 import { DEV_AUTH_TOKEN, isDevAuthBypassEnabled, resolveAuthUser } from "../auth/clerk.js";
+import { logEvent, nextConnectionId } from "../lib/log.js";
 import { handleChatMessage } from "./chat.js";
 import {
   deleteAuthenticatedSocket,
   getAuthenticatedSocket,
+  getSocketUser,
   setAuthenticatedSocket,
 } from "./sockets.js";
 import {
   handleVoiceMessage,
+  isSocketInVoice,
   removeVoicePeerBySocket,
   sendAllVoiceRosters,
 } from "./voice.js";
@@ -16,9 +19,12 @@ export { forEachAuthenticatedSocket, getSocketUser } from "./sockets.js";
 
 export function handleWsConnection(socket: WebSocket) {
   let authenticated = false;
+  const connId = nextConnectionId();
+  logEvent("ws.connect", { connId });
 
   const authTimeout = setTimeout(() => {
     if (!authenticated) {
+      logEvent("ws.authTimeout", { connId });
       socket.close(4401, "Auth timeout");
     }
   }, 10_000);
@@ -50,6 +56,7 @@ export function handleWsConnection(socket: WebSocket) {
 
       const resolved = await resolveAuthUser(authHeader);
       if (!resolved) {
+        logEvent("ws.authFail", { connId });
         socket.close(4401, "Unauthorized");
         return;
       }
@@ -57,6 +64,7 @@ export function handleWsConnection(socket: WebSocket) {
       authenticated = true;
       clearTimeout(authTimeout);
       setAuthenticatedSocket(socket, resolved.user);
+      logEvent("ws.auth", { connId, userId: resolved.user.id });
       socket.send(JSON.stringify({ type: "ready" }));
       void sendAllVoiceRosters(socket, resolved.user);
       return;
@@ -86,9 +94,21 @@ export function handleWsConnection(socket: WebSocket) {
     }
   });
 
-  socket.on("close", () => {
+  socket.on("close", (code: number, reason: Buffer) => {
     clearTimeout(authTimeout);
+    const user = getSocketUser(socket);
+    logEvent("ws.close", {
+      connId,
+      userId: user?.id,
+      code,
+      reason: reason?.toString() || undefined,
+      wasInVoice: isSocketInVoice(socket),
+    });
     removeVoicePeerBySocket(socket);
     deleteAuthenticatedSocket(socket);
+  });
+
+  socket.on("error", (error: Error) => {
+    logEvent("ws.error", { connId, message: error.message });
   });
 }

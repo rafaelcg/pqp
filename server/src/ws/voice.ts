@@ -8,6 +8,7 @@ import {
   type VoiceSignalingMessage,
 } from "@pqp/shared";
 import type { DbUser } from "../db.js";
+import { logEvent } from "../lib/log.js";
 import { getChannel } from "../services/servers.js";
 import { isChannelMember, isServerMember, listServerMemberIds } from "../services/users.js";
 import { forEachAuthenticatedSocket } from "./sockets.js";
@@ -94,6 +95,12 @@ function removePeer(peerId: string) {
   const { voiceChannelId, serverId } = peer;
   peers.delete(peerId);
   socketToPeerId.delete(peer.socket);
+  logEvent("voice.leave", {
+    peerId,
+    userId: peer.userId,
+    voiceChannelId,
+    roomSize: getRoomPeers(voiceChannelId).length,
+  });
   broadcastToRoom(voiceChannelId, { type: "peer-left", peerId });
   void broadcastRoster(voiceChannelId, serverId);
 }
@@ -103,6 +110,11 @@ export function removeVoicePeerBySocket(socket: WebSocket) {
   if (peerId) {
     removePeer(peerId);
   }
+}
+
+/** Whether a socket currently holds a voice peer (for disconnect diagnostics). */
+export function isSocketInVoice(socket: WebSocket): boolean {
+  return socketToPeerId.has(socket);
 }
 
 /**
@@ -169,6 +181,11 @@ export async function handleVoiceMessage(
         (p) => p.socket !== socket,
       ).length >= MESH_VOICE_LIMIT;
     if (roomIsFull) {
+      logEvent("voice.roomFull", {
+        userId: user.id,
+        voiceChannelId: payload.voiceChannelId,
+        limit: MESH_VOICE_LIMIT,
+      });
       send(socket, {
         type: "voice-room-full",
         voiceChannelId: payload.voiceChannelId,
@@ -193,6 +210,12 @@ export async function handleVoiceMessage(
     };
     peers.set(peerId, peer);
     socketToPeerId.set(socket, peerId);
+    logEvent("voice.join", {
+      peerId,
+      userId: user.id,
+      voiceChannelId: payload.voiceChannelId,
+      roomSize: getRoomPeers(payload.voiceChannelId).length,
+    });
 
     const self = toParticipant(peer);
     const existingPeers = getRoomPeers(payload.voiceChannelId)
