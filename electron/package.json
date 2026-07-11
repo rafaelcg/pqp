@@ -28,6 +28,10 @@
     "appId": "gg.pqp.app",
     "productName": "pqp",
     "copyright": "Copyright © pqp contributors",
+    "extraMetadata": {
+      "name": "pqp"
+    },
+    "artifactName": "${productName}-${version}.${ext}",
     "directories": {
       "output": "release",
       "buildResources": "build"
@@ -93,7 +97,8 @@
       "mimeTypes": [
         "x-scheme-handler/pqp"
       ],
-      "maintainer": "pqp <pqp@users.noreply.github.com>"
+      "maintainer": "pqp <pqp@users.noreply.github.com>",
+      "executableName": "pqp"
     },
     "nsis": {
       "oneClick": false,
