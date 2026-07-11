@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "pnpm run --parallel --filter @pqp/client --filter @pqp/server dev",
     "build": "pnpm run -r --filter=!@pqp/electron build",
+    "test": "pnpm --filter @pqp/server test",
     "start": "pnpm --filter @pqp/server start",
     "electron:dev": "pnpm --filter @pqp/electron dev",
     "electron:dist": "pnpm --filter @pqp/client build && pnpm --filter @pqp/electron dist",

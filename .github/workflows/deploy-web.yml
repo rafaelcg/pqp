@@ -1,7 +1,11 @@
 name: Deploy Web
 
+# Only deploy after CI succeeds on main (workflow_run), so a commit that fails
+# typecheck/build/test never reaches production. Manual dispatch stays available.
 on:
-  push:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
 
@@ -14,6 +18,8 @@ jobs:
     name: Build & deploy Cloudflare Pages
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # Skip when triggered by a failed CI run; always run on manual dispatch.
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     permissions:
       contents: read
       deployments: write
