@@ -6,6 +6,7 @@ FROM base AS deps
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml* ./
 COPY server/package.json ./server/
 COPY client/package.json ./client/
+COPY electron/package.json ./electron/
 COPY packages/shared/package.json ./packages/shared/
 RUN pnpm install --frozen-lockfile || pnpm install
 
@@ -20,14 +21,15 @@ RUN pnpm run build
 FROM node:22-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml* ./
+COPY server/package.json ./server/
+COPY packages/shared/package.json ./packages/shared/
 COPY --from=build /app/server/dist ./server/dist
-COPY --from=build /app/server/package.json ./server/
-COPY --from=build /app/client/dist ./client/dist
 COPY --from=build /app/packages/shared/dist ./packages/shared/dist
-COPY --from=build /app/packages/shared/package.json ./packages/shared/
-COPY package.json pnpm-workspace.yaml ./
-RUN corepack enable && corepack prepare pnpm@9 --activate
-RUN cd server && npm install --omit=dev 2>/dev/null || pnpm install --prod --filter @pqp/server
+COPY --from=build /app/client/dist ./client/dist
+RUN corepack enable && corepack prepare pnpm@9 --activate \
+  && pnpm install --prod --filter @pqp/server --filter @pqp/shared --frozen-lockfile \
+  || pnpm install --prod --filter @pqp/server --filter @pqp/shared
 
 EXPOSE 3001
 CMD ["node", "server/dist/index.js"]
