@@ -13,7 +13,18 @@ export function getPool(): pg.Pool {
     if (!connectionString) {
       throw new Error("DATABASE_URL is required");
     }
-    pool = new pg.Pool({ connectionString });
+    // Opt into TLS when the host needs it (most managed Postgres over public
+    // networking). Left off by default so local/dev works without certs.
+    const useSsl =
+      process.env.DATABASE_SSL === "true" ||
+      process.env.PGSSLMODE === "require";
+    pool = new pg.Pool({
+      connectionString,
+      max: Number(process.env.PG_POOL_MAX ?? 10),
+      idleTimeoutMillis: 30_000,
+      connectionTimeoutMillis: 10_000,
+      ...(useSsl ? { ssl: { rejectUnauthorized: false } } : {}),
+    });
     // Idle-client errors (Postgres restart, network blip) are emitted on the
     // pool; without a listener they crash the process.
     pool.on("error", (error) => {
