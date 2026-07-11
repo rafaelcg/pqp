@@ -37,7 +37,7 @@ export async function createServer(
       `INSERT INTO channels (server_id, name, type, position, is_private) VALUES
          ($1, 'general', 'text', 0, FALSE),
          ($1, 'Lobby', 'voice', 1, FALSE)
-       RETURNING id, server_id, name, type, position, is_private`,
+       RETURNING id, server_id, name, type, position, is_private, topic, image_url`,
       [server.id],
     );
 
@@ -56,7 +56,7 @@ export async function listChannels(
   userId: string,
 ): Promise<DbChannel[]> {
   const result = await getPool().query<DbChannel>(
-    `SELECT c.id, c.server_id, c.name, c.type, c.position, c.is_private
+    `SELECT c.id, c.server_id, c.name, c.type, c.position, c.is_private, c.topic, c.image_url
      FROM channels c
      JOIN server_members sm ON sm.server_id = c.server_id
      WHERE c.server_id = $1 AND sm.user_id = $2
@@ -89,7 +89,7 @@ export async function createChannel(
   const result = await getPool().query<DbChannel>(
     `INSERT INTO channels (server_id, name, type, position, is_private)
      VALUES ($1, $2, $3, $4, $5)
-     RETURNING id, server_id, name, type, position, is_private`,
+     RETURNING id, server_id, name, type, position, is_private, topic, image_url`,
     [serverId, name, type, position, isPrivate],
   );
   return result.rows[0]!;
@@ -97,15 +97,30 @@ export async function createChannel(
 
 export async function updateChannel(
   channelId: string,
-  updates: { name?: string; isPrivate?: boolean },
+  updates: {
+    name?: string;
+    isPrivate?: boolean;
+    topic?: string | null;
+    imageUrl?: string | null;
+  },
 ): Promise<DbChannel | null> {
   const result = await getPool().query<DbChannel>(
     `UPDATE channels SET
        name = COALESCE($2, name),
-       is_private = COALESCE($3, is_private)
+       is_private = COALESCE($3, is_private),
+       topic = CASE WHEN $4::boolean THEN $5 ELSE topic END,
+       image_url = CASE WHEN $6::boolean THEN $7 ELSE image_url END
      WHERE id = $1
-     RETURNING id, server_id, name, type, position, is_private`,
-    [channelId, updates.name ?? null, updates.isPrivate ?? null],
+     RETURNING id, server_id, name, type, position, is_private, topic, image_url`,
+    [
+      channelId,
+      updates.name ?? null,
+      updates.isPrivate ?? null,
+      updates.topic !== undefined,
+      updates.topic === "" ? null : (updates.topic ?? null),
+      updates.imageUrl !== undefined,
+      updates.imageUrl === "" ? null : (updates.imageUrl ?? null),
+    ],
   );
   return result.rows[0] ?? null;
 }
@@ -120,7 +135,7 @@ export async function deleteChannel(channelId: string): Promise<boolean> {
 
 export async function getChannel(channelId: string): Promise<DbChannel | null> {
   const result = await getPool().query<DbChannel>(
-    `SELECT id, server_id, name, type, position, is_private FROM channels WHERE id = $1`,
+    `SELECT id, server_id, name, type, position, is_private, topic, image_url FROM channels WHERE id = $1`,
     [channelId],
   );
   return result.rows[0] ?? null;
@@ -179,6 +194,8 @@ export function mapChannel(c: DbChannel) {
     type: c.type,
     position: c.position,
     isPrivate: c.is_private,
+    topic: c.topic ?? null,
+    imageUrl: c.image_url ?? null,
   };
 }
 

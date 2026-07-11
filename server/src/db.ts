@@ -47,6 +47,8 @@ export interface DbChannel {
   type: "text" | "voice";
   position: number;
   is_private: boolean;
+  topic: string | null;
+  image_url: string | null;
 }
 
 export interface DbMessage {

@@ -1,15 +1,22 @@
 import {
   MESH_VOICE_WARNING,
   type ClientRelayMessage,
+  type VoiceParticipant,
   type VoiceSignalingMessage,
 } from "@pqp/shared";
 import { buildAudioConstraints } from "@/lib/audio-devices";
 import {
   createPeerConnectionManager,
+  getDefaultIceServers,
   type PeerConnectionState,
   type RemotePeer,
 } from "@/lib/peer-connection-manager";
 import type { RealtimeTransport } from "@/lib/realtime";
+import {
+  createSpeakingTracker,
+  createStreamAnalyser,
+  readAnalyserLevel,
+} from "@/lib/voice-audio";
 
 export type VoiceStatus = "idle" | "joining" | "connected";
 
@@ -25,6 +32,10 @@ export interface VoiceState {
   isMuted: boolean;
   error: string | null;
   voiceChannelId: string | null;
+  self: VoiceParticipant | null;
+  speakingPeerIds: string[];
+  /** channelId → participants currently in that voice channel */
+  occupancy: Record<string, VoiceParticipant[]>;
 }
 
 interface MicPipeline {
@@ -35,11 +46,29 @@ interface MicPipeline {
   analyser: AnalyserNode;
 }
 
+interface IceServerConfig {
+  urls: string | string[];
+  username?: string;
+  credential?: string;
+}
+
 function clampVolume(value: number): number {
   if (Number.isNaN(value)) {
     return 1;
   }
   return Math.min(2, Math.max(0, value));
+}
+
+function sameSpeaking(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) {
+    return false;
+  }
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) {
+      return false;
+    }
+  }
+  return true;
 }
 
 async function createMicPipeline(
@@ -87,6 +116,13 @@ export function createVoiceController(transport: RealtimeTransport) {
   let manager: ReturnType<typeof createPeerConnectionManager> | null = null;
   let pipeline: MicPipeline | null = null;
   let joinTimeoutId: ReturnType<typeof setTimeout> | null = null;
+  let speakingRaf = 0;
+  let iceServers: RTCIceServer[] = getDefaultIceServers();
+  const remoteAnalysers = new Map<
+    string,
+    { analyser: AnalyserNode; dispose: () => void }
+  >();
+  const speakingTracker = createSpeakingTracker();
   let audioOptions: VoiceAudioOptions = {
     inputDeviceId: "",
     inputVolume: 1,
@@ -98,6 +134,9 @@ export function createVoiceController(transport: RealtimeTransport) {
     isMuted: false,
     error: null,
     voiceChannelId: null,
+    self: null,
+    speakingPeerIds: [],
+    occupancy: {},
   };
   let listener: ((state: VoiceState) => void) | null = null;
 
@@ -109,7 +148,13 @@ export function createVoiceController(transport: RealtimeTransport) {
   }
 
   function emit() {
-    listener?.({ ...state });
+    listener?.({
+      ...state,
+      remotePeers: [...state.remotePeers],
+      speakingPeerIds: [...state.speakingPeerIds],
+      occupancy: { ...state.occupancy },
+      self: state.self ? { ...state.self } : null,
+    });
   }
 
   function sendRelay(message: ClientRelayMessage) {
@@ -131,31 +176,136 @@ export function createVoiceController(transport: RealtimeTransport) {
     }
   }
 
+  function disposeRemoteAnalysers() {
+    for (const entry of remoteAnalysers.values()) {
+      entry.dispose();
+    }
+    remoteAnalysers.clear();
+  }
+
+  function syncRemoteAnalysers(peers: RemotePeer[]) {
+    const live = new Set(peers.map((p) => p.peerId));
+    for (const [peerId, entry] of remoteAnalysers) {
+      if (!live.has(peerId)) {
+        entry.dispose();
+        remoteAnalysers.delete(peerId);
+      }
+    }
+    for (const peer of peers) {
+      if (!peer.stream || remoteAnalysers.has(peer.peerId)) {
+        continue;
+      }
+      const created = createStreamAnalyser(peer.stream);
+      if (created) {
+        remoteAnalysers.set(peer.peerId, {
+          analyser: created.analyser,
+          dispose: created.dispose,
+        });
+      }
+    }
+  }
+
+  function stopSpeakingLoop() {
+    if (speakingRaf) {
+      cancelAnimationFrame(speakingRaf);
+      speakingRaf = 0;
+    }
+    speakingTracker.clear();
+    if (state.speakingPeerIds.length > 0) {
+      state.speakingPeerIds = [];
+      emit();
+    }
+  }
+
+  function startSpeakingLoop() {
+    stopSpeakingLoop();
+    const tick = () => {
+      const next: string[] = [];
+      if (pipeline && state.peerId && !state.isMuted) {
+        const level = readAnalyserLevel(pipeline.analyser);
+        if (speakingTracker.update(state.peerId, level, true)) {
+          next.push(state.peerId);
+        }
+      } else if (state.peerId) {
+        speakingTracker.update(state.peerId, 0, false);
+      }
+
+      for (const [peerId, entry] of remoteAnalysers) {
+        const level = readAnalyserLevel(entry.analyser);
+        if (speakingTracker.update(peerId, level, true)) {
+          next.push(peerId);
+        }
+      }
+
+      next.sort();
+      if (!sameSpeaking(state.speakingPeerIds, next)) {
+        state.speakingPeerIds = next;
+        emit();
+      }
+      speakingRaf = requestAnimationFrame(tick);
+    };
+    speakingRaf = requestAnimationFrame(tick);
+  }
+
+  function toIdentity(participant: VoiceParticipant) {
+    return {
+      userId: participant.userId,
+      displayName: participant.displayName,
+      avatarUrl: participant.avatarUrl,
+    };
+  }
+
   function handleSignaling(message: VoiceSignalingMessage) {
     switch (message.type) {
+      case "voice-roster":
+        state.occupancy = {
+          ...state.occupancy,
+          [message.voiceChannelId]: message.participants,
+        };
+        if (message.participants.length === 0) {
+          const next = { ...state.occupancy };
+          delete next[message.voiceChannelId];
+          state.occupancy = next;
+        }
+        emit();
+        break;
       case "welcome":
         clearJoinTimeout();
         state.peerId = message.peerId;
         state.status = "connected";
         state.voiceChannelId = message.voiceChannelId;
-        manager = createPeerConnectionManager(message.peerId, sendRelay);
+        state.self = message.self;
+        manager = createPeerConnectionManager(
+          message.peerId,
+          sendRelay,
+          iceServers,
+        );
         if (pipeline) {
           manager.setLocalStream(pipeline.processedStream);
         }
         manager.onPeerStateChange((peers) => {
           state.remotePeers = peers;
+          syncRemoteAnalysers(peers);
           emit();
         });
-        for (const peerId of message.peers) {
-          manager.connectToPeer(peerId);
+        for (const peer of message.peers) {
+          manager.connectToPeer(peer.peerId, toIdentity(peer));
         }
+        startSpeakingLoop();
         emit();
         break;
       case "peer-joined":
-        manager?.connectToPeer(message.peerId);
+        manager?.connectToPeer(message.peer.peerId, toIdentity(message.peer));
         break;
       case "peer-left":
         manager?.removePeer(message.peerId);
+        {
+          const entry = remoteAnalysers.get(message.peerId);
+          if (entry) {
+            entry.dispose();
+            remoteAnalysers.delete(message.peerId);
+          }
+        }
         break;
       case "offer":
         void manager?.handleOffer(message.from, message.sdp);
@@ -175,7 +325,13 @@ export function createVoiceController(transport: RealtimeTransport) {
     },
 
     getState() {
-      return { ...state };
+      return {
+        ...state,
+        remotePeers: [...state.remotePeers],
+        speakingPeerIds: [...state.speakingPeerIds],
+        occupancy: { ...state.occupancy },
+        self: state.self ? { ...state.self } : null,
+      };
     },
 
     getAnalyser() {
@@ -183,6 +339,13 @@ export function createVoiceController(transport: RealtimeTransport) {
     },
 
     handleSignaling,
+
+    setIceServers(servers: IceServerConfig[]) {
+      if (servers.length === 0) {
+        return;
+      }
+      iceServers = servers as RTCIceServer[];
+    },
 
     async join(voiceChannelId: string, options?: VoiceAudioOptions) {
       state.error = null;
@@ -237,6 +400,8 @@ export function createVoiceController(transport: RealtimeTransport) {
 
     leave() {
       clearJoinTimeout();
+      stopSpeakingLoop();
+      disposeRemoteAnalysers();
       transport.sendVoice({ type: "leave-voice-room" });
       manager?.dispose();
       manager = null;
@@ -249,6 +414,9 @@ export function createVoiceController(transport: RealtimeTransport) {
         isMuted: false,
         error: null,
         voiceChannelId: null,
+        self: null,
+        speakingPeerIds: [],
+        occupancy: state.occupancy,
       };
       emit();
     },
@@ -305,9 +473,7 @@ export function createVoiceController(transport: RealtimeTransport) {
         emit();
       } catch (err) {
         state.error =
-          err instanceof Error
-            ? err.message
-            : "Failed to switch microphone";
+          err instanceof Error ? err.message : "Failed to switch microphone";
         emit();
       }
     },

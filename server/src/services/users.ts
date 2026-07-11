@@ -46,13 +46,13 @@ export async function upsertUser(auth: AuthUser): Promise<DbUser> {
   );
 
   if (existing.rows[0]) {
+    // Do not clobber profile edits on every auth; only fill empty avatar from Clerk.
     const result = await getPool().query<DbUser>(
       `UPDATE users SET
-         display_name = $2,
-         avatar_url = $3
+         avatar_url = COALESCE(avatar_url, $2)
        WHERE clerk_id = $1
        RETURNING id, clerk_id, display_name, username, discriminator, avatar_url`,
-      [auth.clerkId, auth.displayName, auth.avatarUrl],
+      [auth.clerkId, auth.avatarUrl],
     );
     const user = result.rows[0]!;
     if (!user.username || !user.discriminator) {
@@ -96,7 +96,11 @@ export async function getUserById(userId: string): Promise<DbUser | null> {
 
 export async function updateProfile(
   userId: string,
-  updates: { displayName?: string; username?: string },
+  updates: {
+    displayName?: string;
+    username?: string;
+    avatarUrl?: string | null;
+  },
 ): Promise<DbUser> {
   const current = await getUserById(userId);
   if (!current) {
@@ -111,14 +115,28 @@ export async function updateProfile(
     discriminator = await allocateDiscriminator(updates.username);
   }
 
+  const avatarUrl =
+    updates.avatarUrl !== undefined
+      ? updates.avatarUrl === ""
+        ? null
+        : updates.avatarUrl
+      : current.avatar_url;
+
   const result = await getPool().query<DbUser>(
     `UPDATE users SET
        display_name = COALESCE($2, display_name),
        username = $3,
-       discriminator = $4
+       discriminator = $4,
+       avatar_url = $5
      WHERE id = $1
      RETURNING id, clerk_id, display_name, username, discriminator, avatar_url`,
-    [userId, updates.displayName ?? null, username, discriminator],
+    [
+      userId,
+      updates.displayName ?? null,
+      username,
+      discriminator,
+      avatarUrl,
+    ],
   );
   return result.rows[0]!;
 }

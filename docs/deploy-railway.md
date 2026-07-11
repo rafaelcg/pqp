@@ -33,9 +33,15 @@ Also add `https://pqp-3yr.pages.dev` (and any custom domain) to your Clerk app�
 3. Copy publishable key → `VITE_CLERK_PUBLISHABLE_KEY`
 4. Copy secret key → `CLERK_SECRET_KEY`
 
-## TURN (optional)
+## TURN
 
-For voice across different networks, configure Cloudflare TURN or coturn and set `VITE_TURN_*` in the client build env.
+For voice across different networks, set on the **Railway API** (preferred):
+
+- `TURN_URL` — e.g. `turn:turn.example.com:3478` (comma-separated for multiple)
+- `TURN_USERNAME`
+- `TURN_CREDENTIAL`
+
+The client fetches these from `GET /api/ice-servers` at bootstrap. If unset, the API falls back to public STUN + Metered Open Relay so mesh voice still works across NATs.
 
 ## What you get
 

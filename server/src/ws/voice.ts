@@ -3,16 +3,20 @@ import type { WebSocket } from "ws";
 import {
   isClientRelayMessage,
   voiceClientMessageSchema,
+  type VoiceParticipant,
   type VoiceSignalingMessage,
 } from "@pqp/shared";
 import type { DbUser } from "../db.js";
 import { getChannel } from "../services/servers.js";
 import { isChannelMember } from "../services/users.js";
+import { forEachAuthenticatedSocket } from "./sockets.js";
 
 interface VoicePeer {
   id: string;
   socket: WebSocket;
   userId: string;
+  displayName: string;
+  avatarUrl: string | null;
   voiceChannelId: string;
 }
 
@@ -21,6 +25,15 @@ const socketToPeerId = new Map<WebSocket, string>();
 
 function getRoomPeers(voiceChannelId: string): VoicePeer[] {
   return [...peers.values()].filter((p) => p.voiceChannelId === voiceChannelId);
+}
+
+function toParticipant(peer: VoicePeer): VoiceParticipant {
+  return {
+    peerId: peer.id,
+    userId: peer.userId,
+    displayName: peer.displayName,
+    avatarUrl: peer.avatarUrl,
+  };
 }
 
 function send(socket: WebSocket, message: VoiceSignalingMessage) {
@@ -41,6 +54,17 @@ function broadcastToRoom(
   }
 }
 
+function broadcastRoster(voiceChannelId: string) {
+  const message: VoiceSignalingMessage = {
+    type: "voice-roster",
+    voiceChannelId,
+    participants: getRoomPeers(voiceChannelId).map(toParticipant),
+  };
+  forEachAuthenticatedSocket((socket) => {
+    send(socket, message);
+  });
+}
+
 function relayToTarget(message: VoiceSignalingMessage & { to: string }) {
   const target = peers.get(message.to);
   if (target) {
@@ -57,12 +81,30 @@ function removePeer(peerId: string) {
   peers.delete(peerId);
   socketToPeerId.delete(peer.socket);
   broadcastToRoom(voiceChannelId, { type: "peer-left", peerId });
+  broadcastRoster(voiceChannelId);
 }
 
 export function removeVoicePeerBySocket(socket: WebSocket) {
   const peerId = socketToPeerId.get(socket);
   if (peerId) {
     removePeer(peerId);
+  }
+}
+
+/** Send current voice occupancy for every active room (e.g. after auth). */
+export function sendAllVoiceRosters(socket: WebSocket) {
+  const byChannel = new Map<string, VoiceParticipant[]>();
+  for (const peer of peers.values()) {
+    const list = byChannel.get(peer.voiceChannelId) ?? [];
+    list.push(toParticipant(peer));
+    byChannel.set(peer.voiceChannelId, list);
+  }
+  for (const [voiceChannelId, participants] of byChannel) {
+    send(socket, {
+      type: "voice-roster",
+      voiceChannelId,
+      participants,
+    });
   }
 }
 
@@ -98,27 +140,32 @@ export async function handleVoiceMessage(
       id: peerId,
       socket,
       userId: user.id,
+      displayName: user.display_name,
+      avatarUrl: user.avatar_url,
       voiceChannelId: payload.voiceChannelId,
     };
     peers.set(peerId, peer);
     socketToPeerId.set(socket, peerId);
 
-    const existingPeerIds = getRoomPeers(payload.voiceChannelId)
-      .map((p) => p.id)
-      .filter((id) => id !== peerId);
+    const self = toParticipant(peer);
+    const existingPeers = getRoomPeers(payload.voiceChannelId)
+      .filter((p) => p.id !== peerId)
+      .map(toParticipant);
 
     send(socket, {
       type: "welcome",
       peerId,
-      peers: existingPeerIds,
+      peers: existingPeers,
       voiceChannelId: payload.voiceChannelId,
+      self,
     });
 
     broadcastToRoom(
       payload.voiceChannelId,
-      { type: "peer-joined", peerId },
+      { type: "peer-joined", peer: self },
       peerId,
     );
+    broadcastRoster(payload.voiceChannelId);
     return;
   }
 

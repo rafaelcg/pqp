@@ -6,17 +6,28 @@ export interface RemotePeer {
   peerId: string;
   connectionState: PeerConnectionState;
   stream: MediaStream | null;
+  userId?: string;
+  displayName?: string;
+  avatarUrl?: string | null;
 }
 
 export type SignalingSend = (message: ClientRelayMessage) => void;
 
 export type PeerStateChangeHandler = (peers: RemotePeer[]) => void;
 
-function buildIceServers(): RTCIceServer[] {
-  const servers: RTCIceServer[] = [
-    { urls: "stun:stun.l.google.com:19302" },
-  ];
+export interface PeerIdentity {
+  userId: string;
+  displayName: string;
+  avatarUrl: string | null;
+}
 
+const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
+  { urls: "stun:stun.l.google.com:19302" },
+  { urls: "stun:stun1.l.google.com:19302" },
+];
+
+export function getDefaultIceServers(): RTCIceServer[] {
+  const servers = [...DEFAULT_ICE_SERVERS];
   const turnUrl = import.meta.env.VITE_TURN_URL as string | undefined;
   const turnUsername = import.meta.env.VITE_TURN_USERNAME as string | undefined;
   const turnCredential = import.meta.env.VITE_TURN_CREDENTIAL as
@@ -57,15 +68,22 @@ interface ManagedPeer {
   connectionState: PeerConnectionState;
   stream: MediaStream | null;
   pendingCandidates: RTCIceCandidateInit[];
+  userId?: string;
+  displayName?: string;
+  avatarUrl?: string | null;
 }
 
 export interface PeerConnectionManager {
   setLocalStream(stream: MediaStream): void;
   replaceLocalTrack(stream: MediaStream): Promise<void>;
-  connectToPeer(remotePeerId: string): void;
+  connectToPeer(remotePeerId: string, identity?: PeerIdentity): void;
+  setPeerIdentity(remotePeerId: string, identity: PeerIdentity): void;
   handleOffer(from: string, sdp: string): Promise<void>;
   handleAnswer(from: string, sdp: string): Promise<void>;
-  handleIceCandidate(from: string, candidate: RTCIceCandidateInit | null): Promise<void>;
+  handleIceCandidate(
+    from: string,
+    candidate: RTCIceCandidateInit | null,
+  ): Promise<void>;
   removePeer(remotePeerId: string): void;
   dispose(): void;
   onPeerStateChange(handler: PeerStateChangeHandler): void;
@@ -74,6 +92,7 @@ export interface PeerConnectionManager {
 export function createPeerConnectionManager(
   localPeerId: string,
   send: SignalingSend,
+  iceServers: RTCIceServer[] = getDefaultIceServers(),
 ): PeerConnectionManager {
   const peers = new Map<string, ManagedPeer>();
   let localStream: MediaStream | null = null;
@@ -84,12 +103,27 @@ export function createPeerConnectionManager(
       peerId: peer.peerId,
       connectionState: peer.connectionState,
       stream: peer.stream,
+      userId: peer.userId,
+      displayName: peer.displayName,
+      avatarUrl: peer.avatarUrl,
     }));
     stateHandler?.(remotePeers);
   }
 
-  function createPeerConnection(remotePeerId: string): ManagedPeer {
-    const pc = new RTCPeerConnection({ iceServers: buildIceServers() });
+  function applyIdentity(peer: ManagedPeer, identity?: PeerIdentity) {
+    if (!identity) {
+      return;
+    }
+    peer.userId = identity.userId;
+    peer.displayName = identity.displayName;
+    peer.avatarUrl = identity.avatarUrl;
+  }
+
+  function createPeerConnection(
+    remotePeerId: string,
+    identity?: PeerIdentity,
+  ): ManagedPeer {
+    const pc = new RTCPeerConnection({ iceServers });
 
     const managed: ManagedPeer = {
       peerId: remotePeerId,
@@ -101,15 +135,14 @@ export function createPeerConnectionManager(
       stream: null,
       pendingCandidates: [],
     };
+    applyIdentity(managed, identity);
 
     pc.onicecandidate = (event) => {
       send({
         type: "ice-candidate",
         from: localPeerId,
         to: remotePeerId,
-        candidate: event.candidate
-          ? event.candidate.toJSON()
-          : null,
+        candidate: event.candidate ? event.candidate.toJSON() : null,
       });
     };
 
@@ -225,18 +258,32 @@ export function createPeerConnectionManager(
       }
     },
 
-    connectToPeer(remotePeerId: string) {
-      if (peers.has(remotePeerId)) {
+    connectToPeer(remotePeerId: string, identity?: PeerIdentity) {
+      const existing = peers.get(remotePeerId);
+      if (existing) {
+        if (identity) {
+          applyIdentity(existing, identity);
+          emitState();
+        }
         return;
       }
 
-      const managed = createPeerConnection(remotePeerId);
+      const managed = createPeerConnection(remotePeerId, identity);
       peers.set(remotePeerId, managed);
       emitState();
 
       if (isImpolite(localPeerId, remotePeerId)) {
         void negotiateAsImpolite(managed);
       }
+    },
+
+    setPeerIdentity(remotePeerId: string, identity: PeerIdentity) {
+      const peer = peers.get(remotePeerId);
+      if (!peer) {
+        return;
+      }
+      applyIdentity(peer, identity);
+      emitState();
     },
 
     async handleOffer(from: string, sdp: string) {

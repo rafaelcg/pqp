@@ -1,8 +1,9 @@
 import { useEffect, useRef } from "react";
-import { MESH_VOICE_WARNING } from "@pqp/shared";
+import { MESH_VOICE_WARNING, type VoiceParticipant } from "@pqp/shared";
 import type { RemotePeer } from "@/lib/peer-connection-manager";
 import { applyAudioOutputDevice } from "@/lib/audio-devices";
 import { Button } from "@/components/ui/button";
+import { VoiceAvatar } from "@/components/voice/voice-avatar";
 
 interface PeerAudioProps {
   peerId: string;
@@ -61,6 +62,9 @@ interface VoicePanelProps {
   channelName: string;
   status: "idle" | "joining" | "connected";
   remotePeers: RemotePeer[];
+  self: VoiceParticipant | null;
+  localPeerId: string | null;
+  speakingPeerIds: string[];
   isMuted: boolean;
   error: string | null;
   compactPeers?: boolean;
@@ -75,6 +79,9 @@ export function VoicePanel({
   channelName,
   status,
   remotePeers,
+  self,
+  localPeerId,
+  speakingPeerIds,
   isMuted,
   error,
   compactPeers = false,
@@ -85,6 +92,9 @@ export function VoicePanel({
   onToggleMute,
 }: VoicePanelProps) {
   const showWarning = remotePeers.length >= MESH_VOICE_WARNING;
+  const speaking = new Set(speakingPeerIds);
+  const connectedCount =
+    (status === "connected" && self ? 1 : 0) + remotePeers.length;
 
   return (
     <div className="flex h-full min-h-0 flex-col border-b border-panel-hover lg:border-b-0 lg:border-r">
@@ -135,41 +145,68 @@ export function VoicePanel({
 
             <div className="rounded-lg border border-ink-4 bg-ink p-3">
               <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-paper-muted">
-                Connected ({remotePeers.length})
+                Connected ({connectedCount})
               </h3>
-              {remotePeers.length === 0 ? (
-                <p className="text-sm text-muted">Waiting for others…</p>
-              ) : (
-                <ul className={compactPeers ? "space-y-1" : "space-y-2"}>
-                  {remotePeers.map((peer) => (
-                    <li
-                      key={peer.peerId}
-                      className="flex items-center justify-between gap-2 text-sm"
-                    >
-                      <code className="truncate text-xs text-muted">
-                        {peer.peerId.slice(0, compactPeers ? 6 : 8)}…
-                      </code>
-                      <span
-                        className={`rounded px-2 py-0.5 text-[10px] uppercase ${
-                          peer.connectionState === "connected"
-                            ? "bg-success/20 text-success"
-                            : peer.connectionState === "failed"
-                              ? "bg-danger/20 text-danger"
-                              : "bg-warning/20 text-warning"
-                        }`}
-                      >
-                        {peer.connectionState}
+              <ul className={compactPeers ? "space-y-1" : "space-y-2"}>
+                {self && (
+                  <li className="flex items-center gap-2 text-sm">
+                    <VoiceAvatar
+                      name={self.displayName}
+                      avatarUrl={self.avatarUrl}
+                      isSpeaking={
+                        !!localPeerId && speaking.has(localPeerId) && !isMuted
+                      }
+                      muted={isMuted}
+                      size={compactPeers ? "sm" : "md"}
+                    />
+                    <span className="min-w-0 flex-1 truncate font-medium">
+                      {self.displayName}
+                      <span className="ml-1 text-xs text-paper-muted">
+                        (you)
                       </span>
-                      <PeerAudio
-                        peerId={peer.peerId}
-                        stream={peer.stream}
-                        outputDeviceId={outputDeviceId}
-                        outputVolume={outputVolume}
-                      />
-                    </li>
-                  ))}
-                </ul>
-              )}
+                    </span>
+                    {isMuted && (
+                      <span className="rounded bg-danger/20 px-2 py-0.5 text-[10px] uppercase text-danger">
+                        Muted
+                      </span>
+                    )}
+                  </li>
+                )}
+                {remotePeers.map((peer) => (
+                  <li
+                    key={peer.peerId}
+                    className="flex items-center gap-2 text-sm"
+                  >
+                    <VoiceAvatar
+                      name={peer.displayName ?? "Peer"}
+                      avatarUrl={peer.avatarUrl}
+                      isSpeaking={speaking.has(peer.peerId)}
+                      size={compactPeers ? "sm" : "md"}
+                    />
+                    <span className="min-w-0 flex-1 truncate font-medium">
+                      {peer.displayName ??
+                        `${peer.peerId.slice(0, compactPeers ? 6 : 8)}…`}
+                    </span>
+                    <span
+                      className={`rounded px-2 py-0.5 text-[10px] uppercase ${
+                        peer.connectionState === "connected"
+                          ? "bg-success/20 text-success"
+                          : peer.connectionState === "failed"
+                            ? "bg-danger/20 text-danger"
+                            : "bg-warning/20 text-warning"
+                      }`}
+                    >
+                      {peer.connectionState}
+                    </span>
+                    <PeerAudio
+                      peerId={peer.peerId}
+                      stream={peer.stream}
+                      outputDeviceId={outputDeviceId}
+                      outputVolume={outputVolume}
+                    />
+                  </li>
+                ))}
+              </ul>
             </div>
           </div>
         )}

@@ -1,11 +1,12 @@
 import { Hash, Lock, Mic, Plus, Users, X } from "lucide-react";
 import type { ReactNode } from "react";
-import type { Channel, Server } from "@pqp/shared";
+import type { Channel, Server, VoiceParticipant } from "@pqp/shared";
 import {
   ContextMenu,
   type ContextMenuItemDef,
 } from "@/components/ui/context-menu";
 import { ChannelListSkeleton } from "@/components/ui/skeleton";
+import { VoiceAvatar } from "@/components/voice/voice-avatar";
 
 interface ChannelListProps {
   server: Server | null;
@@ -13,9 +14,12 @@ interface ChannelListProps {
   selectedChannelId: string | null;
   canManage: boolean;
   isLoading?: boolean;
+  voiceOccupancy?: Record<string, VoiceParticipant[]>;
+  speakingPeerIds?: string[];
   onSelectChannel: (channelId: string) => void;
   onCreateChannel: (type: "text" | "voice", isPrivate: boolean) => void;
   onRenameChannel: (channel: Channel) => void;
+  onEditChannelMeta?: (channel: Channel) => void;
   onDeleteChannel: (channelId: string) => void;
   onTogglePrivate: (channel: Channel) => void;
   onManageChannelMembers: (channel: Channel) => void;
@@ -32,9 +36,12 @@ export function ChannelList({
   selectedChannelId,
   canManage,
   isLoading = false,
+  voiceOccupancy = {},
+  speakingPeerIds = [],
   onSelectChannel,
   onCreateChannel,
   onRenameChannel,
+  onEditChannelMeta,
   onDeleteChannel,
   onTogglePrivate,
   onManageChannelMembers,
@@ -46,6 +53,7 @@ export function ChannelList({
 }: ChannelListProps) {
   const textChannels = channels.filter((c) => c.type === "text");
   const voiceChannels = channels.filter((c) => c.type === "voice");
+  const speaking = new Set(speakingPeerIds);
 
   return (
     <aside
@@ -105,65 +113,85 @@ export function ChannelList({
           <>
             <ChannelSection
               label="Text"
-          canManage={canManage}
-          onAdd={() => onCreateChannel("text", false)}
-          onAddPrivate={() => onCreateChannel("text", true)}
-        >
-          {textChannels.map((channel) => (
-            <ChannelRow
-              key={channel.id}
-              channel={channel}
-              selected={selectedChannelId === channel.id}
               canManage={canManage}
-              icon={
-                channel.isPrivate ? (
-                  <Lock className="h-3.5 w-3.5 shrink-0 text-warning" />
-                ) : (
-                  <Hash className="h-3.5 w-3.5 shrink-0" />
-                )
-              }
-              onSelect={() => {
-                onSelectChannel(channel.id);
-                onMobileClose?.();
-              }}
-              onRename={() => onRenameChannel(channel)}
-              onDelete={() => onDeleteChannel(channel.id)}
-              onTogglePrivate={() => onTogglePrivate(channel)}
-              onManageMembers={() => onManageChannelMembers(channel)}
-            />
-          ))}
-        </ChannelSection>
+              onAdd={() => onCreateChannel("text", false)}
+              onAddPrivate={() => onCreateChannel("text", true)}
+            >
+              {textChannels.map((channel) => (
+                <ChannelRow
+                  key={channel.id}
+                  channel={channel}
+                  selected={selectedChannelId === channel.id}
+                  canManage={canManage}
+                  icon={<ChannelIcon channel={channel} />}
+                  onSelect={() => {
+                    onSelectChannel(channel.id);
+                    onMobileClose?.();
+                  }}
+                  onRename={() => onRenameChannel(channel)}
+                  onEditMeta={
+                    onEditChannelMeta
+                      ? () => onEditChannelMeta(channel)
+                      : undefined
+                  }
+                  onDelete={() => onDeleteChannel(channel.id)}
+                  onTogglePrivate={() => onTogglePrivate(channel)}
+                  onManageMembers={() => onManageChannelMembers(channel)}
+                />
+              ))}
+            </ChannelSection>
 
-        <ChannelSection
-          label="Voice"
-          canManage={canManage}
-          onAdd={() => onCreateChannel("voice", false)}
-          onAddPrivate={() => onCreateChannel("voice", true)}
-        >
-          {voiceChannels.map((channel) => (
-            <ChannelRow
-              key={channel.id}
-              channel={channel}
-              selected={selectedChannelId === channel.id}
+            <ChannelSection
+              label="Voice"
               canManage={canManage}
-              icon={
-                channel.isPrivate ? (
-                  <Lock className="h-3.5 w-3.5 shrink-0 text-warning" />
-                ) : (
-                  <Mic className="h-3.5 w-3.5 shrink-0" />
-                )
-              }
-              onSelect={() => {
-                onSelectChannel(channel.id);
-                onMobileClose?.();
-              }}
-              onRename={() => onRenameChannel(channel)}
-              onDelete={() => onDeleteChannel(channel.id)}
-              onTogglePrivate={() => onTogglePrivate(channel)}
-              onManageMembers={() => onManageChannelMembers(channel)}
-            />
-          ))}
-        </ChannelSection>
+              onAdd={() => onCreateChannel("voice", false)}
+              onAddPrivate={() => onCreateChannel("voice", true)}
+            >
+              {voiceChannels.map((channel) => {
+                const occupants = voiceOccupancy[channel.id] ?? [];
+                return (
+                  <div key={channel.id} className="mb-0.5">
+                    <ChannelRow
+                      channel={channel}
+                      selected={selectedChannelId === channel.id}
+                      canManage={canManage}
+                      icon={<ChannelIcon channel={channel} />}
+                      onSelect={() => {
+                        onSelectChannel(channel.id);
+                        onMobileClose?.();
+                      }}
+                      onRename={() => onRenameChannel(channel)}
+                      onEditMeta={
+                        onEditChannelMeta
+                          ? () => onEditChannelMeta(channel)
+                          : undefined
+                      }
+                      onDelete={() => onDeleteChannel(channel.id)}
+                      onTogglePrivate={() => onTogglePrivate(channel)}
+                      onManageMembers={() => onManageChannelMembers(channel)}
+                    />
+                    {occupants.length > 0 && (
+                      <ul className="ml-2 space-y-0.5 border-l border-ink-4/70 py-0.5 pl-2">
+                        {occupants.map((person) => (
+                          <li
+                            key={person.peerId}
+                            className="flex items-center gap-1.5 rounded px-1.5 py-0.5 text-xs text-paper-muted"
+                          >
+                            <VoiceAvatar
+                              name={person.displayName}
+                              avatarUrl={person.avatarUrl}
+                              isSpeaking={speaking.has(person.peerId)}
+                              size="sm"
+                            />
+                            <span className="truncate">{person.displayName}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                );
+              })}
+            </ChannelSection>
           </>
         )}
       </div>
@@ -171,6 +199,32 @@ export function ChannelList({
       {footer}
     </aside>
   );
+}
+
+function ChannelIcon({ channel }: { channel: Channel }) {
+  if (channel.imageUrl) {
+    if (channel.imageUrl.startsWith("http") || channel.imageUrl.startsWith("/")) {
+      return (
+        <img
+          src={channel.imageUrl}
+          alt=""
+          className="h-3.5 w-3.5 shrink-0 rounded-sm object-cover"
+        />
+      );
+    }
+    return (
+      <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center text-[11px] leading-none">
+        {channel.imageUrl}
+      </span>
+    );
+  }
+  if (channel.isPrivate) {
+    return <Lock className="h-3.5 w-3.5 shrink-0 text-warning" />;
+  }
+  if (channel.type === "voice") {
+    return <Mic className="h-3.5 w-3.5 shrink-0" />;
+  }
+  return <Hash className="h-3.5 w-3.5 shrink-0" />;
 }
 
 function ChannelSection({
@@ -225,6 +279,7 @@ function ChannelRow({
   icon,
   onSelect,
   onRename,
+  onEditMeta,
   onDelete,
   onTogglePrivate,
   onManageMembers,
@@ -235,6 +290,7 @@ function ChannelRow({
   icon: ReactNode;
   onSelect: () => void;
   onRename: () => void;
+  onEditMeta?: () => void;
   onDelete: () => void;
   onTogglePrivate: () => void;
   onManageMembers: () => void;
@@ -244,12 +300,19 @@ function ChannelRow({
   if (canManage) {
     items.push(
       { id: "rename", label: "Rename channel", onSelect: onRename },
-      {
-        id: "private",
-        label: channel.isPrivate ? "Make public" : "Make private",
-        onSelect: onTogglePrivate,
-      },
     );
+    if (onEditMeta) {
+      items.push({
+        id: "meta",
+        label: "Edit topic & icon",
+        onSelect: onEditMeta,
+      });
+    }
+    items.push({
+      id: "private",
+      label: channel.isPrivate ? "Make public" : "Make private",
+      onSelect: onTogglePrivate,
+    });
     if (channel.isPrivate) {
       items.push({
         id: "invite-private",
@@ -282,7 +345,7 @@ function ChannelRow({
   return (
     <ContextMenu items={items}>
       <div
-        className={`group mb-0.5 flex items-center gap-1 rounded-md px-2 py-1.5 text-sm ${
+        className={`group flex items-center gap-1 rounded-md px-2 py-1.5 text-sm ${
           selected
             ? "bg-ink-3 text-paper"
             : "text-paper-muted hover:bg-ink-3/70 hover:text-paper"

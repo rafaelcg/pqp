@@ -37,6 +37,8 @@ export const channelSchema = z.object({
   type: channelTypeSchema,
   position: z.number(),
   isPrivate: z.boolean(),
+  topic: z.string().nullable().default(null),
+  imageUrl: z.string().nullable().default(null),
 });
 
 export const reactionEmojiSchema = z
@@ -96,6 +98,22 @@ export const updateChannelSchema = z.object({
     .regex(/^[a-z0-9-_]+$/i)
     .optional(),
   isPrivate: z.boolean().optional(),
+  topic: z.string().max(200).nullable().optional(),
+  imageUrl: z
+    .string()
+    .max(500)
+    .nullable()
+    .optional()
+    .refine(
+      (value) =>
+        value == null ||
+        value === "" ||
+        value.startsWith("http://") ||
+        value.startsWith("https://") ||
+        value.startsWith("/") ||
+        [...value].length <= 8,
+      "Use an image URL or a short emoji/icon",
+    ),
 });
 
 export const createInviteSchema = z.object({
@@ -106,7 +124,29 @@ export const createInviteSchema = z.object({
 export const updateProfileSchema = z.object({
   displayName: z.string().min(1).max(100).optional(),
   username: usernameSchema.optional(),
+  avatarUrl: z
+    .string()
+    .max(500)
+    .nullable()
+    .optional()
+    .refine(
+      (value) =>
+        value == null ||
+        value === "" ||
+        value.startsWith("http://") ||
+        value.startsWith("https://") ||
+        value.startsWith("/"),
+      "Avatar must be an image URL",
+    ),
 });
+
+export const iceServerSchema = z.object({
+  urls: z.union([z.string(), z.array(z.string())]),
+  username: z.string().optional(),
+  credential: z.string().optional(),
+});
+
+export type IceServerConfig = z.infer<typeof iceServerSchema>;
 
 export const updateMemberRoleSchema = z.object({
   role: z.enum(["admin", "member"]),

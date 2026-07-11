@@ -4,7 +4,7 @@ import {
   useAuth,
 } from "@clerk/clerk-react";
 import { Lock, Menu } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import type { Channel, Server, User } from "@pqp/shared";
 import { MessageComposer } from "@/components/chat/message-composer";
@@ -15,6 +15,7 @@ import {
 } from "@/components/layout/app-loading-shell";
 import { ChannelList } from "@/components/layout/channel-list";
 import { ChannelMembersPanel } from "@/components/layout/channel-members-panel";
+import { ChannelMetaDialog } from "@/components/layout/channel-meta-dialog";
 import { InvitePanel } from "@/components/layout/invite-panel";
 import { MembersPanel } from "@/components/layout/members-panel";
 import { ServerRail } from "@/components/layout/server-rail";
@@ -36,6 +37,7 @@ import {
   createServer,
   deleteChannel,
   fetchChannels,
+  fetchIceServers,
   fetchMe,
   fetchMessages,
   fetchServers,
@@ -120,13 +122,17 @@ function ClerkAppGate() {
 
 function ClerkMainApp() {
   const { getToken } = useAuth();
+  const getTokenRef = useRef(getToken);
+  getTokenRef.current = getToken;
 
-  return (
-    <MainAppContent
-      resolveToken={() => getAuthToken(() => getToken())}
-      showUserButton
-    />
+  // Stable callback — Clerk's getToken identity changes often and must not
+  // remount the app / tear down the WebSocket (that looked like a full refresh).
+  const resolveToken = useCallback(
+    () => getAuthToken(() => getTokenRef.current()),
+    [],
   );
+
+  return <MainAppContent resolveToken={resolveToken} showUserButton />;
 }
 
 interface MainAppContentProps {
@@ -165,6 +171,9 @@ function MainAppContent({
   const [channelPrompt, setChannelPrompt] = useState<ChannelPromptState | null>(
     null,
   );
+  const [channelMetaChannel, setChannelMetaChannel] = useState<Channel | null>(
+    null,
+  );
   const [composerInsert, setComposerInsert] = useState<string | null>(null);
   const [localSettings, setLocalSettings] = useState<LocalSettings>(
     defaultLocalSettings,
@@ -180,6 +189,15 @@ function MainAppContent({
   const chat = useMemo(() => createChatController(transport), [transport]);
   const voice = useMemo(() => createVoiceController(transport), [transport]);
   const [voiceState, setVoiceState] = useState(voice.getState());
+
+  const resolveTokenRef = useRef(resolveToken);
+  resolveTokenRef.current = resolveToken;
+  const transportRef = useRef(transport);
+  transportRef.current = transport;
+  const chatRef = useRef(chat);
+  chatRef.current = chat;
+  const voiceRef = useRef(voice);
+  voiceRef.current = voice;
 
   const refresh = useCallback(() => setTick((t) => t + 1), []);
 
@@ -207,6 +225,9 @@ function MainAppContent({
 
   useEffect(() => {
     let cancelled = false;
+    const transport = transportRef.current;
+    const chat = chatRef.current;
+    const voice = voiceRef.current;
 
     async function bootstrapChannel(channelId: string, authToken: string) {
       setMessagesLoading(true);
@@ -230,7 +251,7 @@ function MainAppContent({
       setBootstrapError(null);
 
       try {
-        const authToken = await resolveToken();
+        const authToken = await resolveTokenRef.current();
         if (!authToken || cancelled) {
           return;
         }
@@ -242,6 +263,15 @@ function MainAppContent({
         }
         setUser(me);
         chat.setCurrentUserId(me.id);
+
+        try {
+          const { iceServers } = await fetchIceServers(authToken);
+          if (!cancelled && iceServers.length > 0) {
+            voice.setIceServers(iceServers);
+          }
+        } catch {
+          // STUN / VITE_TURN fallbacks still apply
+        }
 
         const { servers: serverList } = await fetchServers(authToken);
         if (cancelled) {
@@ -324,7 +354,8 @@ function MainAppContent({
       transport.disconnect();
       voice.leave();
     };
-  }, [resolveToken, transport, chat, voice, refresh, bootstrapAttempt]);
+    // Only re-bootstrap on explicit retry — unstable Clerk token fn must not remount.
+  }, [bootstrapAttempt, refresh]);
 
   async function loadChannels(serverId: string) {
     const authToken = token ?? (await resolveToken());
@@ -654,19 +685,31 @@ function MainAppContent({
             {selectedChannel.name}
           </p>
           <p className="text-[11px] text-paper-muted">
-            {selectedChannel.isPrivate ? "Private · " : ""}
-            {chat.getPresence().length} here
+            {selectedChannel.topic
+              ? selectedChannel.topic
+              : `${selectedChannel.isPrivate ? "Private · " : ""}${chat.getPresence().length} here`}
           </p>
         </div>
-        {canManage && selectedChannel.isPrivate && (
-          <button
-            type="button"
-            className="ml-auto rounded-md px-2 py-1 text-xs text-signal hover:bg-ink-3"
-            onClick={() => setChannelMembersChannel(selectedChannel)}
-          >
-            Access
-          </button>
-        )}
+        <div className="ml-auto flex items-center gap-2">
+          {canManage && (
+            <button
+              type="button"
+              className="rounded-md px-2 py-1 text-xs text-signal hover:bg-ink-3"
+              onClick={() => setChannelMetaChannel(selectedChannel)}
+            >
+              Topic
+            </button>
+          )}
+          {canManage && selectedChannel.isPrivate && (
+            <button
+              type="button"
+              className="rounded-md px-2 py-1 text-xs text-signal hover:bg-ink-3"
+              onClick={() => setChannelMembersChannel(selectedChannel)}
+            >
+              Access
+            </button>
+          )}
+        </div>
       </header>
       <MessageList
         messages={chat.getMessages()}
@@ -741,11 +784,14 @@ function MainAppContent({
         selectedChannelId={selectedChannelId}
         canManage={!!canManage}
         isLoading={channelsLoading}
+        voiceOccupancy={voiceState.occupancy}
+        speakingPeerIds={voiceState.speakingPeerIds}
         mobileOpen={mobileNavOpen}
         onMobileClose={() => setMobileNavOpen(false)}
         onSelectChannel={(id) => void selectChannel(id)}
         onCreateChannel={requestCreateChannel}
         onRenameChannel={requestRenameChannel}
+        onEditChannelMeta={setChannelMetaChannel}
         onDeleteChannel={(id) => void handleDeleteChannel(id)}
         onTogglePrivate={(ch) => void handleTogglePrivate(ch)}
         onManageChannelMembers={setChannelMembersChannel}
@@ -755,6 +801,7 @@ function MainAppContent({
           <UserPanel
             displayName={user?.displayName ?? "User"}
             tag={user?.tag ?? null}
+            avatarUrl={user?.avatarUrl ?? null}
             isMuted={voiceState.isMuted}
             inVoice={voiceState.status === "connected"}
             showUserButton={showUserButton}
@@ -857,6 +904,9 @@ function MainAppContent({
                 channelName={selectedChannel.name}
                 status={voiceState.status}
                 remotePeers={voiceState.remotePeers}
+                self={voiceState.self}
+                localPeerId={voiceState.peerId}
+                speakingPeerIds={voiceState.speakingPeerIds}
                 isMuted={voiceState.isMuted}
                 error={voiceState.error}
                 compactPeers={localSettings.compactPeers}
@@ -939,6 +989,27 @@ function MainAppContent({
         onClose={() => setChannelPrompt(null)}
         onConfirm={(name, isPrivate) => {
           void handleChannelPromptConfirm(name, isPrivate);
+        }}
+      />
+
+      <ChannelMetaDialog
+        open={channelMetaChannel !== null}
+        channel={channelMetaChannel}
+        onClose={() => setChannelMetaChannel(null)}
+        onSave={async (updates) => {
+          const authToken = token ?? (await resolveToken());
+          if (!authToken || !channelMetaChannel) {
+            return;
+          }
+          const { channel } = await updateChannel(
+            authToken,
+            channelMetaChannel.id,
+            updates,
+          );
+          setChannels((prev) =>
+            prev.map((c) => (c.id === channel.id ? channel : c)),
+          );
+          setChannelMetaChannel(null);
         }}
       />
     </div>

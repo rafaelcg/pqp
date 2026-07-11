@@ -26,6 +26,7 @@ import {
   removeChannelMember,
   updateChannel,
 } from "../services/servers.js";
+import { getIceServers } from "../services/ice.js";
 import {
   canManageServer,
   getMemberRole,
@@ -66,8 +67,14 @@ export async function handleApi(
       const updated = await updateProfile(user.id, {
         displayName: body.displayName,
         username: body.username,
+        avatarUrl: body.avatarUrl,
       });
       sendJson(res, 200, toPublicUser(updated));
+      return;
+    }
+
+    if (req.method === "GET" && pathname === "/api/ice-servers") {
+      sendJson(res, 200, { iceServers: getIceServers() });
       return;
     }
 
@@ -241,6 +248,8 @@ export async function handleApi(
         const updated = await updateChannel(channelId, {
           name: body.name,
           isPrivate: body.isPrivate,
+          topic: body.topic,
+          imageUrl: body.imageUrl,
         });
         sendJson(res, 200, { channel: mapChannel(updated!) });
         return;

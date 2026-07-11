@@ -82,12 +82,24 @@ export function fetchMe(token: string) {
 
 export function updateMe(
   token: string,
-  body: { displayName?: string; username?: string },
+  body: {
+    displayName?: string;
+    username?: string;
+    avatarUrl?: string | null;
+  },
 ) {
   return apiFetch<User>("/api/me", token, {
     method: "PATCH",
     body: JSON.stringify(body),
   });
+}
+
+export function fetchIceServers(token: string) {
+  return apiFetch<{ iceServers: Array<{
+    urls: string | string[];
+    username?: string;
+    credential?: string;
+  }> }>("/api/ice-servers", token);
 }
 
 export function fetchServers(token: string) {
@@ -128,7 +140,12 @@ export function createChannel(
 export function updateChannel(
   token: string,
   channelId: string,
-  body: { name?: string; isPrivate?: boolean },
+  body: {
+    name?: string;
+    isPrivate?: boolean;
+    topic?: string | null;
+    imageUrl?: string | null;
+  },
 ) {
   return apiFetch<{ channel: Channel }>(`/api/channels/${channelId}`, token, {
     method: "PATCH",

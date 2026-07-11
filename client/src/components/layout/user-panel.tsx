@@ -6,6 +6,7 @@ import { isDevAuthBypassEnabled } from "@/lib/dev-auth";
 interface UserPanelProps {
   displayName: string;
   tag: string | null;
+  avatarUrl?: string | null;
   isMuted: boolean;
   inVoice: boolean;
   showUserButton: boolean;
@@ -16,6 +17,7 @@ interface UserPanelProps {
 export function UserPanel({
   displayName,
   tag,
+  avatarUrl = null,
   isMuted,
   inVoice,
   showUserButton,
@@ -25,7 +27,13 @@ export function UserPanel({
   return (
     <div className="safe-pb flex items-center gap-2 border-t border-ink-4/60 bg-ink px-2 py-2">
       <div className="flex min-w-0 flex-1 items-center gap-2">
-        {showUserButton && !isDevAuthBypassEnabled() ? (
+        {avatarUrl ? (
+          <img
+            src={avatarUrl}
+            alt=""
+            className="h-8 w-8 shrink-0 rounded-md object-cover"
+          />
+        ) : showUserButton && !isDevAuthBypassEnabled() ? (
           <UserButton
             appearance={{
               elements: {
