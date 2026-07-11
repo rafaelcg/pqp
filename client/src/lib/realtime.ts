@@ -10,9 +10,12 @@ type MessageHandler = (message: ChatServerMessage | VoiceSignalingMessage) => vo
 type TokenProvider = () => Promise<string | null>;
 
 // Hosted proxies (Railway edge) drop idle WebSockets, so keep traffic flowing
-// well under typical idle timeouts and treat a missed pong as a dead link.
-const PING_INTERVAL_MS = 25_000;
-const PONG_TIMEOUT_MS = 10_000;
+// well under typical idle timeouts. A pong is expected each interval, but we
+// only declare the link dead after MAX_MISSED_PONGS consecutive misses — one
+// slow round-trip (mobile radio, a brief server event-loop stall) must not
+// self-disconnect an otherwise healthy connection.
+const PING_INTERVAL_MS = 20_000;
+const MAX_MISSED_PONGS = 2;
 const RECONNECT_BASE_DELAY_MS = 1_000;
 const RECONNECT_MAX_DELAY_MS = 30_000;
 // Bound the offline outbound queues so a long disconnect can't grow memory
@@ -56,7 +59,8 @@ export function createRealtimeTransport(): RealtimeTransport {
   let reconnectAttempt = 0;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let pingTimer: ReturnType<typeof setInterval> | null = null;
-  let pongTimer: ReturnType<typeof setTimeout> | null = null;
+  let awaitingPong = false;
+  let missedPongs = 0;
   const chatQueue: ChatClientMessage[] = [];
   const voiceQueue: VoiceClientMessage[] = [];
 
@@ -72,10 +76,8 @@ export function createRealtimeTransport(): RealtimeTransport {
       clearInterval(pingTimer);
       pingTimer = null;
     }
-    if (pongTimer) {
-      clearTimeout(pongTimer);
-      pongTimer = null;
-    }
+    awaitingPong = false;
+    missedPongs = 0;
   }
 
   function startKeepalive(ws: WebSocket) {
@@ -84,15 +86,19 @@ export function createRealtimeTransport(): RealtimeTransport {
       if (ws !== socket || ws.readyState !== WebSocket.OPEN) {
         return;
       }
-      ws.send(JSON.stringify({ type: "ping" }));
-      if (!pongTimer) {
-        pongTimer = setTimeout(() => {
-          pongTimer = null;
+      if (awaitingPong) {
+        // Previous ping went unanswered this interval — tolerate a few before
+        // giving up, so a single latency spike doesn't drop a live connection.
+        missedPongs += 1;
+        if (missedPongs >= MAX_MISSED_PONGS) {
           // Half-open connection: the close event may never fire on its own.
           handleConnectionLoss(ws);
           ws.close();
-        }, PONG_TIMEOUT_MS);
+          return;
+        }
       }
+      awaitingPong = true;
+      ws.send(JSON.stringify({ type: "ping" }));
     }, PING_INTERVAL_MS);
   }
 
@@ -114,6 +120,22 @@ export function createRealtimeTransport(): RealtimeTransport {
   function handleOnline() {
     // Network came back: skip the remaining backoff and retry now.
     if (!manualClose && reconnectTimer) {
+      clearReconnectTimer();
+      void connectSocket();
+    }
+  }
+
+  function handleVisibility() {
+    if (manualClose || document.visibilityState !== "visible") {
+      return;
+    }
+    // Coming back to the foreground: background tabs throttle timers, so a
+    // missed-pong count here is stale — reset it instead of dropping a link
+    // that is actually fine. If the socket did die while hidden, reconnect now
+    // rather than waiting out the backoff.
+    awaitingPong = false;
+    missedPongs = 0;
+    if (!socket && reconnectTimer) {
       clearReconnectTimer();
       void connectSocket();
     }
@@ -186,10 +208,8 @@ export function createRealtimeTransport(): RealtimeTransport {
           | VoiceSignalingMessage;
 
         if (message.type === "pong") {
-          if (pongTimer) {
-            clearTimeout(pongTimer);
-            pongTimer = null;
-          }
+          awaitingPong = false;
+          missedPongs = 0;
           return;
         }
 
@@ -262,12 +282,14 @@ export function createRealtimeTransport(): RealtimeTransport {
       tokenProvider = provider;
       manualClose = false;
       window.addEventListener("online", handleOnline);
+      document.addEventListener("visibilitychange", handleVisibility);
       void connectSocket();
     },
 
     disconnect() {
       manualClose = true;
       window.removeEventListener("online", handleOnline);
+      document.removeEventListener("visibilitychange", handleVisibility);
       clearReconnectTimer();
       stopKeepalive();
       reconnectAttempt = 0;

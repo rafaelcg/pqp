@@ -127,6 +127,9 @@ export function createVoiceController(transport: RealtimeTransport) {
   // is dropped so a stray/cross-room offer can never open a mic connection.
   const knownPeerIds = new Set<string>();
   let joinGeneration = 0;
+  // The room the user means to be in. Kept across a WS drop so we can auto-
+  // rejoin on reconnect instead of ejecting them from the call.
+  let intendedChannelId: string | null = null;
   let audioOptions: VoiceAudioOptions = {
     inputDeviceId: "",
     inputVolume: 1,
@@ -149,6 +152,39 @@ export function createVoiceController(transport: RealtimeTransport) {
       clearTimeout(joinTimeoutId);
       joinTimeoutId = null;
     }
+  }
+
+  function armJoinTimeout() {
+    clearJoinTimeout();
+    const generation = ++joinGeneration;
+    joinTimeoutId = setTimeout(() => {
+      if (state.status === "joining" && generation === joinGeneration) {
+        // Release the mic so the browser recording indicator clears, and tell
+        // the server to drop us if the room ever registered the join.
+        stopMicPipeline(pipeline);
+        pipeline = null;
+        intendedChannelId = null;
+        transport.sendVoice({ type: "leave-voice-room" });
+        state.error =
+          "Voice connection timed out. Is the server running and WebSocket connected?";
+        state.status = "idle";
+        emit();
+      }
+    }, 12_000);
+  }
+
+  // WS dropped mid-call: peer connections are dead. Tear the mesh down but keep
+  // the mic pipeline and intendedChannelId so we can rejoin on reconnect.
+  function teardownMeshForReconnect() {
+    knownPeerIds.clear();
+    stopSpeakingLoop();
+    disposeRemoteAnalysers();
+    manager?.dispose();
+    manager = null;
+    state.peerId = null;
+    state.remotePeers = [];
+    state.self = null;
+    state.speakingPeerIds = [];
   }
 
   function emit() {
@@ -402,6 +438,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     async join(voiceChannelId: string, options?: VoiceAudioOptions) {
       state.error = null;
       state.status = "joining";
+      intendedChannelId = voiceChannelId;
       emit();
 
       if (options) {
@@ -411,21 +448,7 @@ export function createVoiceController(transport: RealtimeTransport) {
         };
       }
 
-      clearJoinTimeout();
-      const generation = ++joinGeneration;
-      joinTimeoutId = setTimeout(() => {
-        if (state.status === "joining" && generation === joinGeneration) {
-          // Release the mic so the browser recording indicator clears, and
-          // tell the server to drop us if the room ever registered the join.
-          stopMicPipeline(pipeline);
-          pipeline = null;
-          transport.sendVoice({ type: "leave-voice-room" });
-          state.error =
-            "Voice connection timed out. Is the server running and WebSocket connected?";
-          state.status = "idle";
-          emit();
-        }
-      }, 12_000);
+      armJoinTimeout();
 
       try {
         stopMicPipeline(pipeline);
@@ -459,6 +482,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     leave() {
       clearJoinTimeout();
       joinGeneration++;
+      intendedChannelId = null;
       knownPeerIds.clear();
       stopSpeakingLoop();
       disposeRemoteAnalysers();
@@ -479,6 +503,39 @@ export function createVoiceController(transport: RealtimeTransport) {
         occupancy: state.occupancy,
       };
       emit();
+    },
+
+    /** WS connection lost mid-call: keep the mic + intent, drop the dead mesh. */
+    notifyDisconnected() {
+      if (state.status === "idle" || !intendedChannelId) {
+        return;
+      }
+      clearJoinTimeout();
+      teardownMeshForReconnect();
+      // Show "joining" (reconnecting) rather than kicking the user to idle.
+      state.status = "joining";
+      emit();
+    },
+
+    /** WS reconnected: auto-rejoin the room so the call resumes seamlessly. */
+    async notifyReconnected() {
+      if (!intendedChannelId || state.status === "idle") {
+        return;
+      }
+      if (!pipeline) {
+        // Mic was released (e.g. a long outage) — re-acquire via a full join.
+        await this.join(intendedChannelId);
+        return;
+      }
+      // Mic still live: re-enter the room; welcome rebuilds the mesh with a
+      // fresh peer id and other participants reconnect to us.
+      state.status = "joining";
+      emit();
+      armJoinTimeout();
+      transport.sendVoice({
+        type: "join-voice-room",
+        voiceChannelId: intendedChannelId,
+      });
     },
 
     setMuted(muted: boolean) {

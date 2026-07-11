@@ -335,20 +335,21 @@ function MainAppContent({
         transport.onError((message) => setRealtimeError(message));
 
         transport.onClose(() => {
-          // The server dropped our voice peer with the socket; reset local
-          // voice state so the user can rejoin after the reconnect.
-          if (voice.getState().status !== "idle") {
-            voice.leave();
-          }
+          // The server dropped our voice peer with the socket. Keep the mic and
+          // the intended room so the call resumes on reconnect instead of
+          // kicking the user out (they just see "connecting" briefly).
+          voice.notifyDisconnected();
         });
 
         transport.onReady(() => {
           setRealtimeError(null);
-          // On reconnect, rejoin whatever channel the user is in now.
+          // On reconnect, rejoin whatever channel the user is in now...
           const channelId = chat.getChannelId() ?? initialChannelId;
           if (channelId) {
             void bootstrapChannel(channelId);
           }
+          // ...and auto-rejoin voice if the user was in a call.
+          void voice.notifyReconnected();
         });
 
         transport.connect(() => resolveTokenRef.current());
