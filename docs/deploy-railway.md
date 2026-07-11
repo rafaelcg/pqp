@@ -52,7 +52,19 @@ railway variables set CLOUDFLARE_TURN_API_TOKEN=<token>
 
 The API fetches short-lived `iceServers` via Cloudflare’s credential API and serves them at `GET /api/ice-servers`.
 
-### Option B — Metered / Open Relay
+### Option C — Static TURN credentials (e.g. ExpressTURN free)
+
+Sign up at [expressturn.com](https://www.expressturn.com) (free tier) or any coturn host, then:
+
+```bash
+railway variables set TURN_URL=turn:free.expressturn.com:3478,turn:relay1.expressturn.com:443?transport=tcp
+railway variables set TURN_USERNAME=...
+railway variables set TURN_CREDENTIAL=...
+```
+
+`TURN_URL` may be comma-separated for multiple URLs (UDP + TCP + TLS).
+
+### Option D — Metered / Open Relay REST
 
 1. Sign up at [metered.ca](https://www.metered.ca/tools/openrelay) and create an API key
 2. Set on Railway:
@@ -63,19 +75,9 @@ railway variables set METERED_API_KEY=<key>
 railway variables set METERED_DOMAIN=<appname>
 ```
 
-### Option C — Static TURN credentials
-
-```bash
-railway variables set TURN_URL=turn:turn.example.com:3478
-railway variables set TURN_USERNAME=...
-railway variables set TURN_CREDENTIAL=...
-```
-
-`TURN_URL` may be comma-separated for multiple URLs (UDP + TCP + TLS).
-
 The client fetches ICE config from `GET /api/ice-servers` at bootstrap and again on each voice join. If no TURN is configured, the API returns public STUN only and cross-NAT calls will show **FAILED**.
 
-> Note: The old static Open Relay credentials (`openrelayproject` / `openrelayproject`) no longer work reliably — do not rely on them.
+> Note: The old static Open Relay credentials (`openrelayproject` / `openrelayproject`) are dead — do not rely on them.
 
 ## What you get
 
