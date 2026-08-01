@@ -48,7 +48,16 @@
 | Deep links / shareable URLs | Done (`/app/server/<id>/channel/<id>`, `/app/invite/<code>`) |
 | Dev auth bypass | Done (agent testing) |
 
-## Still open (recommended order)
+## Product roadmap
+
+Feature gaps versus Discord are ranked with implementation sketches in
+[`DISCORD_GAPS.md`](./DISCORD_GAPS.md); the theming entry is scoped separately in
+[`THEMING.md`](./THEMING.md). Three items in that report are **shipped-but-broken** rather than
+missing, and are the cheapest work available: the "Copy message link" URL is not a route the
+router parses, the composer has no `key` so drafts follow you between channels, and `@mention`
+autocomplete was never wired to the mention pipeline that already exists end to end.
+
+## Still open (operational)
 
 1. **Verify LiveKit end-to-end** — bring up `docker compose --profile livekit`, join from two clients
 2. **Verify voice in a real browser** — the 2026-07-31 pass could not exercise mic capture; mesh
@@ -56,7 +65,5 @@
 3. **`pqp.gg` is unregistered** — canonical/OG tags point at a domain nobody owns
 4. **Electron app icon** — no `electron/build` icons, so packaged apps ship the default Electron icon
 5. **Redis-backed rate limiting and presence** — both are in-process, so the API cannot scale past one instance
-6. **File / image uploads** — messages are text-only at the schema level
-7. **DMs and message search**
-8. **Cloudflare Realtime SFU** adapter (LiveKit covers the SFU need today)
-9. **Plus/Pro billing** (Clerk Billing)
+6. **Cloudflare Realtime SFU** adapter (LiveKit covers the SFU need today)
+7. **Plus/Pro billing** (Clerk Billing)
