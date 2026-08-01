@@ -1,5 +1,91 @@
 import { formatUserTag } from "@pqp/shared";
 import { getPool, type DbChannel, type DbServer, type MemberRole } from "../db.js";
+import { deleteObject, isStorageConfigured } from "../lib/s3.js";
+
+/**
+ * How many attachment objects one channel or server delete will clean up.
+ *
+ * The read happens on the request path, so it cannot pull an unbounded key set
+ * into memory. Past the cap the objects leak, which is the same cost problem
+ * the sweeper already accepts on a failed delete and which a bucket lifecycle
+ * rule backstops — unlike a delete that OOMs the process.
+ */
+const MAX_DELETED_OBJECTS = 5000;
+
+/** Concurrent bucket deletes: quick, but far short of self-inflicted throttling. */
+const DELETE_CONCURRENCY = 8;
+
+/**
+ * Storage keys for every attachment under a channel, read *before* the delete.
+ *
+ * `message_attachments.channel_id` is ON DELETE CASCADE, so the cascade
+ * destroys the only rows that name these objects, and the sweeper cannot help:
+ * its predicate is `message_id IS NULL`, which can never match a row that no
+ * longer exists. Read them afterwards and nothing in Postgres names the bytes
+ * ever again.
+ */
+async function channelAttachmentKeys(channelId: string): Promise<string[]> {
+  if (!isStorageConfigured()) {
+    return [];
+  }
+  const result = await getPool().query<{ storage_key: string }>(
+    `SELECT storage_key FROM message_attachments
+     WHERE channel_id = $1
+     LIMIT ${MAX_DELETED_OBJECTS}`,
+    [channelId],
+  );
+  return result.rows.map((row) => row.storage_key);
+}
+
+/** Same read as `channelAttachmentKeys`, reached through the server's channels. */
+async function serverAttachmentKeys(serverId: string): Promise<string[]> {
+  if (!isStorageConfigured()) {
+    return [];
+  }
+  const result = await getPool().query<{ storage_key: string }>(
+    `SELECT a.storage_key
+     FROM message_attachments a
+     JOIN channels c ON c.id = a.channel_id
+     WHERE c.server_id = $1
+     LIMIT ${MAX_DELETED_OBJECTS}`,
+    [serverId],
+  );
+  return result.rows.map((row) => row.storage_key);
+}
+
+/**
+ * Drop the objects a completed delete just orphaned, best effort.
+ *
+ * Neither awaited nor allowed to fail, matching `deleteMessage`: the row that
+ * referenced each object is already gone, so nothing here can be retried and
+ * nothing depends on the outcome. Blocking on it would put one bucket round
+ * trip per attachment in front of the response and let an unreachable bucket
+ * fail a delete that has already committed. Batched rather than fired at once
+ * because a busy channel holds thousands of these and a store answers a
+ * thousand simultaneous DELETEs with rate limiting.
+ */
+function deleteObjectsInBackground(keys: string[]): void {
+  if (keys.length === 0) {
+    return;
+  }
+  void (async () => {
+    for (let start = 0; start < keys.length; start += DELETE_CONCURRENCY) {
+      await Promise.all(
+        keys.slice(start, start + DELETE_CONCURRENCY).map((key) =>
+          deleteObject(key).catch((error: unknown) => {
+            // Logged because this is the last mention of the key anywhere: the
+            // row naming it is gone, so a lost object is only ever recoverable
+            // by diffing the bucket against the table by hand.
+            console.error(
+              `[attachments] leaked object ${key}:`,
+              error instanceof Error ? error.message : error,
+            );
+          }),
+        ),
+      );
+    }
+  })();
+}
 
 export async function listServersForUser(userId: string): Promise<DbServer[]> {
   const result = await getPool().query<DbServer>(
@@ -126,19 +212,36 @@ export async function updateChannel(
 }
 
 export async function deleteChannel(channelId: string): Promise<boolean> {
+  const keys = await channelAttachmentKeys(channelId);
+
   const result = await getPool().query(
     `DELETE FROM channels WHERE id = $1`,
     [channelId],
   );
-  return (result.rowCount ?? 0) > 0;
+  const deleted = (result.rowCount ?? 0) > 0;
+
+  // Only once the delete landed: a channel that was already gone, or that some
+  // other request is still using, must not have its objects removed.
+  if (deleted) {
+    deleteObjectsInBackground(keys);
+  }
+  return deleted;
 }
 
 export async function deleteServer(serverId: string): Promise<boolean> {
-  // channels / members / invites / bans all cascade from servers.
+  const keys = await serverAttachmentKeys(serverId);
+
+  // channels / members / invites / bans all cascade from servers — and so do
+  // the attachment rows, which is why their keys are already in hand.
   const result = await getPool().query(`DELETE FROM servers WHERE id = $1`, [
     serverId,
   ]);
-  return (result.rowCount ?? 0) > 0;
+  const deleted = (result.rowCount ?? 0) > 0;
+
+  if (deleted) {
+    deleteObjectsInBackground(keys);
+  }
+  return deleted;
 }
 
 export async function renameServer(

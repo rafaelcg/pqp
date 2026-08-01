@@ -1,5 +1,18 @@
-import { MESSAGE_MAX_LENGTH, type Gif } from "@pqp/shared";
-import { CornerUpLeft, ImagePlay, Smile, X } from "lucide-react";
+import {
+  ATTACHMENT_MIME_ALLOWLIST,
+  isImageContentType,
+  MESSAGE_MAX_LENGTH,
+  type AttachmentContentType,
+  type Gif,
+} from "@pqp/shared";
+import {
+  AlertCircle,
+  CornerUpLeft,
+  ImagePlay,
+  Paperclip,
+  Smile,
+  X,
+} from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AutocompleteMenu,
@@ -8,6 +21,18 @@ import {
 import { EmojiPickerPanel } from "@/components/chat/emoji-picker";
 import { GifPickerPanel } from "@/components/chat/gif-picker";
 import { Button } from "@/components/ui/button";
+import {
+  AttachmentAbortError,
+  createPreviewUrl,
+  filesFromDataTransfer,
+  formatByteSize,
+  loadAttachmentConfig,
+  revokePreviewUrl,
+  selectAttachments,
+  uploadAttachment,
+  type AcceptedFile,
+  type OutgoingAttachment,
+} from "@/lib/attachments";
 import { expandEmojiShortcodes } from "@/lib/emoji-shortcodes";
 import { loadGifSearchEnabled } from "@/lib/gifs";
 import {
@@ -41,11 +66,20 @@ export interface ComposerReplyTarget {
 }
 
 interface MessageComposerProps {
-  onSend: (body: string) => void;
+  onSend: (body: string, attachments?: OutgoingAttachment[]) => void;
   onTyping?: () => void;
   slashContext?: ComposerSlashContext;
   insertText?: string | null;
   onInsertConsumed?: () => void;
+  /** Where uploads are minted. Null disables the paperclip along with the send. */
+  channelId?: string | null;
+  /**
+   * Files dropped on the message pane. The drop target is the whole
+   * conversation rather than the textarea, so it lives in the shell and arrives
+   * here the same way `insertText` does.
+   */
+  droppedFiles?: File[] | null;
+  onDroppedFilesConsumed?: () => void;
   replyTarget?: ComposerReplyTarget | null;
   onCancelReply?: () => void;
   mentionCandidates?: MentionCandidate[];
@@ -58,12 +92,39 @@ const MAX_COMPOSER_HEIGHT_PX = 200;
 
 const MENU_ID = "composer-autocomplete";
 
+/** One chip in the tray above the textarea, from pick to send. */
+interface PendingAttachment {
+  /** Client-side only: a chip exists before the server has minted an id. */
+  localId: string;
+  filename: string;
+  contentType: AttachmentContentType;
+  byteSize: number;
+  /** Object URL of the local file; this component owns revoking it. */
+  previewUrl: string;
+  status: "uploading" | "ready" | "failed";
+  /** 0..1, from the XHR upload progress event. */
+  progress: number;
+  attachmentId: string | null;
+  width: number | null;
+  height: number | null;
+  error: string | null;
+}
+
+let localIdCounter = 0;
+function nextLocalId(): string {
+  localIdCounter += 1;
+  return `attachment-${localIdCounter}`;
+}
+
 export function MessageComposer({
   onSend,
   onTyping,
   slashContext,
   insertText,
   onInsertConsumed,
+  channelId = null,
+  droppedFiles = null,
+  onDroppedFilesConsumed,
   replyTarget = null,
   onCancelReply,
   mentionCandidates = [],
@@ -75,14 +136,24 @@ export function MessageComposer({
   const [isPickerOpen, setIsPickerOpen] = useState(false);
   const [isGifPickerOpen, setIsGifPickerOpen] = useState(false);
   const [isGifSearchEnabled, setIsGifSearchEnabled] = useState(false);
+  const [attachmentLimits, setAttachmentLimits] = useState<{
+    enabled: boolean;
+    maxBytes: number;
+  } | null>(null);
+  const [pending, setPending] = useState<PendingAttachment[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [feedback, setFeedback] = useState<SlashFeedback | null>(null);
   const [isRunningSlash, setIsRunningSlash] = useState(false);
   const [menuDismissed, setMenuDismissed] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   /** Lets the insert effect append without listing the draft as a dependency. */
   const bodyRef = useRef(body);
   bodyRef.current = body;
+  /** Read by handlers and by the unmount cleanup, neither of which may re-run. */
+  const pendingRef = useRef(pending);
+  pendingRef.current = pending;
+  const uploadsRef = useRef(new Map<string, AbortController>());
 
   const slashOpen =
     Boolean(slashContext) && isSlashMenuOpen(body) && !menuDismissed;
@@ -104,6 +175,10 @@ export function MessageComposer({
         : [],
     [mentionCandidates, mentionQuery],
   );
+
+  const isUploading = pending.some((item) => item.status === "uploading");
+  const readyCount = pending.filter((item) => item.status === "ready").length;
+  const isAttachmentsEnabled = Boolean(attachmentLimits?.enabled && channelId);
 
   const menuKind: "slash" | "mention" | null = slashOpen
     ? "slash"
@@ -161,6 +236,36 @@ export function MessageComposer({
     });
     return () => {
       active = false;
+    };
+  }, []);
+
+  // Same shape, same reason: with no bucket configured there is nothing to
+  // upload to, so the paperclip never appears rather than failing on use.
+  useEffect(() => {
+    let active = true;
+    void loadAttachmentConfig().then((config) => {
+      if (active) {
+        setAttachmentLimits(config);
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  // The composer is remounted per channel, so unmount is also "you switched
+  // channels": every in-flight upload is abandoned and every object URL still
+  // owned here is released. Anything already sent has left this list.
+  useEffect(() => {
+    const uploads = uploadsRef.current;
+    return () => {
+      for (const controller of uploads.values()) {
+        controller.abort();
+      }
+      uploads.clear();
+      for (const item of pendingRef.current) {
+        revokePreviewUrl(item.previewUrl);
+      }
     };
   }, []);
 
@@ -243,6 +348,138 @@ export function MessageComposer({
     onSend(gif.url);
   }
 
+  function updatePending(
+    localId: string,
+    patch: Partial<PendingAttachment>,
+  ) {
+    setPending((list) =>
+      list.map((item) =>
+        item.localId === localId ? { ...item, ...patch } : item,
+      ),
+    );
+  }
+
+  function startUpload(targetChannelId: string, selected: AcceptedFile) {
+    const localId = nextLocalId();
+    const controller = new AbortController();
+    uploadsRef.current.set(localId, controller);
+    // Created up front, not on completion: the thumbnail is the confirmation
+    // that the right file was picked, and it has to be there before the upload
+    // finishes rather than after.
+    const previewUrl = createPreviewUrl(selected.file);
+
+    setPending((list) => [
+      ...list,
+      {
+        localId,
+        filename: selected.filename,
+        contentType: selected.contentType,
+        byteSize: selected.file.size,
+        previewUrl,
+        status: "uploading",
+        progress: 0,
+        attachmentId: null,
+        width: null,
+        height: null,
+        error: null,
+      },
+    ]);
+
+    void uploadAttachment(targetChannelId, selected, {
+      signal: controller.signal,
+      onProgress: (fraction) => updatePending(localId, { progress: fraction }),
+    })
+      .then((uploaded) =>
+        updatePending(localId, {
+          status: "ready",
+          progress: 1,
+          attachmentId: uploaded.attachmentId,
+          width: uploaded.width,
+          height: uploaded.height,
+        }),
+      )
+      .catch((error: unknown) => {
+        // A cancel already removed the chip and revoked its URL; re-adding an
+        // error to a row that is gone would resurrect it.
+        if (error instanceof AttachmentAbortError) {
+          return;
+        }
+        updatePending(localId, {
+          status: "failed",
+          error: error instanceof Error ? error.message : "Upload failed",
+        });
+      })
+      .finally(() => uploadsRef.current.delete(localId));
+  }
+
+  function addFiles(files: File[]) {
+    if (!channelId || !attachmentLimits?.enabled || files.length === 0) {
+      return;
+    }
+    const { accepted, rejected } = selectAttachments(files, {
+      existingCount: pendingRef.current.length,
+      maxBytes: attachmentLimits.maxBytes,
+    });
+    if (rejected.length > 0) {
+      // Reuses the slash-command feedback strip: it already self-clears, and a
+      // second error surface in the same three inches of screen helps nobody.
+      setFeedback({
+        tone: "error",
+        message: rejected
+          .map((item) => `${item.filename}: ${item.reason}`)
+          .join("\n"),
+      });
+    }
+    for (const selected of accepted) {
+      startUpload(channelId, selected);
+    }
+  }
+
+  /**
+   * `addFiles` closes over state and so has a new identity every render. Listing
+   * it in the drop effect's deps would re-run that effect constantly — the same
+   * remount-storm shape the Clerk token getter caused.
+   */
+  const addFilesRef = useRef(addFiles);
+  addFilesRef.current = addFiles;
+
+  useEffect(() => {
+    if (!droppedFiles?.length) {
+      return;
+    }
+    addFilesRef.current(droppedFiles);
+    onDroppedFilesConsumed?.();
+  }, [droppedFiles, onDroppedFilesConsumed]);
+
+  function removeAttachment(localId: string) {
+    const target = pendingRef.current.find((item) => item.localId === localId);
+    uploadsRef.current.get(localId)?.abort();
+    uploadsRef.current.delete(localId);
+    if (target) {
+      revokePreviewUrl(target.previewUrl);
+    }
+    setPending((list) => list.filter((item) => item.localId !== localId));
+  }
+
+  /**
+   * Screenshot paste — the single action this whole feature exists for.
+   *
+   * The default has to be prevented: the clipboard carries the image *and* an
+   * HTML fragment wrapping it, so letting the paste through would drop markup
+   * into the textarea alongside the upload.
+   */
+  function handlePaste(event: React.ClipboardEvent<HTMLTextAreaElement>) {
+    if (!channelId || !attachmentLimits?.enabled) {
+      return;
+    }
+    const files = filesFromDataTransfer(event.clipboardData);
+    if (files.length === 0) {
+      return;
+    }
+    event.preventDefault();
+    addFiles(files);
+  }
+
   function applySlashSelection(command: SlashCommandMeta) {
     const next = command.takesArgs ? `/${command.name} ` : `/${command.name}`;
     setBody(next);
@@ -304,7 +541,15 @@ export function MessageComposer({
   async function handleSubmit(event?: React.FormEvent) {
     event?.preventDefault();
     const trimmed = body.trim();
-    if (!trimmed || isRunningSlash) {
+    const ready = pending.filter(
+      (item) => item.status === "ready" && item.attachmentId,
+    );
+    // Sending mid-upload would silently drop whatever had not finished, so the
+    // send waits rather than sending a message the user did not compose.
+    if (isRunningSlash || isUploading) {
+      return;
+    }
+    if (!trimmed && ready.length === 0) {
       return;
     }
 
@@ -313,7 +558,23 @@ export function MessageComposer({
       return;
     }
 
-    onSend(expandEmojiShortcodes(trimmed));
+    onSend(
+      trimmed ? expandEmojiShortcodes(trimmed) : "",
+      ready.map((item) => ({
+        attachmentId: item.attachmentId!,
+        filename: item.filename,
+        contentType: item.contentType,
+        byteSize: item.byteSize,
+        width: item.width,
+        height: item.height,
+        previewUrl: item.previewUrl,
+      })),
+    );
+    // The object URLs of everything just sent now belong to the chat
+    // controller, which revokes them when the real message replaces the
+    // optimistic one — revoking here would blank the image it is showing.
+    // Failed chips keep theirs, and stay put so the upload can be retried.
+    setPending((list) => list.filter((item) => item.status === "failed"));
     setBody("");
     setCaret(0);
     setIsPickerOpen(false);
@@ -461,7 +722,58 @@ export function MessageComposer({
           </button>
         </div>
       )}
+      {pending.length > 0 && (
+        <ul
+          aria-label="Attachments to send"
+          className="mb-2 flex flex-wrap gap-2"
+        >
+          {pending.map((item) => (
+            <AttachmentChip
+              key={item.localId}
+              attachment={item}
+              onRemove={() => removeAttachment(item.localId)}
+            />
+          ))}
+        </ul>
+      )}
       <div className="flex gap-2">
+        {isAttachmentsEnabled && (
+          <>
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              // Greys out everything that would only be rejected on the way
+              // back. It is a filter in the OS picker and nothing more — a drop
+              // or a paste bypasses it entirely, so `selectAttachments` is
+              // still the check that counts.
+              accept={ATTACHMENT_MIME_ALLOWLIST.join(",")}
+              className="hidden"
+              onChange={(event) => {
+                addFiles([...(event.target.files ?? [])]);
+                // Cleared so that picking the same file twice in a row still
+                // fires a change event the second time.
+                event.target.value = "";
+              }}
+            />
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              disabled={disabled}
+              aria-label="Attach a file"
+              onClick={() => fileInputRef.current?.click()}
+              onMouseDown={(event) => {
+                if (menuKind) {
+                  event.preventDefault();
+                }
+              }}
+              className="shrink-0 text-paper-muted hover:text-signal"
+            >
+              <Paperclip className="h-5 w-5" />
+            </Button>
+          </>
+        )}
         <Button
           type="button"
           variant="ghost"
@@ -519,6 +831,7 @@ export function MessageComposer({
           // Arrow keys and clicks move the caret without changing the value, and
           // the active `@token` is defined by where the caret is.
           onSelect={(e) => syncCaret(e.currentTarget)}
+          onPaste={handlePaste}
           placeholder={placeholder}
           disabled={disabled || isRunningSlash}
           maxLength={MESSAGE_MAX_LENGTH}
@@ -533,11 +846,85 @@ export function MessageComposer({
         <Button
           type="submit"
           className="self-end"
-          disabled={disabled || !body.trim() || isRunningSlash}
+          // An attachment is a message on its own, so an empty body is only a
+          // reason to stay disabled when nothing is attached either.
+          disabled={
+            disabled ||
+            isRunningSlash ||
+            isUploading ||
+            (!body.trim() && readyCount === 0)
+          }
         >
           Send
         </Button>
       </div>
     </form>
+  );
+}
+
+function AttachmentChip({
+  attachment,
+  onRemove,
+}: {
+  attachment: PendingAttachment;
+  onRemove: () => void;
+}) {
+  const isImage = isImageContentType(attachment.contentType);
+  const percent = Math.round(attachment.progress * 100);
+
+  return (
+    <li className="relative flex w-44 items-center gap-2 rounded-md border border-ink-4 bg-ink-3/60 p-1.5">
+      <span className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded bg-ink-4/60">
+        {isImage ? (
+          <img
+            src={attachment.previewUrl}
+            alt={attachment.filename}
+            className="h-full w-full object-cover"
+          />
+        ) : (
+          <Paperclip className="h-4 w-4 text-paper-muted" />
+        )}
+      </span>
+
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-xs text-paper" title={attachment.filename}>
+          {attachment.filename}
+        </span>
+        {attachment.status === "failed" ? (
+          <span className="flex items-center gap-1 text-[11px] text-danger">
+            <AlertCircle className="h-3 w-3 shrink-0" />
+            <span className="truncate">{attachment.error ?? "Failed"}</span>
+          </span>
+        ) : (
+          <span className="block text-[11px] text-paper-muted">
+            {formatByteSize(attachment.byteSize)}
+          </span>
+        )}
+        {attachment.status === "uploading" && (
+          <span
+            role="progressbar"
+            aria-label={`Uploading ${attachment.filename}`}
+            aria-valuenow={percent}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            className="mt-1 block h-1 w-full overflow-hidden rounded-full bg-ink-4"
+          >
+            <span
+              className="block h-full rounded-full bg-signal transition-[width] duration-150"
+              style={{ width: `${percent}%` }}
+            />
+          </span>
+        )}
+      </span>
+
+      <button
+        type="button"
+        onClick={onRemove}
+        aria-label={`Remove ${attachment.filename}`}
+        className="shrink-0 self-start rounded p-0.5 text-paper-muted hover:text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
+      >
+        <X className="h-3.5 w-3.5" />
+      </button>
+    </li>
   );
 }

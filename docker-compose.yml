@@ -28,6 +28,23 @@ services:
       LIVEKIT_URL: ${LIVEKIT_URL:-}
       LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
       LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-}
+      # Leave blank and attachments are off entirely (/api/attachments/config
+      # reports enabled:false and the composer hides the attach button).
+      # With the `storage` profile below the values are in docs/ATTACHMENTS.md.
+      # S3_ENDPOINT has to be reachable under ONE name from both this container
+      # and the browser, because the same host is signed into the presigned PUT
+      # the browser uploads to and HEADed from here before the claim. Inside
+      # compose that rules out `localhost`; use the machine's LAN IP, or run the
+      # API on the host with `pnpm dev` where localhost satisfies both.
+      S3_ENDPOINT: ${S3_ENDPOINT:-}
+      S3_BUCKET: ${S3_BUCKET:-}
+      S3_REGION: ${S3_REGION:-auto}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
+      S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-false}
+      S3_PUBLIC_BASE_URL: ${S3_PUBLIC_BASE_URL:-}
+      MAX_ATTACHMENT_BYTES: ${MAX_ATTACHMENT_BYTES:-}
+      ATTACHMENT_URL_TTL_SECONDS: ${ATTACHMENT_URL_TTL_SECONDS:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -47,5 +64,51 @@ services:
       # `--dev` enables the well-known devkey/secret pair.
       LIVEKIT_KEYS: "devkey: secret"
 
+  # Optional S3-compatible object storage for attachments — the local stand-in
+  # for Cloudflare R2 in production.
+  #   docker compose --profile storage up -d
+  # Dev credentials only — generate real ones for any public deployment. These
+  # are published on localhost:9000 with no network policy in front of them.
+  minio:
+    image: minio/minio:latest
+    profiles: ["storage"]
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"      # S3 API — the host presigned URLs are signed for
+      - "9001:9001"      # web console (browse uploaded objects)
+    environment:
+      MINIO_ROOT_USER: pqpminio
+      MINIO_ROOT_PASSWORD: pqpminio-dev-secret
+      # Default is already `*`, set explicitly because a browser PUT straight to
+      # storage is the whole upload path — a bucket that rejects the preflight
+      # fails every upload with an opaque network error. R2 needs the equivalent
+      # rule configured by hand; see docs/ATTACHMENTS.md.
+      MINIO_API_CORS_ALLOW_ORIGIN: "*"
+    volumes:
+      - pqp_minio:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # A fresh MinIO has no buckets. Without this the first upload gets a 404 from
+  # a URL the server signed successfully, which reads like a signing bug and is
+  # not one — so the bucket is created as part of bringing the profile up.
+  # Runs once and exits; `--ignore-existing` makes a re-up a no-op.
+  minio-init:
+    image: minio/mc:latest
+    profiles: ["storage"]
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint:
+      - /bin/sh
+      - -c
+      - >
+        mc alias set pqp http://minio:9000 pqpminio pqpminio-dev-secret &&
+        mc mb --ignore-existing pqp/pqp-attachments
+
 volumes:
   pqp_pg:
+  pqp_minio:

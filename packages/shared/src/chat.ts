@@ -1,10 +1,15 @@
 import { z } from "zod";
 import {
-  messageBodySchema,
+  MESSAGE_MAX_LENGTH,
   messageReactionSchema,
   messageReplyRefSchema,
   reactionEmojiSchema,
+  safeTextSchema,
 } from "./api.js";
+import {
+  attachmentSchema,
+  MAX_ATTACHMENTS_PER_MESSAGE,
+} from "./attachments.js";
 
 export const joinChannelMessageSchema = z.object({
   type: z.literal("join-channel"),
@@ -15,10 +20,16 @@ export const leaveChannelMessageSchema = z.object({
   type: z.literal("leave-channel"),
 });
 
-export const messageCreateMessageSchema = z.object({
+const messageCreateFrameSchema = z.object({
   type: z.literal("message-create"),
   channelId: z.string().uuid(),
-  body: messageBodySchema,
+  /**
+   * Deliberately not `messageBodySchema`: a message that carries attachments is
+   * allowed to say nothing, so the floor of one character has to come off. The
+   * emptiness rule moves to `requireBodyOrAttachment` below instead of being
+   * dropped — see there for why it cannot live on the leaf.
+   */
+  body: z.string().max(MESSAGE_MAX_LENGTH).pipe(safeTextSchema),
   /**
    * Client-generated id echoed back on the broadcast so the sender can swap its
    * optimistic bubble for the stored message instead of rendering it twice.
@@ -26,7 +37,44 @@ export const messageCreateMessageSchema = z.object({
   nonce: z.string().min(1).max(64).optional(),
   /** The message this one answers. Must live in the same channel. */
   replyToId: z.string().uuid().optional(),
+  /**
+   * Rows minted by `POST /api/channels/:channelId/attachments` and not yet
+   * claimed by a message.
+   *
+   * Ids and nothing else: filename, type and size are re-read from the row and
+   * from the object itself when the claim happens, so a sender cannot describe
+   * its own upload into something it is not.
+   */
+  attachmentIds: z
+    .array(z.string().uuid())
+    .max(MAX_ATTACHMENTS_PER_MESSAGE)
+    .optional(),
 });
+
+/**
+ * A message may be text, attachments, or both — never neither.
+ *
+ * The rule sits on the frame rather than on `messageBodySchema` because the
+ * leaf cannot see `attachmentIds`, and because that leaf is also what the edit
+ * path validates: relaxing it to allow `""` would let an edit blank an existing
+ * message out, which is a delete wearing an edit's clothes.
+ */
+function requireBodyOrAttachment(
+  frame: { body: string; attachmentIds?: string[] },
+  ctx: z.RefinementCtx,
+): void {
+  if (frame.body.length === 0 && !frame.attachmentIds?.length) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["body"],
+      message: "A message needs a body or an attachment",
+    });
+  }
+}
+
+export const messageCreateMessageSchema = messageCreateFrameSchema.superRefine(
+  requireBodyOrAttachment,
+);
 
 export const typingMessageSchema = z.object({
   type: z.literal("typing"),
@@ -52,6 +100,13 @@ const broadcastMessageSchema = z.object({
   editedAt: z.string().nullable().default(null),
   reactions: z.array(messageReactionSchema).default([]),
   replyTo: messageReplyRefSchema.nullable().default(null),
+  /**
+   * Only the attachments that survived the claim: one that failed its HEAD
+   * check is dropped from the message rather than broadcast with a URL that
+   * would 404. Defaulted so a client keeps parsing broadcasts from an API that
+   * predates attachments.
+   */
+  attachments: z.array(attachmentSchema).default([]),
 });
 
 export const messageBroadcastSchema = z.object({
@@ -128,13 +183,26 @@ export const chatServerMessageSchema = z.discriminatedUnion("type", [
   channelActivitySchema,
 ]);
 
-export const chatClientMessageSchema = z.discriminatedUnion("type", [
-  joinChannelMessageSchema,
-  leaveChannelMessageSchema,
-  messageCreateMessageSchema,
-  reactionToggleMessageSchema,
-  typingMessageSchema,
-]);
+/**
+ * `discriminatedUnion` only takes plain objects as options, so the refinement
+ * on `messageCreateMessageSchema` cannot ride along inside the union — and this
+ * is the schema every inbound frame is actually parsed with. Re-applying the
+ * same function here is what keeps the two from drifting; dropping it would
+ * leave the empty-message rule enforced only on a schema nothing parses with.
+ */
+export const chatClientMessageSchema = z
+  .discriminatedUnion("type", [
+    joinChannelMessageSchema,
+    leaveChannelMessageSchema,
+    messageCreateFrameSchema,
+    reactionToggleMessageSchema,
+    typingMessageSchema,
+  ])
+  .superRefine((message, ctx) => {
+    if (message.type === "message-create") {
+      requireBodyOrAttachment(message, ctx);
+    }
+  });
 
 /** Server message types the chat controller owns (everything else is voice). */
 export const CHAT_SERVER_MESSAGE_TYPES = [

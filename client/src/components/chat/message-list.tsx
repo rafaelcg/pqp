@@ -24,6 +24,7 @@ import {
 import ReactMarkdown from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
+import { AttachmentGrid } from "@/components/chat/attachment-grid";
 import { EmojiPickerPanel } from "@/components/chat/emoji-picker";
 import {
   ContextMenu,
@@ -636,6 +637,12 @@ function MessageBody({
   );
 }
 
+/**
+ * Note the absence of `img`: attachments render from the structured array on
+ * the message, never from markdown a sender typed. Allowing it here would let
+ * any message embed any URL, which is a per-reader tracking pixel and a way to
+ * put arbitrary remote content inside our own origin.
+ */
 const MARKDOWN_ELEMENTS = [
   "p",
   "span",
@@ -713,6 +720,7 @@ const MessageRow = memo(function MessageRow({
   // A body that is nothing but a GIF link is media, not prose — the URL is the
   // message, so it renders instead of the text rather than beside it.
   const gifMedia = useMemo(() => gifMessageMedia(message.body), [message.body]);
+  const attachments = message.attachments ?? [];
   const isMine = message.authorId === currentUserId;
   const isReal = !message.pending && !message.failed;
   const canDelete = isReal && !!onDelete && (isMine || canModerate);
@@ -868,6 +876,7 @@ const MessageRow = memo(function MessageRow({
             {isEditing ? (
               <EditComposer
                 initialValue={message.body}
+                allowEmpty={attachments.length > 0}
                 onCancel={onCancelEdit}
                 onSubmit={onSubmitEdit}
               />
@@ -877,13 +886,37 @@ const MessageRow = memo(function MessageRow({
                 <EditedMarker editedAt={message.editedAt} />
               </div>
             ) : (
-              <div className="markdown-body text-[15px] leading-relaxed text-paper/90">
-                <MessageBody
-                  body={message.body}
-                  currentUsername={currentUsername}
-                />
-                <EditedMarker editedAt={message.editedAt} />
-              </div>
+              <>
+                {/* A message carrying attachments is allowed to say nothing, so
+                    an empty body renders as nothing rather than an empty line. */}
+                {message.body && (
+                  <div className="markdown-body text-[15px] leading-relaxed text-paper/90">
+                    <MessageBody
+                      body={message.body}
+                      currentUsername={currentUsername}
+                    />
+                    {attachments.length === 0 && (
+                      <EditedMarker editedAt={message.editedAt} />
+                    )}
+                  </div>
+                )}
+                {attachments.length > 0 && (
+                  <div>
+                    <AttachmentGrid attachments={attachments} />
+                    <EditedMarker editedAt={message.editedAt} />
+                  </div>
+                )}
+                {/* Says nothing and carries nothing. The server refuses to
+                    create that, so reaching it means the attachments were
+                    withheld on read — which is what a deployment whose storage
+                    config went missing serves for an attachment-only message.
+                    Naming it beats an unexplained blank row. */}
+                {!message.body && attachments.length === 0 && (
+                  <p className="text-[15px] italic leading-relaxed text-paper-muted">
+                    Attachment unavailable.
+                  </p>
+                )}
+              </>
             )}
 
             {message.failed && (
@@ -1091,10 +1124,18 @@ function ReplyQuote({
 
 function EditComposer({
   initialValue,
+  allowEmpty = false,
   onCancel,
   onSubmit,
 }: {
   initialValue: string;
+  /**
+   * Set for a message that carries attachments, which is the only shape the
+   * server will store an empty body for. Clearing a caption is an edit and not
+   * a delete — the image stays — so refusing to submit here would leave the
+   * caption on screen with no way to remove it short of deleting the message.
+   */
+  allowEmpty?: boolean;
   onCancel: () => void;
   onSubmit: (body: string) => Promise<void>;
 }) {
@@ -1112,9 +1153,11 @@ function EditComposer({
 
   async function submit() {
     const trimmed = value.trim();
-    if (!trimmed || busy) {
+    if (busy || (!trimmed && !allowEmpty)) {
       return;
     }
+    // An already-empty body cleared again is not a change, so this still keeps
+    // the empty case from sending a PATCH that would do nothing.
     if (trimmed === initialValue) {
       onCancel();
       return;

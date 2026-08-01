@@ -1,6 +1,9 @@
 import type {
+  AttachmentUrlResponse,
   Channel,
   ChannelUnread,
+  CreateAttachmentRequest,
+  CreateAttachmentResponse,
   Gif,
   Invite,
   Message,
@@ -200,6 +203,40 @@ export const searchGifs = (query: string, signal?: AbortSignal) =>
 
 export const fetchTrendingGifs = (signal?: AbortSignal) =>
   apiFetch<{ gifs: Gif[] }>("/api/gifs/trending", signal ? { signal } : {});
+
+// -------------------------------------------------------------- attachments
+
+/**
+ * Whether this deployment has object storage, so the paperclip can be hidden.
+ * `maxBytes` is optional: a server that only reports `enabled` leaves the client
+ * on the shared ceiling, which is the value it would have enforced anyway.
+ */
+export const fetchAttachmentConfig = () =>
+  apiFetch<{ enabled: boolean; maxBytes?: number }>("/api/attachments/config");
+
+/**
+ * Reserve a row and get a presigned PUT for it. The storage key is chosen by
+ * the server — a client-supplied one would let anybody overwrite anybody's
+ * object — so nothing about the destination is negotiable here.
+ */
+export const createAttachment = (
+  channelId: string,
+  body: CreateAttachmentRequest,
+  signal?: AbortSignal,
+) =>
+  apiFetch<CreateAttachmentResponse>(`/api/channels/${channelId}/attachments`, {
+    method: "POST",
+    body: JSON.stringify(body),
+    ...(signal ? { signal } : {}),
+  });
+
+/**
+ * A fresh presigned GET for one attachment. Read URLs are minted per response
+ * and expire, so a tab left open overnight is holding dead links — this is how
+ * it heals rather than showing a broken image.
+ */
+export const fetchAttachmentUrl = (attachmentId: string) =>
+  apiFetch<AttachmentUrlResponse>(`/api/attachments/${attachmentId}/url`);
 
 // ------------------------------------------------------------------ servers
 

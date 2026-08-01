@@ -1,4 +1,4 @@
-# Handover — pqp (as of 2026-07-31)
+# Handover — pqp (as of 2026-08-01)
 
 Cold-start status for agents and humans. Companion: [`../CLAUDE.md`](../CLAUDE.md). Roadmap checklist: [`PLAN_STATUS.md`](./PLAN_STATUS.md).
 
@@ -28,6 +28,10 @@ pnpm workspaces: `client/` · `server/` · `packages/shared/` · `electron/`
 docker compose up -d postgres
 pnpm install && pnpm dev          # :5173 + :3001
 pnpm electron:dev                 # desktop shell vs Vite
+
+# Optional profiles
+docker compose --profile livekit up -d                        # SFU
+docker compose --profile storage up -d postgres minio minio-init   # attachments
 ```
 
 Never commit `.env`. Template: [`.env.example`](../.env.example).
@@ -132,6 +136,12 @@ Do **not** put `CLERK_SECRET_KEY`, `DATABASE_URL`, or TURN credentials in Pages/
 - `CLOUDFLARE_TURN_KEY_ID` + `CLOUDFLARE_TURN_API_TOKEN`, or
 - `METERED_API_KEY` (+ optional `METERED_DOMAIN`)
 
+Optional features, each off until its names are set: `GIPHY_API_KEY` (GIF search), `LIVEKIT_*`
+(SFU), `S3_*` (attachments — see [`ATTACHMENTS.md`](./ATTACHMENTS.md)).
+
+Do **not** put `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` in a `VITE_` variable or a Pages
+secret; they would ship in the public bundle.
+
 ## Auth notes
 
 - Clerk on client + `@clerk/backend` verify on server.
@@ -147,6 +157,7 @@ Do **not** put `CLERK_SECRET_KEY`, `DATABASE_URL`, or TURN credentials in Pages/
 | [`deploy-railway.md`](./deploy-railway.md) | Railway + TURN options |
 | [`CLERK_SETUP.md`](./CLERK_SETUP.md) | Clerk CLI |
 | [`voice-backends.md`](./voice-backends.md) | SFU notes |
+| [`ATTACHMENTS.md`](./ATTACHMENTS.md) | File uploads: R2 in prod, MinIO locally, limits, sweeper |
 | [`billing.md`](./billing.md) | Future Plus/Pro |
 | [`PLAN_STATUS.md`](./PLAN_STATUS.md) | Phase checklist |
 | [`DISCORD_GAPS.md`](./DISCORD_GAPS.md) | Ranked feature gaps vs Discord, with implementation sketches |
@@ -197,6 +208,97 @@ Full list in [`PLAN_STATUS.md`](./PLAN_STATUS.md). The parts most likely to surp
   reset swaps the whole window — a scroll scheduled when the fetch resolves runs against the
   outgoing layout and the browser then drops the container to the top.
 
+## File attachments (2026-08-01)
+
+Uploads to S3-compatible object storage — **Cloudflare R2** hosted, **MinIO** locally. Full
+setup, R2 CORS and limits: [`ATTACHMENTS.md`](./ATTACHMENTS.md). Rationale:
+[`DECISIONS.md`](./DECISIONS.md).
+
+- **Off unless configured.** No `S3_*` env → `GET /api/attachments/config` says
+  `{"enabled":false,"maxBytes":10485760}` and the composer hides the attach button. Same shape as
+  GIF search.
+- **Image dimensions travel with the mint**, not with the send: the browser measures the file
+  before `POST …/attachments` and the row carries `width` / `height` from birth, so every reader
+  can reserve the box. Display-only and bounded at 65535 px (`ATTACHMENT_MAX_DIMENSION`) — a
+  client that lies mis-sizes its own placeholder.
+- **Bytes never touch the API.** The server signs a PUT and the browser uploads straight to
+  storage; reads are presigned GETs minted per row. Railway egress and Node memory both stay out
+  of it.
+- **Signing is hand-rolled SigV4** in `server/src/lib/s3.ts` over `node:crypto`. No new
+  dependency — the S3 SDK is ~50 packages for one operation.
+- **Size is enforced twice, and the two catch different things.** The mint signs
+  `Content-Length` as well as `Content-Type` into the presigned PUT, so the store rejects a body
+  of any other length — the client's declared `byteSize` can no longer become bytes the bucket
+  pays for. The claim then requires `uploader_id` = sender, `channel_id` = the target channel and
+  `message_id IS NULL`, and `HEAD`s each object, which is still the only thing that tells "never
+  uploaded" from "uploaded", catches an object stored as a type other than the one signed, and
+  covers a store that ignores a signed length. An attachment that fails it is dropped from the
+  message.
+- **The HEAD runs before the claim transaction opens**, on the pool. Inside it, a bucket that
+  blackholes packets parks a pooled connection idle-in-transaction for the full ten second
+  timeout, and a few concurrent image sends drain `PG_POOL_MAX` — every unrelated query, down to
+  the membership check on each WS frame, then queues behind a storage outage. The insert, claim
+  and mentions still share one transaction; ownership is re-stated in the claim `UPDATE`'s own
+  `WHERE` under its row lock, so verifying on another connection gives up nothing.
+- **Deleting a channel or server deletes its objects.** `message_attachments.channel_id` is
+  `ON DELETE CASCADE` and the sweeper's predicate is `message_id IS NULL`, so a cascaded row is
+  unreachable to it — both delete paths therefore read the storage keys *before* the delete and
+  fire the bucket deletes afterwards, unawaited, in batches of 8, capped at 5000 objects
+  (`server/src/services/servers.ts`). Past the cap the objects leak; the read is on the request
+  path and must not be unbounded. Failures log `[attachments] leaked object <key>`.
+- **The sweeper also runs once at boot**, right after `initDb()` and unawaited, on top of the
+  hourly interval — a process that redeploys more often than the interval would otherwise never
+  sweep once in its life.
+- **A caption can be cleared.** `PATCH /api/messages/:id` accepts `body: ""` when the message
+  carries attachments and only then; for a text-only message an empty body is a delete wearing an
+  edit's clothes, so `updateMessageSchema` keeps its one-character floor.
+- **Local:** `docker compose --profile storage up -d postgres minio minio-init`. The `minio-init`
+  one-shot exists because a fresh MinIO has no bucket, and the first upload would then 404 on a
+  URL that was signed perfectly correctly.
+- **New env names:** `S3_ENDPOINT`, `S3_BUCKET`, `S3_REGION`, `S3_ACCESS_KEY_ID`,
+  `S3_SECRET_ACCESS_KEY`, `S3_FORCE_PATH_STYLE`, `S3_PUBLIC_BASE_URL`, `MAX_ATTACHMENT_BYTES`,
+  `ATTACHMENT_URL_TTL_SECONDS`. The key and secret are credentials — API only, never `VITE_`.
+
+**The thing that will waste your afternoon:** an R2 bucket has **no CORS policy by default**, and
+a browser cannot PUT to it without one. The mint call returns 200, the API logs are silent
+because the upload never touches the API, and the browser reports a CORS error against a URL that
+is entirely valid. `AllowedHeaders` must include `content-type`, because the presigned PUT signs
+it — but *not* `content-length`, which is a forbidden header name the browser sets itself and
+which therefore never appears in a preflight. MinIO allows all origins by default, which is
+precisely why this only shows up in production.
+
+**The second thing:** every `/api` route needs a Bearer token, including
+`/api/attachments/config`. A bare `curl` answers 401 and looks exactly like a broken feature.
+Locally use `-H "Authorization: Bearer dev-local-token"` with `DEV_AUTH_BYPASS=true`.
+
+### Verified against a real MinIO (2026-08-01)
+
+`docker compose --profile storage up -d postgres minio minio-init` (naming the services, because
+a bare `--profile storage up -d` also starts `app`, which then fights `pnpm dev` for `:3001`),
+then the opt-in suite: `S3_TEST_ENDPOINT=http://localhost:9000 S3_TEST_BUCKET=pqp-attachments
+S3_TEST_ACCESS_KEY_ID=pqpminio S3_TEST_SECRET_ACCESS_KEY=pqpminio-dev-secret pnpm --filter
+@pqp/server test s3` — 19 passed, including the three cases that skip without `S3_TEST_*`.
+
+- Full round trip passes for a plain key and for one holding a space, `+ ( ) * ' ! ~` and
+  non-ASCII, so the hand-rolled RFC-3986 canonical-URI encoder is right against a real
+  implementation.
+- **The signed `Content-Length` is enforced.** Same URL with an over-size body → `403
+  SignatureDoesNotMatch`; with an under-size body → the same. `Transfer-Encoding: chunked` with no
+  length → `411 MissingContentLength`, nothing stored. A lying `Content-Length` header stores only
+  the framed bytes, and an `aws-chunked` envelope cannot amplify because the envelope is what is
+  signed.
+- `presignGet` with a download filename survives a space, a quote and `ó` across both the
+  `filename=` fallback and `filename*=UTF-8''`. `deleteObject` is idempotent.
+
+**Caveat, and production runs on R2:** MinIO's enforcement is a side effect of signature
+verification (`SignatureDoesNotMatch`, not `EntityTooLarge`), so it only holds where
+`content-length` is reconstructed verbatim into the string-to-sign. R2 sits behind Cloudflare's
+edge, which is the class of proxy that re-frames request bodies. **Treat the signed length as
+verified on MinIO and unverified on R2.** The claim-time HEAD is what makes that tolerable: an
+oversized object can never be attached to a message on any backend, so the exposure is one
+unclaimed row for one sweeper grace period. A 10-minute check against a real R2 bucket would
+close it.
+
 ## Verification status
 
 | Checked | How |
@@ -204,6 +306,8 @@ Full list in [`PLAN_STATUS.md`](./PLAN_STATUS.md). The parts most likely to surp
 | Authorization matrix | 24 integration tests against real Postgres (`server/src/api/api.test.ts`) |
 | Reconnect, optimistic send, chat reducers | 30 client unit tests |
 | Send, multi-line, markdown + mentions, reconnect after restart, dialogs | Driven in a browser |
+| SigV4 signing + presigned round trip, signed `Content-Length` | 19 tests against a real MinIO (`server/src/lib/s3.test.ts`, opt in with `S3_TEST_*`) |
+| **Attachments against R2** | **Not verified** — signing is exercised on MinIO only; the CORS policy and the signed length are unconfirmed on Cloudflare's edge |
 | **Voice (mesh, deafen, per-peer volume)** | **Not verified** — no microphone was available |
 
 ## Suggested next work (priority)
@@ -211,9 +315,13 @@ Full list in [`PLAN_STATUS.md`](./PLAN_STATUS.md). The parts most likely to surp
 1. **Exercise voice with a real mic** — mesh join, deafen, per-peer volume, and the persistent
    voice bar all changed and none were run against real hardware.
 2. **Verify LiveKit end-to-end** — `docker compose --profile livekit up -d`, set `LIVEKIT_*`, join from two clients. Token minting is verified; the browser join/publish path is not.
-3. **Set `CORS_ALLOWED_ORIGINS` on Railway** to the Pages origin (and pqp.gg when it exists).
-4. **pqp.gg is unregistered** — canonical/OG tags in `client/index.html` and `SITE_URL` in `seo.tsx` point at a domain nobody owns, so shared links render a broken preview. Buy the domain or repoint the metadata.
-5. **Electron app icon** — no `electron/build` icons; packaged apps use the default Electron icon.
-6. Move rate limiting + presence to Redis before running more than one API instance.
-7. Cloudflare Realtime SFU adapter (optional — LiveKit covers the need)
-8. Clerk Billing (Plus/Pro) when ready
+3. **Confirm the signed `Content-Length` against a real R2 bucket** — PUT a body longer than the
+   one that was minted and check it is refused. It holds on MinIO; Cloudflare's edge may re-frame
+   the request, and if it does the mint-time size cap is decoration and only the claim-time HEAD
+   is real. Ten minutes with a scratch bucket settles it.
+4. **Set `CORS_ALLOWED_ORIGINS` on Railway** to the Pages origin (and pqp.gg when it exists).
+5. **pqp.gg is unregistered** — canonical/OG tags in `client/index.html` and `SITE_URL` in `seo.tsx` point at a domain nobody owns, so shared links render a broken preview. Buy the domain or repoint the metadata.
+6. **Electron app icon** — no `electron/build` icons; packaged apps use the default Electron icon.
+7. Move rate limiting + presence to Redis before running more than one API instance.
+8. Cloudflare Realtime SFU adapter (optional — LiveKit covers the need)
+9. Clerk Billing (Plus/Pro) when ready

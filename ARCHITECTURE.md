@@ -19,13 +19,22 @@ flowchart TB
     TURN[TURN relay]
     SFU[Realtime SFU Phase 5]
   end
+  subgraph store [Object storage optional]
+    S3[(R2 or any S3)]
+  end
   Web --> Node
   Electron --> Node
   Node --> PG
   Web --> TURN
   Web -.-> SFU
   Pages --> Web
+  Web -->|attachment bytes| S3
+  Node -->|sign, HEAD, delete| S3
 ```
+
+Note the two arrows into object storage. Attachment **bytes** go browser ↔ storage directly; the
+server only ever signs URLs, reads object metadata, and deletes — on the sweeper's schedule and
+when a channel or server is deleted. Nothing large transits Node.
 
 ## Monorepo layout
 
@@ -43,9 +52,13 @@ Discord-like hierarchy:
 - **Server** — workspace / guild
 - **Channel** — `text` or `voice`
 - **Message** — persisted text in text channels
+- **Attachment** — `message_attachments` row pointing at an object in storage
 - **User** — synced from Clerk on first request
 
 Creating a server bootstraps `#general` (text) and `Lobby` (voice).
+
+The database is the index; the object store holds bytes. No file content is ever in Postgres —
+it would bloat every backup for the one kind of data that least needs transactional storage.
 
 ## Realtime protocols
 
@@ -71,6 +84,52 @@ Per **voice channel** mesh room. Same offer/answer/ICE relay as the seed MVP, sc
 | Relayed | `offer` / `answer` / `ice-candidate` | WebRTC negotiation |
 
 **Mesh limit:** ~5–8 users per voice channel. UI warns at 6+. SFU backends scale beyond this.
+
+## Attachments
+
+An optional feature — with no `S3_*` env the whole path is absent and the composer hides the
+attach button. It spans HTTP, the WebSocket and object storage, in that order:
+
+| Step | Transport | What happens |
+|---|---|---|
+| Mint | `POST /api/channels/:channelId/attachments` | Access check, allowlist + cap check, row with `message_id NULL` and a **server-generated** key, returns a presigned PUT |
+| Upload | Browser → storage | Direct PUT with exactly the signed `Content-Type` **and** `Content-Length` |
+| Claim | `message-create` on `/ws` | Rows claimed **in the same transaction as the message insert**; the per-object HEAD runs before that transaction opens |
+| Read | Any message fetch | Presigned GET minted per row, embedded as `url` |
+| Sweep | Background | Rows with `message_id IS NULL` older than an hour, plus their objects |
+| Delete | Channel / server delete | Keys read **before** the cascade drops the rows, objects deleted afterwards, unawaited |
+
+Two properties carry the security of this design:
+
+- **The storage key is never client-supplied.** A client that chooses its own key can overwrite
+  another user's object.
+- **Size is enforced at both ends.** The mint signs `Content-Length` as well as `Content-Type`
+  into the PUT, so the store rejects a body of any other length and the client's declared
+  `byteSize` cannot become bytes the bucket pays for. The claim then requires `uploader_id` =
+  sender, `channel_id` = the target channel, `message_id IS NULL`, and `HEAD`s each object — which
+  is still the only thing that distinguishes "never uploaded", catches an object stored as a
+  different type than was signed, and covers a store that ignores a signed length. An attachment
+  that fails it is dropped from the message rather than accepted.
+
+The HEAD deliberately runs outside the transaction: it is an HTTP round trip with a ten second
+timeout, and held open between `BEGIN` and `COMMIT` a blackholing bucket would park pooled
+connections idle-in-transaction until unrelated queries — including the membership check on every
+inbound WS frame — queued behind a storage outage. Ownership is re-stated in the claim `UPDATE`'s
+own `WHERE`, under its row lock, so nothing is given up by verifying on another connection.
+
+The honest residual: a presigned PUT is an unconditional overwrite for its 15-minute life, so an
+object can still be replaced by a *different body of the same length*. It is bounded, and closing
+it would take a conditional PUT or a key rotation at claim time.
+
+Reads are presigned rather than public or proxied — a public bucket would make every attachment
+world-readable regardless of the private channel it was posted in, and an authenticated proxy
+route cannot work because `<img src>` sends no `Authorization` header. URLs expire, and the
+client refetches on `<img>` error.
+
+Signing is hand-rolled SigV4 over `node:crypto` in `server/src/lib/s3.ts`, so the feature adds no
+dependency to an image that otherwise runs raw `node:http`.
+
+Setup, R2 CORS, and limits: [`docs/ATTACHMENTS.md`](./docs/ATTACHMENTS.md).
 
 ## Auth
 
@@ -101,6 +160,7 @@ Details: [`docs/voice-backends.md`](./docs/voice-backends.md).
 | **TURN** | NAT traversal for mesh voice | Self-host uses coturn or env TURN |
 | **Realtime SFU** | Scale voice past mesh on hosted | Not self-hostable; LiveKit for OSS |
 | **Pages** | CDN for static client on pqp.gg | Self-host serves from Node |
+| **R2** | Attachment bytes (no egress fee) | Same S3 driver points at MinIO for self-host |
 
 Core API + Postgres stay on **Node/Railway/Docker** so self-host is one artifact.
 
@@ -108,9 +168,9 @@ Core API + Postgres stay on **Node/Railway/Docker** so self-host is one artifact
 
 Independent copy — your URL, your data, your Clerk instance.
 
-- `docker-compose.yml` — app + Postgres (+ optional coturn)
+- `docker-compose.yml` — app + Postgres, plus optional profiles: `livekit` (SFU), `storage` (MinIO)
 - Railway template — one-click from repo
-- Same env contract as hosted
+- Same env contract as hosted — R2 and MinIO are the same `S3_*` names and the same driver
 
 ## Monetization (future)
 
