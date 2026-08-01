@@ -30,8 +30,13 @@ interface VoicePeer {
 const peers = new Map<string, VoicePeer>();
 const socketToPeerId = new Map<WebSocket, string>();
 
-/** Joining fans a query plus a broadcast out to a whole server; cap the churn. */
-const roomLimiter = createRateLimiter({ capacity: 6, refillPerSecond: 0.5 });
+/**
+ * Joining fans a query plus a broadcast out to a whole server, so the churn is
+ * worth bounding — but generously. A client re-joins on every reconnect, so a
+ * flappy network legitimately produces bursts, and throttling those would eject
+ * people from calls exactly when the reconnect logic is trying to keep them in.
+ */
+const roomLimiter = createRateLimiter({ capacity: 20, refillPerSecond: 2 });
 
 export function resetVoiceRateLimits(): void {
   roomLimiter.reset();
