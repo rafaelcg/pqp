@@ -2,6 +2,7 @@ const {
   app,
   BrowserWindow,
   Menu,
+  nativeTheme,
   shell,
   ipcMain,
   session,
@@ -9,6 +10,7 @@ const {
 const fs = require("node:fs");
 const path = require("node:path");
 const { loadWindowState, trackWindowState, DEFAULTS } = require("./lib/window-state");
+const { loadTheme, saveTheme, BACKGROUNDS } = require("./lib/theme-state");
 const { startStaticServer } = require("./lib/static-server");
 const { waitForUrl, isLocalDevUrl } = require("./lib/wait-for-url");
 
@@ -309,6 +311,11 @@ function createWindow(appUrl, allowedOrigin) {
   const state = loadWindowState(app.getPath("userData"));
   const isMac = process.platform === "darwin";
 
+  // Read before the window exists: backgroundColor cannot be changed later
+  // without the user seeing it change.
+  const theme = loadTheme(app.getPath("userData"));
+  nativeTheme.themeSource = theme;
+
   mainWindow = new BrowserWindow({
     width: state.width ?? DEFAULTS.width,
     height: state.height ?? DEFAULTS.height,
@@ -318,7 +325,7 @@ function createWindow(appUrl, allowedOrigin) {
     minHeight: DEFAULTS.minHeight,
     title: "pqp",
     show: false,
-    backgroundColor: "#1a1f2a",
+    backgroundColor: BACKGROUNDS[theme],
     autoHideMenuBar: process.platform === "win32",
     // macOS: hiddenInset keeps traffic lights; React draws a slim drag region.
     ...(isMac
@@ -416,6 +423,14 @@ if (!gotLock) {
     const value = pendingDeepLink;
     pendingDeepLink = null;
     return value;
+  });
+
+  ipcMain.on("pqp:set-theme", (_event, theme) => {
+    if (theme !== "dark" && theme !== "light") {
+      return;
+    }
+    nativeTheme.themeSource = theme;
+    saveTheme(app.getPath("userData"), theme);
   });
 
   app.whenReady().then(async () => {

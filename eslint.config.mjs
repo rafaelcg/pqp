@@ -85,7 +85,14 @@ export default tseslint.config(
     // Standalone Node ESM tooling, run with `node scripts/…`.
     files: ["scripts/**/*.mjs", "client/bench/**/*.mjs", "*.mjs"],
     languageOptions: {
-      globals: { ...globals.node, WebSocket: "readonly", fetch: "readonly" },
+      // Benchmarks are Node scripts that also evaluate code inside a browser
+      // page, so both sets of globals are legitimately in scope.
+      globals: {
+        ...globals.node,
+        ...globals.browser,
+        WebSocket: "readonly",
+        fetch: "readonly",
+      },
       sourceType: "module",
     },
     rules: {

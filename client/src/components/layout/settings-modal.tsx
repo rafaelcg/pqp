@@ -1,14 +1,16 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { User } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { useTheme } from "@/hooks/use-theme";
 import {
   ensureMediaPermission,
   listAudioDevices,
   supportsAudioOutputSelection,
   type MediaDeviceOption,
 } from "@/lib/audio-devices";
+import type { ThemePreference } from "@/lib/theme";
 import { updateMe } from "@/lib/api";
 
 export interface LocalSettings {
@@ -201,6 +203,83 @@ function MicLevelMeter({
           style={{ width: `${Math.round(level * 100)}%` }}
         />
       </div>
+    </div>
+  );
+}
+
+const THEME_OPTIONS: { value: ThemePreference; label: string }[] = [
+  { value: "light", label: "Light" },
+  { value: "dark", label: "Dark" },
+  { value: "system", label: "System" },
+];
+
+/**
+ * Theme is not part of `LocalSettings`: it applies on click rather than on
+ * Save, and it persists under its own key so the boot script can read it
+ * without parsing the audio blob.
+ */
+function ThemePicker() {
+  const { preference, resolved, setPreference } = useTheme();
+
+  function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    const step =
+      event.key === "ArrowRight" || event.key === "ArrowDown"
+        ? 1
+        : event.key === "ArrowLeft" || event.key === "ArrowUp"
+          ? -1
+          : 0;
+    if (step === 0) {
+      return;
+    }
+    event.preventDefault();
+    const current = THEME_OPTIONS.findIndex(
+      (option) => option.value === preference,
+    );
+    const nextIndex =
+      (current + step + THEME_OPTIONS.length) % THEME_OPTIONS.length;
+    setPreference(THEME_OPTIONS[nextIndex].value);
+    const radios =
+      event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="radio"]');
+    radios[nextIndex]?.focus();
+  }
+
+  return (
+    <div>
+      <p className="text-xs uppercase tracking-wide text-text-muted">
+        Appearance
+      </p>
+      <div
+        role="radiogroup"
+        aria-label="Theme"
+        className="mt-2 flex gap-1.5"
+        onKeyDown={handleKeyDown}
+      >
+        {THEME_OPTIONS.map((option) => {
+          const selected = option.value === preference;
+          return (
+            <button
+              key={option.value}
+              type="button"
+              role="radio"
+              aria-checked={selected}
+              tabIndex={selected ? 0 : -1}
+              onClick={() => setPreference(option.value)}
+              className={`rounded-md border px-3 py-1.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent ${
+                selected
+                  ? "border-accent bg-accent/10 text-text"
+                  : "border-border text-text-muted hover:border-accent/50"
+              }`}
+            >
+              {option.label}
+            </button>
+          );
+        })}
+      </div>
+      <p className="mt-1.5 text-xs text-text-muted">
+        {preference === "system"
+          ? `Following your system — currently ${resolved}.`
+          : "Applies immediately, on this device."}
+      </p>
     </div>
   );
 }
@@ -422,7 +501,11 @@ export function SettingsModal({
           </span>
         </label>
 
-        <div className="space-y-4 border-t border-ink-4 pt-4">
+        <div className="border-t border-ink-4 pt-4">
+          <ThemePicker />
+        </div>
+
+        <div className="mt-4 space-y-4 border-t border-ink-4 pt-4">
           <div>
             <p className="text-xs uppercase tracking-wide text-paper-muted">
               Voice &amp; Video

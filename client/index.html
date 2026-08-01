@@ -26,6 +26,33 @@
     />
     <meta name="twitter:image" content="https://pqp.gg/images/og-image.jpg" />
     <meta name="theme-color" content="#1a1c22" />
+    <!--
+      Vite injects the app bundle at the end of <body>, so this runs first and
+      the theme is on the element before the first paint rather than one frame
+      after it. Keep it dependency-free. If a CSP is ever added it needs a hash
+      for this script.
+    -->
+    <script>
+      try {
+        const stored = localStorage.getItem("pqp-theme");
+        const preference =
+          stored === "light" || stored === "dark" ? stored : "system";
+        let theme =
+          preference === "system"
+            ? window.matchMedia("(prefers-color-scheme: dark)").matches
+              ? "dark"
+              : "light"
+            : preference;
+        // Marketing routes are compositions over a hero photograph and stay dark.
+        const path = location.pathname.replace(/\/+$/, "") || "/";
+        if (["/", "/privacy", "/terms", "/cookies"].includes(path)) {
+          theme = "dark";
+        }
+        document.documentElement.dataset.theme = theme;
+      } catch {
+        // Storage or matchMedia blocked — the stylesheet defaults to dark.
+      }
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link

@@ -29,6 +29,10 @@ export default defineConfig({
     screenshot: "only-on-failure",
     // Deterministic geometry: several checks compare rendered colour and layout.
     viewport: { width: 1440, height: 900 },
+    // Playwright defaults to a light OS preference. Pin dark so "no stored
+    // choice" is a known starting point; the system-preference tests build
+    // their own light context explicitly.
+    colorScheme: "dark",
   },
 
   projects: [

@@ -95,6 +95,63 @@
   --picker-border: oklch(0.3 0.018 250);
 }
 
+/*
+ * Light is not an inversion of dark. `@theme` emits into `@layer theme`, so this
+ * unlayered block outranks it without any specificity trick — keep it unlayered.
+ *
+ * `--overlay` is deliberately absent: a modal scrim has to darken what is behind
+ * it in both themes, so a light scrim would be a bug rather than a theme.
+ */
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --color-surface-0: oklch(0.98 0.005 95);
+  --color-surface-1: oklch(0.955 0.006 95);
+  --color-surface-2: oklch(0.92 0.008 95);
+  /* Darker than surface-1 here, unlike dark, or every skeleton disappears. */
+  --color-surface-3: oklch(0.88 0.01 95);
+  --color-rail: oklch(0.93 0.008 95);
+
+  --color-border: oklch(0.86 0.01 95);
+  --color-border-strong: oklch(0.74 0.012 95);
+
+  --color-text: oklch(0.25 0.015 250);
+  --color-text-muted: oklch(0.45 0.02 250);
+  --color-text-subtle: oklch(0.38 0.018 250);
+
+  /* The dark chartreuse is near-white in luminance and fails on a white page. */
+  --color-accent: oklch(0.52 0.16 135);
+  --color-accent-hover: oklch(0.45 0.15 135);
+  --color-on-accent: oklch(0.99 0 0);
+
+  --color-danger: oklch(0.52 0.2 25);
+  --color-warning: oklch(0.52 0.13 75);
+  --color-success: oklch(0.48 0.13 150);
+
+  --color-code-bg: oklch(0.94 0.006 95);
+  --color-code-text: oklch(0.42 0.14 135);
+
+  --color-focus-ring: oklch(0.52 0.16 135 / 0.6);
+  --color-selection: oklch(0.52 0.16 135 / 0.25);
+  --color-indicator: oklch(0.25 0.015 250);
+
+  --shadow-popover: 0 12px 40px oklch(0.4 0.02 250 / 0.18);
+  /* A soft glow reads as a smudge on a light panel, so the ring goes solid. */
+  --shadow-speaking: 0 0 0 3px oklch(0.52 0.16 135 / 0.4);
+  --glow-accent: oklch(0.75 0.12 135 / 0.18);
+  --glow-danger: oklch(0.7 0.14 25 / 0.15);
+  --glow-success: oklch(0.55 0.13 150 / 0.5);
+
+  --gradient-app-1: oklch(0.85 0.06 125 / 0.25);
+  --gradient-app-2: oklch(0.85 0.04 250 / 0.3);
+
+  --rgb-picker-background: 250, 249, 245;
+  --rgb-picker-input: 240, 238, 232;
+  --rgb-picker-color: 40, 44, 52;
+  --rgb-picker-accent: 90, 130, 40;
+  --picker-border: oklch(0.86 0.01 95);
+}
+
 * {
   box-sizing: border-box;
 }
