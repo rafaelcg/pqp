@@ -70,6 +70,7 @@ function serverMessage(overrides: Partial<Message> = {}): Message {
     editedAt: null,
     reactions: [],
     replyTo: null,
+    attachments: [],
     ...overrides,
   };
 }

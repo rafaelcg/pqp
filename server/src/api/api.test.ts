@@ -21,7 +21,11 @@ import type { DbUser } from "../db.js";
  * with only the identity layer stubbed.
  */
 
-const DATABASE_URL = process.env.DATABASE_URL ?? process.env.TEST_DATABASE_URL;
+// TEST_DATABASE_URL wins. These tests truncate the tables they touch, and the
+// other order made the opt-out unreachable: a developer always has
+// DATABASE_URL set, so it always won and `pnpm test` silently ate the dev
+// database. CI sets only DATABASE_URL and is unaffected.
+const DATABASE_URL = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL;
 const describeDb = DATABASE_URL ? describe : describe.skip;
 
 if (DATABASE_URL) {
@@ -106,7 +110,8 @@ describeDb("API authorization", () => {
     await getPool().query(
       `TRUNCATE users, user_preferences, servers, channels, messages,
                 server_members, channel_members, server_invites, server_bans,
-                channel_reads, message_mentions, message_reactions
+                channel_reads, message_mentions, message_reactions,
+                message_attachments
        RESTART IDENTITY CASCADE`,
     );
 
@@ -131,6 +136,23 @@ describeDb("API authorization", () => {
       avatarUrl: null,
     });
   });
+
+  /** The chat handler only ever touches these three members of a socket. */
+  function fakeSocket(): WebSocket {
+    return {
+      readyState: 1,
+      send: () => {},
+      on: () => {},
+    } as unknown as WebSocket;
+  }
+
+  async function asDbUser(id: string): Promise<DbUser> {
+    const result = await getPool().query<DbUser>(
+      `SELECT * FROM users WHERE id = $1`,
+      [id],
+    );
+    return result.rows[0]!;
+  }
 
   async function makeServer() {
     const created = await call<{
@@ -705,23 +727,6 @@ describeDb("API authorization", () => {
       } | null;
     }
 
-    /** The chat handler only ever touches these three members of a socket. */
-    function fakeSocket(): WebSocket {
-      return {
-        readyState: 1,
-        send: () => {},
-        on: () => {},
-      } as unknown as WebSocket;
-    }
-
-    async function asDbUser(id: string): Promise<DbUser> {
-      const result = await getPool().query<DbUser>(
-        `SELECT * FROM users WHERE id = $1`,
-        [id],
-      );
-      return result.rows[0]!;
-    }
-
     /** Replies are only creatable over the socket, so these drive it directly. */
     async function send(
       as: { id: string },
@@ -1227,6 +1232,333 @@ describeDb("API authorization", () => {
       expect(last).toBe(429);
       // The bucket is spent before the provider is called again.
       expect(upstreamCalls.length).toBeLessThan(40);
+    });
+  });
+
+  describe("attachments", () => {
+    /**
+     * Storage that is configured but never contacted. Presigning is pure HMAC
+     * over strings, so the routes under test — mint, refresh, read — need
+     * credentials to exist and a bucket to name, and nothing else. The signature
+     * itself is proved against a real MinIO in `lib/s3.test.ts`.
+     */
+    function configureStorage() {
+      process.env.S3_ENDPOINT = "https://storage.test";
+      process.env.S3_BUCKET = "pqp-test";
+      process.env.S3_ACCESS_KEY_ID = "test-access-key";
+      process.env.S3_SECRET_ACCESS_KEY = "test-secret-key";
+      process.env.S3_FORCE_PATH_STYLE = "true";
+    }
+
+    afterEach(() => {
+      for (const name of [
+        "S3_ENDPOINT",
+        "S3_BUCKET",
+        "S3_ACCESS_KEY_ID",
+        "S3_SECRET_ACCESS_KEY",
+        "S3_FORCE_PATH_STYLE",
+        "MAX_ATTACHMENT_BYTES",
+      ]) {
+        delete process.env[name];
+      }
+    });
+
+    function mintBody(overrides: Record<string, unknown> = {}) {
+      return {
+        filename: "shot.png",
+        contentType: "image/png",
+        byteSize: 1024,
+        ...overrides,
+      };
+    }
+
+    async function postMessage(channelId: string, author = owner) {
+      const result = await getPool().query<{ id: string }>(
+        `INSERT INTO messages (channel_id, author_id, body) VALUES ($1, $2, 'look')
+         RETURNING id`,
+        [channelId, author.id],
+      );
+      return result.rows[0]!.id;
+    }
+
+    /**
+     * A claimed attachment, inserted directly. The claim path needs a real HEAD
+     * against a real object to accept anything, and it has its own suite; what
+     * these tests are about is who the API will hand the row to afterwards.
+     */
+    async function seedAttachment(
+      channelId: string,
+      messageId: string,
+      uploader = owner,
+    ) {
+      const result = await getPool().query<{ id: string }>(
+        `INSERT INTO message_attachments
+           (message_id, channel_id, uploader_id, storage_key, filename,
+            content_type, byte_size)
+         VALUES ($1, $2, $3, $4, 'shot.png', 'image/png', 1024)
+         RETURNING id`,
+        [messageId, channelId, uploader.id, `${channelId}/seeded.png`],
+      );
+      return result.rows[0]!.id;
+    }
+
+    async function attachmentCount(): Promise<number> {
+      const result = await getPool().query(`SELECT 1 FROM message_attachments`);
+      return result.rowCount ?? 0;
+    }
+
+    it("reports whether this deployment can accept uploads at all", async () => {
+      const off = await call<{ enabled: boolean }>(
+        owner,
+        "GET",
+        "/api/attachments/config",
+      );
+      expect(off.status).toBe(200);
+      expect(off.body.enabled).toBe(false);
+
+      configureStorage();
+      const on = await call<{ enabled: boolean; maxBytes: number }>(
+        owner,
+        "GET",
+        "/api/attachments/config",
+      );
+      expect(on.body.enabled).toBe(true);
+      // The composer sizes its own check off this, so it has to be the number
+      // the server would actually enforce.
+      expect(on.body.maxBytes).toBe(10 * 1024 * 1024);
+    });
+
+    it("refuses to mint an upload URL for a channel the caller cannot see", async () => {
+      configureStorage();
+      const { serverId, textChannelId } = await makeServer();
+
+      const byOutsider = await call(
+        outsider,
+        "POST",
+        `/api/channels/${textChannelId}/attachments`,
+        mintBody(),
+      );
+      expect(byOutsider.status).toBe(404);
+
+      const created = await call<{ channel: { id: string } }>(
+        owner,
+        "POST",
+        `/api/servers/${serverId}/channels`,
+        { name: "secret", type: "text", isPrivate: true },
+      );
+      const byNonMember = await call(
+        member,
+        "POST",
+        `/api/channels/${created.body.channel.id}/attachments`,
+        mintBody(),
+      );
+      expect(byNonMember.status).toBe(404);
+
+      // Not even a reserved row: minting *is* the write, and a refused caller
+      // must not be able to leave anything behind for the sweeper to pay for.
+      expect(await attachmentCount()).toBe(0);
+
+      const allowed = await call<{ attachmentId: string; uploadUrl: string }>(
+        member,
+        "POST",
+        `/api/channels/${textChannelId}/attachments`,
+        mintBody(),
+      );
+      expect(allowed.status).toBe(201);
+      expect(allowed.body.uploadUrl).toContain("X-Amz-Signature");
+      // The key is the server's, derived from the content type — never the
+      // filename the caller sent.
+      const stored = await getPool().query<{ storage_key: string }>(
+        `SELECT storage_key FROM message_attachments WHERE id = $1`,
+        [allowed.body.attachmentId],
+      );
+      expect(stored.rows[0]!.storage_key).not.toContain("shot");
+    });
+
+    it("refuses to mint anything on a deployment with no storage", async () => {
+      const { textChannelId } = await makeServer();
+      const res = await call(
+        owner,
+        "POST",
+        `/api/channels/${textChannelId}/attachments`,
+        mintBody(),
+      );
+      expect(res.status).toBe(503);
+      expect(await attachmentCount()).toBe(0);
+    });
+
+    it("answers 413 for a file over this deployment's own cap", async () => {
+      configureStorage();
+      // Under the shared ceiling the schema enforces, over what this server has
+      // been told to accept — the only case that reaches the service's check.
+      process.env.MAX_ATTACHMENT_BYTES = "1024";
+      const { textChannelId } = await makeServer();
+
+      const res = await call(
+        owner,
+        "POST",
+        `/api/channels/${textChannelId}/attachments`,
+        mintBody({ byteSize: 4096 }),
+      );
+      expect(res.status).toBe(413);
+    });
+
+    it("rejects a content type outside the allowlist", async () => {
+      configureStorage();
+      const { textChannelId } = await makeServer();
+      const res = await call(
+        owner,
+        "POST",
+        `/api/channels/${textChannelId}/attachments`,
+        mintBody({ filename: "payload.html", contentType: "text/html" }),
+      );
+      expect(res.status).toBe(400);
+      expect(await attachmentCount()).toBe(0);
+    });
+
+    it("hands a fresh URL only to someone who can see the channel", async () => {
+      configureStorage();
+      const { serverId } = await makeServer();
+      const created = await call<{ channel: { id: string } }>(
+        owner,
+        "POST",
+        `/api/servers/${serverId}/channels`,
+        { name: "secret", type: "text", isPrivate: true },
+      );
+      const privateId = created.body.channel.id;
+      const attachmentId = await seedAttachment(
+        privateId,
+        await postMessage(privateId),
+      );
+
+      // 404 rather than 403, so refreshing a guessed id cannot be used to learn
+      // that an attachment exists in a channel you are not in.
+      expect(
+        (await call(member, "GET", `/api/attachments/${attachmentId}/url`))
+          .status,
+      ).toBe(404);
+      expect(
+        (await call(outsider, "GET", `/api/attachments/${attachmentId}/url`))
+          .status,
+      ).toBe(404);
+
+      const fresh = await call<{ url: string; expiresAt: string }>(
+        owner,
+        "GET",
+        `/api/attachments/${attachmentId}/url`,
+      );
+      expect(fresh.status).toBe(200);
+      expect(fresh.body.url).toContain("X-Amz-Signature");
+      expect(Date.parse(fresh.body.expiresAt)).toBeGreaterThan(Date.now());
+
+      // Granting access opens it, on the same predicate as history.
+      await call(owner, "POST", `/api/channels/${privateId}/members`, {
+        userId: member.id,
+      });
+      expect(
+        (await call(member, "GET", `/api/attachments/${attachmentId}/url`))
+          .status,
+      ).toBe(200);
+    });
+
+    it("hides an attachment no message has claimed", async () => {
+      configureStorage();
+      const { textChannelId } = await makeServer();
+      const minted = await call<{ attachmentId: string }>(
+        owner,
+        "POST",
+        `/api/channels/${textChannelId}/attachments`,
+        mintBody(),
+      );
+
+      // Until a message carries it, an upload is not content anyone can read —
+      // not even the person who uploaded it.
+      expect(
+        (
+          await call(
+            owner,
+            "GET",
+            `/api/attachments/${minted.body.attachmentId}/url`,
+          )
+        ).status,
+      ).toBe(404);
+    });
+
+    it("carries attachments on history, one presigned URL per row", async () => {
+      configureStorage();
+      const { textChannelId } = await makeServer();
+      const messageId = await postMessage(textChannelId);
+      await seedAttachment(textChannelId, messageId);
+
+      const res = await call<{
+        messages: Array<{
+          attachments: Array<{ filename: string; byteSize: number; url: string }>;
+        }>;
+      }>(owner, "GET", `/api/channels/${textChannelId}/messages`);
+
+      const [attachment] = res.body.messages[0]!.attachments;
+      expect(attachment!.filename).toBe("shot.png");
+      // BIGINT arrives from node-postgres as a string; a read that forgot to
+      // convert it fails `attachmentSchema` on the client.
+      expect(attachment!.byteSize).toBe(1024);
+      expect(attachment!.url).toContain("X-Amz-Signature");
+    });
+
+    it("does not post an empty message when every attachment failed", async () => {
+      configureStorage();
+      const { textChannelId } = await makeServer();
+      const minted = await call<{ attachmentId: string }>(
+        owner,
+        "POST",
+        `/api/channels/${textChannelId}/attachments`,
+        mintBody(),
+      );
+
+      // Nothing was ever uploaded, so the HEAD guarding the claim finds nothing
+      // and the attachment is dropped. A message whose only content was that
+      // file is then not a message at all, and the frame goes the way every
+      // other frame that describes nothing goes.
+      await handleChatMessage(
+        { socket: fakeSocket(), user: await asDbUser(owner.id) },
+        {
+          type: "message-create",
+          channelId: textChannelId,
+          body: "",
+          attachmentIds: [minted.body.attachmentId],
+        },
+      );
+
+      const history = await call<{ messages: unknown[] }>(
+        owner,
+        "GET",
+        `/api/channels/${textChannelId}/messages`,
+      );
+      expect(history.body.messages).toHaveLength(0);
+      // The reserved row survives the rollback and is left to the sweeper,
+      // which is the only thing that ever deletes an unclaimed upload.
+      expect(await attachmentCount()).toBe(1);
+    });
+
+    it("lets a message with attachments be edited down to no caption", async () => {
+      configureStorage();
+      const { textChannelId } = await makeServer();
+      const plain = await postMessage(textChannelId);
+      const withFile = await postMessage(textChannelId);
+      await seedAttachment(textChannelId, withFile);
+
+      // Text and nothing else has nothing left when the text goes: that is a
+      // delete, and the edit schema keeps refusing it.
+      expect(
+        (await call(owner, "PATCH", `/api/messages/${plain}`, { body: "" }))
+          .status,
+      ).toBe(400);
+
+      const edited = await call<{
+        message: { body: string; attachments: unknown[] };
+      }>(owner, "PATCH", `/api/messages/${withFile}`, { body: "" });
+      expect(edited.status).toBe(200);
+      expect(edited.body.message.body).toBe("");
+      expect(edited.body.message.attachments).toHaveLength(1);
     });
   });
 

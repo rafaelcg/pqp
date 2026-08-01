@@ -53,6 +53,11 @@ import {
   updateMe,
 } from "@/lib/api";
 import { channelRoutePath, parseAppRoute } from "@/lib/app-route";
+import {
+  filesFromDataTransfer,
+  isFileDrag,
+  loadAttachmentConfig,
+} from "@/lib/attachments";
 import type { MentionCandidate } from "@/lib/mention-autocomplete";
 import { DEV_AUTH_TOKEN, getAuthToken, isDevAuthBypassEnabled } from "@/lib/dev-auth";
 import { getDesktop } from "@/lib/desktop";
@@ -199,6 +204,15 @@ function MainAppContent({
     null,
   );
   const [composerInsert, setComposerInsert] = useState<string | null>(null);
+  const [droppedFiles, setDroppedFiles] = useState<File[] | null>(null);
+  const [isDraggingFiles, setIsDraggingFiles] = useState(false);
+  const [isAttachmentsEnabled, setIsAttachmentsEnabled] = useState(false);
+  /**
+   * `dragenter` / `dragleave` fire for every element the pointer crosses, so a
+   * boolean alone flickers off the moment the drag passes over a message. Only
+   * the count returning to zero means the drag has actually left the pane.
+   */
+  const dragDepth = useRef(0);
   const [localSettings, setLocalSettings] = useState<LocalSettings>(
     defaultLocalSettings,
   );
@@ -256,6 +270,21 @@ function MainAppContent({
 
   useEffect(() => {
     setLocalSettings(loadLocalSettings());
+  }, []);
+
+  // Asked here as well as in the composer so the pane does not offer a drop
+  // target on a deployment that has nowhere to put the bytes. The probe itself
+  // is memoised, so this is the same answer rather than a second request.
+  useEffect(() => {
+    let active = true;
+    void loadAttachmentConfig().then((config) => {
+      if (active) {
+        setIsAttachmentsEnabled(config.enabled);
+      }
+    });
+    return () => {
+      active = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -989,8 +1018,55 @@ function MainAppContent({
     selectedChannel?.type === "voice" &&
     selectedChannel.id === voiceState.voiceChannelId;
 
+  const canDropFiles = isAttachmentsEnabled && selectedChannel?.type === "text";
+
   const chatPane = selectedChannel ? (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+    <div
+      className="relative flex min-h-0 min-w-0 flex-1 flex-col"
+      // The whole conversation is the drop target, not the textarea: dragging a
+      // screenshot onto the messages is what people actually do, and a target
+      // the size of one input is a target you miss.
+      onDragEnter={(event) => {
+        if (!canDropFiles || !isFileDrag(event.dataTransfer)) {
+          return;
+        }
+        dragDepth.current += 1;
+        setIsDraggingFiles(true);
+      }}
+      onDragOver={(event) => {
+        if (canDropFiles && isFileDrag(event.dataTransfer)) {
+          // Without this the browser navigates to the file instead of dropping.
+          event.preventDefault();
+        }
+      }}
+      onDragLeave={() => {
+        dragDepth.current = Math.max(0, dragDepth.current - 1);
+        if (dragDepth.current === 0) {
+          setIsDraggingFiles(false);
+        }
+      }}
+      onDrop={(event) => {
+        dragDepth.current = 0;
+        setIsDraggingFiles(false);
+        if (!canDropFiles) {
+          return;
+        }
+        const files = filesFromDataTransfer(event.dataTransfer);
+        if (files.length === 0) {
+          return;
+        }
+        event.preventDefault();
+        setDroppedFiles(files);
+      }}
+    >
+      {isDraggingFiles && (
+        // Inert, so the drop lands on the pane below rather than on the overlay.
+        <div className="pointer-events-none absolute inset-0 z-30 m-2 flex items-center justify-center rounded-lg border-2 border-dashed border-signal bg-ink/85">
+          <p className="font-display text-lg font-bold text-signal">
+            Drop to attach
+          </p>
+        </div>
+      )}
       <header className="flex h-14 shrink-0 items-center border-b border-ink-4/60 px-3 sm:px-4">
         <button
           type="button"
@@ -1070,13 +1146,16 @@ function MainAppContent({
         // half-typed message follows you into the next channel, one Enter away
         // from the wrong audience.
         key={selectedChannel.id}
-        onSend={(body) => {
-          chat.sendMessage(body, replyTarget);
+        onSend={(body, attachments) => {
+          chat.sendMessage(body, replyTarget, attachments);
           setReplyTarget(null);
         }}
         onTyping={() => chat.notifyTyping()}
         insertText={composerInsert}
         onInsertConsumed={() => setComposerInsert(null)}
+        channelId={selectedChannel.id}
+        droppedFiles={droppedFiles}
+        onDroppedFilesConsumed={() => setDroppedFiles(null)}
         replyTarget={replyTarget}
         onCancelReply={() => setReplyTarget(null)}
         mentionCandidates={mentionCandidates}

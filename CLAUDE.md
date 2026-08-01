@@ -35,6 +35,9 @@ docker compose up -d postgres
 pnpm dev
 # Client http://localhost:5173 — Server http://localhost:3001 — WS /ws
 
+# Optional MinIO for file attachments (creates the bucket too)
+docker compose --profile storage up -d postgres minio minio-init
+
 # Optional desktop shell (Vite must be up)
 pnpm electron:dev
 ```
@@ -52,6 +55,7 @@ See `.env.example`. Important names:
 | ICE / TURN (API preferred) | `TURN_URL`, `TURN_USERNAME`, `TURN_CREDENTIAL`, `CLOUDFLARE_TURN_KEY_ID`, `CLOUDFLARE_TURN_API_TOKEN`, `METERED_API_KEY`, `METERED_DOMAIN` |
 | Client TURN fallback (avoid in prod) | `VITE_TURN_URL`, `VITE_TURN_USERNAME`, `VITE_TURN_CREDENTIAL` |
 | SFU | `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` (implemented); `CLOUDFLARE_REALTIME_*` (stub) |
+| Attachments (S3/R2) | `S3_ENDPOINT`, `S3_BUCKET`, `S3_REGION`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_FORCE_PATH_STYLE`, `S3_PUBLIC_BASE_URL`, `MAX_ATTACHMENT_BYTES`, `ATTACHMENT_URL_TTL_SECONDS` |
 | Electron | `VITE_APP_URL` |
 
 **Rule:** never commit `.env` / secrets. Prefer serving ICE via `GET /api/ice-servers` (Railway) over baking TURN into the Pages build.
@@ -63,10 +67,12 @@ Browser/Electron → Clerk (auth)
                  → HTTPS API (servers, channels, messages, /api/ice-servers)
                  → WSS /ws (chat + presence + WebRTC offer/answer/ICE relay)
                  → P2P mesh (audio); TURN when cross-NAT
+                 → S3/R2 direct (attachment bytes, presigned; never via the API)
 ```
 
 - **Mesh limit:** ~5–8 peers per voice channel. **LiveKit SFU is implemented** — set `LIVEKIT_URL` / `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` and the server advertises it via `GET /api/voice/backend` (no client rebuild). Presence stays on `/ws` in both modes; only media moves. `cloudflare-sfu` is still a stub that falls back to mesh. See [`docs/voice-backends.md`](./docs/voice-backends.md).
-- **Data model:** Server → Channels (`text` \| `voice`) → Messages; roles `owner` / `admin` / `member`; usernames `name#1234`.
+- **Attachments:** S3-compatible storage (R2 hosted, MinIO local). The API only signs URLs — the browser PUTs and GETs the bytes itself. Off entirely unless `S3_*` is configured. Size is enforced twice: `Content-Length` is signed into the presigned PUT (verified against MinIO, not yet against R2), and the claim `HEAD`s the object — which is also what catches "never uploaded" and a stored type that differs from the signed one. That HEAD runs *before* the claim transaction opens; nothing between `BEGIN` and `COMMIT` may touch the network. See [`docs/ATTACHMENTS.md`](./docs/ATTACHMENTS.md).
+- **Data model:** Server → Channels (`text` \| `voice`) → Messages (+ `message_attachments`); roles `owner` / `admin` / `member`; usernames `name#1234`.
 
 ## Deploy targets (hosted)
 
@@ -79,7 +85,7 @@ CI workflows: `.github/workflows/ci.yml`, `deploy-web.yml`, `electron.yml`.
 
 **GitHub Actions secrets (names):** `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `VITE_CLERK_PUBLISHABLE_KEY`, `VITE_API_URL`, `VITE_WS_URL`.
 
-**Railway env (names):** `DATABASE_URL`, `CLERK_SECRET_KEY`, plus TURN/ICE vars above. Do not put Clerk secret or TURN credentials in Pages/client secrets.
+**Railway env (names):** `DATABASE_URL`, `CLERK_SECRET_KEY`, plus TURN/ICE vars above and `S3_*` if attachments are wanted. Do not put Clerk secret, TURN credentials, or S3 keys in Pages/client secrets.
 
 ## Pitfalls already hit
 
@@ -90,10 +96,11 @@ CI workflows: `.github/workflows/ci.yml`, `deploy-web.yml`, `electron.yml`.
 5. **`@pqp/shared` on Railway** — production resolution needed a dedicated fix; rebuild/shared packaging matters for Docker deploys.
 6. **pnpm version** — CI uses pnpm matching the lockfile (pnpm 10); don’t downgrade casually.
 7. **Electron Linux artifacts** — scoped package name broke `.deb` paths; fixed in CI metadata.
-8. **Persistent "Realtime connection closed" on hosted deploy** — no WS heartbeat/reconnect, plus any thrown WS handler error crashed the whole server (unhandled rejection → Railway restart → every client dropped). **Fixed (2026-07-11):** server ping/pong heartbeat + try/catch around WS handlers + `pool.on("error")`; client auto-reconnect with backoff that resolves a fresh Clerk token per attempt (`client/src/lib/realtime.ts`).
+8. **`curl` against `/api/...` returns 401** — there is no public-route allowlist; `handleApi` resolves a Bearer token before the router runs, so even `/api/attachments/config` and `/api/gifs/config` need one. Locally: `-H "Authorization: Bearer dev-local-token"` with `DEV_AUTH_BYPASS=true` (the bypass is ignored when `NODE_ENV=production`).
+9. **Persistent "Realtime connection closed" on hosted deploy** — no WS heartbeat/reconnect, plus any thrown WS handler error crashed the whole server (unhandled rejection → Railway restart → every client dropped). **Fixed (2026-07-11):** server ping/pong heartbeat + try/catch around WS handlers + `pool.on("error")`; client auto-reconnect with backoff that resolves a fresh Clerk token per attempt (`client/src/lib/realtime.ts`).
 
 ## Agent norms
 
 - Do not invent secret values in docs or commits.
-- Point humans to `docs/CLERK_SETUP.md` for Clerk CLI setup; `docs/voice-backends.md` for SFU notes.
+- Point humans to `docs/CLERK_SETUP.md` for Clerk CLI setup; `docs/voice-backends.md` for SFU notes; `docs/ATTACHMENTS.md` for R2/MinIO setup.
 - Update `docs/HANDOVER.md` + `docs/PLAN_STATUS.md` when phase status changes.

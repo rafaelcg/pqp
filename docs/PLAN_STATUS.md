@@ -55,11 +55,15 @@ Feature gaps versus Discord are ranked with implementation sketches in
 [`THEMING.md`](./THEMING.md), and choices that shape work not yet built are recorded in
 [`DECISIONS.md`](./DECISIONS.md). Gaps marked ✅ in the ranked list have shipped: the three
 shipped-but-broken items (permalink route, per-channel drafts, `@mention` autocomplete), plus
-replies, theming, message search, desktop notifications, and per-server/channel notification
-levels.
+replies, theming, message search, desktop notifications, per-server/channel notification
+levels, and file/image attachments.
 
-Next up, in order: **attachments** (#4) on Cloudflare R2, then **user search by handle** (#17),
-which **DMs** (#18) depend on. Blocking (#19) stops being optional the moment DMs exist.
+Next up, in order: **user search by handle** (#17), which **DMs** (#18) depend on. Blocking (#19)
+stops being optional the moment DMs exist.
+
+Attachments landed the object-storage subsystem the product did not have, which is also what
+custom emoji (#26), server icons, and real uploaded avatars hang off — none of those need a
+second storage decision now. See [`ATTACHMENTS.md`](./ATTACHMENTS.md).
 
 ## Still open (operational)
 

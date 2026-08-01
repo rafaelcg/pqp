@@ -11,6 +11,10 @@ import { closePool, getPool, initDb } from "./db.js";
 import { SECURITY_HEADERS, sendError } from "./lib/http.js";
 import { logEvent } from "./lib/log.js";
 import { clientAddress, sweepRateLimits } from "./lib/rate-limit.js";
+import {
+  isAttachmentsConfigured,
+  sweepOrphanedAttachments,
+} from "./services/attachments.js";
 import { getSocketUser, handleWsConnection } from "./ws/index.js";
 
 const PORT = Number(process.env.PORT ?? 3001);
@@ -208,6 +212,36 @@ wss.on("close", () => clearInterval(heartbeat));
 const rateLimitSweep = setInterval(() => sweepRateLimits(), 60_000);
 rateLimitSweep.unref?.();
 
+/**
+ * Collect attachments no message claimed — uploads that were never sent, and
+ * rows orphaned when a message, channel or server was deleted.
+ *
+ * Hourly, because the grace period is an hour: running more often only finds
+ * rows it is not yet allowed to touch. Skipped outright without storage so a
+ * deployment that never enabled the feature does no work at all, and every
+ * failure is swallowed — a bucket being unreachable is a cost problem that
+ * resolves on the next run, and must never be able to bring the server down.
+ */
+const ATTACHMENT_SWEEP_INTERVAL_MS = 60 * 60_000;
+
+async function sweepAttachments(): Promise<void> {
+  if (!isAttachmentsConfigured()) {
+    return;
+  }
+  try {
+    await sweepOrphanedAttachments();
+  } catch (error) {
+    console.error("[attachments] sweep failed:", error);
+  }
+}
+
+const attachmentSweep = setInterval(() => {
+  void sweepAttachments();
+}, ATTACHMENT_SWEEP_INTERVAL_MS);
+// Unref'd like the rate-limit sweep: a timer this long must not be the reason
+// the process refuses to exit.
+attachmentSweep.unref?.();
+
 async function main() {
   assertAuthConfig();
   if (isDevAuthBypassEnabled()) {
@@ -218,6 +252,13 @@ async function main() {
   }
 
   await initDb();
+
+  // One sweep per boot, on top of the interval: a process that redeploys or
+  // crash-restarts more often than hourly never reaches the first tick, so on
+  // Railway the sweeper could otherwise never run once in the lifetime of a
+  // deployment. After initDb so it cannot race schema creation, and unawaited
+  // so a bucket that is merely unreachable cannot hold up listen().
+  void sweepAttachments();
 
   httpServer.listen(PORT, () => {
     console.log(`pqp server listening on http://localhost:${PORT}`);
@@ -239,6 +280,7 @@ async function shutdown(signal: string) {
   console.log(`[shutdown] ${signal} — draining`);
   clearInterval(heartbeat);
   clearInterval(rateLimitSweep);
+  clearInterval(attachmentSweep);
   for (const socket of wss.clients) {
     socket.close(1001, "Server shutting down");
   }

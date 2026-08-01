@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { attachmentSchema } from "./attachments.js";
 
 export const channelTypeSchema = z.enum(["text", "voice"]);
 export type ChannelType = z.infer<typeof channelTypeSchema>;
@@ -189,6 +190,13 @@ export const messageSchema = z.object({
   editedAt: z.string().nullable().default(null),
   reactions: z.array(messageReactionSchema).default([]),
   replyTo: messageReplyRefSchema.nullable().default(null),
+  /**
+   * Defaulted rather than required, for the same reason `replyTo` is: a client
+   * built against this schema still has to parse a response from an API that
+   * predates attachments. Each `url` is a presigned GET minted while this row
+   * was mapped, so the array is only as fresh as the response carrying it.
+   */
+  attachments: z.array(attachmentSchema).default([]),
 });
 
 export const MESSAGE_MAX_LENGTH = 4000;

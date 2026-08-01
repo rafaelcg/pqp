@@ -10,6 +10,7 @@ This repo deploys the **marketing site + static SPA shell** to **Cloudflare Page
 | API + `/ws` | Railway / Docker / VPS | See `railway.toml`, `Dockerfile` |
 | Auth | Clerk | Publishable key in client build; secret on server only |
 | Database | Postgres | Railway plugin or self-hosted |
+| Attachments | Cloudflare R2 (or any S3) | Optional — off unless configured. See [`ATTACHMENTS.md`](./ATTACHMENTS.md) |
 
 First deploy priority: **dev / marketing website** on Pages. Point `VITE_API_URL` / `VITE_WS_URL` at your API when it exists.
 
@@ -63,7 +64,25 @@ gh secret set VITE_WS_URL
 | `VITE_API_URL` | Working `/app` | Public API origin, e.g. `https://your-api.up.railway.app` (no trailing slash) |
 | `VITE_WS_URL` | Working `/app` | Public WebSocket URL, e.g. `wss://your-api.up.railway.app/ws` |
 
-Do **not** put `CLERK_SECRET_KEY`, database URLs, or TURN credentials in Pages/client secrets for the static deploy.
+Do **not** put `CLERK_SECRET_KEY`, database URLs, TURN credentials, or `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` in Pages/client secrets for the static deploy.
+
+## Server-side env (Railway / Docker / VPS)
+
+These live on the API, never in the client build. Names only — see [`../.env.example`](../.env.example).
+
+| Group | Names | Required |
+|---|---|---|
+| Core | `DATABASE_URL`, `CLERK_SECRET_KEY`, `PORT` | Yes |
+| Hardening | `CLERK_AUTHORIZED_PARTIES`, `CORS_ALLOWED_ORIGINS`, `TRUST_PROXY`, `PG_POOL_MAX`, `DATABASE_SSL` | Recommended |
+| ICE / TURN | one of the options in [`deploy-railway.md`](./deploy-railway.md) | For cross-NAT voice |
+| SFU | `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` | Only past the mesh limit |
+| GIF search | `GIPHY_API_KEY` | Optional feature |
+| **Attachments** | `S3_ENDPOINT`, `S3_BUCKET`, `S3_REGION`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_FORCE_PATH_STYLE` | Optional feature |
+| Attachments (tuning) | `S3_PUBLIC_BASE_URL`, `MAX_ATTACHMENT_BYTES`, `ATTACHMENT_URL_TTL_SECONDS` | Optional |
+
+Attachments are **off** until the six `S3_*` names above are set: `GET /api/attachments/config` reports `{"enabled":false}` and the client hides the attach button, the same way GIF search behaves without `GIPHY_API_KEY`.
+
+Setting the variables is not the whole job — an R2 bucket also needs a **CORS policy** or every browser upload fails while the API logs stay silent. Full walkthrough: [`ATTACHMENTS.md`](./ATTACHMENTS.md).
 
 ### Create a Cloudflare API token
 

@@ -1,4 +1,5 @@
 import type {
+  Attachment,
   ChatServerMessage,
   Message,
   MessageBroadcast,
@@ -12,6 +13,7 @@ import {
   deleteMessage as deleteMessageRequest,
   editMessage as editMessageRequest,
 } from "@/lib/api";
+import { revokePreviewUrl, type OutgoingAttachment } from "@/lib/attachments";
 import type { RealtimeTransport } from "@/lib/realtime";
 
 /** A message plus the client-only state an optimistic bubble needs. */
@@ -84,11 +86,30 @@ function toStoredMessage(message: Message): ChatMessage {
     ...message,
     reactions: message.reactions ?? [],
     replyTo: message.replyTo ?? null,
+    attachments: message.attachments ?? [],
   };
 }
 
 function isOptimistic(message: ChatMessage): boolean {
   return Boolean(message.pending || message.failed);
+}
+
+/**
+ * Release the `blob:` URLs an optimistic bubble was rendering.
+ *
+ * Each one pins the whole uploaded file in memory for as long as the document
+ * lives — a session that posts a dozen screenshots would otherwise still be
+ * holding every one of them — so the moment the bubble is replaced by the real
+ * message, which carries real storage URLs, they have to go. Only ever called
+ * on a message that is leaving: a retry keeps rendering these.
+ */
+function revokeLocalPreviews(message: ChatMessage): void {
+  if (!isOptimistic(message)) {
+    return;
+  }
+  for (const attachment of message.attachments ?? []) {
+    revokePreviewUrl(attachment.url);
+  }
 }
 
 /** The order the server pages on, so a merged page reads the same either way. */
@@ -147,6 +168,7 @@ function toChatMessage(message: MessageBroadcast["message"]): ChatMessage {
     authorTag: message.authorTag ?? null,
     reactions: message.reactions ?? [],
     replyTo: message.replyTo ?? null,
+    attachments: message.attachments ?? [],
   };
 }
 
@@ -211,6 +233,7 @@ export function createChatController(transport: RealtimeTransport) {
     body: string,
     targetChannelId: string,
     replyToId?: string,
+    attachmentIds: string[] = [],
   ) {
     clearSendTimer(nonce);
     // Only start the failure clock once the message is actually on the wire.
@@ -228,6 +251,7 @@ export function createChatController(transport: RealtimeTransport) {
       body,
       nonce,
       ...(replyToId ? { replyToId } : {}),
+      ...(attachmentIds.length > 0 ? { attachmentIds } : {}),
     });
   }
 
@@ -260,6 +284,9 @@ export function createChatController(transport: RealtimeTransport) {
     }
     sendTimers.clear();
     typing.clear();
+    for (const message of messages) {
+      revokeLocalPreviews(message);
+    }
     messages = [];
     presence = [];
     hasMore = false;
@@ -509,11 +536,31 @@ export function createChatController(transport: RealtimeTransport) {
       emit();
     },
 
-    sendMessage(body: string, replyTo?: ReplyTargetMessage | null) {
+    sendMessage(
+      body: string,
+      replyTo?: ReplyTargetMessage | null,
+      attachments: OutgoingAttachment[] = [],
+    ) {
       if (!channelId || !currentUserId) {
         return;
       }
       const nonce = createNonce();
+      /**
+       * The local files, so an image is on screen the instant Enter is pressed
+       * rather than after a round trip plus a fetch from storage. `url` is a
+       * `blob:` URL here and a presigned one on the message that replaces this;
+       * nothing downstream has to know which, and `revokeLocalPreviews` is what
+       * keeps the difference from leaking.
+       */
+      const optimisticAttachments: Attachment[] = attachments.map((item) => ({
+        id: item.attachmentId,
+        filename: item.filename,
+        contentType: item.contentType,
+        byteSize: item.byteSize,
+        width: item.width,
+        height: item.height,
+        url: item.previewUrl,
+      }));
       const optimistic: ChatMessage = {
         id: `pending:${nonce}`,
         channelId,
@@ -525,6 +572,7 @@ export function createChatController(transport: RealtimeTransport) {
         createdAt: new Date().toISOString(),
         editedAt: null,
         reactions: [],
+        attachments: optimisticAttachments,
         // Built with the same helper the server uses, so the bubble does not
         // visibly rewrite itself when the broadcast comes back.
         replyTo: replyTo
@@ -541,7 +589,13 @@ export function createChatController(transport: RealtimeTransport) {
       };
       messages = [...messages, optimistic];
       emit();
-      transmit(nonce, body, channelId, replyTo?.id);
+      transmit(
+        nonce,
+        body,
+        channelId,
+        replyTo?.id,
+        optimisticAttachments.map((attachment) => attachment.id),
+      );
     },
 
     retryMessage(nonce: string) {
@@ -555,11 +609,24 @@ export function createChatController(transport: RealtimeTransport) {
           : message,
       );
       emit();
-      transmit(nonce, failed.body, channelId, failed.replyTo?.id);
+      // The rows are still unclaimed — a claim only happens on a message that
+      // was actually stored — so the same ids are still the right ones to send.
+      transmit(
+        nonce,
+        failed.body,
+        channelId,
+        failed.replyTo?.id,
+        (failed.attachments ?? []).map((attachment) => attachment.id),
+      );
     },
 
     discardMessage(nonce: string) {
       clearSendTimer(nonce);
+      for (const message of messages) {
+        if (message.nonce === nonce) {
+          revokeLocalPreviews(message);
+        }
+      }
       messages = messages.filter((message) => message.nonce !== nonce);
       emit();
     },
@@ -632,6 +699,7 @@ export function createChatController(transport: RealtimeTransport) {
               (entry) => entry.nonce === message.nonce,
             );
             if (index >= 0) {
+              revokeLocalPreviews(messages[index]!);
               messages = [
                 ...messages.slice(0, index),
                 incoming,

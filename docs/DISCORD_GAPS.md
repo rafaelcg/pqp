@@ -33,7 +33,7 @@ They cost days, not weeks.
 | 1 | ✅ Jump to message and working permalinks | navigation | high | medium |
 | 2 | ✅ Composer fixes: @mention autocomplete and per-channel drafts | composer | high | small |
 | 3 | ✅ Replies (quote-and-respond) | conversation-structure | critical | small |
-| 4 | File and image attachments | attachments | critical | large |
+| 4 | ✅ File and image attachments | attachments | critical | large |
 | 5 | Push-to-talk, input mode, and mic processing controls | voice-input | high | medium |
 | 6 | Voice state visibility and voice moderation | voice-presence | high | medium |
 | 7 | ✅ Desktop notifications with a cross-server unread badge | notifications | critical | medium |

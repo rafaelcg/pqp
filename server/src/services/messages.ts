@@ -2,11 +2,34 @@ import {
   buildReplyExcerpt,
   extractMentionUsernames,
   formatUserTag,
+  type Attachment,
   type MessageReaction,
   type MessageReplyRef,
 } from "@pqp/shared";
+import type { PoolClient } from "pg";
 import { getPool, type DbMessage, type DbUser } from "../db.js";
+import { deleteObject } from "../lib/s3.js";
+import {
+  claimAttachments,
+  listAttachmentsForMessages,
+  toPublicAttachment,
+  verifyPendingAttachments,
+} from "./attachments.js";
 import { listReactionsForMessages } from "./reactions.js";
+
+/**
+ * The pool, or one connection checked out of it. Mention rows carry an FK to
+ * the message they belong to, so they have to be written on the same connection
+ * as an insert that has not committed yet — from any other, the message does
+ * not exist.
+ */
+type Queryable = Pick<PoolClient, "query">;
+
+/** What every read path hands back: a row plus its two batched relations. */
+export type HydratedMessage = DbMessage & {
+  reactions: MessageReaction[];
+  attachments: Attachment[];
+};
 
 /** Parent columns every read path needs to build a quote header. */
 const REPLY_COLUMNS = `m.reply_to_id,
@@ -29,7 +52,7 @@ const MESSAGE_SELECT = `SELECT m.id, m.channel_id, m.author_id, m.body, m.create
      ${REPLY_JOINS}`;
 
 export interface MessagePage {
-  messages: Array<DbMessage & { reactions: MessageReaction[] }>;
+  messages: HydratedMessage[];
   /** True when older messages exist beyond this page. */
   hasMore: boolean;
   /** True when newer messages exist beyond this page — the page is mid-history. */
@@ -124,23 +147,32 @@ async function keysetPage(
   };
 }
 
-/** Rows are handed over oldest-first, the order the client renders them in. */
-async function withReactions(
+/**
+ * Rows are handed over oldest-first, the order the client renders them in.
+ *
+ * Both relations are fetched for the whole page at once, in parallel. Either one
+ * asked per row would turn a fifty-message page into a hundred round trips, and
+ * attachments are the more tempting of the two to get wrong because presigning
+ * a URL is local work that looks free.
+ */
+async function hydrate(
   rows: DbMessage[],
   hasMore: boolean,
   hasNewer: boolean,
   viewerId?: string,
 ): Promise<MessagePage> {
-  const reactionsByMessage = await listReactionsForMessages(
-    rows.map((row) => row.id),
-    viewerId,
-  );
+  const messageIds = rows.map((row) => row.id);
+  const [reactionsByMessage, attachmentsByMessage] = await Promise.all([
+    listReactionsForMessages(messageIds, viewerId),
+    listAttachmentsForMessages(messageIds),
+  ]);
   return {
     hasMore,
     hasNewer,
     messages: rows.map((row) => ({
       ...row,
       reactions: reactionsByMessage.get(row.id) ?? [],
+      attachments: attachmentsByMessage.get(row.id) ?? [],
     })),
   };
 }
@@ -168,7 +200,7 @@ export async function listMessages(
         inclusive: false,
       }),
     ]);
-    return withReactions(
+    return hydrate(
       [...older.rows.reverse(), ...newer.rows],
       older.overflow,
       newer.overflow,
@@ -185,7 +217,7 @@ export async function listMessages(
     });
     // The cursor and everything behind it are older than this page by
     // definition, so history is always still there to walk back into.
-    return withReactions(page.rows, true, page.overflow, viewerId);
+    return hydrate(page.rows, true, page.overflow, viewerId);
   }
 
   if (before) {
@@ -195,16 +227,18 @@ export async function listMessages(
       direction: "older",
       inclusive: false,
     });
-    return withReactions(page.rows.reverse(), page.overflow, true, viewerId);
+    return hydrate(page.rows.reverse(), page.overflow, true, viewerId);
   }
 
   const page = await keysetPage(channelId, limit);
-  return withReactions(page.rows.reverse(), page.overflow, false, viewerId);
+  return hydrate(page.rows.reverse(), page.overflow, false, viewerId);
 }
 
 export async function getMessage(
   messageId: string,
-): Promise<(DbMessage & { server_id: string }) | null> {
+): Promise<
+  (DbMessage & { server_id: string; attachments: Attachment[] }) | null
+> {
   const result = await getPool().query<DbMessage & { server_id: string }>(
     `SELECT m.id, m.channel_id, m.author_id, m.body, m.created_at, m.edited_at,
             c.server_id,
@@ -218,7 +252,15 @@ export async function getMessage(
      WHERE m.id = $1`,
     [messageId],
   );
-  return result.rows[0] ?? null;
+  const message = result.rows[0];
+  if (!message) {
+    return null;
+  }
+  // Carried because the edit route has to know whether this message says
+  // anything other than its attachments before it decides an empty body is
+  // legal.
+  const attachments = await listAttachmentsForMessages([messageId]);
+  return { ...message, attachments: attachments.get(messageId) ?? [] };
 }
 
 /** Just enough of a parent message to validate a reply and quote it. */
@@ -252,6 +294,7 @@ export async function getReplyParent(
  * lands in the same table, so the unread and badge paths need no change.
  */
 async function recordMentions(
+  db: Queryable,
   messageId: string,
   channelId: string,
   body: string,
@@ -259,7 +302,7 @@ async function recordMentions(
 ): Promise<void> {
   const usernames = extractMentionUsernames(body);
   if (usernames.length > 0) {
-    await getPool().query(
+    await db.query(
       `INSERT INTO message_mentions (message_id, user_id)
        SELECT $1, u.id
        FROM users u
@@ -276,7 +319,7 @@ async function recordMentions(
   }
   // Answering yourself is not a notification. The predicate lives in SQL so a
   // parent deleted between the insert and here simply yields no row.
-  await getPool().query(
+  await db.query(
     `INSERT INTO message_mentions (message_id, user_id)
      SELECT $1, parent.author_id
      FROM messages parent
@@ -286,51 +329,102 @@ async function recordMentions(
   );
 }
 
+/**
+ * Insert a message and pull its attachments onto it, atomically.
+ *
+ * Verification runs first, on the pool, before any transaction is open, because
+ * confirming an upload costs one HTTP HEAD per attachment with a ten second
+ * timeout. Inside the transaction those HEADs park a pooled connection
+ * idle-in-transaction for the whole timeout whenever the bucket blackholes
+ * packets instead of refusing fast, and a handful of concurrent image sends
+ * then drain the pool — every unrelated query in the process, down to the
+ * membership check on each inbound WS frame, queues behind a storage outage.
+ * Nothing between BEGIN and COMMIT below may touch the network.
+ *
+ * The insert, the claim and the mentions still share one transaction, because
+ * claiming is where an attachment's ownership is actually enforced: split
+ * across two, a message could be broadcast carrying rows a concurrent send had
+ * already taken, or survive a claim that failed. That the verifying SELECT ran
+ * on another connection costs nothing — `claimAttachments` re-states ownership
+ * in its own UPDATE, under the row lock.
+ *
+ * Returns null when the frame turns out to say nothing at all: `body` was empty
+ * and every attachment failed verification. The shared schema already refuses
+ * `{body: "", attachmentIds: []}`, but it cannot know which uploads exist, so
+ * this is the same rule re-checked once the answer is in — and the insert is
+ * rolled back rather than leaving a blank message in the channel.
+ */
 export async function createMessage(
   channelId: string,
   author: DbUser,
   body: string,
   replyToId?: string | null,
-): Promise<DbMessage & { reactions: MessageReaction[] }> {
-  // One round trip: RETURNING cannot join, so the insert feeds a CTE that the
-  // parent lookup hangs off.
-  const result = await getPool().query<DbMessage>(
-    `WITH inserted AS (
-       INSERT INTO messages (channel_id, author_id, body, reply_to_id)
-       VALUES ($1, $2, $3, $4)
-       RETURNING id, channel_id, author_id, body, created_at, edited_at, reply_to_id
-     )
-     SELECT m.id, m.channel_id, m.author_id, m.body, m.created_at, m.edited_at,
-            ${REPLY_COLUMNS}
-     FROM inserted m
-     ${REPLY_JOINS}`,
-    [channelId, author.id, body, replyToId ?? null],
-  );
-  const message = result.rows[0]!;
+  attachmentIds?: string[],
+): Promise<HydratedMessage | null> {
+  const verified = attachmentIds?.length
+    ? await verifyPendingAttachments(channelId, author.id, attachmentIds)
+    : [];
 
-  await recordMentions(
-    message.id,
-    channelId,
-    body,
-    replyToId ? { parentId: replyToId, authorId: author.id } : undefined,
-  );
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
 
-  // The author is already in hand from the authenticated session — the previous
-  // implementation re-read it from the database on every single message.
-  return {
-    ...message,
-    author_name: author.display_name,
-    author_username: author.username,
-    author_discriminator: author.discriminator,
-    author_avatar_url: author.avatar_url,
-    reactions: [],
-  };
+    // One round trip: RETURNING cannot join, so the insert feeds a CTE that the
+    // parent lookup hangs off.
+    const result = await client.query<DbMessage>(
+      `WITH inserted AS (
+         INSERT INTO messages (channel_id, author_id, body, reply_to_id)
+         VALUES ($1, $2, $3, $4)
+         RETURNING id, channel_id, author_id, body, created_at, edited_at, reply_to_id
+       )
+       SELECT m.id, m.channel_id, m.author_id, m.body, m.created_at, m.edited_at,
+              ${REPLY_COLUMNS}
+       FROM inserted m
+       ${REPLY_JOINS}`,
+      [channelId, author.id, body, replyToId ?? null],
+    );
+    const message = result.rows[0]!;
+
+    const claimed = await claimAttachments(client, message.id, verified);
+
+    if (body.length === 0 && claimed.length === 0) {
+      await client.query("ROLLBACK");
+      return null;
+    }
+
+    await recordMentions(
+      client,
+      message.id,
+      channelId,
+      body,
+      replyToId ? { parentId: replyToId, authorId: author.id } : undefined,
+    );
+
+    await client.query("COMMIT");
+
+    // The author is already in hand from the authenticated session — the previous
+    // implementation re-read it from the database on every single message.
+    return {
+      ...message,
+      author_name: author.display_name,
+      author_username: author.username,
+      author_discriminator: author.discriminator,
+      author_avatar_url: author.avatar_url,
+      reactions: [],
+      attachments: claimed.map(toPublicAttachment),
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function updateMessageBody(
   messageId: string,
   body: string,
-): Promise<(DbMessage & { reactions: MessageReaction[] }) | null> {
+): Promise<HydratedMessage | null> {
   const result = await getPool().query<DbMessage>(
     `WITH updated AS (
        UPDATE messages SET body = $2, edited_at = NOW()
@@ -359,6 +453,7 @@ export async function updateMessageBody(
   // The reply mention is re-recorded too: an edit wipes the row set, and losing
   // it would quietly downgrade the reply to decoration.
   await recordMentions(
+    getPool(),
     messageId,
     message.channel_id,
     body,
@@ -367,15 +462,55 @@ export async function updateMessageBody(
       : undefined,
   );
 
-  const reactions = await listReactionsForMessages([messageId]);
-  return { ...message, reactions: reactions.get(messageId) ?? [] };
+  // An edit never touches attachments, but the broadcast it produces is a whole
+  // message — dropping them here would blank the images out of every open tab
+  // until the next history load.
+  const [reactions, attachments] = await Promise.all([
+    listReactionsForMessages([messageId]),
+    listAttachmentsForMessages([messageId]),
+  ]);
+  return {
+    ...message,
+    reactions: reactions.get(messageId) ?? [],
+    attachments: attachments.get(messageId) ?? [],
+  };
 }
 
 export async function deleteMessage(messageId: string): Promise<boolean> {
+  // Read before the delete, because `message_attachments.message_id` is
+  // ON DELETE SET NULL: once the message is gone the rows are still there but
+  // nothing links them back to it.
+  const attached = await getPool().query<{ storage_key: string }>(
+    `SELECT storage_key FROM message_attachments WHERE message_id = $1`,
+    [messageId],
+  );
+
   const result = await getPool().query(`DELETE FROM messages WHERE id = $1`, [
     messageId,
   ]);
-  return (result.rowCount ?? 0) > 0;
+  const deleted = (result.rowCount ?? 0) > 0;
+
+  if (deleted && attached.rows.length > 0) {
+    // Deliberately not awaited and deliberately allowed to fail. The sweeper
+    // collects every orphan an hour later and this changes nothing about
+    // whether the bytes eventually go — it only makes them go sooner, for the
+    // common case of someone deleting a 10 MiB video they just posted. Turning
+    // it into a blocking step would put a bucket round trip per attachment in
+    // front of a response that is otherwise two queries, and would let a
+    // storage outage fail a delete that has already happened.
+    void Promise.all(
+      attached.rows.map((row) =>
+        deleteObject(row.storage_key).catch((error: unknown) => {
+          console.error(
+            `[attachments] deferred delete of ${row.storage_key} to the sweeper:`,
+            error instanceof Error ? error.message : error,
+          );
+        }),
+      ),
+    );
+  }
+
+  return deleted;
 }
 
 function mapReplyTo(m: DbMessage): MessageReplyRef | null {
@@ -402,8 +537,14 @@ function mapReplyTo(m: DbMessage): MessageReplyRef | null {
   };
 }
 
+/**
+ * Stays synchronous even though every attachment carries a freshly presigned
+ * URL: signing is an HMAC over strings with no network call, so the cost is the
+ * same whether it happens here or a layer up. The batched *fetch* is the async
+ * part, and it has already happened by the time a row reaches this.
+ */
 export function mapMessage(
-  m: DbMessage & { reactions?: MessageReaction[] },
+  m: DbMessage & { reactions?: MessageReaction[]; attachments?: Attachment[] },
 ) {
   return {
     id: m.id,
@@ -417,5 +558,6 @@ export function mapMessage(
     editedAt: m.edited_at?.toISOString() ?? null,
     reactions: m.reactions ?? [],
     replyTo: mapReplyTo(m),
+    attachments: m.attachments ?? [],
   };
 }

@@ -303,7 +303,15 @@ export async function handleChatMessage(
       conn.user,
       payload.body,
       parent?.id ?? null,
+      payload.attachmentIds,
     );
+    // Nothing survived: an attachment-only message whose every upload failed
+    // its verification. The frame said something when it was sent and says
+    // nothing now, so it is dropped like any other frame that does not describe
+    // a message — broadcasting an empty bubble would be worse than silence.
+    if (!dbMessage) {
+      return;
+    }
 
     broadcastToChannel(
       payload.channelId,

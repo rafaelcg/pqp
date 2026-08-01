@@ -2,16 +2,19 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   addChannelMemberSchema,
   banMemberSchema,
+  createAttachmentSchema,
   createChannelSchema,
   createInviteSchema,
   createServerSchema,
   GIF_PAGE_MAX,
   GIF_PAGE_SIZE,
   GIF_QUERY_MAX_LENGTH,
+  MESSAGE_MAX_LENGTH,
   MESSAGE_PAGE_MAX,
   MESSAGE_PAGE_SIZE,
   messageSearchQuerySchema,
   removeMemberSchema,
+  safeTextSchema,
   SEARCH_PAGE_MAX,
   SEARCH_PAGE_SIZE,
   updateChannelSchema,
@@ -23,6 +26,7 @@ import {
   voiceSessionRequestSchema,
   type Gif,
 } from "@pqp/shared";
+import { z } from "zod";
 import {
   createLiveKitSession,
   getServerVoiceBackend,
@@ -92,6 +96,14 @@ import {
   updateChannel,
 } from "../services/servers.js";
 import {
+  attachmentUrlTtlSeconds,
+  AttachmentTooLargeError,
+  createPendingAttachment,
+  getAttachmentForViewer,
+  isAttachmentsConfigured,
+  maxAttachmentBytes,
+} from "../services/attachments.js";
+import {
   GifBackendError,
   isGifSearchConfigured,
   searchGifs,
@@ -155,6 +167,14 @@ const gifLimiter = createRateLimiter({ capacity: 20, refillPerSecond: 1 });
  * the results; sustained it is roughly one search per second.
  */
 const searchLimiter = createRateLimiter({ capacity: 30, refillPerSecond: 1 });
+/**
+ * Minting an upload URL is the most expensive write the API grants: each one is
+ * a standing permit to put 10 MiB into the bucket, and the bytes never come past
+ * here to be counted. The burst covers dragging a full ten-file message in at
+ * once; sustained it is one file every ten seconds, which no human beats and a
+ * script would need hours to run up a bill with.
+ */
+const uploadLimiter = createRateLimiter({ capacity: 10, refillPerSecond: 0.1 });
 
 export function resetApiRateLimits(): void {
   apiLimiter.reset();
@@ -162,6 +182,7 @@ export function resetApiRateLimits(): void {
   anonLimiter.reset();
   gifLimiter.reset();
   searchLimiter.reset();
+  uploadLimiter.reset();
 }
 
 class Forbidden extends HttpError {
@@ -380,6 +401,98 @@ router.get("/api/gifs/trending", async (ctx) => {
   );
   return respondWithGifs(() => trendingGifs(limit));
 });
+
+// ------------------------------------------------------------ attachments
+
+/**
+ * Same contract as `/api/gifs/config`: with no S3 environment the composer
+ * hides its attach button entirely, rather than offering an upload that can
+ * only ever answer 503.
+ *
+ * `maxBytes` rides along so the client rejects an oversized file in the file
+ * picker instead of discovering the deployment's own lower cap on a 413.
+ */
+router.get("/api/attachments/config", async () => ({
+  enabled: isAttachmentsConfigured(),
+  maxBytes: maxAttachmentBytes(),
+}));
+
+router.post(
+  "/api/channels/:channelId/attachments",
+  async ({ req, res, user }, { channelId }) => {
+    // Access first, so a channel the caller cannot see answers 404 whether or
+    // not this deployment has storage — the 503 would otherwise confirm the
+    // channel exists.
+    await requireChannelAccess(channelId!, user.id);
+    if (!isAttachmentsConfigured()) {
+      throw new HttpError(503, "File uploads are not configured on this server");
+    }
+
+    const key = `user:${user.id}`;
+    if (!uploadLimiter.take(key)) {
+      res.setHeader("Retry-After", String(uploadLimiter.retryAfter(key)));
+      throw new HttpError(429, "Slow down");
+    }
+
+    const body = createAttachmentSchema.parse(await readJsonBody(req));
+    try {
+      // The storage key is generated inside the service and never taken from
+      // the request: a client-chosen key is a client-chosen overwrite of
+      // somebody else's object, and the presigned PUT would sign it happily.
+      const pending = await createPendingAttachment({
+        channelId: channelId!,
+        uploaderId: user.id,
+        filename: body.filename,
+        contentType: body.contentType,
+        byteSize: body.byteSize,
+        // Display-only, and dropped here the layout hint is lost for good: the
+        // server never measures an image, so a message read back from history
+        // would have no box to reserve and every image would land as a reflow.
+        width: body.width,
+        height: body.height,
+      });
+      return created({
+        attachmentId: pending.attachment.id,
+        uploadUrl: pending.uploadUrl,
+        expiresAt: pending.expiresAt,
+      });
+    } catch (error) {
+      if (error instanceof AttachmentTooLargeError) {
+        throw new HttpError(
+          413,
+          `Attachments are limited to ${error.limit} bytes`,
+        );
+      }
+      throw error;
+    }
+  },
+);
+
+/**
+ * A fresh read URL for one attachment.
+ *
+ * Exists because the URL baked into a message expires while the tab stays open,
+ * so an `<img>` that fails asks for a new one rather than staying broken. The
+ * access check is the point: this is the one route where an attachment id can
+ * be named directly.
+ */
+router.get(
+  "/api/attachments/:attachmentId/url",
+  async ({ user }, { attachmentId }) => {
+    const attachment = await getAttachmentForViewer(attachmentId!, user.id);
+    if (!attachment) {
+      // 404 for "no such attachment" and "not yours to see" alike, exactly as
+      // requireChannelAccess refuses to confirm a channel exists.
+      throw new NotFound("Attachment not found");
+    }
+    return {
+      url: attachment.url,
+      expiresAt: new Date(
+        Date.now() + attachmentUrlTtlSeconds() * 1000,
+      ).toISOString(),
+    };
+  },
+);
 
 // ---------------------------------------------------------------- servers
 
@@ -603,6 +716,18 @@ router.get(
   },
 );
 
+/**
+ * The edit body for a message that carries attachments, where `""` is a legal
+ * result: posting an image with a caption and then removing the caption is an
+ * edit, not a delete. `updateMessageSchema` keeps its floor of one character for
+ * every other message, because there an empty body *is* a delete wearing an
+ * edit's clothes — and the shared schema cannot make the distinction, since it
+ * never sees what the message already has attached.
+ */
+const captionEditSchema = z.object({
+  body: z.string().max(MESSAGE_MAX_LENGTH).pipe(safeTextSchema),
+});
+
 router.patch("/api/messages/:messageId", async ({ req, user }, { messageId }) => {
   const existing = await getMessage(messageId!);
   if (!existing) {
@@ -613,7 +738,9 @@ router.patch("/api/messages/:messageId", async ({ req, user }, { messageId }) =>
     throw new Forbidden("You can only edit your own messages");
   }
 
-  const body = updateMessageSchema.parse(await readJsonBody(req));
+  const schema =
+    existing.attachments.length > 0 ? captionEditSchema : updateMessageSchema;
+  const body = schema.parse(await readJsonBody(req));
   const updated = await updateMessageBody(messageId!, body.body);
   if (!updated) {
     throw new NotFound("Message not found");
