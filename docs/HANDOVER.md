@@ -149,6 +149,8 @@ Do **not** put `CLERK_SECRET_KEY`, `DATABASE_URL`, or TURN credentials in Pages/
 | [`voice-backends.md`](./voice-backends.md) | SFU notes |
 | [`billing.md`](./billing.md) | Future Plus/Pro |
 | [`PLAN_STATUS.md`](./PLAN_STATUS.md) | Phase checklist |
+| [`DISCORD_GAPS.md`](./DISCORD_GAPS.md) | Ranked feature gaps vs Discord, with implementation sketches |
+| [`THEMING.md`](./THEMING.md) | Theming scope: role tokens, light mode, synced preferences |
 
 ## Hardening + product pass (2026-07-31)
 
