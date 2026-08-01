@@ -84,6 +84,11 @@ export interface DbMessage {
   author_username?: string | null;
   author_discriminator?: string | null;
   author_avatar_url?: string | null;
+  reply_to_id?: string | null;
+  /** Joined from the parent message; absent when this row is not a reply. */
+  reply_author_id?: string | null;
+  reply_author_name?: string | null;
+  reply_body?: string | null;
 }
 
 export interface DbInvite {

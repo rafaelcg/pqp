@@ -38,12 +38,23 @@ export async function ensureServer(): Promise<void> {
  * the outcome of every later test.
  */
 export async function resetPreferences(): Promise<void> {
+  const headers = {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${DEV_TOKEN}`,
+  };
+  // Read first. Writes are rate limited per user, and every test in the suite
+  // shares one account — unconditionally PATCHing here exhausts the budget and
+  // fails whichever test happens to run last.
+  const current = await fetch(`${API}/api/me`, { headers });
+  const me = (await current.json()) as {
+    preferences?: { theme?: string };
+  };
+  if ((me.preferences?.theme ?? "system") === "system") {
+    return;
+  }
   await fetch(`${API}/api/me/preferences`, {
     method: "PATCH",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${DEV_TOKEN}`,
-    },
+    headers,
     body: JSON.stringify({ theme: "system" }),
   });
 }

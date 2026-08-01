@@ -105,6 +105,46 @@ export const messageReactionSchema = z.object({
   me: z.boolean(),
 });
 
+/** How much of a replied-to message travels with the reply. */
+export const REPLY_EXCERPT_MAX_LENGTH = 120;
+
+/**
+ * Denormalised snapshot of the message a reply answers, so drawing the quote
+ * header never costs a second fetch.
+ *
+ * The author fields are nullable rather than required: a parent can be gone by
+ * the time a client renders the reply, and a quote that cannot name anyone is
+ * still worth showing as "the original message was deleted".
+ */
+export const messageReplyRefSchema = z.object({
+  id: z.string().uuid(),
+  authorId: z.string().uuid().nullable(),
+  authorName: z.string().nullable(),
+  excerpt: z.string().max(REPLY_EXCERPT_MAX_LENGTH),
+  deleted: z.boolean(),
+});
+
+export type MessageReplyRef = z.infer<typeof messageReplyRefSchema>;
+
+/**
+ * Flatten a body to a single short line for a quote header. Markdown is left
+ * intact — stripping it would need the whole parser on the server, and a quote
+ * header is a hint rather than a rendering.
+ */
+export function buildReplyExcerpt(body: string): string {
+  const flat = body.replace(/\s+/g, " ").trim();
+  if (flat.length <= REPLY_EXCERPT_MAX_LENGTH) {
+    return flat;
+  }
+  // Cutting by code unit can split a surrogate pair, which renders as U+FFFD.
+  let cut = REPLY_EXCERPT_MAX_LENGTH - 1;
+  const lead = flat.charCodeAt(cut - 1);
+  if (lead >= 0xd800 && lead <= 0xdbff) {
+    cut -= 1;
+  }
+  return `${flat.slice(0, cut).trimEnd()}…`;
+}
+
 export const messageSchema = z.object({
   id: z.string().uuid(),
   channelId: z.string().uuid(),
@@ -116,6 +156,7 @@ export const messageSchema = z.object({
   createdAt: z.string(),
   editedAt: z.string().nullable().default(null),
   reactions: z.array(messageReactionSchema).default([]),
+  replyTo: messageReplyRefSchema.nullable().default(null),
 });
 
 export const MESSAGE_MAX_LENGTH = 4000;

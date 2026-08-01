@@ -55,6 +55,13 @@ export default defineConfig({
         DATABASE_URL,
         DEV_AUTH_BYPASS: "true",
         NODE_ENV: "development",
+        // Every test drives the same account and boots the app from scratch,
+        // which no real user does. Raise the ceiling rather than lower it in
+        // production code.
+        RATE_LIMIT_API_CAPACITY: "10000",
+        RATE_LIMIT_API_REFILL: "1000",
+        RATE_LIMIT_WRITE_CAPACITY: "10000",
+        RATE_LIMIT_WRITE_REFILL: "1000",
       },
     },
     {

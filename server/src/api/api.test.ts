@@ -1,6 +1,17 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
+import type { WebSocket } from "ws";
+import type { DbUser } from "../db.js";
 
 /**
  * The authorization matrix is the highest-risk untested surface in the app: a
@@ -32,6 +43,9 @@ vi.mock("../auth/clerk.js", () => ({
 const { handleApi, resetApiRateLimits } = await import("./index.js");
 const { getPool, initDb, closePool } = await import("../db.js");
 const { upsertUser } = await import("../services/users.js");
+const { handleChatMessage, resetChatRateLimits } = await import(
+  "../ws/chat.js"
+);
 
 let server: Server;
 let baseUrl: string;
@@ -86,6 +100,7 @@ describeDb("API authorization", () => {
 
   beforeEach(async () => {
     resetApiRateLimits();
+    resetChatRateLimits();
     // servers/messages cascade; users are the only root we must clear.
     await getPool().query(
       `TRUNCATE users, user_preferences, servers, channels, messages,
@@ -547,6 +562,184 @@ describeDb("API authorization", () => {
     });
   });
 
+  describe("replies", () => {
+    interface HistoryMessage {
+      id: string;
+      body: string;
+      replyTo: {
+        id: string;
+        authorId: string | null;
+        authorName: string | null;
+        excerpt: string;
+        deleted: boolean;
+      } | null;
+    }
+
+    /** The chat handler only ever touches these three members of a socket. */
+    function fakeSocket(): WebSocket {
+      return {
+        readyState: 1,
+        send: () => {},
+        on: () => {},
+      } as unknown as WebSocket;
+    }
+
+    async function asDbUser(id: string): Promise<DbUser> {
+      const result = await getPool().query<DbUser>(
+        `SELECT * FROM users WHERE id = $1`,
+        [id],
+      );
+      return result.rows[0]!;
+    }
+
+    /** Replies are only creatable over the socket, so these drive it directly. */
+    async function send(
+      as: { id: string },
+      channelId: string,
+      body: string,
+      replyToId?: string,
+    ) {
+      await handleChatMessage(
+        { socket: fakeSocket(), user: await asDbUser(as.id) },
+        {
+          type: "message-create",
+          channelId,
+          body,
+          ...(replyToId ? { replyToId } : {}),
+        },
+      );
+    }
+
+    async function history(
+      as: { id: string; clerk_id: string },
+      channelId: string,
+    ): Promise<HistoryMessage[]> {
+      const res = await call<{ messages: HistoryMessage[] }>(
+        as,
+        "GET",
+        `/api/channels/${channelId}/messages`,
+      );
+      expect(res.status).toBe(200);
+      return res.body.messages;
+    }
+
+    async function mentionCount(): Promise<number> {
+      const result = await getPool().query(`SELECT 1 FROM message_mentions`);
+      return result.rowCount ?? 0;
+    }
+
+    it("carries a snapshot of the message it answers", async () => {
+      const { textChannelId } = await makeServer();
+      await send(owner, textChannelId, "the original question");
+      const [parent] = await history(owner, textChannelId);
+
+      await send(member, textChannelId, "the answer", parent!.id);
+
+      const messages = await history(owner, textChannelId);
+      expect(messages.map((m) => m.body)).toEqual([
+        "the original question",
+        "the answer",
+      ]);
+      expect(messages[0]!.replyTo).toBeNull();
+      expect(messages[1]!.replyTo).toEqual({
+        id: parent!.id,
+        authorId: owner.id,
+        authorName: "Owner",
+        excerpt: "the original question",
+        deleted: false,
+      });
+    });
+
+    it("counts a reply as a mention of the person being answered", async () => {
+      const { serverId, textChannelId } = await makeServer();
+      await send(owner, textChannelId, "question");
+      const [parent] = await history(owner, textChannelId);
+      await send(member, textChannelId, "answer", parent!.id);
+
+      const unread = await call<{
+        unread: Array<{ channelId: string; count: number; mentions: number }>;
+      }>(owner, "GET", `/api/servers/${serverId}/unread`);
+      const row = unread.body.unread.find((u) => u.channelId === textChannelId);
+      expect(row?.mentions).toBe(1);
+    });
+
+    it("does not notify someone for answering themselves", async () => {
+      const { textChannelId } = await makeServer();
+      await send(owner, textChannelId, "thinking out loud");
+      const [parent] = await history(owner, textChannelId);
+      await send(owner, textChannelId, "and the answer", parent!.id);
+
+      expect(await mentionCount()).toBe(0);
+    });
+
+    it("keeps the reply notification when the reply is edited", async () => {
+      const { textChannelId } = await makeServer();
+      await send(owner, textChannelId, "question");
+      const [parent] = await history(owner, textChannelId);
+      await send(member, textChannelId, "answer", parent!.id);
+      const messages = await history(owner, textChannelId);
+
+      const edited = await call(
+        member,
+        "PATCH",
+        `/api/messages/${messages[1]!.id}`,
+        { body: "answer, corrected" },
+      );
+      expect(edited.status).toBe(200);
+      // An edit wipes and re-derives the mention rows; the reply must survive it.
+      expect(await mentionCount()).toBe(1);
+    });
+
+    it("refuses a parent that lives in another channel", async () => {
+      const { serverId, textChannelId } = await makeServer();
+      const other = await call<{ channel: { id: string } }>(
+        owner,
+        "POST",
+        `/api/servers/${serverId}/channels`,
+        { name: "elsewhere", type: "text" },
+      );
+      const otherChannelId = other.body.channel.id;
+      await send(owner, otherChannelId, "over here");
+      const [foreign] = await history(owner, otherChannelId);
+
+      await send(member, textChannelId, "smuggled", foreign!.id);
+
+      expect(await history(owner, textChannelId)).toHaveLength(0);
+    });
+
+    it("still posts when the message being answered is already gone", async () => {
+      const { textChannelId } = await makeServer();
+      // A parent deleted while the reply was being typed is an ordinary race;
+      // throwing away what somebody wrote would be the worse failure.
+      await send(
+        member,
+        textChannelId,
+        "answer",
+        "00000000-0000-4000-8000-0000000000ff",
+      );
+
+      const messages = await history(owner, textChannelId);
+      expect(messages.map((m) => m.body)).toEqual(["answer"]);
+      expect(messages[0]!.replyTo).toBeNull();
+    });
+
+    it("keeps replies alive when the message they answer is deleted", async () => {
+      const { textChannelId } = await makeServer();
+      await send(owner, textChannelId, "question");
+      const [parent] = await history(owner, textChannelId);
+      await send(member, textChannelId, "answer", parent!.id);
+
+      expect(
+        (await call(owner, "DELETE", `/api/messages/${parent!.id}`)).status,
+      ).toBe(200);
+
+      // SET NULL, not CASCADE: the answer outlives the question.
+      const messages = await history(owner, textChannelId);
+      expect(messages.map((m) => m.body)).toEqual(["answer"]);
+      expect(messages[0]!.replyTo).toBeNull();
+    });
+  });
+
   describe("unread", () => {
     it("counts other people's messages until the channel is marked read", async () => {
       const { serverId, textChannelId } = await makeServer();
@@ -716,6 +909,194 @@ describeDb("API authorization", () => {
         theme: "dark",
       });
       expect(res.status).toBe(401);
+    });
+  });
+
+  describe("gifs", () => {
+    interface GifsBody {
+      gifs: Array<Record<string, unknown>>;
+    }
+
+    /** One upstream entry, shaped like GIPHY's — trimmed to what we read. */
+    function giphyEntry(overrides: Record<string, unknown> = {}) {
+      return {
+        id: "abc123",
+        title: "a cat  ",
+        images: {
+          downsized_medium: {
+            url: "https://media3.giphy.com/media/abc123/giphy.gif?cid=track&ct=g",
+            width: "480",
+            height: "270",
+          },
+          fixed_width: {
+            url: "https://media3.giphy.com/media/abc123/200w.gif?cid=track",
+            width: "200",
+            height: "112",
+          },
+          fixed_width_still: {
+            url: "https://media3.giphy.com/media/abc123/200w_s.gif",
+            width: "200",
+            height: "112",
+          },
+        },
+        ...overrides,
+      };
+    }
+
+    /** URLs GIPHY was asked for, so the forced parameters can be asserted. */
+    let upstreamCalls: string[];
+    let upstreamReply: () => Response;
+    const realFetch = globalThis.fetch;
+
+    beforeEach(() => {
+      upstreamCalls = [];
+      upstreamReply = () =>
+        new Response(JSON.stringify({ data: [giphyEntry()] }), {
+          headers: { "Content-Type": "application/json" },
+        });
+
+      process.env.GIPHY_API_KEY = "test-key";
+      // Only GIPHY is intercepted: `call()` reaches the API under test with the
+      // same global, and stubbing that too would break every request here.
+      vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+        const url = String(input);
+        if (!url.startsWith("https://api.giphy.com/")) {
+          return realFetch(input, init);
+        }
+        upstreamCalls.push(url);
+        return Promise.resolve(upstreamReply());
+      });
+    });
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+      delete process.env.GIPHY_API_KEY;
+    });
+
+    it("normalises upstream results to the wire shape and drops tracking", async () => {
+      const res = await call<GifsBody>(owner, "GET", "/api/gifs/search?q=cat");
+      expect(res.status).toBe(200);
+      expect(res.body.gifs).toEqual([
+        {
+          id: "abc123",
+          // The chosen URL becomes a message body that outlives the session
+          // that fetched it, so the per-request analytics id must not ride along.
+          url: "https://media3.giphy.com/media/abc123/giphy.gif",
+          previewUrl: "https://media3.giphy.com/media/abc123/200w.gif",
+          previewStillUrl: "https://media3.giphy.com/media/abc123/200w_s.gif",
+          width: 200,
+          height: 112,
+          title: "a cat",
+        },
+      ]);
+    });
+
+    it("forces a pg-13 rating on every upstream call", async () => {
+      await call(owner, "GET", "/api/gifs/search?q=cat");
+      await call(owner, "GET", "/api/gifs/trending");
+      expect(upstreamCalls).toHaveLength(2);
+      for (const url of upstreamCalls) {
+        expect(new URL(url).searchParams.get("rating")).toBe("pg-13");
+      }
+    });
+
+    it("never leaks the API key to the caller", async () => {
+      const res = await call(owner, "GET", "/api/gifs/search?q=cat");
+      expect(JSON.stringify(res.body)).not.toContain("test-key");
+      expect(new URL(upstreamCalls[0]!).searchParams.get("api_key")).toBe(
+        "test-key",
+      );
+    });
+
+    it("clamps the page size a caller may ask for", async () => {
+      await call(owner, "GET", "/api/gifs/trending?limit=5000");
+      expect(new URL(upstreamCalls[0]!).searchParams.get("limit")).toBe("50");
+    });
+
+    it("drops a result whose media host is outside the allowlist", async () => {
+      // A provider that ever served a third-party URL would otherwise get an
+      // <img> pointed at it in every reader's browser.
+      upstreamReply = () =>
+        new Response(
+          JSON.stringify({
+            data: [
+              giphyEntry({
+                images: {
+                  original: { url: "https://evil.example/x.gif", width: "1", height: "1" },
+                },
+              }),
+              giphyEntry(),
+            ],
+          }),
+          { headers: { "Content-Type": "application/json" } },
+        );
+
+      const res = await call<GifsBody>(owner, "GET", "/api/gifs/trending");
+      expect(res.body.gifs).toHaveLength(1);
+      expect(res.body.gifs[0]!.url).toBe(
+        "https://media3.giphy.com/media/abc123/giphy.gif",
+      );
+    });
+
+    it("rejects a search with no query", async () => {
+      const res = await call(owner, "GET", "/api/gifs/search");
+      expect(res.status).toBe(400);
+      expect(upstreamCalls).toHaveLength(0);
+    });
+
+    it("answers 502 when the provider fails, not 500", async () => {
+      upstreamReply = () => new Response("nope", { status: 500 });
+      const res = await call(owner, "GET", "/api/gifs/trending");
+      expect(res.status).toBe(502);
+    });
+
+    it("reports itself disabled and refuses with 503 when no key is set", async () => {
+      delete process.env.GIPHY_API_KEY;
+
+      const config = await call<{ enabled: boolean }>(
+        owner,
+        "GET",
+        "/api/gifs/config",
+      );
+      expect(config.body.enabled).toBe(false);
+
+      for (const path of ["/api/gifs/search?q=cat", "/api/gifs/trending"]) {
+        const res = await call(owner, "GET", path);
+        expect(res.status).toBe(503);
+      }
+      expect(upstreamCalls).toHaveLength(0);
+    });
+
+    it("treats a placeholder key as no key at all", async () => {
+      // `.env.example` copies are the usual source of this.
+      process.env.GIPHY_API_KEY = "your-giphy-api-key";
+      const res = await call(owner, "GET", "/api/gifs/trending");
+      expect(res.status).toBe(503);
+    });
+
+    it("reports itself enabled when a key is set", async () => {
+      const res = await call<{ enabled: boolean }>(
+        owner,
+        "GET",
+        "/api/gifs/config",
+      );
+      expect(res.body.enabled).toBe(true);
+    });
+
+    it("spends someone else's quota only for signed-in callers", async () => {
+      const res = await call(null, "GET", "/api/gifs/search?q=cat");
+      expect(res.status).toBe(401);
+      expect(upstreamCalls).toHaveLength(0);
+    });
+
+    it("rate limits search harder than ordinary reads", async () => {
+      let last = 200;
+      for (let attempt = 0; attempt < 40 && last === 200; attempt += 1) {
+        last = (await call(owner, "GET", "/api/gifs/trending")).status;
+      }
+      expect(last).toBe(429);
+      // The bucket is spent before the provider is called again.
+      expect(upstreamCalls.length).toBeLessThan(40);
     });
   });
 

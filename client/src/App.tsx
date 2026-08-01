@@ -30,7 +30,7 @@ import { VoicePanel } from "@/components/voice/voice-panel";
 import { VoiceStatusBar } from "@/components/voice/voice-status-bar";
 import { PromptDialog } from "@/components/ui/prompt-dialog";
 import { Seo } from "@/components/marketing/seo";
-import { createChatController } from "@/hooks/use-chat";
+import { createChatController, type ChatMessage } from "@/hooks/use-chat";
 import { createVoiceController } from "@/hooks/use-voice";
 import {
   createChannel,
@@ -40,6 +40,7 @@ import {
   fetchChannels,
   fetchIceServers,
   fetchMe,
+  fetchMembers,
   fetchMessages,
   fetchServers,
   fetchUnread,
@@ -52,6 +53,7 @@ import {
   updateMe,
 } from "@/lib/api";
 import { channelRoutePath, parseAppRoute } from "@/lib/app-route";
+import type { MentionCandidate } from "@/lib/mention-autocomplete";
 import { DEV_AUTH_TOKEN, getAuthToken, isDevAuthBypassEnabled } from "@/lib/dev-auth";
 import { getDesktop } from "@/lib/desktop";
 import { createRealtimeTransport, type RealtimeStatus } from "@/lib/realtime";
@@ -201,6 +203,13 @@ function MainAppContent({
   const [channelsLoading, setChannelsLoading] = useState(false);
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [unread, setUnread] = useState<Record<string, UnreadState>>({});
+  const [replyTarget, setReplyTarget] = useState<ChatMessage | null>(null);
+  const [mentionCandidates, setMentionCandidates] = useState<
+    MentionCandidate[]
+  >([]);
+  const [highlightMessageId, setHighlightMessageId] = useState<string | null>(
+    null,
+  );
   const [, setTick] = useState(0);
 
   const transport = useMemo(() => createRealtimeTransport(), []);
@@ -222,6 +231,9 @@ function MainAppContent({
   const voiceServerIdRef = useRef<string | null>(null);
 
   const refresh = useCallback(() => setTick((t) => t + 1), []);
+  // Stable: the message list schedules the jump in a frame, and a fresh
+  // identity every render would cancel and re-schedule it forever.
+  const clearHighlight = useCallback(() => setHighlightMessageId(null), []);
 
   // Every request pulls a fresh token from Clerk. Holding one in state meant
   // that after the ~1 minute token lifetime every action failed with 401.
@@ -290,6 +302,28 @@ function MainAppContent({
     }
   }, []);
 
+  // The composer completes `@` against this server's members, which is also the
+  // only place a handle can be learned from without asking for it.
+  useEffect(() => {
+    if (!selectedServerId) {
+      setMentionCandidates([]);
+      return;
+    }
+    let cancelled = false;
+    void fetchMembers(selectedServerId)
+      .then(({ members }) => {
+        if (!cancelled) {
+          setMentionCandidates(members);
+        }
+      })
+      .catch(() => {
+        // Autocomplete degrades to typing the handle out; not worth an error.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedServerId]);
+
   const openChannel = useCallback(
     async (channelId: string, channelList: Channel[], serverId?: string) => {
       const channel = channelList.find((c) => c.id === channelId);
@@ -299,6 +333,8 @@ function MainAppContent({
 
       setSelectedChannelId(channelId);
       selectedChannelIdRef.current = channelId;
+      // The reply belongs to the conversation you were in, not the next one.
+      setReplyTarget(null);
       clearUnread(channelId);
       setMessagesLoading(true);
       chat.joinChannel(channelId);
@@ -797,7 +833,11 @@ function MainAppContent({
    * channel when the id is missing or no longer visible to this user).
    */
   const applyChannelRoute = useCallback(
-    async (serverId: string, channelId: string | null) => {
+    async (
+      serverId: string,
+      channelId: string | null,
+      messageId: string | null = null,
+    ) => {
       setSelectedServerId(serverId);
       setChannelsLoading(true);
       try {
@@ -814,6 +854,11 @@ function MainAppContent({
           requested ?? list.find((c) => c.type === "text") ?? list[0];
         if (target) {
           await selectChannel(target.id, list, serverId);
+          // Only after the page is in hand: the list flashes the row if it is
+          // there and says so plainly if it is not.
+          if (messageId && target.id === channelId) {
+            setHighlightMessageId(messageId);
+          }
         } else {
           setSelectedChannelId(null);
           selectedChannelIdRef.current = null;
@@ -851,7 +896,11 @@ function MainAppContent({
       setInviteMode("join");
       return;
     }
-    void applyChannelRoute(target.serverId, target.channelId);
+    void applyChannelRoute(
+      target.serverId,
+      target.channelId,
+      target.messageId,
+    );
     // applyChannelRoute reads current state; re-running only on path/readiness
     // changes is intentional — selection changes write the URL via syncRoute.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -949,12 +998,16 @@ function MainAppContent({
         messages={chat.getMessages()}
         currentUserId={user?.id ?? null}
         currentUsername={user?.username ?? null}
+        serverId={selectedServerId}
         channelId={selectedChannel.id}
         isLoading={messagesLoading}
         hasMore={chat.hasMoreHistory()}
         isLoadingOlder={chat.isLoadingOlder()}
         typingUsers={chat.getTypingUsers()}
         canModerate={!!canManage}
+        highlightMessageId={highlightMessageId}
+        onHighlightHandled={clearHighlight}
+        onReplyTo={setReplyTarget}
         onToggleReaction={(messageId, emoji) =>
           chat.toggleReaction(messageId, emoji)
         }
@@ -965,10 +1018,20 @@ function MainAppContent({
         onDiscardMessage={(nonce) => chat.discardMessage(nonce)}
       />
       <MessageComposer
-        onSend={(body) => chat.sendMessage(body)}
+        // Remount per channel: the draft is component state, so without this a
+        // half-typed message follows you into the next channel, one Enter away
+        // from the wrong audience.
+        key={selectedChannel.id}
+        onSend={(body) => {
+          chat.sendMessage(body, replyTarget);
+          setReplyTarget(null);
+        }}
         onTyping={() => chat.notifyTyping()}
         insertText={composerInsert}
         onInsertConsumed={() => setComposerInsert(null)}
+        replyTarget={replyTarget}
+        onCancelReply={() => setReplyTarget(null)}
+        mentionCandidates={mentionCandidates}
         slashContext={{
           updateDisplayName: async (name: string) => {
             const updated = await updateMe({ displayName: name });

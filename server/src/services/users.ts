@@ -13,6 +13,19 @@ function slugifyUsername(input: string): string {
   return slug.length >= 2 ? slug : `user_${Math.random().toString(36).slice(2, 6)}`;
 }
 
+async function isTagTaken(
+  username: string,
+  discriminator: string,
+  excludeUserId: string,
+): Promise<boolean> {
+  const result = await getPool().query(
+    `SELECT 1 FROM users
+     WHERE username = $1 AND discriminator = $2 AND id <> $3`,
+    [username, discriminator, excludeUserId],
+  );
+  return result.rows.length > 0;
+}
+
 async function allocateDiscriminator(username: string): Promise<string> {
   for (let attempt = 0; attempt < 40; attempt++) {
     const discrim = String(Math.floor(Math.random() * 9999) + 1).padStart(4, "0");
@@ -120,7 +133,15 @@ export async function updateProfile(
 
   if (updates.username && updates.username !== current.username) {
     username = updates.username;
-    discriminator = await allocateDiscriminator(updates.username);
+    // Keep the number. It is half the handle people have already shared, and
+    // re-rolling it on every rename silently invalidates it — only allocate a
+    // new one when this exact pair is taken.
+    const keepsCurrent =
+      discriminator !== null &&
+      !(await isTagTaken(updates.username, discriminator, userId));
+    if (!keepsCurrent) {
+      discriminator = await allocateDiscriminator(updates.username);
+    }
   }
 
   const avatarUrl =

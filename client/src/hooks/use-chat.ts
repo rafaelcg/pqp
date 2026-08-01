@@ -6,7 +6,7 @@ import type {
   PresenceUpdate,
   ReactionBroadcast,
 } from "@pqp/shared";
-import { MESSAGE_PAGE_SIZE } from "@pqp/shared";
+import { buildReplyExcerpt, MESSAGE_PAGE_SIZE } from "@pqp/shared";
 import {
   deleteMessage as deleteMessageRequest,
   editMessage as editMessageRequest,
@@ -25,6 +25,14 @@ export interface ChatMessage extends Message {
 export interface TypingUser {
   userId: string;
   displayName: string;
+}
+
+/** What the composer needs to hand back when sending a reply. */
+export interface ReplyTargetMessage {
+  id: string;
+  authorId: string;
+  authorName: string;
+  body: string;
 }
 
 /** How long a typing indicator survives without a refresh. */
@@ -74,6 +82,7 @@ function toChatMessage(message: MessageBroadcast["message"]): ChatMessage {
     ...message,
     authorTag: message.authorTag ?? null,
     reactions: message.reactions ?? [],
+    replyTo: message.replyTo ?? null,
   };
 }
 
@@ -125,7 +134,12 @@ export function createChatController(transport: RealtimeTransport) {
     }
   }
 
-  function transmit(nonce: string, body: string, targetChannelId: string) {
+  function transmit(
+    nonce: string,
+    body: string,
+    targetChannelId: string,
+    replyToId?: string,
+  ) {
     clearSendTimer(nonce);
     // Only start the failure clock once the message is actually on the wire.
     // While offline the transport queues it and delivers it on reconnect, so
@@ -141,6 +155,7 @@ export function createChatController(transport: RealtimeTransport) {
       channelId: targetChannelId,
       body,
       nonce,
+      ...(replyToId ? { replyToId } : {}),
     });
   }
 
@@ -240,6 +255,7 @@ export function createChatController(transport: RealtimeTransport) {
         ...next.map((message) => ({
           ...message,
           reactions: message.reactions ?? [],
+          replyTo: message.replyTo ?? null,
         })),
         ...inFlight,
       ];
@@ -320,7 +336,7 @@ export function createChatController(transport: RealtimeTransport) {
       emit();
     },
 
-    sendMessage(body: string) {
+    sendMessage(body: string, replyTo?: ReplyTargetMessage | null) {
       if (!channelId || !currentUserId) {
         return;
       }
@@ -336,12 +352,23 @@ export function createChatController(transport: RealtimeTransport) {
         createdAt: new Date().toISOString(),
         editedAt: null,
         reactions: [],
+        // Built with the same helper the server uses, so the bubble does not
+        // visibly rewrite itself when the broadcast comes back.
+        replyTo: replyTo
+          ? {
+              id: replyTo.id,
+              authorId: replyTo.authorId,
+              authorName: replyTo.authorName,
+              excerpt: buildReplyExcerpt(replyTo.body),
+              deleted: false,
+            }
+          : null,
         pending: true,
         nonce,
       };
       messages = [...messages, optimistic];
       emit();
-      transmit(nonce, body, channelId);
+      transmit(nonce, body, channelId, replyTo?.id);
     },
 
     retryMessage(nonce: string) {
@@ -355,7 +382,7 @@ export function createChatController(transport: RealtimeTransport) {
           : message,
       );
       emit();
-      transmit(nonce, failed.body, channelId);
+      transmit(nonce, failed.body, channelId, failed.replyTo?.id);
     },
 
     discardMessage(nonce: string) {
@@ -467,7 +494,25 @@ export function createChatController(transport: RealtimeTransport) {
           if (message.channelId !== channelId) {
             return;
           }
-          messages = messages.filter((entry) => entry.id !== message.messageId);
+          messages = messages
+            .filter((entry) => entry.id !== message.messageId)
+            // The parent column is nulled server-side, so nothing will ever
+            // re-tell us this. Marking it here is what keeps a reply from
+            // pointing at a row that is no longer on screen.
+            .map((entry) =>
+              entry.replyTo && entry.replyTo.id === message.messageId
+                ? {
+                    ...entry,
+                    replyTo: {
+                      ...entry.replyTo,
+                      authorId: null,
+                      authorName: null,
+                      excerpt: "",
+                      deleted: true,
+                    },
+                  }
+                : entry,
+            );
           emit();
           return;
         }

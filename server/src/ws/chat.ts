@@ -6,7 +6,11 @@ import {
 } from "@pqp/shared";
 import type { DbUser } from "../db.js";
 import { createRateLimiter } from "../lib/rate-limit.js";
-import { createMessage, mapMessage } from "../services/messages.js";
+import {
+  createMessage,
+  getReplyParent,
+  mapMessage,
+} from "../services/messages.js";
 import { getMessageChannelId, toggleReaction } from "../services/reactions.js";
 import { getChannelAudience } from "../services/servers.js";
 import { isChannelMember } from "../services/users.js";
@@ -175,6 +179,7 @@ async function notifyChannelActivity(
   channelId: string,
   authorId: string,
   body: string,
+  repliedToUserId?: string | null,
 ): Promise<void> {
   const audience = await getChannelAudience(channelId);
   if (!audience) {
@@ -199,7 +204,12 @@ async function notifyChannelActivity(
         type: "channel-activity",
         serverId: audience.serverId,
         channelId,
-        mention: Boolean(user.username && mentioned.has(user.username)),
+        // Being answered is a mention here for the same reason it is one in
+        // `message_mentions`: otherwise the live badge and the badge you get
+        // after a refresh disagree about the same message.
+        mention:
+          user.id === repliedToUserId ||
+          Boolean(user.username && mentioned.has(user.username)),
       }),
     );
   });
@@ -275,10 +285,24 @@ export async function handleChatMessage(
       conn.channelId = payload.channelId;
     }
 
+    let parent = null;
+    if (payload.replyToId) {
+      parent = await getReplyParent(payload.replyToId);
+      // A parent in another channel can only come from a client that made it
+      // up, so drop the whole frame the way every other invalid input is
+      // dropped. A parent that is simply gone is an ordinary race — someone
+      // deleted it while the reply was being typed — and losing the words
+      // somebody actually wrote would be the worse failure, so it posts plain.
+      if (parent && parent.channel_id !== payload.channelId) {
+        return;
+      }
+    }
+
     const dbMessage = await createMessage(
       payload.channelId,
       conn.user,
       payload.body,
+      parent?.id ?? null,
     );
 
     broadcastToChannel(
@@ -291,7 +315,12 @@ export async function handleChatMessage(
       conn.socket,
     );
 
-    await notifyChannelActivity(payload.channelId, conn.user.id, payload.body);
+    await notifyChannelActivity(
+      payload.channelId,
+      conn.user.id,
+      payload.body,
+      parent?.author_id ?? null,
+    );
     return;
   }
 
