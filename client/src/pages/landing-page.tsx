@@ -49,7 +49,7 @@ export function LandingPage() {
           aria-hidden
         />
         <div
-          className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_center,transparent_0%,rgba(0,0,0,0.42)_100%)]"
+          className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_center,transparent_0%,var(--scrim-media)_100%)]"
           aria-hidden
         />
         <div className="hero-grain pointer-events-none absolute inset-0" aria-hidden />

@@ -83,7 +83,7 @@ export default tseslint.config(
 
   {
     // Standalone Node ESM tooling, run with `node scripts/…`.
-    files: ["scripts/**/*.mjs", "*.mjs"],
+    files: ["scripts/**/*.mjs", "client/bench/**/*.mjs", "*.mjs"],
     languageOptions: {
       globals: { ...globals.node, WebSocket: "readonly", fetch: "readonly" },
       sourceType: "module",

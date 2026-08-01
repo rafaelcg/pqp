@@ -42,7 +42,7 @@ export function VoiceStatusBar({
       <div className="flex items-center gap-2">
         {connected ? (
           <span
-            className="h-2 w-2 shrink-0 rounded-full bg-success shadow-[0_0_8px_oklch(0.72_0.14_150/0.7)]"
+            className="h-2 w-2 shrink-0 rounded-full bg-success shadow-[0_0_8px_var(--glow-success)]"
             aria-hidden="true"
           />
         ) : (

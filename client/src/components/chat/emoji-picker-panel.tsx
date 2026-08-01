@@ -45,7 +45,7 @@ export function EmojiPickerPanel({
     <div
       ref={panelRef}
       className={cn(
-        "emoji-mart-shell z-50 overflow-hidden rounded-lg border border-ink-4 shadow-[0_12px_40px_oklch(0.1_0.02_250/0.55)] animate-rise",
+        "emoji-mart-shell z-50 overflow-hidden rounded-lg border border-ink-4 shadow-[var(--shadow-popover)] animate-rise",
         className,
       )}
     >

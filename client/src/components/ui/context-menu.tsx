@@ -31,7 +31,7 @@ export function ContextMenu({
       <ContextMenuPrimitive.Trigger asChild>{children}</ContextMenuPrimitive.Trigger>
       <ContextMenuPrimitive.Portal>
         <ContextMenuPrimitive.Content
-          className="z-[100] min-w-[11.5rem] overflow-hidden rounded-lg border border-ink-4 bg-ink-2 p-1 shadow-[0_12px_40px_oklch(0.1_0.02_250/0.55)] animate-rise"
+          className="z-[100] min-w-[11.5rem] overflow-hidden rounded-lg border border-ink-4 bg-ink-2 p-1 shadow-[var(--shadow-popover)] animate-rise"
           onCloseAutoFocus={(e) => e.preventDefault()}
         >
           {items.map((item) =>

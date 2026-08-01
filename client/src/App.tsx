@@ -96,7 +96,7 @@ function ClerkAppGate() {
   if (!isSignedIn) {
     return (
       <div className="relative flex h-full flex-col items-start justify-end overflow-hidden p-8 sm:p-12">
-        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,oklch(0.35_0.12_125/0.25),transparent_40%)]" />
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,var(--glow-accent),transparent_40%)]" />
         <div className="animate-rise relative z-10 max-w-lg">
           <Link
             to="/"
