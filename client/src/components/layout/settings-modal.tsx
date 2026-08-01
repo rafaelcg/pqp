@@ -3,6 +3,7 @@ import type { User, UserPreferences } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { useNotificationSettings } from "@/hooks/use-notifications";
 import { useTheme } from "@/hooks/use-theme";
 import {
   ensureMediaPermission,
@@ -10,6 +11,10 @@ import {
   supportsAudioOutputSelection,
   type MediaDeviceOption,
 } from "@/lib/audio-devices";
+import {
+  adoptNotificationPreferences,
+  type NotificationLevel,
+} from "@/lib/notifications";
 import type { ThemePreference } from "@/lib/theme";
 import { updateMe } from "@/lib/api";
 import { queuePreferenceSync } from "@/lib/preferences";
@@ -115,6 +120,10 @@ export function preferencesFromLocal(
  *
  * `theme` is absent on purpose: it lives in its own store under its own key,
  * because the boot script has to resolve it before this module exists.
+ *
+ * Notification levels are the same shape of thing — their own store, read by
+ * the rail and the channel list rather than by any settings state — so this is
+ * where the account's copy is handed over rather than returned.
  */
 export function applyRemotePreferences(
   local: LocalSettings,
@@ -123,6 +132,7 @@ export function applyRemotePreferences(
   if (!preferences) {
     return local;
   }
+  adoptNotificationPreferences(preferences.notifications);
   return {
     ...local,
     muteOnJoin: preferences.muteOnJoin ?? local.muteOnJoin,
@@ -331,6 +341,89 @@ function ThemePicker() {
         {preference === "system"
           ? `Following your system — currently ${resolved}.`
           : "Applies immediately, and follows your account to other devices."}
+      </p>
+    </div>
+  );
+}
+
+const LEVEL_OPTIONS: { value: NotificationLevel; label: string }[] = [
+  { value: "all", label: "All messages" },
+  { value: "mentions", label: "Only @mentions" },
+  { value: "none", label: "Nothing" },
+];
+
+/**
+ * The account-wide notification default, plus the opt-in itself.
+ *
+ * Permission is requested from the button and nowhere else. Browsers penalise
+ * pages that ask on load, a refusal cannot be taken back from script, and there
+ * is no second prompt to fall back on — so the ask has to be worth spending.
+ */
+function NotificationsSection() {
+  const { state, permission, enable, disable, setDefaultLevel } =
+    useNotificationSettings();
+  const active = state.desktop && permission === "granted";
+
+  return (
+    <div>
+      <p className="text-xs uppercase tracking-wide text-text-muted">
+        Notifications
+      </p>
+
+      {permission === "unsupported" ? (
+        <p className="mt-2 text-xs text-text-muted">
+          This browser cannot show desktop notifications.
+        </p>
+      ) : permission === "denied" ? (
+        <p className="mt-2 text-xs text-warning" role="status">
+          Blocked for this site. Allow notifications in your browser&apos;s site
+          settings to turn them back on — the page cannot ask again.
+        </p>
+      ) : (
+        <div className="mt-2 flex items-center gap-3">
+          <Button
+            variant={active ? "secondary" : "default"}
+            size="sm"
+            onClick={() => (active ? disable() : void enable())}
+          >
+            {active ? "Turn off" : "Enable desktop notifications"}
+          </Button>
+          <span className="text-xs text-text-muted">
+            {active
+              ? "On for this account."
+              : "Your browser will ask for permission."}
+          </span>
+        </div>
+      )}
+
+      <div
+        role="radiogroup"
+        aria-label="Default notification level"
+        className="mt-3 flex flex-wrap gap-1.5"
+      >
+        {LEVEL_OPTIONS.map((option) => {
+          const selected = option.value === state.default;
+          return (
+            <button
+              key={option.value}
+              type="button"
+              role="radio"
+              aria-checked={selected}
+              onClick={() => setDefaultLevel(option.value)}
+              className={`rounded-md border px-3 py-1.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent ${
+                selected
+                  ? "border-accent bg-accent/10 text-text"
+                  : "border-border text-text-muted hover:border-accent/50"
+              }`}
+            >
+              {option.label}
+            </button>
+          );
+        })}
+      </div>
+      <p className="mt-1.5 text-xs text-text-muted">
+        Applies where a server or channel has no setting of its own. Right-click
+        a server or channel to change just that one.
       </p>
     </div>
   );
@@ -559,6 +652,10 @@ export function SettingsModal({
 
         <div className="border-t border-ink-4 pt-4">
           <ThemePicker />
+        </div>
+
+        <div className="mt-4 border-t border-ink-4 pt-4">
+          <NotificationsSection />
         </div>
 
         <div className="mt-4 space-y-4 border-t border-ink-4 pt-4">

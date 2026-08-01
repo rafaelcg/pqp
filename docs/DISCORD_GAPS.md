@@ -26,21 +26,23 @@ They cost days, not weeks.
 
 ## Ranked list
 
+✅ marks a gap that has since shipped.
+
 | # | Feature | Category | Pain | Effort |
 |---|---|---|---|---|
-| 1 | Jump to message and working permalinks | navigation | high | medium |
-| 2 | Composer fixes: @mention autocomplete and per-channel drafts | composer | high | small |
-| 3 | Replies (quote-and-respond) | conversation-structure | critical | small |
+| 1 | ✅ Jump to message and working permalinks | navigation | high | medium |
+| 2 | ✅ Composer fixes: @mention autocomplete and per-channel drafts | composer | high | small |
+| 3 | ✅ Replies (quote-and-respond) | conversation-structure | critical | small |
 | 4 | File and image attachments | attachments | critical | large |
 | 5 | Push-to-talk, input mode, and mic processing controls | voice-input | high | medium |
 | 6 | Voice state visibility and voice moderation | voice-presence | high | medium |
-| 7 | Desktop notifications with a cross-server unread badge | notifications | critical | medium |
-| 8 | Per-server and per-channel notification levels | notifications | high | medium |
+| 7 | ✅ Desktop notifications with a cross-server unread badge | notifications | critical | medium |
+| 8 | ✅ Per-server and per-channel notification levels | notifications | high | medium |
 | 9 | Installable PWA (manifest, icons, service worker) | platform | high | small |
-| 10 | Message search | discovery | high | medium |
+| 10 | ✅ Message search | discovery | high | medium |
 | 11 | Screen share with audio | screen-share | critical | large |
 | 12 | Call quality indicators and a TURN-relay badge | diagnostics | medium | small |
-| 13 | Theming: light mode, a token layer, and synced user preferences | theming | medium | medium |
+| 13 | ✅ Theming: light mode, a token layer, and synced user preferences | theming | medium | medium |
 | 14 | Channel categories and drag-to-reorder | server-structure | high | medium |
 | 15 | Camera video in voice channels | video | medium | medium |
 | 16 | Keyboard access to message actions and a screen-reader-visible message log | accessibility | medium | small |

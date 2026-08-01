@@ -64,7 +64,10 @@ interface MessageListProps {
   channelId?: string | null;
   isLoading?: boolean;
   hasMore?: boolean;
+  /** True while the loaded window stops short of the newest message. */
+  hasNewer?: boolean;
   isLoadingOlder?: boolean;
+  isLoadingNewer?: boolean;
   typingUsers?: TypingUser[];
   canModerate?: boolean;
   /** Scrolled into view and flashed once it renders. */
@@ -72,6 +75,11 @@ interface MessageListProps {
   onHighlightHandled?: () => void;
   onToggleReaction: (messageId: string, emoji: string) => void;
   onLoadOlder?: () => Promise<number>;
+  onLoadNewer?: () => Promise<number>;
+  /** Fetch history around a message that is not in the loaded window. */
+  onJumpToMessage?: (messageId: string) => Promise<boolean>;
+  /** Drop the history window and reload the newest page. */
+  onJumpToPresent?: () => Promise<boolean>;
   onEditMessage?: (messageId: string, body: string) => Promise<void>;
   onDeleteMessage?: (messageId: string) => Promise<void>;
   onRetryMessage?: (nonce: string) => void;
@@ -115,13 +123,18 @@ export function MessageList({
   channelId = null,
   isLoading = false,
   hasMore = false,
+  hasNewer = false,
   isLoadingOlder = false,
+  isLoadingNewer = false,
   typingUsers = [],
   canModerate = false,
   highlightMessageId = null,
   onHighlightHandled,
   onToggleReaction,
   onLoadOlder,
+  onLoadNewer,
+  onJumpToMessage,
+  onJumpToPresent,
   onEditMessage,
   onDeleteMessage,
   onRetryMessage,
@@ -136,9 +149,13 @@ export function MessageList({
   const [missedCount, setMissedCount] = useState(0);
   const [flashId, setFlashId] = useState<string | null>(null);
   const [jumpNotice, setJumpNotice] = useState(false);
+  /** A jump whose page has been fetched but not yet rendered. */
+  const [pendingJumpId, setPendingJumpId] = useState<string | null>(null);
 
   const isPinnedRef = useRef(true);
   isPinnedRef.current = isPinned;
+  const hasNewerRef = useRef(hasNewer);
+  hasNewerRef.current = hasNewer;
   /** Row elements by message id, so a jump can find its target. */
   const rowNodes = useRef(new Map<string, HTMLElement>());
   const flashTimer = useRef<number | null>(null);
@@ -155,6 +172,10 @@ export function MessageList({
    * been cleared by then.
    */
   const prependedRef = useRef(0);
+  /** The same, for a page appended below the viewport. */
+  const appendedRef = useRef(0);
+  /** Set while a jump back to the live end is in flight. */
+  const pendingTailRef = useRef(false);
 
   const rows = useMemo(() => buildRows(messages), [messages]);
 
@@ -171,22 +192,24 @@ export function MessageList({
     }
   }, []);
 
+  const showJumpNotice = useCallback(() => {
+    setJumpNotice(true);
+    if (noticeTimer.current) {
+      window.clearTimeout(noticeTimer.current);
+    }
+    noticeTimer.current = window.setTimeout(
+      () => setJumpNotice(false),
+      JUMP_NOTICE_MS,
+    );
+  }, []);
+
   /**
-   * Scroll a loaded message into view and light it up. Returns false when the
-   * message is not in the loaded page — history around an arbitrary message is
-   * not fetchable yet, so the honest answer is to say so rather than to guess.
+   * Scroll a rendered message into view and light it up. False when the message
+   * is not in the loaded window.
    */
-  const jumpToMessage = useCallback((messageId: string): boolean => {
+  const focusRow = useCallback((messageId: string): boolean => {
     const node = rowNodes.current.get(messageId);
     if (!node) {
-      setJumpNotice(true);
-      if (noticeTimer.current) {
-        window.clearTimeout(noticeTimer.current);
-      }
-      noticeTimer.current = window.setTimeout(
-        () => setJumpNotice(false),
-        JUMP_NOTICE_MS,
-      );
       return false;
     }
     node.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -197,6 +220,47 @@ export function MessageList({
     flashTimer.current = window.setTimeout(() => setFlashId(null), HIGHLIGHT_MS);
     return true;
   }, []);
+
+  /**
+   * Go to a message wherever it lives: a rendered row is scrolled to directly,
+   * anything older than the window is fetched around first.
+   */
+  const jumpToMessage = useCallback(
+    (messageId: string) => {
+      if (focusRow(messageId)) {
+        return;
+      }
+      if (!onJumpToMessage) {
+        showJumpNotice();
+        return;
+      }
+      void onJumpToMessage(messageId)
+        .then((reachable) => {
+          if (reachable) {
+            setPendingJumpId(messageId);
+          } else {
+            showJumpNotice();
+          }
+        })
+        .catch(showJumpNotice);
+    },
+    [focusRow, onJumpToMessage, showJumpNotice],
+  );
+
+  // The fetched window is only in the DOM once the parent has re-rendered with
+  // it, so the scroll waits a frame rather than reading the row map inline.
+  useEffect(() => {
+    if (!pendingJumpId) {
+      return;
+    }
+    const frame = requestAnimationFrame(() => {
+      setPendingJumpId(null);
+      if (!focusRow(pendingJumpId)) {
+        showJumpNotice();
+      }
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [pendingJumpId, focusRow, showJumpNotice]);
 
   useEffect(
     () => () => {
@@ -231,8 +295,16 @@ export function MessageList({
 
     const prepended = prependedRef.current;
     prependedRef.current = 0;
-    const arrived = added - prepended;
+    const appended = appendedRef.current;
+    appendedRef.current = 0;
+    const arrived = added - prepended - appended;
     if (arrived <= 0) {
+      return;
+    }
+    // A jump parks the reader mid-history: the last row on screen is not the
+    // newest in the channel, so following the bottom would scroll to a place
+    // nobody asked for and undo the jump itself.
+    if (hasNewerRef.current) {
       return;
     }
     if (isPinnedRef.current) {
@@ -241,6 +313,24 @@ export function MessageList({
       setMissedCount((count) => count + arrived);
     }
   }, [messages.length, scrollToBottom]);
+
+  // Land at the bottom after a jump back to the present.
+  //
+  // A tail reset swaps the entire window rather than adding to it, so a scroll
+  // scheduled when the fetch resolves runs against the outgoing layout — and
+  // replacing a scroll container's contents drops it back to the top, which is
+  // exactly the place the reader just asked to leave. Waiting for the commit is
+  // what makes the button land where it says it will.
+  useLayoutEffect(() => {
+    if (!pendingTailRef.current) {
+      return;
+    }
+    pendingTailRef.current = false;
+    lastCountRef.current = messages.length;
+    setIsPinned(true);
+    setMissedCount(0);
+    scrollToBottom("auto");
+  }, [messages, scrollToBottom]);
 
   // Restore the scroll offset after older messages are prepended.
   useLayoutEffect(() => {
@@ -259,6 +349,7 @@ export function MessageList({
     setMissedCount(0);
     setFlashId(null);
     setJumpNotice(false);
+    setPendingJumpId(null);
     rowNodes.current.clear();
     lastCountRef.current = messages.length;
     requestAnimationFrame(() => {
@@ -297,6 +388,39 @@ export function MessageList({
       });
   }, [hasMore, isLoadingOlder, onLoadOlder]);
 
+  const loadNewer = useCallback(() => {
+    if (!onLoadNewer || !hasNewer || isLoadingNewer) {
+      return;
+    }
+    // Content added below the viewport does not move the scroll offset, so this
+    // needs no anchor — only a count, so the arrival effect does not mistake
+    // fetched history for live traffic.
+    void onLoadNewer()
+      .then((added) => {
+        appendedRef.current += added;
+      })
+      .catch(() => {
+        // The controller already stops offering the direction it failed in.
+      });
+  }, [hasNewer, isLoadingNewer, onLoadNewer]);
+
+  /** The button under the reader: back to the live end of the channel. */
+  const jumpToPresent = useCallback(() => {
+    if (!hasNewer || !onJumpToPresent) {
+      scrollToBottom();
+      return;
+    }
+    // Flagged before the fetch, not after: the effect below owns the scroll
+    // because it is the only thing that runs after React has committed the new
+    // window. See the comment there.
+    pendingTailRef.current = true;
+    void onJumpToPresent().then((loaded) => {
+      if (!loaded) {
+        pendingTailRef.current = false;
+      }
+    });
+  }, [hasNewer, onJumpToPresent, scrollToBottom]);
+
   const handleScroll = useCallback(() => {
     const container = scrollRef.current;
     if (!container) {
@@ -313,7 +437,10 @@ export function MessageList({
     if (container.scrollTop <= LOAD_MORE_THRESHOLD_PX) {
       loadOlder();
     }
-  }, [loadOlder]);
+    if (distanceFromBottom <= LOAD_MORE_THRESHOLD_PX) {
+      loadNewer();
+    }
+  }, [loadNewer, loadOlder]);
 
   if (isLoading) {
     return <MessageListSkeleton />;
@@ -386,6 +513,25 @@ export function MessageList({
             />
           ))
         )}
+
+        {hasNewer && (
+          <div className="flex justify-center pt-3">
+            {isLoadingNewer ? (
+              <span className="flex items-center gap-2 text-xs text-paper-muted">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                Loading newer messages…
+              </span>
+            ) : (
+              <button
+                type="button"
+                onClick={loadNewer}
+                className="rounded-full border border-ink-4 px-3 py-1 text-xs text-paper-muted hover:text-paper"
+              >
+                Load newer messages
+              </button>
+            )}
+          </div>
+        )}
         <div ref={bottomRef} />
       </div>
 
@@ -396,19 +542,18 @@ export function MessageList({
           role="status"
           className="animate-rise absolute bottom-16 right-4 z-10 max-w-[16rem] rounded-md border border-border bg-surface-2 px-3 py-2 text-xs text-text-muted shadow-lg"
         >
-          That message is older than the history loaded here — scroll up to load
-          more.
+          That message is no longer available — it may have been deleted.
         </p>
       )}
 
-      {!isPinned && (
+      {(!isPinned || hasNewer) && (
         <button
           type="button"
-          onClick={() => scrollToBottom()}
+          onClick={jumpToPresent}
           className="absolute bottom-4 right-4 z-10 flex items-center gap-1.5 rounded-full border border-ink-4 bg-ink-2/95 px-3 py-1.5 text-xs font-medium text-paper shadow-lg backdrop-blur transition-colors hover:border-signal/60 hover:text-signal"
         >
           <ArrowDown className="h-3.5 w-3.5" />
-          {missedCount > 0
+          {missedCount > 0 && !hasNewer
             ? `${missedCount} new message${missedCount === 1 ? "" : "s"}`
             : "Jump to present"}
         </button>
@@ -526,7 +671,7 @@ interface MessageRowProps {
   canModerate: boolean;
   isFlashing: boolean;
   registerRow: (messageId: string, node: HTMLElement | null) => void;
-  onJumpToMessage: (messageId: string) => boolean;
+  onJumpToMessage: (messageId: string) => void;
   onReply?: () => void;
   isPickerOpen: boolean;
   isEditing: boolean;
@@ -910,15 +1055,15 @@ function GifAttachment({ media }: { media: GifMedia }) {
 
 /**
  * One-line header naming the message this one answers. Clicking it jumps to the
- * parent when it is loaded; a parent that is gone renders inert rather than
- * offering a jump that cannot land anywhere.
+ * parent, loading history around it when needed; a parent that is gone renders
+ * inert rather than offering a jump that cannot land anywhere.
  */
 function ReplyQuote({
   replyTo,
   onJump,
 }: {
   replyTo: NonNullable<ChatMessage["replyTo"]>;
-  onJump: (messageId: string) => boolean;
+  onJump: (messageId: string) => void;
 }) {
   if (replyTo.deleted) {
     return (

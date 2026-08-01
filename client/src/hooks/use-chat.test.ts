@@ -4,12 +4,32 @@ import { createChatController } from "./use-chat";
 import type { RealtimeTransport } from "@/lib/realtime";
 
 vi.mock("@/lib/api", () => ({
-  fetchMessages: vi.fn(),
+  apiFetch: vi.fn(),
   editMessage: vi.fn(),
   deleteMessage: vi.fn(),
 }));
 
 const api = await import("@/lib/api");
+
+interface HistoryPage {
+  messages: Message[];
+  hasMore: boolean;
+  hasNewer: boolean;
+}
+
+/** The controller talks to the endpoint directly, so pages arrive as URLs. */
+function mockPage(page: Partial<HistoryPage>) {
+  vi.mocked(api.apiFetch).mockResolvedValueOnce({
+    messages: [],
+    hasMore: false,
+    hasNewer: false,
+    ...page,
+  });
+}
+
+function requestedUrl(call = 0): string {
+  return vi.mocked(api.apiFetch).mock.calls[call]![0];
+}
 
 function createTransport() {
   const sent: unknown[] = [];
@@ -429,9 +449,8 @@ describe("history pagination", () => {
     const { chat } = setup();
     chat.setMessages([serverMessage({ id: "00000000-0000-4000-8000-00000000000b" })], true);
 
-    vi.mocked(api.fetchMessages).mockResolvedValueOnce({
+    mockPage({
       messages: [serverMessage({ id: "00000000-0000-4000-8000-00000000000c" })],
-      hasMore: false,
     });
 
     const added = await chat.loadOlder();
@@ -447,7 +466,7 @@ describe("history pagination", () => {
     const { chat } = setup();
     chat.setMessages([serverMessage()], false);
     expect(await chat.loadOlder()).toBe(0);
-    expect(api.fetchMessages).not.toHaveBeenCalled();
+    expect(api.apiFetch).not.toHaveBeenCalled();
   });
 
   it("stops offering history when the server rejects the cursor", async () => {
@@ -455,7 +474,7 @@ describe("history pagination", () => {
     chat.setMessages([serverMessage()], true);
 
     const rejected = Object.assign(new Error("Unknown cursor"), { status: 400 });
-    vi.mocked(api.fetchMessages).mockRejectedValueOnce(rejected);
+    vi.mocked(api.apiFetch).mockRejectedValueOnce(rejected);
 
     expect(await chat.loadOlder()).toBe(0);
     expect(chat.hasMoreHistory()).toBe(false);
@@ -466,7 +485,7 @@ describe("history pagination", () => {
     chat.setMessages([serverMessage()], true);
 
     const offline = Object.assign(new Error("Network error"), { status: 0 });
-    vi.mocked(api.fetchMessages).mockRejectedValueOnce(offline);
+    vi.mocked(api.apiFetch).mockRejectedValueOnce(offline);
 
     expect(await chat.loadOlder()).toBe(0);
     expect(chat.hasMoreHistory()).toBe(true);
@@ -476,20 +495,158 @@ describe("history pagination", () => {
     const { chat } = setup();
     chat.setMessages([serverMessage()], true);
 
-    let resolvePage: (value: { messages: Message[]; hasMore: boolean }) => void =
-      () => {};
-    vi.mocked(api.fetchMessages).mockReturnValueOnce(
+    let resolvePage: (value: HistoryPage) => void = () => {};
+    vi.mocked(api.apiFetch).mockReturnValueOnce(
       new Promise((resolve) => {
-        resolvePage = resolve;
+        resolvePage = resolve as (value: HistoryPage) => void;
       }),
     );
 
     const pending = chat.loadOlder();
     chat.joinChannel("c0000000-0000-4000-8000-0000000000ff");
-    resolvePage({ messages: [serverMessage()], hasMore: false });
+    resolvePage({ messages: [serverMessage()], hasMore: false, hasNewer: false });
 
     expect(await pending).toBe(0);
     expect(chat.getMessages()).toHaveLength(0);
+  });
+});
+
+/** Ascending ids so a merged window can be checked by order alone. */
+function history(count: number, from = 0): Message[] {
+  return Array.from({ length: count }, (_, index) => {
+    const n = from + index;
+    return serverMessage({
+      id: `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`,
+      body: `m${n}`,
+      createdAt: new Date(n * 1000).toISOString(),
+    });
+  });
+}
+
+describe("jumping into history", () => {
+  it("fetches a page around a message that is not loaded", async () => {
+    const { chat } = setup();
+    chat.setMessages(history(2, 8), true);
+
+    mockPage({ messages: history(4), hasMore: true, hasNewer: true });
+
+    expect(await chat.jumpTo("00000000-0000-4000-8000-000000000002")).toBe(true);
+    expect(requestedUrl()).toContain(
+      "around=00000000-0000-4000-8000-000000000002",
+    );
+    expect(chat.getMessages().map((m) => m.body)).toEqual([
+      "m0",
+      "m1",
+      "m2",
+      "m3",
+    ]);
+    expect(chat.hasNewerHistory()).toBe(true);
+  });
+
+  it("scrolls to a loaded message without asking the server", async () => {
+    const { chat } = setup();
+    const loaded = history(3);
+    chat.setMessages(loaded, true);
+
+    expect(await chat.jumpTo(loaded[1]!.id)).toBe(true);
+    expect(api.apiFetch).not.toHaveBeenCalled();
+  });
+
+  it("reports a message it cannot reach instead of emptying the channel", async () => {
+    const { chat } = setup();
+    chat.setMessages(history(2), true);
+
+    const deleted = Object.assign(new Error("Unknown cursor"), { status: 400 });
+    vi.mocked(api.apiFetch).mockRejectedValueOnce(deleted);
+
+    expect(await chat.jumpTo("00000000-0000-4000-8000-00000000ffff")).toBe(
+      false,
+    );
+    expect(chat.getMessages()).toHaveLength(2);
+  });
+
+  it("pages forward from the newest loaded message and stops at the present", async () => {
+    const { chat } = setup();
+    chat.setMessages(history(2), true, true);
+
+    mockPage({ messages: history(2, 2), hasMore: true, hasNewer: false });
+    const added = await chat.loadNewer();
+
+    expect(added).toBe(2);
+    expect(requestedUrl()).toContain(
+      "after=00000000-0000-4000-8000-000000000001",
+    );
+    expect(chat.getMessages().map((m) => m.body)).toEqual([
+      "m0",
+      "m1",
+      "m2",
+      "m3",
+    ]);
+    expect(chat.hasNewerHistory()).toBe(false);
+
+    expect(await chat.loadNewer()).toBe(0);
+    expect(api.apiFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores a live message while the window stops short of the present", () => {
+    const { chat } = setup();
+    chat.setMessages(history(2), true, true);
+
+    chat.handleServerMessage({
+      type: "message-broadcast",
+      message: serverMessage({ id: "00000000-0000-4000-8000-0000000000ff" }),
+    } as never);
+
+    expect(chat.getMessages()).toHaveLength(2);
+  });
+
+  it("keeps a page it already holds out of the next one", async () => {
+    const { chat } = setup();
+    chat.setMessages(history(3), true, true);
+
+    // The server pages from the cursor, but an overlapping page must not double
+    // rows the window is already showing.
+    mockPage({ messages: history(3, 2), hasNewer: false });
+    const added = await chat.loadNewer();
+
+    expect(added).toBe(2);
+    expect(chat.getMessages().map((m) => m.body)).toEqual([
+      "m0",
+      "m1",
+      "m2",
+      "m3",
+      "m4",
+    ]);
+  });
+
+  it("returns to the newest page when the reader jumps to the present", async () => {
+    const { chat } = setup();
+    chat.setMessages(history(2), true, true);
+
+    mockPage({ messages: history(2, 8), hasMore: true, hasNewer: false });
+    expect(await chat.resetToTail()).toBe(true);
+
+    expect(requestedUrl()).not.toContain("around=");
+    expect(requestedUrl()).not.toContain("after=");
+    expect(chat.getMessages().map((m) => m.body)).toEqual(["m8", "m9"]);
+    expect(chat.hasNewerHistory()).toBe(false);
+  });
+
+  it("moves the forward cursor off a message that was deleted", async () => {
+    const { chat } = setup();
+    const loaded = history(2);
+    chat.setMessages(loaded, true, true);
+
+    chat.handleServerMessage({
+      type: "message-delete",
+      channelId: CHANNEL,
+      messageId: loaded[1]!.id,
+    } as never);
+
+    mockPage({ messages: history(1, 2), hasNewer: false });
+    await chat.loadNewer();
+
+    expect(requestedUrl()).toContain(`after=${loaded[0]!.id}`);
   });
 });
 

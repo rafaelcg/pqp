@@ -56,4 +56,42 @@ contextBridge.exposeInMainWorld("pqpDesktop", {
     }
     ipcRenderer.send("pqp:set-theme", theme);
   },
+
+  /** Dock / taskbar mention count. Zero clears it. */
+  setBadgeCount(count) {
+    if (!Number.isFinite(count)) {
+      return;
+    }
+    ipcRenderer.send("pqp:set-badge", Math.max(0, Math.floor(count)));
+  },
+
+  /**
+   * Notify from the main process rather than the renderer: only it can raise
+   * the window from behind another application when the user clicks.
+   */
+  notify(payload) {
+    if (!payload || typeof payload.title !== "string") {
+      return;
+    }
+    ipcRenderer.send("pqp:notify", {
+      title: payload.title,
+      body: typeof payload.body === "string" ? payload.body : "",
+      tag: typeof payload.tag === "string" ? payload.tag : "",
+      path: typeof payload.path === "string" ? payload.path : "/app",
+    });
+  },
+
+  /** Subscribe to notification clicks; the payload is an in-app `/app` path. */
+  onNotificationClick(callback) {
+    if (typeof callback !== "function") {
+      return () => {};
+    }
+    const handler = (_event, appPath) => {
+      callback(appPath);
+    };
+    ipcRenderer.on("pqp:notification-click", handler);
+    return () => {
+      ipcRenderer.removeListener("pqp:notification-click", handler);
+    };
+  },
 });

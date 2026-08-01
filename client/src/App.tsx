@@ -56,6 +56,11 @@ import { channelRoutePath, parseAppRoute } from "@/lib/app-route";
 import type { MentionCandidate } from "@/lib/mention-autocomplete";
 import { DEV_AUTH_TOKEN, getAuthToken, isDevAuthBypassEnabled } from "@/lib/dev-auth";
 import { getDesktop } from "@/lib/desktop";
+import {
+  describeActivity,
+  notifyChannelActivity,
+  rememberServers,
+} from "@/lib/notifications";
 import { createRealtimeTransport, type RealtimeStatus } from "@/lib/realtime";
 import { adoptThemePreference } from "@/lib/theme";
 import { isMeshForced } from "@/lib/voice-backend";
@@ -234,6 +239,14 @@ function MainAppContent({
   // Stable: the message list schedules the jump in a frame, and a fresh
   // identity every render would cancel and re-schedule it forever.
   const clearHighlight = useCallback(() => setHighlightMessageId(null), []);
+  // Stable identities: the message list drives a permalink jump from an effect,
+  // and a fresh callback every render would re-fire it.
+  const jumpToMessage = useCallback(
+    (messageId: string) => chat.jumpTo(messageId),
+    [chat],
+  );
+  const jumpToPresent = useCallback(() => chat.resetToTail(), [chat]);
+  const loadNewerHistory = useCallback(() => chat.loadNewer(), [chat]);
 
   // Every request pulls a fresh token from Clerk. Holding one in state meant
   // that after the ~1 minute token lifetime every action failed with 401.
@@ -252,6 +265,12 @@ function MainAppContent({
       chat.dispose();
     };
   }, [chat, voice, refresh]);
+
+  // A notification frame carries ids only, and it can name any server the user
+  // belongs to rather than just the open one, so the whole list is remembered.
+  useEffect(() => {
+    rememberServers(servers);
+  }, [servers]);
 
   // Electron: Cmd/Ctrl+Shift+M → toggle mute when connected to voice.
   useEffect(() => {
@@ -423,6 +442,14 @@ function MainAppContent({
         let initialChannels: Channel[] = [];
         let initialChannelId: string | null = null;
         const first = serverList[0];
+        // A URL that already names a channel owns the first navigation. Without
+        // this the bootstrap opens the first text channel anyway and `syncRoute`
+        // rewrites the address bar, so a shared `/message/<id>` link is thrown
+        // away before the deep-link effect below ever reads it — permalinks
+        // worked only in a tab that was already running.
+        const deepLink = parseAppRoute(window.location.pathname);
+        const deepLinksChannel =
+          deepLink?.kind === "channel" && deepLink.channelId !== null;
 
         if (first) {
           setSelectedServerId(first.id);
@@ -434,8 +461,9 @@ function MainAppContent({
             }
             initialChannels = channelList;
             setChannels(channelList);
-            initialChannelId =
-              channelList.find((c) => c.type === "text")?.id ?? null;
+            initialChannelId = deepLinksChannel
+              ? null
+              : (channelList.find((c) => c.type === "text")?.id ?? null);
             void loadUnread(first.id);
           } finally {
             if (!cancelled) {
@@ -456,6 +484,21 @@ function MainAppContent({
               channelId: string;
               mention: boolean;
             };
+            // Fired from the live frame rather than from a diff of `unread`,
+            // because that map also fills in bulk from `loadUnread` when a
+            // server is first opened — announcing that would buzz once per
+            // channel with a backlog. Runs before the early return below so a
+            // hidden tab still hears about the channel it left open.
+            notifyChannelActivity(
+              describeActivity(activity.channelId, {
+                count: 1,
+                mentions: activity.mention ? 1 : 0,
+              }),
+              {
+                selectedChannelId: selectedChannelIdRef.current,
+                documentVisible: document.visibilityState === "visible",
+              },
+            );
             if (activity.channelId === selectedChannelIdRef.current) {
               return;
             }
@@ -854,8 +897,8 @@ function MainAppContent({
           requested ?? list.find((c) => c.type === "text") ?? list[0];
         if (target) {
           await selectChannel(target.id, list, serverId);
-          // Only after the page is in hand: the list flashes the row if it is
-          // there and says so plainly if it is not.
+          // Only after the newest page is in hand: the list flashes the row if
+          // it is there and pulls history around it if it is not.
           if (messageId && target.id === channelId) {
             setHighlightMessageId(messageId);
           }
@@ -1002,7 +1045,9 @@ function MainAppContent({
         channelId={selectedChannel.id}
         isLoading={messagesLoading}
         hasMore={chat.hasMoreHistory()}
+        hasNewer={chat.hasNewerHistory()}
         isLoadingOlder={chat.isLoadingOlder()}
+        isLoadingNewer={chat.isLoadingNewer()}
         typingUsers={chat.getTypingUsers()}
         canModerate={!!canManage}
         highlightMessageId={highlightMessageId}
@@ -1012,6 +1057,9 @@ function MainAppContent({
           chat.toggleReaction(messageId, emoji)
         }
         onLoadOlder={() => chat.loadOlder()}
+        onLoadNewer={loadNewerHistory}
+        onJumpToMessage={jumpToMessage}
+        onJumpToPresent={jumpToPresent}
         onEditMessage={(messageId, body) => chat.editMessage(messageId, body)}
         onDeleteMessage={(messageId) => chat.deleteMessage(messageId)}
         onRetryMessage={(nonce) => chat.retryMessage(nonce)}
