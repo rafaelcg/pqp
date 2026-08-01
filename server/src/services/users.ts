@@ -2,6 +2,7 @@ import { formatUserTag } from "@pqp/shared";
 import type { DbUser } from "../db.js";
 import { getPool } from "../db.js";
 import type { AuthUser } from "../auth/clerk.js";
+import { getPreferences } from "./preferences.js";
 
 function slugifyUsername(input: string): string {
   const slug = input
@@ -26,7 +27,13 @@ async function allocateDiscriminator(username: string): Promise<string> {
   throw new Error("Could not allocate username discriminator");
 }
 
-export function toPublicUser(user: DbUser) {
+/**
+ * The `/api/me` shape. Async only because it carries the user's preferences:
+ * folding that read in here means the client learns its theme and voice
+ * defaults from the bootstrap request it already makes, instead of a second
+ * round-trip it would have to wait on before first paint.
+ */
+export async function toPublicUser(user: DbUser) {
   return {
     id: user.id,
     clerkId: user.clerk_id,
@@ -35,6 +42,7 @@ export function toPublicUser(user: DbUser) {
     discriminator: user.discriminator,
     tag: formatUserTag(user.username, user.discriminator),
     avatarUrl: user.avatar_url,
+    preferences: await getPreferences(user.id),
   };
 }
 

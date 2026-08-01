@@ -7,9 +7,13 @@
  * would be both slower and one more thing that can throw before first paint.
  */
 
+import type { ThemePreference } from "@pqp/shared";
 import { getDesktop } from "@/lib/desktop";
+import { queuePreferenceSync } from "@/lib/preferences";
 
-export type ThemePreference = "light" | "dark" | "system";
+// Re-exported from the shared package so the union the boot script, the radio
+// group and the server's validator all key off cannot drift apart.
+export type { ThemePreference };
 export type ResolvedTheme = "light" | "dark";
 
 export const THEME_STORAGE_KEY = "pqp-theme";
@@ -117,7 +121,23 @@ function commit(preference: ThemePreference): void {
   }
 }
 
+/** A choice the user just made here: apply it, keep it, and send it on. */
 export function setThemePreference(preference: ThemePreference): void {
+  storeTheme(preference);
+  commit(preference);
+  queuePreferenceSync({ theme: preference }, { immediate: true });
+}
+
+/**
+ * Take the theme the account already carries, as returned by `/api/me`.
+ *
+ * Deliberately does not sync back. The value came from the server, so writing
+ * it again would at best be a no-op and at worst let a tab that has been open
+ * since yesterday overwrite the choice the user made on another device since.
+ * It is still persisted locally, so the boot script paints this theme rather
+ * than the old one on the next load.
+ */
+export function adoptThemePreference(preference: ThemePreference): void {
   storeTheme(preference);
   commit(preference);
 }

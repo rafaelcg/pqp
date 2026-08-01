@@ -12,6 +12,39 @@ export const usernameSchema = z
   .max(32)
   .regex(/^[a-z0-9_]+$/, "Username must be lowercase letters, numbers, or _");
 
+export const themePreferenceSchema = z.enum(["light", "dark", "system"]);
+export type ThemePreference = z.infer<typeof themePreferenceSchema>;
+
+/**
+ * Settings that belong to the person rather than to the machine they are on,
+ * stored as one JSONB blob so adding a preference stays a schema change here
+ * instead of a database migration.
+ *
+ * Every field is optional because a write is a patch: the client sends what the
+ * user just changed, and the server merges it over what is already stored.
+ *
+ * Audio device ids are deliberately absent and must stay device-local. A
+ * `deviceId` identifies hardware within one browser profile on one machine, so
+ * the value means nothing on the next device — and
+ * `getUserMedia({ audio: { deviceId: { exact } } })` rejects with
+ * OverconstrainedError rather than falling back when it does not resolve, which
+ * would turn "signed in on my laptop" into "microphone broken on my phone".
+ *
+ * Unknown keys are stripped rather than rejected (zod's default): the SPA and
+ * the API deploy separately, so a client that already knows about a preference
+ * this server does not must still get the rest of its patch saved.
+ */
+export const userPreferencesSchema = z.object({
+  theme: themePreferenceSchema.optional(),
+  muteOnJoin: z.boolean().optional(),
+  compactPeers: z.boolean().optional(),
+  /** Mic gain, where 1 is unity and 2 is the boost ceiling the UI exposes. */
+  inputVolume: z.number().min(0).max(2).optional(),
+  outputVolume: z.number().min(0).max(1).optional(),
+});
+
+export type UserPreferences = z.infer<typeof userPreferencesSchema>;
+
 export const userSchema = z.object({
   id: z.string().uuid(),
   clerkId: z.string(),
@@ -20,6 +53,11 @@ export const userSchema = z.object({
   discriminator: z.string().nullable(),
   tag: z.string().nullable(),
   avatarUrl: z.string().nullable(),
+  /**
+   * Optional so a client built against this schema still parses a response
+   * from an API that predates the preference store.
+   */
+  preferences: userPreferencesSchema.optional(),
 });
 
 export const serverSchema = z.object({

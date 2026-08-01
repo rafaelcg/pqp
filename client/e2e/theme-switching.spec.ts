@@ -1,5 +1,12 @@
 import { expect, test } from "@playwright/test";
-import { computed, contrast, cssVar, ensureServer, openApp } from "./fixtures";
+import {
+  computed,
+  contrast,
+  cssVar,
+  ensureServer,
+  openApp,
+  resetPreferences,
+} from "./fixtures";
 
 /**
  * Stage 2: light, dark and system. The assertions that matter are the ones a
@@ -81,6 +88,7 @@ test.describe("stage 2 — light and system", () => {
 
   test("a stored theme is applied before first paint", async ({ page }) => {
     await ensureServer();
+    await resetPreferences();
     await page.addInitScript(() => {
       window.localStorage.setItem("pqp-theme", "light");
     });
@@ -112,21 +120,27 @@ test.describe("stage 2 — light and system", () => {
     const context = await browser.newContext({ colorScheme: "light" });
     const page = await context.newPage();
     await ensureServer();
+    await resetPreferences();
     await page.goto("/app");
     await expect(page.getByText("Dev auth bypass")).toBeVisible({ timeout: 20_000 });
     expect(await themeAttr(page)).toBe("light");
     await context.close();
   });
 
-  test("an explicit choice beats the system preference", async ({ browser }) => {
+  test("a locally stored choice paints first, before the account is known", async ({
+    browser,
+  }) => {
     const context = await browser.newContext({ colorScheme: "light" });
     const page = await context.newPage();
     await ensureServer();
+    await resetPreferences();
     await page.addInitScript(() => {
       window.localStorage.setItem("pqp-theme", "dark");
     });
-    await page.goto("/app");
-    await expect(page.getByText("Dev auth bypass")).toBeVisible({ timeout: 20_000 });
+    // Before /api/me resolves, the local copy is the only thing that exists —
+    // this is what keeps the boot flash-free.
+    await page.goto("/app", { waitUntil: "commit" });
+    await page.waitForFunction(() => document.readyState !== "loading");
     expect(await themeAttr(page)).toBe("dark");
     await context.close();
   });
@@ -139,6 +153,7 @@ test.describe("stage 2 — light and system", () => {
     await page.addInitScript(() => {
       window.localStorage.setItem("pqp-theme", "light");
     });
+    await resetPreferences();
     // It is a composition over a hero photograph, not app chrome.
     await page.goto("/");
     await expect(page.getByRole("link", { name: /open the app/i }).first()).toBeVisible();

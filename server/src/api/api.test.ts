@@ -88,9 +88,10 @@ describeDb("API authorization", () => {
     resetApiRateLimits();
     // servers/messages cascade; users are the only root we must clear.
     await getPool().query(
-      `TRUNCATE users, servers, channels, messages, server_members,
-                channel_members, server_invites, server_bans, channel_reads,
-                message_mentions, message_reactions RESTART IDENTITY CASCADE`,
+      `TRUNCATE users, user_preferences, servers, channels, messages,
+                server_members, channel_members, server_invites, server_bans,
+                channel_reads, message_mentions, message_reactions
+       RESTART IDENTITY CASCADE`,
     );
 
     owner = await upsertUser({
@@ -620,6 +621,101 @@ describeDb("API authorization", () => {
       expect(
         (await call(owner, "DELETE", `/api/servers/${serverId}`)).status,
       ).toBe(403);
+    });
+  });
+
+  describe("preferences", () => {
+    // Deliberately not typed from the shared schema: these assertions are about
+    // what actually reaches and leaves the database, so a mistake in the schema
+    // should fail them rather than be assumed away.
+    interface PrefsBody {
+      preferences: Record<string, unknown>;
+    }
+
+    it("round-trips a patch and carries it on /api/me", async () => {
+      const saved = await call<PrefsBody>(owner, "PATCH", "/api/me/preferences", {
+        theme: "light",
+        muteOnJoin: true,
+        inputVolume: 1.5,
+      });
+      expect(saved.status).toBe(200);
+      expect(saved.body.preferences).toEqual({
+        theme: "light",
+        muteOnJoin: true,
+        inputVolume: 1.5,
+      });
+
+      // The bootstrap request already carries them, so the client needs no
+      // second round-trip before it can paint.
+      const me = await call<PrefsBody>(owner, "GET", "/api/me");
+      expect(me.body.preferences).toEqual({
+        theme: "light",
+        muteOnJoin: true,
+        inputVolume: 1.5,
+      });
+    });
+
+    it("merges shallowly instead of replacing the stored object", async () => {
+      const fresh = await call<PrefsBody>(owner, "GET", "/api/me");
+      expect(fresh.body.preferences).toEqual({});
+
+      await call(owner, "PATCH", "/api/me/preferences", {
+        theme: "dark",
+        compactPeers: true,
+        outputVolume: 0.4,
+      });
+
+      // A client that only knows about `theme` must not drop the rest.
+      const merged = await call<PrefsBody>(owner, "PATCH", "/api/me/preferences", {
+        theme: "light",
+      });
+      expect(merged.body.preferences).toEqual({
+        theme: "light",
+        compactPeers: true,
+        outputVolume: 0.4,
+      });
+    });
+
+    it("keeps one account's preferences out of another's", async () => {
+      await call(owner, "PATCH", "/api/me/preferences", { theme: "light" });
+      const other = await call<PrefsBody>(member, "GET", "/api/me");
+      expect(other.body.preferences).toEqual({});
+    });
+
+    it("rejects values outside the allowed set with 400 and stores nothing", async () => {
+      const invalid = [
+        { theme: "neon" },
+        { inputVolume: 4 },
+        { outputVolume: -1 },
+        { muteOnJoin: "yes" },
+      ];
+      for (const body of invalid) {
+        const res = await call(owner, "PATCH", "/api/me/preferences", body);
+        expect(res.status).toBe(400);
+      }
+
+      const me = await call<PrefsBody>(owner, "GET", "/api/me");
+      expect(me.body.preferences).toEqual({});
+    });
+
+    it("drops audio device ids, which name nothing on another machine", async () => {
+      const saved = await call<PrefsBody>(owner, "PATCH", "/api/me/preferences", {
+        muteOnJoin: true,
+        inputDeviceId: "3f9c…-mic",
+        outputDeviceId: "a71b…-speakers",
+      });
+      expect(saved.status).toBe(200);
+      expect(saved.body.preferences).toEqual({ muteOnJoin: true });
+
+      const me = await call<PrefsBody>(owner, "GET", "/api/me");
+      expect(me.body.preferences).toEqual({ muteOnJoin: true });
+    });
+
+    it("rejects unauthenticated writes", async () => {
+      const res = await call(null, "PATCH", "/api/me/preferences", {
+        theme: "dark",
+      });
+      expect(res.status).toBe(401);
     });
   });
 

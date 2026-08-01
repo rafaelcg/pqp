@@ -32,8 +32,25 @@ export async function ensureServer(): Promise<void> {
  * The app boots straight into `/app` with the dev auth bypass, but it still has
  * to reach the server, so wait for real chrome rather than a fixed delay.
  */
+/**
+ * Theme is server state now, and the suite shares one dev-bypass account against
+ * a persistent database. Without this, a test that stores a theme would decide
+ * the outcome of every later test.
+ */
+export async function resetPreferences(): Promise<void> {
+  await fetch(`${API}/api/me/preferences`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${DEV_TOKEN}`,
+    },
+    body: JSON.stringify({ theme: "system" }),
+  });
+}
+
 export async function openApp(page: Page): Promise<void> {
   await ensureServer();
+  await resetPreferences();
   await page.goto("/app");
   await expect(page.getByText("Dev auth bypass")).toBeVisible({ timeout: 20_000 });
   // The composer only exists once a text channel is selected.

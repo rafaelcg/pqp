@@ -5,6 +5,7 @@ import type {
   Message,
   Server,
   User,
+  UserPreferences,
   VoiceBackendType,
   VoiceSessionInfo,
 } from "@pqp/shared";
@@ -159,6 +160,10 @@ export const updateMe = (body: {
   username?: string;
   avatarUrl?: string | null;
 }) => patch<User>("/api/me", body);
+
+/** Patch of changed keys in, whole merged object out. */
+export const updatePreferences = (body: UserPreferences) =>
+  patch<{ preferences: UserPreferences }>("/api/me/preferences", body);
 
 // -------------------------------------------------------------------- voice
 

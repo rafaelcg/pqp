@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
-import type { User } from "@pqp/shared";
+import type { User, UserPreferences } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -12,6 +12,7 @@ import {
 } from "@/lib/audio-devices";
 import type { ThemePreference } from "@/lib/theme";
 import { updateMe } from "@/lib/api";
+import { queuePreferenceSync } from "@/lib/preferences";
 
 export interface LocalSettings {
   muteOnJoin: boolean;
@@ -78,6 +79,57 @@ export function loadLocalSettings(): LocalSettings {
 
 export function saveLocalSettings(settings: LocalSettings) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+}
+
+/**
+ * The half of `LocalSettings` that describes the person rather than the
+ * machine, ready to send to the server.
+ *
+ * Takes a partial so a single control change queues only the key it touched.
+ * The device ids are what the filtering is for: they name hardware in this
+ * browser profile and nowhere else, so they never leave the device.
+ */
+export function preferencesFromLocal(
+  settings: Partial<LocalSettings>,
+): UserPreferences {
+  const preferences: UserPreferences = {};
+  if (settings.muteOnJoin !== undefined) {
+    preferences.muteOnJoin = settings.muteOnJoin;
+  }
+  if (settings.compactPeers !== undefined) {
+    preferences.compactPeers = settings.compactPeers;
+  }
+  if (settings.inputVolume !== undefined) {
+    preferences.inputVolume = settings.inputVolume;
+  }
+  if (settings.outputVolume !== undefined) {
+    preferences.outputVolume = settings.outputVolume;
+  }
+  return preferences;
+}
+
+/**
+ * Overlay the account's settings onto this device's. The server wins on read —
+ * it is the only copy that saw the change made on another device — while the
+ * device keeps the parts the account does not carry.
+ *
+ * `theme` is absent on purpose: it lives in its own store under its own key,
+ * because the boot script has to resolve it before this module exists.
+ */
+export function applyRemotePreferences(
+  local: LocalSettings,
+  preferences: UserPreferences | undefined,
+): LocalSettings {
+  if (!preferences) {
+    return local;
+  }
+  return {
+    ...local,
+    muteOnJoin: preferences.muteOnJoin ?? local.muteOnJoin,
+    compactPeers: preferences.compactPeers ?? local.compactPeers,
+    inputVolume: preferences.inputVolume ?? local.inputVolume,
+    outputVolume: preferences.outputVolume ?? local.outputVolume,
+  };
 }
 
 interface SettingsModalProps {
@@ -278,7 +330,7 @@ function ThemePicker() {
       <p className="mt-1.5 text-xs text-text-muted">
         {preference === "system"
           ? `Following your system — currently ${resolved}.`
-          : "Applies immediately, on this device."}
+          : "Applies immediately, and follows your account to other devices."}
       </p>
     </div>
   );
@@ -376,6 +428,10 @@ export function SettingsModal({
       onAudioSettingsLive?.(next);
       return next;
     });
+    // These already apply and persist locally as they are edited rather than on
+    // Save, so the account copy follows the same moment. Device-only changes
+    // queue nothing, and a slider drag coalesces into one request.
+    queuePreferenceSync(preferencesFromLocal(partial));
   }
 
   async function handleSave() {
