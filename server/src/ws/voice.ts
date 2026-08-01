@@ -12,6 +12,10 @@ import { logEvent } from "../lib/log.js";
 import { createRateLimiter } from "../lib/rate-limit.js";
 import { getChannel, getChannelAudience } from "../services/servers.js";
 import { isChannelMember } from "../services/users.js";
+import {
+  getServerVoiceBackend,
+  isLiveKitConfigured,
+} from "../voice/backends.js";
 import { forEachAuthenticatedSocket } from "./sockets.js";
 
 interface VoicePeer {
@@ -270,8 +274,13 @@ export async function handleVoiceMessage(
     }
 
     // Enforce the mesh ceiling server-side. Above it, each client would carry
-    // one Opus uplink per peer and quality collapses — reject instead.
+    // one Opus uplink per peer and quality collapses — reject instead. The
+    // ceiling is a property of the mesh, so it does not apply once media is
+    // routed through an SFU.
+    const usingMesh =
+      getServerVoiceBackend() !== "livekit" || !isLiveKitConfigured();
     const roomIsFull =
+      usingMesh &&
       getRoomPeers(payload.voiceChannelId).filter((p) => p.socket !== socket)
         .length >= MESH_VOICE_LIMIT;
     if (roomIsFull) {

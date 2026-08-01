@@ -233,7 +233,16 @@ export function createRealtimeTransport(): RealtimeTransport {
     }
 
     isReady = false;
-    const ws = new WebSocket(getWsUrl());
+    let ws: WebSocket;
+    try {
+      ws = new WebSocket(getWsUrl());
+    } catch {
+      // A malformed VITE_WS_URL throws here rather than firing an error event,
+      // which would otherwise leave the transport silently idle forever.
+      errorHandler?.("Realtime connection failed — check the WebSocket URL");
+      scheduleReconnect();
+      return;
+    }
     socket = ws;
 
     ws.addEventListener("open", () => {

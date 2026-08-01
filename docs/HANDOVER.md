@@ -164,7 +164,7 @@ Full list in [`PLAN_STATUS.md`](./PLAN_STATUS.md). The parts most likely to surp
 - **Routes live in a table.** `server/src/api/index.ts` registers against
   `server/src/lib/router.ts`. Params named `*Id` must be UUIDs or the request 404s before
   reaching Postgres.
-- **New env vars:** `ALLOWED_ORIGINS`, `TRUST_PROXY`, `PG_POOL_MAX`. Set `ALLOWED_ORIGINS` on
+- **New env vars:** `CORS_ALLOWED_ORIGINS`, `TRUST_PROXY`, `PG_POOL_MAX`. Set `CORS_ALLOWED_ORIGINS` on
   Railway; without it CORS stays permissive.
 - **Rate limiting and chat presence are in-process**, so the API is single-instance for now.
 - **Schema additions** apply on boot via `initDb()`: `messages.edited_at`, `message_mentions`,
@@ -184,7 +184,7 @@ Full list in [`PLAN_STATUS.md`](./PLAN_STATUS.md). The parts most likely to surp
 1. **Exercise voice with a real mic** — mesh join, deafen, per-peer volume, and the persistent
    voice bar all changed and none were run against real hardware.
 2. **Verify LiveKit end-to-end** — `docker compose --profile livekit up -d`, set `LIVEKIT_*`, join from two clients. Token minting is verified; the browser join/publish path is not.
-3. **Set `ALLOWED_ORIGINS` on Railway** to the Pages origin (and pqp.gg when it exists).
+3. **Set `CORS_ALLOWED_ORIGINS` on Railway** to the Pages origin (and pqp.gg when it exists).
 4. **pqp.gg is unregistered** — canonical/OG tags in `client/index.html` and `SITE_URL` in `seo.tsx` point at a domain nobody owns, so shared links render a broken preview. Buy the domain or repoint the metadata.
 5. **Electron app icon** — no `electron/build` icons; packaged apps use the default Electron icon.
 6. Move rate limiting + presence to Redis before running more than one API instance.

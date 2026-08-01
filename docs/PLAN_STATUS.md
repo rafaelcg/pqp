@@ -20,7 +20,7 @@
 |---|---|
 | Voice signalling | Relay is scoped to the sender's own voice room; rosters go only to members who can see the channel |
 | Auth | `DEV_AUTH_BYPASS` refuses to run under `NODE_ENV=production`; Clerk profile + DB user cached per request instead of a network call and an UPDATE every time |
-| Abuse | Per-identity rate limits (HTTP + WS), body size cap, `ALLOWED_ORIGINS` CORS allowlist, security headers, UUID validation on path params, clamped `?limit` |
+| Abuse | Per-identity rate limits (HTTP + WS), body size cap, `CORS_ALLOWED_ORIGINS` CORS allowlist, security headers, UUID validation on path params, clamped `?limit` |
 | Crash paths | pg pool `error` listener, WS handler rejections caught, `unhandledRejection` backstop, graceful shutdown |
 | Realtime | Client reconnects with jittered backoff, app-level ping/pong, resubscribes and re-syncs history; fresh Clerk token per request (fixed 401s after ~1 min) |
 | Chat | Optimistic send with retry, message edit/delete, keyset pagination + infinite scroll, typing indicators, unread + mention badges, mentions, multi-line composer, grouping and date separators |

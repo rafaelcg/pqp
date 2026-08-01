@@ -444,7 +444,13 @@ function MainAppContent({
           }
         });
 
-        transport.onError((message) => setAppError(message));
+        // Connectivity already has a dedicated strip driven by status; routing
+        // it here too would paint the same sentence twice.
+        transport.onError((message) => {
+          if (transport.getStatus() === "online") {
+            setAppError(message);
+          }
+        });
 
         transport.onClose(() => {
           // The server dropped our voice peer with the socket. Keep the mic and
