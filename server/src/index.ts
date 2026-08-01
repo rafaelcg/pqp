@@ -1,19 +1,53 @@
 import "./env.js";
 import { createServer } from "node:http";
-import { readFileSync, existsSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { readFile, stat } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { dirname, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 import { handleApi } from "./api/index.js";
-import { getPool, initDb } from "./db.js";
-import { sendError } from "./lib/http.js";
+import { assertAuthConfig, isDevAuthBypassEnabled } from "./auth/clerk.js";
+import { closePool, getPool, initDb } from "./db.js";
+import { SECURITY_HEADERS, sendError } from "./lib/http.js";
 import { logEvent } from "./lib/log.js";
-import { sweepRateLimits } from "./lib/rate-limit.js";
+import { clientAddress, sweepRateLimits } from "./lib/rate-limit.js";
 import { getSocketUser, handleWsConnection } from "./ws/index.js";
 
 const PORT = Number(process.env.PORT ?? 3001);
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const CLIENT_DIST = join(__dirname, "../../client/dist");
+const CLIENT_DIST = resolve(join(__dirname, "../../client/dist"));
+
+/** WebRTC SDP offers are a few KB; anything larger is not a real client. */
+const MAX_WS_PAYLOAD_BYTES = 128 * 1024;
+
+const CONTENT_TYPES: Record<string, string> = {
+  html: "text/html; charset=utf-8",
+  js: "application/javascript; charset=utf-8",
+  css: "text/css; charset=utf-8",
+  svg: "image/svg+xml",
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  webp: "image/webp",
+  ico: "image/x-icon",
+  woff: "font/woff",
+  woff2: "font/woff2",
+  json: "application/json; charset=utf-8",
+  xml: "application/xml",
+  txt: "text/plain; charset=utf-8",
+  map: "application/json; charset=utf-8",
+};
+
+/** SPA routes that contain a dot (e.g. an invite code) still need index.html. */
+const ASSET_EXTENSION = /\.[a-z0-9]{1,8}$/i;
+
+async function isFile(path: string): Promise<boolean> {
+  try {
+    return (await stat(path)).isFile();
+  } catch {
+    return false;
+  }
+}
 
 async function serveStatic(
   pathname: string,
@@ -23,71 +57,117 @@ async function serveStatic(
     return false;
   }
 
-  let filePath = join(CLIENT_DIST, pathname === "/" ? "index.html" : pathname);
-  if (!existsSync(filePath) && !pathname.includes(".")) {
-    filePath = join(CLIENT_DIST, "index.html");
-  }
-
-  if (!existsSync(filePath)) {
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(pathname);
+  } catch {
     return false;
   }
 
-  const ext = filePath.split(".").pop();
-  const types: Record<string, string> = {
-    html: "text/html",
-    js: "application/javascript",
-    css: "text/css",
-    svg: "image/svg+xml",
-    png: "image/png",
-    jpg: "image/jpeg",
-    jpeg: "image/jpeg",
-    ico: "image/x-icon",
-    xml: "application/xml",
-    txt: "text/plain",
-  };
+  const requested = resolve(join(CLIENT_DIST, normalize(decoded)));
+  // normalize() collapses `..`, but a crafted path can still resolve outside
+  // the root (e.g. `/../secrets`); confirm containment before reading.
+  const withinRoot =
+    requested === CLIENT_DIST || requested.startsWith(CLIENT_DIST + sep);
+  if (!withinRoot) {
+    return false;
+  }
 
-  res.writeHead(200, { "Content-Type": types[ext ?? ""] ?? "application/octet-stream" });
-  res.end(readFileSync(filePath));
+  const indexHtml = join(CLIENT_DIST, "index.html");
+  let filePath = decoded === "/" ? indexHtml : requested;
+
+  if (!(await isFile(filePath))) {
+    // Unknown path with no file extension is an SPA route, not a missing asset.
+    if (ASSET_EXTENSION.test(decoded)) {
+      return false;
+    }
+    filePath = indexHtml;
+    if (!(await isFile(filePath))) {
+      return false;
+    }
+  }
+
+  const ext = filePath.split(".").pop()?.toLowerCase() ?? "";
+  const body = await readFile(filePath);
+
+  // Only Vite's own output under /assets/ is content-hashed. Everything else —
+  // robots.txt, sitemap.xml, images copied from public/ — keeps its name across
+  // deploys and must stay revalidated.
+  const isFingerprinted = decoded.startsWith("/assets/");
+
+  res.writeHead(200, {
+    "Content-Type": CONTENT_TYPES[ext] ?? "application/octet-stream",
+    "Cache-Control": isFingerprinted
+      ? "public, max-age=31536000, immutable"
+      : "public, max-age=300, must-revalidate",
+    ...SECURITY_HEADERS,
+  });
+  res.end(body);
   return true;
 }
 
-const httpServer = createServer(async (req, res) => {
-  const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
-  const pathname = url.pathname;
+const httpServer = createServer((req, res) => {
+  void (async () => {
+    const url = new URL(
+      req.url ?? "/",
+      `http://${req.headers.host ?? "localhost"}`,
+    );
+    const pathname = url.pathname;
 
-  if (pathname === "/health") {
-    // Report unhealthy if the DB is unreachable so the platform can restart /
-    // route away instead of serving a process with a dead pool.
-    try {
-      await getPool().query("SELECT 1");
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ ok: true }));
-    } catch {
-      res.writeHead(503, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ ok: false, error: "database unavailable" }));
+    if (pathname === "/health") {
+      // Report unhealthy if the DB is unreachable so the platform can restart /
+      // route away instead of serving a process with a dead pool.
+      try {
+        await getPool().query("SELECT 1");
+        res.writeHead(200, {
+          "Content-Type": "application/json",
+          "Cache-Control": "no-store",
+        });
+        res.end(JSON.stringify({ ok: true }));
+      } catch {
+        res.writeHead(503, {
+          "Content-Type": "application/json",
+          "Cache-Control": "no-store",
+        });
+        res.end(JSON.stringify({ ok: false, error: "database unavailable" }));
+      }
+      return;
     }
-    return;
-  }
 
-  if (pathname.startsWith("/api/")) {
-    try {
-      await handleApi(req, res, pathname);
-    } catch (error) {
-      console.error(error);
-      sendError(res, 500, "Internal server error");
+    if (pathname.startsWith("/api/")) {
+      try {
+        await handleApi(req, res, pathname);
+      } catch (error) {
+        console.error(error);
+        sendError(res, 500, "Internal server error");
+      }
+      return;
     }
-    return;
-  }
 
-  if (await serveStatic(pathname, res)) {
-    return;
-  }
+    if (await serveStatic(pathname, res)) {
+      return;
+    }
 
-  res.writeHead(200, { "Content-Type": "text/plain" });
-  res.end("pqp server");
+    res.writeHead(200, {
+      "Content-Type": "text/plain; charset=utf-8",
+      ...SECURITY_HEADERS,
+    });
+    res.end("pqp server");
+  })().catch((error) => {
+    console.error("[http] request failed:", error);
+    if (!res.headersSent) {
+      sendError(res, 500, "Internal server error", req);
+    } else {
+      res.end();
+    }
+  });
 });
 
-const wss = new WebSocketServer({ server: httpServer, path: "/ws" });
+const wss = new WebSocketServer({
+  server: httpServer,
+  path: "/ws",
+  maxPayload: MAX_WS_PAYLOAD_BYTES,
+});
 
 // Protocol-level heartbeat: browsers auto-reply pong, so this both reaps dead
 // connections and keeps proxy idle timers (e.g. Railway edge) from closing
@@ -95,12 +175,16 @@ const wss = new WebSocketServer({ server: httpServer, path: "/ws" });
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const socketLiveness = new WeakMap<import("ws").WebSocket, boolean>();
 
-wss.on("connection", (socket) => {
+wss.on("connection", (socket, req) => {
   socketLiveness.set(socket, true);
   socket.on("pong", () => {
     socketLiveness.set(socket, true);
   });
-  handleWsConnection(socket);
+  handleWsConnection(socket, clientAddress(req as never));
+});
+
+wss.on("error", (error) => {
+  console.error("[ws] server error:", error);
 });
 
 const heartbeat = setInterval(() => {
@@ -125,7 +209,16 @@ const rateLimitSweep = setInterval(() => sweepRateLimits(), 60_000);
 rateLimitSweep.unref?.();
 
 async function main() {
+  assertAuthConfig();
+  if (isDevAuthBypassEnabled()) {
+    console.warn(
+      "[auth] DEV_AUTH_BYPASS is ON — anyone with the token 'dev-local-token' " +
+        "can sign in as the shared dev account. Never enable this on a public host.",
+    );
+  }
+
   await initDb();
+
   httpServer.listen(PORT, () => {
     console.log(`pqp server listening on http://localhost:${PORT}`);
     console.log(`WebSocket: ws://localhost:${PORT}/ws`);
@@ -141,6 +234,24 @@ process.on("unhandledRejection", (reason) => {
 process.on("uncaughtException", (error) => {
   console.error("[process] uncaught exception:", error);
 });
+
+async function shutdown(signal: string) {
+  console.log(`[shutdown] ${signal} — draining`);
+  clearInterval(heartbeat);
+  clearInterval(rateLimitSweep);
+  for (const socket of wss.clients) {
+    socket.close(1001, "Server shutting down");
+  }
+  await new Promise<void>((done) => httpServer.close(() => done()));
+  await closePool();
+  process.exit(0);
+}
+
+for (const signal of ["SIGTERM", "SIGINT"] as const) {
+  process.on(signal, () => {
+    void shutdown(signal);
+  });
+}
 
 main().catch((error) => {
   console.error("Failed to start server:", error);

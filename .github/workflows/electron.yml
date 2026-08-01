@@ -49,7 +49,11 @@ jobs:
       - name: Build client
         env:
           VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.VITE_CLERK_PUBLISHABLE_KEY || 'pk_test_ci_placeholder' }}
-          VITE_DEV_AUTH_BYPASS: "true"
+          VITE_API_URL: ${{ secrets.VITE_API_URL }}
+          VITE_WS_URL: ${{ secrets.VITE_WS_URL }}
+          # Desktop artifacts are downloadable builds; they must never ship the
+          # bypass that accepts the public dev token.
+          VITE_DEV_AUTH_BYPASS: "false"
         run: pnpm --filter @pqp/client build
 
       - name: Package Electron (unsigned)

@@ -48,10 +48,10 @@ See `.env.example`. Important names:
 | Area | Names |
 |---|---|
 | Server | `DATABASE_URL`, `CLERK_SECRET_KEY`, `PORT`, `DEV_AUTH_BYPASS` |
-| Client | `VITE_CLERK_PUBLISHABLE_KEY`, `VITE_API_URL`, `VITE_WS_URL`, `VITE_DEV_AUTH_BYPASS`, `VITE_VOICE_BACKEND` |
+| Client | `VITE_CLERK_PUBLISHABLE_KEY`, `VITE_API_URL`, `VITE_WS_URL`, `VITE_DEV_AUTH_BYPASS`, `VITE_VOICE_BACKEND` (leave empty to follow the server; `mesh` forces peer-to-peer) |
 | ICE / TURN (API preferred) | `TURN_URL`, `TURN_USERNAME`, `TURN_CREDENTIAL`, `CLOUDFLARE_TURN_KEY_ID`, `CLOUDFLARE_TURN_API_TOKEN`, `METERED_API_KEY`, `METERED_DOMAIN` |
 | Client TURN fallback (avoid in prod) | `VITE_TURN_URL`, `VITE_TURN_USERNAME`, `VITE_TURN_CREDENTIAL` |
-| SFU stubs (Phase 5) | `CLOUDFLARE_REALTIME_*`, `LIVEKIT_*` |
+| SFU | `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` (implemented); `CLOUDFLARE_REALTIME_*` (stub) |
 | Electron | `VITE_APP_URL` |
 
 **Rule:** never commit `.env` / secrets. Prefer serving ICE via `GET /api/ice-servers` (Railway) over baking TURN into the Pages build.
@@ -65,7 +65,7 @@ Browser/Electron → Clerk (auth)
                  → P2P mesh (audio); TURN when cross-NAT
 ```
 
-- **Mesh limit:** ~5–8 peers per voice channel; SFU deferred (`cloudflare-sfu` / `livekit` stubs fall back to mesh).
+- **Mesh limit:** ~5–8 peers per voice channel. **LiveKit SFU is implemented** — set `LIVEKIT_URL` / `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` and the server advertises it via `GET /api/voice/backend` (no client rebuild). Presence stays on `/ws` in both modes; only media moves. `cloudflare-sfu` is still a stub that falls back to mesh. See [`docs/voice-backends.md`](./docs/voice-backends.md).
 - **Data model:** Server → Channels (`text` \| `voice`) → Messages; roles `owner` / `admin` / `member`; usernames `name#1234`.
 
 ## Deploy targets (hosted)

@@ -23,9 +23,29 @@ services:
       DATABASE_URL: postgresql://pqp:pqp@postgres:5432/pqp
       CLERK_SECRET_KEY: ${CLERK_SECRET_KEY}
       PORT: 3001
+      # Set these to route voice through the SFU instead of a full mesh.
+      # With the `livekit` profile below: ws://localhost:7880 (dev key/secret).
+      LIVEKIT_URL: ${LIVEKIT_URL:-}
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-}
     depends_on:
       postgres:
         condition: service_healthy
+
+  # Optional SFU for voice channels above the ~5-8 user mesh limit.
+  #   docker compose --profile livekit up -d
+  # Dev credentials only — generate real ones for any public deployment.
+  livekit:
+    image: livekit/livekit-server:latest
+    profiles: ["livekit"]
+    command: --dev --bind 0.0.0.0
+    ports:
+      - "7880:7880"      # signaling (ws)
+      - "7881:7881"      # WebRTC over TCP
+      - "50000-50060:50000-50060/udp"  # WebRTC media
+    environment:
+      # `--dev` enables the well-known devkey/secret pair.
+      LIVEKIT_KEYS: "devkey: secret"
 
 volumes:
   pqp_pg:

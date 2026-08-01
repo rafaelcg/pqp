@@ -133,6 +133,116 @@ export async function deleteChannel(channelId: string): Promise<boolean> {
   return (result.rowCount ?? 0) > 0;
 }
 
+export async function deleteServer(serverId: string): Promise<boolean> {
+  // channels / members / invites / bans all cascade from servers.
+  const result = await getPool().query(`DELETE FROM servers WHERE id = $1`, [
+    serverId,
+  ]);
+  return (result.rowCount ?? 0) > 0;
+}
+
+export async function renameServer(
+  serverId: string,
+  name: string,
+): Promise<DbServer | null> {
+  const result = await getPool().query<DbServer>(
+    `UPDATE servers SET name = $2 WHERE id = $1
+     RETURNING id, name, owner_id, created_at`,
+    [serverId, name],
+  );
+  return result.rows[0] ?? null;
+}
+
+/**
+ * Hand the server to another member. Both role rows and `servers.owner_id` move
+ * together or not at all — a half-applied transfer would leave a server with two
+ * owners or none.
+ */
+export async function transferOwnership(
+  serverId: string,
+  currentOwnerId: string,
+  nextOwnerId: string,
+): Promise<void> {
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+
+    const target = await client.query(
+      `SELECT 1 FROM server_members WHERE server_id = $1 AND user_id = $2`,
+      [serverId, nextOwnerId],
+    );
+    if (target.rows.length === 0) {
+      throw new Error("New owner must already be a member of this server");
+    }
+
+    await client.query(
+      `UPDATE servers SET owner_id = $2 WHERE id = $1 AND owner_id = $3`,
+      [serverId, nextOwnerId, currentOwnerId],
+    );
+    await client.query(
+      `UPDATE server_members SET role = 'admin'
+       WHERE server_id = $1 AND user_id = $2`,
+      [serverId, currentOwnerId],
+    );
+    await client.query(
+      `UPDATE server_members SET role = 'owner'
+       WHERE server_id = $1 AND user_id = $2`,
+      [serverId, nextOwnerId],
+    );
+
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Every user who is allowed to see a channel, with the owning server id. Used to
+ * decide who gets an unread notification for a new message.
+ */
+export async function getChannelAudience(
+  channelId: string,
+): Promise<{ serverId: string; userIds: string[] } | null> {
+  const result = await getPool().query<{ server_id: string; user_id: string }>(
+    `SELECT c.server_id, sm.user_id
+     FROM channels c
+     JOIN server_members sm ON sm.server_id = c.server_id
+     WHERE c.id = $1
+       AND (
+         c.is_private = FALSE
+         OR sm.role IN ('owner', 'admin')
+         OR EXISTS (
+           SELECT 1 FROM channel_members cm
+           WHERE cm.channel_id = c.id AND cm.user_id = sm.user_id
+         )
+       )`,
+    [channelId],
+  );
+
+  const first = result.rows[0];
+  if (!first) {
+    return null;
+  }
+  return {
+    serverId: first.server_id,
+    userIds: result.rows.map((row) => row.user_id),
+  };
+}
+
+/** Channel ids belonging to a server — used to evict live WS state on removal. */
+export async function listServerChannelIds(
+  serverId: string,
+): Promise<Set<string>> {
+  const result = await getPool().query<{ id: string }>(
+    `SELECT id FROM channels WHERE server_id = $1`,
+    [serverId],
+  );
+  return new Set(result.rows.map((row) => row.id));
+}
+
 export async function getChannel(channelId: string): Promise<DbChannel | null> {
   const result = await getPool().query<DbChannel>(
     `SELECT id, server_id, name, type, position, is_private, topic, image_url FROM channels WHERE id = $1`,

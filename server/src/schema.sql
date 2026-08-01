@@ -75,6 +75,7 @@ CREATE TABLE IF NOT EXISTS server_invites (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Bans outlive membership, so a kicked user cannot walk back in with an invite.
 CREATE TABLE IF NOT EXISTS server_bans (
   server_id UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -84,16 +85,45 @@ CREATE TABLE IF NOT EXISTS server_bans (
   PRIMARY KEY (server_id, user_id)
 );
 
+-- CREATE TABLE IF NOT EXISTS never adds a column to a table that already exists,
+-- so databases created before `reason` need it backfilled explicitly.
+ALTER TABLE server_bans ADD COLUMN IF NOT EXISTS reason TEXT;
+
 CREATE TABLE IF NOT EXISTS messages (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   channel_id UUID NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
   author_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   body TEXT NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  edited_at TIMESTAMPTZ
 );
 
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS edited_at TIMESTAMPTZ;
+
+-- (channel_id, created_at, id) keeps keyset pagination ordering stable when two
+-- messages land in the same millisecond.
 CREATE INDEX IF NOT EXISTS idx_messages_channel_created
-  ON messages (channel_id, created_at DESC);
+  ON messages (channel_id, created_at DESC, id DESC);
+
+-- Who was @-mentioned, resolved at write time so unread badges are a join
+-- rather than a scan of every message body.
+CREATE TABLE IF NOT EXISTS message_mentions (
+  message_id UUID NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  PRIMARY KEY (message_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_message_mentions_user
+  ON message_mentions (user_id);
+
+-- Per-user read cursor. Absent row means "never opened", which reads as
+-- everything unread.
+CREATE TABLE IF NOT EXISTS channel_reads (
+  channel_id UUID NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  last_read_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (channel_id, user_id)
+);
 
 CREATE TABLE IF NOT EXISTS message_reactions (
   message_id UUID NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
@@ -103,17 +133,19 @@ CREATE TABLE IF NOT EXISTS message_reactions (
   UNIQUE (message_id, user_id, emoji)
 );
 
-CREATE INDEX IF NOT EXISTS idx_message_reactions_message
-  ON message_reactions (message_id);
-
 CREATE INDEX IF NOT EXISTS idx_channels_server
   ON channels (server_id, position);
 
 CREATE INDEX IF NOT EXISTS idx_server_members_user
   ON server_members (user_id);
 
-CREATE INDEX IF NOT EXISTS idx_server_invites_code
-  ON server_invites (code);
+-- Look up a user's rows across channels — the reverse of the (channel_id,
+-- user_id) primary key, which cannot serve this direction.
+CREATE INDEX IF NOT EXISTS idx_channel_members_user_channel
+  ON channel_members (user_id, channel_id);
 
-CREATE INDEX IF NOT EXISTS idx_channel_members_user
-  ON channel_members (user_id);
+-- Redundant with existing UNIQUE constraints (server_invites.code is UNIQUE;
+-- message_reactions' UNIQUE leads with message_id), so they only cost writes.
+DROP INDEX IF EXISTS idx_server_invites_code;
+DROP INDEX IF EXISTS idx_message_reactions_message;
+DROP INDEX IF EXISTS idx_channel_members_user;

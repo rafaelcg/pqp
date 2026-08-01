@@ -1,5 +1,6 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useId, useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
+import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 
 interface PromptDialogProps {
@@ -13,7 +14,7 @@ interface PromptDialogProps {
   checkboxLabel?: string;
   checkboxDefault?: boolean;
   onClose: () => void;
-  onConfirm: (value: string, checked: boolean) => void;
+  onConfirm: (value: string, checked: boolean) => void | Promise<void>;
 }
 
 export function PromptDialog({
@@ -31,40 +32,58 @@ export function PromptDialog({
 }: PromptDialogProps) {
   const [value, setValue] = useState(initialValue);
   const [checked, setChecked] = useState(checkboxDefault);
+  const [busy, setBusy] = useState(false);
+  const formId = useId();
 
   useEffect(() => {
     if (open) {
       setValue(initialValue);
       setChecked(checkboxDefault);
+      setBusy(false);
     }
   }, [open, initialValue, checkboxDefault]);
 
-  if (!open) {
-    return null;
-  }
-
-  function handleSubmit(e: FormEvent) {
+  async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     const trimmed = value.trim();
-    if (!trimmed) {
+    // Enter fires as fast as you can press it, and creating a channel is a
+    // round trip — without this guard a double tap creates two channels.
+    if (!trimmed || busy) {
       return;
     }
-    onConfirm(trimmed, checked);
+    setBusy(true);
+    try {
+      await onConfirm(trimmed, checked);
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-end justify-center bg-ink/80 p-0 sm:items-center sm:p-4">
+    <Dialog
+      open={open}
+      eyebrow="Channel"
+      title={title}
+      description={description}
+      size="sm"
+      onClose={onClose}
+      footer={
+        <>
+          <Button type="button" variant="ghost" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button type="submit" form={formId} disabled={!value.trim() || busy}>
+            {busy ? "Working…" : confirmLabel}
+          </Button>
+        </>
+      }
+    >
       <form
-        onSubmit={handleSubmit}
-        className="animate-rise w-full rounded-t-2xl border border-ink-4 bg-ink-2 p-5 shadow-2xl sm:max-w-md sm:rounded-2xl"
+        id={formId}
+        onSubmit={(event) => void handleSubmit(event)}
+        className="space-y-3 px-5 py-4"
       >
-        <p className="text-xs uppercase tracking-[0.18em] text-signal">Channel</p>
-        <h2 className="mb-1 font-display text-2xl font-bold">{title}</h2>
-        {description && (
-          <p className="mb-4 text-sm text-paper-muted">{description}</p>
-        )}
-
-        <label className="mb-3 block">
+        <label className="block">
           <span className="mb-1 block text-xs uppercase tracking-wide text-paper-muted">
             {label}
           </span>
@@ -74,12 +93,13 @@ export function PromptDialog({
               setValue(e.target.value.toLowerCase().replace(/[^a-z0-9-_]/gi, ""))
             }
             placeholder={placeholder}
+            disabled={busy}
             autoFocus
           />
         </label>
 
         {checkboxLabel && (
-          <label className="mb-4 flex cursor-pointer items-center gap-3">
+          <label className="flex cursor-pointer items-center gap-3">
             <input
               type="checkbox"
               checked={checked}
@@ -89,16 +109,7 @@ export function PromptDialog({
             <span className="text-sm">{checkboxLabel}</span>
           </label>
         )}
-
-        <div className="flex justify-end gap-2 safe-pb">
-          <Button type="button" variant="ghost" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button type="submit" disabled={!value.trim()}>
-            {confirmLabel}
-          </Button>
-        </div>
       </form>
-    </div>
+    </Dialog>
   );
 }

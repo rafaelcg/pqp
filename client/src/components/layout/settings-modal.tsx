@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { User } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
+import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import {
   ensureMediaPermission,
@@ -80,7 +81,6 @@ export function saveLocalSettings(settings: LocalSettings) {
 interface SettingsModalProps {
   open: boolean;
   user: User | null;
-  token: string | null;
   localSettings: LocalSettings;
   /** Live analyser from active voice session, if connected */
   voiceAnalyser?: AnalyserNode | null;
@@ -90,6 +90,11 @@ interface SettingsModalProps {
   onAudioSettingsLive?: (settings: LocalSettings) => void;
 }
 
+/**
+ * Volume only scales how the level reads, so it is held in a ref: putting it in
+ * the effect deps would tear down the preview stream and re-prompt
+ * `getUserMedia` on every slider tick.
+ */
 function MicLevelMeter({
   deviceId,
   inputVolume,
@@ -102,11 +107,11 @@ function MicLevelMeter({
   active: boolean;
 }) {
   const [level, setLevel] = useState(0);
-  const previewRef = useRef<{
-    stream: MediaStream;
-    ctx: AudioContext;
-    analyser: AnalyserNode;
-  } | null>(null);
+  const volumeRef = useRef(inputVolume);
+
+  useEffect(() => {
+    volumeRef.current = inputVolume;
+  }, [inputVolume]);
 
   useEffect(() => {
     if (!active) {
@@ -116,32 +121,35 @@ function MicLevelMeter({
 
     let cancelled = false;
     let raf = 0;
+    let preview: { stream: MediaStream; ctx: AudioContext } | null = null;
 
-    async function startPreview() {
+    function meter(analyser: AnalyserNode) {
+      const data = new Uint8Array(analyser.frequencyBinCount);
+      const tick = () => {
+        if (cancelled) {
+          return;
+        }
+        analyser.getByteFrequencyData(data);
+        let sum = 0;
+        for (const v of data) {
+          sum += v;
+        }
+        const avg = sum / data.length / 255;
+        setLevel(Math.min(1, avg * 1.8 * Math.max(0.15, volumeRef.current)));
+        raf = requestAnimationFrame(tick);
+      };
+      tick();
+    }
+
+    async function start() {
       if (liveAnalyser) {
-        const data = new Uint8Array(liveAnalyser.frequencyBinCount);
-        const tick = () => {
-          if (cancelled) {
-            return;
-          }
-          liveAnalyser.getByteFrequencyData(data);
-          let sum = 0;
-          for (const v of data) {
-            sum += v;
-          }
-          const avg = sum / data.length / 255;
-          setLevel(Math.min(1, avg * 1.8 * Math.max(0.15, inputVolume)));
-          raf = requestAnimationFrame(tick);
-        };
-        tick();
+        meter(liveAnalyser);
         return;
       }
 
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
-          audio: deviceId
-            ? { deviceId: { exact: deviceId } }
-            : true,
+          audio: deviceId ? { deviceId: { exact: deviceId } } : true,
           video: false,
         });
         if (cancelled) {
@@ -151,53 +159,43 @@ function MicLevelMeter({
           return;
         }
         const ctx = new AudioContext();
-        const source = ctx.createMediaStreamSource(stream);
         const analyser = ctx.createAnalyser();
         analyser.fftSize = 256;
-        source.connect(analyser);
-        previewRef.current = { stream, ctx, analyser };
-
-        const data = new Uint8Array(analyser.frequencyBinCount);
-        const tick = () => {
-          if (cancelled) {
-            return;
-          }
-          analyser.getByteFrequencyData(data);
-          let sum = 0;
-          for (const v of data) {
-            sum += v;
-          }
-          const avg = sum / data.length / 255;
-          setLevel(Math.min(1, avg * 1.8 * Math.max(0.15, inputVolume)));
-          raf = requestAnimationFrame(tick);
-        };
-        tick();
+        ctx.createMediaStreamSource(stream).connect(analyser);
+        preview = { stream, ctx };
+        meter(analyser);
       } catch {
         setLevel(0);
       }
     }
 
-    void startPreview();
+    void start();
 
     return () => {
       cancelled = true;
       cancelAnimationFrame(raf);
-      if (previewRef.current) {
-        for (const track of previewRef.current.stream.getTracks()) {
+      if (preview) {
+        for (const track of preview.stream.getTracks()) {
           track.stop();
         }
-        void previewRef.current.ctx.close();
-        previewRef.current = null;
+        void preview.ctx.close();
       }
     };
-  }, [active, deviceId, inputVolume, liveAnalyser]);
+  }, [active, deviceId, liveAnalyser]);
 
   return (
     <div className="space-y-1.5">
       <span className="block text-xs uppercase tracking-wide text-paper-muted">
         Input level
       </span>
-      <div className="h-2 overflow-hidden rounded-full bg-ink">
+      <div
+        className="h-2 overflow-hidden rounded-full bg-ink"
+        role="progressbar"
+        aria-label="Input level"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={Math.round(level * 100)}
+      >
         <div
           className="h-full rounded-full bg-signal transition-[width] duration-75"
           style={{ width: `${Math.round(level * 100)}%` }}
@@ -210,7 +208,6 @@ function MicLevelMeter({
 export function SettingsModal({
   open,
   user,
-  token,
   localSettings,
   voiceAnalyser = null,
   onClose,
@@ -228,16 +225,28 @@ export function SettingsModal({
   const [outputs, setOutputs] = useState<MediaDeviceOption[]>([]);
   const [devicesError, setDevicesError] = useState<string | null>(null);
   const canSelectOutput = supportsAudioOutputSelection();
+  const settingsRef = useRef(localSettings);
+
+  useEffect(() => {
+    settingsRef.current = localSettings;
+  }, [localSettings]);
 
   useEffect(() => {
     if (open && user) {
       setDisplayName(user.displayName);
       setUsername(user.username ?? "");
       setAvatarUrl(user.avatarUrl ?? "");
-      setDraftLocal(localSettings);
+    }
+  }, [open, user]);
+
+  // Seeded from a ref so live audio edits, which flow back in as a new
+  // `localSettings` prop, do not restart the draft mid-session.
+  useEffect(() => {
+    if (open) {
+      setDraftLocal(settingsRef.current);
       setError(null);
     }
-  }, [open, user, localSettings]);
+  }, [open]);
 
   useEffect(() => {
     if (!open) {
@@ -290,18 +299,14 @@ export function SettingsModal({
     });
   }
 
-  if (!open) {
-    return null;
-  }
-
   async function handleSave() {
     setSaving(true);
     setError(null);
     try {
       onLocalSave(draftLocal);
       saveLocalSettings(draftLocal);
-      if (token && user) {
-        const updated = await updateMe(token, {
+      if (user) {
+        const updated = await updateMe({
           displayName: displayName.trim() || undefined,
           username: username.trim() || undefined,
           avatarUrl: avatarUrl.trim() || null,
@@ -317,24 +322,24 @@ export function SettingsModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-ink/80 p-0 sm:items-center sm:p-4">
-      <div className="animate-rise max-h-[92vh] w-full overflow-y-auto rounded-t-2xl border border-ink-4 bg-ink-2 p-5 shadow-2xl sm:max-w-md sm:rounded-2xl">
-        <div className="mb-5 flex items-end justify-between gap-3">
-          <div>
-            <p className="text-xs uppercase tracking-[0.18em] text-signal">
-              Account
-            </p>
-            <h2 className="font-display text-2xl font-bold">Settings</h2>
-          </div>
-          <button
-            type="button"
-            className="text-sm text-paper-muted hover:text-paper"
-            onClick={onClose}
-          >
-            Close
-          </button>
-        </div>
-
+    <Dialog
+      open={open}
+      eyebrow="Account"
+      title="Settings"
+      size="sm"
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button onClick={() => void handleSave()} disabled={saving}>
+            {saving ? "Saving…" : "Save"}
+          </Button>
+        </>
+      }
+    >
+      <div className="px-5 py-4">
         {user?.tag && (
           <p className="mb-4 rounded-md border border-ink-4 bg-ink px-3 py-2 font-mono text-sm text-signal">
             {user.tag}
@@ -361,6 +366,7 @@ export function SettingsModal({
               value={avatarUrl}
               onChange={(e) => setAvatarUrl(e.target.value)}
               placeholder="https://… image URL"
+              aria-label="Avatar image URL"
             />
           </div>
           <div className="flex flex-wrap gap-1.5">
@@ -368,7 +374,8 @@ export function SettingsModal({
               <button
                 key={url}
                 type="button"
-                title="Use preset"
+                aria-label="Use preset avatar"
+                aria-pressed={avatarUrl === url}
                 className={`h-9 w-9 overflow-hidden rounded-md border ${
                   avatarUrl === url
                     ? "border-signal ring-1 ring-signal"
@@ -415,7 +422,7 @@ export function SettingsModal({
           </span>
         </label>
 
-        <div className="mb-5 space-y-4 border-t border-ink-4 pt-4">
+        <div className="space-y-4 border-t border-ink-4 pt-4">
           <div>
             <p className="text-xs uppercase tracking-wide text-paper-muted">
               Voice &amp; Video
@@ -427,7 +434,9 @@ export function SettingsModal({
           </div>
 
           {devicesError && (
-            <p className="text-xs text-warning">{devicesError}</p>
+            <p className="text-xs text-warning" role="status">
+              {devicesError}
+            </p>
           )}
 
           <label className="block">
@@ -481,9 +490,7 @@ export function SettingsModal({
               </span>
               <select
                 value={draftLocal.outputDeviceId}
-                onChange={(e) =>
-                  patchLocal({ outputDeviceId: e.target.value })
-                }
+                onChange={(e) => patchLocal({ outputDeviceId: e.target.value })}
                 className="h-10 w-full rounded-md border border-ink-4 bg-ink px-3 text-sm text-paper outline-none focus:border-signal"
               >
                 <option value="">System default</option>
@@ -532,26 +539,19 @@ export function SettingsModal({
             <input
               type="checkbox"
               checked={draftLocal.compactPeers}
-              onChange={(e) =>
-                patchLocal({ compactPeers: e.target.checked })
-              }
+              onChange={(e) => patchLocal({ compactPeers: e.target.checked })}
               className="h-4 w-4 accent-[var(--color-signal)]"
             />
             <span className="text-sm">Compact peer list</span>
           </label>
         </div>
 
-        {error && <p className="mb-3 text-sm text-danger">{error}</p>}
-
-        <div className="flex justify-end gap-2 safe-pb">
-          <Button variant="ghost" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button onClick={() => void handleSave()} disabled={saving}>
-            {saving ? "Saving…" : "Save"}
-          </Button>
-        </div>
+        {error && (
+          <p className="mt-4 text-sm text-danger" role="alert">
+            {error}
+          </p>
+        )}
       </div>
-    </div>
+    </Dialog>
   );
 }

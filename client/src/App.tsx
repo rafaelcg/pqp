@@ -1,11 +1,7 @@
-import {
-  SignInButton,
-  SignUpButton,
-  useAuth,
-} from "@clerk/clerk-react";
-import { Lock, Menu } from "lucide-react";
+import { SignInButton, SignUpButton, useAuth } from "@clerk/clerk-react";
+import { Lock, Menu, WifiOff } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import type { Channel, Server, User } from "@pqp/shared";
 import { MessageComposer } from "@/components/chat/message-composer";
 import { MessageList } from "@/components/chat/message-list";
@@ -19,6 +15,7 @@ import { ChannelMetaDialog } from "@/components/layout/channel-meta-dialog";
 import { InvitePanel } from "@/components/layout/invite-panel";
 import { MembersPanel } from "@/components/layout/members-panel";
 import { ServerRail } from "@/components/layout/server-rail";
+import { ServerSettingsDialog } from "@/components/layout/server-settings-dialog";
 import {
   defaultLocalSettings,
   loadLocalSettings,
@@ -27,7 +24,9 @@ import {
   type LocalSettings,
 } from "@/components/layout/settings-modal";
 import { UserPanel } from "@/components/layout/user-panel";
+import { VoiceAudioSinks } from "@/components/voice/voice-audio-sinks";
 import { VoicePanel } from "@/components/voice/voice-panel";
+import { VoiceStatusBar } from "@/components/voice/voice-status-bar";
 import { PromptDialog } from "@/components/ui/prompt-dialog";
 import { Seo } from "@/components/marketing/seo";
 import { createChatController } from "@/hooks/use-chat";
@@ -35,27 +34,33 @@ import { createVoiceController } from "@/hooks/use-voice";
 import {
   createChannel,
   createServer,
+  createVoiceSession,
   deleteChannel,
-  deleteMessage,
   fetchChannels,
   fetchIceServers,
   fetchMe,
   fetchMessages,
   fetchServers,
+  fetchUnread,
+  fetchVoiceBackend,
   joinInvite,
   leaveServer,
+  markChannelRead,
+  setAuthTokenProvider,
   updateChannel,
   updateMe,
 } from "@/lib/api";
-import {
-  DEV_AUTH_TOKEN,
-  getAuthToken,
-  isDevAuthBypassEnabled,
-} from "@/lib/dev-auth";
+import { channelRoutePath, parseAppRoute } from "@/lib/app-route";
+import { DEV_AUTH_TOKEN, getAuthToken, isDevAuthBypassEnabled } from "@/lib/dev-auth";
 import { getDesktop } from "@/lib/desktop";
-import { createRealtimeTransport } from "@/lib/realtime";
+import { createRealtimeTransport, type RealtimeStatus } from "@/lib/realtime";
+import { isMeshForced } from "@/lib/voice-backend";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+
+export type TokenResolver = (options?: {
+  forceRefresh?: boolean;
+}) => Promise<string | null>;
 
 interface AppProps {
   devBypass?: boolean;
@@ -128,8 +133,11 @@ function ClerkMainApp() {
 
   // Stable callback — Clerk's getToken identity changes often and must not
   // remount the app / tear down the WebSocket (that looked like a full refresh).
-  const resolveToken = useCallback(
-    () => getAuthToken(() => getTokenRef.current()),
+  const resolveToken = useCallback<TokenResolver>(
+    (options) =>
+      getAuthToken(() =>
+        getTokenRef.current({ skipCache: options?.forceRefresh }),
+      ),
     [],
   );
 
@@ -137,7 +145,7 @@ function ClerkMainApp() {
 }
 
 interface MainAppContentProps {
-  resolveToken: () => Promise<string | null>;
+  resolveToken: TokenResolver;
   showUserButton?: boolean;
 }
 
@@ -148,24 +156,30 @@ interface ChannelPromptState {
   channel?: Channel;
 }
 
+export interface UnreadState {
+  count: number;
+  mentions: number;
+}
+
 function MainAppContent({
   resolveToken,
   showUserButton = false,
 }: MainAppContentProps) {
-  const [token, setToken] = useState<string | null>(null);
   const [user, setUser] = useState<User | null>(null);
   const [servers, setServers] = useState<Server[]>([]);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
-  const [selectedChannelId, setSelectedChannelId] = useState<string | null>(
-    null,
-  );
+  const [selectedChannelId, setSelectedChannelId] = useState<string | null>(null);
   const [showCreateServer, setShowCreateServer] = useState(false);
   const [newServerName, setNewServerName] = useState("");
-  const [realtimeError, setRealtimeError] = useState<string | null>(null);
+  const [creatingServer, setCreatingServer] = useState(false);
+  const [appError, setAppError] = useState<string | null>(null);
+  const [connection, setConnection] = useState<RealtimeStatus>("idle");
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [serverSettingsOpen, setServerSettingsOpen] = useState(false);
   const [inviteMode, setInviteMode] = useState<"create" | "join" | null>(null);
+  const [inviteCodeFromUrl, setInviteCodeFromUrl] = useState<string | null>(null);
   const [membersOpen, setMembersOpen] = useState(false);
   const [channelMembersChannel, setChannelMembersChannel] =
     useState<Channel | null>(null);
@@ -184,6 +198,7 @@ function MainAppContent({
   const [bootstrapAttempt, setBootstrapAttempt] = useState(0);
   const [channelsLoading, setChannelsLoading] = useState(false);
   const [messagesLoading, setMessagesLoading] = useState(false);
+  const [unread, setUnread] = useState<Record<string, UnreadState>>({});
   const [, setTick] = useState(0);
 
   const transport = useMemo(() => createRealtimeTransport(), []);
@@ -191,16 +206,26 @@ function MainAppContent({
   const voice = useMemo(() => createVoiceController(transport), [transport]);
   const [voiceState, setVoiceState] = useState(voice.getState());
 
+  const location = useLocation();
+  const navigate = useNavigate();
+  // Last path this component applied or emitted — guards the deep-link effect
+  // against reacting to its own URL writes.
+  const routeRef = useRef<string | null>(null);
+
   const resolveTokenRef = useRef(resolveToken);
   resolveTokenRef.current = resolveToken;
-  const transportRef = useRef(transport);
-  transportRef.current = transport;
-  const chatRef = useRef(chat);
-  chatRef.current = chat;
-  const voiceRef = useRef(voice);
-  voiceRef.current = voice;
+  const selectedChannelIdRef = useRef<string | null>(null);
+  selectedChannelIdRef.current = selectedChannelId;
+  /** Which server owns the active call — `channels` only holds the selected one. */
+  const voiceServerIdRef = useRef<string | null>(null);
 
   const refresh = useCallback(() => setTick((t) => t + 1), []);
+
+  // Every request pulls a fresh token from Clerk. Holding one in state meant
+  // that after the ~1 minute token lifetime every action failed with 401.
+  useEffect(() => {
+    setAuthTokenProvider(resolveToken);
+  }, [resolveToken]);
 
   useEffect(() => {
     setLocalSettings(loadLocalSettings());
@@ -209,6 +234,9 @@ function MainAppContent({
   useEffect(() => {
     chat.onChange(refresh);
     voice.onStateChange(setVoiceState);
+    return () => {
+      chat.dispose();
+    };
   }, [chat, voice, refresh]);
 
   // Electron: Cmd/Ctrl+Shift+M → toggle mute when connected to voice.
@@ -224,54 +252,93 @@ function MainAppContent({
     });
   }, [voice]);
 
-  useEffect(() => {
-    let cancelled = false;
-    const transport = transportRef.current;
-    const chat = chatRef.current;
-    const voice = voiceRef.current;
+  const clearUnread = useCallback((channelId: string) => {
+    setUnread((prev) => {
+      if (!prev[channelId]) {
+        return prev;
+      }
+      const next = { ...prev };
+      delete next[channelId];
+      return next;
+    });
+    void markChannelRead(channelId).catch(() => {
+      // A missed read receipt only means a stale badge; not worth surfacing.
+    });
+  }, []);
 
-    async function bootstrapChannel(channelId: string) {
+  const loadUnread = useCallback(async (serverId: string) => {
+    try {
+      const { unread: rows } = await fetchUnread(serverId);
+      setUnread((prev) => {
+        const next = { ...prev };
+        for (const row of rows) {
+          if (row.count > 0 && row.channelId !== selectedChannelIdRef.current) {
+            next[row.channelId] = {
+              count: row.count,
+              mentions: row.mentions,
+            };
+          } else {
+            delete next[row.channelId];
+          }
+        }
+        return next;
+      });
+    } catch {
+      // Badges are cosmetic — never block the app on them.
+    }
+  }, []);
+
+  const openChannel = useCallback(
+    async (channelId: string, channelList: Channel[], serverId?: string) => {
+      const channel = channelList.find((c) => c.id === channelId);
+      if (!channel) {
+        return;
+      }
+
+      setSelectedChannelId(channelId);
+      selectedChannelIdRef.current = channelId;
+      clearUnread(channelId);
       setMessagesLoading(true);
       chat.joinChannel(channelId);
+
       try {
-        // Resolve a fresh token — on reconnect the bootstrap one has expired.
-        const authToken = await resolveTokenRef.current();
-        if (!authToken || cancelled) {
+        const page = await fetchMessages(channelId);
+        if (selectedChannelIdRef.current !== channelId) {
           return;
         }
-        const { messages } = await fetchMessages(authToken, channelId);
-        if (cancelled) {
-          return;
-        }
-        chat.setMessages(messages);
+        chat.setMessages(page.messages, page.hasMore);
         refresh();
+      } catch (error) {
+        setAppError(
+          error instanceof Error ? error.message : "Failed to load messages",
+        );
       } finally {
-        if (!cancelled) {
+        if (selectedChannelIdRef.current === channelId) {
           setMessagesLoading(false);
         }
       }
-    }
+      void serverId;
+    },
+    [chat, clearUnread, refresh],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
 
     async function init() {
       setBootstrapReady(false);
       setBootstrapError(null);
 
       try {
-        const authToken = await resolveTokenRef.current();
-        if (!authToken || cancelled) {
-          return;
-        }
-        setToken(authToken);
-
-        const me = await fetchMe(authToken);
+        const me = await fetchMe();
         if (cancelled) {
           return;
         }
         setUser(me);
-        chat.setCurrentUserId(me.id);
+        chat.setCurrentUser(me);
 
         try {
-          const { iceServers } = await fetchIceServers(authToken);
+          const { iceServers } = await fetchIceServers();
           if (!cancelled && iceServers.length > 0) {
             voice.setIceServers(iceServers);
           }
@@ -279,33 +346,44 @@ function MainAppContent({
           // STUN / VITE_TURN fallbacks still apply
         }
 
-        const { servers: serverList } = await fetchServers(authToken);
+        // Route voice media through the SFU when the server offers one.
+        // Anything else (or a failure here) leaves the mesh path in place.
+        try {
+          const { backend } = isMeshForced()
+            ? { backend: "mesh" as const }
+            : await fetchVoiceBackend();
+          if (!cancelled && backend === "livekit") {
+            voice.setSessionProvider((voiceChannelId, peerId) =>
+              createVoiceSession(voiceChannelId, peerId),
+            );
+          }
+        } catch {
+          // Older server without /api/voice/backend — mesh it is.
+        }
+
+        const { servers: serverList } = await fetchServers();
         if (cancelled) {
           return;
         }
         setServers(serverList);
 
+        let initialChannels: Channel[] = [];
         let initialChannelId: string | null = null;
+        const first = serverList[0];
 
-        if (serverList.length > 0) {
-          const first = serverList[0]!;
+        if (first) {
           setSelectedServerId(first.id);
           setChannelsLoading(true);
           try {
-            const { channels: channelList } = await fetchChannels(
-              authToken,
-              first.id,
-            );
+            const { channels: channelList } = await fetchChannels(first.id);
             if (cancelled) {
               return;
             }
+            initialChannels = channelList;
             setChannels(channelList);
-            const general = channelList.find((c) => c.type === "text");
-            if (general) {
-              initialChannelId = general.id;
-              setSelectedChannelId(general.id);
-              setMessagesLoading(true);
-            }
+            initialChannelId =
+              channelList.find((c) => c.type === "text")?.id ?? null;
+            void loadUnread(first.id);
           } finally {
             if (!cancelled) {
               setChannelsLoading(false);
@@ -320,11 +398,38 @@ function MainAppContent({
         setBootstrapReady(true);
 
         transport.onMessage((message) => {
+          if (message.type === "channel-activity") {
+            const activity = message as {
+              channelId: string;
+              mention: boolean;
+            };
+            if (activity.channelId === selectedChannelIdRef.current) {
+              return;
+            }
+            setUnread((prev) => {
+              const current = prev[activity.channelId] ?? {
+                count: 0,
+                mentions: 0,
+              };
+              return {
+                ...prev,
+                [activity.channelId]: {
+                  count: current.count + 1,
+                  mentions: current.mentions + (activity.mention ? 1 : 0),
+                },
+              };
+            });
+            return;
+          }
+
           if (
             message.type === "message-broadcast" ||
+            message.type === "message-update" ||
+            message.type === "message-delete" ||
             message.type === "reaction-broadcast" ||
             message.type === "message-deleted" ||
-            message.type === "presence-update"
+            message.type === "presence-update" ||
+            message.type === "typing-broadcast"
           ) {
             chat.handleServerMessage(message);
             return;
@@ -332,7 +437,20 @@ function MainAppContent({
           voice.handleSignaling(message);
         });
 
-        transport.onError((message) => setRealtimeError(message));
+        transport.onStatusChange((status) => {
+          setConnection(status);
+          if (status === "online") {
+            setAppError(null);
+          }
+        });
+
+        // Connectivity already has a dedicated strip driven by status; routing
+        // it here too would paint the same sentence twice.
+        transport.onError((message) => {
+          if (transport.getStatus() === "online") {
+            setAppError(message);
+          }
+        });
 
         transport.onClose(() => {
           // The server dropped our voice peer with the socket. Keep the mic and
@@ -341,15 +459,35 @@ function MainAppContent({
           voice.notifyDisconnected();
         });
 
-        transport.onReady(() => {
-          setRealtimeError(null);
-          // On reconnect, rejoin whatever channel the user is in now...
-          const channelId = chat.getChannelId() ?? initialChannelId;
-          if (channelId) {
-            void bootstrapChannel(channelId);
+        transport.onReady((reconnected) => {
+          if (cancelled) {
+            return;
           }
-          // ...and auto-rejoin voice if the user was in a call.
+          const channelId = selectedChannelIdRef.current;
+          if (!reconnected) {
+            if (initialChannelId) {
+              void openChannel(initialChannelId, initialChannels, first?.id);
+            }
+            return;
+          }
+          // Re-subscribe and re-sync: messages sent while we were offline were
+          // never delivered, so the local list is stale.
+          chat.resubscribe();
+          // The server drops a voice peer as soon as its socket closes, so the
+          // call has to be re-entered before the UI matches reality again.
           void voice.notifyReconnected();
+          if (channelId) {
+            void fetchMessages(channelId)
+              .then((page) => {
+                if (selectedChannelIdRef.current === channelId) {
+                  chat.setMessages(page.messages, page.hasMore);
+                  refresh();
+                }
+              })
+              .catch(() => {
+                // Next reconnect will retry.
+              });
+          }
         });
 
         transport.connect(() => resolveTokenRef.current());
@@ -369,122 +507,112 @@ function MainAppContent({
 
     return () => {
       cancelled = true;
-      transport.disconnect();
       voice.leave();
+      transport.disconnect();
     };
     // Only re-bootstrap on explicit retry — unstable Clerk token fn must not remount.
-  }, [bootstrapAttempt, refresh]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bootstrapAttempt]);
 
-  async function loadChannels(serverId: string) {
-    const authToken = token ?? (await resolveToken());
-    if (!authToken) {
-      return;
-    }
-    setChannelsLoading(true);
-    try {
-      const { channels: list } = await fetchChannels(authToken, serverId);
-      setChannels(list);
-      const general = list.find((c) => c.type === "text") ?? list[0];
-      if (general) {
-        await selectChannel(general.id, list);
-      } else {
-        setSelectedChannelId(null);
+  /**
+   * Mirror the current selection into the URL so links are shareable and
+   * `pqp://server/<id>/channel/<id>` round-trips. Records the path first so the
+   * deep-link effect ignores navigations we caused ourselves.
+   */
+  const syncRoute = useCallback(
+    (serverId: string | null, channelId: string | null) => {
+      if (!serverId) {
+        return;
       }
-    } finally {
-      setChannelsLoading(false);
-    }
-  }
+      const path = channelRoutePath(serverId, channelId);
+      if (routeRef.current === path) {
+        return;
+      }
+      routeRef.current = path;
+      navigate(path, { replace: true });
+    },
+    [navigate],
+  );
 
-  async function selectChannel(channelId: string, channelList = channels) {
-    const channel = channelList.find((c) => c.id === channelId);
-    if (!channel) {
-      return;
-    }
+  const selectChannel = useCallback(
+    async (
+      channelId: string,
+      channelList = channels,
+      serverIdOverride?: string,
+    ) => {
+      syncRoute(serverIdOverride ?? selectedServerId, channelId);
+      // Voice deliberately survives navigating away: leaving a call because you
+      // clicked another channel is not how a chat app should behave.
+      await openChannel(channelId, channelList, serverIdOverride);
+    },
+    [channels, openChannel, selectedServerId, syncRoute],
+  );
 
-    if (
-      voiceState.voiceChannelId &&
-      voiceState.voiceChannelId !== channelId
-    ) {
-      voice.leave();
-    }
-
-    setSelectedChannelId(channelId);
-    setMessagesLoading(true);
-
-    const authToken = token ?? (await resolveToken());
-    if (!authToken) {
-      setMessagesLoading(false);
-      return;
-    }
-
-    chat.joinChannel(channelId);
-    try {
-      const { messages } = await fetchMessages(authToken, channelId);
-      chat.setMessages(messages);
-      refresh();
-    } finally {
-      setMessagesLoading(false);
-    }
-  }
+  const loadChannels = useCallback(
+    async (serverId: string) => {
+      setChannelsLoading(true);
+      try {
+        const { channels: list } = await fetchChannels(serverId);
+        setChannels(list);
+        void loadUnread(serverId);
+        const general = list.find((c) => c.type === "text") ?? list[0];
+        if (general) {
+          await selectChannel(general.id, list, serverId);
+        } else {
+          setSelectedChannelId(null);
+          selectedChannelIdRef.current = null;
+          syncRoute(serverId, null);
+        }
+      } catch (error) {
+        setAppError(
+          error instanceof Error ? error.message : "Failed to load channels",
+        );
+      } finally {
+        setChannelsLoading(false);
+      }
+    },
+    [loadUnread, selectChannel, syncRoute],
+  );
 
   async function handleCreateServer() {
-    const authToken = token ?? (await resolveToken());
-    if (!authToken || !newServerName.trim()) {
+    const name = newServerName.trim();
+    if (!name || creatingServer) {
       return;
     }
+    setCreatingServer(true);
     try {
-      const { server, channels: newChannels } = await createServer(
-        authToken,
-        newServerName.trim(),
-      );
+      const { server, channels: newChannels } = await createServer(name);
       setServers((prev) => [...prev, server]);
       setSelectedServerId(server.id);
       setChannels(newChannels);
       setNewServerName("");
       setShowCreateServer(false);
-      setRealtimeError(null);
+      setAppError(null);
       const general = newChannels.find((c) => c.type === "text");
       if (general) {
-        setSelectedChannelId(general.id);
-        setMessagesLoading(true);
-        chat.joinChannel(general.id);
-        try {
-          const { messages } = await fetchMessages(authToken, general.id);
-          chat.setMessages(messages);
-          refresh();
-        } finally {
-          setMessagesLoading(false);
-        }
+        await selectChannel(general.id, newChannels, server.id);
       }
     } catch (error) {
-      setRealtimeError(
+      setAppError(
         error instanceof Error ? error.message : "Failed to create server",
       );
+    } finally {
+      setCreatingServer(false);
     }
   }
 
-  function requestCreateChannel(type: "text" | "voice", isPrivate: boolean) {
-    setChannelPrompt({ mode: "create", type, isPrivate });
-  }
-
-  function requestRenameChannel(channel: Channel) {
-    setChannelPrompt({ mode: "rename", channel });
-  }
-
   async function handleChannelPromptConfirm(name: string, isPrivate?: boolean) {
-    const authToken = token ?? (await resolveToken());
-    if (!authToken || !channelPrompt) {
+    if (!channelPrompt) {
       return;
     }
 
     try {
       if (channelPrompt.mode === "create") {
         if (!selectedServerId || !channelPrompt.type) {
-          setRealtimeError("Select a server before creating a channel");
+          setAppError("Select a server before creating a channel");
           return;
         }
         const { channel } = await createChannel(
-          authToken,
           selectedServerId,
           name,
           channelPrompt.type,
@@ -494,7 +622,7 @@ function MainAppContent({
           (a, b) => a.position - b.position,
         );
         setChannels(next);
-        setRealtimeError(null);
+        setAppError(null);
         setChannelPrompt(null);
         await selectChannel(channel.id, next);
         if (channel.isPrivate) {
@@ -504,102 +632,76 @@ function MainAppContent({
       }
 
       if (channelPrompt.channel) {
-        const { channel } = await updateChannel(
-          authToken,
-          channelPrompt.channel.id,
-          { name },
-        );
+        const { channel } = await updateChannel(channelPrompt.channel.id, {
+          name,
+        });
         setChannels((prev) =>
           prev.map((c) => (c.id === channel.id ? channel : c)),
         );
         setChannelPrompt(null);
-        setRealtimeError(null);
+        setAppError(null);
       }
     } catch (error) {
-      setRealtimeError(
+      setAppError(
         error instanceof Error ? error.message : "Channel action failed",
       );
     }
   }
 
   async function handleTogglePrivate(channel: Channel) {
-    const authToken = token ?? (await resolveToken());
-    if (!authToken) {
-      return;
-    }
     try {
-      const { channel: updated } = await updateChannel(authToken, channel.id, {
+      const { channel: updated } = await updateChannel(channel.id, {
         isPrivate: !channel.isPrivate,
       });
-      setChannels((prev) =>
-        prev.map((c) => (c.id === updated.id ? updated : c)),
-      );
+      setChannels((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
       if (updated.isPrivate) {
         setChannelMembersChannel(updated);
       }
-      setRealtimeError(null);
+      setAppError(null);
     } catch (error) {
-      setRealtimeError(
+      setAppError(
         error instanceof Error ? error.message : "Failed to update channel",
       );
     }
   }
 
   async function handleDeleteChannel(channelId: string) {
-    const authToken = token ?? (await resolveToken());
-    if (!authToken) {
-      return;
-    }
-    if (!window.confirm("Delete this channel?")) {
+    if (!window.confirm("Delete this channel? Messages cannot be recovered.")) {
       return;
     }
     try {
-      await deleteChannel(authToken, channelId);
+      await deleteChannel(channelId);
       const next = channels.filter((c) => c.id !== channelId);
       setChannels(next);
+      if (voiceState.voiceChannelId === channelId) {
+        voice.leave();
+      }
       if (selectedChannelId === channelId) {
-        const fallback = next[0];
+        const fallback = next.find((c) => c.type === "text") ?? next[0];
         if (fallback) {
           await selectChannel(fallback.id, next);
         } else {
           setSelectedChannelId(null);
+          selectedChannelIdRef.current = null;
         }
       }
     } catch (error) {
-      setRealtimeError(
+      setAppError(
         error instanceof Error ? error.message : "Failed to delete channel",
       );
     }
   }
 
-  async function handleDeleteMessage(messageId: string) {
-    const authToken = token ?? (await resolveToken());
-    if (!authToken) {
-      return;
-    }
-    try {
-      await deleteMessage(authToken, messageId);
-      // The server broadcasts message-deleted to the channel, which removes it
-      // from the list; nothing else to do here.
-    } catch (error) {
-      setRealtimeError(
-        error instanceof Error ? error.message : "Failed to delete message",
-      );
-    }
-  }
-
-  async function handleLeaveServer(serverId: string) {
-    const authToken = token ?? (await resolveToken());
-    if (!authToken) {
-      return;
-    }
-    if (!window.confirm("Leave this server?")) {
-      return;
-    }
-    try {
-      await leaveServer(authToken, serverId);
+  const dropServer = useCallback(
+    async (serverId: string) => {
       const nextServers = servers.filter((s) => s.id !== serverId);
       setServers(nextServers);
+      // Hang up only if the call belongs to the server being dropped. `channels`
+      // holds the *selected* server's channels, which is often a different one.
+      if (voiceState.voiceChannelId && voiceServerIdRef.current === serverId) {
+        voiceServerIdRef.current = null;
+        voice.leave();
+      }
       if (selectedServerId === serverId) {
         const next = nextServers[0];
         if (next) {
@@ -609,48 +711,44 @@ function MainAppContent({
           setSelectedServerId(null);
           setChannels([]);
           setSelectedChannelId(null);
+          selectedChannelIdRef.current = null;
         }
       }
-      setRealtimeError(null);
+      setAppError(null);
+    },
+    [loadChannels, selectedServerId, servers, voice, voiceState.voiceChannelId],
+  );
+
+  async function handleLeaveServer(serverId: string) {
+    if (!window.confirm("Leave this server?")) {
+      return;
+    }
+    try {
+      await leaveServer(serverId);
+      await dropServer(serverId);
     } catch (error) {
-      setRealtimeError(
+      setAppError(
         error instanceof Error ? error.message : "Failed to leave server",
       );
     }
   }
 
   async function handleJoinVoice(channelId: string) {
-    const authToken = token ?? (await resolveToken());
-    if (authToken) {
-      try {
-        const { iceServers } = await fetchIceServers(authToken);
-        if (iceServers.length > 0) {
-          voice.setIceServers(iceServers);
-        }
-      } catch {
-        // Keep previously fetched / default ICE servers
+    voiceServerIdRef.current = selectedServerId;
+    try {
+      const { iceServers } = await fetchIceServers();
+      if (iceServers.length > 0) {
+        voice.setIceServers(iceServers);
       }
+    } catch {
+      // Keep previously fetched / default ICE servers
     }
 
     await voice.join(channelId, {
       inputDeviceId: localSettings.inputDeviceId,
       inputVolume: localSettings.inputVolume,
+      startMuted: localSettings.muteOnJoin,
     });
-    if (localSettings.muteOnJoin) {
-      const started = Date.now();
-      const interval = setInterval(() => {
-        const state = voice.getState();
-        if (state.status === "connected") {
-          if (!state.isMuted) {
-            voice.toggleMute();
-          }
-          clearInterval(interval);
-        }
-        if (Date.now() - started > 15_000) {
-          clearInterval(interval);
-        }
-      }, 200);
-    }
   }
 
   function handleAudioSettingsLive(next: LocalSettings) {
@@ -666,16 +764,81 @@ function MainAppContent({
     }
   }
 
-  async function refreshAfterJoin(serverId: string) {
-    const authToken = token ?? (await resolveToken());
-    if (!authToken) {
+  const refreshAfterJoin = useCallback(
+    async (serverId: string) => {
+      const { servers: serverList } = await fetchServers();
+      setServers(serverList);
+      setSelectedServerId(serverId);
+      await loadChannels(serverId);
+    },
+    [loadChannels],
+  );
+
+  /**
+   * Apply a `/app/server/<id>[/channel/<id>]` target: switch server, load its
+   * channels, and open the requested channel (falling back to the first text
+   * channel when the id is missing or no longer visible to this user).
+   */
+  const applyChannelRoute = useCallback(
+    async (serverId: string, channelId: string | null) => {
+      setSelectedServerId(serverId);
+      setChannelsLoading(true);
+      try {
+        const { channels: list } = await fetchChannels(serverId);
+        setChannels(list);
+        void loadUnread(serverId);
+        const requested = channelId
+          ? list.find((c) => c.id === channelId)
+          : undefined;
+        if (channelId && !requested) {
+          setAppError("That channel no longer exists or is private.");
+        }
+        const target =
+          requested ?? list.find((c) => c.type === "text") ?? list[0];
+        if (target) {
+          await selectChannel(target.id, list, serverId);
+        } else {
+          setSelectedChannelId(null);
+          selectedChannelIdRef.current = null;
+        }
+      } catch (error) {
+        setAppError(
+          error instanceof Error
+            ? error.message
+            : "That link points to a server you cannot open.",
+        );
+      } finally {
+        setChannelsLoading(false);
+      }
+    },
+    [loadUnread, selectChannel],
+  );
+
+  // Deep links (`pqp://…` via Electron) and shareable web URLs both land here.
+  useEffect(() => {
+    if (!bootstrapReady) {
       return;
     }
-    const { servers: serverList } = await fetchServers(authToken);
-    setServers(serverList);
-    setSelectedServerId(serverId);
-    await loadChannels(serverId);
-  }
+    const path = location.pathname;
+    if (routeRef.current === path) {
+      return;
+    }
+    const target = parseAppRoute(path);
+    if (!target) {
+      return;
+    }
+    routeRef.current = path;
+
+    if (target.kind === "invite") {
+      setInviteCodeFromUrl(target.code);
+      setInviteMode("join");
+      return;
+    }
+    void applyChannelRoute(target.serverId, target.channelId);
+    // applyChannelRoute reads current state; re-running only on path/readiness
+    // changes is intentional — selection changes write the URL via syncRoute.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bootstrapReady, location.pathname]);
 
   function openInviteForServer(serverId: string) {
     setSelectedServerId(serverId);
@@ -709,6 +872,13 @@ function MainAppContent({
   const selectedServer = servers.find((s) => s.id === selectedServerId);
   const canManage =
     selectedServer?.role === "owner" || selectedServer?.role === "admin";
+  const voiceChannel =
+    voiceState.voiceChannelId
+      ? channels.find((c) => c.id === voiceState.voiceChannelId) ?? null
+      : null;
+  const isViewingVoiceChannel =
+    selectedChannel?.type === "voice" &&
+    selectedChannel.id === voiceState.voiceChannelId;
 
   const chatPane = selectedChannel ? (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -716,6 +886,7 @@ function MainAppContent({
         <button
           type="button"
           className="mr-2 rounded-md p-1.5 hover:bg-ink-3 md:hidden"
+          aria-label="Open navigation"
           onClick={() => setMobileNavOpen(true)}
         >
           <Menu className="h-5 w-5" />
@@ -730,7 +901,7 @@ function MainAppContent({
               : ""}
             {selectedChannel.name}
           </p>
-          <p className="text-[11px] text-paper-muted">
+          <p className="truncate text-[11px] text-paper-muted">
             {selectedChannel.topic
               ? selectedChannel.topic
               : `${selectedChannel.isPrivate ? "Private · " : ""}${chat.getPresence().length} here`}
@@ -760,34 +931,36 @@ function MainAppContent({
       <MessageList
         messages={chat.getMessages()}
         currentUserId={user?.id ?? null}
+        currentUsername={user?.username ?? null}
         channelId={selectedChannel.id}
         isLoading={messagesLoading}
-        canManage={!!canManage}
+        hasMore={chat.hasMoreHistory()}
+        isLoadingOlder={chat.isLoadingOlder()}
+        typingUsers={chat.getTypingUsers()}
+        canModerate={!!canManage}
         onToggleReaction={(messageId, emoji) =>
           chat.toggleReaction(messageId, emoji)
         }
-        onDeleteMessage={(messageId) => void handleDeleteMessage(messageId)}
+        onLoadOlder={() => chat.loadOlder()}
+        onEditMessage={(messageId, body) => chat.editMessage(messageId, body)}
+        onDeleteMessage={(messageId) => chat.deleteMessage(messageId)}
+        onRetryMessage={(nonce) => chat.retryMessage(nonce)}
+        onDiscardMessage={(nonce) => chat.discardMessage(nonce)}
       />
       <MessageComposer
         onSend={(body) => chat.sendMessage(body)}
+        onTyping={() => chat.notifyTyping()}
         insertText={composerInsert}
         onInsertConsumed={() => setComposerInsert(null)}
         slashContext={{
           updateDisplayName: async (name: string) => {
-            const authToken = token ?? (await resolveToken());
-            if (!authToken) {
-              throw new Error("Not signed in");
-            }
-            const updated = await updateMe(authToken, { displayName: name });
+            const updated = await updateMe({ displayName: name });
             setUser(updated);
+            chat.setCurrentUser(updated);
           },
           openInvite: (mode: "create" | "join") => setInviteMode(mode),
           joinByCode: async (code: string) => {
-            const authToken = token ?? (await resolveToken());
-            if (!authToken) {
-              throw new Error("Not signed in");
-            }
-            const result = await joinInvite(authToken, code);
+            const result = await joinInvite(code);
             await refreshAfterJoin(result.serverId);
           },
           setMuted: (muted: boolean) => voice.setMuted(muted),
@@ -802,6 +975,16 @@ function MainAppContent({
 
   return (
     <div className="animate-fade-in relative flex h-full overflow-hidden">
+      {/* Mounted at the root so remote audio keeps playing when you navigate
+          away from the voice channel. */}
+      <VoiceAudioSinks
+        peers={voiceState.remotePeers}
+        peerVolumes={voiceState.peerVolumes}
+        isDeafened={voiceState.isDeafened}
+        outputDeviceId={localSettings.outputDeviceId}
+        outputVolume={localSettings.outputVolume}
+      />
+
       {mobileNavOpen && (
         <button
           type="button"
@@ -814,6 +997,8 @@ function MainAppContent({
       <ServerRail
         servers={servers}
         selectedServerId={selectedServerId}
+        unread={unread}
+        channels={channels}
         onSelectServer={(id) => {
           setSelectedServerId(id);
           void loadChannels(id);
@@ -823,6 +1008,10 @@ function MainAppContent({
         onJoinServer={() => setInviteMode("join")}
         onInvite={openInviteForServer}
         onOpenMembers={openMembersForServer}
+        onOpenSettings={(id) => {
+          setSelectedServerId(id);
+          setServerSettingsOpen(true);
+        }}
         onLeaveServer={(id) => void handleLeaveServer(id)}
       />
 
@@ -834,28 +1023,55 @@ function MainAppContent({
         isLoading={channelsLoading}
         voiceOccupancy={voiceState.occupancy}
         speakingPeerIds={voiceState.speakingPeerIds}
+        activeVoiceChannelId={voiceState.voiceChannelId}
+        unread={unread}
         mobileOpen={mobileNavOpen}
         onMobileClose={() => setMobileNavOpen(false)}
         onSelectChannel={(id) => void selectChannel(id)}
-        onCreateChannel={requestCreateChannel}
-        onRenameChannel={requestRenameChannel}
+        onCreateChannel={(type, isPrivate) =>
+          setChannelPrompt({ mode: "create", type, isPrivate })
+        }
+        onRenameChannel={(channel) =>
+          setChannelPrompt({ mode: "rename", channel })
+        }
         onEditChannelMeta={setChannelMetaChannel}
         onDeleteChannel={(id) => void handleDeleteChannel(id)}
         onTogglePrivate={(ch) => void handleTogglePrivate(ch)}
         onManageChannelMembers={setChannelMembersChannel}
         onInvite={() => setInviteMode("create")}
         onOpenMembers={() => setMembersOpen(true)}
+        onOpenServerSettings={() => setServerSettingsOpen(true)}
         footer={
-          <UserPanel
-            displayName={user?.displayName ?? "User"}
-            tag={user?.tag ?? null}
-            avatarUrl={user?.avatarUrl ?? null}
-            isMuted={voiceState.isMuted}
-            inVoice={voiceState.status === "connected"}
-            showUserButton={showUserButton}
-            onToggleMute={() => voice.toggleMute()}
-            onOpenSettings={() => setSettingsOpen(true)}
-          />
+          <>
+            {voiceState.status !== "idle" && !isViewingVoiceChannel && (
+              <VoiceStatusBar
+                channelName={voiceChannel?.name ?? "Voice"}
+                status={voiceState.status}
+                peerCount={voiceState.remotePeers.length}
+                isMuted={voiceState.isMuted}
+                isDeafened={voiceState.isDeafened}
+                usingSfu={voiceState.usingSfu}
+                onOpen={() => {
+                  if (voiceState.voiceChannelId) {
+                    void selectChannel(voiceState.voiceChannelId);
+                  }
+                }}
+                onToggleMute={() => voice.toggleMute()}
+                onToggleDeafen={() => voice.toggleDeafen()}
+                onLeave={() => voice.leave()}
+              />
+            )}
+            <UserPanel
+              displayName={user?.displayName ?? "User"}
+              tag={user?.tag ?? null}
+              avatarUrl={user?.avatarUrl ?? null}
+              isMuted={voiceState.isMuted}
+              inVoice={voiceState.status === "connected"}
+              showUserButton={showUserButton}
+              onToggleMute={() => voice.toggleMute()}
+              onOpenSettings={() => setSettingsOpen(true)}
+            />
+          </>
         }
       />
 
@@ -866,9 +1082,28 @@ function MainAppContent({
           </div>
         )}
 
-        {realtimeError && (
-          <div className="border-b border-danger/40 bg-danger/10 px-4 py-2 text-sm text-danger">
-            {realtimeError}
+        {(connection === "reconnecting" || connection === "unauthorized") && (
+          <div
+            className="flex items-center justify-center gap-2 border-b border-warning/30 bg-warning/10 px-4 py-1.5 text-xs text-warning"
+            role="status"
+          >
+            <WifiOff className="h-3.5 w-3.5" />
+            {connection === "unauthorized"
+              ? "Session expired — reconnecting…"
+              : "Connection lost — reconnecting…"}
+          </div>
+        )}
+
+        {appError && (
+          <div className="flex items-start gap-3 border-b border-danger/40 bg-danger/10 px-4 py-2 text-sm text-danger">
+            <span className="flex-1">{appError}</span>
+            <button
+              type="button"
+              className="shrink-0 text-xs underline underline-offset-2"
+              onClick={() => setAppError(null)}
+            >
+              Dismiss
+            </button>
           </div>
         )}
 
@@ -878,12 +1113,20 @@ function MainAppContent({
               <Input
                 value={newServerName}
                 onChange={(e) => setNewServerName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    void handleCreateServer();
+                  }
+                }}
                 placeholder="Server name"
                 autoFocus
               />
               <div className="flex gap-2">
-                <Button onClick={() => void handleCreateServer()}>
-                  Create
+                <Button
+                  onClick={() => void handleCreateServer()}
+                  disabled={!newServerName.trim() || creatingServer}
+                >
+                  {creatingServer ? "Creating…" : "Create"}
                 </Button>
                 <Button
                   variant="ghost"
@@ -901,6 +1144,7 @@ function MainAppContent({
             <button
               type="button"
               className="rounded-md p-2 hover:bg-ink-3 md:hidden"
+              aria-label="Open navigation"
               onClick={() => setMobileNavOpen(true)}
             >
               <Menu className="h-6 w-6" />
@@ -950,19 +1194,36 @@ function MainAppContent({
             <div className="h-[38%] min-h-[160px] shrink-0 lg:h-auto lg:w-[min(100%,20rem)]">
               <VoicePanel
                 channelName={selectedChannel.name}
-                status={voiceState.status}
-                remotePeers={voiceState.remotePeers}
-                self={voiceState.self}
+                status={
+                  voiceState.voiceChannelId === selectedChannel.id
+                    ? voiceState.status
+                    : "idle"
+                }
+                remotePeers={
+                  voiceState.voiceChannelId === selectedChannel.id
+                    ? voiceState.remotePeers
+                    : []
+                }
+                self={
+                  voiceState.voiceChannelId === selectedChannel.id
+                    ? voiceState.self
+                    : null
+                }
                 localPeerId={voiceState.peerId}
                 speakingPeerIds={voiceState.speakingPeerIds}
                 isMuted={voiceState.isMuted}
+                isDeafened={voiceState.isDeafened}
+                peerVolumes={voiceState.peerVolumes}
                 error={voiceState.error}
                 compactPeers={localSettings.compactPeers}
-                outputDeviceId={localSettings.outputDeviceId}
-                outputVolume={localSettings.outputVolume}
+                usingSfu={voiceState.usingSfu}
                 onJoin={() => void handleJoinVoice(selectedChannel.id)}
                 onLeave={() => voice.leave()}
                 onToggleMute={() => voice.toggleMute()}
+                onToggleDeafen={() => voice.toggleDeafen()}
+                onSetPeerVolume={(userId, volume) =>
+                  voice.setPeerVolume(userId, volume)
+                }
                 onRetryPeer={(peerId) => {
                   void voice.retryPeer(peerId);
                 }}
@@ -976,13 +1237,34 @@ function MainAppContent({
       <SettingsModal
         open={settingsOpen}
         user={user}
-        token={token}
         localSettings={localSettings}
         voiceAnalyser={voice.getAnalyser()}
         onClose={() => setSettingsOpen(false)}
         onLocalSave={setLocalSettings}
-        onUserUpdated={setUser}
+        onUserUpdated={(updated) => {
+          setUser(updated);
+          chat.setCurrentUser(updated);
+        }}
         onAudioSettingsLive={handleAudioSettingsLive}
+      />
+
+      <ServerSettingsDialog
+        open={serverSettingsOpen}
+        server={selectedServer ?? null}
+        currentUserId={user?.id ?? null}
+        onClose={() => setServerSettingsOpen(false)}
+        onRenamed={(server) =>
+          setServers((prev) =>
+            prev.map((s) => (s.id === server.id ? { ...s, ...server } : s)),
+          )
+        }
+        onOwnershipTransferred={() => {
+          void fetchServers().then(({ servers: list }) => setServers(list));
+        }}
+        onDeleted={(serverId) => {
+          setServerSettingsOpen(false);
+          void dropServer(serverId);
+        }}
       />
 
       <InvitePanel
@@ -990,23 +1272,27 @@ function MainAppContent({
         mode={inviteMode ?? "join"}
         serverId={selectedServerId}
         serverName={selectedServer?.name ?? null}
-        token={token}
         canManage={!!canManage}
-        onClose={() => setInviteMode(null)}
-        onJoined={(serverId) => void refreshAfterJoin(serverId)}
+        initialCode={inviteCodeFromUrl}
+        onClose={() => {
+          setInviteMode(null);
+          setInviteCodeFromUrl(null);
+        }}
+        onJoined={(serverId) => {
+          setInviteCodeFromUrl(null);
+          void refreshAfterJoin(serverId);
+        }}
       />
 
       <MembersPanel
         open={membersOpen}
         serverId={selectedServerId}
         serverName={selectedServer?.name ?? null}
-        token={token}
-        isOwner={selectedServer?.role === "owner"}
-        canManage={!!canManage}
+        role={selectedServer?.role ?? "member"}
         currentUserId={user?.id ?? null}
         onClose={() => setMembersOpen(false)}
-        onMention={(displayName) => {
-          setComposerInsert(`@${displayName}`);
+        onMention={(username) => {
+          setComposerInsert(`@${username}`);
           setMembersOpen(false);
         }}
       />
@@ -1016,7 +1302,6 @@ function MainAppContent({
         channelId={channelMembersChannel?.id ?? null}
         channelName={channelMembersChannel?.name ?? null}
         serverId={selectedServerId}
-        token={token}
         onClose={() => setChannelMembersChannel(null)}
       />
 
@@ -1039,9 +1324,9 @@ function MainAppContent({
         }
         checkboxDefault={channelPrompt?.isPrivate ?? false}
         onClose={() => setChannelPrompt(null)}
-        onConfirm={(name, isPrivate) => {
-          void handleChannelPromptConfirm(name, isPrivate);
-        }}
+        onConfirm={(name, isPrivate) =>
+          handleChannelPromptConfirm(name, isPrivate)
+        }
       />
 
       <ChannelMetaDialog
@@ -1049,12 +1334,10 @@ function MainAppContent({
         channel={channelMetaChannel}
         onClose={() => setChannelMetaChannel(null)}
         onSave={async (updates) => {
-          const authToken = token ?? (await resolveToken());
-          if (!authToken || !channelMetaChannel) {
+          if (!channelMetaChannel) {
             return;
           }
           const { channel } = await updateChannel(
-            authToken,
             channelMetaChannel.id,
             updates,
           );

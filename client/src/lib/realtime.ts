@@ -9,6 +9,13 @@ import { getWsUrl } from "@/lib/utils";
 type MessageHandler = (message: ChatServerMessage | VoiceSignalingMessage) => void;
 type TokenProvider = () => Promise<string | null>;
 
+export type RealtimeStatus =
+  | "idle"
+  | "connecting"
+  | "online"
+  | "reconnecting"
+  | "unauthorized";
+
 // Hosted proxies (Railway edge) drop idle WebSockets, so keep traffic flowing
 // well under typical idle timeouts. A pong is expected each interval, but we
 // only declare the link dead after MAX_MISSED_PONGS consecutive misses — one
@@ -40,20 +47,31 @@ export interface RealtimeTransport {
   // therefore idempotent, and auto-reconnects reuse the already-registered
   // handler without re-subscribing, so no side effect fires twice per event.
   onMessage(handler: MessageHandler): void;
-  onReady(handler: () => void): void;
+  /**
+   * Fires after every successful (re)connect. `reconnected` is false only for
+   * the first connect of a session, so callers can re-subscribe and re-sync
+   * state that went stale while the socket was down.
+   */
+  onReady(handler: (reconnected: boolean) => void): void;
   onError(handler: (message: string) => void): void;
   /** Fired once when an established connection is lost (before reconnect attempts). */
   onClose(handler: () => void): void;
+  /** Connection state for UI — drives the "reconnecting" banner. */
+  onStatusChange(handler: (status: RealtimeStatus) => void): void;
+  getStatus(): RealtimeStatus;
   isConnected(): boolean;
 }
 
 export function createRealtimeTransport(): RealtimeTransport {
   let socket: WebSocket | null = null;
   let handler: MessageHandler | null = null;
-  let readyHandler: (() => void) | null = null;
+  let readyHandler: ((reconnected: boolean) => void) | null = null;
   let errorHandler: ((message: string) => void) | null = null;
   let closeHandler: (() => void) | null = null;
+  let statusHandler: ((status: RealtimeStatus) => void) | null = null;
+  let status: RealtimeStatus = "idle";
   let isReady = false;
+  let hasConnectedOnce = false;
   let tokenProvider: TokenProvider | null = null;
   let manualClose = false;
   let reconnectAttempt = 0;
@@ -63,6 +81,26 @@ export function createRealtimeTransport(): RealtimeTransport {
   let missedPongs = 0;
   const chatQueue: ChatClientMessage[] = [];
   const voiceQueue: VoiceClientMessage[] = [];
+
+  function setStatus(next: RealtimeStatus) {
+    if (status === next) {
+      return;
+    }
+    status = next;
+    statusHandler?.(next);
+  }
+
+  /**
+   * Enter the in-flight state, but never downgrade "unauthorized" — why we are
+   * retrying is more useful to the user than the fact that we are. Cleared by a
+   * successful connect or an explicit disconnect.
+   */
+  function setPendingStatus() {
+    if (status === "unauthorized") {
+      return;
+    }
+    setStatus(hasConnectedOnce ? "reconnecting" : "connecting");
+  }
 
   function clearReconnectTimer() {
     if (reconnectTimer) {
@@ -106,6 +144,7 @@ export function createRealtimeTransport(): RealtimeTransport {
     if (manualClose || reconnectTimer) {
       return;
     }
+    setPendingStatus();
     const delay = Math.min(
       RECONNECT_BASE_DELAY_MS * 2 ** reconnectAttempt,
       RECONNECT_MAX_DELAY_MS,
@@ -156,13 +195,17 @@ export function createRealtimeTransport(): RealtimeTransport {
     }
 
     if (authFailed) {
+      // Still retried below — the token provider refreshes on the next attempt.
+      setStatus("unauthorized");
       errorHandler?.("Realtime authentication failed — sign in again");
+      scheduleReconnect();
       return;
     }
 
     if (wasReady) {
       closeHandler?.();
     }
+    setPendingStatus();
     errorHandler?.("Connection lost — reconnecting…");
     scheduleReconnect();
   }
@@ -171,6 +214,8 @@ export function createRealtimeTransport(): RealtimeTransport {
     if (!tokenProvider || manualClose || socket) {
       return;
     }
+
+    setPendingStatus();
 
     let token: string | null = null;
     try {
@@ -182,12 +227,22 @@ export function createRealtimeTransport(): RealtimeTransport {
       return;
     }
     if (!token) {
+      setStatus("unauthorized");
       scheduleReconnect();
       return;
     }
 
     isReady = false;
-    const ws = new WebSocket(getWsUrl());
+    let ws: WebSocket;
+    try {
+      ws = new WebSocket(getWsUrl());
+    } catch {
+      // A malformed VITE_WS_URL throws here rather than firing an error event,
+      // which would otherwise leave the transport silently idle forever.
+      errorHandler?.("Realtime connection failed — check the WebSocket URL");
+      scheduleReconnect();
+      return;
+    }
     socket = ws;
 
     ws.addEventListener("open", () => {
@@ -216,9 +271,12 @@ export function createRealtimeTransport(): RealtimeTransport {
         if (message.type === "ready") {
           isReady = true;
           reconnectAttempt = 0;
+          const reconnected = hasConnectedOnce;
+          hasConnectedOnce = true;
+          setStatus("online");
           startKeepalive(ws);
           flushQueues();
-          readyHandler?.();
+          readyHandler?.(reconnected);
           return;
         }
 
@@ -281,6 +339,7 @@ export function createRealtimeTransport(): RealtimeTransport {
     connect(provider: TokenProvider) {
       tokenProvider = provider;
       manualClose = false;
+      hasConnectedOnce = false;
       window.addEventListener("online", handleOnline);
       document.addEventListener("visibilitychange", handleVisibility);
       void connectSocket();
@@ -299,6 +358,7 @@ export function createRealtimeTransport(): RealtimeTransport {
       tokenProvider = null;
       chatQueue.length = 0;
       voiceQueue.length = 0;
+      setStatus("idle");
     },
 
     sendChat(message: ChatClientMessage) {
@@ -313,7 +373,7 @@ export function createRealtimeTransport(): RealtimeTransport {
       handler = nextHandler;
     },
 
-    onReady(nextHandler: () => void) {
+    onReady(nextHandler: (reconnected: boolean) => void) {
       readyHandler = nextHandler;
     },
 
@@ -323,6 +383,14 @@ export function createRealtimeTransport(): RealtimeTransport {
 
     onClose(nextHandler: () => void) {
       closeHandler = nextHandler;
+    },
+
+    onStatusChange(nextHandler: (status: RealtimeStatus) => void) {
+      statusHandler = nextHandler;
+    },
+
+    getStatus() {
+      return status;
     },
 
     isConnected() {

@@ -34,6 +34,12 @@ export function getPool(): pg.Pool {
   return pool;
 }
 
+export async function closePool(): Promise<void> {
+  const current = pool;
+  pool = null;
+  await current?.end().catch(() => {});
+}
+
 export async function initDb(): Promise<void> {
   const schema = readFileSync(join(__dirname, "schema.sql"), "utf8");
   await getPool().query(schema);
@@ -73,6 +79,7 @@ export interface DbMessage {
   author_id: string;
   body: string;
   created_at: Date;
+  edited_at?: Date | null;
   author_name?: string;
   author_username?: string | null;
   author_discriminator?: string | null;

@@ -1,8 +1,11 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-// Cap request bodies so a client can't exhaust memory by streaming an
-// unbounded payload (Zod limits only apply after the whole body is buffered).
-const MAX_BODY_BYTES = 256 * 1024;
+/**
+ * Cap request bodies so a client can't exhaust memory by streaming an
+ * unbounded payload (Zod limits only apply after the whole body is buffered).
+ * No endpoint accepts anything close to this.
+ */
+export const MAX_BODY_BYTES = 64 * 1024;
 
 export class HttpError extends Error {
   constructor(
@@ -26,38 +29,59 @@ function allowedOrigins(): string[] | null {
   }
   const origins = raw
     .split(",")
-    .map((value) => value.trim())
+    .map((value) => value.trim().replace(/\/$/, ""))
     .filter(Boolean);
   return origins.length > 0 ? origins : null;
 }
 
-function corsHeaders(req: IncomingMessage): Record<string, string> {
+/**
+ * Resolves the `Access-Control-Allow-Origin` value for a request, or null when
+ * the browser should be left to block it.
+ *
+ * A request with no Origin header is not a browser CORS request (CLI,
+ * server-to-server, same-origin) — CORS can't restrict it anyway, so stay
+ * permissive. When an Origin is present, only echo it back if allowed; echoing
+ * a *different* allowed origin would be wrong.
+ */
+export function resolveCorsOrigin(
+  requestOrigin: string | undefined,
+): string | null {
   const configured = allowedOrigins();
+  if (!configured || !requestOrigin) {
+    return "*";
+  }
+  return configured.includes(requestOrigin.replace(/\/$/, ""))
+    ? requestOrigin
+    : null;
+}
+
+function corsHeaders(req: IncomingMessage): Record<string, string> {
   const headers: Record<string, string> = {
     "Access-Control-Allow-Headers": "Content-Type, Authorization",
     "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
+    "Access-Control-Max-Age": "600",
   };
 
-  if (!configured) {
-    // No allowlist: permissive (fine for local dev / self-host).
-    headers["Access-Control-Allow-Origin"] = "*";
-    return headers;
+  const origin = resolveCorsOrigin(req.headers.origin);
+  if (allowedOrigins()) {
+    headers.Vary = "Origin";
   }
-
-  // Allowlist configured. A request with no Origin header is not a browser
-  // CORS request (CLI, server-to-server, same-origin) — CORS can't restrict it
-  // anyway, so stay permissive to preserve prior behavior. When an Origin is
-  // present, only echo it if allowed; a disallowed Origin gets no ACAO so the
-  // browser blocks it (echoing a *different* allowed origin would be wrong).
-  const requestOrigin = req.headers.origin;
-  headers.Vary = "Origin";
-  if (!requestOrigin) {
-    headers["Access-Control-Allow-Origin"] = "*";
-  } else if (configured.includes(requestOrigin)) {
-    headers["Access-Control-Allow-Origin"] = requestOrigin;
+  if (origin) {
+    headers["Access-Control-Allow-Origin"] = origin;
   }
   return headers;
 }
+
+/**
+ * Headers that make sense for a JSON API and for the SPA we may also serve.
+ * The API returns no HTML, so a maximally strict CSP is safe here.
+ */
+export const SECURITY_HEADERS: Record<string, string> = {
+  "X-Content-Type-Options": "nosniff",
+  "Referrer-Policy": "no-referrer",
+  "X-Frame-Options": "DENY",
+  "Cross-Origin-Resource-Policy": "cross-origin",
+};
 
 export function sendJson(
   res: ServerResponse,
@@ -67,6 +91,8 @@ export function sendJson(
 ) {
   res.writeHead(status, {
     "Content-Type": "application/json",
+    "Cache-Control": "no-store",
+    ...SECURITY_HEADERS,
     ...(req ? corsHeaders(req) : { "Access-Control-Allow-Origin": "*" }),
   });
   res.end(JSON.stringify(data));
@@ -82,19 +108,28 @@ export function sendError(
 }
 
 export async function readJsonBody<T>(req: IncomingMessage): Promise<T> {
+  const declared = Number(req.headers?.["content-length"] ?? 0);
+  if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) {
+    throw new HttpError(413, "Request body too large");
+  }
+
   const chunks: Buffer[] = [];
-  let total = 0;
+  let size = 0;
   for await (const chunk of req) {
-    total += chunk.length;
-    if (total > MAX_BODY_BYTES) {
+    const buffer = Buffer.from(chunk);
+    size += buffer.length;
+    if (size > MAX_BODY_BYTES) {
+      // Stop reading; the socket is torn down by the 413 response.
       throw new HttpError(413, "Request body too large");
     }
-    chunks.push(Buffer.from(chunk));
+    chunks.push(buffer);
   }
+
   const raw = Buffer.concat(chunks).toString("utf8");
-  if (!raw) {
+  if (raw.trim() === "") {
     return {} as T;
   }
+
   try {
     return JSON.parse(raw) as T;
   } catch {
@@ -104,8 +139,36 @@ export async function readJsonBody<T>(req: IncomingMessage): Promise<T> {
 
 export function handleCors(req: IncomingMessage, res: ServerResponse): boolean {
   if (req.method === "OPTIONS") {
-    sendJson(res, 204, null, req);
+    res.writeHead(204, {
+      ...SECURITY_HEADERS,
+      ...corsHeaders(req),
+    });
+    res.end();
     return true;
   }
   return false;
+}
+
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Path params reach Postgres as `uuid`, where a malformed value raises and
+ * surfaces as a 500. Reject them at the edge instead.
+ */
+export function isUuid(value: string | undefined): value is string {
+  return typeof value === "string" && UUID_PATTERN.test(value);
+}
+
+/** Clamp a caller-supplied page size into a range the database can serve. */
+export function clampLimit(
+  raw: string | null,
+  fallback: number,
+  max: number,
+): number {
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+  return Math.min(Math.floor(parsed), max);
 }

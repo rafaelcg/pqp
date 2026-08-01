@@ -41,11 +41,25 @@ export const channelSchema = z.object({
   imageUrl: z.string().nullable().default(null),
 });
 
+/**
+ * Postgres rejects NUL bytes in `text` parameters (SQLSTATE 22021), so any
+ * control character that reaches a query turns into a driver-level error rather
+ * than a validation failure. Strip them at the schema boundary instead.
+ * Newline and tab are kept — messages are multi-line.
+ */
+// eslint-disable-next-line no-control-regex
+const CONTROL_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
+
+export const safeTextSchema = z
+  .string()
+  .refine((value) => !CONTROL_CHARS.test(value), "Invalid characters");
+
 export const reactionEmojiSchema = z
   .string()
   .min(1)
   .max(32)
-  .refine((value) => !/\s/.test(value), "Invalid emoji");
+  .refine((value) => !/\s/.test(value), "Invalid emoji")
+  .refine((value) => !CONTROL_CHARS.test(value), "Invalid emoji");
 
 export const messageReactionSchema = z.object({
   emoji: z.string(),
@@ -62,8 +76,33 @@ export const messageSchema = z.object({
   authorAvatarUrl: z.string().nullable(),
   body: z.string(),
   createdAt: z.string(),
+  editedAt: z.string().nullable().default(null),
   reactions: z.array(messageReactionSchema).default([]),
 });
+
+export const MESSAGE_MAX_LENGTH = 4000;
+
+export const messageBodySchema = z
+  .string()
+  .min(1)
+  .max(MESSAGE_MAX_LENGTH)
+  .refine((value) => !CONTROL_CHARS.test(value), "Invalid characters");
+
+export const updateMessageSchema = z.object({
+  body: messageBodySchema,
+});
+
+/** How many messages a single history request may return. */
+export const MESSAGE_PAGE_SIZE = 50;
+export const MESSAGE_PAGE_MAX = 100;
+
+export const channelUnreadSchema = z.object({
+  channelId: z.string().uuid(),
+  count: z.number().int().nonnegative(),
+  mentions: z.number().int().nonnegative(),
+});
+
+export type ChannelUnread = z.infer<typeof channelUnreadSchema>;
 
 export const inviteSchema = z.object({
   id: z.string().uuid(),
@@ -155,6 +194,34 @@ export const updateMemberRoleSchema = z.object({
 export const addChannelMemberSchema = z.object({
   userId: z.string().uuid(),
 });
+
+export const updateServerSchema = z.object({
+  name: z.string().min(1).max(100).optional(),
+  ownerId: z.string().uuid().optional(),
+});
+
+export const removeMemberSchema = z.object({
+  /** Also add the member to the server ban list so invites stop working. */
+  ban: z.boolean().optional().default(false),
+});
+
+/**
+ * Mentions are written as `@username` (the unique slug half of `name#1234`).
+ * Kept in shared so the server's notification counting and the client's
+ * highlighting can never disagree about what counts as a mention.
+ */
+export const MENTION_PATTERN = /@([A-Za-z0-9_]{2,32})/g;
+
+export function extractMentionUsernames(body: string): string[] {
+  const found = new Set<string>();
+  for (const match of body.matchAll(MENTION_PATTERN)) {
+    const name = match[1];
+    if (name) {
+      found.add(name.toLowerCase());
+    }
+  }
+  return [...found];
+}
 
 export const banMemberSchema = z.object({
   userId: z.string().uuid(),

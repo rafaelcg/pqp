@@ -74,7 +74,11 @@ function makeClient(name, voiceId) {
 try {
   let up = false;
   for (let i = 0; i < 50; i++) {
-    try { if ((await fetch(`${BASE}/health`)).ok) { up = true; break; } } catch {}
+    try {
+      if ((await fetch(`${BASE}/health`)).ok) { up = true; break; }
+    } catch {
+      // Server not listening yet — retry until the attempt budget runs out.
+    }
     await sleep(200);
   }
   if (!up) throw new Error("server never became healthy");

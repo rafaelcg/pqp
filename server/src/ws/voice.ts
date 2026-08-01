@@ -9,8 +9,13 @@ import {
 } from "@pqp/shared";
 import type { DbUser } from "../db.js";
 import { logEvent } from "../lib/log.js";
-import { getChannel } from "../services/servers.js";
-import { isChannelMember, isServerMember, listServerMemberIds } from "../services/users.js";
+import { createRateLimiter } from "../lib/rate-limit.js";
+import { getChannel, getChannelAudience } from "../services/servers.js";
+import { isChannelMember } from "../services/users.js";
+import {
+  getServerVoiceBackend,
+  isLiveKitConfigured,
+} from "../voice/backends.js";
 import { forEachAuthenticatedSocket } from "./sockets.js";
 
 interface VoicePeer {
@@ -20,11 +25,22 @@ interface VoicePeer {
   displayName: string;
   avatarUrl: string | null;
   voiceChannelId: string;
-  serverId: string;
 }
 
 const peers = new Map<string, VoicePeer>();
 const socketToPeerId = new Map<WebSocket, string>();
+
+/**
+ * Joining fans a query plus a broadcast out to a whole server, so the churn is
+ * worth bounding — but generously. A client re-joins on every reconnect, so a
+ * flappy network legitimately produces bursts, and throttling those would eject
+ * people from calls exactly when the reconnect logic is trying to keep them in.
+ */
+const roomLimiter = createRateLimiter({ capacity: 20, refillPerSecond: 2 });
+
+export function resetVoiceRateLimits(): void {
+  roomLimiter.reset();
+}
 
 function getRoomPeers(voiceChannelId: string): VoicePeer[] {
   return [...peers.values()].filter((p) => p.voiceChannelId === voiceChannelId);
@@ -50,34 +66,63 @@ function broadcastToRoom(
   message: VoiceSignalingMessage,
   excludePeerId?: string,
 ) {
+  const encoded = JSON.stringify(message);
   for (const peer of getRoomPeers(voiceChannelId)) {
-    if (peer.id !== excludePeerId) {
-      send(peer.socket, message);
+    if (peer.id !== excludePeerId && peer.socket.readyState === 1) {
+      peer.socket.send(encoded);
     }
   }
 }
 
-// Roster/occupancy is only for members of the server that owns the voice
-// channel — not every authenticated socket on the instance (which would leak
-// cross-server presence and, worse, hand out the peer IDs used for signaling).
-async function broadcastRoster(voiceChannelId: string, serverId: string) {
-  const message: VoiceSignalingMessage = {
-    type: "voice-roster",
-    voiceChannelId,
-    participants: getRoomPeers(voiceChannelId).map(toParticipant),
-  };
-  let memberIds: Set<string>;
-  try {
-    memberIds = new Set(await listServerMemberIds(serverId));
-  } catch (error) {
-    console.error("[voice] failed to load members for roster:", error);
-    return;
-  }
-  forEachAuthenticatedSocket((socket, user) => {
-    if (memberIds.has(user.id)) {
-      send(socket, message);
-    }
-  });
+/**
+ * Roster fan-out. Occupancy drives the channel-list badges, so it goes to
+ * everyone who can *see* the channel — sending it to every socket on the
+ * instance would leak cross-server presence and, worse, hand out the peer IDs
+ * used for signaling.
+ *
+ * Serialized per channel: the audience lookup is async, and two overlapping
+ * broadcasts could otherwise deliver an older snapshot last, leaving a departed
+ * peer visible in everyone's sidebar.
+ */
+const rosterQueue = new Map<string, Promise<void>>();
+
+function broadcastRoster(voiceChannelId: string): Promise<void> {
+  const previous = rosterQueue.get(voiceChannelId) ?? Promise.resolve();
+  const next = previous
+    .catch(() => {})
+    .then(async () => {
+      try {
+        const audience = await getChannelAudience(voiceChannelId);
+        if (!audience) {
+          return;
+        }
+
+        // Read the room *after* the await so the payload reflects state at send
+        // time, not at the time the broadcast was requested.
+        const encoded = JSON.stringify({
+          type: "voice-roster",
+          voiceChannelId,
+          participants: getRoomPeers(voiceChannelId).map(toParticipant),
+        } satisfies VoiceSignalingMessage);
+
+        const allowed = new Set(audience.userIds);
+        forEachAuthenticatedSocket((socket, user) => {
+          if (socket.readyState === 1 && allowed.has(user.id)) {
+            socket.send(encoded);
+          }
+        });
+      } catch (error) {
+        console.error("[voice] failed to load audience for roster:", error);
+      }
+    })
+    .finally(() => {
+      if (rosterQueue.get(voiceChannelId) === next) {
+        rosterQueue.delete(voiceChannelId);
+      }
+    });
+
+  rosterQueue.set(voiceChannelId, next);
+  return next;
 }
 
 function relayToTarget(message: VoiceSignalingMessage & { to: string }) {
@@ -92,9 +137,11 @@ function removePeer(peerId: string) {
   if (!peer) {
     return;
   }
-  const { voiceChannelId, serverId } = peer;
+  const { voiceChannelId } = peer;
   peers.delete(peerId);
-  socketToPeerId.delete(peer.socket);
+  if (socketToPeerId.get(peer.socket) === peerId) {
+    socketToPeerId.delete(peer.socket);
+  }
   logEvent("voice.leave", {
     peerId,
     userId: peer.userId,
@@ -102,7 +149,57 @@ function removePeer(peerId: string) {
     roomSize: getRoomPeers(voiceChannelId).length,
   });
   broadcastToRoom(voiceChannelId, { type: "peer-left", peerId });
-  void broadcastRoster(voiceChannelId, serverId);
+  void broadcastRoster(voiceChannelId);
+}
+
+/** Drop every peer of a channel — used when a channel is deleted or made private. */
+export function evictVoiceChannel(voiceChannelId: string) {
+  for (const peer of getRoomPeers(voiceChannelId)) {
+    removePeer(peer.id);
+  }
+}
+
+/** Drop everyone from a channel's voice room except the given users. */
+export function evictVoiceUsersExcept(
+  voiceChannelId: string,
+  allowedUserIds: Set<string>,
+) {
+  for (const peer of getRoomPeers(voiceChannelId)) {
+    if (!allowedUserIds.has(peer.userId)) {
+      removePeer(peer.id);
+    }
+  }
+}
+
+/** Drop a specific user from a channel's voice room (kick / access revoked). */
+export function evictVoiceUser(userId: string, serverChannelIds?: Set<string>) {
+  for (const peer of [...peers.values()]) {
+    if (peer.userId !== userId) {
+      continue;
+    }
+    if (serverChannelIds && !serverChannelIds.has(peer.voiceChannelId)) {
+      continue;
+    }
+    removePeer(peer.id);
+  }
+}
+
+/**
+ * Look up a live voice peer. Used by the SFU token endpoint to prove the
+ * requested peer id really belongs to the requesting user and channel.
+ */
+export function getVoicePeer(
+  peerId: string,
+): { userId: string; voiceChannelId: string; displayName: string } | null {
+  const peer = peers.get(peerId);
+  if (!peer) {
+    return null;
+  }
+  return {
+    userId: peer.userId,
+    voiceChannelId: peer.voiceChannelId,
+    displayName: peer.displayName,
+  };
 }
 
 export function removeVoicePeerBySocket(socket: WebSocket) {
@@ -119,36 +216,33 @@ export function isSocketInVoice(socket: WebSocket): boolean {
 
 /**
  * Send current voice occupancy to a newly authenticated socket — but only for
- * servers the connecting user actually belongs to.
+ * the rooms this user is allowed to see.
  */
 export async function sendAllVoiceRosters(socket: WebSocket, user: DbUser) {
-  const byChannel = new Map<
-    string,
-    { serverId: string; participants: VoiceParticipant[] }
-  >();
+  const byChannel = new Map<string, VoiceParticipant[]>();
   for (const peer of peers.values()) {
-    const entry = byChannel.get(peer.voiceChannelId) ?? {
-      serverId: peer.serverId,
-      participants: [],
-    };
-    entry.participants.push(toParticipant(peer));
-    byChannel.set(peer.voiceChannelId, entry);
+    const list = byChannel.get(peer.voiceChannelId) ?? [];
+    list.push(toParticipant(peer));
+    byChannel.set(peer.voiceChannelId, list);
   }
-  for (const [voiceChannelId, { serverId, participants }] of byChannel) {
-    try {
-      if (!(await isServerMember(serverId, user.id))) {
-        continue;
+
+  await Promise.all(
+    [...byChannel].map(async ([voiceChannelId, participants]) => {
+      try {
+        if (!(await isChannelMember(voiceChannelId, user.id))) {
+          return;
+        }
+      } catch (error) {
+        console.error("[voice] roster membership check failed:", error);
+        return;
       }
-    } catch (error) {
-      console.error("[voice] roster membership check failed:", error);
-      continue;
-    }
-    send(socket, {
-      type: "voice-roster",
-      voiceChannelId,
-      participants,
-    });
-  }
+      send(socket, {
+        type: "voice-roster",
+        voiceChannelId,
+        participants,
+      });
+    }),
+  );
 }
 
 export async function handleVoiceMessage(
@@ -165,6 +259,9 @@ export async function handleVoiceMessage(
   const existingPeerId = socketToPeerId.get(socket);
 
   if (payload.type === "join-voice-room") {
+    if (!roomLimiter.take(user.id)) {
+      return;
+    }
     if (!(await isChannelMember(payload.voiceChannelId, user.id))) {
       return;
     }
@@ -174,12 +271,23 @@ export async function handleVoiceMessage(
       return;
     }
 
+    // The awaits above mean the socket may have closed, or the client may have
+    // sent a second join, while this one was in flight. Registering a peer for a
+    // dead socket leaves a ghost in the roster that nothing ever removes.
+    if (socket.readyState !== 1) {
+      return;
+    }
+
     // Enforce the mesh ceiling server-side. Above it, each client would carry
-    // one Opus uplink per peer and quality collapses — reject instead.
+    // one Opus uplink per peer and quality collapses — reject instead. The
+    // ceiling is a property of the mesh, so it does not apply once media is
+    // routed through an SFU.
+    const usingMesh =
+      getServerVoiceBackend() !== "livekit" || !isLiveKitConfigured();
     const roomIsFull =
-      getRoomPeers(payload.voiceChannelId).filter(
-        (p) => p.socket !== socket,
-      ).length >= MESH_VOICE_LIMIT;
+      usingMesh &&
+      getRoomPeers(payload.voiceChannelId).filter((p) => p.socket !== socket)
+        .length >= MESH_VOICE_LIMIT;
     if (roomIsFull) {
       logEvent("voice.roomFull", {
         userId: user.id,
@@ -194,8 +302,9 @@ export async function handleVoiceMessage(
       return;
     }
 
-    if (existingPeerId) {
-      removePeer(existingPeerId);
+    const currentPeerId = socketToPeerId.get(socket);
+    if (currentPeerId) {
+      removePeer(currentPeerId);
     }
 
     const peerId = randomUUID();
@@ -206,7 +315,6 @@ export async function handleVoiceMessage(
       displayName: user.display_name,
       avatarUrl: user.avatar_url,
       voiceChannelId: payload.voiceChannelId,
-      serverId: channel.server_id,
     };
     peers.set(peerId, peer);
     socketToPeerId.set(socket, peerId);
@@ -235,7 +343,7 @@ export async function handleVoiceMessage(
       { type: "peer-joined", peer: self },
       peerId,
     );
-    void broadcastRoster(payload.voiceChannelId, channel.server_id);
+    await broadcastRoster(payload.voiceChannelId);
     return;
   }
 
@@ -254,7 +362,7 @@ export async function handleVoiceMessage(
     return;
   }
 
-  const fromPeer = peers.get(payload.from);
+  const fromPeer = peers.get(existingPeerId);
   if (!fromPeer || payload.from !== existingPeerId) {
     return;
   }

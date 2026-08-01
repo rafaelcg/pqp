@@ -12,10 +12,12 @@ concurrency:
 
 jobs:
   build:
-    name: Install, typecheck, build, test
+    name: Lint, typecheck, test, build
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
+    # The authorization matrix is covered by integration tests that run against a
+    # real database — a mocked one would not catch a wrong SQL predicate.
     services:
       postgres:
         image: postgres:16-alpine
@@ -30,6 +32,9 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+
+    env:
+      DATABASE_URL: postgres://pqp:pqp@localhost:5432/pqp
 
     steps:
       - name: Checkout
@@ -51,17 +56,24 @@ jobs:
       - name: Build shared
         run: pnpm --filter @pqp/shared build
 
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      # Before the tests: the DB-backed suites under server/test import the
+      # compiled output from server/dist.
       - name: Build server
         run: pnpm --filter @pqp/server build
 
-      - name: Test server
-        env:
-          DATABASE_URL: postgres://pqp:pqp@localhost:5432/pqp
-        run: pnpm --filter @pqp/server test
+      - name: Test
+        run: pnpm test
 
-      - name: Typecheck / build client
+      - name: Build client
         env:
-          # Publishable key is public; placeholder keeps Vite build green in PRs
+          # Publishable key is public; placeholder keeps the Vite build green in PRs.
           VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.VITE_CLERK_PUBLISHABLE_KEY || 'pk_test_ci_placeholder' }}
-          VITE_DEV_AUTH_BYPASS: "true"
+          # Never ship a CI artifact that accepts the public dev token.
+          VITE_DEV_AUTH_BYPASS: "false"
         run: pnpm --filter @pqp/client build

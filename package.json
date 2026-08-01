@@ -5,7 +5,10 @@
   "scripts": {
     "dev": "pnpm run --parallel --filter @pqp/client --filter @pqp/server dev",
     "build": "pnpm run -r --filter=!@pqp/electron build",
-    "test": "pnpm --filter @pqp/server test",
+    "test": "pnpm run -r --filter=!@pqp/electron test",
+    "typecheck": "pnpm run -r --filter=!@pqp/electron typecheck",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
     "soak:voice": "node scripts/voice-soak.mjs",
     "start": "pnpm --filter @pqp/server start",
     "electron:dev": "pnpm --filter @pqp/electron dev",
@@ -16,6 +19,13 @@
     "clerk:doctor": "clerk doctor"
   },
   "devDependencies": {
-    "typescript": "^5.7.3"
+    "@eslint/js": "^9.18.0",
+    "eslint": "^9.18.0",
+    "eslint-plugin-react-hooks": "^5.1.0",
+    "eslint-plugin-react-refresh": "^0.4.18",
+    "globals": "^15.14.0",
+    "typescript": "^5.7.3",
+    "typescript-eslint": "^8.20.0",
+    "vitest": "^4.1.10"
   }
 }

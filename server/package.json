@@ -5,8 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc && cp src/schema.sql dist/",
+    "build": "tsc -p tsconfig.build.json && cp src/schema.sql dist/",
     "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"
   },
@@ -14,6 +15,7 @@
     "@clerk/backend": "^1.23.3",
     "@pqp/shared": "workspace:*",
     "dotenv": "^16.4.7",
+    "livekit-server-sdk": "^2.17.0",
     "pg": "^8.13.1",
     "ws": "^8.18.0",
     "zod": "^3.24.1"

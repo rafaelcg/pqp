@@ -1,4 +1,4 @@
-import { Hash, Lock, Mic, Plus, Users, X } from "lucide-react";
+import { Hash, Lock, Mic, Plus, Settings, Users, X } from "lucide-react";
 import type { ReactNode } from "react";
 import type { Channel, Server, VoiceParticipant } from "@pqp/shared";
 import {
@@ -7,6 +7,18 @@ import {
 } from "@/components/ui/context-menu";
 import { ChannelListSkeleton } from "@/components/ui/skeleton";
 import { VoiceAvatar } from "@/components/voice/voice-avatar";
+import { cn } from "@/lib/utils";
+
+export interface UnreadState {
+  count: number;
+  mentions: number;
+}
+
+const EMPTY_UNREAD: UnreadState = { count: 0, mentions: 0 };
+
+export function formatBadgeCount(value: number): string {
+  return value > 99 ? "99+" : String(value);
+}
 
 interface ChannelListProps {
   server: Server | null;
@@ -16,6 +28,8 @@ interface ChannelListProps {
   isLoading?: boolean;
   voiceOccupancy?: Record<string, VoiceParticipant[]>;
   speakingPeerIds?: string[];
+  activeVoiceChannelId: string | null;
+  unread: Record<string, UnreadState>;
   onSelectChannel: (channelId: string) => void;
   onCreateChannel: (type: "text" | "voice", isPrivate: boolean) => void;
   onRenameChannel: (channel: Channel) => void;
@@ -25,6 +39,7 @@ interface ChannelListProps {
   onManageChannelMembers: (channel: Channel) => void;
   onInvite: () => void;
   onOpenMembers: () => void;
+  onOpenServerSettings: () => void;
   footer?: ReactNode;
   mobileOpen?: boolean;
   onMobileClose?: () => void;
@@ -38,6 +53,8 @@ export function ChannelList({
   isLoading = false,
   voiceOccupancy = {},
   speakingPeerIds = [],
+  activeVoiceChannelId,
+  unread,
   onSelectChannel,
   onCreateChannel,
   onRenameChannel,
@@ -47,6 +64,7 @@ export function ChannelList({
   onManageChannelMembers,
   onInvite,
   onOpenMembers,
+  onOpenServerSettings,
   footer,
   mobileOpen = false,
   onMobileClose,
@@ -54,6 +72,23 @@ export function ChannelList({
   const textChannels = channels.filter((c) => c.type === "text");
   const voiceChannels = channels.filter((c) => c.type === "voice");
   const speaking = new Set(speakingPeerIds);
+
+  const headerItems: ContextMenuItemDef[] = server
+    ? [
+        { id: "invite", label: "Invite people", onSelect: onInvite },
+        { id: "members", label: "Members", onSelect: onOpenMembers },
+        ...(canManage
+          ? [
+              { id: "sep", label: "", separator: true },
+              {
+                id: "settings",
+                label: "Server settings",
+                onSelect: onOpenServerSettings,
+              },
+            ]
+          : []),
+      ]
+    : [];
 
   return (
     <aside
@@ -63,48 +98,63 @@ export function ChannelList({
           : "-translate-x-[calc(100%+72px)] md:translate-x-0"
       }`}
     >
-      <div className="flex h-14 items-center justify-between gap-2 border-b border-ink-4/60 px-4">
-        <div className="min-w-0">
-          <p className="truncate font-display text-base font-bold">
-            {server?.name ?? (isLoading ? "Loading…" : "No server")}
-          </p>
-          {server?.role && (
-            <p className="text-[11px] uppercase tracking-wider text-paper-muted">
-              {server.role}
+      <ContextMenu items={headerItems}>
+        <div className="flex h-14 items-center justify-between gap-2 border-b border-ink-4/60 px-4">
+          <div className="min-w-0">
+            <p className="truncate font-display text-base font-bold">
+              {server?.name ?? (isLoading ? "Loading…" : "No server")}
             </p>
-          )}
-        </div>
-        <div className="flex items-center gap-1">
-          {server && (
-            <>
+            {server?.role && (
+              <p className="text-[11px] uppercase tracking-wider text-paper-muted">
+                {server.role}
+              </p>
+            )}
+          </div>
+          <div className="flex items-center gap-1">
+            {server && (
+              <>
+                {canManage && (
+                  <button
+                    type="button"
+                    className="rounded-md p-1.5 text-paper-muted hover:bg-ink-3 hover:text-paper"
+                    title="Server settings"
+                    aria-label="Server settings"
+                    onClick={onOpenServerSettings}
+                  >
+                    <Settings className="h-4 w-4" />
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="rounded-md p-1.5 text-paper-muted hover:bg-ink-3 hover:text-paper"
+                  title="Members"
+                  aria-label="Members"
+                  onClick={onOpenMembers}
+                >
+                  <Users className="h-4 w-4" />
+                </button>
+                <button
+                  type="button"
+                  className="rounded-md px-2 py-1 text-xs text-signal hover:bg-ink-3"
+                  onClick={onInvite}
+                >
+                  Invite
+                </button>
+              </>
+            )}
+            {onMobileClose && (
               <button
                 type="button"
-                className="rounded-md p-1.5 text-paper-muted hover:bg-ink-3 hover:text-paper"
-                title="Members"
-                onClick={onOpenMembers}
+                className="rounded p-1 hover:bg-ink-3 md:hidden"
+                aria-label="Close channel list"
+                onClick={onMobileClose}
               >
-                <Users className="h-4 w-4" />
+                <X className="h-4 w-4" />
               </button>
-              <button
-                type="button"
-                className="rounded-md px-2 py-1 text-xs text-signal hover:bg-ink-3"
-                onClick={onInvite}
-              >
-                Invite
-              </button>
-            </>
-          )}
-          {onMobileClose && (
-            <button
-              type="button"
-              className="rounded p-1 hover:bg-ink-3 md:hidden"
-              onClick={onMobileClose}
-            >
-              <X className="h-4 w-4" />
-            </button>
-          )}
+            )}
+          </div>
         </div>
-      </div>
+      </ContextMenu>
 
       <div className="flex-1 overflow-y-auto p-2">
         {isLoading ? (
@@ -122,6 +172,7 @@ export function ChannelList({
                   key={channel.id}
                   channel={channel}
                   selected={selectedChannelId === channel.id}
+                  unread={unread[channel.id] ?? EMPTY_UNREAD}
                   canManage={canManage}
                   icon={<ChannelIcon channel={channel} />}
                   onSelect={() => {
@@ -154,6 +205,8 @@ export function ChannelList({
                     <ChannelRow
                       channel={channel}
                       selected={selectedChannelId === channel.id}
+                      unread={unread[channel.id] ?? EMPTY_UNREAD}
+                      connected={activeVoiceChannelId === channel.id}
                       canManage={canManage}
                       icon={<ChannelIcon channel={channel} />}
                       onSelect={() => {
@@ -275,6 +328,8 @@ function ChannelSection({
 function ChannelRow({
   channel,
   selected,
+  unread,
+  connected = false,
   canManage,
   icon,
   onSelect,
@@ -286,6 +341,8 @@ function ChannelRow({
 }: {
   channel: Channel;
   selected: boolean;
+  unread: UnreadState;
+  connected?: boolean;
   canManage: boolean;
   icon: ReactNode;
   onSelect: () => void;
@@ -342,27 +399,61 @@ function ChannelRow({
     },
   );
 
+  const hasUnread = !selected && unread.count > 0;
+  const mentions = selected ? 0 : unread.mentions;
+
   return (
     <ContextMenu items={items}>
       <div
-        className={`group flex items-center gap-1 rounded-md px-2 py-1.5 text-sm ${
+        className={cn(
+          "group relative flex items-center gap-1 rounded-md px-2 py-1.5 text-sm",
           selected
             ? "bg-ink-3 text-paper"
-            : "text-paper-muted hover:bg-ink-3/70 hover:text-paper"
-        }`}
+            : "text-paper-muted hover:bg-ink-3/70 hover:text-paper",
+          connected && "bg-signal/10 text-signal ring-1 ring-inset ring-signal/30",
+          hasUnread && !selected && !connected && "text-paper",
+        )}
       >
+        {hasUnread && (
+          <span
+            aria-hidden="true"
+            className="absolute -left-1 top-1/2 h-4 w-1 -translate-y-1/2 rounded-r-full bg-paper"
+          />
+        )}
         <button
           type="button"
           onClick={onSelect}
           className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
         >
           {icon}
-          <span className="truncate">{channel.name}</span>
-          {channel.isPrivate && (
-            <span className="ml-auto shrink-0 rounded bg-warning/10 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-warning">
-              Private
-            </span>
-          )}
+          <span className={cn("truncate", hasUnread && "font-semibold")}>
+            {channel.name}
+          </span>
+          {hasUnread && <span className="sr-only">(unread)</span>}
+          <span className="ml-auto flex shrink-0 items-center gap-1">
+            {connected && (
+              <>
+                <span
+                  aria-hidden="true"
+                  className="h-1.5 w-1.5 rounded-full bg-signal"
+                />
+                <span className="sr-only">Connected</span>
+              </>
+            )}
+            {channel.isPrivate && (
+              <span className="rounded bg-warning/10 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-warning">
+                Private
+              </span>
+            )}
+            {mentions > 0 && (
+              <span
+                className="min-w-4 rounded-full bg-danger px-1 py-0.5 text-center text-[10px] font-bold leading-none text-paper"
+                aria-label={`${mentions} unread mentions`}
+              >
+                {formatBadgeCount(mentions)}
+              </span>
+            )}
+          </span>
         </button>
       </div>
     </ContextMenu>
