@@ -17,6 +17,15 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_discrim
   ON users (username, discriminator)
   WHERE username IS NOT NULL AND discriminator IS NOT NULL;
 
+-- One JSONB blob per user rather than a column per setting: the set of
+-- preferences churns, and a column each would mean a migration each. The shape
+-- is validated by `userPreferencesSchema` before anything is written.
+CREATE TABLE IF NOT EXISTS user_preferences (
+  user_id    UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  settings   JSONB NOT NULL DEFAULT '{}'::jsonb,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS servers (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   name TEXT NOT NULL,

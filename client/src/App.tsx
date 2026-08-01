@@ -17,6 +17,7 @@ import { MembersPanel } from "@/components/layout/members-panel";
 import { ServerRail } from "@/components/layout/server-rail";
 import { ServerSettingsDialog } from "@/components/layout/server-settings-dialog";
 import {
+  applyRemotePreferences,
   defaultLocalSettings,
   loadLocalSettings,
   saveLocalSettings,
@@ -54,6 +55,7 @@ import { channelRoutePath, parseAppRoute } from "@/lib/app-route";
 import { DEV_AUTH_TOKEN, getAuthToken, isDevAuthBypassEnabled } from "@/lib/dev-auth";
 import { getDesktop } from "@/lib/desktop";
 import { createRealtimeTransport, type RealtimeStatus } from "@/lib/realtime";
+import { adoptThemePreference } from "@/lib/theme";
 import { isMeshForced } from "@/lib/voice-backend";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -96,7 +98,7 @@ function ClerkAppGate() {
   if (!isSignedIn) {
     return (
       <div className="relative flex h-full flex-col items-start justify-end overflow-hidden p-8 sm:p-12">
-        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,oklch(0.35_0.12_125/0.25),transparent_40%)]" />
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,var(--glow-accent),transparent_40%)]" />
         <div className="animate-rise relative z-10 max-w-lg">
           <Link
             to="/"
@@ -336,6 +338,21 @@ function MainAppContent({
         }
         setUser(me);
         chat.setCurrentUser(me);
+
+        // Settings the account carries win over this device's stored copy —
+        // another device may have changed them since this browser last saw
+        // them. Nothing is sent back: a tab that has been open for hours would
+        // otherwise push its stale values over a newer choice made elsewhere.
+        // Persisted locally so the next cold start renders them without a wait.
+        if (me.preferences?.theme) {
+          adoptThemePreference(me.preferences.theme);
+        }
+        const merged = applyRemotePreferences(
+          loadLocalSettings(),
+          me.preferences,
+        );
+        setLocalSettings(merged);
+        saveLocalSettings(merged);
 
         try {
           const { iceServers } = await fetchIceServers();

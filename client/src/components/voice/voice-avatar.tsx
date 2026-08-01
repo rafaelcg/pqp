@@ -20,7 +20,7 @@ export function VoiceAvatar({
     <div
       className={`relative shrink-0 rounded-full ${dim} ${
         isSpeaking
-          ? "ring-2 ring-signal ring-offset-1 ring-offset-ink shadow-[0_0_10px_oklch(0.88_0.19_125/0.45)]"
+          ? "ring-2 ring-accent ring-offset-1 ring-offset-surface-0 shadow-[var(--shadow-speaking)]"
           : "ring-1 ring-ink-4"
       }`}
     >

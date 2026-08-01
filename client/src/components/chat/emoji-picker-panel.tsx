@@ -1,6 +1,7 @@
 import data from "@emoji-mart/data";
 import Picker from "@emoji-mart/react";
 import { useEffect, useRef } from "react";
+import { useTheme } from "@/hooks/use-theme";
 import { cn } from "@/lib/utils";
 
 interface EmojiPickerPanelProps {
@@ -19,6 +20,7 @@ export function EmojiPickerPanel({
   className,
 }: EmojiPickerPanelProps) {
   const panelRef = useRef<HTMLDivElement>(null);
+  const { resolved } = useTheme();
 
   useEffect(() => {
     function handlePointerDown(event: MouseEvent) {
@@ -45,13 +47,13 @@ export function EmojiPickerPanel({
     <div
       ref={panelRef}
       className={cn(
-        "emoji-mart-shell z-50 overflow-hidden rounded-lg border border-ink-4 shadow-[0_12px_40px_oklch(0.1_0.02_250/0.55)] animate-rise",
+        "emoji-mart-shell z-50 overflow-hidden rounded-lg border border-ink-4 shadow-[var(--shadow-popover)] animate-rise",
         className,
       )}
     >
       <Picker
         data={data}
-        theme="dark"
+        theme={resolved}
         previewPosition="none"
         skinTonePosition="none"
         navPosition="bottom"

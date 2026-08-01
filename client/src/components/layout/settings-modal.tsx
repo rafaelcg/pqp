@@ -1,15 +1,18 @@
-import { useEffect, useRef, useState } from "react";
-import type { User } from "@pqp/shared";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import type { User, UserPreferences } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { useTheme } from "@/hooks/use-theme";
 import {
   ensureMediaPermission,
   listAudioDevices,
   supportsAudioOutputSelection,
   type MediaDeviceOption,
 } from "@/lib/audio-devices";
+import type { ThemePreference } from "@/lib/theme";
 import { updateMe } from "@/lib/api";
+import { queuePreferenceSync } from "@/lib/preferences";
 
 export interface LocalSettings {
   muteOnJoin: boolean;
@@ -76,6 +79,57 @@ export function loadLocalSettings(): LocalSettings {
 
 export function saveLocalSettings(settings: LocalSettings) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+}
+
+/**
+ * The half of `LocalSettings` that describes the person rather than the
+ * machine, ready to send to the server.
+ *
+ * Takes a partial so a single control change queues only the key it touched.
+ * The device ids are what the filtering is for: they name hardware in this
+ * browser profile and nowhere else, so they never leave the device.
+ */
+export function preferencesFromLocal(
+  settings: Partial<LocalSettings>,
+): UserPreferences {
+  const preferences: UserPreferences = {};
+  if (settings.muteOnJoin !== undefined) {
+    preferences.muteOnJoin = settings.muteOnJoin;
+  }
+  if (settings.compactPeers !== undefined) {
+    preferences.compactPeers = settings.compactPeers;
+  }
+  if (settings.inputVolume !== undefined) {
+    preferences.inputVolume = settings.inputVolume;
+  }
+  if (settings.outputVolume !== undefined) {
+    preferences.outputVolume = settings.outputVolume;
+  }
+  return preferences;
+}
+
+/**
+ * Overlay the account's settings onto this device's. The server wins on read —
+ * it is the only copy that saw the change made on another device — while the
+ * device keeps the parts the account does not carry.
+ *
+ * `theme` is absent on purpose: it lives in its own store under its own key,
+ * because the boot script has to resolve it before this module exists.
+ */
+export function applyRemotePreferences(
+  local: LocalSettings,
+  preferences: UserPreferences | undefined,
+): LocalSettings {
+  if (!preferences) {
+    return local;
+  }
+  return {
+    ...local,
+    muteOnJoin: preferences.muteOnJoin ?? local.muteOnJoin,
+    compactPeers: preferences.compactPeers ?? local.compactPeers,
+    inputVolume: preferences.inputVolume ?? local.inputVolume,
+    outputVolume: preferences.outputVolume ?? local.outputVolume,
+  };
 }
 
 interface SettingsModalProps {
@@ -205,6 +259,83 @@ function MicLevelMeter({
   );
 }
 
+const THEME_OPTIONS: { value: ThemePreference; label: string }[] = [
+  { value: "light", label: "Light" },
+  { value: "dark", label: "Dark" },
+  { value: "system", label: "System" },
+];
+
+/**
+ * Theme is not part of `LocalSettings`: it applies on click rather than on
+ * Save, and it persists under its own key so the boot script can read it
+ * without parsing the audio blob.
+ */
+function ThemePicker() {
+  const { preference, resolved, setPreference } = useTheme();
+
+  function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    const step =
+      event.key === "ArrowRight" || event.key === "ArrowDown"
+        ? 1
+        : event.key === "ArrowLeft" || event.key === "ArrowUp"
+          ? -1
+          : 0;
+    if (step === 0) {
+      return;
+    }
+    event.preventDefault();
+    const current = THEME_OPTIONS.findIndex(
+      (option) => option.value === preference,
+    );
+    const nextIndex =
+      (current + step + THEME_OPTIONS.length) % THEME_OPTIONS.length;
+    setPreference(THEME_OPTIONS[nextIndex].value);
+    const radios =
+      event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="radio"]');
+    radios[nextIndex]?.focus();
+  }
+
+  return (
+    <div>
+      <p className="text-xs uppercase tracking-wide text-text-muted">
+        Appearance
+      </p>
+      <div
+        role="radiogroup"
+        aria-label="Theme"
+        className="mt-2 flex gap-1.5"
+        onKeyDown={handleKeyDown}
+      >
+        {THEME_OPTIONS.map((option) => {
+          const selected = option.value === preference;
+          return (
+            <button
+              key={option.value}
+              type="button"
+              role="radio"
+              aria-checked={selected}
+              tabIndex={selected ? 0 : -1}
+              onClick={() => setPreference(option.value)}
+              className={`rounded-md border px-3 py-1.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent ${
+                selected
+                  ? "border-accent bg-accent/10 text-text"
+                  : "border-border text-text-muted hover:border-accent/50"
+              }`}
+            >
+              {option.label}
+            </button>
+          );
+        })}
+      </div>
+      <p className="mt-1.5 text-xs text-text-muted">
+        {preference === "system"
+          ? `Following your system — currently ${resolved}.`
+          : "Applies immediately, and follows your account to other devices."}
+      </p>
+    </div>
+  );
+}
+
 export function SettingsModal({
   open,
   user,
@@ -297,6 +428,10 @@ export function SettingsModal({
       onAudioSettingsLive?.(next);
       return next;
     });
+    // These already apply and persist locally as they are edited rather than on
+    // Save, so the account copy follows the same moment. Device-only changes
+    // queue nothing, and a slider drag coalesces into one request.
+    queuePreferenceSync(preferencesFromLocal(partial));
   }
 
   async function handleSave() {
@@ -422,7 +557,11 @@ export function SettingsModal({
           </span>
         </label>
 
-        <div className="space-y-4 border-t border-ink-4 pt-4">
+        <div className="border-t border-ink-4 pt-4">
+          <ThemePicker />
+        </div>
+
+        <div className="mt-4 space-y-4 border-t border-ink-4 pt-4">
           <div>
             <p className="text-xs uppercase tracking-wide text-paper-muted">
               Voice &amp; Video

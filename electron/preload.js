@@ -44,4 +44,16 @@ contextBridge.exposeInMainWorld("pqpDesktop", {
   getPendingDeepLink() {
     return ipcRenderer.invoke("pqp:get-pending-deep-link");
   },
+
+  /**
+   * Mirror the resolved theme into the main process, which cannot read the
+   * renderer's localStorage but has to paint the window background before the
+   * renderer loads on the next launch.
+   */
+  setTheme(theme) {
+    if (theme !== "dark" && theme !== "light") {
+      return;
+    }
+    ipcRenderer.send("pqp:set-theme", theme);
+  },
 });

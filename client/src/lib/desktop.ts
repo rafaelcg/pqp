@@ -6,6 +6,8 @@ export interface PqpDesktop {
   /** In-app path under `/app` (main process maps `pqp://` → `/app/...`). */
   onDeepLink(cb: (appPath: string) => void): () => void;
   getPendingDeepLink(): Promise<string | null>;
+  /** Older shells predate theming, so this may be absent. */
+  setTheme?(theme: "dark" | "light"): void;
 }
 
 export function getDesktop(): PqpDesktop | undefined {

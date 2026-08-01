@@ -1,31 +1,155 @@
 @import "tailwindcss";
 
-@theme {
-  --color-ink: oklch(0.16 0.012 250);
-  --color-ink-2: oklch(0.2 0.014 250);
-  --color-ink-3: oklch(0.24 0.016 250);
-  --color-ink-4: oklch(0.3 0.018 250);
-  --color-paper: oklch(0.93 0.015 95);
-  --color-paper-muted: oklch(0.72 0.02 95);
-  --color-signal: oklch(0.88 0.19 125);
-  --color-signal-dim: oklch(0.75 0.14 125);
+/*
+ * Tokens are named by ROLE, not by colour, so a theme can invert the surface
+ * ramp without every class name becoming a lie.
+ *
+ * `static` matters: role tokens are read at runtime by theme overrides, not
+ * only by the utility scanner, and the default `@theme` tree-shakes anything
+ * the scanner does not see. Never use `@theme inline` here — it resolves values
+ * at build time, which structurally breaks runtime theming.
+ */
+@theme static {
+  /* Surfaces, lowest elevation first. Light themes invert this ramp. */
+  --color-surface-0: oklch(0.16 0.012 250);
+  --color-surface-1: oklch(0.2 0.014 250);
+  --color-surface-2: oklch(0.24 0.016 250);
+  --color-surface-3: oklch(0.3 0.018 250);
+  --color-rail: oklch(0.13 0.012 250);
+
+  --color-border: oklch(0.3 0.018 250);
+  --color-border-strong: oklch(0.38 0.02 250);
+
+  --color-text: oklch(0.93 0.015 95);
+  --color-text-muted: oklch(0.72 0.02 95);
+  --color-text-subtle: oklch(0.82 0.015 95);
+
+  --color-accent: oklch(0.88 0.19 125);
+  --color-accent-hover: oklch(0.75 0.14 125);
+  /* Foreground for anything sitting ON the accent — the accent is bright in
+     dark and dark in light, so this cannot be derived from --color-text. */
+  --color-on-accent: oklch(0.16 0.012 250);
+
   --color-danger: oklch(0.65 0.2 25);
   --color-warning: oklch(0.8 0.14 85);
   --color-success: oklch(0.72 0.14 150);
 
-  --color-background: var(--color-ink);
-  --color-foreground: var(--color-paper);
-  --color-muted: var(--color-paper-muted);
-  --color-panel: var(--color-ink-2);
-  --color-panel-hover: var(--color-ink-3);
-  --color-rail: oklch(0.13 0.012 250);
-  --color-channel: var(--color-ink-2);
-  --color-accent: var(--color-signal);
-  --color-accent-hover: var(--color-signal-dim);
+  /* Code sits BELOW the message list in dark and would be the page itself in
+     light, so it is a role rather than an alias for a surface. */
+  --color-code-bg: oklch(0.16 0.012 250);
+  --color-code-text: oklch(0.88 0.19 125);
+
+  --color-focus-ring: oklch(0.88 0.19 125 / 0.6);
+  --color-selection: oklch(0.88 0.19 125 / 0.35);
+  --color-indicator: oklch(0.93 0.015 95);
+
+  /*
+   * Deprecated colour-named aliases. Every existing utility class keeps
+   * working, so light mode is not blocked on a 200-call-site codemod. Prefer
+   * the role names above in new code.
+   */
+  --color-ink: var(--color-surface-0);
+  --color-ink-2: var(--color-surface-1);
+  --color-ink-3: var(--color-surface-2);
+  --color-ink-4: var(--color-border);
+  --color-paper: var(--color-text);
+  --color-paper-muted: var(--color-text-muted);
+  --color-signal: var(--color-accent);
+  --color-signal-dim: var(--color-accent-hover);
+  --color-background: var(--color-surface-0);
+  --color-foreground: var(--color-text);
+  --color-muted: var(--color-text-muted);
+  --color-panel: var(--color-surface-1);
+  --color-panel-hover: var(--color-surface-2);
+  --color-channel: var(--color-surface-1);
 
   --font-sans: "Instrument Sans", ui-sans-serif, system-ui, sans-serif;
   --font-display: "Unbounded", "Instrument Sans", sans-serif;
   --font-brand: "Dela Gothic One", "Unbounded", sans-serif;
+}
+
+/*
+ * Non-colour theme values. Kept out of @theme because Tailwind would try to
+ * generate utilities from them; these are consumed via var() in arbitrary
+ * values and plain CSS instead.
+ */
+:root {
+  color-scheme: dark;
+
+  --overlay: oklch(0.1 0.02 250 / 0.8);
+  --shadow-popover: 0 12px 40px oklch(0.1 0.02 250 / 0.55);
+  --shadow-speaking: 0 0 10px oklch(0.88 0.19 125 / 0.45);
+  --glow-accent: oklch(0.35 0.12 125 / 0.25);
+  --glow-danger: oklch(0.35 0.12 25 / 0.2);
+  --glow-success: oklch(0.72 0.14 150 / 0.7);
+  --scrim-media: rgba(0, 0, 0, 0.42);
+
+  --gradient-app-1: oklch(0.22 0.04 125 / 0.35);
+  --gradient-app-2: oklch(0.22 0.03 250 / 0.4);
+
+  /* emoji-mart takes rgb triplets, not colours, so each theme lists its own. */
+  --rgb-picker-background: 36, 40, 48;
+  --rgb-picker-input: 28, 32, 40;
+  --rgb-picker-color: 232, 228, 214;
+  --rgb-picker-accent: 196, 232, 72;
+  --picker-border: oklch(0.3 0.018 250);
+}
+
+/*
+ * Light is not an inversion of dark. `@theme` emits into `@layer theme`, so this
+ * unlayered block outranks it without any specificity trick — keep it unlayered.
+ *
+ * `--overlay` is deliberately absent: a modal scrim has to darken what is behind
+ * it in both themes, so a light scrim would be a bug rather than a theme.
+ */
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --color-surface-0: oklch(0.98 0.005 95);
+  --color-surface-1: oklch(0.955 0.006 95);
+  --color-surface-2: oklch(0.92 0.008 95);
+  /* Darker than surface-1 here, unlike dark, or every skeleton disappears. */
+  --color-surface-3: oklch(0.88 0.01 95);
+  --color-rail: oklch(0.93 0.008 95);
+
+  --color-border: oklch(0.86 0.01 95);
+  --color-border-strong: oklch(0.74 0.012 95);
+
+  --color-text: oklch(0.25 0.015 250);
+  --color-text-muted: oklch(0.45 0.02 250);
+  --color-text-subtle: oklch(0.38 0.018 250);
+
+  /* The dark chartreuse is near-white in luminance and fails on a white page. */
+  --color-accent: oklch(0.52 0.16 135);
+  --color-accent-hover: oklch(0.45 0.15 135);
+  --color-on-accent: oklch(0.99 0 0);
+
+  --color-danger: oklch(0.52 0.2 25);
+  --color-warning: oklch(0.52 0.13 75);
+  --color-success: oklch(0.48 0.13 150);
+
+  --color-code-bg: oklch(0.94 0.006 95);
+  --color-code-text: oklch(0.42 0.14 135);
+
+  --color-focus-ring: oklch(0.52 0.16 135 / 0.6);
+  --color-selection: oklch(0.52 0.16 135 / 0.25);
+  --color-indicator: oklch(0.25 0.015 250);
+
+  --shadow-popover: 0 12px 40px oklch(0.4 0.02 250 / 0.18);
+  /* A soft glow reads as a smudge on a light panel, so the ring goes solid. */
+  --shadow-speaking: 0 0 0 3px oklch(0.52 0.16 135 / 0.4);
+  --glow-accent: oklch(0.75 0.12 135 / 0.18);
+  --glow-danger: oklch(0.7 0.14 25 / 0.15);
+  --glow-success: oklch(0.55 0.13 150 / 0.5);
+
+  --gradient-app-1: oklch(0.85 0.06 125 / 0.25);
+  --gradient-app-2: oklch(0.85 0.04 250 / 0.3);
+
+  --rgb-picker-background: 250, 249, 245;
+  --rgb-picker-input: 240, 238, 232;
+  --rgb-picker-color: 40, 44, 52;
+  --rgb-picker-accent: 90, 130, 40;
+  --picker-border: oklch(0.86 0.01 95);
 }
 
 * {
@@ -41,11 +165,11 @@ body,
 
 body {
   font-family: var(--font-sans);
-  background:
-    radial-gradient(1200px 600px at 10% -10%, oklch(0.22 0.04 125 / 0.35), transparent 55%),
-    radial-gradient(900px 500px at 100% 0%, oklch(0.22 0.03 250 / 0.4), transparent 50%),
-    var(--color-ink);
-  color: var(--color-paper);
+  background-color: var(--color-surface-0);
+  background-image:
+    radial-gradient(1200px 600px at 10% -10%, var(--gradient-app-1), transparent 55%),
+    radial-gradient(900px 500px at 100% 0%, var(--gradient-app-2), transparent 50%);
+  color: var(--color-text);
   line-height: 1.55;
   -webkit-font-smoothing: antialiased;
 }
@@ -63,7 +187,7 @@ h2,
 }
 
 ::selection {
-  background: oklch(0.88 0.19 125 / 0.35);
+  background: var(--color-selection);
 }
 
 /* Electron macOS hiddenInset drag region */
@@ -86,22 +210,22 @@ h2,
 }
 
 .markdown-body code {
-  background: var(--color-ink);
+  background: var(--color-code-bg);
   padding: 0.1rem 0.35rem;
   border-radius: 0.25rem;
   font-size: 0.875em;
-  color: var(--color-signal);
+  color: var(--color-code-text);
 }
 
 .markdown-body a {
-  color: var(--color-signal);
+  color: var(--color-accent);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
 
 .markdown-body strong {
   font-weight: 600;
-  color: var(--color-paper);
+  color: var(--color-text);
 }
 
 .markdown-body em {
@@ -109,9 +233,9 @@ h2,
 }
 
 .markdown-body blockquote {
-  border-left: 2px solid var(--color-ink-4);
+  border-left: 2px solid var(--color-border);
   padding-left: 0.6rem;
-  color: var(--color-paper-muted);
+  color: var(--color-text-muted);
 }
 
 .markdown-body ul,
@@ -121,8 +245,8 @@ h2,
 }
 
 .markdown-body pre {
-  background: var(--color-ink);
-  border: 1px solid var(--color-ink-4);
+  background: var(--color-code-bg);
+  border: 1px solid var(--color-border);
   border-radius: 0.375rem;
   padding: 0.5rem 0.65rem;
   margin: 0.35rem 0;
@@ -132,19 +256,19 @@ h2,
 .markdown-body pre code {
   background: none;
   padding: 0;
-  color: var(--color-paper);
+  color: var(--color-text);
 }
 
 .pqp-mention {
   border-radius: 0.25rem;
   padding: 0.05rem 0.25rem;
   font-weight: 500;
-  background: color-mix(in oklch, var(--color-signal) 12%, transparent);
-  color: var(--color-signal);
+  background: color-mix(in oklch, var(--color-accent) 12%, transparent);
+  color: var(--color-accent);
 }
 
 .pqp-mention-self {
-  background: color-mix(in oklch, var(--color-signal) 26%, transparent);
+  background: color-mix(in oklch, var(--color-accent) 26%, transparent);
 }
 
 @keyframes rise-in {
@@ -239,12 +363,12 @@ h2,
   font-weight: 700;
   letter-spacing: -0.02em;
   margin-top: 2rem;
-  color: var(--color-paper);
+  color: var(--color-text);
 }
 
 .legal-prose p,
 .legal-prose li {
-  color: oklch(0.82 0.015 95);
+  color: var(--color-text-subtle);
 }
 
 .legal-prose ul {
@@ -256,7 +380,7 @@ h2,
 }
 
 .legal-prose a {
-  color: var(--color-signal);
+  color: var(--color-accent);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
@@ -267,11 +391,11 @@ h2,
 }
 
 .emoji-mart-shell em-emoji-picker {
-  --rgb-background: 36, 40, 48;
-  --rgb-input: 28, 32, 40;
-  --rgb-color: 232, 228, 214;
-  --rgb-accent: 196, 232, 72;
-  --color-border: oklch(0.3 0.018 250);
+  --rgb-background: var(--rgb-picker-background);
+  --rgb-input: var(--rgb-picker-input);
+  --rgb-color: var(--rgb-picker-color);
+  --rgb-accent: var(--rgb-picker-accent);
+  --color-border: var(--picker-border);
   --font-family: var(--font-sans);
   border: none;
   height: 340px;

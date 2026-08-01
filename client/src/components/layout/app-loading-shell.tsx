@@ -75,7 +75,7 @@ interface AppBootstrapErrorProps {
 export function AppBootstrapError({ message, onRetry }: AppBootstrapErrorProps) {
   return (
     <div className="relative flex h-full flex-col items-start justify-end overflow-hidden p-8 sm:p-12">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_80%_10%,oklch(0.35_0.12_25/0.2),transparent_45%)]" />
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_80%_10%,var(--glow-danger),transparent_45%)]" />
       <div className="relative z-10 max-w-lg">
         <Link
           to="/"

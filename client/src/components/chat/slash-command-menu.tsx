@@ -20,7 +20,7 @@ export function SlashCommandMenu({
     return (
       <div
         id={id}
-        className="absolute bottom-full left-0 right-0 z-20 mb-2 overflow-hidden rounded-lg border border-ink-4 bg-ink-2 p-3 shadow-[0_12px_40px_oklch(0.1_0.02_250/0.55)] animate-rise"
+        className="absolute bottom-full left-0 right-0 z-20 mb-2 overflow-hidden rounded-lg border border-ink-4 bg-ink-2 p-3 shadow-[var(--shadow-popover)] animate-rise"
       >
         <p className="text-sm text-paper-muted">No matching commands</p>
       </div>
@@ -30,7 +30,7 @@ export function SlashCommandMenu({
   return (
     <div
       id={id}
-      className="absolute bottom-full left-0 right-0 z-20 mb-2 max-h-64 overflow-y-auto rounded-lg border border-ink-4 bg-ink-2 p-1 shadow-[0_12px_40px_oklch(0.1_0.02_250/0.55)] animate-rise"
+      className="absolute bottom-full left-0 right-0 z-20 mb-2 max-h-64 overflow-y-auto rounded-lg border border-ink-4 bg-ink-2 p-1 shadow-[var(--shadow-popover)] animate-rise"
       role="listbox"
       aria-label="Slash commands"
     >

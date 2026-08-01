@@ -13,6 +13,7 @@ import {
   updateMessageSchema,
   updateProfileSchema,
   updateServerSchema,
+  userPreferencesSchema,
   voiceSessionRequestSchema,
 } from "@pqp/shared";
 import {
@@ -84,6 +85,7 @@ import {
   updateChannel,
 } from "../services/servers.js";
 import { getIceServers } from "../services/ice.js";
+import { mergePreferences } from "../services/preferences.js";
 import {
   canManageServer,
   getMemberRole,
@@ -216,6 +218,17 @@ router.patch("/api/me", async ({ req, user }) => {
   });
   invalidateUserCache(updated.clerk_id);
   return toPublicUser(updated);
+});
+
+/**
+ * Patch semantics: the body carries only what changed, and the response is the
+ * whole merged object so the caller never has to guess what the server kept.
+ * Keys the schema does not know — audio device ids above all — are dropped
+ * before anything is stored.
+ */
+router.patch("/api/me/preferences", async ({ req, user }) => {
+  const patch = userPreferencesSchema.parse(await readJsonBody(req));
+  return { preferences: await mergePreferences(user.id, patch) };
 });
 
 // ------------------------------------------------------------------ voice

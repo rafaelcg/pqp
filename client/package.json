@@ -9,10 +9,16 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "e2e": "playwright test",
+    "e2e:ui": "playwright test --ui",
+    "bench:tokens": "node bench/theme-tokens.mjs",
+    "bench": "node bench/theme-tokens.mjs && node bench/theme-runtime.mjs",
+    "bench:runtime": "node bench/theme-runtime.mjs"
   },
   "dependencies": {
     "@clerk/clerk-react": "^5.22.4",
+    "@clerk/themes": "^2.4.57",
     "@emoji-mart/data": "^1.2.1",
     "@emoji-mart/react": "^1.1.1",
     "@pqp/shared": "workspace:*",
@@ -32,6 +38,7 @@
     "tailwind-merge": "^2.6.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@tailwindcss/vite": "^4.0.0",
     "@types/react": "^19.0.2",
     "@types/react-dom": "^19.0.2",

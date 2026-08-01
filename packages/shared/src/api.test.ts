@@ -6,6 +6,7 @@ import {
   messageBodySchema,
   reactionEmojiSchema,
   updateProfileSchema,
+  userPreferencesSchema,
 } from "./api.js";
 
 describe("messageBodySchema", () => {
@@ -115,6 +116,38 @@ describe("updateProfileSchema", () => {
       false,
     );
     expect(updateProfileSchema.safeParse({ username: "a" }).success).toBe(false);
+  });
+});
+
+describe("userPreferencesSchema", () => {
+  it("accepts a partial patch and an empty one", () => {
+    expect(userPreferencesSchema.safeParse({ theme: "light" }).success).toBe(true);
+    expect(userPreferencesSchema.safeParse({}).success).toBe(true);
+  });
+
+  it("bounds the volumes to the ranges the UI exposes", () => {
+    expect(userPreferencesSchema.safeParse({ inputVolume: 2 }).success).toBe(true);
+    expect(userPreferencesSchema.safeParse({ inputVolume: 2.5 }).success).toBe(
+      false,
+    );
+    // Output is attenuation only — there is no gain stage on playback.
+    expect(userPreferencesSchema.safeParse({ outputVolume: 1 }).success).toBe(true);
+    expect(userPreferencesSchema.safeParse({ outputVolume: 1.5 }).success).toBe(
+      false,
+    );
+  });
+
+  it("rejects a theme outside the three the stylesheet defines", () => {
+    expect(userPreferencesSchema.safeParse({ theme: "neon" }).success).toBe(false);
+  });
+
+  it("drops audio device ids so they cannot follow a user to another machine", () => {
+    const parsed = userPreferencesSchema.parse({
+      muteOnJoin: true,
+      inputDeviceId: "3f9c…-mic",
+      outputDeviceId: "a71b…-speakers",
+    });
+    expect(parsed).toEqual({ muteOnJoin: true });
   });
 });
 
