@@ -5,6 +5,9 @@ import {
   createChannelSchema,
   createInviteSchema,
   createServerSchema,
+  GIF_PAGE_MAX,
+  GIF_PAGE_SIZE,
+  GIF_QUERY_MAX_LENGTH,
   MESSAGE_PAGE_MAX,
   MESSAGE_PAGE_SIZE,
   removeMemberSchema,
@@ -15,6 +18,7 @@ import {
   updateServerSchema,
   userPreferencesSchema,
   voiceSessionRequestSchema,
+  type Gif,
 } from "@pqp/shared";
 import {
   createLiveKitSession,
@@ -84,6 +88,12 @@ import {
   transferOwnership,
   updateChannel,
 } from "../services/servers.js";
+import {
+  GifBackendError,
+  isGifSearchConfigured,
+  searchGifs,
+  trendingGifs,
+} from "../services/gifs.js";
 import { getIceServers } from "../services/ice.js";
 import { mergePreferences } from "../services/preferences.js";
 import {
@@ -102,9 +112,25 @@ import {
 } from "../services/users.js";
 
 /** Per-identity request budget. Generous for a UI, hostile to a script. */
-const apiLimiter = createRateLimiter({ capacity: 120, refillPerSecond: 10 });
+/**
+ * Tunable because the right ceiling depends on the deployment: a family
+ * self-host and a public instance want very different numbers, and an automated
+ * suite driving one account needs headroom a human never would.
+ */
+function limitFromEnv(name: string, fallback: number): number {
+  const parsed = Number(process.env[name]);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+const apiLimiter = createRateLimiter({
+  capacity: limitFromEnv("RATE_LIMIT_API_CAPACITY", 120),
+  refillPerSecond: limitFromEnv("RATE_LIMIT_API_REFILL", 10),
+});
 /** Writes are cheaper to abuse and more expensive to serve. */
-const writeLimiter = createRateLimiter({ capacity: 30, refillPerSecond: 2 });
+const writeLimiter = createRateLimiter({
+  capacity: limitFromEnv("RATE_LIMIT_WRITE_CAPACITY", 30),
+  refillPerSecond: limitFromEnv("RATE_LIMIT_WRITE_REFILL", 2),
+});
 /**
  * Pre-auth backstop keyed by address. Behind a proxy without `TRUST_PROXY`,
  * every caller looks like the same address — so this bucket is deliberately
@@ -112,11 +138,18 @@ const writeLimiter = createRateLimiter({ capacity: 30, refillPerSecond: 2 });
  * stop an unauthenticated flood from reaching Clerk token verification.
  */
 const anonLimiter = createRateLimiter({ capacity: 240, refillPerSecond: 60 });
+/**
+ * GIF search is a per-keystroke read against someone else's quota, so it gets a
+ * tighter budget than the general one: enough for a debounced session of
+ * typing, not enough to burn the deployment's key.
+ */
+const gifLimiter = createRateLimiter({ capacity: 20, refillPerSecond: 1 });
 
 export function resetApiRateLimits(): void {
   apiLimiter.reset();
   writeLimiter.reset();
   anonLimiter.reset();
+  gifLimiter.reset();
 }
 
 class Forbidden extends HttpError {
@@ -273,6 +306,67 @@ router.post("/api/voice/token", async ({ req, user }) => {
     console.error("[voice] token minting failed:", error);
     throw new HttpError(502, "Voice backend unavailable");
   }
+});
+
+// ------------------------------------------------------------------- gifs
+
+/**
+ * The button in the composer is hidden entirely on a deployment without a key,
+ * so this exists to say so once at bootstrap rather than letting the user open
+ * a panel that can only ever show an error.
+ */
+router.get("/api/gifs/config", async () => ({
+  enabled: isGifSearchConfigured(),
+}));
+
+function requireGifSearch(ctx: RequestContext): void {
+  if (!isGifSearchConfigured()) {
+    throw new HttpError(503, "GIF search is not configured on this server");
+  }
+  const key = `user:${ctx.user.id}`;
+  if (!gifLimiter.take(key)) {
+    ctx.res.setHeader("Retry-After", String(gifLimiter.retryAfter(key)));
+    throw new HttpError(429, "Slow down");
+  }
+}
+
+async function respondWithGifs(load: () => Promise<Gif[]>) {
+  try {
+    return { gifs: await load() };
+  } catch (error) {
+    if (error instanceof GifBackendError) {
+      console.error("[gifs] upstream failed:", error.message);
+      throw new HttpError(502, "GIF provider unavailable");
+    }
+    throw error;
+  }
+}
+
+router.get("/api/gifs/search", async (ctx) => {
+  requireGifSearch(ctx);
+  const query = (ctx.url.searchParams.get("q") ?? "").trim();
+  if (!query) {
+    throw new HttpError(400, "Missing search query");
+  }
+  if (query.length > GIF_QUERY_MAX_LENGTH) {
+    throw new HttpError(400, "Search query too long");
+  }
+  const limit = clampLimit(
+    ctx.url.searchParams.get("limit"),
+    GIF_PAGE_SIZE,
+    GIF_PAGE_MAX,
+  );
+  return respondWithGifs(() => searchGifs(query, limit));
+});
+
+router.get("/api/gifs/trending", async (ctx) => {
+  requireGifSearch(ctx);
+  const limit = clampLimit(
+    ctx.url.searchParams.get("limit"),
+    GIF_PAGE_SIZE,
+    GIF_PAGE_MAX,
+  );
+  return respondWithGifs(() => trendingGifs(limit));
 });
 
 // ---------------------------------------------------------------- servers

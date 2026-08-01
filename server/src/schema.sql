@@ -109,6 +109,16 @@ CREATE TABLE IF NOT EXISTS messages (
 
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS edited_at TIMESTAMPTZ;
 
+-- Replies point at the message they answer. ON DELETE SET NULL, never CASCADE:
+-- deleting one message must not silently take every answer to it with it.
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS reply_to_id UUID
+  REFERENCES messages(id) ON DELETE SET NULL;
+
+-- Partial: the overwhelming majority of messages are not replies, and this index
+-- only exists to make the parent lookup and the SET NULL sweep cheap.
+CREATE INDEX IF NOT EXISTS idx_messages_reply_to
+  ON messages (reply_to_id) WHERE reply_to_id IS NOT NULL;
+
 -- (channel_id, created_at, id) keeps keyset pagination ordering stable when two
 -- messages land in the same millisecond.
 CREATE INDEX IF NOT EXISTS idx_messages_channel_created

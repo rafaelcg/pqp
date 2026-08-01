@@ -1,6 +1,7 @@
 import type {
   Channel,
   ChannelUnread,
+  Gif,
   Invite,
   Message,
   Server,
@@ -183,6 +184,21 @@ export const fetchVoiceBackend = () =>
 /** Mint an SFU session for a voice channel the caller has already joined. */
 export const createVoiceSession = (voiceChannelId: string, peerId: string) =>
   post<VoiceSessionInfo>("/api/voice/token", { voiceChannelId, peerId });
+
+// --------------------------------------------------------------------- gifs
+
+/** Whether this deployment has a provider key, so the button can be hidden. */
+export const fetchGifConfig = () =>
+  apiFetch<{ enabled: boolean }>("/api/gifs/config");
+
+export const searchGifs = (query: string, signal?: AbortSignal) =>
+  apiFetch<{ gifs: Gif[] }>(
+    `/api/gifs/search?q=${encodeURIComponent(query)}`,
+    signal ? { signal } : {},
+  );
+
+export const fetchTrendingGifs = (signal?: AbortSignal) =>
+  apiFetch<{ gifs: Gif[] }>("/api/gifs/trending", signal ? { signal } : {});
 
 // ------------------------------------------------------------------ servers
 

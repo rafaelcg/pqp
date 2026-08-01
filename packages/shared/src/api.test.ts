@@ -1,13 +1,19 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildReplyExcerpt,
   createChannelSchema,
   extractMentionUsernames,
   formatUserTag,
   messageBodySchema,
+  messageReplyRefSchema,
+  messageSchema,
   reactionEmojiSchema,
+  REPLY_EXCERPT_MAX_LENGTH,
   updateProfileSchema,
   userPreferencesSchema,
 } from "./api.js";
+import { messageCreateMessageSchema } from "./chat.js";
+import { gifSchema, isGifMediaUrl, stillGifUrl } from "./gifs.js";
 
 describe("messageBodySchema", () => {
   it("accepts ordinary and multi-line text", () => {
@@ -148,6 +154,172 @@ describe("userPreferencesSchema", () => {
       outputDeviceId: "a71b…-speakers",
     });
     expect(parsed).toEqual({ muteOnJoin: true });
+  });
+});
+
+describe("buildReplyExcerpt", () => {
+  it("flattens a multi-line body to one line", () => {
+    expect(buildReplyExcerpt("first\n\nsecond   third")).toBe(
+      "first second third",
+    );
+  });
+
+  it("truncates to something the schema will accept", () => {
+    const excerpt = buildReplyExcerpt("x".repeat(400));
+    expect(excerpt.length).toBeLessThanOrEqual(REPLY_EXCERPT_MAX_LENGTH);
+    expect(excerpt.endsWith("…")).toBe(true);
+    expect(messageReplyRefSchema.shape.excerpt.safeParse(excerpt).success).toBe(
+      true,
+    );
+  });
+
+  it("does not cut an emoji in half", () => {
+    // A lone surrogate renders as U+FFFD, which looks like a corrupt message.
+    const excerpt = buildReplyExcerpt(`${"a".repeat(118)}🔥tail`);
+    expect(excerpt).not.toMatch(/[\uD800-\uDBFF]$/);
+    expect(excerpt.length).toBeLessThanOrEqual(REPLY_EXCERPT_MAX_LENGTH);
+  });
+
+  it("leaves a short body untouched", () => {
+    expect(buildReplyExcerpt("  short  ")).toBe("short");
+  });
+});
+
+describe("reply protocol", () => {
+  it("defaults replyTo to null so pre-reply clients still parse a message", () => {
+    const parsed = messageSchema.parse({
+      id: "00000000-0000-4000-8000-000000000001",
+      channelId: "00000000-0000-4000-8000-000000000002",
+      authorId: "00000000-0000-4000-8000-000000000003",
+      authorName: "A",
+      authorTag: null,
+      authorAvatarUrl: null,
+      body: "hi",
+      createdAt: new Date(0).toISOString(),
+    });
+    expect(parsed.replyTo).toBeNull();
+  });
+
+  it("represents a parent that is gone with no author", () => {
+    expect(
+      messageReplyRefSchema.safeParse({
+        id: "00000000-0000-4000-8000-000000000001",
+        authorId: null,
+        authorName: null,
+        excerpt: "",
+        deleted: true,
+      }).success,
+    ).toBe(true);
+  });
+
+  it("only accepts a uuid as the parent on the wire", () => {
+    const base = {
+      type: "message-create" as const,
+      channelId: "00000000-0000-4000-8000-000000000002",
+      body: "hi",
+    };
+    expect(messageCreateMessageSchema.safeParse(base).success).toBe(true);
+    expect(
+      messageCreateMessageSchema.safeParse({ ...base, replyToId: "nope" })
+        .success,
+    ).toBe(false);
+  });
+});
+
+describe("isGifMediaUrl", () => {
+  it("accepts the media hosts the picker actually returns", () => {
+    expect(
+      isGifMediaUrl("https://media3.giphy.com/media/abc123/giphy.gif"),
+    ).toBe(true);
+    expect(isGifMediaUrl("https://media.giphy.com/media/abc/giphy.webp")).toBe(
+      true,
+    );
+    expect(isGifMediaUrl("https://i.giphy.com/abc123.gif")).toBe(true);
+    expect(isGifMediaUrl("https://media.tenor.com/xyz/happy-dance.gif")).toBe(
+      true,
+    );
+  });
+
+  it("keeps query strings, which every CDN URL carries", () => {
+    expect(
+      isGifMediaUrl("https://media0.giphy.com/media/abc/giphy.gif?cid=1&ct=g"),
+    ).toBe(true);
+  });
+
+  it("refuses any host outside the allowlist", () => {
+    // The whole point of the allowlist: an arbitrary host must render as a
+    // link, never as an image the reader's browser fetches on sight.
+    expect(isGifMediaUrl("https://evil.example/tracker.gif")).toBe(false);
+    expect(isGifMediaUrl("https://giphy.com.evil.example/giphy.gif")).toBe(
+      false,
+    );
+    expect(isGifMediaUrl("https://notgiphy.com/media/abc/giphy.gif")).toBe(
+      false,
+    );
+  });
+
+  it("refuses http and embedded credentials", () => {
+    expect(isGifMediaUrl("http://media.giphy.com/media/abc/giphy.gif")).toBe(
+      false,
+    );
+    expect(
+      isGifMediaUrl("https://user:pw@media.giphy.com/media/abc/giphy.gif"),
+    ).toBe(false);
+  });
+
+  it("refuses a credential-shaped URL whose real host is elsewhere", () => {
+    expect(isGifMediaUrl("https://media.giphy.com@evil.example/a.gif")).toBe(
+      false,
+    );
+  });
+
+  it("refuses paths that are not images, and non-URLs", () => {
+    expect(isGifMediaUrl("https://media.giphy.com/media/abc/giphy.mp4")).toBe(
+      false,
+    );
+    expect(isGifMediaUrl("https://media.giphy.com/media/abc")).toBe(false);
+    expect(isGifMediaUrl("just some text")).toBe(false);
+  });
+});
+
+describe("stillGifUrl", () => {
+  it("derives GIPHY's still rendition", () => {
+    expect(stillGifUrl("https://media2.giphy.com/media/abc/giphy.gif")).toBe(
+      "https://media2.giphy.com/media/abc/giphy_s.gif",
+    );
+  });
+
+  it("returns null where no still can be named", () => {
+    // Tenor publishes no derivable still, and inventing one would 404.
+    expect(stillGifUrl("https://media.tenor.com/xyz/dance.gif")).toBeNull();
+    expect(stillGifUrl("https://media.giphy.com/media/abc/200w.gif")).toBeNull();
+    expect(stillGifUrl("https://evil.example/giphy.gif")).toBeNull();
+  });
+});
+
+describe("gifSchema", () => {
+  const gif = {
+    id: "abc123",
+    url: "https://media.giphy.com/media/abc/giphy.gif",
+    previewUrl: "https://media.giphy.com/media/abc/200w.gif",
+    previewStillUrl: null,
+    width: 200,
+    height: 150,
+    title: "a cat",
+  };
+
+  it("accepts the normalised shape the proxy emits", () => {
+    expect(gifSchema.safeParse(gif).success).toBe(true);
+  });
+
+  it("requires positive integer dimensions the grid can lay out with", () => {
+    expect(gifSchema.safeParse({ ...gif, width: 0 }).success).toBe(false);
+    expect(gifSchema.safeParse({ ...gif, height: 1.5 }).success).toBe(false);
+  });
+
+  it("requires a still to be null rather than absent", () => {
+    const { previewStillUrl: _omitted, ...withoutStill } = gif;
+    expect(gifSchema.safeParse(withoutStill).success).toBe(false);
   });
 });
 

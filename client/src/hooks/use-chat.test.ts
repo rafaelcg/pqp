@@ -49,6 +49,7 @@ function serverMessage(overrides: Partial<Message> = {}): Message {
     createdAt: new Date(0).toISOString(),
     editedAt: null,
     reactions: [],
+    replyTo: null,
     ...overrides,
   };
 }
@@ -304,6 +305,83 @@ describe("edit and delete", () => {
       messageId,
     } as never);
     expect(chat.getMessages()).toHaveLength(0);
+  });
+});
+
+describe("replies", () => {
+  const PARENT = {
+    id: "00000000-0000-4000-8000-0000000000aa",
+    authorId: "00000000-0000-4000-8000-0000000000bb",
+    authorName: "Ana",
+    body: "the original question",
+  };
+
+  it("quotes the parent optimistically and tells the server which one", () => {
+    const { chat, sent } = setup();
+    chat.sendMessage("the answer", PARENT);
+
+    expect(chat.getMessages()[0]!.replyTo).toEqual({
+      id: PARENT.id,
+      authorId: PARENT.authorId,
+      authorName: "Ana",
+      excerpt: "the original question",
+      deleted: false,
+    });
+    expect(sent.at(-1)).toMatchObject({ replyToId: PARENT.id });
+  });
+
+  it("omits replyToId entirely for an ordinary message", () => {
+    const { chat, sent } = setup();
+    chat.sendMessage("just talking");
+
+    expect(chat.getMessages()[0]!.replyTo).toBeNull();
+    expect(sent.at(-1)).not.toHaveProperty("replyToId");
+  });
+
+  it("still replies to the same message on retry", () => {
+    const { chat, sent } = setup();
+    chat.sendMessage("the answer", PARENT);
+    const nonce = chat.getMessages()[0]!.nonce!;
+
+    vi.advanceTimersByTime(10_000);
+    expect(chat.getMessages()[0]!.failed).toBe(true);
+
+    chat.retryMessage(nonce);
+    expect(sent.at(-1)).toMatchObject({ replyToId: PARENT.id });
+  });
+
+  it("marks a quote as deleted when its parent is removed live", () => {
+    const { chat } = setup();
+    chat.setMessages([
+      serverMessage({
+        id: "00000000-0000-4000-8000-00000000000b",
+        body: "the answer",
+        replyTo: {
+          id: PARENT.id,
+          authorId: PARENT.authorId,
+          authorName: "Ana",
+          excerpt: "the original question",
+          deleted: false,
+        },
+      }),
+    ]);
+
+    chat.handleServerMessage({
+      type: "message-delete",
+      channelId: CHANNEL,
+      messageId: PARENT.id,
+    } as never);
+
+    // The reply itself must survive — only the quote loses its target.
+    const [reply] = chat.getMessages();
+    expect(reply!.body).toBe("the answer");
+    expect(reply!.replyTo).toEqual({
+      id: PARENT.id,
+      authorId: null,
+      authorName: null,
+      excerpt: "",
+      deleted: true,
+    });
   });
 });
 

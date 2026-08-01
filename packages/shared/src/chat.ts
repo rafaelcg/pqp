@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   messageBodySchema,
   messageReactionSchema,
+  messageReplyRefSchema,
   reactionEmojiSchema,
 } from "./api.js";
 
@@ -23,6 +24,8 @@ export const messageCreateMessageSchema = z.object({
    * optimistic bubble for the stored message instead of rendering it twice.
    */
   nonce: z.string().min(1).max(64).optional(),
+  /** The message this one answers. Must live in the same channel. */
+  replyToId: z.string().uuid().optional(),
 });
 
 export const typingMessageSchema = z.object({
@@ -48,6 +51,7 @@ const broadcastMessageSchema = z.object({
   createdAt: z.string(),
   editedAt: z.string().nullable().default(null),
   reactions: z.array(messageReactionSchema).default([]),
+  replyTo: messageReplyRefSchema.nullable().default(null),
 });
 
 export const messageBroadcastSchema = z.object({

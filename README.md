@@ -77,6 +77,7 @@ pnpm dev
 | `CORS_ALLOWED_ORIGINS` | No | Comma-separated CORS allowlist. Empty = permissive `*`; **set it on any public deploy** |
 | `TRUST_PROXY` | No | Set `true` on Railway/Fly/Cloudflare so rate limiting reads `X-Forwarded-For`; without it every client shares one bucket |
 | `PG_POOL_MAX` | No | Postgres pool size, default `10` |
+| `GIPHY_API_KEY` | No | Enables the composer's GIF picker. Stays server-side — never give it a `VITE_` prefix. Unset: `/api/gifs/*` returns `503` and the client hides the button. Search is forced to `rating=pg-13` |
 | `DEV_AUTH_BYPASS` | No | Local only; rejected when `NODE_ENV=production` |
 
 ### Client (`client/.env`)
@@ -138,6 +139,8 @@ You get an **independent copy**: own URL, data, and Clerk instance. Not linked t
 | POST | `/api/channels/:id/read` | Mark read |
 | PATCH / DELETE | `/api/messages/:id` | Edit / delete a message |
 | GET / POST | `/api/invites/:code` | Preview / redeem an invite |
+| GET | `/api/gifs/config` | Whether GIF search is configured |
+| GET | `/api/gifs/search`, `/api/gifs/trending` | GIF proxy (`?q=`, `?limit=`), `503` without `GIPHY_API_KEY` |
 | GET | `/api/ice-servers` | ICE / TURN config |
 | GET / POST | `/api/voice/backend`, `/api/voice/token` | SFU discovery and session |
 
