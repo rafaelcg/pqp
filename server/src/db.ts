@@ -13,9 +13,27 @@ export function getPool(): pg.Pool {
     if (!connectionString) {
       throw new Error("DATABASE_URL is required");
     }
-    pool = new pg.Pool({ connectionString });
+    pool = new pg.Pool({
+      connectionString,
+      max: Number(process.env.PG_POOL_MAX ?? 10),
+      idleTimeoutMillis: 30_000,
+      connectionTimeoutMillis: 10_000,
+    });
+
+    // An idle client dropped by the database (Railway restarts, Postgres
+    // upgrades, network blips) emits 'error' on the pool. With no listener,
+    // Node treats it as an unhandled 'error' event and kills the process.
+    pool.on("error", (error) => {
+      console.error("[db] idle client error:", error);
+    });
   }
   return pool;
+}
+
+export async function closePool(): Promise<void> {
+  const current = pool;
+  pool = null;
+  await current?.end().catch(() => {});
 }
 
 export async function initDb(): Promise<void> {
@@ -57,6 +75,7 @@ export interface DbMessage {
   author_id: string;
   body: string;
   created_at: Date;
+  edited_at?: Date | null;
   author_name?: string;
   author_username?: string | null;
   author_discriminator?: string | null;

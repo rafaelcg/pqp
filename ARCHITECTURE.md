@@ -80,15 +80,19 @@ Per **voice channel** mesh room. Same offer/answer/ICE relay as the seed MVP, sc
 
 ## Voice backends (Phase 5)
 
-`VoiceBackend` abstraction in client:
+Media transport is selected by the **server** and advertised via `GET /api/voice/backend`:
 
 | Backend | Deployment | Status |
 |---|---|---|
 | `mesh` | All | **Implemented** (default) |
+| `livekit` | Self-host or hosted | **Implemented** — set `LIVEKIT_URL` / `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` |
 | `cloudflare-sfu` | pqp.gg hosted | Stub — falls back to mesh |
-| `livekit` | Self-host Docker/Railway | Stub — falls back to mesh |
 
-Set `VITE_VOICE_BACKEND=mesh` (default). Hosted production will use Cloudflare Realtime SFU; self-host uses LiveKit.
+Presence (roster, occupancy, join/leave, speaking) always rides `/ws`; the SFU replaces only the audio path, and SFU participant identity is the WS-assigned `peerId` so both paths produce the same `RemotePeer[]`.
+
+Switching needs no client rebuild. `VITE_VOICE_BACKEND=mesh` forces peer-to-peer as an escape hatch. If an SFU session fails to establish, the client falls back to mesh.
+
+Details: [`docs/voice-backends.md`](./docs/voice-backends.md).
 
 ## Cloudflare — when and why
 

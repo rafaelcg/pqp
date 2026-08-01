@@ -49,7 +49,7 @@ export function UserPanel({
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-semibold">{displayName}</p>
           <p className="truncate font-mono text-[11px] text-paper-muted">
-            {tag ?? (inVoice ? (isMuted ? "Muted" : "In voice") : "Online")}
+            {tag ?? "Online"}
           </p>
         </div>
       </div>
@@ -60,6 +60,8 @@ export function UserPanel({
         onClick={onToggleMute}
         disabled={!inVoice}
         title={isMuted ? "Unmute" : "Mute"}
+        aria-label={isMuted ? "Unmute microphone" : "Mute microphone"}
+        aria-pressed={isMuted}
       >
         {isMuted ? (
           <MicOff className="h-4 w-4 text-danger" />
@@ -73,6 +75,7 @@ export function UserPanel({
         className="h-8 w-8 shrink-0"
         onClick={onOpenSettings}
         title="Settings"
+        aria-label="Open settings"
       >
         <Settings className="h-4 w-4" />
       </Button>

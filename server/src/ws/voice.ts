@@ -7,7 +7,8 @@ import {
   type VoiceSignalingMessage,
 } from "@pqp/shared";
 import type { DbUser } from "../db.js";
-import { getChannel } from "../services/servers.js";
+import { createRateLimiter } from "../lib/rate-limit.js";
+import { getChannel, getChannelAudience } from "../services/servers.js";
 import { isChannelMember } from "../services/users.js";
 import { forEachAuthenticatedSocket } from "./sockets.js";
 
@@ -22,6 +23,13 @@ interface VoicePeer {
 
 const peers = new Map<string, VoicePeer>();
 const socketToPeerId = new Map<WebSocket, string>();
+
+/** Joining fans a query plus a broadcast out to a whole server; cap the churn. */
+const roomLimiter = createRateLimiter({ capacity: 6, refillPerSecond: 0.5 });
+
+export function resetVoiceRateLimits(): void {
+  roomLimiter.reset();
+}
 
 function getRoomPeers(voiceChannelId: string): VoicePeer[] {
   return [...peers.values()].filter((p) => p.voiceChannelId === voiceChannelId);
@@ -47,22 +55,58 @@ function broadcastToRoom(
   message: VoiceSignalingMessage,
   excludePeerId?: string,
 ) {
+  const encoded = JSON.stringify(message);
   for (const peer of getRoomPeers(voiceChannelId)) {
-    if (peer.id !== excludePeerId) {
-      send(peer.socket, message);
+    if (peer.id !== excludePeerId && peer.socket.readyState === 1) {
+      peer.socket.send(encoded);
     }
   }
 }
 
-function broadcastRoster(voiceChannelId: string) {
-  const message: VoiceSignalingMessage = {
-    type: "voice-roster",
-    voiceChannelId,
-    participants: getRoomPeers(voiceChannelId).map(toParticipant),
-  };
-  forEachAuthenticatedSocket((socket) => {
-    send(socket, message);
-  });
+/**
+ * Roster fan-out. Occupancy drives the channel-list badges, so it goes to
+ * everyone who can *see* the channel — not, as before, to every socket on the
+ * instance, which leaked private-channel participants across unrelated servers.
+ *
+ * Serialized per channel: the audience lookup is async, and two overlapping
+ * broadcasts could otherwise deliver an older snapshot last, leaving a departed
+ * peer visible in everyone's sidebar.
+ */
+const rosterQueue = new Map<string, Promise<void>>();
+
+function broadcastRoster(voiceChannelId: string): Promise<void> {
+  const previous = rosterQueue.get(voiceChannelId) ?? Promise.resolve();
+  const next = previous
+    .catch(() => {})
+    .then(async () => {
+      const audience = await getChannelAudience(voiceChannelId);
+      if (!audience) {
+        return;
+      }
+
+      // Read the room *after* the await so the payload reflects state at send
+      // time, not at the time the broadcast was requested.
+      const encoded = JSON.stringify({
+        type: "voice-roster",
+        voiceChannelId,
+        participants: getRoomPeers(voiceChannelId).map(toParticipant),
+      } satisfies VoiceSignalingMessage);
+
+      const allowed = new Set(audience.userIds);
+      forEachAuthenticatedSocket((socket, user) => {
+        if (socket.readyState === 1 && allowed.has(user.id)) {
+          socket.send(encoded);
+        }
+      });
+    })
+    .finally(() => {
+      if (rosterQueue.get(voiceChannelId) === next) {
+        rosterQueue.delete(voiceChannelId);
+      }
+    });
+
+  rosterQueue.set(voiceChannelId, next);
+  return next;
 }
 
 function relayToTarget(message: VoiceSignalingMessage & { to: string }) {
@@ -79,9 +123,61 @@ function removePeer(peerId: string) {
   }
   const { voiceChannelId } = peer;
   peers.delete(peerId);
-  socketToPeerId.delete(peer.socket);
+  if (socketToPeerId.get(peer.socket) === peerId) {
+    socketToPeerId.delete(peer.socket);
+  }
   broadcastToRoom(voiceChannelId, { type: "peer-left", peerId });
-  broadcastRoster(voiceChannelId);
+  void broadcastRoster(voiceChannelId);
+}
+
+/** Drop every peer of a channel — used when a channel is deleted or made private. */
+export function evictVoiceChannel(voiceChannelId: string) {
+  for (const peer of getRoomPeers(voiceChannelId)) {
+    removePeer(peer.id);
+  }
+}
+
+/** Drop everyone from a channel's voice room except the given users. */
+export function evictVoiceUsersExcept(
+  voiceChannelId: string,
+  allowedUserIds: Set<string>,
+) {
+  for (const peer of getRoomPeers(voiceChannelId)) {
+    if (!allowedUserIds.has(peer.userId)) {
+      removePeer(peer.id);
+    }
+  }
+}
+
+/** Drop a specific user from a channel's voice room (kick / access revoked). */
+export function evictVoiceUser(userId: string, serverChannelIds?: Set<string>) {
+  for (const peer of [...peers.values()]) {
+    if (peer.userId !== userId) {
+      continue;
+    }
+    if (serverChannelIds && !serverChannelIds.has(peer.voiceChannelId)) {
+      continue;
+    }
+    removePeer(peer.id);
+  }
+}
+
+/**
+ * Look up a live voice peer. Used by the SFU token endpoint to prove the
+ * requested peer id really belongs to the requesting user and channel.
+ */
+export function getVoicePeer(
+  peerId: string,
+): { userId: string; voiceChannelId: string; displayName: string } | null {
+  const peer = peers.get(peerId);
+  if (!peer) {
+    return null;
+  }
+  return {
+    userId: peer.userId,
+    voiceChannelId: peer.voiceChannelId,
+    displayName: peer.displayName,
+  };
 }
 
 export function removeVoicePeerBySocket(socket: WebSocket) {
@@ -91,21 +187,27 @@ export function removeVoicePeerBySocket(socket: WebSocket) {
   }
 }
 
-/** Send current voice occupancy for every active room (e.g. after auth). */
-export function sendAllVoiceRosters(socket: WebSocket) {
+/** Send current voice occupancy for every room this user can see (e.g. after auth). */
+export async function sendAllVoiceRosters(socket: WebSocket, userId: string) {
   const byChannel = new Map<string, VoiceParticipant[]>();
   for (const peer of peers.values()) {
     const list = byChannel.get(peer.voiceChannelId) ?? [];
     list.push(toParticipant(peer));
     byChannel.set(peer.voiceChannelId, list);
   }
-  for (const [voiceChannelId, participants] of byChannel) {
-    send(socket, {
-      type: "voice-roster",
-      voiceChannelId,
-      participants,
-    });
-  }
+
+  await Promise.all(
+    [...byChannel].map(async ([voiceChannelId, participants]) => {
+      if (!(await isChannelMember(voiceChannelId, userId))) {
+        return;
+      }
+      send(socket, {
+        type: "voice-roster",
+        voiceChannelId,
+        participants,
+      });
+    }),
+  );
 }
 
 export async function handleVoiceMessage(
@@ -122,6 +224,9 @@ export async function handleVoiceMessage(
   const existingPeerId = socketToPeerId.get(socket);
 
   if (payload.type === "join-voice-room") {
+    if (!roomLimiter.take(user.id)) {
+      return;
+    }
     if (!(await isChannelMember(payload.voiceChannelId, user.id))) {
       return;
     }
@@ -131,8 +236,16 @@ export async function handleVoiceMessage(
       return;
     }
 
-    if (existingPeerId) {
-      removePeer(existingPeerId);
+    // The awaits above mean the socket may have closed, or the client may have
+    // sent a second join, while this one was in flight. Registering a peer for a
+    // dead socket leaves a ghost in the roster that nothing ever removes.
+    if (socket.readyState !== 1) {
+      return;
+    }
+
+    const currentPeerId = socketToPeerId.get(socket);
+    if (currentPeerId) {
+      removePeer(currentPeerId);
     }
 
     const peerId = randomUUID();
@@ -165,7 +278,7 @@ export async function handleVoiceMessage(
       { type: "peer-joined", peer: self },
       peerId,
     );
-    broadcastRoster(payload.voiceChannelId);
+    await broadcastRoster(payload.voiceChannelId);
     return;
   }
 
@@ -184,11 +297,20 @@ export async function handleVoiceMessage(
     return;
   }
 
-  if (!peers.has(payload.from) || payload.from !== existingPeerId) {
+  const sender = peers.get(existingPeerId);
+  if (!sender || payload.from !== existingPeerId) {
     return;
   }
 
-  if (!peers.has(payload.to)) {
+  const target = peers.get(payload.to);
+  if (!target) {
+    return;
+  }
+
+  // Without this check any authenticated user could address an offer at a peer
+  // in a voice channel they are not in; the receiving browser would answer and
+  // publish its microphone to them.
+  if (target.voiceChannelId !== sender.voiceChannelId) {
     return;
   }
 

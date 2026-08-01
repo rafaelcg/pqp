@@ -1,60 +1,138 @@
 import { useEffect, useRef } from "react";
+import {
+  AlertTriangle,
+  HeadphoneOff,
+  Headphones,
+  Loader2,
+  Mic,
+  MicOff,
+  PhoneOff,
+  Volume2,
+  VolumeX,
+} from "lucide-react";
 import { MESH_VOICE_WARNING, type VoiceParticipant } from "@pqp/shared";
 import type { RemotePeer } from "@/lib/peer-connection-manager";
-import { applyAudioOutputDevice } from "@/lib/audio-devices";
 import { Button } from "@/components/ui/button";
 import { VoiceAvatar } from "@/components/voice/voice-avatar";
+import { cn } from "@/lib/utils";
 
-interface PeerAudioProps {
-  peerId: string;
-  stream: MediaStream | null;
-  outputDeviceId: string;
-  outputVolume: number;
+interface PeerRowProps {
+  peer: RemotePeer;
+  compact: boolean;
+  isSpeaking: boolean;
+  volume: number;
+  onSetVolume: (volume: number) => void;
+  onRetry?: () => void;
 }
 
-function PeerAudio({
-  peerId,
-  stream,
-  outputDeviceId,
-  outputVolume,
-}: PeerAudioProps) {
-  const audioRef = useRef<HTMLAudioElement>(null);
+function PeerRow({
+  peer,
+  compact,
+  isSpeaking,
+  volume,
+  onSetVolume,
+  onRetry,
+}: PeerRowProps) {
+  const name = peer.displayName ?? `${peer.peerId.slice(0, compact ? 6 : 8)}…`;
+  const silenced = volume === 0;
+  // Remembers where the slider was so unmuting restores that level, not 100%.
+  const restoreRef = useRef(1);
 
   useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio) {
-      return;
+    if (volume > 0) {
+      restoreRef.current = volume;
     }
-    audio.srcObject = stream;
-    if (stream) {
-      void audio.play().catch(() => {});
-    }
-  }, [stream]);
-
-  useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio) {
-      return;
-    }
-    audio.volume = Math.min(1, Math.max(0, outputVolume));
-  }, [outputVolume]);
-
-  useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio) {
-      return;
-    }
-    void applyAudioOutputDevice(audio, outputDeviceId);
-  }, [outputDeviceId, stream]);
+  }, [volume]);
 
   return (
-    <audio
-      ref={audioRef}
-      autoPlay
-      playsInline
-      data-peer-id={peerId}
-      className="sr-only"
-    />
+    <li className="group rounded-md px-1 py-0.5 transition-colors hover:bg-ink-2">
+      <div className="flex items-center gap-2 text-sm">
+        <VoiceAvatar
+          name={peer.displayName ?? "Peer"}
+          avatarUrl={peer.avatarUrl}
+          isSpeaking={isSpeaking && !silenced}
+          muted={silenced}
+          size={compact ? "sm" : "md"}
+        />
+        <span className="min-w-0 flex-1 truncate font-medium">{name}</span>
+        {silenced && (
+          <span className="flex shrink-0 items-center text-paper-muted">
+            <VolumeX className="h-3.5 w-3.5" aria-hidden="true" />
+            <span className="sr-only">Silenced</span>
+          </span>
+        )}
+        <span
+          className={cn(
+            "rounded px-2 py-0.5 text-[10px] uppercase",
+            peer.connectionState === "connected"
+              ? "bg-success/20 text-success"
+              : peer.connectionState === "failed"
+                ? "bg-danger/20 text-danger"
+                : "bg-warning/20 text-warning",
+          )}
+        >
+          {peer.connectionState}
+        </span>
+        {peer.connectionState === "failed" && onRetry && (
+          <Button
+            variant="secondary"
+            size="sm"
+            className="h-6 px-2 text-[10px]"
+            onClick={onRetry}
+          >
+            Retry
+          </Button>
+        )}
+      </div>
+
+      <div
+        className={cn(
+          "grid transition-[grid-template-rows] duration-150",
+          volume === 1
+            ? "grid-rows-[0fr] group-hover:grid-rows-[1fr] group-focus-within:grid-rows-[1fr]"
+            : "grid-rows-[1fr]",
+        )}
+      >
+        <div className="overflow-hidden">
+          <div
+            className={cn(
+              "flex items-center gap-2 pb-1 pr-1",
+              compact ? "pl-8" : "pl-11",
+            )}
+          >
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6 shrink-0"
+              aria-label={silenced ? `Unmute ${name}` : `Mute ${name}`}
+              aria-pressed={silenced}
+              onClick={() => onSetVolume(silenced ? restoreRef.current : 0)}
+            >
+              {silenced ? (
+                <VolumeX className="h-3.5 w-3.5 text-danger" />
+              ) : (
+                <Volume2 className="h-3.5 w-3.5" />
+              )}
+            </Button>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={volume}
+              aria-label={`Volume for ${name}`}
+              aria-valuetext={`${Math.round(volume * 100)} percent`}
+              onChange={(event) => onSetVolume(Number(event.target.value))}
+              className="h-1 min-w-0 flex-1 cursor-pointer accent-signal"
+            />
+            <span className="w-9 shrink-0 text-right font-mono text-[10px] tabular-nums text-paper-muted">
+              {Math.round(volume * 100)}%
+            </span>
+          </div>
+        </div>
+      </div>
+
+    </li>
   );
 }
 
@@ -66,13 +144,18 @@ interface VoicePanelProps {
   localPeerId: string | null;
   speakingPeerIds: string[];
   isMuted: boolean;
+  isDeafened: boolean;
+  /** peerId → 0..2 playback multiplier. Missing entries play at 1. */
+  peerVolumes: Record<string, number>;
   error: string | null;
   compactPeers?: boolean;
-  outputDeviceId?: string;
-  outputVolume?: number;
+  /** Media is going through an SFU — the mesh peer ceiling does not apply. */
+  usingSfu?: boolean;
   onJoin: () => void;
   onLeave: () => void;
   onToggleMute: () => void;
+  onToggleDeafen: () => void;
+  onSetPeerVolume: (peerId: string, volume: number) => void;
   onRetryPeer?: (peerId: string) => void;
 }
 
@@ -84,16 +167,19 @@ export function VoicePanel({
   localPeerId,
   speakingPeerIds,
   isMuted,
+  isDeafened,
+  peerVolumes,
   error,
   compactPeers = false,
-  outputDeviceId = "",
-  outputVolume = 1,
+  usingSfu = false,
   onJoin,
   onLeave,
   onToggleMute,
+  onToggleDeafen,
+  onSetPeerVolume,
   onRetryPeer,
 }: VoicePanelProps) {
-  const showWarning = remotePeers.length >= MESH_VOICE_WARNING;
+  const showWarning = !usingSfu && remotePeers.length >= MESH_VOICE_WARNING;
   const speaking = new Set(speakingPeerIds);
   const connectedCount =
     (status === "connected" && self ? 1 : 0) + remotePeers.length;
@@ -101,23 +187,30 @@ export function VoicePanel({
   return (
     <div className="flex h-full min-h-0 flex-col border-b border-panel-hover lg:border-b-0 lg:border-r">
       <header className="flex h-12 shrink-0 items-center border-b border-panel-hover px-4 shadow-sm">
-        <MicIcon />
+        <Mic className="h-5 w-5 text-muted" aria-hidden="true" />
         <span className="ml-2 font-semibold">{channelName}</span>
         {status === "connected" && (
-          <span className="ml-2 text-xs text-success">Live</span>
+          <span className="ml-2 flex items-center gap-1 text-xs text-success">
+            <span className="h-1.5 w-1.5 rounded-full bg-success" />
+            Live
+          </span>
         )}
       </header>
 
       <div className="flex flex-1 flex-col items-center justify-center gap-3 overflow-y-auto p-4">
         {error && (
-          <p className="rounded bg-danger/20 px-4 py-2 text-sm text-danger">
-            {error}
-          </p>
+          <div
+            role="alert"
+            className="flex w-full max-w-sm items-start gap-2 rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger"
+          >
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+            <p className="min-w-0 flex-1 break-words">{error}</p>
+          </div>
         )}
 
         {status === "idle" && (
           <>
-            <p className="text-center text-sm text-muted">
+            <p className="max-w-xs text-center text-sm text-muted">
               Join voice to talk. Chat stays available below / beside.
             </p>
             <Button onClick={onJoin}>Join Voice</Button>
@@ -125,22 +218,57 @@ export function VoicePanel({
         )}
 
         {status === "joining" && (
-          <p className="text-muted">Connecting to voice…</p>
+          <>
+            <p
+              aria-live="polite"
+              className="flex items-center gap-2 text-sm text-muted"
+            >
+              <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+              Connecting to {channelName}…
+            </p>
+            <Button variant="ghost" size="sm" onClick={onLeave}>
+              Cancel
+            </Button>
+          </>
         )}
 
         {status === "connected" && (
           <div className="w-full max-w-sm space-y-3">
             {showWarning && (
               <p className="rounded bg-warning/20 px-3 py-2 text-center text-xs text-warning">
-                Mesh limit approaching — SFU coming later.
+                Mesh limit approaching — configure an SFU for larger calls.
               </p>
             )}
 
             <div className="flex justify-center gap-2">
-              <Button variant="secondary" size="sm" onClick={onToggleMute}>
-                {isMuted ? "Unmute" : "Mute"}
+              <Button
+                variant="secondary"
+                size="icon"
+                aria-label={isMuted ? "Unmute microphone" : "Mute microphone"}
+                aria-pressed={isMuted}
+                onClick={onToggleMute}
+              >
+                {isMuted ? (
+                  <MicOff className="h-4 w-4 text-danger" />
+                ) : (
+                  <Mic className="h-4 w-4" />
+                )}
+              </Button>
+              <Button
+                variant="secondary"
+                size="icon"
+                aria-label={isDeafened ? "Undeafen" : "Deafen"}
+                aria-pressed={isDeafened}
+                onClick={onToggleDeafen}
+              >
+                {isDeafened ? (
+                  <HeadphoneOff className="h-4 w-4 text-danger" />
+                ) : (
+                  <Headphones className="h-4 w-4" />
+                )}
               </Button>
               <Button variant="danger" size="sm" onClick={onLeave}>
+                <PhoneOff className="h-4 w-4" aria-hidden="true" />
                 Leave
               </Button>
             </div>
@@ -151,7 +279,7 @@ export function VoicePanel({
               </h3>
               <ul className={compactPeers ? "space-y-1" : "space-y-2"}>
                 {self && (
-                  <li className="flex items-center gap-2 text-sm">
+                  <li className="flex items-center gap-2 px-1 py-0.5 text-sm">
                     <VoiceAvatar
                       name={self.displayName}
                       avatarUrl={self.avatarUrl}
@@ -167,56 +295,35 @@ export function VoicePanel({
                         (you)
                       </span>
                     </span>
-                    {isMuted && (
-                      <span className="rounded bg-danger/20 px-2 py-0.5 text-[10px] uppercase text-danger">
-                        Muted
+                    {isDeafened ? (
+                      <span className="flex items-center gap-1 rounded bg-danger/20 px-2 py-0.5 text-[10px] uppercase text-danger">
+                        <HeadphoneOff className="h-3 w-3" aria-hidden="true" />
+                        Deafened
                       </span>
+                    ) : (
+                      isMuted && (
+                        <span className="flex items-center gap-1 rounded bg-danger/20 px-2 py-0.5 text-[10px] uppercase text-danger">
+                          <MicOff className="h-3 w-3" aria-hidden="true" />
+                          Muted
+                        </span>
+                      )
                     )}
                   </li>
                 )}
                 {remotePeers.map((peer) => (
-                  <li
+                  <PeerRow
                     key={peer.peerId}
-                    className="flex items-center gap-2 text-sm"
-                  >
-                    <VoiceAvatar
-                      name={peer.displayName ?? "Peer"}
-                      avatarUrl={peer.avatarUrl}
-                      isSpeaking={speaking.has(peer.peerId)}
-                      size={compactPeers ? "sm" : "md"}
-                    />
-                    <span className="min-w-0 flex-1 truncate font-medium">
-                      {peer.displayName ??
-                        `${peer.peerId.slice(0, compactPeers ? 6 : 8)}…`}
-                    </span>
-                    <span
-                      className={`rounded px-2 py-0.5 text-[10px] uppercase ${
-                        peer.connectionState === "connected"
-                          ? "bg-success/20 text-success"
-                          : peer.connectionState === "failed"
-                            ? "bg-danger/20 text-danger"
-                            : "bg-warning/20 text-warning"
-                      }`}
-                    >
-                      {peer.connectionState}
-                    </span>
-                    {peer.connectionState === "failed" && onRetryPeer && (
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        className="h-6 px-2 text-[10px]"
-                        onClick={() => onRetryPeer(peer.peerId)}
-                      >
-                        Retry
-                      </Button>
-                    )}
-                    <PeerAudio
-                      peerId={peer.peerId}
-                      stream={peer.stream}
-                      outputDeviceId={outputDeviceId}
-                      outputVolume={outputVolume}
-                    />
-                  </li>
+                    peer={peer}
+                    compact={compactPeers}
+                    isSpeaking={speaking.has(peer.peerId) && !isDeafened}
+                    volume={peerVolumes[peer.userId ?? peer.peerId] ?? 1}
+                    onSetVolume={(volume) =>
+                      onSetPeerVolume(peer.userId ?? peer.peerId, volume)
+                    }
+                    onRetry={
+                      onRetryPeer ? () => onRetryPeer(peer.peerId) : undefined
+                    }
+                  />
                 ))}
               </ul>
             </div>
@@ -224,26 +331,5 @@ export function VoicePanel({
         )}
       </div>
     </div>
-  );
-}
-
-function MicIcon() {
-  return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      width="20"
-      height="20"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className="text-muted"
-    >
-      <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
-      <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-      <line x1="12" x2="12" y1="19" y2="22" />
-    </svg>
   );
 }

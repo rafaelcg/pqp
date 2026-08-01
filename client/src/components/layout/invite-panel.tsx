@@ -1,18 +1,65 @@
-import { useState } from "react";
+import { Check, Copy, Link2, Trash2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import type { Invite } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
+import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { createInvite, joinInvite } from "@/lib/api";
+import {
+  createInvite,
+  deleteInvite,
+  joinInvite,
+  listInvites,
+  previewInvite,
+} from "@/lib/api";
 
 interface InvitePanelProps {
   open: boolean;
   mode: "create" | "join";
   serverId: string | null;
   serverName: string | null;
-  token: string | null;
   canManage: boolean;
+  /** Code from an `/app/invite/<code>` link or `pqp://invite/<code>` deep link. */
+  initialCode?: string | null;
   onClose: () => void;
   onJoined: (serverId: string) => void;
+}
+
+const DEFAULT_EXPIRY_HOURS = 168;
+
+function inviteLink(code: string): string {
+  return `${window.location.origin}/app/invite/${encodeURIComponent(code)}`;
+}
+
+/** Accepts a bare code or a pasted `/app/invite/<code>` link. */
+function normalizeCode(input: string): string {
+  const segments = input.trim().split(/[/\\]/).filter(Boolean);
+  const last = segments[segments.length - 1] ?? "";
+  try {
+    return decodeURIComponent(last);
+  } catch {
+    return last;
+  }
+}
+
+function formatExpiry(expiresAt: string | null): string {
+  if (!expiresAt) {
+    return "Never expires";
+  }
+  const remainingMs = new Date(expiresAt).getTime() - Date.now();
+  if (Number.isNaN(remainingMs) || remainingMs <= 0) {
+    return "Expired";
+  }
+  const hours = Math.round(remainingMs / 3_600_000);
+  if (hours < 24) {
+    return `Expires in ${Math.max(1, hours)}h`;
+  }
+  return `Expires in ${Math.round(hours / 24)}d`;
+}
+
+function formatUses(invite: Invite): string {
+  return invite.maxUses === null
+    ? `${invite.uses} uses`
+    : `${invite.uses}/${invite.maxUses} uses`;
 }
 
 export function InvitePanel({
@@ -20,32 +67,127 @@ export function InvitePanel({
   mode,
   serverId,
   serverName,
-  token,
   canManage,
+  initialCode = null,
   onClose,
   onJoined,
 }: InvitePanelProps) {
   const [code, setCode] = useState("");
-  const [created, setCreated] = useState<Invite | null>(null);
+  const [preview, setPreview] = useState<Invite | null>(null);
+  const [invites, setInvites] = useState<Invite[]>([]);
+  const [loadingInvites, setLoadingInvites] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [pendingId, setPendingId] = useState<string | null>(null);
+  const [copied, setCopied] = useState<string | null>(null);
+  const copyTimer = useRef<number | null>(null);
 
-  if (!open) {
-    return null;
+  useEffect(() => {
+    if (open && mode === "join") {
+      setCode(initialCode ?? "");
+      setError(null);
+    }
+  }, [open, mode, initialCode]);
+
+  useEffect(() => {
+    if (!open || mode !== "create" || !serverId || !canManage) {
+      return;
+    }
+    let cancelled = false;
+    setLoadingInvites(true);
+    setError(null);
+
+    listInvites(serverId)
+      .then((result) => {
+        if (!cancelled) {
+          setInvites(result.invites);
+        }
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setError(
+            err instanceof Error ? err.message : "Failed to load invites",
+          );
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoadingInvites(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open, mode, serverId, canManage]);
+
+  // Resolving the code before joining lets people confirm which server a
+  // pasted link actually points at.
+  useEffect(() => {
+    if (!open || mode !== "join") {
+      return;
+    }
+    const trimmed = code.trim();
+    if (trimmed.length < 4) {
+      setPreview(null);
+      return;
+    }
+
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      previewInvite(trimmed)
+        .then(({ invite }) => {
+          if (!cancelled) {
+            setPreview(invite);
+          }
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setPreview(null);
+          }
+        });
+    }, 350);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [open, mode, code]);
+
+  useEffect(
+    () => () => {
+      if (copyTimer.current !== null) {
+        window.clearTimeout(copyTimer.current);
+      }
+    },
+    [],
+  );
+
+  async function copyToClipboard(key: string, text: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(key);
+      if (copyTimer.current !== null) {
+        window.clearTimeout(copyTimer.current);
+      }
+      copyTimer.current = window.setTimeout(() => setCopied(null), 1600);
+    } catch {
+      setError("Clipboard is blocked — select the link and copy it manually.");
+    }
   }
 
   async function handleCreate() {
-    if (!token || !serverId) {
+    if (!serverId) {
       return;
     }
     setBusy(true);
     setError(null);
     try {
-      const { invite } = await createInvite(token, serverId, {
-        expiresInHours: 168,
+      const { invite } = await createInvite(serverId, {
+        expiresInHours: DEFAULT_EXPIRY_HOURS,
       });
-      setCreated(invite);
+      setInvites((prev) => [invite, ...prev]);
+      await copyToClipboard(`link:${invite.id}`, inviteLink(invite.code));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create invite");
     } finally {
@@ -53,14 +195,31 @@ export function InvitePanel({
     }
   }
 
+  async function handleRevoke(inviteId: string) {
+    if (!serverId) {
+      return;
+    }
+    setPendingId(inviteId);
+    setError(null);
+    try {
+      await deleteInvite(serverId, inviteId);
+      setInvites((prev) => prev.filter((invite) => invite.id !== inviteId));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to revoke invite");
+    } finally {
+      setPendingId(null);
+    }
+  }
+
   async function handleJoin() {
-    if (!token || !code.trim()) {
+    const trimmed = code.trim();
+    if (!trimmed) {
       return;
     }
     setBusy(true);
     setError(null);
     try {
-      const result = await joinInvite(token, code.trim());
+      const result = await joinInvite(trimmed);
       onJoined(result.serverId);
       onClose();
     } catch (err) {
@@ -70,84 +229,174 @@ export function InvitePanel({
     }
   }
 
-  async function copyCode() {
-    if (!created) {
-      return;
-    }
-    await navigator.clipboard.writeText(created.code);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  }
+  const isCreate = mode === "create";
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-ink/80 sm:items-center sm:p-4">
-      <div className="animate-rise w-full max-w-md rounded-t-2xl border border-ink-4 bg-ink-2 p-5 sm:rounded-2xl">
-        <div className="mb-4 flex items-start justify-between">
-          <div>
-            <p className="text-xs uppercase tracking-[0.18em] text-signal">
-              {mode === "create" ? "Invite people" : "Join a server"}
-            </p>
-            <h2 className="font-display text-xl font-bold">
-              {mode === "create"
-                ? serverName ?? "Server"
-                : "Enter invite code"}
-            </h2>
-          </div>
-          <button
-            type="button"
-            className="text-sm text-paper-muted"
-            onClick={onClose}
-          >
-            Close
-          </button>
-        </div>
-
-        {mode === "create" && canManage && (
-          <div className="space-y-3">
-            {!created ? (
+    <Dialog
+      open={open}
+      eyebrow={isCreate ? "Invite people" : "Join a server"}
+      title={isCreate ? (serverName ?? "Server") : "Enter invite code"}
+      description={
+        isCreate
+          ? "Anyone with the link can join until it expires or is revoked."
+          : "Paste an invite link or type the code you were given."
+      }
+      onClose={onClose}
+      footer={
+        isCreate ? (
+          <>
+            <Button variant="ghost" onClick={onClose}>
+              Close
+            </Button>
+            {canManage && (
               <Button onClick={() => void handleCreate()} disabled={busy}>
                 {busy ? "Creating…" : "Create invite link"}
               </Button>
-            ) : (
-              <div className="rounded-lg border border-ink-4 bg-ink p-4">
-                <p className="mb-2 text-xs text-paper-muted">Invite code</p>
-                <p className="font-display text-3xl font-bold tracking-wide text-signal">
-                  {created.code}
-                </p>
-                <Button
-                  className="mt-3"
-                  variant="secondary"
-                  onClick={() => void copyCode()}
-                >
-                  {copied ? "Copied" : "Copy code"}
-                </Button>
-              </div>
             )}
-          </div>
-        )}
-
-        {mode === "create" && !canManage && (
+          </>
+        ) : (
+          <>
+            <Button variant="ghost" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => void handleJoin()}
+              disabled={busy || !code.trim()}
+            >
+              {busy ? "Joining…" : "Join server"}
+            </Button>
+          </>
+        )
+      }
+    >
+      <div className="space-y-4 px-5 py-4">
+        {isCreate && !canManage && (
           <p className="text-sm text-paper-muted">
             Only owners and admins can create invites.
           </p>
         )}
 
-        {mode === "join" && (
-          <div className="space-y-3">
-            <Input
-              value={code}
-              onChange={(e) => setCode(e.target.value)}
-              placeholder="Invite code"
-              autoFocus
-            />
-            <Button onClick={() => void handleJoin()} disabled={busy}>
-              {busy ? "Joining…" : "Join server"}
-            </Button>
+        {isCreate && canManage && (
+          <section>
+            <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-paper-muted">
+              Active invites
+            </h3>
+            {loadingInvites ? (
+              <p className="text-sm text-paper-muted">Loading invites…</p>
+            ) : invites.length === 0 ? (
+              <p className="text-sm text-paper-muted">
+                No invites yet. Create one to share this server.
+              </p>
+            ) : (
+              <ul className="space-y-2">
+                {invites.map((invite) => (
+                  <li
+                    key={invite.id}
+                    className="rounded-lg border border-ink-4 bg-ink p-3"
+                  >
+                    <div className="flex items-center gap-2">
+                      <p className="min-w-0 flex-1 truncate font-mono text-sm text-signal">
+                        {inviteLink(invite.code)}
+                      </p>
+                      <Button
+                        size="icon"
+                        variant="secondary"
+                        className="h-8 w-8 shrink-0"
+                        aria-label={`Copy invite link for code ${invite.code}`}
+                        onClick={() =>
+                          void copyToClipboard(
+                            `link:${invite.id}`,
+                            inviteLink(invite.code),
+                          )
+                        }
+                      >
+                        {copied === `link:${invite.id}` ? (
+                          <Check className="h-4 w-4 text-success" />
+                        ) : (
+                          <Link2 className="h-4 w-4" />
+                        )}
+                      </Button>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-8 w-8 shrink-0"
+                        aria-label={`Copy invite code ${invite.code}`}
+                        onClick={() =>
+                          void copyToClipboard(
+                            `code:${invite.id}`,
+                            invite.code,
+                          )
+                        }
+                      >
+                        {copied === `code:${invite.id}` ? (
+                          <Check className="h-4 w-4 text-success" />
+                        ) : (
+                          <Copy className="h-4 w-4" />
+                        )}
+                      </Button>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-8 w-8 shrink-0"
+                        aria-label={`Revoke invite ${invite.code}`}
+                        disabled={pendingId === invite.id}
+                        onClick={() => void handleRevoke(invite.id)}
+                      >
+                        <Trash2 className="h-4 w-4 text-danger" />
+                      </Button>
+                    </div>
+                    <p className="mt-2 text-xs text-paper-muted">
+                      <span className="font-mono text-paper">
+                        {invite.code}
+                      </span>
+                      {" · "}
+                      {formatUses(invite)}
+                      {" · "}
+                      {formatExpiry(invite.expiresAt)}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <p
+              className="mt-2 h-4 text-xs text-success"
+              role="status"
+              aria-live="polite"
+            >
+              {copied ? "Copied" : ""}
+            </p>
+          </section>
+        )}
+
+        {!isCreate && (
+          <div className="space-y-2">
+            <label className="block">
+              <span className="mb-1 block text-xs uppercase tracking-wide text-paper-muted">
+                Invite code
+              </span>
+              <Input
+                value={code}
+                onChange={(e) => setCode(normalizeCode(e.target.value))}
+                placeholder="Invite code or link"
+                autoFocus
+              />
+            </label>
+            <p
+              className="h-4 text-xs text-paper-muted"
+              role="status"
+              aria-live="polite"
+            >
+              {preview?.serverName ? `Joins ${preview.serverName}` : ""}
+            </p>
           </div>
         )}
 
-        {error && <p className="mt-3 text-sm text-danger">{error}</p>}
+        {error && (
+          <p className="text-sm text-danger" role="alert">
+            {error}
+          </p>
+        )}
       </div>
-    </div>
+    </Dialog>
   );
 }

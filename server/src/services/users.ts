@@ -229,6 +229,34 @@ export async function updateMemberRole(
   );
 }
 
+/** Remove all membership rows for a user in one server. */
+async function deleteMembership(
+  serverId: string,
+  userId: string,
+): Promise<void> {
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(
+      `DELETE FROM server_members WHERE server_id = $1 AND user_id = $2`,
+      [serverId, userId],
+    );
+    await client.query(
+      `DELETE FROM channel_members
+       WHERE user_id = $1 AND channel_id IN (
+         SELECT id FROM channels WHERE server_id = $2
+       )`,
+      [userId, serverId],
+    );
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 export async function leaveServer(
   serverId: string,
   userId: string,
@@ -238,17 +266,152 @@ export async function leaveServer(
     throw new Error("Not a member of this server");
   }
   if (role === "owner") {
-    throw new Error("Owner cannot leave — transfer ownership or delete the server");
+    throw new Error(
+      "Transfer ownership or delete the server before leaving it",
+    );
   }
-  await getPool().query(
-    `DELETE FROM server_members WHERE server_id = $1 AND user_id = $2`,
+  await deleteMembership(serverId, userId);
+}
+
+/**
+ * Kick (and optionally ban) a member. Owners can act on anyone; admins can only
+ * act on plain members, so an admin cannot depose a peer or the owner.
+ */
+export async function removeMember(
+  serverId: string,
+  actorId: string,
+  targetUserId: string,
+  ban: boolean,
+): Promise<void> {
+  if (actorId === targetUserId) {
+    throw new Error("Use leave to remove yourself");
+  }
+
+  const actorRole = await getMemberRole(serverId, actorId);
+  const targetRole = await getMemberRole(serverId, targetUserId);
+
+  if (!targetRole) {
+    throw new Error("Not a member of this server");
+  }
+  if (targetRole === "owner") {
+    throw new Error("The owner cannot be removed");
+  }
+  if (actorRole !== "owner" && !(actorRole === "admin" && targetRole === "member")) {
+    throw new Error("You do not have permission to remove this member");
+  }
+
+  await deleteMembership(serverId, targetUserId);
+
+  if (ban) {
+    await getPool().query(
+      `INSERT INTO server_bans (server_id, user_id, banned_by)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (server_id, user_id) DO NOTHING`,
+      [serverId, targetUserId, actorId],
+    );
+  }
+}
+
+export async function isBanned(
+  serverId: string,
+  userId: string,
+): Promise<boolean> {
+  const result = await getPool().query(
+    `SELECT 1 FROM server_bans WHERE server_id = $1 AND user_id = $2`,
     [serverId, userId],
   );
+  return result.rows.length > 0;
+}
+
+export async function listBans(serverId: string) {
+  const result = await getPool().query<{
+    id: string;
+    display_name: string;
+    username: string | null;
+    discriminator: string | null;
+    avatar_url: string | null;
+    created_at: Date;
+  }>(
+    `SELECT u.id, u.display_name, u.username, u.discriminator, u.avatar_url,
+            b.created_at
+     FROM server_bans b
+     JOIN users u ON u.id = b.user_id
+     WHERE b.server_id = $1
+     ORDER BY b.created_at DESC`,
+    [serverId],
+  );
+  return result.rows.map((row) => ({
+    id: row.id,
+    displayName: row.display_name,
+    tag: formatUserTag(row.username, row.discriminator),
+    avatarUrl: row.avatar_url,
+    bannedAt: row.created_at.toISOString(),
+  }));
+}
+
+export async function liftBan(
+  serverId: string,
+  userId: string,
+): Promise<void> {
   await getPool().query(
-    `DELETE FROM channel_members
-     WHERE user_id = $1 AND channel_id IN (
-       SELECT id FROM channels WHERE server_id = $2
-     )`,
-    [userId, serverId],
+    `DELETE FROM server_bans WHERE server_id = $1 AND user_id = $2`,
+    [serverId, userId],
+  );
+}
+
+/**
+ * Unread counts for every channel of a server the viewer can see. A channel with
+ * no `channel_reads` row counts everything, which is what a freshly joined
+ * member should see.
+ */
+export async function listUnread(serverId: string, userId: string) {
+  const result = await getPool().query<{
+    channel_id: string;
+    count: string;
+    mentions: string;
+  }>(
+    `SELECT c.id AS channel_id,
+            COUNT(m.id)::text AS count,
+            COUNT(mm.user_id)::text AS mentions
+     FROM channels c
+     JOIN server_members sm ON sm.server_id = c.server_id AND sm.user_id = $2
+     LEFT JOIN channel_reads cr
+       ON cr.channel_id = c.id AND cr.user_id = $2
+     LEFT JOIN messages m
+       ON m.channel_id = c.id
+      AND m.author_id <> $2
+      AND m.created_at > COALESCE(cr.last_read_at, TIMESTAMPTZ '-infinity')
+     LEFT JOIN message_mentions mm
+       ON mm.message_id = m.id AND mm.user_id = $2
+     WHERE c.server_id = $1
+       AND (
+         c.is_private = FALSE
+         OR sm.role IN ('owner', 'admin')
+         OR EXISTS (
+           SELECT 1 FROM channel_members cm
+           WHERE cm.channel_id = c.id AND cm.user_id = $2
+         )
+       )
+     GROUP BY c.id`,
+    [serverId, userId],
+  );
+
+  return result.rows.map((row) => ({
+    channelId: row.channel_id,
+    count: Number(row.count),
+    mentions: Number(row.mentions),
+  }));
+}
+
+export async function markChannelRead(
+  channelId: string,
+  userId: string,
+): Promise<void> {
+  await getPool().query(
+    `INSERT INTO channel_reads (channel_id, user_id, last_read_at)
+     VALUES ($1, $2, NOW())
+     ON CONFLICT (channel_id, user_id)
+     DO UPDATE SET last_read_at = NOW()`,
+    [channelId, userId],
   );
 }

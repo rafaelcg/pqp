@@ -39,6 +39,24 @@ jobs:
       - name: Build shared
         run: pnpm --filter @pqp/shared build
 
+      # A Pages build with empty API URLs points /app at the static host, which
+      # has no API — the app loads and then fails on every request. Fail loudly
+      # here instead of shipping that.
+      - name: Check client environment
+        env:
+          VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.VITE_CLERK_PUBLISHABLE_KEY }}
+          VITE_API_URL: ${{ secrets.VITE_API_URL }}
+          VITE_WS_URL: ${{ secrets.VITE_WS_URL }}
+        run: |
+          missing=0
+          for name in VITE_CLERK_PUBLISHABLE_KEY VITE_API_URL VITE_WS_URL; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Missing secret $name. Set it with: gh secret set $name"
+              missing=1
+            fi
+          done
+          [ "$missing" -eq 0 ]
+
       - name: Build client (production)
         env:
           VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.VITE_CLERK_PUBLISHABLE_KEY }}

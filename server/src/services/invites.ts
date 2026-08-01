@@ -5,6 +5,17 @@ function generateInviteCode(): string {
   return randomBytes(5).toString("base64url").slice(0, 8);
 }
 
+export async function deleteInvite(
+  serverId: string,
+  inviteId: string,
+): Promise<boolean> {
+  const result = await getPool().query(
+    `DELETE FROM server_invites WHERE id = $1 AND server_id = $2`,
+    [inviteId, serverId],
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
 export async function createInvite(
   serverId: string,
   createdBy: string,
@@ -72,21 +83,35 @@ export async function redeemInvite(
     if (invite.expires_at && invite.expires_at.getTime() < Date.now()) {
       throw new Error("Invite expired");
     }
-    if (invite.max_uses != null && invite.uses >= invite.max_uses) {
-      throw new Error("Invite has no uses left");
+
+    const banned = await client.query(
+      `SELECT 1 FROM server_bans WHERE server_id = $1 AND user_id = $2`,
+      [invite.server_id, userId],
+    );
+    if (banned.rows.length > 0) {
+      throw new Error("You cannot join this server");
     }
 
-    await client.query(
+    const inserted = await client.query(
       `INSERT INTO server_members (server_id, user_id, role)
        VALUES ($1, $2, 'member')
        ON CONFLICT DO NOTHING`,
       [invite.server_id, userId],
     );
 
-    await client.query(
-      `UPDATE server_invites SET uses = uses + 1 WHERE id = $1`,
-      [invite.id],
-    );
+    const joinedNow = (inserted.rowCount ?? 0) > 0;
+
+    // Only a real join consumes the invite. Re-opening an invite link you have
+    // already used previously burned a use and could exhaust your own invite.
+    if (joinedNow) {
+      if (invite.max_uses != null && invite.uses >= invite.max_uses) {
+        throw new Error("Invite has no uses left");
+      }
+      await client.query(
+        `UPDATE server_invites SET uses = uses + 1 WHERE id = $1`,
+        [invite.id],
+      );
+    }
 
     await client.query("COMMIT");
     return {

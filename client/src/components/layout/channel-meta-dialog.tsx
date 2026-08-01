@@ -1,6 +1,7 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useId, useState, type FormEvent } from "react";
 import type { Channel } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
+import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 
 const CHANNEL_ICON_PRESETS = ["📡", "💬", "🔊", "🎮", "☕", "🛠️", "🎵", "📌"];
@@ -25,6 +26,7 @@ export function ChannelMetaDialog({
   const [imageUrl, setImageUrl] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const formId = useId();
 
   useEffect(() => {
     if (open && channel) {
@@ -33,10 +35,6 @@ export function ChannelMetaDialog({
       setError(null);
     }
   }, [open, channel]);
-
-  if (!open || !channel) {
-    return null;
-  }
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -56,21 +54,29 @@ export function ChannelMetaDialog({
   }
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-end justify-center bg-ink/80 p-0 sm:items-center sm:p-4">
+    <Dialog
+      open={open && channel !== null}
+      eyebrow="Channel"
+      title={`Edit #${channel?.name ?? "channel"}`}
+      description="Topic shows in the channel header. Icon can be an emoji or image URL."
+      size="sm"
+      onClose={onClose}
+      footer={
+        <>
+          <Button type="button" variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button type="submit" form={formId} disabled={saving}>
+            {saving ? "Saving…" : "Save"}
+          </Button>
+        </>
+      }
+    >
       <form
+        id={formId}
         onSubmit={(e) => void handleSubmit(e)}
-        className="animate-rise w-full rounded-t-2xl border border-ink-4 bg-ink-2 p-5 shadow-2xl sm:max-w-md sm:rounded-2xl"
+        className="px-5 py-4"
       >
-        <p className="text-xs uppercase tracking-[0.18em] text-signal">
-          Channel
-        </p>
-        <h2 className="mb-1 font-display text-2xl font-bold">
-          Edit #{channel.name}
-        </h2>
-        <p className="mb-4 text-sm text-paper-muted">
-          Topic shows in the channel header. Icon can be an emoji or image URL.
-        </p>
-
         <label className="mb-3 block">
           <span className="mb-1 block text-xs uppercase tracking-wide text-paper-muted">
             Topic
@@ -96,11 +102,13 @@ export function ChannelMetaDialog({
           />
         </label>
 
-        <div className="mb-4 flex flex-wrap gap-1.5">
+        <div className="flex flex-wrap gap-1.5">
           {CHANNEL_ICON_PRESETS.map((icon) => (
             <button
               key={icon}
               type="button"
+              aria-label={`Use ${icon} as the channel icon`}
+              aria-pressed={imageUrl === icon}
               className={`flex h-9 w-9 items-center justify-center rounded-md border text-base ${
                 imageUrl === icon
                   ? "border-signal bg-signal/10"
@@ -120,17 +128,12 @@ export function ChannelMetaDialog({
           </button>
         </div>
 
-        {error && <p className="mb-3 text-sm text-danger">{error}</p>}
-
-        <div className="flex justify-end gap-2 safe-pb">
-          <Button type="button" variant="ghost" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button type="submit" disabled={saving}>
-            {saving ? "Saving…" : "Save"}
-          </Button>
-        </div>
+        {error && (
+          <p className="mt-3 text-sm text-danger" role="alert">
+            {error}
+          </p>
+        )}
       </form>
-    </div>
+    </Dialog>
   );
 }

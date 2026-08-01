@@ -1,9 +1,9 @@
+import { MESSAGE_MAX_LENGTH } from "@pqp/shared";
 import { Smile } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { EmojiPickerPanel } from "@/components/chat/emoji-picker";
 import { SlashCommandMenu } from "@/components/chat/slash-command-menu";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { expandEmojiShortcodes } from "@/lib/emoji-shortcodes";
 import {
   executeSlashCommand,
@@ -26,6 +26,7 @@ export interface ComposerSlashContext {
 
 interface MessageComposerProps {
   onSend: (body: string) => void;
+  onTyping?: () => void;
   slashContext?: ComposerSlashContext;
   insertText?: string | null;
   onInsertConsumed?: () => void;
@@ -33,8 +34,12 @@ interface MessageComposerProps {
   placeholder?: string;
 }
 
+/** Grow with the content, but never take over the whole pane. */
+const MAX_COMPOSER_HEIGHT_PX = 200;
+
 export function MessageComposer({
   onSend,
+  onTyping,
   slashContext,
   insertText,
   onInsertConsumed,
@@ -47,7 +52,7 @@ export function MessageComposer({
   const [feedback, setFeedback] = useState<SlashFeedback | null>(null);
   const [isRunningSlash, setIsRunningSlash] = useState(false);
   const [menuDismissed, setMenuDismissed] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   const menuOpen =
     Boolean(slashContext) && isSlashMenuOpen(body) && !menuDismissed;
@@ -58,6 +63,16 @@ export function MessageComposer({
 
   useEffect(() => {
     setSelectedIndex(0);
+  }, [body]);
+
+  // Auto-size the textarea so multi-line drafts are visible while typing.
+  useEffect(() => {
+    const node = inputRef.current;
+    if (!node) {
+      return;
+    }
+    node.style.height = "auto";
+    node.style.height = `${Math.min(node.scrollHeight, MAX_COMPOSER_HEIGHT_PX)}px`;
   }, [body]);
 
   useEffect(() => {
@@ -132,8 +147,8 @@ export function MessageComposer({
     }
   }
 
-  async function handleSubmit(event: React.FormEvent) {
-    event.preventDefault();
+  async function handleSubmit(event?: React.FormEvent) {
+    event?.preventDefault();
     const trimmed = body.trim();
     if (!trimmed || isRunningSlash) {
       return;
@@ -149,7 +164,7 @@ export function MessageComposer({
     setIsPickerOpen(false);
   }
 
-  function handleKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+  function handleKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key === "Escape") {
       if (menuOpen || isPickerOpen || feedback) {
         event.preventDefault();
@@ -159,6 +174,20 @@ export function MessageComposer({
           setMenuDismissed(true);
         }
       }
+      return;
+    }
+
+    // Enter sends; Shift+Enter (and the slash menu, handled below) inserts a
+    // newline. Without this a textarea would only ever add lines.
+    if (
+      event.key === "Enter" &&
+      !event.shiftKey &&
+      !event.metaKey &&
+      !event.ctrlKey &&
+      !(menuOpen && slashMatches.length > 0)
+    ) {
+      event.preventDefault();
+      void handleSubmit();
       return;
     }
 
@@ -266,24 +295,31 @@ export function MessageComposer({
         >
           <Smile className="h-5 w-5" />
         </Button>
-        <Input
+        <textarea
           ref={inputRef}
           value={body}
+          rows={1}
           onChange={(e) => {
             setMenuDismissed(false);
             setBody(e.target.value);
+            if (e.target.value.trim() && !e.target.value.startsWith("/")) {
+              onTyping?.();
+            }
           }}
           placeholder={placeholder}
           disabled={disabled || isRunningSlash}
-          className="flex-1"
+          maxLength={MESSAGE_MAX_LENGTH}
+          className="flex-1 resize-none self-center rounded-md border border-ink-4 bg-ink-3 px-3 py-2 text-sm leading-6 text-paper placeholder:text-paper-muted focus-visible:border-signal/60 focus-visible:outline-none disabled:opacity-50"
           role="combobox"
           aria-expanded={menuOpen}
           aria-controls={menuOpen ? "slash-command-menu" : undefined}
           aria-autocomplete="list"
+          aria-label={placeholder}
           onKeyDown={handleKeyDown}
         />
         <Button
           type="submit"
+          className="self-end"
           disabled={disabled || !body.trim() || isRunningSlash}
         >
           Send

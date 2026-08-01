@@ -4,26 +4,75 @@ import {
   createChannelSchema,
   createInviteSchema,
   createServerSchema,
+  MESSAGE_PAGE_MAX,
+  MESSAGE_PAGE_SIZE,
+  removeMemberSchema,
   updateChannelSchema,
   updateMemberRoleSchema,
+  updateMessageSchema,
   updateProfileSchema,
+  updateServerSchema,
+  voiceSessionRequestSchema,
 } from "@pqp/shared";
-import { resolveAuthUser } from "../auth/clerk.js";
-import { handleCors, readJsonBody, sendError, sendJson } from "../lib/http.js";
-import { createInvite, getInviteByCode, listInvites, mapInvite, redeemInvite } from "../services/invites.js";
-import { createMessage, listMessages, mapMessage } from "../services/messages.js";
+import {
+  createLiveKitSession,
+  getServerVoiceBackend,
+  isLiveKitConfigured,
+} from "../voice/backends.js";
+import {
+  broadcastToChannel,
+  evictChannelViewers,
+  evictUserFromChannels,
+  evictVoiceChannel,
+  evictVoiceUser,
+  evictVoiceUsersExcept,
+} from "../ws/index.js";
+import { getVoicePeer } from "../ws/voice.js";
+import { invalidateUserCache, resolveAuthUser } from "../auth/clerk.js";
+import {
+  clampLimit,
+  handleCors,
+  HttpError,
+  isUuid,
+  readJsonBody,
+  sendError,
+  sendJson,
+} from "../lib/http.js";
+import { clientAddress, createRateLimiter } from "../lib/rate-limit.js";
+import { createRouter, type RequestContext } from "../lib/router.js";
+import {
+  createInvite,
+  deleteInvite,
+  getInviteByCode,
+  listInvites,
+  mapInvite,
+  redeemInvite,
+} from "../services/invites.js";
+import {
+  deleteMessage,
+  getMessage,
+  listMessages,
+  mapMessage,
+  UnknownCursorError,
+  updateMessageBody,
+} from "../services/messages.js";
 import {
   addChannelMember,
   createChannel,
   createServer,
   deleteChannel,
+  deleteServer,
   getChannel,
+  getChannelAudience,
   listChannelMembers,
   listChannels,
+  listServerChannelIds,
   listServersForUser,
   mapChannel,
   mapServer,
   removeChannelMember,
+  renameServer,
+  transferOwnership,
   updateChannel,
 } from "../services/servers.js";
 import { getIceServers } from "../services/ice.js";
@@ -33,11 +82,514 @@ import {
   isChannelMember,
   isServerMember,
   leaveServer,
+  liftBan,
+  listBans,
   listServerMembers,
+  listUnread,
+  markChannelRead,
+  removeMember,
   toPublicUser,
   updateMemberRole,
   updateProfile,
 } from "../services/users.js";
+
+/** Per-identity request budget. Generous for a UI, hostile to a script. */
+const apiLimiter = createRateLimiter({ capacity: 120, refillPerSecond: 10 });
+/** Writes are cheaper to abuse and more expensive to serve. */
+const writeLimiter = createRateLimiter({ capacity: 30, refillPerSecond: 2 });
+/**
+ * Pre-auth backstop keyed by address. Behind a proxy without `TRUST_PROXY`,
+ * every caller looks like the same address — so this bucket is deliberately
+ * coarse. The per-user buckets above do the real work; this one only exists to
+ * stop an unauthenticated flood from reaching Clerk token verification.
+ */
+const anonLimiter = createRateLimiter({ capacity: 240, refillPerSecond: 60 });
+
+export function resetApiRateLimits(): void {
+  apiLimiter.reset();
+  writeLimiter.reset();
+  anonLimiter.reset();
+}
+
+class Forbidden extends HttpError {
+  constructor(message = "Forbidden") {
+    super(403, message);
+  }
+}
+
+/** Wrap a handler result to answer 201 instead of 200. */
+class Created {
+  constructor(readonly body: unknown) {}
+}
+
+function created(body: unknown): Created {
+  return new Created(body);
+}
+
+class NotFound extends HttpError {
+  constructor(message = "Not found") {
+    super(404, message);
+  }
+}
+
+async function requireServerMember(serverId: string, userId: string) {
+  const role = await getMemberRole(serverId, userId);
+  if (!role) {
+    // 404 rather than 403: a non-member should not be able to probe which
+    // server ids exist.
+    throw new NotFound("Server not found");
+  }
+  return role;
+}
+
+async function requireManager(serverId: string, userId: string) {
+  const role = await requireServerMember(serverId, userId);
+  if (role !== "owner" && role !== "admin") {
+    throw new Forbidden("Only owners and admins can do that");
+  }
+  return role;
+}
+
+async function requireOwner(serverId: string, userId: string) {
+  const role = await requireServerMember(serverId, userId);
+  if (role !== "owner") {
+    throw new Forbidden("Only the owner can do that");
+  }
+  return role;
+}
+
+async function requireChannel(channelId: string) {
+  const channel = await getChannel(channelId);
+  if (!channel) {
+    throw new NotFound("Channel not found");
+  }
+  return channel;
+}
+
+async function requireChannelAccess(channelId: string, userId: string) {
+  const channel = await requireChannel(channelId);
+  if (!(await isChannelMember(channelId, userId))) {
+    throw new NotFound("Channel not found");
+  }
+  return channel;
+}
+
+const router = createRouter();
+
+// ---------------------------------------------------------------- profile
+
+router.get("/api/me", async ({ user }) => toPublicUser(user));
+
+router.patch("/api/me", async ({ req, user }) => {
+  const body = updateProfileSchema.parse(await readJsonBody(req));
+  const updated = await updateProfile(user.id, {
+    displayName: body.displayName,
+    username: body.username,
+    avatarUrl: body.avatarUrl,
+  });
+  invalidateUserCache(updated.clerk_id);
+  return toPublicUser(updated);
+});
+
+// ------------------------------------------------------------------ voice
+
+router.get("/api/ice-servers", async () => ({
+  iceServers: await getIceServers(),
+}));
+
+router.get("/api/voice/backend", async () => {
+  const backend = getServerVoiceBackend();
+  return {
+    backend: backend === "livekit" && !isLiveKitConfigured() ? "mesh" : backend,
+  };
+});
+
+router.post("/api/voice/token", async ({ req, user }) => {
+  if (!isLiveKitConfigured()) {
+    throw new HttpError(503, "SFU backend not configured");
+  }
+  const body = voiceSessionRequestSchema.parse(await readJsonBody(req));
+
+  // The peer id must be a live peer owned by this user, in this channel —
+  // otherwise a caller could mint a token impersonating someone else.
+  const peer = getVoicePeer(body.peerId);
+  if (
+    !peer ||
+    peer.userId !== user.id ||
+    peer.voiceChannelId !== body.voiceChannelId
+  ) {
+    throw new Forbidden("Unknown or mismatched voice peer");
+  }
+
+  await requireChannelAccess(body.voiceChannelId, user.id);
+
+  try {
+    return await createLiveKitSession(
+      body.voiceChannelId,
+      body.peerId,
+      peer.displayName,
+    );
+  } catch (error) {
+    console.error("[voice] token minting failed:", error);
+    throw new HttpError(502, "Voice backend unavailable");
+  }
+});
+
+// ---------------------------------------------------------------- servers
+
+router.get("/api/servers", async ({ user }) => ({
+  servers: (await listServersForUser(user.id)).map(mapServer),
+}));
+
+router.post("/api/servers", async ({ req, user }) => {
+  const body = createServerSchema.parse(await readJsonBody(req));
+  const { server, channels } = await createServer(body.name, user.id);
+  return created({
+    server: { ...mapServer(server), role: "owner" as const },
+    channels: channels.map(mapChannel),
+  });
+});
+
+router.patch("/api/servers/:serverId", async ({ req, user }, { serverId }) => {
+  await requireOwner(serverId!, user.id);
+  const body = updateServerSchema.parse(await readJsonBody(req));
+
+  if (body.ownerId && body.ownerId !== user.id) {
+    try {
+      await transferOwnership(serverId!, user.id, body.ownerId);
+    } catch (error) {
+      throw new HttpError(
+        400,
+        error instanceof Error ? error.message : "Cannot transfer ownership",
+      );
+    }
+  }
+  const server = body.name ? await renameServer(serverId!, body.name) : null;
+
+  return { ok: true, ...(server ? { server: mapServer(server) } : {}) };
+});
+
+router.delete("/api/servers/:serverId", async ({ user }, { serverId }) => {
+  await requireOwner(serverId!, user.id);
+  const channelIds = await listServerChannelIds(serverId!);
+  await deleteServer(serverId!);
+  for (const channelId of channelIds) {
+    evictVoiceChannel(channelId);
+    evictChannelViewers(channelId);
+  }
+  return { ok: true };
+});
+
+router.post("/api/servers/:serverId/leave", async ({ user }, { serverId }) => {
+  try {
+    await leaveServer(serverId!, user.id);
+  } catch (error) {
+    throw new HttpError(
+      400,
+      error instanceof Error ? error.message : "Cannot leave server",
+    );
+  }
+  const channelIds = await listServerChannelIds(serverId!);
+  evictUserFromChannels(user.id, channelIds);
+  evictVoiceUser(user.id, channelIds);
+  return { ok: true };
+});
+
+router.get("/api/servers/:serverId/unread", async ({ user }, { serverId }) => {
+  await requireServerMember(serverId!, user.id);
+  return { unread: await listUnread(serverId!, user.id) };
+});
+
+// --------------------------------------------------------------- channels
+
+router.get(
+  "/api/servers/:serverId/channels",
+  async ({ user }, { serverId }) => {
+    await requireServerMember(serverId!, user.id);
+    return { channels: (await listChannels(serverId!, user.id)).map(mapChannel) };
+  },
+);
+
+router.post(
+  "/api/servers/:serverId/channels",
+  async ({ req, user }, { serverId }) => {
+    await requireManager(serverId!, user.id);
+    const body = createChannelSchema.parse(await readJsonBody(req));
+    const channel = await createChannel(
+      serverId!,
+      body.name,
+      body.type,
+      body.isPrivate ?? false,
+    );
+    if (channel.is_private) {
+      await addChannelMember(channel.id, user.id);
+    }
+    return created({ channel: mapChannel(channel) });
+  },
+);
+
+router.patch("/api/channels/:channelId", async ({ req, user }, { channelId }) => {
+  const channel = await requireChannel(channelId!);
+  await requireManager(channel.server_id, user.id);
+  const body = updateChannelSchema.parse(await readJsonBody(req));
+  const updated = await updateChannel(channelId!, {
+    name: body.name,
+    isPrivate: body.isPrivate,
+    topic: body.topic,
+    imageUrl: body.imageUrl,
+  });
+  if (!updated) {
+    throw new NotFound("Channel not found");
+  }
+
+  // Turning a channel private must immediately cut off anyone watching or
+  // talking in it who is not on the access list. The audience query is the same
+  // predicate isChannelMember uses, so owners and admins — who keep access
+  // without a channel_members row — are not evicted along with everyone else.
+  if (updated.is_private && !channel.is_private) {
+    const audience = await getChannelAudience(channelId!);
+    const allowed = new Set(audience?.userIds ?? []);
+    evictChannelViewers(channelId!, (userId) => !allowed.has(userId));
+    evictVoiceUsersExcept(channelId!, allowed);
+  }
+
+  return { channel: mapChannel(updated) };
+});
+
+router.delete("/api/channels/:channelId", async ({ user }, { channelId }) => {
+  const channel = await requireChannel(channelId!);
+  await requireManager(channel.server_id, user.id);
+  await deleteChannel(channelId!);
+  evictVoiceChannel(channelId!);
+  evictChannelViewers(channelId!);
+  return { ok: true };
+});
+
+router.get(
+  "/api/channels/:channelId/members",
+  async ({ user }, { channelId }) => {
+    const channel = await requireChannel(channelId!);
+    await requireManager(channel.server_id, user.id);
+    return { members: await listChannelMembers(channelId!) };
+  },
+);
+
+router.post(
+  "/api/channels/:channelId/members",
+  async ({ req, user }, { channelId }) => {
+    const channel = await requireChannel(channelId!);
+    await requireManager(channel.server_id, user.id);
+    const body = addChannelMemberSchema.parse(await readJsonBody(req));
+    if (!(await isServerMember(channel.server_id, body.userId))) {
+      throw new HttpError(400, "User must be a server member");
+    }
+    await addChannelMember(channelId!, body.userId);
+    return created({ ok: true });
+  },
+);
+
+router.delete(
+  "/api/channels/:channelId/members/:userId",
+  async ({ user }, { channelId, userId }) => {
+    const channel = await requireChannel(channelId!);
+    await requireManager(channel.server_id, user.id);
+    await removeChannelMember(channelId!, userId!);
+    if (channel.is_private) {
+      evictChannelViewers(channelId!, (viewerId) => viewerId === userId);
+      evictVoiceUser(userId!, new Set([channelId!]));
+    }
+    return { ok: true };
+  },
+);
+
+router.post("/api/channels/:channelId/read", async ({ user }, { channelId }) => {
+  await requireChannelAccess(channelId!, user.id);
+  await markChannelRead(channelId!, user.id);
+  return { ok: true };
+});
+
+// --------------------------------------------------------------- messages
+
+router.get(
+  "/api/channels/:channelId/messages",
+  async ({ url, user }, { channelId }) => {
+    await requireChannelAccess(channelId!, user.id);
+
+    const limit = clampLimit(
+      url.searchParams.get("limit"),
+      MESSAGE_PAGE_SIZE,
+      MESSAGE_PAGE_MAX,
+    );
+    const before = url.searchParams.get("before") ?? undefined;
+    if (before !== undefined && !isUuid(before)) {
+      throw new HttpError(400, "Invalid cursor");
+    }
+
+    try {
+      const page = await listMessages(channelId!, limit, before, user.id);
+      return {
+        messages: page.messages.map(mapMessage),
+        hasMore: page.hasMore,
+      };
+    } catch (error) {
+      if (error instanceof UnknownCursorError) {
+        throw new HttpError(400, "Unknown cursor");
+      }
+      throw error;
+    }
+  },
+);
+
+router.patch("/api/messages/:messageId", async ({ req, user }, { messageId }) => {
+  const existing = await getMessage(messageId!);
+  if (!existing) {
+    throw new NotFound("Message not found");
+  }
+  await requireChannelAccess(existing.channel_id, user.id);
+  if (existing.author_id !== user.id) {
+    throw new Forbidden("You can only edit your own messages");
+  }
+
+  const body = updateMessageSchema.parse(await readJsonBody(req));
+  const updated = await updateMessageBody(messageId!, body.body);
+  if (!updated) {
+    throw new NotFound("Message not found");
+  }
+
+  const message = mapMessage(updated);
+  broadcastToChannel(existing.channel_id, { type: "message-update", message });
+  return { message };
+});
+
+router.delete("/api/messages/:messageId", async ({ user }, { messageId }) => {
+  const existing = await getMessage(messageId!);
+  if (!existing) {
+    throw new NotFound("Message not found");
+  }
+  await requireChannelAccess(existing.channel_id, user.id);
+
+  // Authors delete their own; moderators delete anyone's.
+  if (
+    existing.author_id !== user.id &&
+    !(await canManageServer(existing.server_id, user.id))
+  ) {
+    throw new Forbidden("You cannot delete this message");
+  }
+
+  await deleteMessage(messageId!);
+  broadcastToChannel(existing.channel_id, {
+    type: "message-delete",
+    channelId: existing.channel_id,
+    messageId: messageId!,
+  });
+  return { ok: true };
+});
+
+// ---------------------------------------------------------------- members
+
+router.get("/api/servers/:serverId/members", async ({ user }, { serverId }) => {
+  await requireServerMember(serverId!, user.id);
+  return { members: await listServerMembers(serverId!) };
+});
+
+router.patch(
+  "/api/servers/:serverId/members/:userId",
+  async ({ req, user }, { serverId, userId }) => {
+    await requireOwner(serverId!, user.id);
+    const body = updateMemberRoleSchema.parse(await readJsonBody(req));
+    await updateMemberRole(serverId!, userId!, body.role);
+    return { ok: true };
+  },
+);
+
+router.delete(
+  "/api/servers/:serverId/members/:userId",
+  async ({ req, user }, { serverId, userId }) => {
+    await requireServerMember(serverId!, user.id);
+    const body = removeMemberSchema.parse(await readJsonBody(req));
+    try {
+      await removeMember(serverId!, user.id, userId!, body.ban ?? false);
+    } catch (error) {
+      throw new HttpError(
+        403,
+        error instanceof Error ? error.message : "Cannot remove member",
+      );
+    }
+    const channelIds = await listServerChannelIds(serverId!);
+    evictUserFromChannels(userId!, channelIds);
+    evictVoiceUser(userId!, channelIds);
+    return { ok: true };
+  },
+);
+
+router.get("/api/servers/:serverId/bans", async ({ user }, { serverId }) => {
+  await requireManager(serverId!, user.id);
+  return { bans: await listBans(serverId!) };
+});
+
+router.delete(
+  "/api/servers/:serverId/bans/:userId",
+  async ({ user }, { serverId, userId }) => {
+    await requireManager(serverId!, user.id);
+    await liftBan(serverId!, userId!);
+    return { ok: true };
+  },
+);
+
+// ---------------------------------------------------------------- invites
+
+router.get("/api/servers/:serverId/invites", async ({ user }, { serverId }) => {
+  await requireManager(serverId!, user.id);
+  return { invites: (await listInvites(serverId!)).map(mapInvite) };
+});
+
+router.post(
+  "/api/servers/:serverId/invites",
+  async ({ req, user }, { serverId }) => {
+    await requireManager(serverId!, user.id);
+    const body = createInviteSchema.parse(await readJsonBody(req));
+    const invite = await createInvite(serverId!, user.id, {
+      maxUses: body.maxUses,
+      expiresInHours: body.expiresInHours,
+    });
+    return created({ invite: mapInvite(invite) });
+  },
+);
+
+router.delete(
+  "/api/servers/:serverId/invites/:inviteId",
+  async ({ user }, { serverId, inviteId }) => {
+    await requireManager(serverId!, user.id);
+    await deleteInvite(serverId!, inviteId!);
+    return { ok: true };
+  },
+);
+
+router.post("/api/invites/:code/join", async ({ user }, { code }) => {
+  try {
+    return await redeemInvite(code!, user.id);
+  } catch (error) {
+    throw new HttpError(
+      400,
+      error instanceof Error ? error.message : "Invalid invite",
+    );
+  }
+});
+
+router.get("/api/invites/:code", async ({ user }, { code }) => {
+  const invite = await getInviteByCode(code!);
+  if (!invite) {
+    throw new NotFound("Invite not found");
+  }
+  // Preview is intentionally readable by any signed-in user — that is the point
+  // of an invite link — but it must not leak who else is in the server.
+  void user;
+  return { invite: mapInvite(invite) };
+});
+
+// ---------------------------------------------------------------- dispatch
+
+const WRITE_METHODS = new Set(["POST", "PATCH", "DELETE"]);
 
 export async function handleApi(
   req: IncomingMessage,
@@ -48,301 +600,69 @@ export async function handleApi(
     return;
   }
 
-  const resolved = await resolveAuthUser(req.headers.authorization);
+  const address = clientAddress(req as never);
+  if (!anonLimiter.take(`ip:${address}`)) {
+    res.setHeader("Retry-After", String(anonLimiter.retryAfter(`ip:${address}`)));
+    sendError(res, 429, "Too many requests", req);
+    return;
+  }
+
+  let resolved: Awaited<ReturnType<typeof resolveAuthUser>> = null;
+  try {
+    resolved = await resolveAuthUser(req.headers.authorization);
+  } catch (error) {
+    console.error("[auth] resolve failed:", error);
+    sendError(res, 503, "Authentication temporarily unavailable", req);
+    return;
+  }
+
   if (!resolved) {
-    sendError(res, 401, "Unauthorized");
+    sendError(res, 401, "Unauthorized", req);
     return;
   }
 
   const user = resolved.user;
+  const method = req.method ?? "GET";
+
+  if (!apiLimiter.take(`user:${user.id}`)) {
+    res.setHeader("Retry-After", String(apiLimiter.retryAfter(`user:${user.id}`)));
+    sendError(res, 429, "Too many requests", req);
+    return;
+  }
+  if (WRITE_METHODS.has(method) && !writeLimiter.take(`user:${user.id}`)) {
+    res.setHeader(
+      "Retry-After",
+      String(writeLimiter.retryAfter(`user:${user.id}`)),
+    );
+    sendError(res, 429, "Slow down", req);
+    return;
+  }
 
   try {
-    if (req.method === "GET" && pathname === "/api/me") {
-      sendJson(res, 200, toPublicUser(user));
+    const url = new URL(req.url ?? "/", "http://localhost");
+    const matched = router.match(method, pathname);
+    if (!matched) {
+      sendError(res, 404, "Not found", req);
       return;
     }
 
-    if (req.method === "PATCH" && pathname === "/api/me") {
-      const body = updateProfileSchema.parse(await readJsonBody(req));
-      const updated = await updateProfile(user.id, {
-        displayName: body.displayName,
-        username: body.username,
-        avatarUrl: body.avatarUrl,
-      });
-      sendJson(res, 200, toPublicUser(updated));
+    const ctx: RequestContext = { req, res, url, user };
+    const result = await matched.handler(ctx, matched.params);
+    if (result instanceof Created) {
+      sendJson(res, 201, result.body, req);
       return;
     }
-
-    if (req.method === "GET" && pathname === "/api/ice-servers") {
-      sendJson(res, 200, { iceServers: await getIceServers() });
-      return;
-    }
-
-    if (req.method === "GET" && pathname === "/api/servers") {
-      const servers = await listServersForUser(user.id);
-      sendJson(res, 200, { servers: servers.map(mapServer) });
-      return;
-    }
-
-    if (req.method === "POST" && pathname === "/api/servers") {
-      const body = createServerSchema.parse(await readJsonBody(req));
-      const { server, channels } = await createServer(body.name, user.id);
-      sendJson(res, 201, {
-        server: { ...mapServer(server), role: "owner" as const },
-        channels: channels.map(mapChannel),
-      });
-      return;
-    }
-
-    const inviteJoinMatch = pathname.match(/^\/api\/invites\/([^/]+)\/join$/);
-    if (inviteJoinMatch && req.method === "POST") {
-      const code = inviteJoinMatch[1]!;
-      try {
-        const joined = await redeemInvite(code, user.id);
-        sendJson(res, 200, joined);
-      } catch (error) {
-        sendError(
-          res,
-          400,
-          error instanceof Error ? error.message : "Invalid invite",
-        );
-      }
-      return;
-    }
-
-    const invitePreviewMatch = pathname.match(/^\/api\/invites\/([^/]+)$/);
-    if (invitePreviewMatch && req.method === "GET") {
-      const invite = await getInviteByCode(invitePreviewMatch[1]!);
-      if (!invite) {
-        sendError(res, 404, "Invite not found");
-        return;
-      }
-      sendJson(res, 200, { invite: mapInvite(invite) });
-      return;
-    }
-
-    const serverChannelsMatch = pathname.match(
-      /^\/api\/servers\/([^/]+)\/channels$/,
-    );
-    if (serverChannelsMatch) {
-      const serverId = serverChannelsMatch[1]!;
-      if (!(await isServerMember(serverId, user.id))) {
-        sendError(res, 403, "Forbidden");
-        return;
-      }
-
-      if (req.method === "GET") {
-        const channels = await listChannels(serverId, user.id);
-        sendJson(res, 200, { channels: channels.map(mapChannel) });
-        return;
-      }
-
-      if (req.method === "POST") {
-        if (!(await canManageServer(serverId, user.id))) {
-          sendError(res, 403, "Only owners and admins can create channels");
-          return;
-        }
-        const body = createChannelSchema.parse(await readJsonBody(req));
-        const channel = await createChannel(
-          serverId,
-          body.name,
-          body.type,
-          body.isPrivate ?? false,
-        );
-        if (channel.is_private) {
-          await addChannelMember(channel.id, user.id);
-        }
-        sendJson(res, 201, { channel: mapChannel(channel) });
-        return;
-      }
-    }
-
-    const serverInvitesMatch = pathname.match(
-      /^\/api\/servers\/([^/]+)\/invites$/,
-    );
-    if (serverInvitesMatch) {
-      const serverId = serverInvitesMatch[1]!;
-      if (!(await canManageServer(serverId, user.id))) {
-        sendError(res, 403, "Forbidden");
-        return;
-      }
-
-      if (req.method === "GET") {
-        const invites = await listInvites(serverId);
-        sendJson(res, 200, { invites: invites.map(mapInvite) });
-        return;
-      }
-
-      if (req.method === "POST") {
-        const body = createInviteSchema.parse(await readJsonBody(req));
-        const invite = await createInvite(serverId, user.id, {
-          maxUses: body.maxUses,
-          expiresInHours: body.expiresInHours,
-        });
-        sendJson(res, 201, { invite: mapInvite(invite) });
-        return;
-      }
-    }
-
-    const serverMembersMatch = pathname.match(
-      /^\/api\/servers\/([^/]+)\/members$/,
-    );
-    if (serverMembersMatch && req.method === "GET") {
-      const serverId = serverMembersMatch[1]!;
-      if (!(await isServerMember(serverId, user.id))) {
-        sendError(res, 403, "Forbidden");
-        return;
-      }
-      sendJson(res, 200, { members: await listServerMembers(serverId) });
-      return;
-    }
-
-    const serverLeaveMatch = pathname.match(/^\/api\/servers\/([^/]+)\/leave$/);
-    if (serverLeaveMatch && req.method === "POST") {
-      const serverId = serverLeaveMatch[1]!;
-      try {
-        await leaveServer(serverId, user.id);
-        sendJson(res, 200, { ok: true });
-      } catch (error) {
-        sendError(
-          res,
-          400,
-          error instanceof Error ? error.message : "Cannot leave server",
-        );
-      }
-      return;
-    }
-
-    const memberRoleMatch = pathname.match(
-      /^\/api\/servers\/([^/]+)\/members\/([^/]+)$/,
-    );
-    if (memberRoleMatch && req.method === "PATCH") {
-      const serverId = memberRoleMatch[1]!;
-      const targetUserId = memberRoleMatch[2]!;
-      const myRole = await getMemberRole(serverId, user.id);
-      if (myRole !== "owner") {
-        sendError(res, 403, "Only the owner can change roles");
-        return;
-      }
-      const body = updateMemberRoleSchema.parse(await readJsonBody(req));
-      await updateMemberRole(serverId, targetUserId, body.role);
-      sendJson(res, 200, { ok: true });
-      return;
-    }
-
-    const channelMatch = pathname.match(/^\/api\/channels\/([^/]+)$/);
-    if (channelMatch) {
-      const channelId = channelMatch[1]!;
-      const channel = await getChannel(channelId);
-      if (!channel) {
-        sendError(res, 404, "Channel not found");
-        return;
-      }
-
-      if (req.method === "PATCH") {
-        if (!(await canManageServer(channel.server_id, user.id))) {
-          sendError(res, 403, "Forbidden");
-          return;
-        }
-        const body = updateChannelSchema.parse(await readJsonBody(req));
-        const updated = await updateChannel(channelId, {
-          name: body.name,
-          isPrivate: body.isPrivate,
-          topic: body.topic,
-          imageUrl: body.imageUrl,
-        });
-        sendJson(res, 200, { channel: mapChannel(updated!) });
-        return;
-      }
-
-      if (req.method === "DELETE") {
-        if (!(await canManageServer(channel.server_id, user.id))) {
-          sendError(res, 403, "Forbidden");
-          return;
-        }
-        await deleteChannel(channelId);
-        sendJson(res, 200, { ok: true });
-        return;
-      }
-    }
-
-    const channelMembersMatch = pathname.match(
-      /^\/api\/channels\/([^/]+)\/members$/,
-    );
-    if (channelMembersMatch) {
-      const channelId = channelMembersMatch[1]!;
-      const channel = await getChannel(channelId);
-      if (!channel) {
-        sendError(res, 404, "Channel not found");
-        return;
-      }
-      if (!(await canManageServer(channel.server_id, user.id))) {
-        sendError(res, 403, "Forbidden");
-        return;
-      }
-
-      if (req.method === "GET") {
-        sendJson(res, 200, {
-          members: await listChannelMembers(channelId),
-        });
-        return;
-      }
-
-      if (req.method === "POST") {
-        const body = addChannelMemberSchema.parse(await readJsonBody(req));
-        if (!(await isServerMember(channel.server_id, body.userId))) {
-          sendError(res, 400, "User must be a server member");
-          return;
-        }
-        await addChannelMember(channelId, body.userId);
-        sendJson(res, 201, { ok: true });
-        return;
-      }
-    }
-
-    const channelMemberMatch = pathname.match(
-      /^\/api\/channels\/([^/]+)\/members\/([^/]+)$/,
-    );
-    if (channelMemberMatch && req.method === "DELETE") {
-      const channelId = channelMemberMatch[1]!;
-      const targetUserId = channelMemberMatch[2]!;
-      const channel = await getChannel(channelId);
-      if (!channel) {
-        sendError(res, 404, "Channel not found");
-        return;
-      }
-      if (!(await canManageServer(channel.server_id, user.id))) {
-        sendError(res, 403, "Forbidden");
-        return;
-      }
-      await removeChannelMember(channelId, targetUserId);
-      sendJson(res, 200, { ok: true });
-      return;
-    }
-
-    const messagesMatch = pathname.match(/^\/api\/channels\/([^/]+)\/messages$/);
-    if (messagesMatch && req.method === "GET") {
-      const channelId = messagesMatch[1]!;
-      if (!(await isChannelMember(channelId, user.id))) {
-        sendError(res, 403, "Forbidden");
-        return;
-      }
-
-      const url = new URL(req.url ?? "/", "http://localhost");
-      const limit = Number(url.searchParams.get("limit") ?? 50);
-      const before = url.searchParams.get("before") ?? undefined;
-      const messages = await listMessages(channelId, limit, before, user.id);
-      sendJson(res, 200, { messages: messages.map(mapMessage) });
-      return;
-    }
-
-    sendError(res, 404, "Not found");
+    sendJson(res, 200, result, req);
   } catch (error) {
+    if (error instanceof HttpError) {
+      sendError(res, error.status, error.message, req);
+      return;
+    }
     if (error && typeof error === "object" && "name" in error && error.name === "ZodError") {
-      sendError(res, 400, "Invalid request");
+      sendError(res, 400, "Invalid request", req);
       return;
     }
     console.error(error);
-    sendError(res, 500, "Internal server error");
+    sendError(res, 500, "Internal server error", req);
   }
 }
