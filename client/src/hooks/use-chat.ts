@@ -8,9 +8,9 @@ import type {
 } from "@pqp/shared";
 import { buildReplyExcerpt, MESSAGE_PAGE_SIZE } from "@pqp/shared";
 import {
+  apiFetch,
   deleteMessage as deleteMessageRequest,
   editMessage as editMessageRequest,
-  fetchMessages,
 } from "@/lib/api";
 import type { RealtimeTransport } from "@/lib/realtime";
 
@@ -33,6 +33,70 @@ export interface ReplyTargetMessage {
   authorId: string;
   authorName: string;
   body: string;
+}
+
+/** One page of history plus the overflow flag for each end of it. */
+interface HistoryPage {
+  messages: Message[];
+  hasMore: boolean;
+  hasNewer: boolean;
+}
+
+/**
+ * Reads history in either direction. The endpoint is called directly because
+ * this is the only caller that needs the forward cursors, and a page fetched
+ * here is the only thing that may move the window off the newest message.
+ */
+function fetchHistory(
+  channelId: string,
+  params: { limit: number; before?: string; after?: string; around?: string },
+): Promise<HistoryPage> {
+  const query = new URLSearchParams({ limit: String(params.limit) });
+  if (params.before) {
+    query.set("before", params.before);
+  }
+  if (params.after) {
+    query.set("after", params.after);
+  }
+  if (params.around) {
+    query.set("around", params.around);
+  }
+  return apiFetch<HistoryPage>(
+    `/api/channels/${channelId}/messages?${query.toString()}`,
+  );
+}
+
+/**
+ * A cursor the server no longer recognises (the message was deleted) can never
+ * succeed, so the direction it points in has to stop offering itself.
+ */
+function isUnknownCursor(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    "status" in error &&
+    (error as { status?: number }).status === 400
+  );
+}
+
+/** Server payloads leave reactions and replyTo optional; the UI type does not. */
+function toStoredMessage(message: Message): ChatMessage {
+  return {
+    ...message,
+    reactions: message.reactions ?? [],
+    replyTo: message.replyTo ?? null,
+  };
+}
+
+function isOptimistic(message: ChatMessage): boolean {
+  return Boolean(message.pending || message.failed);
+}
+
+/** The order the server pages on, so a merged page reads the same either way. */
+function byPosition(a: ChatMessage, b: ChatMessage): number {
+  if (a.createdAt !== b.createdAt) {
+    return a.createdAt < b.createdAt ? -1 : 1;
+  }
+  return a.id < b.id ? -1 : 1;
 }
 
 /** How long a typing indicator survives without a refresh. */
@@ -101,7 +165,15 @@ export function createChatController(transport: RealtimeTransport) {
     null;
   let listener: (() => void) | null = null;
   let hasMore = false;
+  let hasNewer = false;
   let loadingOlder = false;
+  let loadingNewer = false;
+  /**
+   * Newest message the window was actually paged up to. Distinct from the last
+   * row on screen: one sent while parked in history sits at the end without
+   * closing the gap the forward cursor still has to walk.
+   */
+  let newestLoadedId: string | null = null;
 
   const typing = new Map<string, { displayName: string; expiresAt: number }>();
   const sendTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -191,6 +263,31 @@ export function createChatController(transport: RealtimeTransport) {
     messages = [];
     presence = [];
     hasMore = false;
+    hasNewer = false;
+    newestLoadedId = null;
+  }
+
+  /**
+   * Replace the window with a fetched page. A history re-sync (channel open, a
+   * resync after reconnect, a jump) must not throw away a message the user is
+   * still sending — the reconnect path would otherwise silently swallow
+   * anything typed as the socket dropped.
+   */
+  function applyPage(
+    next: Message[],
+    moreAvailable: boolean,
+    newerAvailable: boolean,
+  ) {
+    const stored = new Set(next.map((message) => message.id));
+    const inFlight = messages.filter(
+      (message) => isOptimistic(message) && !stored.has(message.id),
+    );
+
+    messages = [...next.map(toStoredMessage), ...inFlight];
+    hasMore = moreAvailable;
+    hasNewer = newerAvailable;
+    newestLoadedId = next[next.length - 1]?.id ?? null;
+    emit();
   }
 
   return {
@@ -237,30 +334,21 @@ export function createChatController(transport: RealtimeTransport) {
       return hasMore;
     },
 
+    /** True while the window stops short of the newest message in the channel. */
+    hasNewerHistory() {
+      return hasNewer;
+    },
+
     isLoadingOlder() {
       return loadingOlder;
     },
 
-    setMessages(next: Message[], moreAvailable = false) {
-      // A history re-sync (channel open, or a resync after reconnect) must not
-      // throw away a message the user is still sending — the reconnect path
-      // would otherwise silently swallow anything typed as the socket dropped.
-      const stored = new Set(next.map((message) => message.id));
-      const inFlight = messages.filter(
-        (message) =>
-          (message.pending || message.failed) && !stored.has(message.id),
-      );
+    isLoadingNewer() {
+      return loadingNewer;
+    },
 
-      messages = [
-        ...next.map((message) => ({
-          ...message,
-          reactions: message.reactions ?? [],
-          replyTo: message.replyTo ?? null,
-        })),
-        ...inFlight,
-      ];
-      hasMore = moreAvailable;
-      emit();
+    setMessages(next: Message[], moreAvailable = false, newerAvailable = false) {
+      applyPage(next, moreAvailable, newerAvailable);
     },
 
     /**
@@ -276,7 +364,7 @@ export function createChatController(transport: RealtimeTransport) {
       loadingOlder = true;
       emit();
       try {
-        const page = await fetchMessages(target, {
+        const page = await fetchHistory(target, {
           before: oldest.id,
           limit: MESSAGE_PAGE_SIZE,
         });
@@ -284,26 +372,111 @@ export function createChatController(transport: RealtimeTransport) {
           return 0;
         }
         const known = new Set(messages.map((message) => message.id));
-        const older = page.messages.filter(
-          (message) => !known.has(message.id),
-        );
+        const older = page.messages
+          .filter((message) => !known.has(message.id))
+          .map(toStoredMessage);
         messages = [...older, ...messages];
         hasMore = page.hasMore;
         return older.length;
       } catch (error) {
-        // A cursor the server no longer recognises (the message was deleted)
-        // can never succeed — stop offering to load more rather than looping.
-        if (
-          error instanceof Error &&
-          "status" in error &&
-          (error as { status?: number }).status === 400
-        ) {
+        if (isUnknownCursor(error)) {
           hasMore = false;
         }
         return 0;
       } finally {
         loadingOlder = false;
         emit();
+      }
+    },
+
+    /**
+     * Append one page of newer history. Returns how many messages were added so
+     * the caller can tell fetched history apart from live traffic.
+     */
+    async loadNewer(): Promise<number> {
+      const target = channelId;
+      if (!target || !newestLoadedId || !hasNewer || loadingNewer) {
+        return 0;
+      }
+      loadingNewer = true;
+      emit();
+      try {
+        const page = await fetchHistory(target, {
+          after: newestLoadedId,
+          limit: MESSAGE_PAGE_SIZE,
+        });
+        if (channelId !== target) {
+          return 0;
+        }
+        const known = new Set(messages.map((message) => message.id));
+        const newer = page.messages
+          .filter((message) => !known.has(message.id))
+          .map(toStoredMessage);
+        // Sorted rather than appended: anything sent from inside the window is
+        // newer than every message this page just closed the gap with.
+        messages = [
+          ...[...messages.filter((message) => !isOptimistic(message)), ...newer].sort(
+            byPosition,
+          ),
+          ...messages.filter(isOptimistic),
+        ];
+        hasNewer = page.hasNewer;
+        newestLoadedId = newer[newer.length - 1]?.id ?? newestLoadedId;
+        return newer.length;
+      } catch (error) {
+        if (isUnknownCursor(error)) {
+          hasNewer = false;
+        }
+        return 0;
+      } finally {
+        loadingNewer = false;
+        emit();
+      }
+    },
+
+    /**
+     * Bring a message into the window, fetching history around it when it is not
+     * already loaded. False means it cannot be reached at all: deleted, or in a
+     * channel this window is not showing.
+     */
+    async jumpTo(messageId: string): Promise<boolean> {
+      const target = channelId;
+      if (!target) {
+        return false;
+      }
+      if (messages.some((message) => message.id === messageId)) {
+        return true;
+      }
+      try {
+        const page = await fetchHistory(target, {
+          around: messageId,
+          limit: MESSAGE_PAGE_SIZE,
+        });
+        if (channelId !== target) {
+          return false;
+        }
+        applyPage(page.messages, page.hasMore, page.hasNewer);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+
+    /** Leave a history window behind and reload the newest page. */
+    async resetToTail(): Promise<boolean> {
+      const target = channelId;
+      if (!target) {
+        return false;
+      }
+      try {
+        const page = await fetchHistory(target, { limit: MESSAGE_PAGE_SIZE });
+        if (channelId !== target) {
+          return false;
+        }
+        applyPage(page.messages, page.hasMore, page.hasNewer);
+        return true;
+      } catch {
+        return false;
       }
     },
 
@@ -472,7 +645,14 @@ export function createChatController(transport: RealtimeTransport) {
           if (messages.some((entry) => entry.id === incoming.id)) {
             return;
           }
+          // The window stops short of the present, so appending here would fake
+          // a continuity that paging forward then has to unpick. Returning to
+          // the tail fetches this message along with everything it skipped.
+          if (hasNewer) {
+            return;
+          }
           messages = [...messages, incoming];
+          newestLoadedId = incoming.id;
           emit();
           return;
         }
@@ -513,6 +693,13 @@ export function createChatController(transport: RealtimeTransport) {
                   }
                 : entry,
             );
+          // The forward cursor cannot point at a row the server has forgotten:
+          // paging from it would 400 and strand the reader in history.
+          if (newestLoadedId === message.messageId) {
+            newestLoadedId =
+              [...messages].reverse().find((entry) => !isOptimistic(entry))
+                ?.id ?? null;
+          }
           emit();
           return;
         }

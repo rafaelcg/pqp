@@ -119,6 +119,20 @@ ALTER TABLE messages ADD COLUMN IF NOT EXISTS reply_to_id UUID
 CREATE INDEX IF NOT EXISTS idx_messages_reply_to
   ON messages (reply_to_id) WHERE reply_to_id IS NOT NULL;
 
+-- Full-text search vector. GENERATED ... STORED rather than a trigger: the
+-- vector cannot drift from the body it describes, edits maintain it for free,
+-- and existing rows are backfilled by the one ALTER.
+--
+-- 'english' is a deliberate trade: stemming is what makes "deploying" find
+-- "deploy", which is most of why search feels like search. A multilingual server
+-- pays for it in recall on its non-English messages — the escape hatch is to
+-- change the configuration here, which rewrites the column on next boot.
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS search_tsv tsvector
+  GENERATED ALWAYS AS (to_tsvector('english', body)) STORED;
+
+CREATE INDEX IF NOT EXISTS idx_messages_search
+  ON messages USING GIN (search_tsv);
+
 -- (channel_id, created_at, id) keeps keyset pagination ordering stable when two
 -- messages land in the same millisecond.
 CREATE INDEX IF NOT EXISTS idx_messages_channel_created

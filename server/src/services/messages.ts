@@ -17,10 +17,34 @@ const REPLY_COLUMNS = `m.reply_to_id,
 const REPLY_JOINS = `LEFT JOIN messages parent ON parent.id = m.reply_to_id
      LEFT JOIN users pu ON pu.id = parent.author_id`;
 
+/** Every history read selects the same shape; only the cursor clause differs. */
+const MESSAGE_SELECT = `SELECT m.id, m.channel_id, m.author_id, m.body, m.created_at, m.edited_at,
+            u.display_name as author_name,
+            u.username as author_username,
+            u.discriminator as author_discriminator,
+            u.avatar_url as author_avatar_url,
+            ${REPLY_COLUMNS}
+     FROM messages m
+     JOIN users u ON u.id = m.author_id
+     ${REPLY_JOINS}`;
+
 export interface MessagePage {
   messages: Array<DbMessage & { reactions: MessageReaction[] }>;
   /** True when older messages exist beyond this page. */
   hasMore: boolean;
+  /** True when newer messages exist beyond this page — the page is mid-history. */
+  hasNewer: boolean;
+}
+
+export interface ListMessagesOptions {
+  limit?: number;
+  /** Page strictly older than this message. */
+  before?: string;
+  /** Page strictly newer than this message. */
+  after?: string;
+  /** Centre the page on this message, half of it either side. */
+  around?: string;
+  viewerId?: string;
 }
 
 export class UnknownCursorError extends Error {
@@ -30,64 +54,152 @@ export class UnknownCursorError extends Error {
   }
 }
 
-export async function listMessages(
+type Direction = "older" | "newer";
+
+interface Cursor {
+  id: string;
+  direction: Direction;
+  /** Whether the cursor row itself belongs to the page. */
+  inclusive: boolean;
+}
+
+/**
+ * A cursor row that no longer exists (the message was deleted) makes the row
+ * comparison NULL, which silently returns an empty page. Detect it so the caller
+ * can answer 400 instead of pretending history ran out.
+ */
+async function requireAnchor(
   channelId: string,
-  limit = 50,
-  before?: string,
-  viewerId?: string,
-): Promise<MessagePage> {
+  messageId: string,
+): Promise<void> {
+  const anchor = await getPool().query(
+    `SELECT 1 FROM messages WHERE id = $1 AND channel_id = $2`,
+    [messageId, channelId],
+  );
+  if (anchor.rows.length === 0) {
+    throw new UnknownCursorError();
+  }
+}
+
+/**
+ * One keyset page, in walk order — descending for `older`, ascending for
+ * `newer`. Row comparison rather than created_at alone: two messages can share a
+ * timestamp, and a plain `<` would skip or repeat them across pages.
+ */
+async function keysetPage(
+  channelId: string,
+  limit: number,
+  cursor?: Cursor,
+): Promise<{ rows: DbMessage[]; overflow: boolean }> {
   const params: unknown[] = [channelId, limit + 1];
-  let beforeClause = "";
+  let cursorClause = "";
+  let order = "DESC";
 
-  if (before) {
-    // A cursor row that no longer exists (the message was deleted) makes the
-    // row comparison NULL, which silently returns an empty final page. Detect it
-    // so the caller can answer 400 instead of pretending history ran out.
-    const cursor = await getPool().query(
-      `SELECT 1 FROM messages WHERE id = $1 AND channel_id = $2`,
-      [before, channelId],
-    );
-    if (cursor.rows.length === 0) {
-      throw new UnknownCursorError();
-    }
-
-    // Row comparison rather than created_at alone: two messages can share a
-    // timestamp, and a plain `<` would skip or repeat them across pages.
-    beforeClause = `AND (m.created_at, m.id) <
+  if (cursor) {
+    const operator =
+      cursor.direction === "older"
+        ? cursor.inclusive
+          ? "<="
+          : "<"
+        : cursor.inclusive
+          ? ">="
+          : ">";
+    cursorClause = `AND (m.created_at, m.id) ${operator}
       (SELECT created_at, id FROM messages WHERE id = $3)`;
-    params.push(before);
+    order = cursor.direction === "older" ? "DESC" : "ASC";
+    params.push(cursor.id);
   }
 
   const result = await getPool().query<DbMessage>(
-    `SELECT m.id, m.channel_id, m.author_id, m.body, m.created_at, m.edited_at,
-            u.display_name as author_name,
-            u.username as author_username,
-            u.discriminator as author_discriminator,
-            u.avatar_url as author_avatar_url,
-            ${REPLY_COLUMNS}
-     FROM messages m
-     JOIN users u ON u.id = m.author_id
-     ${REPLY_JOINS}
-     WHERE m.channel_id = $1 ${beforeClause}
-     ORDER BY m.created_at DESC, m.id DESC
+    `${MESSAGE_SELECT}
+     WHERE m.channel_id = $1 ${cursorClause}
+     ORDER BY m.created_at ${order}, m.id ${order}
      LIMIT $2`,
     params,
   );
 
-  const hasMore = result.rows.length > limit;
-  const rows = result.rows.slice(0, limit).reverse();
+  return {
+    rows: result.rows.slice(0, limit),
+    overflow: result.rows.length > limit,
+  };
+}
+
+/** Rows are handed over oldest-first, the order the client renders them in. */
+async function withReactions(
+  rows: DbMessage[],
+  hasMore: boolean,
+  hasNewer: boolean,
+  viewerId?: string,
+): Promise<MessagePage> {
   const reactionsByMessage = await listReactionsForMessages(
     rows.map((row) => row.id),
     viewerId,
   );
-
   return {
     hasMore,
+    hasNewer,
     messages: rows.map((row) => ({
       ...row,
       reactions: reactionsByMessage.get(row.id) ?? [],
     })),
   };
+}
+
+export async function listMessages(
+  channelId: string,
+  options: ListMessagesOptions = {},
+): Promise<MessagePage> {
+  const { limit = 50, before, after, around, viewerId } = options;
+
+  if (around) {
+    await requireAnchor(channelId, around);
+    // The anchor rides in the older half, so a jump always shows the message it
+    // was asked for even when nothing newer exists.
+    const olderLimit = Math.ceil(limit / 2);
+    const [older, newer] = await Promise.all([
+      keysetPage(channelId, olderLimit, {
+        id: around,
+        direction: "older",
+        inclusive: true,
+      }),
+      keysetPage(channelId, limit - olderLimit, {
+        id: around,
+        direction: "newer",
+        inclusive: false,
+      }),
+    ]);
+    return withReactions(
+      [...older.rows.reverse(), ...newer.rows],
+      older.overflow,
+      newer.overflow,
+      viewerId,
+    );
+  }
+
+  if (after) {
+    await requireAnchor(channelId, after);
+    const page = await keysetPage(channelId, limit, {
+      id: after,
+      direction: "newer",
+      inclusive: false,
+    });
+    // The cursor and everything behind it are older than this page by
+    // definition, so history is always still there to walk back into.
+    return withReactions(page.rows, true, page.overflow, viewerId);
+  }
+
+  if (before) {
+    await requireAnchor(channelId, before);
+    const page = await keysetPage(channelId, limit, {
+      id: before,
+      direction: "older",
+      inclusive: false,
+    });
+    return withReactions(page.rows.reverse(), page.overflow, true, viewerId);
+  }
+
+  const page = await keysetPage(channelId, limit);
+  return withReactions(page.rows.reverse(), page.overflow, false, viewerId);
 }
 
 export async function getMessage(

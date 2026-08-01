@@ -52,10 +52,14 @@
 
 Feature gaps versus Discord are ranked with implementation sketches in
 [`DISCORD_GAPS.md`](./DISCORD_GAPS.md); the theming entry is scoped separately in
-[`THEMING.md`](./THEMING.md). Three items in that report are **shipped-but-broken** rather than
-missing, and are the cheapest work available: the "Copy message link" URL is not a route the
-router parses, the composer has no `key` so drafts follow you between channels, and `@mention`
-autocomplete was never wired to the mention pipeline that already exists end to end.
+[`THEMING.md`](./THEMING.md), and choices that shape work not yet built are recorded in
+[`DECISIONS.md`](./DECISIONS.md). Gaps marked ✅ in the ranked list have shipped: the three
+shipped-but-broken items (permalink route, per-channel drafts, `@mention` autocomplete), plus
+replies, theming, message search, desktop notifications, and per-server/channel notification
+levels.
+
+Next up, in order: **attachments** (#4) on Cloudflare R2, then **user search by handle** (#17),
+which **DMs** (#18) depend on. Blocking (#19) stops being optional the moment DMs exist.
 
 ## Still open (operational)
 

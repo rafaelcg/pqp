@@ -8,6 +8,21 @@ export interface PqpDesktop {
   getPendingDeepLink(): Promise<string | null>;
   /** Older shells predate theming, so this may be absent. */
   setTheme?(theme: "dark" | "light"): void;
+  /** Dock / taskbar mention count. Older shells predate notifications. */
+  setBadgeCount?(count: number): void;
+  /**
+   * Show an OS notification from the main process rather than the renderer,
+   * which is the only side that can raise the window when it is clicked.
+   */
+  notify?(payload: {
+    title: string;
+    body: string;
+    /** Collapses repeats from the same channel onto one notification. */
+    tag: string;
+    /** In-app path under `/app` to open on click. */
+    path: string;
+  }): void;
+  onNotificationClick?(cb: (appPath: string) => void): () => void;
 }
 
 export function getDesktop(): PqpDesktop | undefined {

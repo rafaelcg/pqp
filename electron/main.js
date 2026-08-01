@@ -3,6 +3,7 @@ const {
   BrowserWindow,
   Menu,
   nativeTheme,
+  Notification,
   shell,
   ipcMain,
   session,
@@ -101,6 +102,20 @@ function deepLinkToAppPath(url) {
   }
 }
 
+/**
+ * Constrain a renderer-supplied route to an in-app path. `//host` is the case
+ * that matters: it parses as protocol-relative, so without this a click could
+ * navigate the shell off its own origin.
+ */
+function sanitizeAppPath(value) {
+  if (typeof value !== "string" || !value.startsWith(`${APP_PATH}/`)) {
+    return APP_PATH;
+  }
+  return value.includes("\\") || value.startsWith(`${APP_PATH}//`)
+    ? APP_PATH
+    : value;
+}
+
 async function resolveAppUrl() {
   if (wantsStaticLoad()) {
     const dist = resolveClientDist();
@@ -129,6 +144,62 @@ function sendToRenderer(channel, ...args) {
     return;
   }
   mainWindow.webContents.send(channel, ...args);
+}
+
+function focusMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return;
+  }
+  if (mainWindow.isMinimized()) {
+    mainWindow.restore();
+  }
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+/**
+ * One live notification per channel. Electron has no `tag` semantics of its
+ * own, so a burst is collapsed by closing the previous one for that channel
+ * before showing the replacement.
+ *
+ * @type {Map<string, Electron.Notification>}
+ */
+const liveNotifications = new Map();
+
+function showNotification({ title, body, tag, path: appPath }) {
+  if (!Notification.isSupported()) {
+    return;
+  }
+  const key = tag || appPath;
+  liveNotifications.get(key)?.close();
+
+  // The OS owns the alert sound and Do Not Disturb; overriding either is how a
+  // chat app ends up muted at the system level and never heard from again.
+  const notification = new Notification({ title, body, silent: true });
+  notification.on("click", () => {
+    liveNotifications.delete(key);
+    focusMainWindow();
+    sendToRenderer("pqp:notification-click", appPath);
+  });
+  notification.on("close", () => {
+    if (liveNotifications.get(key) === notification) {
+      liveNotifications.delete(key);
+    }
+  });
+  liveNotifications.set(key, notification);
+  notification.show();
+}
+
+function applyBadgeCount(count) {
+  // macOS and most Linux desktops draw a real number; Windows has no dock, so
+  // a taskbar flash is the equivalent nudge. An overlay icon would be better
+  // but needs an icon asset the repo does not ship yet.
+  if (typeof app.setBadgeCount === "function") {
+    app.setBadgeCount(count);
+  }
+  if (process.platform === "win32" && mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.flashFrame(count > 0 && !mainWindow.isFocused());
+  }
 }
 
 function handleDeepLink(url) {
@@ -431,6 +502,25 @@ if (!gotLock) {
     }
     nativeTheme.themeSource = theme;
     saveTheme(app.getPath("userData"), theme);
+  });
+
+  ipcMain.on("pqp:set-badge", (_event, count) => {
+    if (!Number.isFinite(count)) {
+      return;
+    }
+    applyBadgeCount(Math.max(0, Math.floor(count)));
+  });
+
+  ipcMain.on("pqp:notify", (_event, payload) => {
+    if (!payload || typeof payload.title !== "string") {
+      return;
+    }
+    showNotification({
+      title: payload.title,
+      body: typeof payload.body === "string" ? payload.body : "",
+      tag: typeof payload.tag === "string" ? payload.tag : "",
+      path: sanitizeAppPath(payload.path),
+    });
   });
 
   app.whenReady().then(async () => {

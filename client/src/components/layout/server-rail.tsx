@@ -9,6 +9,11 @@ import {
   ContextMenu,
   type ContextMenuItemDef,
 } from "@/components/ui/context-menu";
+import {
+  notificationLevelItems,
+  serverNotificationControls,
+  useNotificationState,
+} from "@/hooks/use-notifications";
 import { cn } from "@/lib/utils";
 
 interface ServerRailProps {
@@ -38,6 +43,10 @@ export function ServerRail({
   onOpenSettings,
   onLeaveServer,
 }: ServerRailProps) {
+  // Subscribed once for the whole rail: hook rules forbid reading the store
+  // inside the map below, and every icon needs the same snapshot anyway.
+  const notifications = useNotificationState();
+
   // Channels are only known for the selected server, so every other icon stays
   // indicator-free rather than guessing.
   const selectedTotals = channels.reduce(
@@ -59,8 +68,11 @@ export function ServerRail({
       {servers.map((server) => {
         const selected = selectedServerId === server.id;
         const totals = selected ? selectedTotals : null;
-        const mentions = totals?.mentions ?? 0;
-        const hasUnread = !!totals && (totals.count > 0 || mentions > 0);
+        const levels = serverNotificationControls(server.id, notifications);
+        const muted = levels.level === "none";
+        const mentions = muted ? 0 : (totals?.mentions ?? 0);
+        const hasUnread =
+          !muted && !!totals && (totals.count > 0 || mentions > 0);
 
         const items: ContextMenuItemDef[] = [
           {
@@ -79,6 +91,9 @@ export function ServerRail({
             onSelect: () => onOpenSettings(server.id),
           },
         ];
+        items.push(
+          ...notificationLevelItems("notify", levels, "account"),
+        );
         if (server.role !== "owner") {
           items.push(
             { id: "sep", label: "", separator: true },
@@ -102,6 +117,7 @@ export function ServerRail({
                 selected
                   ? "rounded-xl bg-signal text-ink"
                   : "bg-ink-3 text-paper hover:bg-signal hover:text-ink",
+                muted && !selected && "opacity-50",
               )}
             >
               {selected && (

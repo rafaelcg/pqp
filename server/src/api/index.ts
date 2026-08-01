@@ -10,7 +10,10 @@ import {
   GIF_QUERY_MAX_LENGTH,
   MESSAGE_PAGE_MAX,
   MESSAGE_PAGE_SIZE,
+  messageSearchQuerySchema,
   removeMemberSchema,
+  SEARCH_PAGE_MAX,
+  SEARCH_PAGE_SIZE,
   updateChannelSchema,
   updateMemberRoleSchema,
   updateMessageSchema,
@@ -95,6 +98,7 @@ import {
   trendingGifs,
 } from "../services/gifs.js";
 import { getIceServers } from "../services/ice.js";
+import { decodeSearchCursor, searchMessages } from "../services/search.js";
 import { mergePreferences } from "../services/preferences.js";
 import {
   canManageServer,
@@ -144,12 +148,20 @@ const anonLimiter = createRateLimiter({ capacity: 240, refillPerSecond: 60 });
  * typing, not enough to burn the deployment's key.
  */
 const gifLimiter = createRateLimiter({ capacity: 20, refillPerSecond: 1 });
+/**
+ * Search is also per-keystroke, but the expensive party is our own database
+ * rather than a third party's quota: one query ranks every visible message in a
+ * server. The burst covers a debounced session of typing plus paging through
+ * the results; sustained it is roughly one search per second.
+ */
+const searchLimiter = createRateLimiter({ capacity: 30, refillPerSecond: 1 });
 
 export function resetApiRateLimits(): void {
   apiLimiter.reset();
   writeLimiter.reset();
   anonLimiter.reset();
   gifLimiter.reset();
+  searchLimiter.reset();
 }
 
 class Forbidden extends HttpError {
@@ -555,15 +567,32 @@ router.get(
       MESSAGE_PAGE_MAX,
     );
     const before = url.searchParams.get("before") ?? undefined;
-    if (before !== undefined && !isUuid(before)) {
+    const after = url.searchParams.get("after") ?? undefined;
+    const around = url.searchParams.get("around") ?? undefined;
+    const cursors = [before, after, around].filter(
+      (cursor) => cursor !== undefined,
+    );
+    if (cursors.some((cursor) => !isUuid(cursor))) {
       throw new HttpError(400, "Invalid cursor");
+    }
+    // Combining them has no single answer for which end the page hangs off, and
+    // silently picking one would page past history the caller thinks it read.
+    if (cursors.length > 1) {
+      throw new HttpError(400, "Use one cursor at a time");
     }
 
     try {
-      const page = await listMessages(channelId!, limit, before, user.id);
+      const page = await listMessages(channelId!, {
+        limit,
+        before,
+        after,
+        around,
+        viewerId: user.id,
+      });
       return {
         messages: page.messages.map(mapMessage),
         hasMore: page.hasMore,
+        hasNewer: page.hasNewer,
       };
     } catch (error) {
       if (error instanceof UnknownCursorError) {
@@ -617,6 +646,46 @@ router.delete("/api/messages/:messageId", async ({ user }, { messageId }) => {
     messageId: messageId!,
   });
   return { ok: true };
+});
+
+// ----------------------------------------------------------------- search
+
+router.get("/api/servers/:serverId/search", async (ctx, { serverId }) => {
+  const { url, user, res } = ctx;
+  await requireServerMember(serverId!, user.id);
+
+  const key = `user:${user.id}`;
+  if (!searchLimiter.take(key)) {
+    res.setHeader("Retry-After", String(searchLimiter.retryAfter(key)));
+    throw new HttpError(429, "Slow down");
+  }
+
+  const query = messageSearchQuerySchema.safeParse(
+    (url.searchParams.get("q") ?? "").trim(),
+  );
+  if (!query.success) {
+    throw new HttpError(400, "Invalid search query");
+  }
+
+  const limit = clampLimit(
+    url.searchParams.get("limit"),
+    SEARCH_PAGE_SIZE,
+    SEARCH_PAGE_MAX,
+  );
+
+  const rawCursor = url.searchParams.get("before");
+  const cursor = rawCursor ? decodeSearchCursor(rawCursor) : null;
+  if (rawCursor && !cursor) {
+    throw new HttpError(400, "Invalid cursor");
+  }
+
+  return await searchMessages(
+    serverId!,
+    user.id,
+    query.data,
+    limit,
+    cursor ?? undefined,
+  );
 });
 
 // ---------------------------------------------------------------- members

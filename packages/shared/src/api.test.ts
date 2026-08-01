@@ -14,6 +14,12 @@ import {
 } from "./api.js";
 import { messageCreateMessageSchema } from "./chat.js";
 import { gifSchema, isGifMediaUrl, stillGifUrl } from "./gifs.js";
+import {
+  messageSearchQuerySchema,
+  parseSearchSnippet,
+  SEARCH_HIGHLIGHT_CLOSE,
+  SEARCH_HIGHLIGHT_OPEN,
+} from "./search.js";
 
 describe("messageBodySchema", () => {
   it("accepts ordinary and multi-line text", () => {
@@ -331,5 +337,56 @@ describe("formatUserTag", () => {
   it("returns null when either half is missing", () => {
     expect(formatUserTag(null, "0042")).toBeNull();
     expect(formatUserTag("alice", null)).toBeNull();
+  });
+});
+
+describe("messageSearchQuerySchema", () => {
+  it("accepts an ordinary phrase", () => {
+    expect(messageSearchQuerySchema.safeParse("deploy notes").success).toBe(true);
+  });
+
+  it("rejects a query too short to be worth a database round trip", () => {
+    expect(messageSearchQuerySchema.safeParse("a").success).toBe(false);
+    expect(messageSearchQuerySchema.safeParse("x".repeat(201)).success).toBe(
+      false,
+    );
+  });
+
+  it("rejects control characters, which Postgres cannot take as parameters", () => {
+    expect(
+      messageSearchQuerySchema.safeParse(`bad${String.fromCharCode(0)}`).success,
+    ).toBe(false);
+  });
+});
+
+describe("parseSearchSnippet", () => {
+  const open = SEARCH_HIGHLIGHT_OPEN;
+  const close = SEARCH_HIGHLIGHT_CLOSE;
+
+  it("splits a snippet into plain and matched runs", () => {
+    expect(parseSearchSnippet(`the ${open}otter${close} swims`)).toEqual([
+      { text: "the ", match: false },
+      { text: "otter", match: true },
+      { text: " swims", match: false },
+    ]);
+  });
+
+  it("handles a match at either end and several matches", () => {
+    expect(parseSearchSnippet(`${open}a${close} b ${open}c${close}`)).toEqual([
+      { text: "a", match: true },
+      { text: " b ", match: false },
+      { text: "c", match: true },
+    ]);
+  });
+
+  it("returns nothing for an empty snippet", () => {
+    expect(parseSearchSnippet("")).toEqual([]);
+  });
+
+  it("never leaks a delimiter into the text it emits", () => {
+    for (const segment of parseSearchSnippet(`stray ${close} marker ${open}x`)) {
+      expect(segment.text).not.toContain(open);
+      expect(segment.text).not.toContain(close);
+    }
   });
 });

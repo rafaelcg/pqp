@@ -15,6 +15,37 @@ export const usernameSchema = z
 export const themePreferenceSchema = z.enum(["light", "dark", "system"]);
 export type ThemePreference = z.infer<typeof themePreferenceSchema>;
 
+export const notificationLevelSchema = z.enum(["all", "mentions", "none"]);
+export type NotificationLevel = z.infer<typeof notificationLevelSchema>;
+
+/**
+ * How loudly each place is allowed to interrupt, keyed by id. A channel entry
+ * wins over the entry for the server it belongs to, which wins over `default`.
+ *
+ * Ids appear only once they diverge from what they inherit, so the common case
+ * — one chatty #general turned down inside an otherwise normal server — costs
+ * two keys rather than a row per channel the user is in.
+ *
+ * The whole object is replaced on write, never patched key by key: the
+ * preference store merges one level deep (jsonb `||`), so a client that sent
+ * `{ channels: { x: "none" } }` would drop every other channel's choice.
+ */
+export const notificationPreferencesSchema = z.object({
+  /**
+   * Whether the user has opted into OS-level notifications at all. Separate
+   * from the browser permission, which they can revoke without telling us and
+   * which cannot be re-requested without another explicit click.
+   */
+  desktop: z.boolean().optional(),
+  default: notificationLevelSchema.optional(),
+  servers: z.record(z.string().uuid(), notificationLevelSchema).optional(),
+  channels: z.record(z.string().uuid(), notificationLevelSchema).optional(),
+});
+
+export type NotificationPreferences = z.infer<
+  typeof notificationPreferencesSchema
+>;
+
 /**
  * Settings that belong to the person rather than to the machine they are on,
  * stored as one JSONB blob so adding a preference stays a schema change here
@@ -41,6 +72,7 @@ export const userPreferencesSchema = z.object({
   /** Mic gain, where 1 is unity and 2 is the boost ceiling the UI exposes. */
   inputVolume: z.number().min(0).max(2).optional(),
   outputVolume: z.number().min(0).max(1).optional(),
+  notifications: notificationPreferencesSchema.optional(),
 });
 
 export type UserPreferences = z.infer<typeof userPreferencesSchema>;

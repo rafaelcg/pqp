@@ -11,6 +11,7 @@ import {
   vi,
 } from "vitest";
 import type { WebSocket } from "ws";
+import { parseSearchSnippet } from "@pqp/shared";
 import type { DbUser } from "../db.js";
 
 /**
@@ -520,6 +521,135 @@ describeDb("API authorization", () => {
         `/api/channels/${textChannelId}/messages?limit=2&before=${first.body.messages[0]!.id}`,
       );
       expect(second.body.messages.map((m) => m.body)).toEqual(["m1", "m2"]);
+    });
+
+    it("centres a page on the message a permalink points at", async () => {
+      const { textChannelId } = await makeServer();
+      const ids: string[] = [];
+      for (let i = 0; i < 9; i++) {
+        const inserted = await getPool().query<{ id: string }>(
+          `INSERT INTO messages (channel_id, author_id, body) VALUES ($1, $2, $3) RETURNING id`,
+          [textChannelId, owner.id, `m${i}`],
+        );
+        ids.push(inserted.rows[0]!.id);
+      }
+
+      const middle = await call<{
+        messages: Array<{ id: string; body: string }>;
+        hasMore: boolean;
+        hasNewer: boolean;
+      }>(
+        owner,
+        "GET",
+        `/api/channels/${textChannelId}/messages?limit=4&around=${ids[4]}`,
+      );
+      expect(middle.body.messages.map((m) => m.body)).toEqual([
+        "m3",
+        "m4",
+        "m5",
+        "m6",
+      ]);
+      expect(middle.body.hasMore).toBe(true);
+      expect(middle.body.hasNewer).toBe(true);
+
+      // The anchor rides in the older half, so the newest message still centres
+      // on itself rather than falling off the end of its own page.
+      const newest = await call<{
+        messages: Array<{ body: string }>;
+        hasMore: boolean;
+        hasNewer: boolean;
+      }>(
+        owner,
+        "GET",
+        `/api/channels/${textChannelId}/messages?limit=4&around=${ids[8]}`,
+      );
+      expect(newest.body.messages.map((m) => m.body)).toEqual(["m7", "m8"]);
+      expect(newest.body.hasNewer).toBe(false);
+      expect(newest.body.hasMore).toBe(true);
+    });
+
+    it("walks back and forth around an anchor without repeating or skipping", async () => {
+      const { textChannelId } = await makeServer();
+      const ids: string[] = [];
+      for (let i = 0; i < 10; i++) {
+        const inserted = await getPool().query<{ id: string }>(
+          `INSERT INTO messages (channel_id, author_id, body) VALUES ($1, $2, $3) RETURNING id`,
+          [textChannelId, owner.id, `m${i}`],
+        );
+        ids.push(inserted.rows[0]!.id);
+      }
+
+      type Page = {
+        messages: Array<{ id: string; body: string }>;
+        hasMore: boolean;
+        hasNewer: boolean;
+      };
+      const around = await call<Page>(
+        owner,
+        "GET",
+        `/api/channels/${textChannelId}/messages?limit=4&around=${ids[5]}`,
+      );
+      expect(around.body.messages.map((m) => m.body)).toEqual([
+        "m4",
+        "m5",
+        "m6",
+        "m7",
+      ]);
+
+      const older = await call<Page>(
+        owner,
+        "GET",
+        `/api/channels/${textChannelId}/messages?limit=2&before=${around.body.messages[0]!.id}`,
+      );
+      expect(older.body.messages.map((m) => m.body)).toEqual(["m2", "m3"]);
+      expect(older.body.hasNewer).toBe(true);
+
+      const newer = await call<Page>(
+        owner,
+        "GET",
+        `/api/channels/${textChannelId}/messages?limit=2&after=${around.body.messages[3]!.id}`,
+      );
+      expect(newer.body.messages.map((m) => m.body)).toEqual(["m8", "m9"]);
+      expect(newer.body.hasMore).toBe(true);
+      expect(newer.body.hasNewer).toBe(false);
+
+      const walked = [
+        ...older.body.messages,
+        ...around.body.messages,
+        ...newer.body.messages,
+      ].map((m) => m.id);
+      expect(walked).toEqual(ids.slice(2));
+      expect(new Set(walked).size).toBe(walked.length);
+    });
+
+    it("rejects an anchor whose message was deleted, rather than paging from nowhere", async () => {
+      const { textChannelId } = await makeServer();
+      for (let i = 0; i < 3; i++) {
+        await getPool().query(
+          `INSERT INTO messages (channel_id, author_id, body) VALUES ($1, $2, $3)`,
+          [textChannelId, owner.id, `m${i}`],
+        );
+      }
+      const anchor = await postMessage(textChannelId);
+      await call(owner, "DELETE", `/api/messages/${anchor}`);
+
+      const res = await call(
+        owner,
+        "GET",
+        `/api/channels/${textChannelId}/messages?around=${anchor}`,
+      );
+      expect(res.status).toBe(400);
+    });
+
+    it("refuses to guess which end a page hangs off when cursors are combined", async () => {
+      const { textChannelId } = await makeServer();
+      const anchor = await postMessage(textChannelId);
+      const res = await call(
+        owner,
+        "GET",
+        `/api/channels/${textChannelId}/messages?around=${anchor}&before=${anchor}`,
+      );
+      expect(res.status).toBe(400);
     });
 
     it("clamps an absurd limit instead of scanning the whole channel", async () => {
@@ -1097,6 +1227,172 @@ describeDb("API authorization", () => {
       expect(last).toBe(429);
       // The bucket is spent before the provider is called again.
       expect(upstreamCalls.length).toBeLessThan(40);
+    });
+  });
+
+  describe("message search", () => {
+    interface SearchBody {
+      results: Array<{
+        messageId: string;
+        channelId: string;
+        channelName: string;
+        authorName: string;
+        snippet: string;
+        createdAt: string;
+      }>;
+      hasMore: boolean;
+      nextCursor: string | null;
+    }
+
+    async function seed(channelId: string, body: string, author = owner) {
+      const result = await getPool().query<{ id: string }>(
+        `INSERT INTO messages (channel_id, author_id, body)
+         VALUES ($1, $2, $3) RETURNING id`,
+        [channelId, author.id, body],
+      );
+      return result.rows[0]!.id;
+    }
+
+    function search(
+      as: { id: string; clerk_id: string },
+      serverId: string,
+      query: string,
+      extra = "",
+    ) {
+      return call<SearchBody>(
+        as,
+        "GET",
+        `/api/servers/${serverId}/search?q=${encodeURIComponent(query)}${extra}`,
+      );
+    }
+
+    it("finds a message and says which channel it lives in", async () => {
+      const { serverId, textChannelId } = await makeServer();
+      const messageId = await seed(textChannelId, "the penguin waddles home");
+      await seed(textChannelId, "nothing to see here");
+
+      const res = await search(owner, serverId, "penguin");
+      expect(res.status).toBe(200);
+      expect(res.body.results).toHaveLength(1);
+
+      const [hit] = res.body.results;
+      expect(hit!.messageId).toBe(messageId);
+      expect(hit!.channelId).toBe(textChannelId);
+      expect(hit!.channelName).toBe("general");
+      expect(hit!.authorName).toBe("Owner");
+      // The snippet marks the matched term rather than returning HTML.
+      expect(
+        parseSearchSnippet(hit!.snippet)
+          .filter((segment) => segment.match)
+          .map((segment) => segment.text),
+      ).toContain("penguin");
+    });
+
+    it("stems, so a search finds the other forms of a word", async () => {
+      const { serverId, textChannelId } = await makeServer();
+      await seed(textChannelId, "we are deploying on friday");
+
+      const res = await search(owner, serverId, "deploy");
+      expect(res.body.results).toHaveLength(1);
+    });
+
+    it("never returns a private channel's messages to a non-member", async () => {
+      const { serverId } = await makeServer();
+      const created = await call<{ channel: { id: string } }>(
+        owner,
+        "POST",
+        `/api/servers/${serverId}/channels`,
+        { name: "secret", type: "text", isPrivate: true },
+      );
+      const privateId = created.body.channel.id;
+      await seed(privateId, "the passphrase is armadillo");
+
+      const hidden = await search(member, serverId, "armadillo");
+      expect(hidden.status).toBe(200);
+      expect(hidden.body.results).toHaveLength(0);
+
+      // Owners and admins keep access without a channel_members row, exactly as
+      // the channel list and history do.
+      expect((await search(owner, serverId, "armadillo")).body.results).toHaveLength(1);
+      expect((await search(admin, serverId, "armadillo")).body.results).toHaveLength(1);
+
+      await call(owner, "POST", `/api/channels/${privateId}/members`, {
+        userId: member.id,
+      });
+      const granted = await search(member, serverId, "armadillo");
+      expect(granted.body.results.map((r) => r.channelId)).toEqual([privateId]);
+    });
+
+    it("keeps results inside the server that was asked about", async () => {
+      const mine = await makeServer();
+      const other = await makeServer();
+      await seed(mine.textChannelId, "shared word narwhal here");
+      const elsewhere = await seed(other.textChannelId, "narwhal over there");
+
+      const res = await search(owner, mine.serverId, "narwhal");
+      expect(res.body.results).toHaveLength(1);
+      expect(res.body.results.map((r) => r.messageId)).not.toContain(elsewhere);
+    });
+
+    it("hides search from someone who is not in the server", async () => {
+      const { serverId, textChannelId } = await makeServer();
+      await seed(textChannelId, "narwhal");
+      const res = await search(outsider, serverId, "narwhal");
+      expect(res.status).toBe(404);
+    });
+
+    it("paginates without repeating or skipping a result", async () => {
+      const { serverId, textChannelId } = await makeServer();
+      const seeded: string[] = [];
+      for (let i = 0; i < 5; i++) {
+        // Varying length and repetition so the rows do not all rank identically,
+        // which is what makes the rank half of the cursor load-bearing.
+        seeded.push(
+          await seed(
+            textChannelId,
+            i % 2 === 0
+              ? `otter ${"padding ".repeat(i + 1)}`
+              : `otter otter sighting ${i}`,
+          ),
+        );
+      }
+
+      const seen: string[] = [];
+      let cursor: string | null = null;
+      for (let page = 0; page < 5; page++) {
+        const res: ApiResult<SearchBody> = await search(
+          owner,
+          serverId,
+          "otter",
+          `&limit=2${cursor ? `&before=${encodeURIComponent(cursor)}` : ""}`,
+        );
+        expect(res.status).toBe(200);
+        seen.push(...res.body.results.map((r) => r.messageId));
+        cursor = res.body.nextCursor;
+        if (!res.body.hasMore) {
+          break;
+        }
+      }
+
+      expect(new Set(seen).size).toBe(seen.length);
+      expect([...seen].sort()).toEqual([...seeded].sort());
+    });
+
+    it("rejects a query that is too short, and a forged cursor, with 400", async () => {
+      const { serverId } = await makeServer();
+      expect((await search(owner, serverId, "a")).status).toBe(400);
+      expect(
+        (await search(owner, serverId, "otter", "&before=not-a-cursor")).status,
+      ).toBe(400);
+    });
+
+    it("rate limits search harder than ordinary reads", async () => {
+      const { serverId } = await makeServer();
+      let last = 200;
+      for (let attempt = 0; attempt < 40 && last === 200; attempt += 1) {
+        last = (await search(owner, serverId, "otter")).status;
+      }
+      expect(last).toBe(429);
     });
   });
 

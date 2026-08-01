@@ -1,12 +1,18 @@
-import { Hash, Lock, Mic, Plus, Settings, Users, X } from "lucide-react";
-import type { ReactNode } from "react";
+import { Hash, Lock, Mic, Plus, Search, Settings, Users, X } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { Channel, Server, VoiceParticipant } from "@pqp/shared";
+import { SearchDialog } from "@/components/search/search-dialog";
 import {
   ContextMenu,
   type ContextMenuItemDef,
 } from "@/components/ui/context-menu";
 import { ChannelListSkeleton } from "@/components/ui/skeleton";
 import { VoiceAvatar } from "@/components/voice/voice-avatar";
+import {
+  notificationLevelItems,
+  useChannelNotificationLevel,
+  useChannelNotifications,
+} from "@/hooks/use-notifications";
 import { cn } from "@/lib/utils";
 
 export interface UnreadState {
@@ -15,6 +21,12 @@ export interface UnreadState {
 }
 
 const EMPTY_UNREAD: UnreadState = { count: 0, mentions: 0 };
+
+/** Apple keyboards label the same chord differently, and the hint is the point. */
+const SEARCH_SHORTCUT_HINT =
+  typeof navigator !== "undefined" && /Mac|iPhone|iPad/i.test(navigator.userAgent)
+    ? "⌘K"
+    : "Ctrl K";
 
 export function formatBadgeCount(value: number): string {
   return value > 99 ? "99+" : String(value);
@@ -72,6 +84,27 @@ export function ChannelList({
   const textChannels = channels.filter((c) => c.type === "text");
   const voiceChannels = channels.filter((c) => c.type === "voice");
   const speaking = new Set(speakingPeerIds);
+  const [searchOpen, setSearchOpen] = useState(false);
+
+  const hasServer = !!server;
+  useEffect(() => {
+    if (!hasServer) {
+      return;
+    }
+    function onKeyDown(event: KeyboardEvent) {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setSearchOpen(true);
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [hasServer]);
+
+  // The sidebar is mounted for the whole session and already receives the
+  // unread map for every server, which is exactly what an OS notification and
+  // the dock badge are derived from.
+  useChannelNotifications({ channels, unread });
 
   const headerItems: ContextMenuItemDef[] = server
     ? [
@@ -155,6 +188,29 @@ export function ChannelList({
           </div>
         </div>
       </ContextMenu>
+
+      {server && (
+        <div className="px-2 pt-2">
+          <button
+            type="button"
+            className="flex w-full items-center gap-2 rounded-md border border-border bg-surface-0/60 px-2 py-1.5 text-xs text-text-muted transition-colors hover:border-border-strong hover:text-text"
+            onClick={() => setSearchOpen(true)}
+          >
+            <Search className="h-3.5 w-3.5 shrink-0" />
+            <span className="truncate">Search messages</span>
+            <kbd className="ml-auto hidden shrink-0 rounded border border-border px-1 py-px text-[10px] font-sans md:inline">
+              {SEARCH_SHORTCUT_HINT}
+            </kbd>
+          </button>
+          <SearchDialog
+            open={searchOpen}
+            serverId={server.id}
+            serverName={server.name}
+            onClose={() => setSearchOpen(false)}
+            onNavigate={onMobileClose}
+          />
+        </div>
+      )}
 
       <div className="flex-1 overflow-y-auto p-2">
         {isLoading ? (
@@ -352,6 +408,7 @@ function ChannelRow({
   onTogglePrivate: () => void;
   onManageMembers: () => void;
 }) {
+  const notifications = useChannelNotificationLevel(channel);
   const items: ContextMenuItemDef[] = [];
 
   if (canManage) {
@@ -397,10 +454,14 @@ function ChannelRow({
       label: "Copy channel ID",
       onSelect: () => void navigator.clipboard.writeText(channel.id),
     },
+    ...notificationLevelItems("notify", notifications, "server"),
   );
 
+  const muted = notifications.level === "none";
   const hasUnread = !selected && unread.count > 0;
-  const mentions = selected ? 0 : unread.mentions;
+  // A muted channel keeps counting for the read cursor, but nothing about it
+  // should pull the eye — that is the whole point of muting it.
+  const mentions = selected || muted ? 0 : unread.mentions;
 
   return (
     <ContextMenu items={items}>
@@ -411,10 +472,11 @@ function ChannelRow({
             ? "bg-ink-3 text-paper"
             : "text-paper-muted hover:bg-ink-3/70 hover:text-paper",
           connected && "bg-signal/10 text-signal ring-1 ring-inset ring-signal/30",
-          hasUnread && !selected && !connected && "text-paper",
+          hasUnread && !muted && !selected && !connected && "text-paper",
+          muted && !selected && !connected && "opacity-50",
         )}
       >
-        {hasUnread && (
+        {hasUnread && !muted && (
           <span
             aria-hidden="true"
             className="absolute -left-1 top-1/2 h-4 w-1 -translate-y-1/2 rounded-r-full bg-paper"
@@ -426,10 +488,11 @@ function ChannelRow({
           className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
         >
           {icon}
-          <span className={cn("truncate", hasUnread && "font-semibold")}>
+          <span className={cn("truncate", hasUnread && !muted && "font-semibold")}>
             {channel.name}
           </span>
-          {hasUnread && <span className="sr-only">(unread)</span>}
+          {hasUnread && !muted && <span className="sr-only">(unread)</span>}
+          {muted && <span className="sr-only">(muted)</span>}
           <span className="ml-auto flex shrink-0 items-center gap-1">
             {connected && (
               <>

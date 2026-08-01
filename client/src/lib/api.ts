@@ -4,6 +4,7 @@ import type {
   Gif,
   Invite,
   Message,
+  MessageSearchResponse,
   Server,
   User,
   UserPreferences,
@@ -271,6 +272,28 @@ export const fetchMessages = (
   const query = params.toString();
   return apiFetch<{ messages: Message[]; hasMore: boolean }>(
     `/api/channels/${channelId}/messages${query ? `?${query}` : ""}`,
+  );
+};
+
+/**
+ * Full-text search across every channel of one server the caller can see.
+ * `before` is the opaque cursor the previous page returned.
+ */
+export const searchServerMessages = (
+  serverId: string,
+  options: { q: string; limit?: number; before?: string | null },
+  signal?: AbortSignal,
+) => {
+  const params = new URLSearchParams({ q: options.q });
+  if (options.limit) {
+    params.set("limit", String(options.limit));
+  }
+  if (options.before) {
+    params.set("before", options.before);
+  }
+  return apiFetch<MessageSearchResponse>(
+    `/api/servers/${serverId}/search?${params.toString()}`,
+    signal ? { signal } : {},
   );
 };
 
