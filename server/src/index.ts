@@ -7,10 +7,11 @@ import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 import { handleApi } from "./api/index.js";
 import { assertAuthConfig, isDevAuthBypassEnabled } from "./auth/clerk.js";
-import { closePool, initDb } from "./db.js";
+import { closePool, getPool, initDb } from "./db.js";
 import { SECURITY_HEADERS, sendError } from "./lib/http.js";
-import { clientAddress } from "./lib/rate-limit.js";
-import { handleWsConnection, startHeartbeat } from "./ws/index.js";
+import { logEvent } from "./lib/log.js";
+import { clientAddress, sweepRateLimits } from "./lib/rate-limit.js";
+import { getSocketUser, handleWsConnection } from "./ws/index.js";
 
 const PORT = Number(process.env.PORT ?? 3001);
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -114,16 +115,32 @@ const httpServer = createServer((req, res) => {
     const pathname = url.pathname;
 
     if (pathname === "/health") {
-      res.writeHead(200, {
-        "Content-Type": "application/json",
-        "Cache-Control": "no-store",
-      });
-      res.end(JSON.stringify({ ok: true }));
+      // Report unhealthy if the DB is unreachable so the platform can restart /
+      // route away instead of serving a process with a dead pool.
+      try {
+        await getPool().query("SELECT 1");
+        res.writeHead(200, {
+          "Content-Type": "application/json",
+          "Cache-Control": "no-store",
+        });
+        res.end(JSON.stringify({ ok: true }));
+      } catch {
+        res.writeHead(503, {
+          "Content-Type": "application/json",
+          "Cache-Control": "no-store",
+        });
+        res.end(JSON.stringify({ ok: false, error: "database unavailable" }));
+      }
       return;
     }
 
     if (pathname.startsWith("/api/")) {
-      await handleApi(req, res, pathname);
+      try {
+        await handleApi(req, res, pathname);
+      } catch (error) {
+        console.error(error);
+        sendError(res, 500, "Internal server error");
+      }
       return;
     }
 
@@ -131,11 +148,11 @@ const httpServer = createServer((req, res) => {
       return;
     }
 
-    res.writeHead(404, {
+    res.writeHead(200, {
       "Content-Type": "text/plain; charset=utf-8",
       ...SECURITY_HEADERS,
     });
-    res.end("Not found");
+    res.end("pqp server");
   })().catch((error) => {
     console.error("[http] request failed:", error);
     if (!res.headersSent) {
@@ -152,7 +169,17 @@ const wss = new WebSocketServer({
   maxPayload: MAX_WS_PAYLOAD_BYTES,
 });
 
+// Protocol-level heartbeat: browsers auto-reply pong, so this both reaps dead
+// connections and keeps proxy idle timers (e.g. Railway edge) from closing
+// quiet sockets.
+const HEARTBEAT_INTERVAL_MS = 30_000;
+const socketLiveness = new WeakMap<import("ws").WebSocket, boolean>();
+
 wss.on("connection", (socket, req) => {
+  socketLiveness.set(socket, true);
+  socket.on("pong", () => {
+    socketLiveness.set(socket, true);
+  });
   handleWsConnection(socket, clientAddress(req as never));
 });
 
@@ -160,7 +187,26 @@ wss.on("error", (error) => {
   console.error("[ws] server error:", error);
 });
 
-let stopHeartbeat: (() => void) | null = null;
+const heartbeat = setInterval(() => {
+  for (const client of wss.clients) {
+    if (socketLiveness.get(client) === false) {
+      // Reaping a socket that missed the previous heartbeat — log it so a
+      // mystery "kicked out" can be traced to a missed pong vs a real close.
+      const user = getSocketUser(client);
+      logEvent("ws.heartbeatTerminate", { userId: user?.id });
+      client.terminate();
+      continue;
+    }
+    socketLiveness.set(client, false);
+    client.ping();
+  }
+}, HEARTBEAT_INTERVAL_MS);
+
+wss.on("close", () => clearInterval(heartbeat));
+
+// Drop expired rate-limit windows so the map doesn't grow unbounded.
+const rateLimitSweep = setInterval(() => sweepRateLimits(), 60_000);
+rateLimitSweep.unref?.();
 
 async function main() {
   assertAuthConfig();
@@ -172,7 +218,6 @@ async function main() {
   }
 
   await initDb();
-  stopHeartbeat = startHeartbeat(wss.clients);
 
   httpServer.listen(PORT, () => {
     console.log(`pqp server listening on http://localhost:${PORT}`);
@@ -180,19 +225,20 @@ async function main() {
   });
 }
 
-// A rejection that escapes a handler must not take the process down silently;
-// log it and keep serving. Handlers already catch their own errors.
+// Last-resort guards: log instead of letting a stray rejection take down
+// every connected WebSocket (Railway restarts show up client-side as
+// "connection closed" for all users at once).
 process.on("unhandledRejection", (reason) => {
-  console.error("[fatal] unhandled rejection:", reason);
+  console.error("[process] unhandled rejection:", reason);
 });
-
 process.on("uncaughtException", (error) => {
-  console.error("[fatal] uncaught exception:", error);
+  console.error("[process] uncaught exception:", error);
 });
 
 async function shutdown(signal: string) {
   console.log(`[shutdown] ${signal} — draining`);
-  stopHeartbeat?.();
+  clearInterval(heartbeat);
+  clearInterval(rateLimitSweep);
   for (const socket of wss.clients) {
     socket.close(1001, "Server shutting down");
   }

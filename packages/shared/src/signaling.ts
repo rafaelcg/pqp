@@ -38,6 +38,12 @@ export const voiceRosterMessageSchema = z.object({
   participants: z.array(voiceParticipantSchema),
 });
 
+export const voiceRoomFullMessageSchema = z.object({
+  type: z.literal("voice-room-full"),
+  voiceChannelId: z.string(),
+  limit: z.number(),
+});
+
 export const offerMessageSchema = z.object({
   type: z.literal("offer"),
   from: z.string(),
@@ -64,6 +70,7 @@ export const voiceSignalingMessageSchema = z.discriminatedUnion("type", [
   peerJoinedMessageSchema,
   peerLeftMessageSchema,
   voiceRosterMessageSchema,
+  voiceRoomFullMessageSchema,
   offerMessageSchema,
   answerMessageSchema,
   iceCandidateMessageSchema,
@@ -74,6 +81,7 @@ export type WelcomeMessage = z.infer<typeof welcomeMessageSchema>;
 export type PeerJoinedMessage = z.infer<typeof peerJoinedMessageSchema>;
 export type PeerLeftMessage = z.infer<typeof peerLeftMessageSchema>;
 export type VoiceRosterMessage = z.infer<typeof voiceRosterMessageSchema>;
+export type VoiceRoomFullMessage = z.infer<typeof voiceRoomFullMessageSchema>;
 export type OfferMessage = z.infer<typeof offerMessageSchema>;
 export type AnswerMessage = z.infer<typeof answerMessageSchema>;
 export type IceCandidateMessage = z.infer<typeof iceCandidateMessageSchema>;

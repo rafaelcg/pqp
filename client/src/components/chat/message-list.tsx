@@ -266,7 +266,11 @@ export function MessageList({
                 await onEditMessage?.(row.message.id, body);
                 setEditingId(null);
               }}
-              onDelete={() => void onDeleteMessage?.(row.message.id)}
+              onDelete={
+                onDeleteMessage
+                  ? () => void onDeleteMessage(row.message.id)
+                  : undefined
+              }
               onToggleReaction={onToggleReaction}
               onRetry={() =>
                 row.message.nonce && onRetryMessage?.(row.message.nonce)
@@ -411,7 +415,7 @@ interface MessageRowProps {
   onStartEdit: () => void;
   onCancelEdit: () => void;
   onSubmitEdit: (body: string) => Promise<void>;
-  onDelete: () => void;
+  onDelete?: () => void;
   onToggleReaction: (messageId: string, emoji: string) => void;
   onRetry: () => void;
   onDiscard: () => void;
@@ -438,12 +442,24 @@ const MessageRow = memo(function MessageRow({
   const { message, startsGroup, dayLabel } = row;
   const isMine = message.authorId === currentUserId;
   const isReal = !message.pending && !message.failed;
+  const canDelete = isReal && !!onDelete && (isMine || canModerate);
+
+  function confirmDelete() {
+    if (window.confirm("Delete this message?")) {
+      onDelete?.();
+    }
+  }
 
   const items: ContextMenuItemDef[] = [
     {
       id: "copy-text",
       label: "Copy text",
       onSelect: () => void navigator.clipboard.writeText(message.body),
+    },
+    {
+      id: "copy-id",
+      label: "Copy message ID",
+      onSelect: () => void navigator.clipboard.writeText(message.id),
     },
     {
       id: "copy-link",
@@ -459,13 +475,13 @@ const MessageRow = memo(function MessageRow({
           { id: "edit", label: "Edit message", onSelect: onStartEdit },
         ]
       : []),
-    ...((isMine || canModerate) && isReal
+    ...(canDelete
       ? [
           {
             id: "delete",
             label: "Delete message",
             danger: true,
-            onSelect: onDelete,
+            onSelect: confirmDelete,
           },
         ]
       : []),
@@ -632,14 +648,14 @@ const MessageRow = memo(function MessageRow({
                   <Pencil className="h-3.5 w-3.5" />
                 </Button>
               )}
-              {(isMine || canModerate) && (
+              {canDelete && (
                 <Button
                   type="button"
                   variant="ghost"
                   size="icon"
                   aria-label="Delete message"
                   className="h-6 w-6 text-danger hover:text-danger"
-                  onClick={onDelete}
+                  onClick={confirmDelete}
                 >
                   <Trash2 className="h-3.5 w-3.5" />
                 </Button>

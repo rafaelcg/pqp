@@ -89,7 +89,7 @@ export async function redeemInvite(
       [invite.server_id, userId],
     );
     if (banned.rows.length > 0) {
-      throw new Error("You cannot join this server");
+      throw new Error("You are banned from this server");
     }
 
     const inserted = await client.query(

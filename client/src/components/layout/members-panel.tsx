@@ -18,10 +18,11 @@ import {
 import { Dialog } from "@/components/ui/dialog";
 import {
   ApiError,
-  fetchBans,
+  banMember,
   fetchMembers,
-  liftBan,
-  removeMember,
+  kickMember,
+  listBans,
+  unbanMember,
   updateMemberRole,
   type ServerBan,
   type ServerMember,
@@ -121,7 +122,7 @@ export function MembersPanel({
     setBansLoading(true);
     setBansError(null);
     try {
-      const res = await fetchBans(serverId);
+      const res = await listBans(serverId);
       setBans(res.bans);
     } catch (err) {
       setBansError(messageOf(err, "Failed to load bans"));
@@ -141,8 +142,10 @@ export function MembersPanel({
     return null;
   }
 
+  // Kick/ban: the owner can act on members and admins; an admin can act only on
+  // plain members. Never on the owner or yourself.
   function canModerate(member: ServerMember): boolean {
-    if (member.role === "owner" || member.id === currentUserId) {
+    if (!canManage || member.role === "owner" || member.id === currentUserId) {
       return false;
     }
     return role === "owner" || member.role === "member";
@@ -174,7 +177,11 @@ export function MembersPanel({
     setBusyId(member.id);
     setError(null);
     try {
-      await removeMember(serverId, member.id, ban);
+      if (ban) {
+        await banMember(serverId, member.id);
+      } else {
+        await kickMember(serverId, member.id);
+      }
       setMembers((prev) => prev.filter((m) => m.id !== member.id));
       setPending(null);
       if (ban && bansOpen) {
@@ -196,8 +203,8 @@ export function MembersPanel({
     setBusyId(userId);
     setBansError(null);
     try {
-      await liftBan(serverId, userId);
-      setBans((prev) => prev.filter((b) => b.id !== userId));
+      await unbanMember(serverId, userId);
+      setBans((prev) => prev.filter((b) => b.userId !== userId));
     } catch (err) {
       setBansError(messageOf(err, "Failed to lift ban"));
     } finally {
@@ -461,19 +468,11 @@ export function MembersPanel({
                 )}
                 {bans.map((banned) => (
                   <div
-                    key={banned.id}
+                    key={banned.userId}
                     className="mb-1 flex items-center gap-3 rounded-md px-2 py-2 hover:bg-ink-3"
                   >
                     <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-md bg-ink-3 text-sm font-semibold">
-                      {banned.avatarUrl ? (
-                        <img
-                          src={banned.avatarUrl}
-                          alt=""
-                          className="h-full w-full object-cover"
-                        />
-                      ) : (
-                        banned.displayName.slice(0, 1).toUpperCase()
-                      )}
+                      {banned.displayName.slice(0, 1).toUpperCase()}
                     </div>
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-sm font-semibold">
@@ -484,16 +483,21 @@ export function MembersPanel({
                           {banned.tag}
                         </p>
                       )}
+                      {banned.reason && (
+                        <p className="truncate text-[11px] text-paper-muted">
+                          {banned.reason}
+                        </p>
+                      )}
                     </div>
                     <Button
                       size="sm"
                       variant="secondary"
                       className="gap-1.5"
-                      disabled={busyId === banned.id}
-                      onClick={() => void unban(banned.id)}
+                      disabled={busyId === banned.userId}
+                      onClick={() => void unban(banned.userId)}
                     >
                       <RotateCcw className="h-3.5 w-3.5" />
-                      {busyId === banned.id ? "Working…" : "Unban"}
+                      {busyId === banned.userId ? "Working…" : "Unban"}
                     </Button>
                   </div>
                 ))}

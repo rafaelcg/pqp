@@ -82,6 +82,18 @@ export default tseslint.config(
   },
 
   {
+    // Standalone Node ESM tooling, run with `node scripts/…`.
+    files: ["scripts/**/*.mjs", "*.mjs"],
+    languageOptions: {
+      globals: { ...globals.node, WebSocket: "readonly", fetch: "readonly" },
+      sourceType: "module",
+    },
+    rules: {
+      "no-console": "off",
+    },
+  },
+
+  {
     // The Electron main process is CommonJS by design.
     files: ["electron/**/*.js"],
     languageOptions: {

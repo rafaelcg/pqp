@@ -21,13 +21,29 @@ class FakeSocket {
   onmessage: ((event: { data: string }) => void) | null = null;
   onerror: (() => void) | null = null;
   onclose: ((event: { code: number }) => void) | null = null;
+  private openListeners: Array<() => void> = [];
 
   constructor(readonly url: string) {
     sockets.push(this);
   }
 
+  addEventListener(type: string, listener: () => void) {
+    if (type === "open") {
+      this.openListeners.push(listener);
+    }
+  }
+
   send(data: string) {
     this.sent.push(data);
+  }
+
+  /** Fire the open handlers registered either way. */
+  open() {
+    this.readyState = FakeSocket.OPEN;
+    this.onopen?.();
+    for (const listener of this.openListeners) {
+      listener();
+    }
   }
 
   close(code = 1000) {
@@ -40,8 +56,7 @@ class FakeSocket {
 
   /** Test helper: complete the handshake the server would perform. */
   accept() {
-    this.readyState = FakeSocket.OPEN;
-    this.onopen?.();
+    this.open();
     this.onmessage?.({ data: JSON.stringify({ type: "ready" }) });
   }
 
@@ -88,8 +103,7 @@ describe("createRealtimeTransport", () => {
     await flush();
 
     expect(sockets).toHaveLength(1);
-    sockets[0]!.readyState = FakeSocket.OPEN;
-    sockets[0]!.onopen?.();
+    sockets[0]!.open();
 
     expect(JSON.parse(sockets[0]!.sent[0]!)).toEqual({
       type: "auth",
@@ -112,8 +126,7 @@ describe("createRealtimeTransport", () => {
     await flush();
 
     expect(sockets).toHaveLength(2);
-    sockets[1]!.readyState = FakeSocket.OPEN;
-    sockets[1]!.onopen?.();
+    sockets[1]!.open();
     expect(JSON.parse(sockets[1]!.sent[0]!).token).toBe("token-2");
   });
 

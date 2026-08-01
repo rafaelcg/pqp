@@ -119,6 +119,18 @@ export function broadcastToChannel(
 }
 
 /**
+ * Broadcast a message deletion to everyone currently viewing the channel.
+ * Called from the HTTP moderation endpoint, so there is no sender socket.
+ */
+export function broadcastMessageDeleted(channelId: string, messageId: string) {
+  broadcastToChannel(channelId, {
+    type: "message-deleted",
+    channelId,
+    messageId,
+  });
+}
+
+/**
  * Force everyone out of a channel's live view. Called when a channel is deleted
  * or a member loses access, so a revoked user stops receiving broadcasts without
  * having to reconnect.
@@ -144,7 +156,11 @@ export function evictUserFromChannels(
   channelIds: Set<string>,
 ): void {
   for (const conn of connections.values()) {
-    if (conn.user.id === userId && conn.channelId && channelIds.has(conn.channelId)) {
+    if (
+      conn.user.id === userId &&
+      conn.channelId &&
+      channelIds.has(conn.channelId)
+    ) {
       leaveChannel(conn);
     }
   }
@@ -247,6 +263,7 @@ export async function handleChatMessage(
   }
 
   if (payload.type === "message-create") {
+    // Throttle sends per user so a single socket can't flood the channel/DB.
     if (!messageLimiter.take(conn.user.id)) {
       return;
     }

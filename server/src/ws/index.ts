@@ -1,20 +1,24 @@
 import type { WebSocket } from "ws";
 import { DEV_AUTH_TOKEN, isDevAuthBypassEnabled, resolveAuthUser } from "../auth/clerk.js";
+import { logEvent, nextConnectionId } from "../lib/log.js";
 import { createRateLimiter } from "../lib/rate-limit.js";
 import { handleChatMessage } from "./chat.js";
 import {
   deleteAuthenticatedSocket,
   getAuthenticatedSocket,
+  getSocketUser,
   setAuthenticatedSocket,
 } from "./sockets.js";
 import {
   handleVoiceMessage,
+  isSocketInVoice,
   removeVoicePeerBySocket,
   sendAllVoiceRosters,
 } from "./voice.js";
 
 export { forEachAuthenticatedSocket, getSocketUser } from "./sockets.js";
 export {
+  broadcastMessageDeleted,
   broadcastToChannel,
   evictChannelViewers,
   evictUserFromChannels,
@@ -61,6 +65,8 @@ const alive = new WeakMap<WebSocket, boolean>();
 export function handleWsConnection(socket: WebSocket, remoteKey: string) {
   let authenticated = false;
   let closed = false;
+  const connId = nextConnectionId();
+  logEvent("ws.connect", { connId });
 
   // Per-connection budget. The address bucket above cannot distinguish clients
   // behind a shared proxy, so the real limit has to live on the socket itself.
@@ -74,6 +80,7 @@ export function handleWsConnection(socket: WebSocket, remoteKey: string) {
 
   const authTimeout = setTimeout(() => {
     if (!authenticated) {
+      logEvent("ws.authTimeout", { connId });
       socket.close(4401, "Auth timeout");
     }
   }, AUTH_TIMEOUT_MS);
@@ -84,6 +91,7 @@ export function handleWsConnection(socket: WebSocket, remoteKey: string) {
     }
     if (!connectionLimiter.take("self")) {
       // Sustained flooding from one socket is not a client we want to keep.
+      logEvent("ws.flood", { connId });
       socket.close(4429, "Too many messages");
       return;
     }
@@ -114,6 +122,7 @@ export function handleWsConnection(socket: WebSocket, remoteKey: string) {
 
       const resolved = await resolveAuthUser(authHeader);
       if (!resolved) {
+        logEvent("ws.authFail", { connId });
         socket.close(4401, "Unauthorized");
         return;
       }
@@ -128,8 +137,9 @@ export function handleWsConnection(socket: WebSocket, remoteKey: string) {
       authenticated = true;
       clearTimeout(authTimeout);
       setAuthenticatedSocket(socket, resolved.user);
-      socket.send(JSON.stringify({ type: "ready", userId: resolved.user.id }));
-      await sendAllVoiceRosters(socket, resolved.user.id);
+      logEvent("ws.auth", { connId, userId: resolved.user.id });
+      socket.send(JSON.stringify({ type: "ready" }));
+      await sendAllVoiceRosters(socket, resolved.user);
       return;
     }
 
@@ -161,20 +171,28 @@ export function handleWsConnection(socket: WebSocket, remoteKey: string) {
   }
 
   socket.on("message", (data) => {
-    // Without this catch, any rejection inside a handler becomes an unhandled
-    // promise rejection, which takes down the whole Node process.
+    // A throwing handler (e.g. transient DB error) must not become an unhandled
+    // rejection — that kills the process and drops every client.
     void onMessage(data).catch((error) => {
       console.error("[ws] message handler failed:", error);
     });
   });
 
-  socket.on("error", (error) => {
-    console.error("[ws] socket error:", error);
+  socket.on("error", (error: Error) => {
+    logEvent("ws.error", { connId, message: error.message });
   });
 
-  socket.on("close", () => {
+  socket.on("close", (code: number, reason: Buffer) => {
     closed = true;
     clearTimeout(authTimeout);
+    const user = getSocketUser(socket);
+    logEvent("ws.close", {
+      connId,
+      userId: user?.id,
+      code,
+      reason: reason?.toString() || undefined,
+      wasInVoice: isSocketInVoice(socket),
+    });
     removeVoicePeerBySocket(socket);
     deleteAuthenticatedSocket(socket);
   });
@@ -191,6 +209,9 @@ export function startHeartbeat(
   const timer = setInterval(() => {
     for (const socket of clients) {
       if (alive.get(socket) === false) {
+        // Log the reap so a mystery "kicked out" can be traced to a missed pong
+        // rather than a real close.
+        logEvent("ws.heartbeatTerminate", { userId: getSocketUser(socket)?.id });
         socket.terminate();
         continue;
       }

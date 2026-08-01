@@ -281,22 +281,33 @@ export const updateMemberRole = (
 ) =>
   patch<{ ok: boolean }>(`/api/servers/${serverId}/members/${userId}`, { role });
 
-export const removeMember = (serverId: string, userId: string, ban = false) =>
-  del<{ ok: boolean }>(`/api/servers/${serverId}/members/${userId}`, { ban });
+export const kickMember = (serverId: string, userId: string) =>
+  del<{ ok: boolean }>(`/api/servers/${serverId}/members/${userId}`);
+
+/** Bans work on non-members too, so an invite can be closed pre-emptively. */
+export const banMember = (
+  serverId: string,
+  userId: string,
+  reason?: string | null,
+) =>
+  post<{ ok: boolean }>(`/api/servers/${serverId}/bans`, {
+    userId,
+    reason: reason ?? null,
+  });
+
+export const unbanMember = (serverId: string, userId: string) =>
+  del<{ ok: boolean }>(`/api/servers/${serverId}/bans/${userId}`);
 
 export interface ServerBan {
-  id: string;
+  userId: string;
   displayName: string;
   tag: string | null;
-  avatarUrl: string | null;
-  bannedAt: string;
+  reason: string | null;
+  createdAt: string;
 }
 
-export const fetchBans = (serverId: string) =>
+export const listBans = (serverId: string) =>
   apiFetch<{ bans: ServerBan[] }>(`/api/servers/${serverId}/bans`);
-
-export const liftBan = (serverId: string, userId: string) =>
-  del<{ ok: boolean }>(`/api/servers/${serverId}/bans/${userId}`);
 
 export const addChannelMember = (channelId: string, userId: string) =>
   post<{ ok: boolean }>(`/api/channels/${channelId}/members`, { userId });

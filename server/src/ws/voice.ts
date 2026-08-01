@@ -2,11 +2,13 @@ import { randomUUID } from "node:crypto";
 import type { WebSocket } from "ws";
 import {
   isClientRelayMessage,
+  MESH_VOICE_LIMIT,
   voiceClientMessageSchema,
   type VoiceParticipant,
   type VoiceSignalingMessage,
 } from "@pqp/shared";
 import type { DbUser } from "../db.js";
+import { logEvent } from "../lib/log.js";
 import { createRateLimiter } from "../lib/rate-limit.js";
 import { getChannel, getChannelAudience } from "../services/servers.js";
 import { isChannelMember } from "../services/users.js";
@@ -65,8 +67,9 @@ function broadcastToRoom(
 
 /**
  * Roster fan-out. Occupancy drives the channel-list badges, so it goes to
- * everyone who can *see* the channel — not, as before, to every socket on the
- * instance, which leaked private-channel participants across unrelated servers.
+ * everyone who can *see* the channel — sending it to every socket on the
+ * instance would leak cross-server presence and, worse, hand out the peer IDs
+ * used for signaling.
  *
  * Serialized per channel: the audience lookup is async, and two overlapping
  * broadcasts could otherwise deliver an older snapshot last, leaving a departed
@@ -79,25 +82,29 @@ function broadcastRoster(voiceChannelId: string): Promise<void> {
   const next = previous
     .catch(() => {})
     .then(async () => {
-      const audience = await getChannelAudience(voiceChannelId);
-      if (!audience) {
-        return;
-      }
-
-      // Read the room *after* the await so the payload reflects state at send
-      // time, not at the time the broadcast was requested.
-      const encoded = JSON.stringify({
-        type: "voice-roster",
-        voiceChannelId,
-        participants: getRoomPeers(voiceChannelId).map(toParticipant),
-      } satisfies VoiceSignalingMessage);
-
-      const allowed = new Set(audience.userIds);
-      forEachAuthenticatedSocket((socket, user) => {
-        if (socket.readyState === 1 && allowed.has(user.id)) {
-          socket.send(encoded);
+      try {
+        const audience = await getChannelAudience(voiceChannelId);
+        if (!audience) {
+          return;
         }
-      });
+
+        // Read the room *after* the await so the payload reflects state at send
+        // time, not at the time the broadcast was requested.
+        const encoded = JSON.stringify({
+          type: "voice-roster",
+          voiceChannelId,
+          participants: getRoomPeers(voiceChannelId).map(toParticipant),
+        } satisfies VoiceSignalingMessage);
+
+        const allowed = new Set(audience.userIds);
+        forEachAuthenticatedSocket((socket, user) => {
+          if (socket.readyState === 1 && allowed.has(user.id)) {
+            socket.send(encoded);
+          }
+        });
+      } catch (error) {
+        console.error("[voice] failed to load audience for roster:", error);
+      }
     })
     .finally(() => {
       if (rosterQueue.get(voiceChannelId) === next) {
@@ -126,6 +133,12 @@ function removePeer(peerId: string) {
   if (socketToPeerId.get(peer.socket) === peerId) {
     socketToPeerId.delete(peer.socket);
   }
+  logEvent("voice.leave", {
+    peerId,
+    userId: peer.userId,
+    voiceChannelId,
+    roomSize: getRoomPeers(voiceChannelId).length,
+  });
   broadcastToRoom(voiceChannelId, { type: "peer-left", peerId });
   void broadcastRoster(voiceChannelId);
 }
@@ -187,8 +200,16 @@ export function removeVoicePeerBySocket(socket: WebSocket) {
   }
 }
 
-/** Send current voice occupancy for every room this user can see (e.g. after auth). */
-export async function sendAllVoiceRosters(socket: WebSocket, userId: string) {
+/** Whether a socket currently holds a voice peer (for disconnect diagnostics). */
+export function isSocketInVoice(socket: WebSocket): boolean {
+  return socketToPeerId.has(socket);
+}
+
+/**
+ * Send current voice occupancy to a newly authenticated socket — but only for
+ * the rooms this user is allowed to see.
+ */
+export async function sendAllVoiceRosters(socket: WebSocket, user: DbUser) {
   const byChannel = new Map<string, VoiceParticipant[]>();
   for (const peer of peers.values()) {
     const list = byChannel.get(peer.voiceChannelId) ?? [];
@@ -198,7 +219,12 @@ export async function sendAllVoiceRosters(socket: WebSocket, userId: string) {
 
   await Promise.all(
     [...byChannel].map(async ([voiceChannelId, participants]) => {
-      if (!(await isChannelMember(voiceChannelId, userId))) {
+      try {
+        if (!(await isChannelMember(voiceChannelId, user.id))) {
+          return;
+        }
+      } catch (error) {
+        console.error("[voice] roster membership check failed:", error);
         return;
       }
       send(socket, {
@@ -243,6 +269,25 @@ export async function handleVoiceMessage(
       return;
     }
 
+    // Enforce the mesh ceiling server-side. Above it, each client would carry
+    // one Opus uplink per peer and quality collapses — reject instead.
+    const roomIsFull =
+      getRoomPeers(payload.voiceChannelId).filter((p) => p.socket !== socket)
+        .length >= MESH_VOICE_LIMIT;
+    if (roomIsFull) {
+      logEvent("voice.roomFull", {
+        userId: user.id,
+        voiceChannelId: payload.voiceChannelId,
+        limit: MESH_VOICE_LIMIT,
+      });
+      send(socket, {
+        type: "voice-room-full",
+        voiceChannelId: payload.voiceChannelId,
+        limit: MESH_VOICE_LIMIT,
+      });
+      return;
+    }
+
     const currentPeerId = socketToPeerId.get(socket);
     if (currentPeerId) {
       removePeer(currentPeerId);
@@ -259,6 +304,12 @@ export async function handleVoiceMessage(
     };
     peers.set(peerId, peer);
     socketToPeerId.set(socket, peerId);
+    logEvent("voice.join", {
+      peerId,
+      userId: user.id,
+      voiceChannelId: payload.voiceChannelId,
+      roomSize: getRoomPeers(payload.voiceChannelId).length,
+    });
 
     const self = toParticipant(peer);
     const existingPeers = getRoomPeers(payload.voiceChannelId)
@@ -297,20 +348,20 @@ export async function handleVoiceMessage(
     return;
   }
 
-  const sender = peers.get(existingPeerId);
-  if (!sender || payload.from !== existingPeerId) {
+  const fromPeer = peers.get(existingPeerId);
+  if (!fromPeer || payload.from !== existingPeerId) {
     return;
   }
 
-  const target = peers.get(payload.to);
-  if (!target) {
+  const toPeer = peers.get(payload.to);
+  if (!toPeer) {
     return;
   }
 
-  // Without this check any authenticated user could address an offer at a peer
-  // in a voice channel they are not in; the receiving browser would answer and
-  // publish its microphone to them.
-  if (target.voiceChannelId !== sender.voiceChannelId) {
+  // Only relay signaling between peers in the same voice room. Without this a
+  // member of one room could open a WebRTC connection to a peer in another
+  // room/server and pull their microphone audio.
+  if (fromPeer.voiceChannelId !== toPeer.voiceChannelId) {
     return;
   }
 

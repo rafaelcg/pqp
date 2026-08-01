@@ -100,6 +100,66 @@ export function createRateLimiter({
   };
 }
 
+export interface RateLimitResult {
+  allowed: boolean;
+  retryAfterMs: number;
+}
+
+interface SharedBucket extends Bucket {
+  capacity: number;
+  refillPerMs: number;
+}
+
+/**
+ * Buckets for one-off checks where the caller carries the budget in the call
+ * rather than holding a limiter of its own. The key is expected to name both
+ * the bucket and the subject (`api-write:<user id>`), so budgets never mix.
+ */
+const sharedBuckets = new Map<string, SharedBucket>();
+
+function available(bucket: SharedBucket, now: number): number {
+  const elapsed = now - bucket.updatedAt;
+  return Math.min(bucket.capacity, bucket.tokens + elapsed * bucket.refillPerMs);
+}
+
+/** Spends one token from the shared bucket named by `key`. */
+export function rateLimit(
+  key: string,
+  limit: number,
+  windowMs: number,
+  now = Date.now(),
+): RateLimitResult {
+  const refillPerMs = limit / windowMs;
+  const existing = sharedBuckets.get(key);
+  const tokens = existing ? available(existing, now) : limit;
+  const allowed = tokens >= 1;
+
+  sharedBuckets.set(key, {
+    tokens: allowed ? tokens - 1 : tokens,
+    updatedAt: now,
+    capacity: limit,
+    refillPerMs,
+  });
+
+  return allowed
+    ? { allowed: true, retryAfterMs: 0 }
+    : { allowed: false, retryAfterMs: Math.ceil((1 - tokens) / refillPerMs) };
+}
+
+/** Drop buckets that have refilled, so the map doesn't grow unbounded. */
+export function sweepRateLimits(now = Date.now()): void {
+  for (const [key, bucket] of sharedBuckets) {
+    if (available(bucket, now) >= bucket.capacity) {
+      sharedBuckets.delete(key);
+    }
+  }
+}
+
+/** Test helper: wipe all shared bucket state. */
+export function resetRateLimits(): void {
+  sharedBuckets.clear();
+}
+
 /**
  * Reads a client address for pre-auth rate limiting. Only trusts
  * `x-forwarded-for` when TRUST_PROXY is on, since it is caller-controlled on a

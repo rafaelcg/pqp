@@ -75,6 +75,20 @@ CREATE TABLE IF NOT EXISTS server_invites (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Bans outlive membership, so a kicked user cannot walk back in with an invite.
+CREATE TABLE IF NOT EXISTS server_bans (
+  server_id UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  banned_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  reason TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (server_id, user_id)
+);
+
+-- CREATE TABLE IF NOT EXISTS never adds a column to a table that already exists,
+-- so databases created before `reason` need it backfilled explicitly.
+ALTER TABLE server_bans ADD COLUMN IF NOT EXISTS reason TEXT;
+
 CREATE TABLE IF NOT EXISTS messages (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   channel_id UUID NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
@@ -109,15 +123,6 @@ CREATE TABLE IF NOT EXISTS channel_reads (
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   last_read_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY (channel_id, user_id)
-);
-
--- Bans outlive membership, so a kicked user cannot walk back in with an invite.
-CREATE TABLE IF NOT EXISTS server_bans (
-  server_id UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
-  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  banned_by UUID REFERENCES users(id) ON DELETE SET NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  PRIMARY KEY (server_id, user_id)
 );
 
 CREATE TABLE IF NOT EXISTS message_reactions (

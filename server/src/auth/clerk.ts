@@ -15,6 +15,8 @@ export interface AuthUser {
 
 export { DEV_AUTH_TOKEN };
 
+let warnedAboutBypassInProd = false;
+
 /**
  * The bypass mints a session for a fixed public token, so it must never be
  * reachable on a production deploy — a copied `.env` would otherwise hand every
@@ -22,10 +24,19 @@ export { DEV_AUTH_TOKEN };
  * request, so `assertAuthConfig` runs from the entrypoint too.
  */
 export function isDevAuthBypassEnabled(): boolean {
-  return (
-    process.env.DEV_AUTH_BYPASS === "true" &&
-    process.env.NODE_ENV !== "production"
-  );
+  if (process.env.DEV_AUTH_BYPASS !== "true") {
+    return false;
+  }
+  if (process.env.NODE_ENV === "production") {
+    if (!warnedAboutBypassInProd) {
+      warnedAboutBypassInProd = true;
+      console.error(
+        "[auth] DEV_AUTH_BYPASS=true ignored because NODE_ENV=production",
+      );
+    }
+    return false;
+  }
+  return true;
 }
 
 export function assertAuthConfig(): void {
@@ -45,9 +56,21 @@ export function assertAuthConfig(): void {
   }
 }
 
+function getAuthorizedParties(): string[] | undefined {
+  const raw = process.env.CLERK_AUTHORIZED_PARTIES;
+  if (!raw) {
+    return undefined;
+  }
+  const parties = raw
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  return parties.length > 0 ? parties : undefined;
+}
+
 /**
- * Clerk profile lookups are a network round trip, and the previous code made
- * one on *every* authenticated request. The JWT already proves identity, so the
+ * Clerk profile lookups are a network round trip, and one would otherwise run
+ * on *every* authenticated request. The JWT already proves identity, so the
  * profile is only needed to fill in display name / avatar; cache it briefly.
  */
 const PROFILE_TTL_MS = 5 * 60_000;
@@ -107,7 +130,7 @@ async function loadProfile(clerkId: string): Promise<AuthUser | null> {
 
 /**
  * The DB row for a Clerk id. Cached because `resolveAuthUser` runs on every
- * request and the previous implementation issued an UPDATE each time.
+ * request and would otherwise issue an UPDATE each time.
  */
 const USER_TTL_MS = 30_000;
 const userCache = new Map<string, { user: DbUser; expiresAt: number }>();
@@ -175,6 +198,8 @@ export async function verifyAuthHeader(
   try {
     const payload = await verifyToken(token, {
       secretKey: process.env.CLERK_SECRET_KEY,
+      // Reject tokens minted for a different origin/app when configured.
+      authorizedParties: getAuthorizedParties(),
     });
 
     const clerkId = payload.sub;

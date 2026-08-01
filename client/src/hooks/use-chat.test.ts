@@ -21,6 +21,8 @@ function createTransport() {
     sendVoice: (message) => sent.push(message),
     onMessage: () => {},
     onReady: () => {},
+    onError: () => {},
+    onClose: () => {},
     onStatusChange: () => {},
     getStatus: () => (state.connected ? "online" : "reconnecting"),
     isConnected: () => state.connected,

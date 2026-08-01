@@ -159,6 +159,14 @@ export async function isServerMember(
   return (await getMemberRole(serverId, userId)) !== null;
 }
 
+export async function listServerMemberIds(serverId: string): Promise<string[]> {
+  const result = await getPool().query<{ user_id: string }>(
+    `SELECT user_id FROM server_members WHERE server_id = $1`,
+    [serverId],
+  );
+  return result.rows.map((row) => row.user_id);
+}
+
 export async function canManageServer(
   serverId: string,
   userId: string,

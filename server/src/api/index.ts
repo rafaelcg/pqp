@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   addChannelMemberSchema,
+  banMemberSchema,
   createChannelSchema,
   createInviteSchema,
   createServerSchema,
@@ -29,6 +30,7 @@ import {
 } from "../ws/index.js";
 import { getVoicePeer } from "../ws/voice.js";
 import { invalidateUserCache, resolveAuthUser } from "../auth/clerk.js";
+import type { MemberRole } from "../db.js";
 import {
   clampLimit,
   handleCors,
@@ -57,6 +59,12 @@ import {
   updateMessageBody,
 } from "../services/messages.js";
 import {
+  banMember,
+  kickMember,
+  listBans,
+  unbanMember,
+} from "../services/moderation.js";
+import {
   addChannelMember,
   createChannel,
   createServer,
@@ -79,15 +87,13 @@ import { getIceServers } from "../services/ice.js";
 import {
   canManageServer,
   getMemberRole,
+  getUserById,
   isChannelMember,
   isServerMember,
   leaveServer,
-  liftBan,
-  listBans,
   listServerMembers,
   listUnread,
   markChannelRead,
-  removeMember,
   toPublicUser,
   updateMemberRole,
   updateProfile,
@@ -156,6 +162,27 @@ async function requireOwner(serverId: string, userId: string) {
     throw new Forbidden("Only the owner can do that");
   }
   return role;
+}
+
+/**
+ * Owners may act on anyone beneath them; admins only on plain members, so an
+ * admin can neither depose a peer nor the owner. Returns the target's role, or
+ * null when they are not a member at all.
+ */
+async function requireOutranked(
+  serverId: string,
+  actorRole: MemberRole,
+  targetUserId: string,
+  action: "kick" | "ban",
+): Promise<MemberRole | null> {
+  const targetRole = await getMemberRole(serverId, targetUserId);
+  if (targetRole === "owner") {
+    throw new Forbidden(`Cannot ${action} the owner`);
+  }
+  if (targetRole === "admin" && actorRole !== "owner") {
+    throw new Forbidden(`Only the owner can ${action} an admin`);
+  }
+  return targetRole;
 }
 
 async function requireChannel(channelId: string) {
@@ -505,16 +532,27 @@ router.patch(
 router.delete(
   "/api/servers/:serverId/members/:userId",
   async ({ req, user }, { serverId, userId }) => {
-    await requireServerMember(serverId!, user.id);
+    const actorRole = await requireManager(serverId!, user.id);
     const body = removeMemberSchema.parse(await readJsonBody(req));
-    try {
-      await removeMember(serverId!, user.id, userId!, body.ban ?? false);
-    } catch (error) {
-      throw new HttpError(
-        403,
-        error instanceof Error ? error.message : "Cannot remove member",
-      );
+    if (userId === user.id) {
+      throw new HttpError(400, "Use leave to remove yourself");
     }
+    const targetRole = await requireOutranked(
+      serverId!,
+      actorRole,
+      userId!,
+      "kick",
+    );
+    if (!targetRole) {
+      throw new NotFound("Member not found");
+    }
+
+    if (body.ban) {
+      await banMember(serverId!, userId!, user.id, null);
+    } else {
+      await kickMember(serverId!, userId!);
+    }
+
     const channelIds = await listServerChannelIds(serverId!);
     evictUserFromChannels(userId!, channelIds);
     evictVoiceUser(userId!, channelIds);
@@ -527,11 +565,35 @@ router.get("/api/servers/:serverId/bans", async ({ user }, { serverId }) => {
   return { bans: await listBans(serverId!) };
 });
 
+router.post(
+  "/api/servers/:serverId/bans",
+  async ({ req, user }, { serverId }) => {
+    const actorRole = await requireManager(serverId!, user.id);
+    const body = banMemberSchema.parse(await readJsonBody(req));
+    if (body.userId === user.id) {
+      throw new HttpError(400, "You cannot ban yourself");
+    }
+    // server_bans carries an FK to users, so the account has to exist — but it
+    // need not be a member: a pre-emptive ban is a valid thing to want.
+    if (!(await getUserById(body.userId))) {
+      throw new NotFound("User not found");
+    }
+    await requireOutranked(serverId!, actorRole, body.userId, "ban");
+
+    await banMember(serverId!, body.userId, user.id, body.reason);
+
+    const channelIds = await listServerChannelIds(serverId!);
+    evictUserFromChannels(body.userId, channelIds);
+    evictVoiceUser(body.userId, channelIds);
+    return { ok: true };
+  },
+);
+
 router.delete(
   "/api/servers/:serverId/bans/:userId",
   async ({ user }, { serverId, userId }) => {
     await requireManager(serverId!, user.id);
-    await liftBan(serverId!, userId!);
+    await unbanMember(serverId!, userId!);
     return { ok: true };
   },
 );

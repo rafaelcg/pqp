@@ -95,6 +95,12 @@ export const reactionBroadcastSchema = z.object({
   added: z.boolean(),
 });
 
+export const messageDeletedBroadcastSchema = z.object({
+  type: z.literal("message-deleted"),
+  channelId: z.string().uuid(),
+  messageId: z.string().uuid(),
+});
+
 export const presenceUpdateSchema = z.object({
   type: z.literal("presence-update"),
   channelId: z.string().uuid(),
@@ -112,6 +118,7 @@ export const chatServerMessageSchema = z.discriminatedUnion("type", [
   messageUpdateBroadcastSchema,
   messageDeleteBroadcastSchema,
   reactionBroadcastSchema,
+  messageDeletedBroadcastSchema,
   presenceUpdateSchema,
   typingBroadcastSchema,
   channelActivitySchema,
@@ -151,6 +158,9 @@ export type MessageDeleteBroadcast = z.infer<
   typeof messageDeleteBroadcastSchema
 >;
 export type ReactionBroadcast = z.infer<typeof reactionBroadcastSchema>;
+export type MessageDeletedBroadcast = z.infer<
+  typeof messageDeletedBroadcastSchema
+>;
 export type PresenceUpdate = z.infer<typeof presenceUpdateSchema>;
 export type TypingBroadcast = z.infer<typeof typingBroadcastSchema>;
 export type ChannelActivity = z.infer<typeof channelActivitySchema>;

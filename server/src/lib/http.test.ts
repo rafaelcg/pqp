@@ -1,13 +1,13 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { clampLimit, isUuid, resolveCorsOrigin } from "./http.js";
 
-const originalAllowed = process.env.ALLOWED_ORIGINS;
+const originalOrigins = process.env.CORS_ALLOWED_ORIGINS;
 
 afterEach(() => {
-  if (originalAllowed === undefined) {
-    delete process.env.ALLOWED_ORIGINS;
+  if (originalOrigins === undefined) {
+    delete process.env.CORS_ALLOWED_ORIGINS;
   } else {
-    process.env.ALLOWED_ORIGINS = originalAllowed;
+    process.env.CORS_ALLOWED_ORIGINS = originalOrigins;
   }
 });
 
@@ -47,19 +47,24 @@ describe("isUuid", () => {
 
 describe("resolveCorsOrigin", () => {
   it("stays permissive when no allowlist is configured", () => {
-    delete process.env.ALLOWED_ORIGINS;
+    delete process.env.CORS_ALLOWED_ORIGINS;
     expect(resolveCorsOrigin("https://anything.example")).toBe("*");
     expect(resolveCorsOrigin(undefined)).toBe("*");
   });
 
   it("echoes only allowlisted origins", () => {
-    process.env.ALLOWED_ORIGINS =
+    process.env.CORS_ALLOWED_ORIGINS =
       "https://pqp.gg, https://pqp-3yr.pages.dev/";
     expect(resolveCorsOrigin("https://pqp.gg")).toBe("https://pqp.gg");
     expect(resolveCorsOrigin("https://pqp-3yr.pages.dev")).toBe(
       "https://pqp-3yr.pages.dev",
     );
     expect(resolveCorsOrigin("https://evil.example")).toBeNull();
-    expect(resolveCorsOrigin(undefined)).toBeNull();
+  });
+
+  it("stays permissive for requests that carry no Origin at all", () => {
+    // Non-browser callers send no Origin, and CORS cannot restrict them anyway.
+    process.env.CORS_ALLOWED_ORIGINS = "https://pqp.gg";
+    expect(resolveCorsOrigin(undefined)).toBe("*");
   });
 });

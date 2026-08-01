@@ -30,9 +30,8 @@ export interface VoiceAudioOptions {
   inputDeviceId?: string;
   inputVolume?: number;
   /**
-   * Join with the microphone already off. Applied before the track is published,
-   * unlike the previous approach of muting shortly after connecting — which left
-   * the mic live for the first fraction of a second.
+   * Join with the microphone already off. Applied before the track is published
+   * so "mute on join" is muted from the very first sample.
    */
   startMuted?: boolean;
 }
@@ -50,7 +49,7 @@ export interface VoiceState {
   speakingPeerIds: string[];
   /** channelId → participants currently in that voice channel */
   occupancy: Record<string, VoiceParticipant[]>;
-  /** peerId → 0..2 playback multiplier, persisted for the session. */
+  /** userId → 0..1 playback multiplier, persisted for the session. */
   peerVolumes: Record<string, number>;
   /** True when media is flowing through an SFU rather than a peer mesh. */
   usingSfu: boolean;
@@ -130,6 +129,16 @@ function stopMicPipeline(pipeline: MicPipeline | null) {
   void pipeline.audioContext.close();
 }
 
+function micErrorMessage(err: unknown): string {
+  if (!(err instanceof Error)) {
+    return "Failed to access microphone";
+  }
+  if (err.name === "NotAllowedError") {
+    return "Microphone access was blocked. Allow it in your browser settings, then rejoin.";
+  }
+  return err.message;
+}
+
 /**
  * Supplies an SFU session for a voice channel. When set, the controller routes
  * media through the SFU instead of building a mesh. Presence/roster still come
@@ -146,20 +155,8 @@ export function createVoiceController(transport: RealtimeTransport) {
   let sessionProvider: VoiceSessionProvider | null = null;
   /** peerId → roster identity, used to label SFU participants. */
   const identities = new Map<string, LiveKitIdentity>();
-  /**
-   * Peers the *server* has announced for this room. Signalling from anyone else
-   * is dropped: accepting an unsolicited offer would publish the microphone to
-   * a peer we were never told about.
-   */
-  const knownPeerIds = new Set<string>();
   let pipeline: MicPipeline | null = null;
   let joinTimeoutId: ReturnType<typeof setTimeout> | null = null;
-  /**
-   * Bumped by every join, leave, and join timeout. `join()` awaits the mic
-   * permission prompt, which a user can outlast by cancelling — without this the
-   * abandoned join would still open the microphone and enter the room.
-   */
-  let joinSeq = 0;
   let speakingRaf = 0;
   let iceServers: RTCIceServer[] = getDefaultIceServers();
   const remoteAnalysers = new Map<
@@ -167,6 +164,13 @@ export function createVoiceController(transport: RealtimeTransport) {
     { analyser: AnalyserNode; dispose: () => void }
   >();
   const speakingTracker = createSpeakingTracker();
+  // Peers the server has told us are in *our* room. Signaling from anyone else
+  // is dropped so a stray/cross-room offer can never open a mic connection.
+  const knownPeerIds = new Set<string>();
+  let joinGeneration = 0;
+  // The room the user means to be in. Kept across a WS drop so we can auto-
+  // rejoin on reconnect instead of ejecting them from the call.
+  let intendedChannelId: string | null = null;
   let audioOptions: VoiceAudioOptions = {
     inputDeviceId: "",
     inputVolume: 1,
@@ -192,6 +196,44 @@ export function createVoiceController(transport: RealtimeTransport) {
       clearTimeout(joinTimeoutId);
       joinTimeoutId = null;
     }
+  }
+
+  /** Returns the generation this attempt owns; older attempts are abandoned. */
+  function armJoinTimeout(): number {
+    clearJoinTimeout();
+    const generation = ++joinGeneration;
+    joinTimeoutId = setTimeout(() => {
+      if (state.status === "joining" && generation === joinGeneration) {
+        joinGeneration++;
+        // Release the mic so the browser recording indicator clears, and tell
+        // the server to drop us if the room ever registered the join.
+        stopMicPipeline(pipeline);
+        pipeline = null;
+        intendedChannelId = null;
+        transport.sendVoice({ type: "leave-voice-room" });
+        state.error =
+          "Voice connection timed out. Is the server running and WebSocket connected?";
+        state.status = "idle";
+        state.voiceChannelId = null;
+        emit();
+      }
+    }, 12_000);
+    return generation;
+  }
+
+  // WS dropped mid-call: the media session is dead. Tear it down but keep the
+  // mic pipeline and intendedChannelId so we can rejoin on reconnect.
+  function teardownMeshForReconnect() {
+    knownPeerIds.clear();
+    stopSpeakingLoop();
+    disposeRemoteAnalysers();
+    manager?.dispose();
+    manager = null;
+    void teardownSfu();
+    state.peerId = null;
+    state.remotePeers = [];
+    state.self = null;
+    state.speakingPeerIds = [];
   }
 
   function snapshot(): VoiceState {
@@ -226,6 +268,11 @@ export function createVoiceController(transport: RealtimeTransport) {
     for (const track of pipeline.rawStream.getAudioTracks()) {
       track.enabled = !state.isMuted;
     }
+  }
+
+  function applyMute() {
+    applyMuteToPipeline();
+    void sfu?.setMuted(state.isMuted);
   }
 
   function disposeRemoteAnalysers() {
@@ -379,13 +426,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     }
   }
 
-  function startMeshSession(
-    peerId: string,
-    peers: VoiceParticipant[],
-  ) {
-    // A second `welcome` (reconnect, or rejoining the same room) must not
-    // orphan the previous mesh — its peer connections would keep the mic open.
-    manager?.dispose();
+  function startMeshSession(peerId: string, peers: VoiceParticipant[]) {
     manager = createPeerConnectionManager(peerId, sendRelay, iceServers);
     if (pipeline) {
       manager.setLocalStream(pipeline.processedStream);
@@ -412,22 +453,57 @@ export function createVoiceController(transport: RealtimeTransport) {
           delete next[message.voiceChannelId];
           state.occupancy = next;
         }
+        // Rebuild the signaling allowlist from the room's authoritative roster
+        // snapshot (not just append), so a stale id from a missed/out-of-order
+        // peer-left can't linger as a trusted signaling source. Safe against
+        // dropping a valid peer: the server sends peer-joined before the roster
+        // on the same ordered socket, and only our own room's roster resets it.
+        if (message.voiceChannelId === state.voiceChannelId) {
+          knownPeerIds.clear();
+          for (const participant of message.participants) {
+            if (participant.peerId !== state.peerId) {
+              knownPeerIds.add(participant.peerId);
+            }
+          }
+        }
+        emit();
+        break;
+      case "voice-room-full":
+        clearJoinTimeout();
+        stopMicPipeline(pipeline);
+        pipeline = null;
+        intendedChannelId = null;
+        state.error = `This voice channel is full (max ${message.limit}).`;
+        state.status = "idle";
+        state.voiceChannelId = null;
         emit();
         break;
       case "welcome": {
+        // Drop a welcome that arrives after we already gave up (join timeout)
+        // or left — otherwise it would flip us back to "connected" with no mic.
+        if (state.status !== "joining") {
+          transport.sendVoice({ type: "leave-voice-room" });
+          return;
+        }
         clearJoinTimeout();
+        knownPeerIds.clear();
         state.peerId = message.peerId;
         state.status = "connected";
         state.voiceChannelId = message.voiceChannelId;
         state.self = message.self;
 
         const welcomePeers = message.peers;
-        knownPeerIds.clear();
         for (const peer of welcomePeers) {
           knownPeerIds.add(peer.peerId);
         }
         const channelId = message.voiceChannelId;
         const peerId = message.peerId;
+
+        // Rejoin/channel-switch: tear the previous session down before building
+        // a new one, or its connections and ICE-restart timers leak.
+        manager?.dispose();
+        manager = null;
+        void teardownSfu();
 
         if (sessionProvider) {
           void startSfuSession(channelId, peerId, welcomePeers).then((ok) => {
@@ -447,13 +523,13 @@ export function createVoiceController(transport: RealtimeTransport) {
         break;
       }
       case "peer-joined":
+        knownPeerIds.add(message.peer.peerId);
         identities.set(message.peer.peerId, toIdentity(message.peer));
         manager?.connectToPeer(message.peer.peerId, toIdentity(message.peer));
-        knownPeerIds.add(message.peer.peerId);
         break;
       case "peer-left":
-        identities.delete(message.peerId);
         knownPeerIds.delete(message.peerId);
+        identities.delete(message.peerId);
         manager?.removePeer(message.peerId);
         {
           const entry = remoteAnalysers.get(message.peerId);
@@ -465,20 +541,19 @@ export function createVoiceController(transport: RealtimeTransport) {
         break;
       case "offer":
         if (!knownPeerIds.has(message.from)) {
-          console.warn("[pqp] dropped offer from unannounced peer", message.from);
-          break;
+          return;
         }
         void manager?.handleOffer(message.from, message.sdp);
         break;
       case "answer":
         if (!knownPeerIds.has(message.from)) {
-          break;
+          return;
         }
         void manager?.handleAnswer(message.from, message.sdp);
         break;
       case "ice-candidate":
         if (!knownPeerIds.has(message.from)) {
-          break;
+          return;
         }
         void manager?.handleIceCandidate(message.from, message.candidate);
         break;
@@ -521,12 +596,12 @@ export function createVoiceController(transport: RealtimeTransport) {
     },
 
     async join(voiceChannelId: string, options?: VoiceAudioOptions) {
-      const seq = ++joinSeq;
       state.error = null;
       state.status = "joining";
       // Known from the moment we start, not only once the server says welcome —
       // otherwise the UI cannot tell which channel is connecting.
       state.voiceChannelId = voiceChannelId;
+      intendedChannelId = voiceChannelId;
       // Applied before the track exists, so "mute on join" is genuinely muted
       // from the first sample rather than a moment later.
       state.isMuted = options?.startMuted ?? state.isMuted;
@@ -539,22 +614,7 @@ export function createVoiceController(transport: RealtimeTransport) {
         };
       }
 
-      clearJoinTimeout();
-      joinTimeoutId = setTimeout(() => {
-        if (state.status === "joining" && seq === joinSeq) {
-          joinSeq += 1;
-          // Releasing the mic matters: leaving it open keeps the browser's
-          // recording indicator lit for a call that never happened.
-          stopMicPipeline(pipeline);
-          pipeline = null;
-          transport.sendVoice({ type: "leave-voice-room" });
-          state.error =
-            "Voice connection timed out. Is the server running and WebSocket connected?";
-          state.status = "idle";
-          state.voiceChannelId = null;
-          emit();
-        }
-      }, 12_000);
+      const generation = armJoinTimeout();
 
       try {
         stopMicPipeline(pipeline);
@@ -574,8 +634,9 @@ export function createVoiceController(transport: RealtimeTransport) {
           );
         }
 
-        // Cancelled (or timed out) while the permission prompt was open.
-        if (seq !== joinSeq) {
+        // Abandoned (left, timed out, or superseded) while the permission
+        // prompt was open: never open a mic for a join nobody is waiting on.
+        if (generation !== joinGeneration) {
           stopMicPipeline(next);
           return;
         }
@@ -584,18 +645,14 @@ export function createVoiceController(transport: RealtimeTransport) {
         applyMuteToPipeline();
         transport.sendVoice({ type: "join-voice-room", voiceChannelId });
       } catch (err) {
-        if (seq !== joinSeq) {
+        if (generation !== joinGeneration) {
           return;
         }
         clearJoinTimeout();
         stopMicPipeline(pipeline);
         pipeline = null;
-        state.error =
-          err instanceof Error
-            ? err.name === "NotAllowedError"
-              ? "Microphone access was blocked. Allow it in your browser settings, then rejoin."
-              : err.message
-            : "Failed to access microphone";
+        intendedChannelId = null;
+        state.error = micErrorMessage(err);
         state.status = "idle";
         state.voiceChannelId = null;
         emit();
@@ -603,16 +660,15 @@ export function createVoiceController(transport: RealtimeTransport) {
     },
 
     leave() {
-      joinSeq += 1;
       clearJoinTimeout();
+      joinGeneration++;
+      intendedChannelId = null;
+      knownPeerIds.clear();
       stopSpeakingLoop();
       disposeRemoteAnalysers();
-      if (state.status !== "idle") {
-        transport.sendVoice({ type: "leave-voice-room" });
-      }
+      transport.sendVoice({ type: "leave-voice-room" });
       manager?.dispose();
       manager = null;
-      knownPeerIds.clear();
       void teardownSfu();
       stopMicPipeline(pipeline);
       pipeline = null;
@@ -633,14 +689,46 @@ export function createVoiceController(transport: RealtimeTransport) {
       emit();
     },
 
+    /** WS connection lost mid-call: keep the mic + intent, drop the dead mesh. */
+    notifyDisconnected() {
+      if (state.status === "idle" || !intendedChannelId) {
+        return;
+      }
+      clearJoinTimeout();
+      teardownMeshForReconnect();
+      // Show "joining" (reconnecting) rather than kicking the user to idle.
+      state.status = "joining";
+      emit();
+    },
+
+    /** WS reconnected: auto-rejoin the room so the call resumes seamlessly. */
+    async notifyReconnected() {
+      if (!intendedChannelId || state.status === "idle") {
+        return;
+      }
+      if (!pipeline) {
+        // Mic was released (e.g. a long outage) — re-acquire via a full join.
+        await this.join(intendedChannelId);
+        return;
+      }
+      // Mic still live: re-enter the room; welcome rebuilds the mesh with a
+      // fresh peer id and other participants reconnect to us.
+      state.status = "joining";
+      emit();
+      armJoinTimeout();
+      transport.sendVoice({
+        type: "join-voice-room",
+        voiceChannelId: intendedChannelId,
+      });
+    },
+
     setMuted(muted: boolean) {
       if (!pipeline) {
         return;
       }
       // Undeafening is the only way back to an unmuted mic while deafened.
       state.isMuted = state.isDeafened ? true : muted;
-      applyMuteToPipeline();
-      void sfu?.setMuted(state.isMuted);
+      applyMute();
       emit();
     },
 
@@ -654,8 +742,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       } else {
         state.isMuted = !state.isMuted;
       }
-      applyMuteToPipeline();
-      void sfu?.setMuted(state.isMuted);
+      applyMute();
       emit();
     },
 
@@ -666,8 +753,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       state.isDeafened = !state.isDeafened;
       // Deafening also mutes; undeafening restores an open mic.
       state.isMuted = state.isDeafened;
-      applyMuteToPipeline();
-      void sfu?.setMuted(state.isMuted);
+      applyMute();
       emit();
     },
 
@@ -682,28 +768,6 @@ export function createVoiceController(transport: RealtimeTransport) {
         [userId]: Math.min(1, Math.max(0, volume)),
       };
       emit();
-    },
-
-    /**
-     * Re-enter the current room after the WebSocket reconnected. The server drops
-     * a peer the moment its socket closes, so without this the UI would show a
-     * call that no longer exists and nobody would hear anything.
-     */
-    rejoin() {
-      if (!state.voiceChannelId || state.status === "idle" || !pipeline) {
-        return;
-      }
-      manager?.dispose();
-      manager = null;
-      knownPeerIds.clear();
-      void teardownSfu();
-      state.remotePeers = [];
-      state.status = "joining";
-      emit();
-      transport.sendVoice({
-        type: "join-voice-room",
-        voiceChannelId: state.voiceChannelId,
-      });
     },
 
     setInputVolume(volume: number) {

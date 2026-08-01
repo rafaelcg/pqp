@@ -24,7 +24,7 @@ jobs:
         env:
           POSTGRES_USER: pqp
           POSTGRES_PASSWORD: pqp
-          POSTGRES_DB: pqp_test
+          POSTGRES_DB: pqp
         ports:
           - 5432:5432
         options: >-
@@ -34,16 +34,15 @@ jobs:
           --health-retries 10
 
     env:
-      DATABASE_URL: postgresql://pqp:pqp@localhost:5432/pqp_test
+      DATABASE_URL: postgres://pqp:pqp@localhost:5432/pqp
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup pnpm
+        # Version comes from the root package.json "packageManager" field.
         uses: pnpm/action-setup@v4
-        with:
-          version: 10
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -63,11 +62,13 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
-      - name: Test
-        run: pnpm test
-
+      # Before the tests: the DB-backed suites under server/test import the
+      # compiled output from server/dist.
       - name: Build server
         run: pnpm --filter @pqp/server build
+
+      - name: Test
+        run: pnpm test
 
       - name: Build client
         env:

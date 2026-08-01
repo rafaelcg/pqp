@@ -462,7 +462,8 @@ export function createChatController(transport: RealtimeTransport) {
           return;
         }
 
-        case "message-delete": {
+        case "message-delete":
+        case "message-deleted": {
           if (message.channelId !== channelId) {
             return;
           }

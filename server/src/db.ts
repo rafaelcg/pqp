@@ -13,16 +13,20 @@ export function getPool(): pg.Pool {
     if (!connectionString) {
       throw new Error("DATABASE_URL is required");
     }
+    // Opt into TLS when the host needs it (most managed Postgres over public
+    // networking). Left off by default so local/dev works without certs.
+    const useSsl =
+      process.env.DATABASE_SSL === "true" ||
+      process.env.PGSSLMODE === "require";
     pool = new pg.Pool({
       connectionString,
       max: Number(process.env.PG_POOL_MAX ?? 10),
       idleTimeoutMillis: 30_000,
       connectionTimeoutMillis: 10_000,
+      ...(useSsl ? { ssl: { rejectUnauthorized: false } } : {}),
     });
-
-    // An idle client dropped by the database (Railway restarts, Postgres
-    // upgrades, network blips) emits 'error' on the pool. With no listener,
-    // Node treats it as an unhandled 'error' event and kills the process.
+    // Idle-client errors (Postgres restart, network blip) are emitted on the
+    // pool; without a listener they crash the process.
     pool.on("error", (error) => {
       console.error("[db] idle client error:", error);
     });

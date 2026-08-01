@@ -90,6 +90,7 @@ CI workflows: `.github/workflows/ci.yml`, `deploy-web.yml`, `electron.yml`.
 5. **`@pqp/shared` on Railway** — production resolution needed a dedicated fix; rebuild/shared packaging matters for Docker deploys.
 6. **pnpm version** — CI uses pnpm matching the lockfile (pnpm 10); don’t downgrade casually.
 7. **Electron Linux artifacts** — scoped package name broke `.deb` paths; fixed in CI metadata.
+8. **Persistent "Realtime connection closed" on hosted deploy** — no WS heartbeat/reconnect, plus any thrown WS handler error crashed the whole server (unhandled rejection → Railway restart → every client dropped). **Fixed (2026-07-11):** server ping/pong heartbeat + try/catch around WS handlers + `pool.on("error")`; client auto-reconnect with backoff that resolves a fresh Clerk token per attempt (`client/src/lib/realtime.ts`).
 
 ## Agent norms
 

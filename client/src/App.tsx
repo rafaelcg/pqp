@@ -427,6 +427,7 @@ function MainAppContent({
             message.type === "message-update" ||
             message.type === "message-delete" ||
             message.type === "reaction-broadcast" ||
+            message.type === "message-deleted" ||
             message.type === "presence-update" ||
             message.type === "typing-broadcast"
           ) {
@@ -436,13 +437,20 @@ function MainAppContent({
           voice.handleSignaling(message);
         });
 
-        transport.onStatusChange((status, detail) => {
+        transport.onStatusChange((status) => {
           setConnection(status);
           if (status === "online") {
             setAppError(null);
-          } else if (detail) {
-            setAppError(null);
           }
+        });
+
+        transport.onError((message) => setAppError(message));
+
+        transport.onClose(() => {
+          // The server dropped our voice peer with the socket. Keep the mic and
+          // the intended room so the call resumes on reconnect instead of
+          // kicking the user out (they just see "connecting" briefly).
+          voice.notifyDisconnected();
         });
 
         transport.onReady((reconnected) => {
@@ -459,9 +467,9 @@ function MainAppContent({
           // Re-subscribe and re-sync: messages sent while we were offline were
           // never delivered, so the local list is stale.
           chat.resubscribe();
-          // The server drops a voice peer as soon as its socket closes, so a
-          // reconnect leaves the UI showing a call that no longer exists.
-          voice.rejoin();
+          // The server drops a voice peer as soon as its socket closes, so the
+          // call has to be re-entered before the UI matches reality again.
+          void voice.notifyReconnected();
           if (channelId) {
             void fetchMessages(channelId)
               .then((page) => {
