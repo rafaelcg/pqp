@@ -105,11 +105,13 @@ Drafts proper: a `useDrafts()` hook in client/src/hooks/ keyed by channel id, ba
 
 **Why it matters.** There is no way to reach a specific person short of sending them a whole server invite, and the handle you would give them silently changes out from under you whenever you edit your username.
 
-**Today.** No endpoint returns a user you are not already a co-member with: `GET /api/servers/:serverId/members` (server/src/api/index.ts:517) is the only user listing and it requires membership; client/src/lib/api.ts has no search call. The tag is unstable — `updateProfile` (server/src/services/users.ts:113-116) re-rolls the discriminator on every username change, so `rafael#0042` silently becomes `rafael#7781`. Uniqueness is only on the pair (`idx_users_username_discrim`, schema.sql:16-18), never on `username` alone.
+**Today.** No endpoint returns a user you are not already a co-member with: `GET /api/servers/:serverId/members` (server/src/api/index.ts:517) is the only user listing and it requires membership; client/src/lib/api.ts has no search call. Uniqueness is only on the pair (`idx_users_username_discrim`, schema.sql:16-18), never on `username` alone.
+
+✅ **The tag-stability half of this entry is already done** (verified 2026-08-01 against `updateProfile` in server/src/services/users.ts). It used to re-roll the discriminator on every username change, so `rafael#0042` silently became `rafael#7781`; it now keeps the number and only reallocates when that exact `(username, discriminator)` pair is taken. What remains here is discovery — the two endpoints and the picker below.
 
 **Sketch.**
 
-Fix the tag first — it is a bug, not a feature: in `updateProfile`, keep the existing discriminator across a username change and only reallocate when `(newUsername, currentDiscriminator)` is already taken. Longer term add `UNIQUE (lower(username))` and demote the discriminator to legacy display, which is where Discord landed in 2023 for exactly the "what's your number again" friction.
+~~Fix the tag first~~ — done, see above. Longer term add `UNIQUE (lower(username))` and demote the discriminator to legacy display, which is where Discord landed in 2023 for exactly the "what's your number again" friction.
 
 Endpoints: `GET /api/users/lookup?tag=name%231234` (exact match) and `GET /api/users/search?q=` (prefix on username, min 2 chars, capped at 20 rows, on a strict limiter bucket like `writeLimiter` at api/index.ts:105 to blunt enumeration). Return only id/displayName/username/tag/avatarUrl — never `clerkId`, which `toPublicUser` (users.ts:29) currently includes and which must not travel to third parties.
 
