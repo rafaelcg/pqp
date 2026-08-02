@@ -1,5 +1,10 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
-import type { User, UserPreferences } from "@pqp/shared";
+import type {
+  BlockedUser,
+  DmPrivacy,
+  User,
+  UserPreferences,
+} from "@pqp/shared";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -148,9 +153,11 @@ interface SettingsModalProps {
   localSettings: LocalSettings;
   /** Live analyser from active voice session, if connected */
   voiceAnalyser?: AnalyserNode | null;
+  blockedUsers: BlockedUser[];
   onClose: () => void;
   onLocalSave: (settings: LocalSettings) => void;
   onUserUpdated: (user: User) => void;
+  onUnblockUser: (userId: string) => void;
   onAudioSettingsLive?: (settings: LocalSettings) => void;
 }
 
@@ -429,14 +436,147 @@ function NotificationsSection() {
   );
 }
 
+const DM_PRIVACY_OPTIONS: { value: DmPrivacy; label: string }[] = [
+  { value: "everyone", label: "Anyone" },
+  { value: "server_members", label: "People I share a server with" },
+  { value: "nobody", label: "No one" },
+];
+
+/**
+ * Who may open a conversation with this account, and who has been blocked.
+ *
+ * Both apply the moment they are clicked rather than on Save, unlike the
+ * profile fields above them. A privacy control that silently did nothing
+ * because the dialog was dismissed with Cancel is the one failure this section
+ * cannot have: the user believes they are closed off and they are not.
+ *
+ * The rule is enforced on the server on every attempt to open a conversation.
+ * Nothing here is the enforcement — this is the switch, not the lock.
+ */
+function PrivacySection({
+  user,
+  blockedUsers,
+  onUserUpdated,
+  onUnblockUser,
+}: {
+  user: User | null;
+  blockedUsers: BlockedUser[];
+  onUserUpdated: (user: User) => void;
+  onUnblockUser: (userId: string) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const current = user?.dmPrivacy ?? "server_members";
+
+  async function choose(value: DmPrivacy) {
+    if (!user || busy || value === current) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      onUserUpdated(await updateMe({ dmPrivacy: value }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save that");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div>
+      <p className="text-xs uppercase tracking-wide text-text-muted">Privacy</p>
+
+      <p className="mt-2 text-xs text-text-muted">
+        Who can start a direct message with you.
+      </p>
+      <div
+        role="radiogroup"
+        aria-label="Who can direct message me"
+        className="mt-2 flex flex-wrap gap-1.5"
+      >
+        {DM_PRIVACY_OPTIONS.map((option) => {
+          const selected = option.value === current;
+          return (
+            <button
+              key={option.value}
+              type="button"
+              role="radio"
+              aria-checked={selected}
+              disabled={busy || !user}
+              onClick={() => void choose(option.value)}
+              className={`rounded-md border px-3 py-1.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent disabled:opacity-60 ${
+                selected
+                  ? "border-accent bg-accent/10 text-text"
+                  : "border-border text-text-muted hover:border-accent/50"
+              }`}
+            >
+              {option.label}
+            </button>
+          );
+        })}
+      </div>
+      <p className="mt-1.5 text-xs text-text-muted">
+        Applies to new conversations. Anyone you are already talking to can still
+        reach you — tightening this is not a way to disappear on someone
+        mid-sentence.
+      </p>
+      {error && (
+        <p role="alert" className="mt-1.5 text-xs text-danger">
+          {error}
+        </p>
+      )}
+
+      <p className="mt-4 text-xs uppercase tracking-wide text-text-muted">
+        Blocked
+      </p>
+      {blockedUsers.length === 0 ? (
+        <p className="mt-2 text-xs text-text-muted">
+          Nobody. Blocking someone stops their messages reaching you and hides
+          what they say in shared channels behind a tap.
+        </p>
+      ) : (
+        <ul className="mt-2 space-y-1">
+          {blockedUsers.map((blocked) => (
+            <li
+              key={blocked.id}
+              className="flex items-center gap-3 rounded-md px-2 py-1.5 hover:bg-surface-2/60"
+            >
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm text-text">
+                  {blocked.displayName}
+                </p>
+                {blocked.tag && (
+                  <p className="truncate font-mono text-[11px] text-text-muted">
+                    {blocked.tag}
+                  </p>
+                )}
+              </div>
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => onUnblockUser(blocked.id)}
+              >
+                Unblock
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 export function SettingsModal({
   open,
   user,
   localSettings,
   voiceAnalyser = null,
+  blockedUsers,
   onClose,
   onLocalSave,
   onUserUpdated,
+  onUnblockUser,
   onAudioSettingsLive,
 }: SettingsModalProps) {
   const [displayName, setDisplayName] = useState("");
@@ -656,6 +796,15 @@ export function SettingsModal({
 
         <div className="mt-4 border-t border-ink-4 pt-4">
           <NotificationsSection />
+        </div>
+
+        <div className="mt-4 border-t border-ink-4 pt-4">
+          <PrivacySection
+            user={user}
+            blockedUsers={blockedUsers}
+            onUserUpdated={onUserUpdated}
+            onUnblockUser={onUnblockUser}
+          />
         </div>
 
         <div className="mt-4 space-y-4 border-t border-ink-4 pt-4">

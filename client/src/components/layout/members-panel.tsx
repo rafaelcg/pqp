@@ -6,7 +6,9 @@ import {
   RotateCcw,
   ShieldMinus,
   ShieldPlus,
+  UserCheck,
   UserMinus,
+  UserX,
   type LucideIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
@@ -50,9 +52,13 @@ interface MembersPanelProps {
   serverName: string | null;
   role: MemberRole;
   currentUserId: string | null;
+  /** Who this account has blocked, so a row offers the action it does not have. */
+  blockedUserIds: ReadonlySet<string>;
   onClose: () => void;
   /** Receives the username slug — mentions are matched by slug, not display name. */
   onMention?: (username: string) => void;
+  onBlockUser: (userId: string) => void;
+  onUnblockUser: (userId: string) => void;
 }
 
 function messageOf(error: unknown, fallback: string): string {
@@ -68,8 +74,11 @@ export function MembersPanel({
   serverName,
   role,
   currentUserId,
+  blockedUserIds,
   onClose,
   onMention,
+  onBlockUser,
+  onUnblockUser,
 }: MembersPanelProps) {
   const [members, setMembers] = useState<ServerMember[]>([]);
   const [loading, setLoading] = useState(false);
@@ -237,6 +246,28 @@ export function MembersPanel({
               label: "Demote to member",
               icon: ShieldMinus,
               onSelect: () => void setRole(member.id, "member"),
+            },
+      );
+    }
+    // Offered for anybody but yourself, whatever their role. Blocking is not
+    // moderation: it is the thing a member does *instead* of asking a moderator
+    // to act, so gating it on the target's rank would leave the person with the
+    // least power the only one with no option at all.
+    if (member.id !== currentUserId) {
+      actions.push(
+        blockedUserIds.has(member.id)
+          ? {
+              id: "unblock",
+              label: "Unblock",
+              icon: UserCheck,
+              onSelect: () => onUnblockUser(member.id),
+            }
+          : {
+              id: "block",
+              label: "Block",
+              icon: UserX,
+              onSelect: () => onBlockUser(member.id),
+              danger: true,
             },
       );
     }

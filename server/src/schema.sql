@@ -17,6 +17,35 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_discrim
   ON users (username, discriminator)
   WHERE username IS NOT NULL AND discriminator IS NOT NULL;
 
+-- Who is allowed to open a conversation with this user. 'server_members' —
+-- "someone I already share a server with" — is the default because a shared
+-- server is the only relationship this product models, and expressing the rule
+-- in those terms is what avoids building a friend graph to gate it.
+--
+-- It governs opening a conversation, not an existing one: tightening this must
+-- not silently cut off people already talking to you.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS dm_privacy TEXT NOT NULL
+  DEFAULT 'server_members'
+  CHECK (dm_privacy IN ('everyone', 'server_members', 'nobody'));
+
+-- Blocking is one-directional (blocker → blocked) and self-serve. It exists
+-- because a DM is a contact channel nobody else moderates: every other sanction
+-- in the product is something a moderator does on a server's behalf, and none
+-- of them help a user who just wants one person out of their own feed.
+CREATE TABLE IF NOT EXISTS user_blocks (
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  blocked_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (user_id, blocked_user_id),
+  CHECK (user_id <> blocked_user_id)
+);
+
+-- Enforcement asks "does either of these two block the other", so half of every
+-- check reads the pair backwards — a direction the primary key cannot serve,
+-- and it sits on the message-send path.
+CREATE INDEX IF NOT EXISTS idx_user_blocks_blocked
+  ON user_blocks (blocked_user_id, user_id);
+
 -- One JSONB blob per user rather than a column per setting: the set of
 -- preferences churns, and a column each would mean a migration each. The shape
 -- is validated by `userPreferencesSchema` before anything is written.
@@ -66,12 +95,74 @@ ALTER TABLE channels ADD COLUMN IF NOT EXISTS is_private BOOLEAN NOT NULL DEFAUL
 ALTER TABLE channels ADD COLUMN IF NOT EXISTS topic TEXT;
 ALTER TABLE channels ADD COLUMN IF NOT EXISTS image_url TEXT;
 
+-- A conversation — a DM or a group DM — is a channel with no server. Modelling
+-- it as a channel row rather than as its own table is what lets messages, read
+-- cursors, reactions, mentions and attachments carry over untouched; a parallel
+-- messaging path is how this feature turns into a rewrite.
+ALTER TABLE channels ALTER COLUMN server_id DROP NOT NULL;
+
+ALTER TABLE channels ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'server'
+  CHECK (kind IN ('server', 'dm', 'group'));
+
+-- `kind` and `server_id` have to agree in both directions or the access
+-- predicates answer the wrong question. A row claiming kind='server' with no
+-- server joins to no `server_members` row and vanishes from every read path,
+-- while a conversation that kept a server_id would be visible to that server's
+-- owners and admins through the role branch of `channelVisibleSql` — a private
+-- conversation leaking to people who were never in it. Pairing them is what
+-- makes "is this a conversation" a fact about the row itself.
+--
+-- ADD CONSTRAINT is not idempotent, so it uses the same DROP-then-ADD block as
+-- the server_members role check above. An exception rolls the whole block back,
+-- so a database whose rows currently violate this keeps the constraint it
+-- already had, and heals on the next boot after the rows are fixed.
+DO $$
+BEGIN
+  ALTER TABLE channels DROP CONSTRAINT IF EXISTS channels_server_kind_check;
+  ALTER TABLE channels
+    ADD CONSTRAINT channels_server_kind_check
+    CHECK ((kind = 'server') = (server_id IS NOT NULL));
+EXCEPTION
+  WHEN others THEN NULL;
+END $$;
+
+-- Participants of a conversation are rows here, same as the allowlist of a
+-- private server channel — so `channel_members` is the one membership table and
+-- idx_channel_members_user_channel below already indexes the user→channels
+-- direction the conversation list needs.
 CREATE TABLE IF NOT EXISTS channel_members (
   channel_id UUID NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   added_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY (channel_id, user_id)
 );
+
+-- The 1:1 conversation index, keyed by the *sorted* uuid pair.
+--
+-- Sorting is the entire reason this table exists rather than a unique index
+-- over an unordered pair: (a,b) and (b,a) are two different rows to Postgres,
+-- so two people tapping "message" on each other in the same instant would each
+-- insert their own and end up in two different conversations, each seeing half
+-- the thread. Sorted, both inserts collide on one primary key and the loser
+-- reads the winner's channel — which is what makes POST /api/dms idempotent
+-- under concurrency without taking a lock. The CHECK is what keeps that true:
+-- an unsorted row written by mistake re-opens the race for that pair forever.
+--
+-- Group DMs are deliberately absent. They have no canonical identity — the same
+-- three people may want two separate rooms — so a group is always created new.
+CREATE TABLE IF NOT EXISTS dm_pairs (
+  low_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  high_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  channel_id UUID NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+  PRIMARY KEY (low_user_id, high_user_id),
+  CHECK (low_user_id < high_user_id)
+);
+
+-- Unique rather than plain: one channel is at most one pair. It also gives the
+-- ON DELETE CASCADE an index to use, without which every channel delete
+-- seq-scans this table.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_dm_pairs_channel
+  ON dm_pairs (channel_id);
 
 CREATE TABLE IF NOT EXISTS server_invites (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

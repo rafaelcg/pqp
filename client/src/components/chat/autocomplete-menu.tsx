@@ -20,9 +20,21 @@ interface AutocompleteMenuProps {
   emptyLabel: string;
   options: AutocompleteOption[];
   selectedIndex: number;
+  /**
+   * Which side of its anchor the menu opens on. Defaults to `"above"` because
+   * the composer sits at the bottom of the window, where a menu opening
+   * downwards would open off-screen; a search field at the top of a dialog is
+   * the mirror image of that and needs `"below"`.
+   */
+  placement?: "above" | "below";
   onSelect: (index: number) => void;
   onHover: (index: number) => void;
 }
+
+const PLACEMENT_CLASS = {
+  above: "bottom-full mb-2",
+  below: "top-full mt-2",
+} as const;
 
 /**
  * The one popup behind both `/command` and `@mention` completion. Keyboard
@@ -35,6 +47,7 @@ export function AutocompleteMenu({
   emptyLabel,
   options,
   selectedIndex,
+  placement = "above",
   onSelect,
   onHover,
 }: AutocompleteMenuProps) {
@@ -42,7 +55,10 @@ export function AutocompleteMenu({
     return (
       <div
         id={id}
-        className="animate-rise absolute bottom-full left-0 right-0 z-20 mb-2 overflow-hidden rounded-lg border border-border bg-surface-1 p-3 shadow-[var(--shadow-popover)]"
+        className={cn(
+          "animate-rise absolute left-0 right-0 z-20 overflow-hidden rounded-lg border border-border bg-surface-1 p-3 shadow-[var(--shadow-popover)]",
+          PLACEMENT_CLASS[placement],
+        )}
       >
         <p className="text-sm text-text-muted">{emptyLabel}</p>
       </div>
@@ -52,7 +68,10 @@ export function AutocompleteMenu({
   return (
     <div
       id={id}
-      className="animate-rise absolute bottom-full left-0 right-0 z-20 mb-2 max-h-64 overflow-y-auto rounded-lg border border-border bg-surface-1 p-1 shadow-[var(--shadow-popover)]"
+      className={cn(
+        "animate-rise absolute left-0 right-0 z-20 max-h-64 overflow-y-auto rounded-lg border border-border bg-surface-1 p-1 shadow-[var(--shadow-popover)]",
+        PLACEMENT_CLASS[placement],
+      )}
       role="listbox"
       aria-label={label}
     >

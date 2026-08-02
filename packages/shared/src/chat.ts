@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  channelKindSchema,
   MESSAGE_MAX_LENGTH,
   messageReactionSchema,
   messageReplyRefSchema,
@@ -140,7 +141,21 @@ export const typingBroadcastSchema = z.object({
  */
 export const channelActivitySchema = z.object({
   type: z.literal("channel-activity"),
-  serverId: z.string().uuid(),
+  /**
+   * Null when the activity is in a conversation, which has no server.
+   *
+   * This was required until conversations existed, so it is a wire change: a
+   * client older than this schema rejects the whole frame rather than
+   * mis-filing it, which costs a live unread badge until that client reloads
+   * and never routes a DM's activity into a server.
+   */
+  serverId: z.string().uuid().nullable(),
+  /**
+   * Which list the badge belongs in — the server sidebar or the conversation
+   * list. Derivable from a null `serverId` today, and sent anyway so a client
+   * never has to infer a kind from the absence of a field.
+   */
+  kind: channelKindSchema.default("server"),
   channelId: z.string().uuid(),
   mention: z.boolean(),
 });

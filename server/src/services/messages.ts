@@ -15,6 +15,7 @@ import {
   toPublicAttachment,
   verifyPendingAttachments,
 } from "./attachments.js";
+import { listBlockedAmong, notBlockedSql } from "./blocks.js";
 import { listReactionsForMessages } from "./reactions.js";
 
 /**
@@ -29,6 +30,15 @@ type Queryable = Pick<PoolClient, "query">;
 export type HydratedMessage = DbMessage & {
   reactions: MessageReaction[];
   attachments: Attachment[];
+  /**
+   * Whether the viewer of *this* read has blocked the author.
+   *
+   * Per-viewer, so it is only ever set on a history read, which has one. A live
+   * broadcast is encoded once and sent to a whole channel, so there is no
+   * single right answer for it and it goes out false — the client collapses
+   * live messages from its own block list, which it holds anyway.
+   */
+  blocked?: boolean;
 };
 
 /** Parent columns every read path needs to build a quote header. */
@@ -162,10 +172,19 @@ async function hydrate(
   viewerId?: string,
 ): Promise<MessagePage> {
   const messageIds = rows.map((row) => row.id);
-  const [reactionsByMessage, attachmentsByMessage] = await Promise.all([
-    listReactionsForMessages(messageIds, viewerId),
-    listAttachmentsForMessages(messageIds),
-  ]);
+  const [reactionsByMessage, attachmentsByMessage, blockedAuthors] =
+    await Promise.all([
+      listReactionsForMessages(messageIds, viewerId),
+      listAttachmentsForMessages(messageIds),
+      // One query for the page, not one per row, and only over the authors
+      // actually on it — the viewer's whole block list is unbounded and most of
+      // it is irrelevant to any given fifty messages.
+      viewerId
+        ? listBlockedAmong(viewerId, [
+            ...new Set(rows.map((row) => row.author_id)),
+          ])
+        : Promise.resolve(new Set<string>()),
+    ]);
   return {
     hasMore,
     hasNewer,
@@ -173,6 +192,7 @@ async function hydrate(
       ...row,
       reactions: reactionsByMessage.get(row.id) ?? [],
       attachments: attachmentsByMessage.get(row.id) ?? [],
+      blocked: blockedAuthors.has(row.author_id),
     })),
   };
 }
@@ -234,12 +254,18 @@ export async function listMessages(
   return hydrate(page.rows.reverse(), page.overflow, false, viewerId);
 }
 
+/**
+ * `server_id` is null when the message is in a conversation, and callers must
+ * branch on it rather than pass it on: a conversation has no moderators, so a
+ * check that would have asked "can this user manage the server" has no server
+ * to ask about and must not fall through to an answer.
+ */
 export async function getMessage(
   messageId: string,
 ): Promise<
-  (DbMessage & { server_id: string; attachments: Attachment[] }) | null
+  (DbMessage & { server_id: string | null; attachments: Attachment[] }) | null
 > {
-  const result = await getPool().query<DbMessage & { server_id: string }>(
+  const result = await getPool().query<DbMessage & { server_id: string | null }>(
     `SELECT m.id, m.channel_id, m.author_id, m.body, m.created_at, m.edited_at,
             c.server_id,
             u.display_name as author_name,
@@ -286,8 +312,19 @@ export async function getReplyParent(
 }
 
 /**
- * Resolve `@username` tokens to members of the channel's server and record
+ * Resolve `@username` tokens to people who can be mentioned here and record
  * them, so unread badges can distinguish a mention from ordinary traffic.
+ *
+ * Who that is depends on the kind of channel, and the old query could not ask:
+ * it reached the mentionable set through `JOIN channels c ON c.server_id =
+ * sm.server_id`, which for a conversation joins on a NULL server and matches
+ * nobody — every mention in a DM would silently record no rows at all. The
+ * `CASE` below is the same split as `channelVisibleSql`: a server channel
+ * mentions the server's members, a conversation mentions its participants.
+ *
+ * Somebody who has blocked the author is never mentioned, in either kind. A
+ * mention is the loudest notification the product has, so leaving this out
+ * would make an @ the way around a block.
  *
  * A reply counts as a mention of the person being answered — that is the whole
  * difference between a reply that notifies and a reply that decorates — and it
@@ -297,6 +334,7 @@ async function recordMentions(
   db: Queryable,
   messageId: string,
   channelId: string,
+  authorId: string,
   body: string,
   reply?: { parentId: string; authorId: string },
 ): Promise<void> {
@@ -306,11 +344,23 @@ async function recordMentions(
       `INSERT INTO message_mentions (message_id, user_id)
        SELECT $1, u.id
        FROM users u
-       JOIN server_members sm ON sm.user_id = u.id
-       JOIN channels c ON c.server_id = sm.server_id
-       WHERE c.id = $2 AND u.username = ANY($3::text[])
+       CROSS JOIN channels c
+       WHERE c.id = $2
+         AND u.username = ANY($3::text[])
+         AND CASE WHEN c.kind = 'server' THEN
+               EXISTS (
+                 SELECT 1 FROM server_members sm
+                 WHERE sm.server_id = c.server_id AND sm.user_id = u.id
+               )
+             ELSE
+               EXISTS (
+                 SELECT 1 FROM channel_members cm
+                 WHERE cm.channel_id = c.id AND cm.user_id = u.id
+               )
+             END
+         AND ${notBlockedSql("u.id", "$4")}
        ON CONFLICT DO NOTHING`,
-      [messageId, channelId, usernames],
+      [messageId, channelId, usernames, authorId],
     );
   }
 
@@ -324,6 +374,7 @@ async function recordMentions(
      SELECT $1, parent.author_id
      FROM messages parent
      WHERE parent.id = $2 AND parent.author_id <> $3
+       AND ${notBlockedSql("parent.author_id", "$3")}
      ON CONFLICT DO NOTHING`,
     [messageId, reply.parentId, reply.authorId],
   );
@@ -396,6 +447,7 @@ export async function createMessage(
       client,
       message.id,
       channelId,
+      author.id,
       body,
       replyToId ? { parentId: replyToId, authorId: author.id } : undefined,
     );
@@ -456,6 +508,7 @@ export async function updateMessageBody(
     getPool(),
     messageId,
     message.channel_id,
+    message.author_id,
     body,
     message.reply_to_id
       ? { parentId: message.reply_to_id, authorId: message.author_id }
@@ -544,7 +597,11 @@ function mapReplyTo(m: DbMessage): MessageReplyRef | null {
  * part, and it has already happened by the time a row reaches this.
  */
 export function mapMessage(
-  m: DbMessage & { reactions?: MessageReaction[]; attachments?: Attachment[] },
+  m: DbMessage & {
+    reactions?: MessageReaction[];
+    attachments?: Attachment[];
+    blocked?: boolean;
+  },
 ) {
   return {
     id: m.id,
@@ -559,5 +616,11 @@ export function mapMessage(
     reactions: m.reactions ?? [],
     replyTo: mapReplyTo(m),
     attachments: m.attachments ?? [],
+    // Sent rather than filtered. Dropping the row instead would corrupt
+    // `listMessages`: it pages by keyset and reports `hasMore` from how many
+    // rows the query read, so a page silently short of its limit reads as
+    // "history ran out" in the middle of a conversation. The body travels and
+    // the client draws the curtain.
+    blocked: m.blocked ?? false,
   };
 }

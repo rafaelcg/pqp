@@ -11,7 +11,6 @@ import { VoiceAvatar } from "@/components/voice/voice-avatar";
 import {
   notificationLevelItems,
   useChannelNotificationLevel,
-  useChannelNotifications,
 } from "@/hooks/use-notifications";
 import { cn } from "@/lib/utils";
 
@@ -100,11 +99,6 @@ export function ChannelList({
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [hasServer]);
-
-  // The sidebar is mounted for the whole session and already receives the
-  // unread map for every server, which is exactly what an OS notification and
-  // the dock badge are derived from.
-  useChannelNotifications({ channels, unread });
 
   const headerItems: ContextMenuItemDef[] = server
     ? [

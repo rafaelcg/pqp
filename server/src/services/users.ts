@@ -1,7 +1,13 @@
-import { formatUserTag } from "@pqp/shared";
+import {
+  formatUserTag,
+  USER_SEARCH_PAGE_SIZE,
+  type DmPrivacy,
+  type PublicUser,
+} from "@pqp/shared";
 import type { DbUser } from "../db.js";
 import { getPool } from "../db.js";
 import type { AuthUser } from "../auth/clerk.js";
+import { notBlockedSql } from "./blocks.js";
 import { getPreferences } from "./preferences.js";
 
 function slugifyUsername(input: string): string {
@@ -45,6 +51,11 @@ async function allocateDiscriminator(username: string): Promise<string> {
  * folding that read in here means the client learns its theme and voice
  * defaults from the bootstrap request it already makes, instead of a second
  * round-trip it would have to wait on before first paint.
+ *
+ * THIS SHAPE CARRIES `clerkId` AND IS ONLY EVER SAFE TO SEND TO THE ACCOUNT'S
+ * OWN OWNER. Anything that hands a user to somebody else — search results, the
+ * participants of a conversation, a block list — must use `toPublicUserSummary`
+ * below instead, which is the shape `publicUserSchema` describes.
  */
 export async function toPublicUser(user: DbUser) {
   return {
@@ -56,7 +67,99 @@ export async function toPublicUser(user: DbUser) {
     tag: formatUserTag(user.username, user.discriminator),
     avatarUrl: user.avatar_url,
     preferences: await getPreferences(user.id),
+    dmPrivacy: await getDmPrivacy(user.id),
   };
+}
+
+/** Columns every public-shaped read selects. */
+const PUBLIC_USER_COLUMNS = `id, display_name, username, discriminator, avatar_url`;
+
+interface PublicUserRow {
+  id: string;
+  display_name: string;
+  username: string | null;
+  discriminator: string | null;
+  avatar_url: string | null;
+}
+
+/**
+ * A user as somebody who is not that user may see them.
+ *
+ * Deliberately built from a row rather than from `DbUser`: the fields simply
+ * are not there to leak. `clerk_id` is the account's identifier at the identity
+ * provider and `toPublicUser` returns it, so the two shapes are kept apart by
+ * construction rather than by remembering to delete a key.
+ */
+export function toPublicUserSummary(row: PublicUserRow): PublicUser {
+  return {
+    id: row.id,
+    displayName: row.display_name,
+    username: row.username,
+    tag: formatUserTag(row.username, row.discriminator),
+    avatarUrl: row.avatar_url,
+  };
+}
+
+/**
+ * Read fresh rather than carried on the session user.
+ *
+ * `resolveAuthUser` caches the row it authenticated with, so a value read off
+ * that object would keep answering with the setting the user had when they
+ * connected — and this one setting decides whether strangers may contact them,
+ * which is precisely the case where a stale read is the wrong answer.
+ */
+export async function getDmPrivacy(userId: string): Promise<DmPrivacy> {
+  const result = await getPool().query<{ dm_privacy: DmPrivacy }>(
+    `SELECT dm_privacy FROM users WHERE id = $1`,
+    [userId],
+  );
+  return result.rows[0]?.dm_privacy ?? "server_members";
+}
+
+/**
+ * Exact handle lookup — the half of discovery that is not enumerable, because
+ * the caller has to already know both the name and the number.
+ */
+export async function findUserByTag(
+  username: string,
+  discriminator: string,
+): Promise<PublicUser | null> {
+  const result = await getPool().query<PublicUserRow>(
+    `SELECT ${PUBLIC_USER_COLUMNS} FROM users
+     WHERE username = $1 AND discriminator = $2`,
+    [username, discriminator],
+  );
+  const row = result.rows[0];
+  return row ? toPublicUserSummary(row) : null;
+}
+
+/**
+ * Prefix search over handles.
+ *
+ * `_` is a legal username character *and* a LIKE wildcard, so an unescaped
+ * query for `a_b` would match `axb` — which turns a search for one person into
+ * a pattern match over the directory. Escaping is done here rather than left to
+ * the caller because forgetting it does not fail, it silently widens.
+ *
+ * The caller is excluded: every result is somebody you might open a
+ * conversation with, and you are not one of them.
+ */
+export async function searchUsersByPrefix(
+  prefix: string,
+  viewerId: string,
+  limit: number = USER_SEARCH_PAGE_SIZE,
+): Promise<PublicUser[]> {
+  const escaped = prefix.toLowerCase().replace(/[\\%_]/g, "\\$&");
+  const result = await getPool().query<PublicUserRow>(
+    `SELECT ${PUBLIC_USER_COLUMNS} FROM users
+     WHERE username IS NOT NULL
+       AND username LIKE $1 || '%' ESCAPE '\\'
+       AND id <> $2
+     ORDER BY username ASC, discriminator ASC
+     LIMIT $3`,
+    [escaped, viewerId, limit],
+  );
+  return result.rows.map(toPublicUserSummary);
 }
 
 export async function upsertUser(auth: AuthUser): Promise<DbUser> {
@@ -121,6 +224,7 @@ export async function updateProfile(
     displayName?: string;
     username?: string;
     avatarUrl?: string | null;
+    dmPrivacy?: DmPrivacy;
   },
 ): Promise<DbUser> {
   const current = await getUserById(userId);
@@ -156,7 +260,8 @@ export async function updateProfile(
        display_name = COALESCE($2, display_name),
        username = $3,
        discriminator = $4,
-       avatar_url = $5
+       avatar_url = $5,
+       dm_privacy = COALESCE($6, dm_privacy)
      WHERE id = $1
      RETURNING id, clerk_id, display_name, username, discriminator, avatar_url`,
     [
@@ -165,6 +270,7 @@ export async function updateProfile(
       username,
       discriminator,
       avatarUrl,
+      updates.dmPrivacy ?? null,
     ],
   );
   return result.rows[0]!;
@@ -204,26 +310,90 @@ export async function canManageServer(
   return role === "owner" || role === "admin";
 }
 
-export async function isChannelMember(
+/**
+ * Membership of one channel's own list, as a subquery.
+ *
+ * The same text answers two questions that must never drift apart: who is on a
+ * private server channel's allowlist, and who is in a conversation. For a
+ * conversation it is the *whole* rule — there is no second source of truth and
+ * no role that overrides it.
+ */
+function channelMemberSql(viewer: string): string {
+  return `EXISTS (
+           SELECT 1 FROM channel_members cm
+           WHERE cm.channel_id = c.id AND cm.user_id = ${viewer}
+         )`;
+}
+
+/**
+ * Who may see a channel, as one SQL fragment every read path interpolates.
+ *
+ * It cannot be a bare constant: `getChannelAudience` asks the question of every
+ * member in a single query, so there the viewer is the row's own `sm.user_id`,
+ * while everywhere else it is a bound parameter whose number differs per call
+ * site. Taking the viewer expression keeps the text itself single-sourced,
+ * which is the whole point — a copy per call site is a private channel leaking
+ * the day one copy is updated and the rest are not.
+ *
+ * THE TWO BRANCHES ARE NOT SYMMETRIC AND MUST NOT BE MADE SO. A server channel
+ * has an owner and admins who can read a private channel without being on its
+ * list, because a server is a thing they are responsible for. A conversation is
+ * not: it belongs to nobody, so the only way in is a `channel_members` row.
+ * Adding a role escape hatch to the `ELSE` branch would put every server
+ * administrator inside their members' direct messages, which is the single
+ * worst thing this predicate could be made to do.
+ *
+ * Callers must expose `channels c` and `server_members sm`. The join to `sm`
+ * may be a LEFT JOIN — a conversation has no server and so no member rows, and
+ * `sm.user_id IS NOT NULL` is what carries the "must be a member" half of the
+ * server branch when it is. Unless the viewer *is* `sm.user_id`, the join must
+ * also constrain `sm.user_id` to the same viewer, or the role branch answers
+ * for some other member and grants access on their rank.
+ */
+export function channelVisibleSql(viewer: string): string {
+  return `(
+         CASE WHEN c.kind = 'server' THEN
+           sm.user_id IS NOT NULL
+           AND (
+             c.is_private = FALSE
+             OR sm.role IN ('owner', 'admin')
+             OR ${channelMemberSql(viewer)}
+           )
+         ELSE ${channelMemberSql(viewer)}
+         END
+       )`;
+}
+
+/**
+ * Canonical single-channel access check — the one predicate everything else
+ * defers to. Private channels are visible to the server's owner and admins
+ * without a `channel_members` row, and to plain members only with one; a
+ * conversation is visible to its participants and to nobody else.
+ *
+ * The join to `server_members` is LEFT because a conversation has no server:
+ * an inner join drops the row before the predicate is ever evaluated, which
+ * would read as "no such channel" for every DM in the instance.
+ */
+export async function canAccessChannel(
   channelId: string,
   userId: string,
 ): Promise<boolean> {
   const result = await getPool().query(
     `SELECT 1 FROM channels c
-     JOIN server_members sm ON sm.server_id = c.server_id
-     WHERE c.id = $1 AND sm.user_id = $2
-       AND (
-         c.is_private = FALSE
-         OR sm.role IN ('owner', 'admin')
-         OR EXISTS (
-           SELECT 1 FROM channel_members cm
-           WHERE cm.channel_id = c.id AND cm.user_id = $2
-         )
-       )`,
+     LEFT JOIN server_members sm
+       ON sm.server_id = c.server_id AND sm.user_id = $2
+     WHERE c.id = $1 AND ${channelVisibleSql("$2")}`,
     [channelId, userId],
   );
   return result.rows.length > 0;
 }
+
+/**
+ * The older name, kept because callers outside this file still use it (and one,
+ * `attachments.ts`, was not part of the consolidation). `canAccessChannel` is
+ * canonical; nothing should acquire a new dependency on this name.
+ */
+export const isChannelMember = canAccessChannel;
 
 export async function listServerMembers(serverId: string) {
   const result = await getPool().query<{
@@ -400,6 +570,19 @@ export async function liftBan(
  * Unread counts for every channel of a server the viewer can see. A channel with
  * no `channel_reads` row counts everything, which is what a freshly joined
  * member should see.
+ *
+ * Server-scoped by construction: `c.server_id = $1` can only ever match
+ * `kind = 'server'` rows, because the `channels_server_kind_check` constraint
+ * makes a non-null server the definition of a server channel. Conversations are
+ * counted by `listConversations` instead, which cannot reuse this query at all
+ * — it joins through `server_members`, and a conversation has no rows there.
+ *
+ * A message from somebody the viewer has blocked does not count. The live
+ * `channel-activity` frame already skips people who blocked the author, so
+ * counting them here would make the badge that appears after a refresh
+ * disagree with the badge that appeared at the time, about the same message.
+ * The message is still delivered and still readable behind the client's
+ * curtain — a block takes away the notification, not the content.
  */
 export async function listUnread(serverId: string, userId: string) {
   const result = await getPool().query<{
@@ -418,17 +601,11 @@ export async function listUnread(serverId: string, userId: string) {
        ON m.channel_id = c.id
       AND m.author_id <> $2
       AND m.created_at > COALESCE(cr.last_read_at, TIMESTAMPTZ '-infinity')
+      AND ${notBlockedSql("$2", "m.author_id")}
      LEFT JOIN message_mentions mm
        ON mm.message_id = m.id AND mm.user_id = $2
      WHERE c.server_id = $1
-       AND (
-         c.is_private = FALSE
-         OR sm.role IN ('owner', 'admin')
-         OR EXISTS (
-           SELECT 1 FROM channel_members cm
-           WHERE cm.channel_id = c.id AND cm.user_id = $2
-         )
-       )
+       AND ${channelVisibleSql("$2")}
      GROUP BY c.id`,
     [serverId, userId],
   );

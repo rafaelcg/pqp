@@ -10,8 +10,9 @@ import {
 import type { DbUser } from "../db.js";
 import { logEvent } from "../lib/log.js";
 import { createRateLimiter } from "../lib/rate-limit.js";
+import { isDmSendBlocked } from "../services/dms.js";
 import { getChannel, getChannelAudience } from "../services/servers.js";
-import { isChannelMember } from "../services/users.js";
+import { canAccessChannel } from "../services/users.js";
 import {
   getServerVoiceBackend,
   isLiveKitConfigured,
@@ -229,7 +230,7 @@ export async function sendAllVoiceRosters(socket: WebSocket, user: DbUser) {
   await Promise.all(
     [...byChannel].map(async ([voiceChannelId, participants]) => {
       try {
-        if (!(await isChannelMember(voiceChannelId, user.id))) {
+        if (!(await canAccessChannel(voiceChannelId, user.id))) {
           return;
         }
       } catch (error) {
@@ -262,12 +263,26 @@ export async function handleVoiceMessage(
     if (!roomLimiter.take(user.id)) {
       return;
     }
-    if (!(await isChannelMember(payload.voiceChannelId, user.id))) {
+    if (!(await canAccessChannel(payload.voiceChannelId, user.id))) {
+      return;
+    }
+    // Ringing somebody is the loudest thing one account can do to another, so a
+    // block closes a 1:1's call the same way it closes its messages. Without
+    // this, a blocked person keeps a working phone line to the person who
+    // blocked them.
+    if (await isDmSendBlocked(payload.voiceChannelId, user.id)) {
       return;
     }
 
+    // `type` says which kind of *server* channel this is, and a conversation is
+    // neither: it has one room that is text and voice at once, the way a DM
+    // call works everywhere else. Gating on `type` alone rejected every
+    // conversation, since they are all stored as text.
     const channel = await getChannel(payload.voiceChannelId);
-    if (!channel || channel.type !== "voice") {
+    if (!channel) {
+      return;
+    }
+    if (channel.kind === "server" && channel.type !== "voice") {
       return;
     }
 

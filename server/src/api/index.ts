@@ -3,7 +3,9 @@ import {
   addChannelMemberSchema,
   banMemberSchema,
   createAttachmentSchema,
+  createBlockSchema,
   createChannelSchema,
+  createDmSchema,
   createInviteSchema,
   createServerSchema,
   GIF_PAGE_MAX,
@@ -22,7 +24,10 @@ import {
   updateMessageSchema,
   updateProfileSchema,
   updateServerSchema,
+  USER_SEARCH_PAGE_SIZE,
   userPreferencesSchema,
+  userSearchQuerySchema,
+  parseUserTag,
   voiceSessionRequestSchema,
   type Gif,
 } from "@pqp/shared";
@@ -113,15 +118,31 @@ import { getIceServers } from "../services/ice.js";
 import { decodeSearchCursor, searchMessages } from "../services/search.js";
 import { mergePreferences } from "../services/preferences.js";
 import {
+  blockUser,
+  listBlocks,
+  SelfBlockError,
+  unblockUser,
+} from "../services/blocks.js";
+import {
+  DmRefusedError,
+  getConversation,
+  hideConversation,
+  isDmSendBlocked,
+  listConversations,
+  openConversation,
+} from "../services/dms.js";
+import {
+  canAccessChannel,
   canManageServer,
+  findUserByTag,
   getMemberRole,
   getUserById,
-  isChannelMember,
   isServerMember,
   leaveServer,
   listServerMembers,
   listUnread,
   markChannelRead,
+  searchUsersByPrefix,
   toPublicUser,
   updateMemberRole,
   updateProfile,
@@ -175,6 +196,19 @@ const searchLimiter = createRateLimiter({ capacity: 30, refillPerSecond: 1 });
  * script would need hours to run up a bill with.
  */
 const uploadLimiter = createRateLimiter({ capacity: 10, refillPerSecond: 0.1 });
+/**
+ * User discovery is an enumeration surface over every account on the instance,
+ * and unlike message search it is not scoped to anything the caller already
+ * belongs to — it is the one endpoint that answers questions about people the
+ * caller has no relationship with at all. So it gets the tightest budget in the
+ * file: a burst that covers typing a handle into a picker, and sustained about
+ * one query every two seconds, which is a working search box and a directory
+ * scrape that would take weeks.
+ */
+const userSearchLimiter = createRateLimiter({
+  capacity: 15,
+  refillPerSecond: 0.5,
+});
 
 export function resetApiRateLimits(): void {
   apiLimiter.reset();
@@ -183,6 +217,7 @@ export function resetApiRateLimits(): void {
   gifLimiter.reset();
   searchLimiter.reset();
   uploadLimiter.reset();
+  userSearchLimiter.reset();
 }
 
 class Forbidden extends HttpError {
@@ -263,10 +298,26 @@ async function requireChannel(channelId: string) {
 
 async function requireChannelAccess(channelId: string, userId: string) {
   const channel = await requireChannel(channelId);
-  if (!(await isChannelMember(channelId, userId))) {
+  if (!(await canAccessChannel(channelId, userId))) {
     throw new NotFound("Channel not found");
   }
   return channel;
+}
+
+/**
+ * A channel that belongs to a server, for the routes that administer one.
+ *
+ * Every one of them goes on to ask a question about `channel.server_id` — who
+ * manages it, who may be added to it — and a conversation has no server to ask
+ * about and no managers at all. 404 rather than 400, so a channel id somebody
+ * guessed does not get told what kind of thing it is.
+ */
+async function requireServerChannel(channelId: string) {
+  const channel = await requireChannel(channelId);
+  if (channel.kind !== "server" || !channel.server_id) {
+    throw new NotFound("Channel not found");
+  }
+  return { ...channel, server_id: channel.server_id };
 }
 
 const router = createRouter();
@@ -281,6 +332,9 @@ router.patch("/api/me", async ({ req, user }) => {
     displayName: body.displayName,
     username: body.username,
     avatarUrl: body.avatarUrl,
+    // Tightening this closes the door on people who have not knocked yet; it
+    // deliberately does not touch conversations that are already open.
+    dmPrivacy: body.dmPrivacy,
   });
   invalidateUserCache(updated.clerk_id);
   return toPublicUser(updated);
@@ -295,6 +349,147 @@ router.patch("/api/me", async ({ req, user }) => {
 router.patch("/api/me/preferences", async ({ req, user }) => {
   const patch = userPreferencesSchema.parse(await readJsonBody(req));
   return { preferences: await mergePreferences(user.id, patch) };
+});
+
+// --------------------------------------------------------- user discovery
+
+/**
+ * Both discovery routes share one bucket, because they are one surface: an
+ * attacker enumerating the directory does not care which of the two answers.
+ */
+function requireDiscoveryBudget(ctx: RequestContext): void {
+  const key = `user:${ctx.user.id}`;
+  if (!userSearchLimiter.take(key)) {
+    ctx.res.setHeader("Retry-After", String(userSearchLimiter.retryAfter(key)));
+    throw new HttpError(429, "Slow down");
+  }
+}
+
+/**
+ * Exact handle lookup — how you reach somebody who told you their tag.
+ *
+ * Answers 404 for a handle nobody holds, which is not a leak: the caller
+ * already had to know both the name and the four digits, and that is the whole
+ * point of the number.
+ */
+router.get("/api/users/lookup", async (ctx) => {
+  requireDiscoveryBudget(ctx);
+  const parsed = parseUserTag(ctx.url.searchParams.get("tag") ?? "");
+  if (!parsed) {
+    throw new HttpError(400, "Use the form name#1234");
+  }
+  const found = await findUserByTag(parsed.username, parsed.discriminator);
+  if (!found) {
+    throw new NotFound("User not found");
+  }
+  return { user: found };
+});
+
+/**
+ * Prefix search over handles.
+ *
+ * Every row is `publicUserSchema` and nothing wider — this is the one place the
+ * product hands a user to somebody they share nothing with, so the narrow shape
+ * is the feature's safety story rather than a nicety. `clerkId` in particular
+ * must never travel here; `toPublicUser` includes it and is the wrong function
+ * for this route.
+ */
+router.get("/api/users/search", async (ctx) => {
+  requireDiscoveryBudget(ctx);
+  const query = userSearchQuerySchema.safeParse(
+    (ctx.url.searchParams.get("q") ?? "").trim(),
+  );
+  if (!query.success) {
+    throw new HttpError(400, "Invalid search query");
+  }
+  return {
+    users: await searchUsersByPrefix(
+      query.data,
+      ctx.user.id,
+      USER_SEARCH_PAGE_SIZE,
+    ),
+  };
+});
+
+// ------------------------------------------------------------------ blocks
+
+router.get("/api/blocks", async ({ user }) => ({
+  blocked: await listBlocks(user.id),
+}));
+
+router.post("/api/blocks", async ({ req, user }) => {
+  const body = createBlockSchema.parse(await readJsonBody(req));
+  if (!(await getUserById(body.userId))) {
+    throw new NotFound("User not found");
+  }
+  try {
+    const added = await blockUser(user.id, body.userId);
+    // Blocking somebody you already blocked is not an error and not a new
+    // block, so it answers 200 while the first one answers 201.
+    return added ? created({ ok: true }) : { ok: true };
+  } catch (error) {
+    if (error instanceof SelfBlockError) {
+      throw new HttpError(400, error.message);
+    }
+    throw error;
+  }
+});
+
+router.delete("/api/blocks/:userId", async ({ user }, { userId }) => {
+  await unblockUser(user.id, userId!);
+  return { ok: true };
+});
+
+// ----------------------------------------------------------- conversations
+
+router.get("/api/dms", async ({ user }) => ({
+  conversations: await listConversations(user.id),
+}));
+
+/**
+ * Open a conversation. 201 when one was created, 200 when an existing 1:1 was
+ * handed back — the idempotency `dm_pairs` exists to provide.
+ *
+ * Every refusal answers with the same message. Distinguishing "they blocked
+ * you" from "their privacy setting refuses you" would turn this route into an
+ * oracle that reports, for any account, whether that specific person has
+ * blocked you — which is precisely what somebody working around a block probes
+ * for.
+ */
+router.post("/api/dms", async ({ req, user }) => {
+  const body = createDmSchema.parse(await readJsonBody(req));
+  try {
+    const opened = await openConversation(user.id, body.userIds);
+    const conversation = await getConversation(opened.channelId, user.id);
+    if (!conversation) {
+      throw new HttpError(500, "Conversation vanished after being opened");
+    }
+    return opened.created ? created({ conversation }) : { conversation };
+  } catch (error) {
+    if (error instanceof DmRefusedError) {
+      throw new Forbidden("Cannot open a conversation with this user");
+    }
+    throw error;
+  }
+});
+
+/**
+ * Close a conversation — hide, never delete. Only the caller's own membership
+ * goes; the channel, its history and the other participant are untouched, and a
+ * 1:1 comes back the moment either side says something in it.
+ */
+router.delete("/api/dms/:channelId", async ({ user }, { channelId }) => {
+  if (!(await hideConversation(channelId!, user.id))) {
+    throw new NotFound("Conversation not found");
+  }
+  // Dropping the membership row is not enough: `broadcastToChannel` fans out on
+  // the socket's `channelId`, which is still set from the earlier join-channel,
+  // and the client sends no leave frame on this path. Without this eviction
+  // somebody who closes a conversation — or leaves a group — keeps receiving
+  // its message bodies, reactions and typing frames for the life of the socket.
+  // Only the caller's own view goes; the other participants did not leave.
+  evictChannelViewers(channelId!, (viewerId) => viewerId === user.id);
+  return { ok: true };
 });
 
 // ------------------------------------------------------------------ voice
@@ -424,6 +619,14 @@ router.post(
     // not this deployment has storage — the 503 would otherwise confirm the
     // channel exists.
     await requireChannelAccess(channelId!, user.id);
+    // Not reachable as a harassment vector on its own — the claim happens on
+    // message-create, which is blocked — but staging an upload into a
+    // conversation you are barred from sending to has no legitimate use, and
+    // leaving it open lets a blocked account mint against the sweeper's grace
+    // window indefinitely.
+    if (await isDmSendBlocked(channelId!, user.id)) {
+      throw new Forbidden("You cannot send to this conversation");
+    }
     if (!isAttachmentsConfigured()) {
       throw new HttpError(503, "File uploads are not configured on this server");
     }
@@ -588,7 +791,7 @@ router.post(
 );
 
 router.patch("/api/channels/:channelId", async ({ req, user }, { channelId }) => {
-  const channel = await requireChannel(channelId!);
+  const channel = await requireServerChannel(channelId!);
   await requireManager(channel.server_id, user.id);
   const body = updateChannelSchema.parse(await readJsonBody(req));
   const updated = await updateChannel(channelId!, {
@@ -603,7 +806,7 @@ router.patch("/api/channels/:channelId", async ({ req, user }, { channelId }) =>
 
   // Turning a channel private must immediately cut off anyone watching or
   // talking in it who is not on the access list. The audience query is the same
-  // predicate isChannelMember uses, so owners and admins — who keep access
+  // predicate canAccessChannel uses, so owners and admins — who keep access
   // without a channel_members row — are not evicted along with everyone else.
   if (updated.is_private && !channel.is_private) {
     const audience = await getChannelAudience(channelId!);
@@ -616,7 +819,7 @@ router.patch("/api/channels/:channelId", async ({ req, user }, { channelId }) =>
 });
 
 router.delete("/api/channels/:channelId", async ({ user }, { channelId }) => {
-  const channel = await requireChannel(channelId!);
+  const channel = await requireServerChannel(channelId!);
   await requireManager(channel.server_id, user.id);
   await deleteChannel(channelId!);
   evictVoiceChannel(channelId!);
@@ -627,7 +830,7 @@ router.delete("/api/channels/:channelId", async ({ user }, { channelId }) => {
 router.get(
   "/api/channels/:channelId/members",
   async ({ user }, { channelId }) => {
-    const channel = await requireChannel(channelId!);
+    const channel = await requireServerChannel(channelId!);
     await requireManager(channel.server_id, user.id);
     return { members: await listChannelMembers(channelId!) };
   },
@@ -636,7 +839,7 @@ router.get(
 router.post(
   "/api/channels/:channelId/members",
   async ({ req, user }, { channelId }) => {
-    const channel = await requireChannel(channelId!);
+    const channel = await requireServerChannel(channelId!);
     await requireManager(channel.server_id, user.id);
     const body = addChannelMemberSchema.parse(await readJsonBody(req));
     if (!(await isServerMember(channel.server_id, body.userId))) {
@@ -650,7 +853,7 @@ router.post(
 router.delete(
   "/api/channels/:channelId/members/:userId",
   async ({ user }, { channelId, userId }) => {
-    const channel = await requireChannel(channelId!);
+    const channel = await requireServerChannel(channelId!);
     await requireManager(channel.server_id, user.id);
     await removeChannelMember(channelId!, userId!);
     if (channel.is_private) {
@@ -738,6 +941,15 @@ router.patch("/api/messages/:messageId", async ({ req, user }, { messageId }) =>
     throw new Forbidden("You can only edit your own messages");
   }
 
+  // Editing is a send. The WebSocket paths all consult this guard, but an edit
+  // arrives over HTTP, and without it a blocked person can rewrite a message
+  // they left before the block into anything at all — `broadcastToChannel`
+  // below then delivers the new body live into the blocker's open view. The
+  // block would stop new messages and let arbitrary new text through anyway.
+  if (await isDmSendBlocked(existing.channel_id, user.id)) {
+    throw new Forbidden("You cannot send to this conversation");
+  }
+
   const schema =
     existing.attachments.length > 0 ? captionEditSchema : updateMessageSchema;
   const body = schema.parse(await readJsonBody(req));
@@ -758,10 +970,15 @@ router.delete("/api/messages/:messageId", async ({ user }, { messageId }) => {
   }
   await requireChannelAccess(existing.channel_id, user.id);
 
-  // Authors delete their own; moderators delete anyone's.
+  // Authors delete their own; moderators delete anyone's. A conversation has no
+  // server and therefore no moderators, so `server_id` being null is not a
+  // missing lookup — it is the answer, and the check must stop there rather
+  // than fall through to one.
   if (
     existing.author_id !== user.id &&
-    !(await canManageServer(existing.server_id, user.id))
+    !(
+      existing.server_id && (await canManageServer(existing.server_id, user.id))
+    )
   ) {
     throw new Forbidden("You cannot delete this message");
   }

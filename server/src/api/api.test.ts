@@ -51,6 +51,12 @@ const { upsertUser } = await import("../services/users.js");
 const { handleChatMessage, resetChatRateLimits } = await import(
   "../ws/chat.js"
 );
+const {
+  handleVoiceMessage,
+  isSocketInVoice,
+  removeVoicePeerBySocket,
+  resetVoiceRateLimits,
+} = await import("../ws/voice.js");
 
 let server: Server;
 let baseUrl: string;
@@ -106,12 +112,13 @@ describeDb("API authorization", () => {
   beforeEach(async () => {
     resetApiRateLimits();
     resetChatRateLimits();
+    resetVoiceRateLimits();
     // servers/messages cascade; users are the only root we must clear.
     await getPool().query(
       `TRUNCATE users, user_preferences, servers, channels, messages,
                 server_members, channel_members, server_invites, server_bans,
                 channel_reads, message_mentions, message_reactions,
-                message_attachments
+                message_attachments, user_blocks, dm_pairs
        RESTART IDENTITY CASCADE`,
     );
 
@@ -144,6 +151,27 @@ describeDb("API authorization", () => {
       send: () => {},
       on: () => {},
     } as unknown as WebSocket;
+  }
+
+  /**
+   * A socket that keeps what was fanned out to it, so a test can assert on what
+   * a *third party* received rather than on what the sender's own call returned.
+   * Eviction is only observable this way: the membership row and the socket's
+   * live view are two separate pieces of state, and a leak in the second one
+   * looks entirely correct from every HTTP response.
+   */
+  function recordingSocket(): { socket: WebSocket; received: string[] } {
+    const received: string[] = [];
+    const socket = {
+      readyState: 1,
+      send: (payload: string) => received.push(payload),
+      on: () => {},
+    } as unknown as WebSocket;
+    return { socket, received };
+  }
+
+  function typesOf(received: string[]): string[] {
+    return received.map((raw) => (JSON.parse(raw) as { type: string }).type);
   }
 
   async function asDbUser(id: string): Promise<DbUser> {
@@ -1725,6 +1753,665 @@ describeDb("API authorization", () => {
         last = (await search(owner, serverId, "otter")).status;
       }
       expect(last).toBe(429);
+    });
+  });
+
+  describe("user discovery", () => {
+    /** The whole shape a search result may ever have. */
+    const PUBLIC_KEYS = ["avatarUrl", "displayName", "id", "tag", "username"];
+
+    async function tagOf(userId: string): Promise<string> {
+      const row = await getPool().query<{ username: string; discrim: string }>(
+        `SELECT username, discriminator AS discrim FROM users WHERE id = $1`,
+        [userId],
+      );
+      return `${row.rows[0]!.username}#${row.rows[0]!.discrim}`;
+    }
+
+    it("finds a user by exact tag, and never carries a clerk id", async () => {
+      const tag = await tagOf(member.id);
+      const res = await call<{ user: Record<string, unknown> }>(
+        outsider,
+        "GET",
+        `/api/users/lookup?tag=${encodeURIComponent(tag)}`,
+      );
+      expect(res.status).toBe(200);
+      expect(res.body.user.id).toBe(member.id);
+      expect(Object.keys(res.body.user).sort()).toEqual(PUBLIC_KEYS);
+    });
+
+    it("answers 400 for something that is not a tag and 404 for one nobody holds", async () => {
+      expect(
+        (await call(owner, "GET", "/api/users/lookup?tag=member")).status,
+      ).toBe(400);
+      expect(
+        (await call(owner, "GET", "/api/users/lookup?tag=nobody%230001"))
+          .status,
+      ).toBe(404);
+    });
+
+    it("searches by prefix, excludes the caller, and stays inside the public shape", async () => {
+      const res = await call<{ users: Array<Record<string, unknown>> }>(
+        outsider,
+        "GET",
+        "/api/users/search?q=me",
+      );
+      expect(res.status).toBe(200);
+      expect(res.body.users.map((u) => u.id)).toEqual([member.id]);
+      expect(Object.keys(res.body.users[0]!).sort()).toEqual(PUBLIC_KEYS);
+
+      const self = await call<{ users: Array<{ id: string }> }>(
+        member,
+        "GET",
+        "/api/users/search?q=me",
+      );
+      expect(self.body.users.map((u) => u.id)).not.toContain(member.id);
+    });
+
+    it("refuses a query below the minimum length", async () => {
+      expect((await call(owner, "GET", "/api/users/search?q=m")).status).toBe(
+        400,
+      );
+    });
+
+    it("does not let a LIKE wildcard widen a search", async () => {
+      // `_` is legal in a username and is also a LIKE wildcard, so an
+      // unescaped query turns a search for one person into a pattern match
+      // over the directory.
+      await getPool().query(`UPDATE users SET username = 'ab_cd' WHERE id = $1`, [
+        member.id,
+      ]);
+      await getPool().query(`UPDATE users SET username = 'abxcd' WHERE id = $1`, [
+        admin.id,
+      ]);
+
+      const res = await call<{ users: Array<{ id: string }> }>(
+        outsider,
+        "GET",
+        "/api/users/search?q=ab_c",
+      );
+      expect(res.body.users.map((u) => u.id)).toEqual([member.id]);
+    });
+
+    it("throttles discovery on its own bucket", async () => {
+      let last = 200;
+      for (let i = 0; i < 25 && last === 200; i++) {
+        last = (await call(owner, "GET", "/api/users/search?q=me")).status;
+      }
+      expect(last).toBe(429);
+    });
+  });
+
+  describe("blocking", () => {
+    it("blocks, lists and unblocks", async () => {
+      const first = await call(member, "POST", "/api/blocks", {
+        userId: outsider.id,
+      });
+      expect(first.status).toBe(201);
+      // Blocking somebody already blocked is not an error and not a new block.
+      expect(
+        (await call(member, "POST", "/api/blocks", { userId: outsider.id }))
+          .status,
+      ).toBe(200);
+
+      const listed = await call<{
+        blocked: Array<Record<string, unknown>>;
+      }>(member, "GET", "/api/blocks");
+      expect(listed.body.blocked.map((b) => b.id)).toEqual([outsider.id]);
+      expect(Object.keys(listed.body.blocked[0]!).sort()).toEqual([
+        "avatarUrl",
+        "blockedAt",
+        "displayName",
+        "id",
+        "tag",
+        "username",
+      ]);
+
+      expect(
+        (await call(member, "DELETE", `/api/blocks/${outsider.id}`)).status,
+      ).toBe(200);
+      expect(
+        (await call<{ blocked: unknown[] }>(member, "GET", "/api/blocks")).body
+          .blocked,
+      ).toHaveLength(0);
+    });
+
+    it("refuses to block yourself or somebody who does not exist", async () => {
+      expect(
+        (await call(member, "POST", "/api/blocks", { userId: member.id }))
+          .status,
+      ).toBe(400);
+      expect(
+        (
+          await call(member, "POST", "/api/blocks", {
+            userId: "00000000-0000-4000-8000-000000000000",
+          })
+        ).status,
+      ).toBe(404);
+    });
+
+    it("shows a block only to the person who made it", async () => {
+      await call(member, "POST", "/api/blocks", { userId: outsider.id });
+      const theirs = await call<{ blocked: unknown[] }>(
+        outsider,
+        "GET",
+        "/api/blocks",
+      );
+      expect(theirs.body.blocked).toHaveLength(0);
+    });
+  });
+
+  describe("conversations", () => {
+    /** Both are members of the same server, so the default privacy allows it. */
+    async function openWith(
+      as: { id: string; clerk_id: string },
+      userIds: string[],
+    ) {
+      return call<{ conversation: { channelId: string } }>(as, "POST", "/api/dms", {
+        userIds,
+      });
+    }
+
+    async function send(
+      as: { id: string; clerk_id: string },
+      channelId: string,
+      body: string,
+    ) {
+      await handleChatMessage(
+        { socket: fakeSocket(), user: await asDbUser(as.id) },
+        { type: "message-create", channelId, body },
+      );
+    }
+
+    it("creates once and reuses after that", async () => {
+      await makeServer();
+      const first = await openWith(member, [admin.id]);
+      expect(first.status).toBe(201);
+
+      const again = await openWith(admin, [member.id]);
+      expect(again.status).toBe(200);
+      expect(again.body.conversation.channelId).toBe(
+        first.body.conversation.channelId,
+      );
+    });
+
+    it("hides a conversation from a non-participant and from the server's owner", async () => {
+      // The owner runs the server both of them are in. That must buy nothing:
+      // a server administrator has no business in their members' messages.
+      await makeServer();
+      const opened = await openWith(member, [admin.id]);
+      const channelId = opened.body.conversation.channelId;
+
+      for (const stranger of [owner, outsider]) {
+        expect(
+          (await call(stranger, "GET", `/api/channels/${channelId}/messages`))
+            .status,
+        ).toBe(404);
+        expect(
+          (await call(stranger, "POST", `/api/channels/${channelId}/read`))
+            .status,
+        ).toBe(404);
+        const theirList = await call<{ conversations: unknown[] }>(
+          stranger,
+          "GET",
+          "/api/dms",
+        );
+        expect(theirList.body.conversations).toHaveLength(0);
+      }
+    });
+
+    it("cannot be administered as if it were a server channel", async () => {
+      await makeServer();
+      const opened = await openWith(member, [admin.id]);
+      const channelId = opened.body.conversation.channelId;
+
+      // Every one of these goes on to ask a question about the channel's
+      // server, and a conversation has none.
+      expect(
+        (await call(member, "PATCH", `/api/channels/${channelId}`, {
+          name: "renamed",
+        })).status,
+      ).toBe(404);
+      expect(
+        (await call(member, "DELETE", `/api/channels/${channelId}`)).status,
+      ).toBe(404);
+      expect(
+        (await call(member, "GET", `/api/channels/${channelId}/members`)).status,
+      ).toBe(404);
+      expect(
+        (
+          await call(member, "POST", `/api/channels/${channelId}/members`, {
+            userId: owner.id,
+          })
+        ).status,
+      ).toBe(404);
+    });
+
+    it("carries messages, unread and history on the ordinary channel routes", async () => {
+      await makeServer();
+      const opened = await openWith(member, [admin.id]);
+      const channelId = opened.body.conversation.channelId;
+
+      await send(admin, channelId, "just between us");
+
+      const history = await call<{ messages: Array<{ body: string }> }>(
+        member,
+        "GET",
+        `/api/channels/${channelId}/messages`,
+      );
+      expect(history.body.messages.map((m) => m.body)).toEqual([
+        "just between us",
+      ]);
+
+      const list = await call<{
+        conversations: Array<{
+          channelId: string;
+          kind: string;
+          participants: Array<{ id: string }>;
+          unread: { count: number };
+        }>;
+      }>(member, "GET", "/api/dms");
+      expect(list.body.conversations).toHaveLength(1);
+      expect(list.body.conversations[0]!.kind).toBe("dm");
+      expect(list.body.conversations[0]!.unread.count).toBe(1);
+      expect(list.body.conversations[0]!.participants.map((p) => p.id)).toEqual([
+        admin.id,
+      ]);
+
+      await call(member, "POST", `/api/channels/${channelId}/read`);
+      const afterRead = await call<{
+        conversations: Array<{ unread: { count: number } }>;
+      }>(member, "GET", "/api/dms");
+      expect(afterRead.body.conversations[0]!.unread.count).toBe(0);
+    });
+
+    it("has no moderators: a server admin cannot delete a message in one", async () => {
+      await makeServer();
+      const opened = await openWith(member, [admin.id]);
+      const channelId = opened.body.conversation.channelId;
+      await send(member, channelId, "mine");
+
+      const history = await call<{ messages: Array<{ id: string }> }>(
+        member,
+        "GET",
+        `/api/channels/${channelId}/messages`,
+      );
+      const messageId = history.body.messages[0]!.id;
+
+      // admin is a participant *and* an admin of the shared server. Being an
+      // admin is what must not help: there is no server to manage here.
+      expect(
+        (await call(admin, "DELETE", `/api/messages/${messageId}`)).status,
+      ).toBe(403);
+      expect(
+        (await call(member, "DELETE", `/api/messages/${messageId}`)).status,
+      ).toBe(200);
+    });
+
+    it("refuses when either party has blocked the other", async () => {
+      await makeServer();
+      await call(admin, "POST", "/api/blocks", { userId: member.id });
+
+      expect((await openWith(member, [admin.id])).status).toBe(403);
+      // Symmetric: the blocker cannot reach through their own block either.
+      expect((await openWith(admin, [member.id])).status).toBe(403);
+    });
+
+    it("drops a message into a 1:1 once a block goes up", async () => {
+      await makeServer();
+      const opened = await openWith(member, [admin.id]);
+      const channelId = opened.body.conversation.channelId;
+
+      await call(admin, "POST", "/api/blocks", { userId: member.id });
+      await send(member, channelId, "let me in");
+
+      const history = await call<{ messages: unknown[] }>(
+        admin,
+        "GET",
+        `/api/channels/${channelId}/messages`,
+      );
+      expect(history.body.messages).toHaveLength(0);
+    });
+
+    it("refuses everyone once dm_privacy is 'nobody'", async () => {
+      await makeServer();
+      expect(
+        (await call(admin, "PATCH", "/api/me", { dmPrivacy: "nobody" })).status,
+      ).toBe(200);
+
+      // Even a co-member of the same server.
+      expect((await openWith(member, [admin.id])).status).toBe(403);
+      expect((await openWith(outsider, [admin.id])).status).toBe(403);
+    });
+
+    it("under 'server_members' refuses a stranger and allows a co-member", async () => {
+      await makeServer();
+      // outsider shares no server with anyone; member and admin share one.
+      expect((await openWith(outsider, [admin.id])).status).toBe(403);
+      expect((await openWith(member, [admin.id])).status).toBe(201);
+    });
+
+    it("under 'everyone' allows a complete stranger", async () => {
+      await call(admin, "PATCH", "/api/me", { dmPrivacy: "everyone" });
+      expect((await openWith(outsider, [admin.id])).status).toBe(201);
+    });
+
+    it("reports dm_privacy back on /api/me", async () => {
+      const before = await call<{ dmPrivacy: string }>(admin, "GET", "/api/me");
+      expect(before.body.dmPrivacy).toBe("server_members");
+
+      await call(admin, "PATCH", "/api/me", { dmPrivacy: "nobody" });
+      const after = await call<{ dmPrivacy: string }>(admin, "GET", "/api/me");
+      expect(after.body.dmPrivacy).toBe("nobody");
+    });
+
+    it("closes a conversation for one side without deleting anything", async () => {
+      await makeServer();
+      const opened = await openWith(member, [admin.id]);
+      const channelId = opened.body.conversation.channelId;
+      await send(admin, channelId, "history");
+
+      expect(
+        (await call(member, "DELETE", `/api/dms/${channelId}`)).status,
+      ).toBe(200);
+      expect(
+        (await call<{ conversations: unknown[] }>(member, "GET", "/api/dms"))
+          .body.conversations,
+      ).toHaveLength(0);
+      // The other side is untouched, and so is the history.
+      expect(
+        (await call<{ conversations: unknown[] }>(admin, "GET", "/api/dms")).body
+          .conversations,
+      ).toHaveLength(1);
+
+      // The next thing said in it brings the conversation back with its
+      // history, rather than dropping the message on the floor.
+      await send(admin, channelId, "still here?");
+      const back = await call<{
+        conversations: Array<{ channelId: string }>;
+      }>(member, "GET", "/api/dms");
+      expect(back.body.conversations.map((c) => c.channelId)).toEqual([
+        channelId,
+      ]);
+      const history = await call<{ messages: unknown[] }>(
+        member,
+        "GET",
+        `/api/channels/${channelId}/messages`,
+      );
+      expect(history.body.messages).toHaveLength(2);
+    });
+
+    it("keeps a block in force after the blocker closes the conversation", async () => {
+      // The whole sequence, end to end: block, close, and then the blocked
+      // person says something. Closing removes the blocker's own membership
+      // row, and a guard that resolved the counterparty through that row let
+      // the message through *and* restored the blocker into the conversation,
+      // so it reappeared in their list carrying the message they blocked to
+      // avoid. Nothing about that is visible to the person who blocked.
+      await makeServer();
+      const opened = await openWith(member, [admin.id]);
+      const channelId = opened.body.conversation.channelId;
+
+      await call(admin, "POST", "/api/blocks", { userId: member.id });
+      expect(
+        (await call(admin, "DELETE", `/api/dms/${channelId}`)).status,
+      ).toBe(200);
+
+      await send(member, channelId, "let me in");
+
+      const stored = await getPool().query(
+        `SELECT id FROM messages WHERE channel_id = $1`,
+        [channelId],
+      );
+      expect(stored.rows).toHaveLength(0);
+      expect(
+        (await call<{ conversations: unknown[] }>(admin, "GET", "/api/dms")).body
+          .conversations,
+      ).toHaveLength(0);
+    });
+
+    it("enforces a block in a group once it has shrunk to two people", async () => {
+      // A group never becomes a 'dm', so gating enforcement on kind left this
+      // channel exempt for good once the third participant closed it.
+      await makeServer();
+      const opened = await openWith(member, [admin.id, owner.id]);
+      const channelId = opened.body.conversation.channelId;
+      expect(
+        (await call(owner, "DELETE", `/api/dms/${channelId}`)).status,
+      ).toBe(200);
+
+      await call(admin, "POST", "/api/blocks", { userId: member.id });
+      await send(member, channelId, "the group is our back door");
+
+      const stored = await getPool().query(
+        `SELECT id FROM messages WHERE channel_id = $1`,
+        [channelId],
+      );
+      expect(stored.rows).toHaveLength(0);
+    });
+
+    it("records a mention into a 1:1 the recipient had closed", async () => {
+      // `recordMentions` resolves a conversation's mentionable set through
+      // `channel_members`, so restoring the recipient after the insert left
+      // them out of their own mention: the live badge says "mention" and the
+      // badge after a refresh says none.
+      await makeServer();
+      const opened = await openWith(member, [admin.id]);
+      const channelId = opened.body.conversation.channelId;
+      expect(
+        (await call(member, "DELETE", `/api/dms/${channelId}`)).status,
+      ).toBe(200);
+
+      const memberRow = await asDbUser(member.id);
+      await send(admin, channelId, `come back @${memberRow.username}`);
+
+      const mentions = await getPool().query<{ user_id: string }>(
+        `SELECT user_id FROM message_mentions`,
+      );
+      expect(mentions.rows.map((row) => row.user_id)).toEqual([member.id]);
+
+      const list = await call<{
+        conversations: Array<{ unread: { count: number; mentions: number } }>;
+      }>(member, "GET", "/api/dms");
+      expect(list.body.conversations[0]!.unread).toEqual({
+        count: 1,
+        mentions: 1,
+      });
+    });
+
+    it("evicts the closer's live view, and nobody else's", async () => {
+      // Closing drops the membership row but the socket's channelId survives,
+      // and `broadcastToChannel` fans out on that field alone — the client
+      // sends no leave frame here. Without the eviction the person who closed
+      // the conversation goes on receiving its message bodies, reactions and
+      // typing frames for as long as the socket lives.
+      await makeServer();
+      const opened = await openWith(member, [admin.id]);
+      const channelId = opened.body.conversation.channelId;
+
+      const closer = recordingSocket();
+      await handleChatMessage(
+        { socket: closer.socket, user: await asDbUser(member.id) },
+        { type: "join-channel", channelId },
+      );
+      const stayer = recordingSocket();
+      await handleChatMessage(
+        { socket: stayer.socket, user: await asDbUser(admin.id) },
+        { type: "join-channel", channelId },
+      );
+
+      expect(
+        (await call(member, "DELETE", `/api/dms/${channelId}`)).status,
+      ).toBe(200);
+      closer.received.length = 0;
+      stayer.received.length = 0;
+
+      await handleChatMessage(
+        { socket: stayer.socket, user: await asDbUser(admin.id) },
+        { type: "message-create", channelId, body: "are you still reading?" },
+      );
+      expect(typesOf(closer.received)).not.toContain("message-broadcast");
+
+      // And only the closer: the other participant never left, so the next
+      // thing said still reaches them.
+      closer.received.length = 0;
+      stayer.received.length = 0;
+      await handleChatMessage(
+        { socket: closer.socket, user: await asDbUser(member.id) },
+        { type: "message-create", channelId, body: "i am" },
+      );
+      expect(typesOf(stayer.received)).toContain("message-broadcast");
+    });
+
+    it("does not let a blocked person type into the blocker's conversation", async () => {
+      // A typing indicator is a notification like any other, and the client
+      // does not filter it — without the guard a blocked person can park
+      // "X is typing…" in the blocker's open conversation indefinitely.
+      await makeServer();
+      const opened = await openWith(member, [admin.id]);
+      const channelId = opened.body.conversation.channelId;
+
+      const blocker = recordingSocket();
+      await handleChatMessage(
+        { socket: blocker.socket, user: await asDbUser(admin.id) },
+        { type: "join-channel", channelId },
+      );
+      const blocked = recordingSocket();
+      await handleChatMessage(
+        { socket: blocked.socket, user: await asDbUser(member.id) },
+        { type: "join-channel", channelId },
+      );
+
+      await handleChatMessage(
+        { socket: blocked.socket, user: await asDbUser(member.id) },
+        { type: "typing", channelId },
+      );
+      expect(typesOf(blocker.received)).toContain("typing-broadcast");
+
+      await call(admin, "POST", "/api/blocks", { userId: member.id });
+      blocker.received.length = 0;
+      await handleChatMessage(
+        { socket: blocked.socket, user: await asDbUser(member.id) },
+        { type: "typing", channelId },
+      );
+      expect(typesOf(blocker.received)).not.toContain("typing-broadcast");
+    });
+
+    it("answers 404 when closing a conversation the caller is not in", async () => {
+      await makeServer();
+      const opened = await openWith(member, [admin.id]);
+      expect(
+        (
+          await call(
+            outsider,
+            "DELETE",
+            `/api/dms/${opened.body.conversation.channelId}`,
+          )
+        ).status,
+      ).toBe(404);
+    });
+
+    it("refuses to open one with yourself", async () => {
+      expect((await openWith(member, [member.id])).status).toBe(403);
+    });
+
+    it("stops a blocked person from reacting into a 1:1", async () => {
+      // A reaction is a persistent, visible poke at somebody's message. Closing
+      // only `message-create` would leave it as the way through.
+      await makeServer();
+      const opened = await openWith(member, [admin.id]);
+      const channelId = opened.body.conversation.channelId;
+      await send(admin, channelId, "hello");
+
+      const history = await call<{ messages: Array<{ id: string }> }>(
+        member,
+        "GET",
+        `/api/channels/${channelId}/messages`,
+      );
+      const messageId = history.body.messages[0]!.id;
+
+      await call(admin, "POST", "/api/blocks", { userId: member.id });
+      await handleChatMessage(
+        { socket: fakeSocket(), user: await asDbUser(member.id) },
+        { type: "reaction-toggle", channelId, messageId, emoji: "👍" },
+      );
+
+      const reactions = await getPool().query(
+        `SELECT 1 FROM message_reactions WHERE message_id = $1`,
+        [messageId],
+      );
+      expect(reactions.rows).toHaveLength(0);
+    });
+
+    it("stops a blocked person from editing an old message into new abuse", async () => {
+      // Every guard above sits on a WebSocket frame, but an edit arrives over
+      // HTTP and re-broadcasts the new body live. Without a check here the
+      // block stops new messages and lets arbitrary new text through anyway,
+      // using a message that was legitimately sent before it went up.
+      await makeServer();
+      const opened = await openWith(member, [admin.id]);
+      const channelId = opened.body.conversation.channelId;
+      await send(member, channelId, "innocent");
+
+      const history = await call<{ messages: Array<{ id: string }> }>(
+        member,
+        "GET",
+        `/api/channels/${channelId}/messages`,
+      );
+      const messageId = history.body.messages[0]!.id;
+
+      await call(admin, "POST", "/api/blocks", { userId: member.id });
+
+      expect(
+        (
+          await call(member, "PATCH", `/api/messages/${messageId}`, {
+            body: "abuse",
+          })
+        ).status,
+      ).toBe(403);
+
+      const stored = await getPool().query<{ body: string }>(
+        `SELECT body FROM messages WHERE id = $1`,
+        [messageId],
+      );
+      expect(stored.rows[0]!.body).toBe("innocent");
+    });
+
+    it("lets a conversation take a call, and closes it to a blocked caller", async () => {
+      // A conversation is stored as a text channel, so gating voice on
+      // `type = 'voice'` used to reject every DM call.
+      await makeServer();
+      const opened = await openWith(member, [admin.id]);
+      const channelId = opened.body.conversation.channelId;
+
+      const allowed = fakeSocket();
+      await handleVoiceMessage(
+        { socket: allowed, user: await asDbUser(member.id) },
+        { type: "join-voice-room", voiceChannelId: channelId },
+      );
+      expect(isSocketInVoice(allowed)).toBe(true);
+      removeVoicePeerBySocket(allowed);
+
+      await call(admin, "POST", "/api/blocks", { userId: member.id });
+      const refused = fakeSocket();
+      await handleVoiceMessage(
+        { socket: refused, user: await asDbUser(member.id) },
+        { type: "join-voice-room", voiceChannelId: channelId },
+      );
+      expect(isSocketInVoice(refused)).toBe(false);
+    });
+
+    it("marks a blocked author's messages in history without dropping them", async () => {
+      const { textChannelId } = await makeServer();
+      await send(admin, textChannelId, "one");
+      await send(member, textChannelId, "two");
+      await call(owner, "POST", "/api/blocks", { userId: admin.id });
+
+      const history = await call<{
+        messages: Array<{ body: string; blocked: boolean }>;
+      }>(owner, "GET", `/api/channels/${textChannelId}/messages`);
+      expect(history.body.messages.map((m) => m.body)).toEqual(["one", "two"]);
+      expect(history.body.messages.map((m) => m.blocked)).toEqual([true, false]);
     });
   });
 

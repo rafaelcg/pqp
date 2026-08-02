@@ -4,6 +4,31 @@ import { attachmentSchema } from "./attachments.js";
 export const channelTypeSchema = z.enum(["text", "voice"]);
 export type ChannelType = z.infer<typeof channelTypeSchema>;
 
+/**
+ * What a channel row *is*, as opposed to what it carries (`type` above).
+ *
+ * `'server'` is a channel inside a server. `'dm'` and `'group'` are
+ * conversations, which have no server and whose participants are rows in
+ * `channel_members`. One kind column rather than a second table, so messages,
+ * reactions, read cursors, mentions and attachments are reused unchanged.
+ */
+export const channelKindSchema = z.enum(["server", "dm", "group"]);
+export type ChannelKind = z.infer<typeof channelKindSchema>;
+
+/**
+ * Who may open a conversation with a user.
+ *
+ * `'server_members'` means "someone I already share a server with" — the only
+ * relationship this product models. Stating the rule in those terms is what
+ * lets DM privacy ship without first building a friend graph to gate it.
+ */
+export const dmPrivacySchema = z.enum([
+  "everyone",
+  "server_members",
+  "nobody",
+]);
+export type DmPrivacy = z.infer<typeof dmPrivacySchema>;
+
 export const memberRoleSchema = z.enum(["owner", "admin", "member"]);
 export type MemberRole = z.infer<typeof memberRoleSchema>;
 
@@ -91,7 +116,40 @@ export const userSchema = z.object({
    * from an API that predates the preference store.
    */
   preferences: userPreferencesSchema.optional(),
+  /**
+   * A column rather than a preference, because it is enforced server-side on
+   * every attempt to open a conversation — a setting the server must read
+   * cannot live in a blob the client is free to reshape. Defaulted here so a
+   * response from an API that predates DM privacy still parses, and defaulted
+   * to the same value as the column so the two can never disagree.
+   */
+  dmPrivacy: dmPrivacySchema.default("server_members"),
 });
+
+/**
+ * A user as seen by somebody who is not that user.
+ *
+ * THIS IS NOT `userSchema`. `userSchema` — and `toPublicUser` on the server,
+ * despite its name — carries `clerkId`, the account's identifier at the
+ * identity provider. That is only ever safe because every response shaped that
+ * way is sent to the account's own owner. User search and DM participant lists
+ * hand a user to a stranger, so they must use this shape instead.
+ *
+ * Every field here is something the two of them could already read off a
+ * message they can both see. Anything added becomes part of what any account
+ * can enumerate about any other account in the instance, so nothing that is not
+ * already public may be added — least of all `clerkId`, an email, or a
+ * presence/last-seen field.
+ */
+export const publicUserSchema = z.object({
+  id: z.string().uuid(),
+  displayName: z.string(),
+  username: z.string().nullable(),
+  tag: z.string().nullable(),
+  avatarUrl: z.string().nullable(),
+});
+
+export type PublicUser = z.infer<typeof publicUserSchema>;
 
 export const serverSchema = z.object({
   id: z.string().uuid(),
@@ -103,7 +161,17 @@ export const serverSchema = z.object({
 
 export const channelSchema = z.object({
   id: z.string().uuid(),
-  serverId: z.string().uuid(),
+  /**
+   * Null for a conversation, which belongs to no server. Nullable rather than
+   * omitted so every caller that reaches for it to route or to authorise is
+   * forced to say what it does when there is no server — that is the point.
+   */
+  serverId: z.string().uuid().nullable(),
+  /**
+   * Defaulted so a response from an API that predates conversations still
+   * parses as what it is: a server channel.
+   */
+  kind: channelKindSchema.default("server"),
   name: z.string(),
   type: channelTypeSchema,
   position: z.number(),
@@ -215,10 +283,19 @@ export const updateMessageSchema = z.object({
 export const MESSAGE_PAGE_SIZE = 50;
 export const MESSAGE_PAGE_MAX = 100;
 
-export const channelUnreadSchema = z.object({
-  channelId: z.string().uuid(),
+/**
+ * Unread as a pair on its own, so a conversation summary counts with exactly
+ * the same two numbers a channel does instead of redefining them.
+ */
+export const unreadCountsSchema = z.object({
   count: z.number().int().nonnegative(),
   mentions: z.number().int().nonnegative(),
+});
+
+export type UnreadCounts = z.infer<typeof unreadCountsSchema>;
+
+export const channelUnreadSchema = unreadCountsSchema.extend({
+  channelId: z.string().uuid(),
 });
 
 export type ChannelUnread = z.infer<typeof channelUnreadSchema>;
@@ -296,7 +373,71 @@ export const updateProfileSchema = z.object({
         value.startsWith("/"),
       "Avatar must be an image URL",
     ),
+  dmPrivacy: dmPrivacySchema.optional(),
 });
+
+/**
+ * User discovery — the only way to reach somebody you share no server with.
+ *
+ * Both shapes below answer with `publicUserSchema` and nothing wider. A search
+ * result is the one place this product hands a user to a stranger, so the
+ * narrow shape is not a nicety here, it is the feature's whole safety story.
+ */
+
+/** Below two characters a prefix search matches most of the directory. */
+export const USER_SEARCH_MIN_LENGTH = 2;
+export const USER_SEARCH_MAX_LENGTH = 32;
+
+/**
+ * Rows one search may return. Small on purpose: this endpoint is an enumeration
+ * surface, and a page size is a cheaper brake than a rate limiter alone.
+ */
+export const USER_SEARCH_PAGE_SIZE = 20;
+
+export const userSearchQuerySchema = z
+  .string()
+  .min(USER_SEARCH_MIN_LENGTH)
+  .max(USER_SEARCH_MAX_LENGTH)
+  .pipe(safeTextSchema);
+
+export const userSearchResponseSchema = z.object({
+  users: z.array(publicUserSchema),
+});
+
+export type UserSearchResponse = z.infer<typeof userSearchResponseSchema>;
+
+/**
+ * The `name#1234` handle, as typed into a lookup box.
+ *
+ * Parsed here beside `formatUserTag` rather than in a route, so the thing that
+ * writes a tag and the thing that reads one back can never disagree about the
+ * separator or about the width of the number.
+ */
+export const USER_TAG_PATTERN = /^([a-z0-9_]{2,32})#(\d{4})$/;
+
+export const userTagSchema = z
+  .string()
+  .refine((value) => parseUserTag(value) !== null, "Use the form name#1234");
+
+/**
+ * Split a typed handle into the two columns it is stored as, or null when it is
+ * not a handle at all.
+ *
+ * A leading `@` is dropped and case is folded because both are how people
+ * actually type a handle back to you — and `username` is stored lowercase, so
+ * an un-folded lookup silently finds nobody rather than failing loudly.
+ */
+export function parseUserTag(
+  value: string,
+): { username: string; discriminator: string } | null {
+  const match = USER_TAG_PATTERN.exec(
+    value.trim().replace(/^@/, "").toLowerCase(),
+  );
+  if (!match) {
+    return null;
+  }
+  return { username: match[1]!, discriminator: match[2]! };
+}
 
 export const iceServerSchema = z.object({
   urls: z.union([z.string(), z.array(z.string())]),

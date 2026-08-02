@@ -1,16 +1,22 @@
 import type {
   AttachmentUrlResponse,
+  BlockListResponse,
   Channel,
   ChannelUnread,
   CreateAttachmentRequest,
   CreateAttachmentResponse,
+  DmListResponse,
+  DmPrivacy,
+  DmSummary,
   Gif,
   Invite,
   Message,
   MessageSearchResponse,
+  PublicUser,
   Server,
   User,
   UserPreferences,
+  UserSearchResponse,
   VoiceBackendType,
   VoiceSessionInfo,
 } from "@pqp/shared";
@@ -164,6 +170,7 @@ export const updateMe = (body: {
   displayName?: string;
   username?: string;
   avatarUrl?: string | null;
+  dmPrivacy?: DmPrivacy;
 }) => patch<User>("/api/me", body);
 
 /** Patch of changed keys in, whole merged object out. */
@@ -406,6 +413,66 @@ export const fetchChannelMembers = (channelId: string) =>
       tag: string | null;
     }>;
   }>(`/api/channels/${channelId}/members`);
+
+// ------------------------------------------------------- users, DMs, blocks
+
+/**
+ * Prefix search over handles, and the only way to reach somebody you share no
+ * server with.
+ *
+ * Takes a signal because it is typed into: an in-flight request for `an` must
+ * be abandoned rather than allowed to land after the one for `ana` and repaint
+ * the list with staler results.
+ */
+export const searchUsers = (query: string, signal?: AbortSignal) =>
+  apiFetch<UserSearchResponse>(
+    `/api/users/search?q=${encodeURIComponent(query)}`,
+    signal ? { signal } : {},
+  );
+
+/**
+ * Exact `name#1234` lookup, for a handle somebody read out to you.
+ *
+ * Answers with one user or a 404 — unlike search, which answers with a list.
+ * A handle names exactly one account or none, and flattening the miss into an
+ * empty list here would hide the difference between "no such handle" and "the
+ * search found nothing", which are different things to say to the user.
+ */
+export const lookupUserByTag = (tag: string, signal?: AbortSignal) =>
+  apiFetch<{ user: PublicUser }>(
+    `/api/users/lookup?tag=${encodeURIComponent(tag)}`,
+    signal ? { signal } : {},
+  );
+
+export const fetchConversations = () =>
+  apiFetch<DmListResponse>("/api/dms");
+
+/**
+ * Open a conversation with these people, or hand back the one that already
+ * exists — a second tap must not create a second 1:1 with the same person.
+ *
+ * The caller's own id is not sent. A conversation with yourself is not a thing
+ * the model can express, and the server rejects it rather than storing half of
+ * one.
+ */
+export const createConversation = (userIds: string[]) =>
+  post<{ conversation: DmSummary }>("/api/dms", { userIds });
+
+/**
+ * Take a conversation off the list. It is hidden, not deleted: the other person
+ * still has their copy, and one side removing a row must not destroy the other
+ * side's history.
+ */
+export const hideConversation = (channelId: string) =>
+  del<{ ok: boolean }>(`/api/dms/${channelId}`);
+
+export const fetchBlocks = () => apiFetch<BlockListResponse>("/api/blocks");
+
+export const blockUser = (userId: string) =>
+  post<{ ok: boolean }>("/api/blocks", { userId });
+
+export const unblockUser = (userId: string) =>
+  del<{ ok: boolean }>(`/api/blocks/${userId}`);
 
 // ------------------------------------------------------------------ invites
 
