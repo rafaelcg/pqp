@@ -299,11 +299,56 @@ oversized object can never be attached to a message on any backend, so the expos
 unclaimed row for one sweeper grace period. A 10-minute check against a real R2 bucket would
 close it.
 
+## Direct messages, group DMs, and blocking (2026-08-02)
+
+Gaps #17, #18 and #19 shipped together — #18 needs #17 to find anyone you share no server with,
+and #19 stops being optional the moment #18 exists.
+
+**The important structural change is `canAccessChannel`.** The channel-visibility predicate used
+to exist as five verbatim copies (`isChannelMember`, `listUnread`, `listChannels`,
+`getChannelAudience`, and search's `VISIBLE_CHANNEL`). It is now generated from one fragment in
+`server/src/services/users.ts` and branches on `channels.kind`. That refactor was landed on its
+own, with the whole existing suite passing untouched, *before* any DM code depended on it — and
+the SQL was proved identical to the originals mechanically (`git show HEAD:` + whitespace-
+normalised comparison), not by eye.
+
+For `kind` of `dm` or `group`, membership is `channel_members` and nothing else. **There is
+deliberately no owner/admin branch**: the server-channel predicate grants access to owners and
+admins, and inheriting that unexamined would have put every server admin inside their members'
+private conversations.
+
+Conversations are channels with a null `server_id`, so messages, edits, reactions, typing, read
+cursors, unread, mentions, attachments and voice all reuse the existing routes unchanged. A 1:1
+is made idempotent by `dm_pairs` on the sorted uuid pair; a group deliberately has no pair row.
+
+**Blocking bugs worth knowing about, because they all lived in the same place.** Review found six
+defects and every one was in the conversation *lifecycle*, not the happy path — blocking then
+sending was correct; blocking, *closing*, then sending was not:
+
+- `isDmSendBlocked` resolved the other party through `channel_members`, which closing a
+  conversation deletes. Block-then-close — two items in the same context menu, in the order a
+  person actually performs them — silently disabled the block. It reads `dm_pairs` now, which
+  survives a close. Pinned by a test that fails if you revert it.
+- A group that had shrunk to two people was exempt entirely (the guard was gated on `kind='dm'`,
+  and a group never becomes one). Now gated on whether a third participant remains, so one
+  person's block still cannot silence a real group.
+- `DELETE /api/dms/:channelId` dropped the membership row without evicting the live WS view, so
+  leaving a group kept delivering its message bodies.
+- Editing is a send: `PATCH /api/messages/:messageId` had no block guard, so a blocked person
+  could rewrite a pre-block message into anything and it re-broadcast live. Every WebSocket path
+  was guarded and the one HTTP path was not — worth remembering when adding routes.
+
+Server-channel messages are **not** filtered server-side; that would corrupt the keyset
+pagination counts. The payload carries `blocked: boolean` and the client collapses it behind a
+reveal affordance.
+
 ## Verification status
 
 | Checked | How |
 |---|---|
 | Authorization matrix | 24 integration tests against real Postgres (`server/src/api/api.test.ts`) |
+| DM access + blocking lifecycle | 25 conversation tests + 20 route tests; the two critical guards are mutation-checked (revert the fix, exactly those tests fail) |
+| DMs in a browser | Home view, `/app/dm/:id` routing, opening a 1:1, sending, and switching Home ↔ server both ways — no console errors. Group DMs and two simultaneous clients were not driven |
 | Reconnect, optimistic send, chat reducers | 30 client unit tests |
 | Send, multi-line, markdown + mentions, reconnect after restart, dialogs | Driven in a browser |
 | SigV4 signing + presigned round trip, signed `Content-Length` | 19 tests against a real MinIO (`server/src/lib/s3.test.ts`, opt in with `S3_TEST_*`) |

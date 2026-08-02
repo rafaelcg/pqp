@@ -56,14 +56,22 @@ Feature gaps versus Discord are ranked with implementation sketches in
 [`DECISIONS.md`](./DECISIONS.md). Gaps marked ✅ in the ranked list have shipped: the three
 shipped-but-broken items (permalink route, per-channel drafts, `@mention` autocomplete), plus
 replies, theming, message search, desktop notifications, per-server/channel notification
-levels, and file/image attachments.
+levels, file/image attachments, user search by handle, direct and group messages, and blocking
+with DM privacy controls.
 
-Next up, in order: **user search by handle** (#17), which **DMs** (#18) depend on. Blocking (#19)
-stops being optional the moment DMs exist.
+Two subsystems landed alongside those features and shape what comes next:
 
-Attachments landed the object-storage subsystem the product did not have, which is also what
-custom emoji (#26), server icons, and real uploaded avatars hang off — none of those need a
-second storage decision now. See [`ATTACHMENTS.md`](./ATTACHMENTS.md).
+- **Object storage** (attachments) is what custom emoji (#26), server icons and real uploaded
+  avatars hang off — none of those need a second storage decision now. See
+  [`ATTACHMENTS.md`](./ATTACHMENTS.md).
+- **One channel-access predicate.** `canAccessChannel` in `server/src/services/users.ts` is now
+  the only answer to "may this user see this channel", branching on `channels.kind`. It replaced
+  five verbatim copies. Anything new that reads a channel must go through it — a second copy is
+  how a private channel or a DM leaks.
+
+Next up, in rough order: **channel categories and drag-to-reorder** (#14), **pinned messages**
+(#24) and an **installable PWA** (#9) are the cheap wins; **screen share** (#11) and a **real
+permission system** (#22) are the next large ones.
 
 ## Still open (operational)
 

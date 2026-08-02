@@ -57,6 +57,9 @@ const HIGHLIGHT_MS = 2_000;
 /** How long the "not loaded" answer to a jump stays on screen. */
 const JUMP_NOTICE_MS = 3_000;
 
+/** Shared identity, so the default prop does not remount every row each render. */
+const EMPTY_BLOCKED: ReadonlySet<string> = new Set<string>();
+
 interface MessageListProps {
   messages: ChatMessage[];
   currentUserId: string | null;
@@ -71,6 +74,13 @@ interface MessageListProps {
   isLoadingNewer?: boolean;
   typingUsers?: TypingUser[];
   canModerate?: boolean;
+  /**
+   * Authors this reader has blocked. Their messages are collapsed here rather
+   * than filtered out on the server: dropping rows from a keyset-paginated
+   * channel would corrupt the page counts the history cursor depends on, and
+   * a gap in a shared conversation is harder to read than a curtain over it.
+   */
+  blockedAuthorIds?: ReadonlySet<string>;
   /** Scrolled into view and flashed once it renders. */
   highlightMessageId?: string | null;
   onHighlightHandled?: () => void;
@@ -129,6 +139,7 @@ export function MessageList({
   isLoadingNewer = false,
   typingUsers = [],
   canModerate = false,
+  blockedAuthorIds = EMPTY_BLOCKED,
   highlightMessageId = null,
   onHighlightHandled,
   onToggleReaction,
@@ -152,6 +163,14 @@ export function MessageList({
   const [jumpNotice, setJumpNotice] = useState(false);
   /** A jump whose page has been fetched but not yet rendered. */
   const [pendingJumpId, setPendingJumpId] = useState<string | null>(null);
+  /**
+   * Blocked messages the reader has chosen to look at. Per message and not
+   * per author: revealing one is answering "what did they say there", not
+   * taking the block off.
+   */
+  const [revealedIds, setRevealedIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
 
   const isPinnedRef = useRef(true);
   isPinnedRef.current = isPinned;
@@ -351,6 +370,9 @@ export function MessageList({
     setFlashId(null);
     setJumpNotice(false);
     setPendingJumpId(null);
+    // A reveal belongs to the conversation it was made in. Carrying it across
+    // would re-open a blocked message in the next channel by message id alone.
+    setRevealedIds(new Set());
     rowNodes.current.clear();
     lastCountRef.current = messages.length;
     requestAnimationFrame(() => {
@@ -485,6 +507,19 @@ export function MessageList({
               serverId={serverId}
               channelId={channelId}
               canModerate={canModerate}
+              // Your own message is never curtained: blocking someone who once
+              // shared your account's id is not a thing, and a reader hiding
+              // their own words reads as data loss.
+              isBlocked={
+                row.message.authorId !== currentUserId &&
+                blockedAuthorIds.has(row.message.authorId) &&
+                !revealedIds.has(row.message.id)
+              }
+              onReveal={() =>
+                setRevealedIds((current) =>
+                  new Set(current).add(row.message.id),
+                )
+              }
               isFlashing={flashId === row.message.id}
               registerRow={registerRow}
               onJumpToMessage={jumpToMessage}
@@ -676,6 +711,9 @@ interface MessageRowProps {
   serverId: string | null;
   channelId: string | null;
   canModerate: boolean;
+  /** True while this message is behind the blocked curtain. */
+  isBlocked: boolean;
+  onReveal: () => void;
   isFlashing: boolean;
   registerRow: (messageId: string, node: HTMLElement | null) => void;
   onJumpToMessage: (messageId: string) => void;
@@ -700,6 +738,8 @@ const MessageRow = memo(function MessageRow({
   serverId,
   channelId,
   canModerate,
+  isBlocked,
+  onReveal,
   isFlashing,
   registerRow,
   onJumpToMessage,
@@ -730,6 +770,33 @@ const MessageRow = memo(function MessageRow({
     if (window.confirm("Delete this message?")) {
       onDelete?.();
     }
+  }
+
+  if (isBlocked) {
+    return (
+      <>
+        {dayLabel && <DaySeparator label={dayLabel} />}
+        {/* Still a registered row, so a permalink or a reply pointing at it
+            lands somewhere instead of reporting the message as gone. Nothing of
+            its content is rendered until asked for — not the body, not the
+            attachments, not the author's avatar. */}
+        <article
+          ref={(node) => {
+            registerRow(message.id, node);
+          }}
+          className="group mt-1 flex items-center gap-2 rounded-md px-1 py-1 text-xs text-paper-muted"
+        >
+          <span className="italic">Blocked message</span>
+          <button
+            type="button"
+            onClick={onReveal}
+            className="underline underline-offset-2 hover:text-paper"
+          >
+            Show
+          </button>
+        </article>
+      </>
+    );
   }
 
   const items: ContextMenuItemDef[] = [
@@ -796,15 +863,7 @@ const MessageRow = memo(function MessageRow({
 
   return (
     <>
-      {dayLabel && (
-        <div className="my-4 flex items-center gap-3" role="separator">
-          <span className="h-px flex-1 bg-ink-4/60" />
-          <span className="text-[11px] font-medium uppercase tracking-wider text-paper-muted">
-            {dayLabel}
-          </span>
-          <span className="h-px flex-1 bg-ink-4/60" />
-        </div>
-      )}
+      {dayLabel && <DaySeparator label={dayLabel} />}
 
       <ContextMenu items={items}>
         <article
@@ -1008,6 +1067,19 @@ const MessageRow = memo(function MessageRow({
     </>
   );
 });
+
+/** The date rule between two days of messages. */
+function DaySeparator({ label }: { label: string }) {
+  return (
+    <div className="my-4 flex items-center gap-3" role="separator">
+      <span className="h-px flex-1 bg-ink-4/60" />
+      <span className="text-[11px] font-medium uppercase tracking-wider text-paper-muted">
+        {label}
+      </span>
+      <span className="h-px flex-1 bg-ink-4/60" />
+    </div>
+  );
+}
 
 function EditedMarker({ editedAt }: { editedAt: string | null | undefined }) {
   if (!editedAt) {

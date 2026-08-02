@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  activityRoutePath,
   describeActivity,
   formatBadge,
   rememberChannels,
@@ -141,5 +142,54 @@ describe("describeActivity", () => {
       channelName: null,
       serverName: null,
     });
+  });
+
+  it("names a conversation after its participants, with no server", () => {
+    const dm = "66666666-6666-4666-8666-666666666666";
+    rememberChannels([
+      { id: dm, serverId: null, name: "Ana", kind: "dm" },
+    ]);
+
+    expect(describeActivity(dm, { count: 1, mentions: 0 })).toMatchObject({
+      serverId: null,
+      channelName: "Ana",
+      // A conversation belongs to no server, so there is nothing to say it came
+      // from — and nothing may be borrowed from whichever server is on screen.
+      serverName: null,
+    });
+  });
+});
+
+describe("activityRoutePath", () => {
+  it("sends a server channel to its server", () => {
+    const channel = "77777777-7777-4777-8777-777777777777";
+    rememberChannels([
+      { id: channel, serverId: SERVER, name: "general", kind: "server" },
+    ]);
+    expect(activityRoutePath(channel, SERVER)).toBe(
+      `/app/server/${SERVER}/channel/${channel}`,
+    );
+  });
+
+  it("sends a conversation to the conversation it is about", () => {
+    // Without the kind this lands on /app, because a conversation has no server
+    // id to build a channel URL from — a notification you click and nothing
+    // opens is worse than none.
+    const dm = "88888888-8888-4888-8888-888888888888";
+    rememberChannels([{ id: dm, serverId: null, name: "Ana", kind: "dm" }]);
+    expect(activityRoutePath(dm, null)).toBe(`/app/dm/${dm}`);
+  });
+
+  it("falls back to the app root for a channel it knows nothing about", () => {
+    const unknown = "99999999-9999-4999-8999-999999999999";
+    expect(activityRoutePath(unknown, null)).toBe("/app");
+  });
+
+  it("treats a channel from an API that predates conversations as a server channel", () => {
+    const legacy = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    rememberChannels([{ id: legacy, serverId: SERVER, name: "general" }]);
+    expect(activityRoutePath(legacy, SERVER)).toBe(
+      `/app/server/${SERVER}/channel/${legacy}`,
+    );
   });
 });

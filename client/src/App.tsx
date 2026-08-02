@@ -2,7 +2,14 @@ import { SignInButton, SignUpButton, useAuth } from "@clerk/clerk-react";
 import { Lock, Menu, WifiOff } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import type { Channel, Server, User } from "@pqp/shared";
+import type {
+  BlockedUser,
+  Channel,
+  ChannelKind,
+  DmSummary,
+  Server,
+  User,
+} from "@pqp/shared";
 import { MessageComposer } from "@/components/chat/message-composer";
 import { MessageList } from "@/components/chat/message-list";
 import {
@@ -12,9 +19,11 @@ import {
 import { ChannelList } from "@/components/layout/channel-list";
 import { ChannelMembersPanel } from "@/components/layout/channel-members-panel";
 import { ChannelMetaDialog } from "@/components/layout/channel-meta-dialog";
+import { DmList } from "@/components/layout/dm-list";
 import { InvitePanel } from "@/components/layout/invite-panel";
 import { MembersPanel } from "@/components/layout/members-panel";
 import { ServerRail } from "@/components/layout/server-rail";
+import { NewDmDialog } from "@/components/user/new-dm-dialog";
 import { ServerSettingsDialog } from "@/components/layout/server-settings-dialog";
 import {
   applyRemotePreferences,
@@ -33,11 +42,14 @@ import { Seo } from "@/components/marketing/seo";
 import { createChatController, type ChatMessage } from "@/hooks/use-chat";
 import { createVoiceController } from "@/hooks/use-voice";
 import {
+  blockUser,
   createChannel,
   createServer,
   createVoiceSession,
   deleteChannel,
+  fetchBlocks,
   fetchChannels,
+  fetchConversations,
   fetchIceServers,
   fetchMe,
   fetchMembers,
@@ -45,14 +57,32 @@ import {
   fetchServers,
   fetchUnread,
   fetchVoiceBackend,
+  hideConversation,
   joinInvite,
   leaveServer,
   markChannelRead,
   setAuthTokenProvider,
+  unblockUser,
   updateChannel,
   updateMe,
 } from "@/lib/api";
-import { channelRoutePath, parseAppRoute } from "@/lib/app-route";
+import { parseAppRoute } from "@/lib/app-route";
+import {
+  conversationChannel,
+  conversationSubtitle,
+  conversationTitle,
+  conversationUnreadTotals,
+  sortConversations,
+  touchConversation,
+  unreadFromConversations,
+  upsertConversation,
+} from "@/lib/conversations";
+import {
+  HOME_SELECTION,
+  selectionRoutePath,
+  selectionServerId,
+  type Selection,
+} from "@/lib/selection";
 import {
   filesFromDataTransfer,
   isFileDrag,
@@ -66,6 +96,7 @@ import {
   notifyChannelActivity,
   rememberServers,
 } from "@/lib/notifications";
+import { useChannelNotifications } from "@/hooks/use-notifications";
 import { createRealtimeTransport, type RealtimeStatus } from "@/lib/realtime";
 import { adoptThemePreference } from "@/lib/theme";
 import { isMeshForced } from "@/lib/voice-backend";
@@ -182,8 +213,17 @@ function MainAppContent({
   const [user, setUser] = useState<User | null>(null);
   const [servers, setServers] = useState<Server[]>([]);
   const [channels, setChannels] = useState<Channel[]>([]);
-  const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
+  /**
+   * Starts on the conversation view rather than on a server, because at this
+   * point there is no server to start on — bootstrap moves it to the first one
+   * unless a deep link has already claimed the navigation.
+   */
+  const [selection, setSelection] = useState<Selection>(HOME_SELECTION);
   const [selectedChannelId, setSelectedChannelId] = useState<string | null>(null);
+  const [conversations, setConversations] = useState<DmSummary[]>([]);
+  const [conversationsLoading, setConversationsLoading] = useState(false);
+  const [blockedUsers, setBlockedUsers] = useState<BlockedUser[]>([]);
+  const [newDmOpen, setNewDmOpen] = useState(false);
   const [showCreateServer, setShowCreateServer] = useState(false);
   const [newServerName, setNewServerName] = useState("");
   const [creatingServer, setCreatingServer] = useState(false);
@@ -246,6 +286,15 @@ function MainAppContent({
   resolveTokenRef.current = resolveToken;
   const selectedChannelIdRef = useRef<string | null>(null);
   selectedChannelIdRef.current = selectedChannelId;
+  /**
+   * The realtime handler is installed once at bootstrap and lives for the whole
+   * session, so it cannot read the conversation list from a closure — by the
+   * time an activity frame arrives that closure is arbitrarily old.
+   */
+  const conversationsRef = useRef<DmSummary[]>(conversations);
+  conversationsRef.current = conversations;
+  /** The server the sidebar is showing, or null in the conversation view. */
+  const selectedServerId = selectionServerId(selection);
   /** Which server owns the active call — `channels` only holds the selected one. */
   const voiceServerIdRef = useRef<string | null>(null);
 
@@ -350,9 +399,91 @@ function MainAppContent({
     }
   }, []);
 
+  /**
+   * Pull the conversation list and fold its unread counts into the shared map.
+   *
+   * Tolerant of failure on purpose: this is the first feature to depend on
+   * endpoints a deployed older API does not have, and an instance without them
+   * should show no conversations rather than refuse to start.
+   */
+  const loadConversations = useCallback(
+    async (
+      { trustSnapshot = false }: { trustSnapshot?: boolean } = {},
+    ): Promise<DmSummary[]> => {
+      // Only a first load draws the skeleton. This also runs when somebody opens
+      // a conversation with this account mid-session, and blanking the list the
+      // reader is looking at to redraw the same rows is a flash for nothing.
+      setConversationsLoading(conversationsRef.current.length === 0);
+      try {
+        const { conversations: list } = await fetchConversations();
+        const sorted = sortConversations(list);
+        setConversations(sorted);
+        conversationsRef.current = sorted;
+        setUnread((prev) => {
+          const seeded = unreadFromConversations(
+            sorted,
+            selectedChannelIdRef.current,
+          );
+          if (!trustSnapshot) {
+            // The live map is spread last so it wins: it has counted
+            // everything that arrived since this snapshot was taken.
+            return { ...seeded, ...prev };
+          }
+          // Blocking changes retroactively what counts as unread, so the local
+          // counter is now wrong by however much that person had said and only
+          // the server knows the new number.
+          const next = { ...prev };
+          for (const conversation of sorted) {
+            delete next[conversation.channelId];
+          }
+          return { ...next, ...seeded };
+        });
+        return sorted;
+      } catch {
+        return conversationsRef.current;
+      } finally {
+        setConversationsLoading(false);
+      }
+    },
+    [],
+  );
+
+  const loadBlocks = useCallback(async () => {
+    try {
+      const { blocked } = await fetchBlocks();
+      setBlockedUsers(blocked);
+    } catch {
+      // An unavailable block list must not stop the app loading. It fails
+      // closed in the only direction that matters: the server enforces every
+      // block regardless of what this list says.
+    }
+  }, []);
+
+  const loadConversationsRef = useRef(loadConversations);
+  loadConversationsRef.current = loadConversations;
+
+  /**
+   * The people the open channel can name. A conversation is closed: everyone
+   * who could be mentioned in one is already in it, so there is nobody to fetch
+   * — and completing `@` against a server's roster inside a private
+   * conversation would offer to ping people who cannot read it.
+   */
+  const conversationParticipants = useMemo(
+    () =>
+      selectedChannelId
+        ? (conversations.find((one) => one.channelId === selectedChannelId)
+            ?.participants ?? null)
+        : null,
+    [conversations, selectedChannelId],
+  );
+
   // The composer completes `@` against this server's members, which is also the
   // only place a handle can be learned from without asking for it.
   useEffect(() => {
+    if (conversationParticipants) {
+      setMentionCandidates([...conversationParticipants]);
+      return;
+    }
     if (!selectedServerId) {
       setMentionCandidates([]);
       return;
@@ -370,15 +501,18 @@ function MainAppContent({
     return () => {
       cancelled = true;
     };
-  }, [selectedServerId]);
+  }, [conversationParticipants, selectedServerId]);
 
+  /**
+   * Open a channel by id, whatever kind it is.
+   *
+   * Takes no channel object and no server: everything below this line — the
+   * join frame, history, the read receipt, the composer — is channel-scoped
+   * already, and a conversation is a channel. Resolving which channel exists is
+   * the caller's job, and asking for one that does not simply loads nothing.
+   */
   const openChannel = useCallback(
-    async (channelId: string, channelList: Channel[], serverId?: string) => {
-      const channel = channelList.find((c) => c.id === channelId);
-      if (!channel) {
-        return;
-      }
-
+    async (channelId: string) => {
       setSelectedChannelId(channelId);
       selectedChannelIdRef.current = channelId;
       // The reply belongs to the conversation you were in, not the next one.
@@ -403,7 +537,6 @@ function MainAppContent({
           setMessagesLoading(false);
         }
       }
-      void serverId;
     },
     [chat, clearUnread, refresh],
   );
@@ -468,7 +601,12 @@ function MainAppContent({
         }
         setServers(serverList);
 
-        let initialChannels: Channel[] = [];
+        // Conversations and blocks are loaded whatever the first view is: the
+        // Home badge counts across the whole account, and the block list drives
+        // what is hidden inside server channels too.
+        void loadConversations();
+        void loadBlocks();
+
         let initialChannelId: string | null = null;
         const first = serverList[0];
         // A URL that already names a channel owns the first navigation. Without
@@ -479,16 +617,19 @@ function MainAppContent({
         const deepLink = parseAppRoute(window.location.pathname);
         const deepLinksChannel =
           deepLink?.kind === "channel" && deepLink.channelId !== null;
+        // A conversation link owns the navigation outright: opening a server
+        // first would move the sidebar, then the deep-link effect would move it
+        // back, and the trip through a server is a fetch nobody asked for.
+        const deepLinksConversation = deepLink?.kind === "conversation";
 
-        if (first) {
-          setSelectedServerId(first.id);
+        if (first && !deepLinksConversation) {
+          setSelection({ kind: "server", serverId: first.id });
           setChannelsLoading(true);
           try {
             const { channels: channelList } = await fetchChannels(first.id);
             if (cancelled) {
               return;
             }
-            initialChannels = channelList;
             setChannels(channelList);
             initialChannelId = deepLinksChannel
               ? null
@@ -512,7 +653,26 @@ function MainAppContent({
             const activity = message as {
               channelId: string;
               mention: boolean;
+              /** Absent from an API that predates conversations. */
+              kind?: ChannelKind;
             };
+            if (activity.kind && activity.kind !== "server") {
+              const now = new Date().toISOString();
+              if (
+                conversationsRef.current.some(
+                  (one) => one.channelId === activity.channelId,
+                )
+              ) {
+                setConversations((prev) =>
+                  touchConversation(prev, activity.channelId, now),
+                );
+              } else {
+                // Somebody opened a conversation with this account while it was
+                // running. There is no row to bump — the list has to be fetched
+                // before the message has anywhere to appear at all.
+                void loadConversationsRef.current();
+              }
+            }
             // Fired from the live frame rather than from a diff of `unread`,
             // because that map also fills in bulk from `loadUnread` when a
             // server is first opened — announcing that would buzz once per
@@ -591,7 +751,7 @@ function MainAppContent({
           const channelId = selectedChannelIdRef.current;
           if (!reconnected) {
             if (initialChannelId) {
-              void openChannel(initialChannelId, initialChannels, first?.id);
+              void openChannel(initialChannelId);
             }
             return;
           }
@@ -643,13 +803,15 @@ function MainAppContent({
    * Mirror the current selection into the URL so links are shareable and
    * `pqp://server/<id>/channel/<id>` round-trips. Records the path first so the
    * deep-link effect ignores navigations we caused ourselves.
+   *
+   * Takes the whole selection rather than a server id. It used to return early
+   * when that id was null, which was the right answer while "no server" meant
+   * "nothing to link to" — a conversation has a URL, and bailing out here left
+   * it unaddressable and unshareable.
    */
   const syncRoute = useCallback(
-    (serverId: string | null, channelId: string | null) => {
-      if (!serverId) {
-        return;
-      }
-      const path = channelRoutePath(serverId, channelId);
+    (target: Selection, channelId: string | null) => {
+      const path = selectionRoutePath(target, channelId);
       if (routeRef.current === path) {
         return;
       }
@@ -660,18 +822,41 @@ function MainAppContent({
   );
 
   const selectChannel = useCallback(
-    async (
-      channelId: string,
-      channelList = channels,
-      serverIdOverride?: string,
-    ) => {
-      syncRoute(serverIdOverride ?? selectedServerId, channelId);
+    async (channelId: string, serverIdOverride?: string) => {
+      // The override matters when a server was only just chosen: `selection` is
+      // still the previous one this render, and the URL has to name the server
+      // whose channel is being opened rather than the one being left.
+      syncRoute(
+        serverIdOverride
+          ? { kind: "server", serverId: serverIdOverride }
+          : selection,
+        channelId,
+      );
       // Voice deliberately survives navigating away: leaving a call because you
       // clicked another channel is not how a chat app should behave.
-      await openChannel(channelId, channelList, serverIdOverride);
+      await openChannel(channelId);
     },
-    [channels, openChannel, selectedServerId, syncRoute],
+    [openChannel, selection, syncRoute],
   );
+
+  /** Open one conversation, switching the sidebar to the home view with it. */
+  const selectConversation = useCallback(
+    async (channelId: string) => {
+      setSelection(HOME_SELECTION);
+      syncRoute(HOME_SELECTION, channelId);
+      await openChannel(channelId);
+    },
+    [openChannel, syncRoute],
+  );
+
+  /** Leave the conversation view open with nothing selected in it. */
+  const selectHome = useCallback(() => {
+    setSelection(HOME_SELECTION);
+    setSelectedChannelId(null);
+    selectedChannelIdRef.current = null;
+    syncRoute(HOME_SELECTION, null);
+    void loadConversations();
+  }, [loadConversations, syncRoute]);
 
   const loadChannels = useCallback(
     async (serverId: string) => {
@@ -682,11 +867,11 @@ function MainAppContent({
         void loadUnread(serverId);
         const general = list.find((c) => c.type === "text") ?? list[0];
         if (general) {
-          await selectChannel(general.id, list, serverId);
+          await selectChannel(general.id, serverId);
         } else {
           setSelectedChannelId(null);
           selectedChannelIdRef.current = null;
-          syncRoute(serverId, null);
+          syncRoute({ kind: "server", serverId }, null);
         }
       } catch (error) {
         setAppError(
@@ -708,14 +893,14 @@ function MainAppContent({
     try {
       const { server, channels: newChannels } = await createServer(name);
       setServers((prev) => [...prev, server]);
-      setSelectedServerId(server.id);
+      setSelection({ kind: "server", serverId: server.id });
       setChannels(newChannels);
       setNewServerName("");
       setShowCreateServer(false);
       setAppError(null);
       const general = newChannels.find((c) => c.type === "text");
       if (general) {
-        await selectChannel(general.id, newChannels, server.id);
+        await selectChannel(general.id, server.id);
       }
     } catch (error) {
       setAppError(
@@ -749,7 +934,7 @@ function MainAppContent({
         setChannels(next);
         setAppError(null);
         setChannelPrompt(null);
-        await selectChannel(channel.id, next);
+        await selectChannel(channel.id);
         if (channel.isPrivate) {
           setChannelMembersChannel(channel);
         }
@@ -804,7 +989,7 @@ function MainAppContent({
       if (selectedChannelId === channelId) {
         const fallback = next.find((c) => c.type === "text") ?? next[0];
         if (fallback) {
-          await selectChannel(fallback.id, next);
+          await selectChannel(fallback.id);
         } else {
           setSelectedChannelId(null);
           selectedChannelIdRef.current = null;
@@ -830,18 +1015,25 @@ function MainAppContent({
       if (selectedServerId === serverId) {
         const next = nextServers[0];
         if (next) {
-          setSelectedServerId(next.id);
+          setSelection({ kind: "server", serverId: next.id });
           await loadChannels(next.id);
         } else {
-          setSelectedServerId(null);
           setChannels([]);
-          setSelectedChannelId(null);
-          selectedChannelIdRef.current = null;
+          // The URL still names the server that just went away. Landing on the
+          // conversations is both a valid place to be and the only one left.
+          selectHome();
         }
       }
       setAppError(null);
     },
-    [loadChannels, selectedServerId, servers, voice, voiceState.voiceChannelId],
+    [
+      loadChannels,
+      selectHome,
+      selectedServerId,
+      servers,
+      voice,
+      voiceState.voiceChannelId,
+    ],
   );
 
   async function handleLeaveServer(serverId: string) {
@@ -893,7 +1085,7 @@ function MainAppContent({
     async (serverId: string) => {
       const { servers: serverList } = await fetchServers();
       setServers(serverList);
-      setSelectedServerId(serverId);
+      setSelection({ kind: "server", serverId });
       await loadChannels(serverId);
     },
     [loadChannels],
@@ -910,7 +1102,7 @@ function MainAppContent({
       channelId: string | null,
       messageId: string | null = null,
     ) => {
-      setSelectedServerId(serverId);
+      setSelection({ kind: "server", serverId });
       setChannelsLoading(true);
       try {
         const { channels: list } = await fetchChannels(serverId);
@@ -925,7 +1117,7 @@ function MainAppContent({
         const target =
           requested ?? list.find((c) => c.type === "text") ?? list[0];
         if (target) {
-          await selectChannel(target.id, list, serverId);
+          await selectChannel(target.id, serverId);
           // Only after the newest page is in hand: the list flashes the row if
           // it is there and pulls history around it if it is not.
           if (messageId && target.id === channelId) {
@@ -948,6 +1140,37 @@ function MainAppContent({
     [loadUnread, selectChannel],
   );
 
+  /**
+   * Apply a `/app/dm[/<channelId>]` target.
+   *
+   * The list is refetched first rather than trusted from state, because this is
+   * also the path a shared link takes into a cold tab: the conversation is not
+   * in memory yet, and an id that is not in the fetched list is one this
+   * account is not part of — which is a dead link, not a channel to try opening.
+   */
+  const applyConversationRoute = useCallback(
+    async (channelId: string | null, messageId: string | null = null) => {
+      setSelection(HOME_SELECTION);
+      const list = await loadConversations();
+      if (!channelId) {
+        setSelectedChannelId(null);
+        selectedChannelIdRef.current = null;
+        return;
+      }
+      if (!list.some((one) => one.channelId === channelId)) {
+        setSelectedChannelId(null);
+        selectedChannelIdRef.current = null;
+        setAppError("That conversation is not available.");
+        return;
+      }
+      await selectConversation(channelId);
+      if (messageId) {
+        setHighlightMessageId(messageId);
+      }
+    },
+    [loadConversations, selectConversation],
+  );
+
   // Deep links (`pqp://…` via Electron) and shareable web URLs both land here.
   useEffect(() => {
     if (!bootstrapReady) {
@@ -968,6 +1191,10 @@ function MainAppContent({
       setInviteMode("join");
       return;
     }
+    if (target.kind === "conversation") {
+      void applyConversationRoute(target.channelId, target.messageId);
+      return;
+    }
     void applyChannelRoute(
       target.serverId,
       target.channelId,
@@ -979,16 +1206,128 @@ function MainAppContent({
   }, [bootstrapReady, location.pathname]);
 
   function openInviteForServer(serverId: string) {
-    setSelectedServerId(serverId);
+    setSelection({ kind: "server", serverId });
     void loadChannels(serverId);
     setInviteMode("create");
   }
 
   function openMembersForServer(serverId: string) {
-    setSelectedServerId(serverId);
+    setSelection({ kind: "server", serverId });
     void loadChannels(serverId);
     setMembersOpen(true);
   }
+
+  const handleBlockUser = useCallback(
+    async (userId: string) => {
+      try {
+        await blockUser(userId);
+        await loadBlocks();
+        // A blocked author's messages stop counting towards unread on the
+        // server, so the conversation's badge is now wrong by however much they
+        // had said. Refetching is what settles it — the row itself stays, since
+        // blocking somebody does not erase what was already said to you.
+        await loadConversations({ trustSnapshot: true });
+      } catch (error) {
+        setAppError(
+          error instanceof Error ? error.message : "Failed to block that person",
+        );
+      }
+    },
+    [loadBlocks, loadConversations],
+  );
+
+  const handleUnblockUser = useCallback(
+    async (userId: string) => {
+      try {
+        await unblockUser(userId);
+        await loadBlocks();
+      } catch (error) {
+        setAppError(
+          error instanceof Error ? error.message : "Failed to unblock",
+        );
+      }
+    },
+    [loadBlocks],
+  );
+
+  const handleHideConversation = useCallback(
+    async (channelId: string) => {
+      try {
+        await hideConversation(channelId);
+      } catch (error) {
+        setAppError(
+          error instanceof Error ? error.message : "Failed to close that",
+        );
+        return;
+      }
+      const remaining = conversationsRef.current.filter(
+        (one) => one.channelId !== channelId,
+      );
+      setConversations(remaining);
+      conversationsRef.current = remaining;
+      if (selectedChannelIdRef.current === channelId) {
+        selectHome();
+      }
+    },
+    [selectHome],
+  );
+
+  const blockedUserIds = useMemo(
+    () => new Set(blockedUsers.map((blocked) => blocked.id)),
+    [blockedUsers],
+  );
+
+  /**
+   * Jump to the channel the current call is in.
+   *
+   * Routed through `applyChannelRoute` whenever that channel is in another
+   * server — or when the sidebar is on conversations, where there is no server
+   * at all — because `channels` only ever holds the selected server's, and
+   * opening an id that is not in it would leave the pane with nothing to draw.
+   */
+  const openVoiceChannel = useCallback(async () => {
+    const channelId = voiceState.voiceChannelId;
+    if (!channelId) {
+      return;
+    }
+    const serverId = voiceServerIdRef.current;
+    if (serverId && serverId !== selectedServerId) {
+      await applyChannelRoute(serverId, channelId);
+      return;
+    }
+    await selectChannel(channelId, serverId ?? undefined);
+  }, [
+    applyChannelRoute,
+    selectChannel,
+    selectedServerId,
+    voiceState.voiceChannelId,
+  ]);
+
+  /**
+   * Everything the notification path needs to name a channel, conversations
+   * included. Built here rather than in a sidebar because a sidebar unmounts
+   * when the other one is shown, and the badge has to outlive that.
+   */
+  const notificationChannels = useMemo(
+    () => [
+      ...channels.map((channel) => ({
+        id: channel.id,
+        serverId: channel.serverId,
+        name: channel.name,
+        kind: channel.kind,
+      })),
+      ...conversations.map((conversation) => ({
+        id: conversation.channelId,
+        serverId: null,
+        name: conversationTitle(conversation.participants),
+        kind: conversation.kind,
+      })),
+    ],
+    [channels, conversations],
+  );
+  useChannelNotifications({ channels: notificationChannels, unread });
+
+  const conversationUnread = conversationUnreadTotals(conversations, unread);
 
   if (bootstrapError) {
     return (
@@ -1006,7 +1345,21 @@ function MainAppContent({
     return <AppLoadingShell label="Loading servers…" />;
   }
 
-  const selectedChannel = channels.find((c) => c.id === selectedChannelId);
+  const activeConversation =
+    selection.kind === "dm" && selectedChannelId
+      ? (conversations.find((one) => one.channelId === selectedChannelId) ??
+        null)
+      : null;
+  /**
+   * The open channel, whichever kind it is. A conversation is dressed as the
+   * channel row it actually is so the whole pane below — header, list,
+   * composer, attachments — keeps working on it unchanged.
+   */
+  const selectedChannel = activeConversation
+    ? conversationChannel(activeConversation)
+    : selection.kind === "server"
+      ? channels.find((c) => c.id === selectedChannelId)
+      : undefined;
   const selectedServer = servers.find((s) => s.id === selectedServerId);
   const canManage =
     selectedServer?.role === "owner" || selectedServer?.role === "admin";
@@ -1019,6 +1372,40 @@ function MainAppContent({
     selectedChannel.id === voiceState.voiceChannelId;
 
   const canDropFiles = isAttachmentsEnabled && selectedChannel?.type === "text";
+
+  /**
+   * The bottom of whichever sidebar is showing. Shared rather than duplicated:
+   * an ongoing call and the mute button must not vanish because the reader
+   * switched to their conversations.
+   */
+  const sidebarFooter = (
+    <>
+      {voiceState.status !== "idle" && !isViewingVoiceChannel && (
+        <VoiceStatusBar
+          channelName={voiceChannel?.name ?? "Voice"}
+          status={voiceState.status}
+          peerCount={voiceState.remotePeers.length}
+          isMuted={voiceState.isMuted}
+          isDeafened={voiceState.isDeafened}
+          usingSfu={voiceState.usingSfu}
+          onOpen={() => void openVoiceChannel()}
+          onToggleMute={() => voice.toggleMute()}
+          onToggleDeafen={() => voice.toggleDeafen()}
+          onLeave={() => voice.leave()}
+        />
+      )}
+      <UserPanel
+        displayName={user?.displayName ?? "User"}
+        tag={user?.tag ?? null}
+        avatarUrl={user?.avatarUrl ?? null}
+        isMuted={voiceState.isMuted}
+        inVoice={voiceState.status === "connected"}
+        showUserButton={showUserButton}
+        onToggleMute={() => voice.toggleMute()}
+        onOpenSettings={() => setSettingsOpen(true)}
+      />
+    </>
+  );
 
   const chatPane = selectedChannel ? (
     <div
@@ -1081,15 +1468,21 @@ function MainAppContent({
             {selectedChannel.isPrivate && (
               <Lock className="h-3.5 w-3.5 shrink-0 text-warning" />
             )}
-            {selectedChannel.type === "text" && !selectedChannel.isPrivate
+            {/* `#` names a channel inside a server. A conversation's title is a
+                person, and hashing it renames them. */}
+            {selectedChannel.kind === "server" &&
+            selectedChannel.type === "text" &&
+            !selectedChannel.isPrivate
               ? "#"
               : ""}
             {selectedChannel.name}
           </p>
           <p className="truncate text-[11px] text-paper-muted">
-            {selectedChannel.topic
-              ? selectedChannel.topic
-              : `${selectedChannel.isPrivate ? "Private · " : ""}${chat.getPresence().length} here`}
+            {activeConversation
+              ? conversationSubtitle(activeConversation)
+              : selectedChannel.topic
+                ? selectedChannel.topic
+                : `${selectedChannel.isPrivate ? "Private · " : ""}${chat.getPresence().length} here`}
           </p>
         </div>
         <div className="ml-auto flex items-center gap-2">
@@ -1126,6 +1519,7 @@ function MainAppContent({
         isLoadingNewer={chat.isLoadingNewer()}
         typingUsers={chat.getTypingUsers()}
         canModerate={!!canManage}
+        blockedAuthorIds={blockedUserIds}
         highlightMessageId={highlightMessageId}
         onHighlightHandled={clearHighlight}
         onReplyTo={setReplyTarget}
@@ -1206,8 +1600,14 @@ function MainAppContent({
         selectedServerId={selectedServerId}
         unread={unread}
         channels={channels}
+        homeSelected={selection.kind === "dm"}
+        homeUnread={conversationUnread}
+        onSelectHome={() => {
+          selectHome();
+          setMobileNavOpen(true);
+        }}
         onSelectServer={(id) => {
-          setSelectedServerId(id);
+          setSelection({ kind: "server", serverId: id });
           void loadChannels(id);
           setMobileNavOpen(true);
         }}
@@ -1216,71 +1616,58 @@ function MainAppContent({
         onInvite={openInviteForServer}
         onOpenMembers={openMembersForServer}
         onOpenSettings={(id) => {
-          setSelectedServerId(id);
+          setSelection({ kind: "server", serverId: id });
           setServerSettingsOpen(true);
         }}
         onLeaveServer={(id) => void handleLeaveServer(id)}
       />
 
-      <ChannelList
-        server={selectedServer ?? null}
-        channels={channels}
-        selectedChannelId={selectedChannelId}
-        canManage={!!canManage}
-        isLoading={channelsLoading}
-        voiceOccupancy={voiceState.occupancy}
-        speakingPeerIds={voiceState.speakingPeerIds}
-        activeVoiceChannelId={voiceState.voiceChannelId}
-        unread={unread}
-        mobileOpen={mobileNavOpen}
-        onMobileClose={() => setMobileNavOpen(false)}
-        onSelectChannel={(id) => void selectChannel(id)}
-        onCreateChannel={(type, isPrivate) =>
-          setChannelPrompt({ mode: "create", type, isPrivate })
-        }
-        onRenameChannel={(channel) =>
-          setChannelPrompt({ mode: "rename", channel })
-        }
-        onEditChannelMeta={setChannelMetaChannel}
-        onDeleteChannel={(id) => void handleDeleteChannel(id)}
-        onTogglePrivate={(ch) => void handleTogglePrivate(ch)}
-        onManageChannelMembers={setChannelMembersChannel}
-        onInvite={() => setInviteMode("create")}
-        onOpenMembers={() => setMembersOpen(true)}
-        onOpenServerSettings={() => setServerSettingsOpen(true)}
-        footer={
-          <>
-            {voiceState.status !== "idle" && !isViewingVoiceChannel && (
-              <VoiceStatusBar
-                channelName={voiceChannel?.name ?? "Voice"}
-                status={voiceState.status}
-                peerCount={voiceState.remotePeers.length}
-                isMuted={voiceState.isMuted}
-                isDeafened={voiceState.isDeafened}
-                usingSfu={voiceState.usingSfu}
-                onOpen={() => {
-                  if (voiceState.voiceChannelId) {
-                    void selectChannel(voiceState.voiceChannelId);
-                  }
-                }}
-                onToggleMute={() => voice.toggleMute()}
-                onToggleDeafen={() => voice.toggleDeafen()}
-                onLeave={() => voice.leave()}
-              />
-            )}
-            <UserPanel
-              displayName={user?.displayName ?? "User"}
-              tag={user?.tag ?? null}
-              avatarUrl={user?.avatarUrl ?? null}
-              isMuted={voiceState.isMuted}
-              inVoice={voiceState.status === "connected"}
-              showUserButton={showUserButton}
-              onToggleMute={() => voice.toggleMute()}
-              onOpenSettings={() => setSettingsOpen(true)}
-            />
-          </>
-        }
-      />
+      {selection.kind === "dm" ? (
+        <DmList
+          conversations={conversations}
+          selectedChannelId={selectedChannelId}
+          unread={unread}
+          isLoading={conversationsLoading}
+          blockedUserIds={blockedUserIds}
+          mobileOpen={mobileNavOpen}
+          onMobileClose={() => setMobileNavOpen(false)}
+          onSelectConversation={(id) => void selectConversation(id)}
+          onStartConversation={() => setNewDmOpen(true)}
+          onHideConversation={(id) => void handleHideConversation(id)}
+          onBlockUser={(person) => void handleBlockUser(person.id)}
+          onUnblockUser={(id) => void handleUnblockUser(id)}
+          footer={sidebarFooter}
+        />
+      ) : (
+        <ChannelList
+          server={selectedServer ?? null}
+          channels={channels}
+          selectedChannelId={selectedChannelId}
+          canManage={!!canManage}
+          isLoading={channelsLoading}
+          voiceOccupancy={voiceState.occupancy}
+          speakingPeerIds={voiceState.speakingPeerIds}
+          activeVoiceChannelId={voiceState.voiceChannelId}
+          unread={unread}
+          mobileOpen={mobileNavOpen}
+          onMobileClose={() => setMobileNavOpen(false)}
+          onSelectChannel={(id) => void selectChannel(id)}
+          onCreateChannel={(type, isPrivate) =>
+            setChannelPrompt({ mode: "create", type, isPrivate })
+          }
+          onRenameChannel={(channel) =>
+            setChannelPrompt({ mode: "rename", channel })
+          }
+          onEditChannelMeta={setChannelMetaChannel}
+          onDeleteChannel={(id) => void handleDeleteChannel(id)}
+          onTogglePrivate={(ch) => void handleTogglePrivate(ch)}
+          onManageChannelMembers={setChannelMembersChannel}
+          onInvite={() => setInviteMode("create")}
+          onOpenMembers={() => setMembersOpen(true)}
+          onOpenServerSettings={() => setServerSettingsOpen(true)}
+          footer={sidebarFooter}
+        />
+      )}
 
       <main className="flex min-w-0 flex-1 flex-col bg-transparent">
         {isDevAuthBypassEnabled() && (
@@ -1357,25 +1744,35 @@ function MainAppContent({
               <Menu className="h-6 w-6" />
             </button>
             <p className="font-display text-3xl font-bold">
-              {servers.length === 0 ? "No servers yet" : "Pick a channel"}
+              {selection.kind === "dm"
+                ? "No conversation open"
+                : servers.length === 0
+                  ? "No servers yet"
+                  : "Pick a channel"}
             </p>
             <p className="max-w-sm text-paper-muted">
-              {servers.length === 0
-                ? "Create a server or join with an invite code."
-                : "Open the sidebar and choose text or voice."}
+              {selection.kind === "dm"
+                ? "Pick someone from the list, or message anyone by handle."
+                : servers.length === 0
+                  ? "Create a server or join with an invite code."
+                  : "Open the sidebar and choose text or voice."}
             </p>
-            {servers.length === 0 && (
-              <div className="flex gap-2">
-                <Button onClick={() => setShowCreateServer(true)}>
-                  Create server
-                </Button>
-                <Button
-                  variant="secondary"
-                  onClick={() => setInviteMode("join")}
-                >
-                  Join invite
-                </Button>
-              </div>
+            {selection.kind === "dm" ? (
+              <Button onClick={() => setNewDmOpen(true)}>New message</Button>
+            ) : (
+              servers.length === 0 && (
+                <div className="flex gap-2">
+                  <Button onClick={() => setShowCreateServer(true)}>
+                    Create server
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    onClick={() => setInviteMode("join")}
+                  >
+                    Join invite
+                  </Button>
+                </div>
+              )
             )}
           </div>
         )}
@@ -1446,12 +1843,14 @@ function MainAppContent({
         user={user}
         localSettings={localSettings}
         voiceAnalyser={voice.getAnalyser()}
+        blockedUsers={blockedUsers}
         onClose={() => setSettingsOpen(false)}
         onLocalSave={setLocalSettings}
         onUserUpdated={(updated) => {
           setUser(updated);
           chat.setCurrentUser(updated);
         }}
+        onUnblockUser={(userId) => void handleUnblockUser(userId)}
         onAudioSettingsLive={handleAudioSettingsLive}
       />
 
@@ -1497,10 +1896,23 @@ function MainAppContent({
         serverName={selectedServer?.name ?? null}
         role={selectedServer?.role ?? "member"}
         currentUserId={user?.id ?? null}
+        blockedUserIds={blockedUserIds}
         onClose={() => setMembersOpen(false)}
         onMention={(username) => {
           setComposerInsert(`@${username}`);
           setMembersOpen(false);
+        }}
+        onBlockUser={(userId) => void handleBlockUser(userId)}
+        onUnblockUser={(userId) => void handleUnblockUser(userId)}
+      />
+
+      <NewDmDialog
+        open={newDmOpen}
+        currentUserId={user?.id ?? null}
+        onClose={() => setNewDmOpen(false)}
+        onCreated={(conversation) => {
+          setConversations((prev) => upsertConversation(prev, conversation));
+          void selectConversation(conversation.channelId);
         }}
       />
 

@@ -1,0 +1,298 @@
+import type { DmSummary, PublicUser } from "@pqp/shared";
+import { Plus, X } from "lucide-react";
+import type { ReactNode } from "react";
+import {
+  formatBadgeCount,
+  type UnreadState,
+} from "@/components/layout/channel-list";
+import {
+  ContextMenu,
+  type ContextMenuItemDef,
+} from "@/components/ui/context-menu";
+import { ChannelListSkeleton } from "@/components/ui/skeleton";
+import {
+  notificationLevelItems,
+  useChannelNotificationLevel,
+} from "@/hooks/use-notifications";
+import { conversationTitle } from "@/lib/conversations";
+import { cn } from "@/lib/utils";
+
+const EMPTY_UNREAD: UnreadState = { count: 0, mentions: 0 };
+
+/** Past this the faces stop being recognisable and start being texture. */
+const MAX_STACKED_AVATARS = 3;
+
+interface DmListProps {
+  conversations: DmSummary[];
+  selectedChannelId: string | null;
+  unread: Record<string, UnreadState>;
+  isLoading?: boolean;
+  /** So a 1:1 with somebody blocked offers "Unblock" instead of "Block". */
+  blockedUserIds: ReadonlySet<string>;
+  onSelectConversation: (channelId: string) => void;
+  onStartConversation: () => void;
+  onHideConversation: (channelId: string) => void;
+  onBlockUser: (user: PublicUser) => void;
+  onUnblockUser: (userId: string) => void;
+  footer?: ReactNode;
+  mobileOpen?: boolean;
+  onMobileClose?: () => void;
+}
+
+/**
+ * The conversation sidebar: what stands in for the channel list when no server
+ * is selected.
+ *
+ * A separate component rather than a mode of `ChannelList`, because almost
+ * nothing is shared below the shell — there are no sections, no types, no
+ * create-channel affordances, and above all no names. Every row's label is
+ * derived from who is in it, which is the one thing a channel row never has to
+ * do.
+ */
+export function DmList({
+  conversations,
+  selectedChannelId,
+  unread,
+  isLoading = false,
+  blockedUserIds,
+  onSelectConversation,
+  onStartConversation,
+  onHideConversation,
+  onBlockUser,
+  onUnblockUser,
+  footer,
+  mobileOpen = false,
+  onMobileClose,
+}: DmListProps) {
+  return (
+    <aside
+      className={`fixed inset-y-0 left-[72px] z-30 flex w-[min(100%-72px,16rem)] flex-col border-r border-ink-4/60 bg-channel transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] md:static md:z-auto md:w-64 md:translate-x-0 ${
+        mobileOpen
+          ? "translate-x-0"
+          : "-translate-x-[calc(100%+72px)] md:translate-x-0"
+      }`}
+    >
+      <div className="flex h-14 items-center justify-between gap-2 border-b border-ink-4/60 px-4">
+        <p className="truncate font-display text-base font-bold">Messages</p>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            className="rounded-md p-1.5 text-paper-muted hover:bg-ink-3 hover:text-paper"
+            title="New message"
+            aria-label="New message"
+            onClick={onStartConversation}
+          >
+            <Plus className="h-4 w-4" />
+          </button>
+          {onMobileClose && (
+            <button
+              type="button"
+              className="rounded p-1 hover:bg-ink-3 md:hidden"
+              aria-label="Close conversation list"
+              onClick={onMobileClose}
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-2">
+        {isLoading ? (
+          <ChannelListSkeleton />
+        ) : conversations.length === 0 ? (
+          <div className="px-2 py-6">
+            <p className="text-sm text-paper-muted">
+              No conversations yet.
+            </p>
+            <button
+              type="button"
+              className="mt-2 text-sm text-signal underline underline-offset-2"
+              onClick={onStartConversation}
+            >
+              Message someone
+            </button>
+          </div>
+        ) : (
+          conversations.map((conversation) => (
+            <ConversationRow
+              key={conversation.channelId}
+              conversation={conversation}
+              selected={selectedChannelId === conversation.channelId}
+              unread={unread[conversation.channelId] ?? EMPTY_UNREAD}
+              blockedUserIds={blockedUserIds}
+              onSelect={() => {
+                onSelectConversation(conversation.channelId);
+                onMobileClose?.();
+              }}
+              onHide={() => onHideConversation(conversation.channelId)}
+              onBlock={onBlockUser}
+              onUnblock={onUnblockUser}
+            />
+          ))
+        )}
+      </div>
+
+      {footer}
+    </aside>
+  );
+}
+
+function ConversationRow({
+  conversation,
+  selected,
+  unread,
+  blockedUserIds,
+  onSelect,
+  onHide,
+  onBlock,
+  onUnblock,
+}: {
+  conversation: DmSummary;
+  selected: boolean;
+  unread: UnreadState;
+  blockedUserIds: ReadonlySet<string>;
+  onSelect: () => void;
+  onHide: () => void;
+  onBlock: (user: PublicUser) => void;
+  onUnblock: (userId: string) => void;
+}) {
+  // The same per-channel levels a server channel gets. Muting a conversation is
+  // the same act as muting #general, and giving it its own store would be a
+  // second place for "leave me alone" to be recorded and forgotten.
+  const notifications = useChannelNotificationLevel({
+    id: conversation.channelId,
+    serverId: null,
+  });
+  const title = conversationTitle(conversation.participants);
+  // Blocking is between two people. In a group there is no single "them" to
+  // block, and blocking one member would leave you in a room reading around a
+  // hole — so the row only offers it for a 1:1.
+  const solo =
+    conversation.participants.length === 1 ? conversation.participants[0]! : null;
+  const blocked = solo ? blockedUserIds.has(solo.id) : false;
+
+  const items: ContextMenuItemDef[] = [
+    {
+      id: "copy-id",
+      label: "Copy conversation ID",
+      onSelect: () => void navigator.clipboard.writeText(conversation.channelId),
+    },
+    ...notificationLevelItems("notify", notifications, "account"),
+    { id: "sep", label: "", separator: true },
+    {
+      id: "hide",
+      label: "Close conversation",
+      onSelect: onHide,
+    },
+  ];
+  if (solo) {
+    items.push(
+      blocked
+        ? {
+            id: "unblock",
+            label: `Unblock ${solo.displayName}`,
+            onSelect: () => onUnblock(solo.id),
+          }
+        : {
+            id: "block",
+            label: `Block ${solo.displayName}`,
+            danger: true,
+            onSelect: () => onBlock(solo),
+          },
+    );
+  }
+
+  const muted = notifications.level === "none";
+  const hasUnread = !selected && unread.count > 0;
+  const mentions = selected || muted ? 0 : unread.mentions;
+
+  return (
+    <ContextMenu items={items}>
+      <div
+        className={cn(
+          "group relative mb-0.5 flex items-center gap-1 rounded-md px-2 py-1.5 text-sm",
+          selected
+            ? "bg-ink-3 text-paper"
+            : "text-paper-muted hover:bg-ink-3/70 hover:text-paper",
+          hasUnread && !muted && !selected && "text-paper",
+          muted && !selected && "opacity-50",
+        )}
+      >
+        {hasUnread && !muted && (
+          <span
+            aria-hidden="true"
+            className="absolute -left-1 top-1/2 h-4 w-1 -translate-y-1/2 rounded-r-full bg-paper"
+          />
+        )}
+        <button
+          type="button"
+          onClick={onSelect}
+          className="flex min-w-0 flex-1 items-center gap-2 text-left"
+        >
+          <AvatarStack participants={conversation.participants} />
+          <span
+            className={cn("truncate", hasUnread && !muted && "font-semibold")}
+          >
+            {title}
+          </span>
+          {blocked && <span className="sr-only">(blocked)</span>}
+          {hasUnread && !muted && <span className="sr-only">(unread)</span>}
+          {muted && <span className="sr-only">(muted)</span>}
+          <span className="ml-auto flex shrink-0 items-center gap-1">
+            {conversation.kind === "group" && (
+              <span className="rounded bg-ink-4 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-paper-muted">
+                {conversation.participants.length + 1}
+              </span>
+            )}
+            {mentions > 0 && (
+              <span
+                className="min-w-4 rounded-full bg-danger px-1 py-0.5 text-center text-[10px] font-bold leading-none text-paper"
+                aria-label={`${mentions} unread mentions`}
+              >
+                {formatBadgeCount(mentions)}
+              </span>
+            )}
+          </span>
+        </button>
+      </div>
+    </ContextMenu>
+  );
+}
+
+/** One face for a 1:1, an overlapped few for a group. */
+function AvatarStack({
+  participants,
+}: {
+  participants: readonly PublicUser[];
+}) {
+  const shown = participants.slice(0, MAX_STACKED_AVATARS);
+  if (shown.length === 0) {
+    return (
+      <span className="h-6 w-6 shrink-0 rounded-full bg-ink-4" aria-hidden="true" />
+    );
+  }
+  return (
+    <span className="flex shrink-0 -space-x-2" aria-hidden="true">
+      {shown.map((person) =>
+        person.avatarUrl ? (
+          <img
+            key={person.id}
+            src={person.avatarUrl}
+            alt=""
+            loading="lazy"
+            referrerPolicy="no-referrer"
+            className="h-6 w-6 rounded-full object-cover ring-2 ring-channel"
+          />
+        ) : (
+          <span
+            key={person.id}
+            className="flex h-6 w-6 items-center justify-center rounded-full bg-ink-4 text-[10px] font-semibold text-paper ring-2 ring-channel"
+          >
+            {person.displayName.slice(0, 1).toUpperCase()}
+          </span>
+        ),
+      )}
+    </span>
+  );
+}

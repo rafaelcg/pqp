@@ -11,8 +11,12 @@
  * the fast path — the first activity frame can arrive before `/api/me` does.
  */
 
-import type { NotificationLevel, NotificationPreferences } from "@pqp/shared";
-import { channelRoutePath } from "@/lib/app-route";
+import type {
+  ChannelKind,
+  NotificationLevel,
+  NotificationPreferences,
+} from "@pqp/shared";
+import { channelRoutePath, conversationRoutePath } from "@/lib/app-route";
 import { getDesktop } from "@/lib/desktop";
 import { queuePreferenceSync } from "@/lib/preferences";
 
@@ -253,21 +257,67 @@ export function hasNotificationOverride(
  * currently looking at can still be titled and levelled. `channels` in app
  * state only ever holds the selected server's, and the activity frame carries
  * ids rather than names.
+ *
+ * Conversations go in the same directory rather than a second one. They are
+ * channels, they raise the same activity frames, and the whole notification
+ * path — levels, bursts, the dock badge — is keyed by channel id already; a
+ * parallel directory would be a second place for a mute to be forgotten.
  */
-const directory = new Map<string, { serverId: string; name: string }>();
+export interface ChannelDirectoryEntry {
+  /** Null for a conversation, which belongs to no server. */
+  serverId: string | null;
+  /**
+   * For a conversation this is the derived participant label, not a stored
+   * name — the caller resolves it, because a conversation has none.
+   */
+  name: string;
+  kind: ChannelKind;
+}
+
+const directory = new Map<string, ChannelDirectoryEntry>();
 
 export function rememberChannels(
-  channels: readonly { id: string; serverId: string; name: string }[],
+  channels: readonly {
+    id: string;
+    serverId: string | null;
+    name: string;
+    kind?: ChannelKind;
+  }[],
 ): void {
   for (const channel of channels) {
-    directory.set(channel.id, { serverId: channel.serverId, name: channel.name });
+    directory.set(channel.id, {
+      serverId: channel.serverId,
+      name: channel.name,
+      // An API that predates conversations sends no kind, and everything it can
+      // send is a server channel.
+      kind: channel.kind ?? "server",
+    });
   }
 }
 
 export function lookupChannel(
   channelId: string,
-): { serverId: string; name: string } | undefined {
+): ChannelDirectoryEntry | undefined {
   return directory.get(channelId);
+}
+
+/**
+ * Where clicking a notification should land.
+ *
+ * Reads the kind from the directory rather than from the activity record: which
+ * URL shape a channel has is a fact about the channel, and inferring it from a
+ * missing server id would send every not-yet-known channel to the conversation
+ * list — a place it is definitely not.
+ */
+export function activityRoutePath(
+  channelId: string,
+  serverId: string | null,
+): string {
+  const known = directory.get(channelId);
+  if (known && known.kind !== "server") {
+    return conversationRoutePath(channelId);
+  }
+  return serverId ? channelRoutePath(serverId, channelId) : "/app";
 }
 
 /**
@@ -299,7 +349,11 @@ export function describeActivity(
     channelId,
     serverId: known?.serverId ?? null,
     channelName: known?.name ?? null,
-    serverName: known ? (serverDirectory.get(known.serverId) ?? null) : null,
+    // A conversation has no server, so nothing to name it after — the title
+    // falls back to the participants, which is all a conversation ever has.
+    serverName: known?.serverId
+      ? (serverDirectory.get(known.serverId) ?? null)
+      : null,
     count: counts.count,
     mentions: counts.mentions,
   };
@@ -411,7 +465,15 @@ export function openNotificationTarget(path: string): void {
 
 function describe(burst: Burst): { title: string; body: string } {
   const { activity } = burst;
-  const channel = activity.channelName ? `#${activity.channelName}` : "New activity";
+  // `#` says "a channel in a server". A conversation's label is a person's
+  // name, and hashing it turns a message from Ana into one from #Ana.
+  const isConversation =
+    (directory.get(activity.channelId)?.kind ?? "server") !== "server";
+  const channel = activity.channelName
+    ? isConversation
+      ? activity.channelName
+      : `#${activity.channelName}`
+    : "New activity";
   const title = activity.serverName ? `${channel} — ${activity.serverName}` : channel;
   if (burst.mentions > 0) {
     const plural = burst.mentions === 1 ? "" : "s";
@@ -424,7 +486,7 @@ function describe(burst: Burst): { title: string; body: string } {
 function deliver(burst: Burst): void {
   const { title, body } = describe(burst);
   const { channelId, serverId } = burst.activity;
-  const path = serverId ? channelRoutePath(serverId, channelId) : "/app";
+  const path = activityRoutePath(channelId, serverId);
 
   const desktop = getDesktop();
   if (desktop?.notify) {

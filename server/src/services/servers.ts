@@ -1,6 +1,25 @@
-import { formatUserTag } from "@pqp/shared";
+import { formatUserTag, type ChannelKind } from "@pqp/shared";
 import { getPool, type DbChannel, type DbServer, type MemberRole } from "../db.js";
 import { deleteObject, isStorageConfigured } from "../lib/s3.js";
+import { channelVisibleSql } from "./users.js";
+
+/**
+ * A `channels` row as it actually comes back now that a channel need not belong
+ * to a server.
+ *
+ * Declared here rather than widening `DbChannel` in db.ts because every caller
+ * that reads `server_id` to route or to authorise has to be made to say what it
+ * does when there is no server — and the type is the only thing that will make
+ * it. `db.ts` still describes the pre-conversation shape; nothing outside this
+ * file reads a channel row directly.
+ */
+export type ChannelRow = Omit<DbChannel, "server_id"> & {
+  server_id: string | null;
+  kind: ChannelKind;
+};
+
+/** Every channel read selects the same columns, `kind` included. */
+const CHANNEL_COLUMNS = `id, server_id, name, type, position, is_private, kind, topic, image_url`;
 
 /**
  * How many attachment objects one channel or server delete will clean up.
@@ -102,7 +121,7 @@ export async function listServersForUser(userId: string): Promise<DbServer[]> {
 export async function createServer(
   name: string,
   ownerId: string,
-): Promise<{ server: DbServer; channels: DbChannel[] }> {
+): Promise<{ server: DbServer; channels: ChannelRow[] }> {
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");
@@ -119,11 +138,11 @@ export async function createServer(
       [server.id, ownerId],
     );
 
-    const channelsResult = await client.query<DbChannel>(
+    const channelsResult = await client.query<ChannelRow>(
       `INSERT INTO channels (server_id, name, type, position, is_private) VALUES
          ($1, 'general', 'text', 0, FALSE),
          ($1, 'Lobby', 'voice', 1, FALSE)
-       RETURNING id, server_id, name, type, position, is_private, topic, image_url`,
+       RETURNING ${CHANNEL_COLUMNS}`,
       [server.id],
     );
 
@@ -140,20 +159,14 @@ export async function createServer(
 export async function listChannels(
   serverId: string,
   userId: string,
-): Promise<DbChannel[]> {
-  const result = await getPool().query<DbChannel>(
-    `SELECT c.id, c.server_id, c.name, c.type, c.position, c.is_private, c.topic, c.image_url
+): Promise<ChannelRow[]> {
+  const result = await getPool().query<ChannelRow>(
+    `SELECT c.id, c.server_id, c.name, c.type, c.position, c.is_private, c.kind,
+            c.topic, c.image_url
      FROM channels c
      JOIN server_members sm ON sm.server_id = c.server_id
      WHERE c.server_id = $1 AND sm.user_id = $2
-       AND (
-         c.is_private = FALSE
-         OR sm.role IN ('owner', 'admin')
-         OR EXISTS (
-           SELECT 1 FROM channel_members cm
-           WHERE cm.channel_id = c.id AND cm.user_id = $2
-         )
-       )
+       AND ${channelVisibleSql("$2")}
      ORDER BY c.position ASC`,
     [serverId, userId],
   );
@@ -165,17 +178,17 @@ export async function createChannel(
   name: string,
   type: "text" | "voice",
   isPrivate = false,
-): Promise<DbChannel> {
+): Promise<ChannelRow> {
   const positionResult = await getPool().query<{ max: number | null }>(
     `SELECT MAX(position) as max FROM channels WHERE server_id = $1`,
     [serverId],
   );
   const position = (positionResult.rows[0]?.max ?? -1) + 1;
 
-  const result = await getPool().query<DbChannel>(
+  const result = await getPool().query<ChannelRow>(
     `INSERT INTO channels (server_id, name, type, position, is_private)
      VALUES ($1, $2, $3, $4, $5)
-     RETURNING id, server_id, name, type, position, is_private, topic, image_url`,
+     RETURNING ${CHANNEL_COLUMNS}`,
     [serverId, name, type, position, isPrivate],
   );
   return result.rows[0]!;
@@ -189,15 +202,15 @@ export async function updateChannel(
     topic?: string | null;
     imageUrl?: string | null;
   },
-): Promise<DbChannel | null> {
-  const result = await getPool().query<DbChannel>(
+): Promise<ChannelRow | null> {
+  const result = await getPool().query<ChannelRow>(
     `UPDATE channels SET
        name = COALESCE($2, name),
        is_private = COALESCE($3, is_private),
        topic = CASE WHEN $4::boolean THEN $5 ELSE topic END,
        image_url = CASE WHEN $6::boolean THEN $7 ELSE image_url END
      WHERE id = $1
-     RETURNING id, server_id, name, type, position, is_private, topic, image_url`,
+     RETURNING ${CHANNEL_COLUMNS}`,
     [
       channelId,
       updates.name ?? null,
@@ -302,26 +315,48 @@ export async function transferOwnership(
   }
 }
 
+export interface ChannelAudience {
+  /** Null for a conversation, which belongs to no server. */
+  serverId: string | null;
+  kind: ChannelKind;
+  userIds: string[];
+}
+
 /**
- * Every user who is allowed to see a channel, with the owning server id. Used to
- * decide who gets an unread notification for a new message.
+ * Every user who is allowed to see a channel. Used to decide who gets an unread
+ * notification, and who sees a voice roster.
+ *
+ * Two branches because the two kinds draw their candidates from different
+ * tables, not merely filter them differently: a server channel's candidates are
+ * the server's members, and a conversation's are its participants. The first
+ * branch is the set-returning form of `channelVisibleSql` and interpolates that
+ * same fragment, so it cannot drift from `canAccessChannel`. The second is the
+ * set-returning form of the conversation branch — `channel_members` and nothing
+ * else, with no role that overrides it.
+ *
+ * `c.kind <> 'server'` on the second branch is what keeps a private server
+ * channel from being answered twice, and more importantly keeps the second
+ * branch from ever being the reason somebody can see a server channel: there,
+ * `channel_members` is only meaningful in combination with server membership.
  */
 export async function getChannelAudience(
   channelId: string,
-): Promise<{ serverId: string; userIds: string[] } | null> {
-  const result = await getPool().query<{ server_id: string; user_id: string }>(
-    `SELECT c.server_id, sm.user_id
+): Promise<ChannelAudience | null> {
+  const result = await getPool().query<{
+    server_id: string | null;
+    kind: ChannelKind;
+    user_id: string;
+  }>(
+    `SELECT c.server_id, c.kind, sm.user_id
      FROM channels c
      JOIN server_members sm ON sm.server_id = c.server_id
      WHERE c.id = $1
-       AND (
-         c.is_private = FALSE
-         OR sm.role IN ('owner', 'admin')
-         OR EXISTS (
-           SELECT 1 FROM channel_members cm
-           WHERE cm.channel_id = c.id AND cm.user_id = sm.user_id
-         )
-       )`,
+       AND ${channelVisibleSql("sm.user_id")}
+     UNION
+     SELECT c.server_id, c.kind, cm.user_id
+     FROM channels c
+     JOIN channel_members cm ON cm.channel_id = c.id
+     WHERE c.id = $1 AND c.kind <> 'server'`,
     [channelId],
   );
 
@@ -331,6 +366,7 @@ export async function getChannelAudience(
   }
   return {
     serverId: first.server_id,
+    kind: first.kind,
     userIds: result.rows.map((row) => row.user_id),
   };
 }
@@ -346,9 +382,9 @@ export async function listServerChannelIds(
   return new Set(result.rows.map((row) => row.id));
 }
 
-export async function getChannel(channelId: string): Promise<DbChannel | null> {
-  const result = await getPool().query<DbChannel>(
-    `SELECT id, server_id, name, type, position, is_private, topic, image_url FROM channels WHERE id = $1`,
+export async function getChannel(channelId: string): Promise<ChannelRow | null> {
+  const result = await getPool().query<ChannelRow>(
+    `SELECT ${CHANNEL_COLUMNS} FROM channels WHERE id = $1`,
     [channelId],
   );
   return result.rows[0] ?? null;
@@ -399,10 +435,11 @@ export async function listChannelMembers(channelId: string) {
   }));
 }
 
-export function mapChannel(c: DbChannel) {
+export function mapChannel(c: ChannelRow) {
   return {
     id: c.id,
     serverId: c.server_id,
+    kind: c.kind,
     name: c.name,
     type: c.type,
     position: c.position,

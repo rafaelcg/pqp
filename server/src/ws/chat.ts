@@ -12,8 +12,10 @@ import {
   mapMessage,
 } from "../services/messages.js";
 import { getMessageChannelId, toggleReaction } from "../services/reactions.js";
+import { listBlockersOf } from "../services/blocks.js";
+import { isDmSendBlocked, restoreDmParticipants } from "../services/dms.js";
 import { getChannelAudience } from "../services/servers.js";
-import { isChannelMember } from "../services/users.js";
+import { canAccessChannel } from "../services/users.js";
 import { forEachAuthenticatedSocket } from "./sockets.js";
 
 interface ChatConnection {
@@ -181,7 +183,10 @@ async function notifyChannelActivity(
   body: string,
   repliedToUserId?: string | null,
 ): Promise<void> {
-  const audience = await getChannelAudience(channelId);
+  const [audience, blockers] = await Promise.all([
+    getChannelAudience(channelId),
+    listBlockersOf(authorId),
+  ]);
   if (!audience) {
     return;
   }
@@ -196,13 +201,23 @@ async function notifyChannelActivity(
     if (!allowed.has(user.id)) {
       return;
     }
+    // Somebody who blocked this author gets no badge from them. The message is
+    // still delivered and still readable behind the client's curtain — what a
+    // block takes away is the notification, which is the part that reaches you
+    // whether you were looking or not.
+    if (blockers.has(user.id)) {
+      return;
+    }
     if (connections.get(socket)?.channelId === channelId) {
       return;
     }
     socket.send(
       encode({
         type: "channel-activity",
+        // Null for a conversation. Guessing a server here would file a private
+        // conversation's badge into a public sidebar.
         serverId: audience.serverId,
+        kind: audience.kind,
         channelId,
         // Being answered is a mention here for the same reason it is one in
         // `message_mentions`: otherwise the live badge and the badge you get
@@ -228,7 +243,7 @@ export async function handleChatMessage(
   const payload = message.data;
 
   if (payload.type === "join-channel") {
-    if (!(await isChannelMember(payload.channelId, conn.user.id))) {
+    if (!(await canAccessChannel(payload.channelId, conn.user.id))) {
       return;
     }
     leaveChannel(conn);
@@ -250,6 +265,15 @@ export async function handleChatMessage(
       return;
     }
     if (!typingLimiter.take(conn.user.id)) {
+      return;
+    }
+    // A block closes a 1:1 in both directions, and "X is typing…" is a
+    // notification like any other — without this, a blocked person can park an
+    // indicator in the blocker's open conversation indefinitely, and the client
+    // does not filter it either. Deliberately placed *after* the limiter, which
+    // already bounds this to roughly one query per second per user, so the
+    // hottest ephemeral path does not become a per-keystroke database read.
+    if (await isDmSendBlocked(payload.channelId, conn.user.id)) {
       return;
     }
     // Membership was proven at join-channel time and revocation evicts the
@@ -277,13 +301,36 @@ export async function handleChatMessage(
     if (!messageLimiter.take(conn.user.id)) {
       return;
     }
-    if (!(await isChannelMember(payload.channelId, conn.user.id))) {
+    if (!(await canAccessChannel(payload.channelId, conn.user.id))) {
+      return;
+    }
+    // A block closes a 1:1 in both directions. Dropped rather than answered,
+    // because a WS frame has no status code — gap #20's message-rejected path
+    // is what will eventually let the sender be told.
+    if (await isDmSendBlocked(payload.channelId, conn.user.id)) {
       return;
     }
 
     if (!conn.channelId) {
       conn.channelId = payload.channelId;
     }
+
+    // A 1:1 the recipient had closed comes back when something is said in it.
+    // Without this the message lands in a channel they are no longer a member
+    // of, so they are not in its audience, get no badge, and never learn it
+    // exists — closing a conversation would silently swallow the next one.
+    // A no-op for every channel that is not a 1:1.
+    //
+    // Ordering is load-bearing: this must run *before* `createMessage`, because
+    // `recordMentions` resolves a conversation's mentionable set through
+    // `channel_members`. Restoring afterwards leaves the recipient missing from
+    // that set for their own message, so an @-mention into a conversation they
+    // had closed records no row — the live badge says "mention" and the badge
+    // after a refresh says none, the exact disagreement the reply-mention
+    // comment in `messages.ts` exists to prevent. It runs after the block guard
+    // so a blocked sender cannot use it to put the conversation back in the
+    // blocker's list.
+    await restoreDmParticipants(payload.channelId);
 
     let parent = null;
     if (payload.replyToId) {
@@ -336,7 +383,14 @@ export async function handleChatMessage(
     if (!reactionLimiter.take(conn.user.id)) {
       return;
     }
-    if (!(await isChannelMember(payload.channelId, conn.user.id))) {
+    if (!(await canAccessChannel(payload.channelId, conn.user.id))) {
+      return;
+    }
+    // A reaction is a persistent, visible poke at somebody else's message, so
+    // it is closed by the same block that closes sending — and by the same
+    // guard that closes typing. Every path that puts something of the sender's
+    // in front of the blocker goes through here.
+    if (await isDmSendBlocked(payload.channelId, conn.user.id)) {
       return;
     }
 

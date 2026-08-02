@@ -1,4 +1,4 @@
-import { Plus, UserPlus } from "lucide-react";
+import { MessageCircle, Plus, UserPlus } from "lucide-react";
 import type { Channel, Server } from "@pqp/shared";
 import {
   formatBadgeCount,
@@ -21,6 +21,11 @@ interface ServerRailProps {
   selectedServerId: string | null;
   unread: Record<string, UnreadState>;
   channels: Channel[];
+  /** True while the conversation view is what the sidebar is showing. */
+  homeSelected: boolean;
+  /** Unread across every conversation, which has no server icon to land on. */
+  homeUnread: UnreadState;
+  onSelectHome: () => void;
   onSelectServer: (serverId: string) => void;
   onCreateServer: () => void;
   onJoinServer: () => void;
@@ -35,6 +40,9 @@ export function ServerRail({
   selectedServerId,
   unread,
   channels,
+  homeSelected,
+  homeUnread,
+  onSelectHome,
   onSelectServer,
   onCreateServer,
   onJoinServer,
@@ -65,6 +73,49 @@ export function ServerRail({
 
   return (
     <nav className="flex h-full w-[72px] shrink-0 flex-col items-center gap-2 overflow-y-auto border-r border-ink-4/40 bg-rail py-3">
+      {/* Above the servers, and separated from them: conversations belong to no
+          server, so putting Home in the list would read as one more of them. */}
+      <button
+        type="button"
+        onClick={onSelectHome}
+        title="Direct messages"
+        aria-label="Direct messages"
+        aria-current={homeSelected ? "page" : undefined}
+        className={cn(
+          "relative flex h-12 w-12 items-center justify-center rounded-2xl transition-all duration-200 hover:rounded-xl",
+          homeSelected
+            ? "rounded-xl bg-signal text-ink"
+            : "bg-ink-3 text-paper hover:bg-signal hover:text-ink",
+        )}
+      >
+        {homeSelected && (
+          <span className="absolute -left-3 h-8 w-1 rounded-r bg-signal" />
+        )}
+        <MessageCircle className="h-5 w-5" />
+        {homeUnread.count > 0 && homeUnread.mentions === 0 && (
+          <span
+            aria-hidden="true"
+            className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-paper ring-2 ring-rail"
+          />
+        )}
+        {homeUnread.mentions > 0 && (
+          <span className="absolute -bottom-0.5 -right-0.5 min-w-[1.15rem] rounded-full bg-danger px-1 py-0.5 text-[10px] font-bold leading-none text-paper ring-2 ring-rail">
+            {formatBadgeCount(homeUnread.mentions)}
+          </span>
+        )}
+        {homeUnread.count > 0 && (
+          <span className="sr-only">
+            {homeUnread.mentions > 0
+              ? `${homeUnread.mentions} unread mentions`
+              : "unread messages"}
+          </span>
+        )}
+      </button>
+      <span
+        aria-hidden="true"
+        className="h-px w-8 shrink-0 rounded-full bg-ink-4/70"
+      />
+
       {servers.map((server) => {
         const selected = selectedServerId === server.id;
         const totals = selected ? selectedTotals : null;

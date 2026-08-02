@@ -46,9 +46,9 @@ They cost days, not weeks.
 | 14 | Channel categories and drag-to-reorder | server-structure | high | medium |
 | 15 | Camera video in voice channels | video | medium | medium |
 | 16 | Keyboard access to message actions and a screen-reader-visible message log | accessibility | medium | small |
-| 17 | Find people by handle, and stop re-rolling their tag | identity | high | small |
-| 18 | Direct messages (1:1) | messaging | critical | large |
-| 19 | Blocking and DM privacy controls | safety | high | medium |
+| 17 | ✅ Find people by handle, and stop re-rolling their tag | identity | high | small |
+| 18 | ✅ Direct messages (1:1 and group) | messaging | critical | large |
+| 19 | ✅ Blocking and DM privacy controls | safety | high | medium |
 | 20 | Timeouts, slow mode, and a real message-rejected path | moderation | medium | medium |
 | 21 | Audit log | moderation | medium | medium |
 | 22 | Real permission system: roles with bitfields and per-channel overwrites | permissions | high | large |

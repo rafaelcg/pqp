@@ -100,6 +100,19 @@ test.describe("stage 2 — light and system", () => {
     expect(await themeAttr(page)).toBe("light");
 
     // And the paint matches: no dark frame slipped through.
+    //
+    // Wait for the sheet to actually be applied rather than assuming the
+    // readyState above implies it. These tests run against the Vite DEV server,
+    // which injects CSS from the module graph — so styles land whenever the
+    // bundle finishes executing, not when the document finishes parsing, and a
+    // transparent body here means "no CSS yet" rather than "wrong colour".
+    // Growing the client bundle is enough to lose that race on a cold runner.
+    // The before-paint guarantee is asserted above on `data-theme`, which the
+    // head script sets synchronously; this half is only checking that body is
+    // painted from the themed token.
+    await page.waitForFunction(
+      () => getComputedStyle(document.body).backgroundColor !== "rgba(0, 0, 0, 0)",
+    );
     const background = await computed(page, "body", "background-color");
     const surface = await page.evaluate(() => {
       const probe = document.createElement("div");

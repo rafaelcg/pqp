@@ -152,13 +152,30 @@ export function useNotificationSettings(): NotificationSettings {
 }
 
 export interface ChannelNotificationsInput {
-  channels: readonly Channel[];
+  /**
+   * Everything with a channel id worth naming — the open server's channels and
+   * every conversation. Structural rather than `Channel[]` so a conversation,
+   * whose label is derived from its participants rather than stored, can be
+   * described without first being dressed up as a channel row.
+   */
+  channels: readonly {
+    id: string;
+    serverId: string | null;
+    name: string;
+    kind?: Channel["kind"];
+  }[];
   unread: Readonly<Record<string, UnreadCounts>>;
 }
 
 /**
  * Keeps the notification directory current, routes notification clicks, and
  * drives the dock badge off the unread map.
+ *
+ * Lives in the app shell rather than in a sidebar. It used to be called from
+ * the channel list, which unmounts whenever that list is replaced — by the
+ * conversation view, for instance — taking the badge and the click handler with
+ * it. Anything mounted for the whole session works; anything else is a badge
+ * that disappears when you change what you are looking at.
  *
  * Deliberately *not* where notifications fire. Diffing the unread map looks
  * equivalent and is not: the map also fills in bulk from `loadUnread` the first
