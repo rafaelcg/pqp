@@ -48,6 +48,7 @@
 | Deep links / shareable URLs | Done (`/app/server/<id>/channel/<id>`, `/app/invite/<code>`) |
 | Dev auth bypass | Done (agent testing) |
 | Per-server message retention policy | Done (owner-configurable window, daily sweep, pinned messages exempt — `servers.message_retention_days`) |
+| Per-server data export | Done (owner-only JSON download of channels/members/messages, capped at 50k messages, audit-logged) |
 
 ## Product roadmap
 
@@ -73,7 +74,7 @@ Two subsystems landed alongside those features and shape what comes next:
 
 Working through the remaining gap list now (2026-08-03), mobile PWA (#9) deliberately last so
 its scope reflects the full feature surface built before it. Next up, in rough order:
-**data export**, **incoming webhooks** (#23, Discord wire-compatible), **screen share** (#11),
+**incoming webhooks** (#23, Discord wire-compatible), **screen share** (#11),
 **SSO/SAML readiness**, and a **public status page** — then mobile PWA.
 
 ## Still open (operational)

@@ -66,6 +66,7 @@ import {
 import { clientAddress, createRateLimiter } from "../lib/rate-limit.js";
 import { createRouter, type RequestContext } from "../lib/router.js";
 import { listAuditLog, logAudit } from "../services/audit.js";
+import { buildServerExport } from "../services/export.js";
 import {
   extractFirstUrl,
   getEmbedCacheState,
@@ -232,6 +233,13 @@ const userSearchLimiter = createRateLimiter({
   capacity: 15,
   refillPerSecond: 0.5,
 });
+/**
+ * A full server export walks every message the server has, up to the cap in
+ * `export.ts` — the single most expensive read this API serves on demand.
+ * A small burst covers a retry after a dropped connection; the slow refill
+ * is what stops it from being repeatable enough to matter as a scrape.
+ */
+const exportLimiter = createRateLimiter({ capacity: 3, refillPerSecond: 0.02 });
 
 export function resetApiRateLimits(): void {
   apiLimiter.reset();
@@ -241,6 +249,7 @@ export function resetApiRateLimits(): void {
   searchLimiter.reset();
   uploadLimiter.reset();
   userSearchLimiter.reset();
+  exportLimiter.reset();
 }
 
 class Forbidden extends HttpError {
@@ -256,6 +265,21 @@ class Created {
 
 function created(body: unknown): Created {
   return new Created(body);
+}
+
+/**
+ * Wrap a handler result to send raw bytes with the given content type
+ * instead of the usual JSON envelope every other route answers with — a
+ * file download rather than API data. Goes through the same router, the
+ * same auth, and the same rate limiting as any other route; only the final
+ * `sendJson` is skipped.
+ */
+class RawResponse {
+  constructor(
+    readonly body: Buffer | string,
+    readonly contentType: string,
+    readonly filename?: string,
+  ) {}
 }
 
 class NotFound extends HttpError {
@@ -1477,6 +1501,52 @@ router.get(
   },
 );
 
+/** Strips everything but the characters a filename and a quoted
+ * `Content-Disposition` value both tolerate — the server name is fully
+ * user-controlled, and the alternative is trusting it inside a header. */
+function sanitizeFilenameSegment(value: string): string {
+  return value.replace(/[^a-zA-Z0-9 _-]/g, "").trim() || "server";
+}
+
+/**
+ * Owner-only, like delete — a full export is as sensitive as destroying the
+ * server: every private channel, every member, every message body. Logged
+ * to the audit trail specifically because it is a read that matters (see
+ * the comment on `server.data_export`), not despite being one.
+ */
+router.get(
+  "/api/servers/:serverId/export",
+  async ({ user, res }, { serverId }) => {
+    await requireOwner(serverId!, user.id);
+
+    const key = `user:${user.id}`;
+    if (!exportLimiter.take(key)) {
+      res.setHeader("Retry-After", String(exportLimiter.retryAfter(key)));
+      throw new HttpError(429, "Slow down");
+    }
+
+    const data = await buildServerExport(serverId!);
+    if (!data) {
+      throw new NotFound("Server not found");
+    }
+
+    await logAudit({
+      serverId: serverId!,
+      actorId: user.id,
+      action: "server.data_export",
+      targetType: "server",
+      targetId: serverId!,
+    });
+
+    const filename = `${sanitizeFilenameSegment(data.server.name)}-export-${data.exportedAt.slice(0, 10)}.json`;
+    return new RawResponse(
+      JSON.stringify(data, null, 2),
+      "application/json",
+      filename,
+    );
+  },
+);
+
 // ---------------------------------------------------------------- invites
 
 router.get("/api/servers/:serverId/invites", async ({ user }, { serverId }) => {
@@ -1658,6 +1728,16 @@ export async function handleApi(
     const result = await matched.handler(ctx, matched.params);
     if (result instanceof Created) {
       sendJson(res, 201, result.body, req);
+      return;
+    }
+    if (result instanceof RawResponse) {
+      res.writeHead(200, {
+        "content-type": result.contentType,
+        ...(result.filename
+          ? { "content-disposition": `attachment; filename="${result.filename}"` }
+          : {}),
+      });
+      res.end(result.body);
       return;
     }
     sendJson(res, 200, result, req);
