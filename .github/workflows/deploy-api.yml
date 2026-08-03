@@ -22,7 +22,9 @@ jobs:
   deploy:
     name: Build & deploy Railway
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # Comfortably past the verification poll below, so a stuck deploy fails with
+    # that step's message rather than being killed by the job timeout.
+    timeout-minutes: 30
     if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main') }}
     permissions:
       contents: read
@@ -61,11 +63,18 @@ jobs:
           railway variable set APP_VERSION="${{ steps.commit.outputs.sha }}" \
             --service api --skip-deploys
 
+      # --detach, not --ci. A project token cannot read build logs, so --ci
+      # uploads and starts the build correctly and then exits 1 on "Failed to
+      # retrieve build log" — a green build reported as a red job, with the
+      # verification step below skipped. Detaching makes that check the gate,
+      # which is what we actually want to gate on: whether the running process
+      # serves this commit, not whether a log stream was readable. The build log
+      # URL is printed above either way.
       - name: Deploy
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
-          railway up --service api --ci \
+          railway up --service api --detach \
             -m "CI ${{ steps.commit.outputs.sha }}"
 
       # A green deploy step only means the platform accepted the build. Assert
@@ -80,7 +89,10 @@ jobs:
             echo "::warning::VITE_API_URL is not set, skipping the deployed-commit check"
             exit 0
           fi
-          for attempt in $(seq 1 30); do
+          # Wide enough to cover a cold Docker build of the whole workspace
+          # (~5-10 min) plus the container swap, since --detach returns as soon
+          # as the upload lands rather than when the build finishes.
+          for attempt in $(seq 1 80); do
             body=$(curl -fsS --max-time 10 "$API_URL/health" || echo '{}')
             got=$(printf '%s' "$body" | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')
             if [ "$got" = "$EXPECTED" ]; then
@@ -88,7 +100,7 @@ jobs:
               exit 0
             fi
             echo "attempt $attempt: serving '${got:-unknown}', want '$EXPECTED'"
-            sleep 10
+            sleep 15
           done
           echo "::error::API never reported the deployed commit. It is probably still serving the previous build."
           exit 1
