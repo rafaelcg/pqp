@@ -1,11 +1,15 @@
 import { z } from "zod";
 
 /**
- * Every mutation the audit log records. Deliberately not `server.delete` —
- * that row would cascade away with the server it describes the instant it
- * was written (`audit_log.server_id` is `ON DELETE CASCADE`), and nobody can
- * open `GET /api/servers/:serverId/audit-log` for a server that no longer
- * exists to read it back anyway.
+ * Every mutation the audit log records, plus one deliberate exception:
+ * `server.data_export` logs a *read* — a full data export is sensitive
+ * enough (every private channel, every member) that "who pulled this and
+ * when" belongs in the same trail as "who deleted that," even though
+ * nothing changed. Deliberately not `server.delete` — that row would
+ * cascade away with the server it describes the instant it was written
+ * (`audit_log.server_id` is `ON DELETE CASCADE`), and nobody can open
+ * `GET /api/servers/:serverId/audit-log` for a server that no longer exists
+ * to read it back anyway.
  */
 export const AUDIT_ACTIONS = [
   "member.kick",
@@ -20,6 +24,7 @@ export const AUDIT_ACTIONS = [
   "server.update",
   "server.retention_update",
   "server.ownership_transfer",
+  "server.data_export",
   "invite.create",
   "invite.delete",
 ] as const;

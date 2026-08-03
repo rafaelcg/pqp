@@ -283,6 +283,28 @@ export const updateServer = (
 export const deleteServer = (serverId: string) =>
   del<{ ok: boolean }>(`/api/servers/${serverId}`);
 
+/**
+ * The one response this file hands back as a `Blob` instead of parsed JSON —
+ * it is a file the browser is about to save, not data the app reads. Goes
+ * through the same auth/retry path as `apiFetch` (via `request`), just
+ * without the "parse it as JSON" step at the end.
+ */
+export async function exportServerData(serverId: string): Promise<Blob> {
+  const token = await tokenProvider();
+  let response = await request(`/api/servers/${serverId}/export`, {}, token);
+  if (response.status === 401) {
+    const refreshed = await tokenProvider({ forceRefresh: true });
+    if (refreshed) {
+      response = await request(`/api/servers/${serverId}/export`, {}, refreshed);
+    }
+  }
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as { error?: string };
+    throw new ApiError(response.status, body.error ?? "Export failed");
+  }
+  return response.blob();
+}
+
 export const leaveServer = (serverId: string) =>
   post<{ ok: boolean }>(`/api/servers/${serverId}/leave`);
 

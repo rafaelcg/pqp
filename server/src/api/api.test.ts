@@ -3341,6 +3341,87 @@ describeDb("API authorization", () => {
     });
   });
 
+  describe("data export", () => {
+    it("requires the owner, refusing an admin", async () => {
+      const { serverId } = await makeServer();
+      const res = await call(admin, "GET", `/api/servers/${serverId}/export`);
+      expect(res.status).toBe(403);
+    });
+
+    it("exports server info, channels, members, and messages", async () => {
+      const { serverId, textChannelId } = await makeServer();
+      await getPool().query(
+        `INSERT INTO messages (channel_id, author_id, body) VALUES ($1, $2, 'hello')`,
+        [textChannelId, owner.id],
+      );
+
+      const res = await call<{
+        server: { id: string; name: string };
+        channels: Array<{ id: string }>;
+        members: Array<{ role: string }>;
+        messages: Array<{ body: string }>;
+        truncated: boolean;
+      }>(owner, "GET", `/api/servers/${serverId}/export`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.server.id).toBe(serverId);
+      expect(res.body.channels.some((c) => c.id === textChannelId)).toBe(true);
+      expect(res.body.members.some((m) => m.role === "owner")).toBe(true);
+      expect(res.body.messages).toMatchObject([{ body: "hello" }]);
+      expect(res.body.truncated).toBe(false);
+    });
+
+    it("sets a Content-Disposition attachment header with a sanitized filename", async () => {
+      const created = await call<{ server: { id: string } }>(
+        owner,
+        "POST",
+        "/api/servers",
+        { name: 'Weird "Name" / Server' },
+      );
+      const serverId = created.body.server.id;
+
+      actor = owner;
+      const res = await fetch(`${baseUrl}/api/servers/${serverId}/export`, {
+        headers: { Authorization: "Bearer test" },
+      });
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toBe("application/json");
+      const disposition = res.headers.get("content-disposition") ?? "";
+      expect(disposition).toContain("attachment; filename=");
+      // No quote, slash, or other header-breaking character survived from
+      // the server's own (fully user-controlled) name.
+      expect(disposition).not.toContain('"Name"');
+      expect(disposition).not.toContain("/");
+    });
+
+    it("logs the export to the audit log", async () => {
+      const { serverId } = await makeServer();
+      await call(owner, "GET", `/api/servers/${serverId}/export`);
+
+      const log = await call<{ entries: Array<{ action: string }> }>(
+        owner,
+        "GET",
+        `/api/servers/${serverId}/audit-log`,
+      );
+      expect(log.body.entries[0]).toMatchObject({
+        action: "server.data_export",
+        actorId: owner.id,
+      });
+    });
+
+    it("rate limits repeated exports", async () => {
+      const { serverId } = await makeServer();
+      const statuses: number[] = [];
+      for (let i = 0; i < 4; i++) {
+        statuses.push(
+          (await call(owner, "GET", `/api/servers/${serverId}/export`)).status,
+        );
+      }
+      expect(statuses.slice(0, 3)).toEqual([200, 200, 200]);
+      expect(statuses[3]).toBe(429);
+    });
+  });
+
   describe("request hygiene", () => {
     it("answers 404 for a malformed id rather than surfacing a database error", async () => {
       const res = await call(owner, "GET", "/api/servers/not-a-uuid/channels");

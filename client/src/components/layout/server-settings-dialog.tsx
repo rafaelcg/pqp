@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import {
   ApiError,
   deleteServer,
+  exportServerData,
   fetchAuditLog,
   fetchMembers,
   updateServer,
@@ -29,6 +30,7 @@ const AUDIT_ACTION_LABELS: Record<string, string> = {
   "server.update": "renamed the server",
   "server.retention_update": "changed message retention",
   "server.ownership_transfer": "transferred ownership",
+  "server.data_export": "exported the server's data",
   "invite.create": "created an invite",
   "invite.delete": "revoked an invite",
 };
@@ -195,6 +197,9 @@ export function ServerSettingsDialog({
   const [retentionSaved, setRetentionSaved] = useState(false);
   const [savingRetention, setSavingRetention] = useState(false);
 
+  const [exportError, setExportError] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
+
   const serverId = server?.id ?? null;
   const isOwner = server?.role === "owner";
   const isManager = isOwner || server?.role === "admin";
@@ -223,6 +228,7 @@ export function ServerSettingsDialog({
     setRetentionDays(retentionRef.current);
     setRetentionError(null);
     setRetentionSaved(false);
+    setExportError(null);
   }, [open, serverId]);
 
   useEffect(() => {
@@ -280,6 +286,29 @@ export function ServerSettingsDialog({
       setRetentionError(messageOf(err, "Failed to update retention"));
     } finally {
       setSavingRetention(false);
+    }
+  }
+
+  async function exportData() {
+    if (!serverId) {
+      return;
+    }
+    setExporting(true);
+    setExportError(null);
+    try {
+      const blob = await exportServerData(serverId);
+      // Same download mechanism a real file link uses — a Blob has no URL of
+      // its own, so one is minted just long enough for the click to fire.
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${server?.name ?? "server"}-export-${new Date().toISOString().slice(0, 10)}.json`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setExportError(messageOf(err, "Failed to export data"));
+    } finally {
+      setExporting(false);
     }
   }
 
@@ -508,6 +537,29 @@ export function ServerSettingsDialog({
           {transferError && (
             <p role="alert" className="text-sm text-danger">
               {transferError}
+            </p>
+          )}
+        </section>
+
+        <section className="space-y-2 border-t border-ink-4 pt-5">
+          <h3 className="font-display text-sm font-bold uppercase tracking-wider text-paper-muted">
+            Export data
+          </h3>
+          <p className="text-sm text-paper-muted">
+            Download every channel, member, and message in {server.name} as a
+            JSON file. Attachment bytes are not included — only their
+            filenames and sizes.
+          </p>
+          <Button
+            variant="secondary"
+            disabled={exporting}
+            onClick={() => void exportData()}
+          >
+            {exporting ? "Preparing export…" : "Export server data"}
+          </Button>
+          {exportError && (
+            <p role="alert" className="text-sm text-danger">
+              {exportError}
             </p>
           )}
         </section>
