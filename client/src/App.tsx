@@ -22,6 +22,7 @@ import { ChannelMetaDialog } from "@/components/layout/channel-meta-dialog";
 import { DmList } from "@/components/layout/dm-list";
 import { InvitePanel } from "@/components/layout/invite-panel";
 import { MembersPanel } from "@/components/layout/members-panel";
+import { PinnedMessagesPanel } from "@/components/chat/pinned-messages-panel";
 import { ServerRail } from "@/components/layout/server-rail";
 import { NewDmDialog } from "@/components/user/new-dm-dialog";
 import { ServerSettingsDialog } from "@/components/layout/server-settings-dialog";
@@ -235,6 +236,7 @@ function MainAppContent({
   const [inviteMode, setInviteMode] = useState<"create" | "join" | null>(null);
   const [inviteCodeFromUrl, setInviteCodeFromUrl] = useState<string | null>(null);
   const [membersOpen, setMembersOpen] = useState(false);
+  const [pinsOpen, setPinsOpen] = useState(false);
   const [channelMembersChannel, setChannelMembersChannel] =
     useState<Channel | null>(null);
   const [channelPrompt, setChannelPrompt] = useState<ChannelPromptState | null>(
@@ -1486,6 +1488,13 @@ function MainAppContent({
           </p>
         </div>
         <div className="ml-auto flex items-center gap-2">
+          <button
+            type="button"
+            className="rounded-md px-2 py-1 text-xs text-signal hover:bg-ink-3"
+            onClick={() => setPinsOpen(true)}
+          >
+            Pins
+          </button>
           {canManage && (
             <button
               type="button"
@@ -1532,6 +1541,8 @@ function MainAppContent({
         onJumpToPresent={jumpToPresent}
         onEditMessage={(messageId, body) => chat.editMessage(messageId, body)}
         onDeleteMessage={(messageId) => chat.deleteMessage(messageId)}
+        onPinMessage={(messageId) => chat.pinMessage(messageId)}
+        onUnpinMessage={(messageId) => chat.unpinMessage(messageId)}
         onRetryMessage={(nonce) => chat.retryMessage(nonce)}
         onDiscardMessage={(nonce) => chat.discardMessage(nonce)}
       />
@@ -1922,6 +1933,18 @@ function MainAppContent({
         channelName={channelMembersChannel?.name ?? null}
         serverId={selectedServerId}
         onClose={() => setChannelMembersChannel(null)}
+      />
+
+      <PinnedMessagesPanel
+        open={pinsOpen}
+        channelId={selectedChannel?.id ?? null}
+        channelName={selectedChannel?.name ?? null}
+        // Mirrors MessageList's own gate: a server channel needs manage
+        // permission, a conversation has no moderators so any participant may
+        // unpin — the same split `requirePinAccess` enforces server-side.
+        canUnpin={selectedServerId ? !!canManage : true}
+        onClose={() => setPinsOpen(false)}
+        onJumpToMessage={(messageId) => void jumpToMessage(messageId)}
       />
 
       <PromptDialog

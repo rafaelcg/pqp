@@ -6,6 +6,7 @@ import {
   ImagePlay,
   Loader2,
   Pencil,
+  Pin,
   Play,
   Reply,
   SmilePlus,
@@ -96,6 +97,8 @@ interface MessageListProps {
   onRetryMessage?: (nonce: string) => void;
   onDiscardMessage?: (nonce: string) => void;
   onReplyTo?: (message: ChatMessage) => void;
+  onPinMessage?: (messageId: string) => Promise<void>;
+  onUnpinMessage?: (messageId: string) => Promise<void>;
 }
 
 interface Row {
@@ -152,6 +155,8 @@ export function MessageList({
   onRetryMessage,
   onDiscardMessage,
   onReplyTo,
+  onPinMessage,
+  onUnpinMessage,
 }: MessageListProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -568,6 +573,16 @@ export function MessageList({
                   ? () => void onDeleteMessage(row.message.id)
                   : undefined
               }
+              onPin={
+                onPinMessage
+                  ? () => void onPinMessage(row.message.id)
+                  : undefined
+              }
+              onUnpin={
+                onUnpinMessage
+                  ? () => void onUnpinMessage(row.message.id)
+                  : undefined
+              }
               onToggleReaction={onToggleReaction}
               onRetry={() =>
                 row.message.nonce && onRetryMessage?.(row.message.nonce)
@@ -755,6 +770,8 @@ interface MessageRowProps {
   onCancelEdit: () => void;
   onSubmitEdit: (body: string) => Promise<void>;
   onDelete?: () => void;
+  onPin?: () => void;
+  onUnpin?: () => void;
   onToggleReaction: (messageId: string, emoji: string) => void;
   onRetry: () => void;
   onDiscard: () => void;
@@ -781,6 +798,8 @@ const MessageRow = memo(function MessageRow({
   onCancelEdit,
   onSubmitEdit,
   onDelete,
+  onPin,
+  onUnpin,
   onToggleReaction,
   onRetry,
   onDiscard,
@@ -794,6 +813,14 @@ const MessageRow = memo(function MessageRow({
   const isReal = !message.pending && !message.failed;
   const canDelete = isReal && !!onDelete && (isMine || canModerate);
   const canReply = isReal && !!onReply;
+  const isMessagePinned = Boolean(message.pinnedAt);
+  // Mirrors the server's own gate: a conversation has no moderators, so
+  // `serverId` being null means anyone already in it — proven just by being
+  // able to see this row — may pin or unpin. A server channel needs the same
+  // permission as every other moderation action, matching Discord's "Manage
+  // Messages" rather than letting an author pin their own post unilaterally.
+  const canPin =
+    isReal && (serverId ? canModerate : true) && (onPin || onUnpin);
 
   function confirmDelete() {
     if (window.confirm("Delete this message?")) {
@@ -865,6 +892,15 @@ const MessageRow = memo(function MessageRow({
       ? [
           { id: "sep-edit", label: "", separator: true },
           { id: "edit", label: "Edit message", onSelect: onStartEdit },
+        ]
+      : []),
+    ...(canPin
+      ? [
+          {
+            id: "pin",
+            label: isMessagePinned ? "Unpin message" : "Pin message",
+            onSelect: isMessagePinned ? onUnpin : onPin,
+          },
         ]
       : []),
     ...(canDelete
@@ -958,6 +994,19 @@ const MessageRow = memo(function MessageRow({
                 >
                   {formatTime(message.createdAt)}
                 </time>
+                {isMessagePinned && (
+                  <span
+                    className="inline-flex items-center gap-0.5 text-[11px] text-signal"
+                    title={
+                      message.pinnedBy
+                        ? `Pinned by ${message.pinnedBy.displayName}`
+                        : "Pinned"
+                    }
+                  >
+                    <Pin className="h-3 w-3" aria-hidden />
+                    <span className="sr-only">Pinned</span>
+                  </span>
+                )}
               </div>
             )}
 

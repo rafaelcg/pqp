@@ -89,6 +89,10 @@ export interface DbMessage {
   reply_author_id?: string | null;
   reply_author_name?: string | null;
   reply_body?: string | null;
+  pinned_at?: Date | null;
+  pinned_by?: string | null;
+  /** Joined from `pinned_by`; absent or null when the pinner has since left. */
+  pinned_by_name?: string | null;
 }
 
 export interface DbInvite {

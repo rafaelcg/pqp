@@ -246,6 +246,21 @@ export function buildReplyExcerpt(body: string): string {
   return `${flat.slice(0, cut).trimEnd()}…`;
 }
 
+/** Who pinned a message. Not just an id: the pin panel names them without a
+ * second round trip, and the account can outlive its own display name changing. */
+export const messagePinnedBySchema = z.object({
+  id: z.string().uuid(),
+  displayName: z.string(),
+});
+
+export type MessagePinnedBy = z.infer<typeof messagePinnedBySchema>;
+
+/** How many messages one channel may have pinned at once. A soft UX ceiling —
+ * past it the panel stops being a place you actually look — not a security
+ * limit, so the server enforces it without a lock and a small race under
+ * concurrent pins is an accepted, harmless overshoot. */
+export const MAX_PINS_PER_CHANNEL = 50;
+
 export const messageSchema = z.object({
   id: z.string().uuid(),
   channelId: z.string().uuid(),
@@ -265,6 +280,8 @@ export const messageSchema = z.object({
    * was mapped, so the array is only as fresh as the response carrying it.
    */
   attachments: z.array(attachmentSchema).default([]),
+  pinnedAt: z.string().nullable().default(null),
+  pinnedBy: messagePinnedBySchema.nullable().default(null),
 });
 
 export const MESSAGE_MAX_LENGTH = 4000;

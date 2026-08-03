@@ -53,7 +53,7 @@ They cost days, not weeks.
 | 21 | Audit log | moderation | medium | medium |
 | 22 | Real permission system: roles with bitfields and per-channel overwrites | permissions | high | large |
 | 23 | Incoming webhooks, Discord wire-compatible | integrations | high | large |
-| 24 | Pinned messages | conversation-structure | medium | small |
+| 24 | ✅ Pinned messages | conversation-structure | medium | small |
 | 25 | Link and image embeds (unfurling) | content-rendering | medium | medium |
 | 26 | Custom server emoji | expression | medium | medium |
 | 27 | Persisted send queue and honest offline state | offline | medium | medium |
@@ -560,23 +560,15 @@ Replace the `window.confirm` delete (:448) with the existing `PromptDialog`/`Dia
 
 This is a defect, not polish: three shipped features are unreachable by an entire input modality, and it is the class of issue an open-source project gets filed against publicly.
 
-#### 24. Pinned messages
+#### 24. ✅ Pinned messages
 
-*medium pain · small · conversation-structure*
-  
-Depends on: Jump to message and working permalinks
+*medium pain · small · conversation-structure — shipped 2026-08*
 
-**Why it matters.** Every group has a handful of durable facts — the rules, the game link, the Friday time — and the only way to keep them visible today is to keep re-posting them.
+**What shipped, and where it differs from the original sketch.** Pin state lives on `messages.pinned_at`/`pinned_by` (server/src/schema.sql) rather than a join table — a message is pinned in at most one place, so a join table would let two rows reference the same pin for nothing, and every existing read path already has the message row in hand. Capped at `MAX_PINS_PER_CHANNEL = 50` (packages/shared/src/api.ts), checked only on the path that adds a new pin — re-pinning an already-pinned message never counts against it.
 
-**Today.** Partially covered by channel topics: `channels.topic` (server/src/schema.sql:57), edited via `PATCH /api/channels/:channelId` (server/src/api/index.ts:358) and client/src/components/layout/channel-meta-dialog.tsx, capped at 200 chars in `updateChannelSchema` (packages/shared/src/api.ts:140). That is one admin-owned string, not a set of member-nominated messages. No pin state on messages at all.
+Permission is manage-only in a server channel (`canManageServer`, matching Discord's own "Manage Messages" gate) rather than "any member" — pinning something you did not write and were not asked to keep is a moderation action, not personal annotation. A conversation has no moderators, so any participant may pin or unpin there, the same split `requirePinAccess` uses everywhere else in the codebase.
 
-**Sketch.**
-
-Schema: `CREATE TABLE message_pins (channel_id UUID NOT NULL REFERENCES channels(id) ON DELETE CASCADE, message_id UUID NOT NULL REFERENCES messages(id) ON DELETE CASCADE, pinned_by UUID NOT NULL REFERENCES users(id), created_at TIMESTAMPTZ DEFAULT NOW(), PRIMARY KEY (channel_id, message_id));` Cap at 50 per channel in the service layer so the panel stays a list, not an archive.
-
-API: `GET /api/channels/:channelId/pins` (behind `requireChannelAccess`), `PUT /api/messages/:messageId/pin`, `DELETE /api/messages/:messageId/pin`. Let any member pin — that is the friendlier default for a small server, and unpin stays manager-or-pinner. Both mutations broadcast `{type: "pin-update", channelId, messageId, pinned}` via the existing `broadcastToChannel`; add it to `chatServerMessageSchema` AND `CHAT_SERVER_MESSAGE_TYPES` (packages/shared/src/chat.ts:116,136 — the `isChatServerMessage` router keys off that array, so missing it silently drops the frame).
-
-Client: a pin icon in the channel header opening a popover list; "Pin message"/"Unpin" in the message-list.tsx context menu (:453); a pin marker on pinned rows; clicking a pin calls `jumpTo()`. Skip the "X pinned a message" system line in v1 — that needs a message `kind` column.
+`POST/DELETE /api/messages/:messageId/pin` and `GET /api/channels/:channelId/pins`. No new broadcast type: pinning is a mutation of the message row like an edit, so it reuses the existing `message-update` broadcast — `pinnedAt`/`pinnedBy` ride on `messageSchema` and `broadcastMessageSchema` for free. Client: "Pin message"/"Unpin message" in the context menu (client/src/components/chat/message-list.tsx), a pin badge next to the timestamp, and a "Pins" button in the channel header opening client/src/components/chat/pinned-messages-panel.tsx. No "X pinned a message" system line — the badge and the panel are the visible record.
 
 #### 25. Link and image embeds (unfurling)
 
