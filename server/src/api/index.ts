@@ -1,6 +1,9 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   addChannelMemberSchema,
+  AUDIT_LOG_PAGE_MAX,
+  AUDIT_LOG_PAGE_SIZE,
+  auditActionSchema,
   banMemberSchema,
   createAttachmentSchema,
   createBlockSchema,
@@ -62,6 +65,7 @@ import {
 } from "../lib/http.js";
 import { clientAddress, createRateLimiter } from "../lib/rate-limit.js";
 import { createRouter, type RequestContext } from "../lib/router.js";
+import { listAuditLog, logAudit } from "../services/audit.js";
 import {
   extractFirstUrl,
   getEmbedCacheState,
@@ -788,8 +792,29 @@ router.patch("/api/servers/:serverId", async ({ req, user }, { serverId }) => {
         error instanceof Error ? error.message : "Cannot transfer ownership",
       );
     }
+    await logAudit({
+      serverId: serverId!,
+      actorId: user.id,
+      action: "server.ownership_transfer",
+      targetType: "user",
+      targetId: body.ownerId,
+      changes: [{ key: "ownerId", old: user.id, new: body.ownerId }],
+    });
   }
   const server = body.name ? await renameServer(serverId!, body.name) : null;
+  if (server) {
+    // The old name is not fetched first — a rename is common enough, and low
+    // enough stakes, that the entry recording what it became is worth more
+    // than the extra read recording what it was.
+    await logAudit({
+      serverId: serverId!,
+      actorId: user.id,
+      action: "server.update",
+      targetType: "server",
+      targetId: serverId!,
+      changes: [{ key: "name", old: null, new: body.name }],
+    });
+  }
 
   return { ok: true, ...(server ? { server: mapServer(server) } : {}) };
 });
@@ -849,6 +874,14 @@ router.post(
     if (channel.is_private) {
       await addChannelMember(channel.id, user.id);
     }
+    await logAudit({
+      serverId: serverId!,
+      actorId: user.id,
+      action: "channel.create",
+      targetType: "channel",
+      targetId: channel.id,
+      changes: [{ key: "name", old: null, new: channel.name }],
+    });
     return created({ channel: mapChannel(channel) });
   },
 );
@@ -878,6 +911,29 @@ router.patch("/api/channels/:channelId", async ({ req, user }, { channelId }) =>
     evictVoiceUsersExcept(channelId!, allowed);
   }
 
+  // `channel` (read for the authorization check above) already carries the
+  // pre-update row, so the diff costs nothing extra to compute here.
+  const changes = (
+    [
+      ["name", channel.name, updated.name],
+      ["topic", channel.topic, updated.topic],
+      ["isPrivate", channel.is_private, updated.is_private],
+      ["imageUrl", channel.image_url, updated.image_url],
+    ] as const
+  )
+    .filter(([, oldValue, newValue]) => oldValue !== newValue)
+    .map(([key, oldValue, newValue]) => ({ key, old: oldValue, new: newValue }));
+  if (changes.length > 0) {
+    await logAudit({
+      serverId: channel.server_id,
+      actorId: user.id,
+      action: "channel.update",
+      targetType: "channel",
+      targetId: channelId!,
+      changes,
+    });
+  }
+
   return { channel: mapChannel(updated) };
 });
 
@@ -887,6 +943,14 @@ router.delete("/api/channels/:channelId", async ({ user }, { channelId }) => {
   await deleteChannel(channelId!);
   evictVoiceChannel(channelId!);
   evictChannelViewers(channelId!);
+  await logAudit({
+    serverId: channel.server_id,
+    actorId: user.id,
+    action: "channel.delete",
+    targetType: "channel",
+    targetId: channelId!,
+    changes: [{ key: "name", old: channel.name, new: null }],
+  });
   return { ok: true };
 });
 
@@ -914,6 +978,18 @@ router.patch(
       }
       throw error;
     }
+
+    await logAudit({
+      serverId: channel.server_id,
+      actorId: user.id,
+      action: "channel.move",
+      targetType: "channel",
+      targetId: channelId!,
+      changes: [
+        { key: "parentId", old: channel.parent_id, new: body.parentId },
+        { key: "index", old: channel.position, new: body.index },
+      ],
+    });
 
     return {
       channels: (await listChannels(channel.server_id, user.id)).map(mapChannel),
@@ -1098,6 +1174,19 @@ router.delete("/api/messages/:messageId", async ({ user }, { messageId }) => {
     channelId: existing.channel_id,
     messageId: messageId!,
   });
+  // Only a moderator acting on someone else's message is worth a trace — an
+  // author deleting their own is not a moderation action, and the body itself
+  // is deliberately not recorded: it is already gone, and copying deleted
+  // content into a second, longer-retained table is its own privacy question.
+  if (existing.author_id !== user.id && existing.server_id) {
+    await logAudit({
+      serverId: existing.server_id,
+      actorId: user.id,
+      action: "message.delete",
+      targetType: "message",
+      targetId: messageId!,
+    });
+  }
   return { ok: true };
 });
 
@@ -1235,7 +1324,16 @@ router.patch(
   async ({ req, user }, { serverId, userId }) => {
     await requireOwner(serverId!, user.id);
     const body = updateMemberRoleSchema.parse(await readJsonBody(req));
+    const previousRole = await getMemberRole(serverId!, userId!);
     await updateMemberRole(serverId!, userId!, body.role);
+    await logAudit({
+      serverId: serverId!,
+      actorId: user.id,
+      action: "member.role_update",
+      targetType: "user",
+      targetId: userId!,
+      changes: [{ key: "role", old: previousRole, new: body.role }],
+    });
     return { ok: true };
   },
 );
@@ -1263,6 +1361,13 @@ router.delete(
     } else {
       await kickMember(serverId!, userId!);
     }
+    await logAudit({
+      serverId: serverId!,
+      actorId: user.id,
+      action: body.ban ? "member.ban" : "member.kick",
+      targetType: "user",
+      targetId: userId!,
+    });
 
     const channelIds = await listServerChannelIds(serverId!);
     evictUserFromChannels(userId!, channelIds);
@@ -1292,6 +1397,14 @@ router.post(
     await requireOutranked(serverId!, actorRole, body.userId, "ban");
 
     await banMember(serverId!, body.userId, user.id, body.reason);
+    await logAudit({
+      serverId: serverId!,
+      actorId: user.id,
+      action: "member.ban",
+      targetType: "user",
+      targetId: body.userId,
+      reason: body.reason,
+    });
 
     const channelIds = await listServerChannelIds(serverId!);
     evictUserFromChannels(body.userId, channelIds);
@@ -1305,7 +1418,40 @@ router.delete(
   async ({ user }, { serverId, userId }) => {
     await requireManager(serverId!, user.id);
     await unbanMember(serverId!, userId!);
+    await logAudit({
+      serverId: serverId!,
+      actorId: user.id,
+      action: "member.unban",
+      targetType: "user",
+      targetId: userId!,
+    });
     return { ok: true };
+  },
+);
+
+/**
+ * Gated on `requireManager` like every other moderation read here — a plain
+ * member does not get to see who kicked whom, only that they can no longer
+ * see the person. `before`/`limit` follow the same cursor contract
+ * `listMessages` uses, so the client's existing infinite-scroll pattern
+ * covers this screen too.
+ */
+router.get(
+  "/api/servers/:serverId/audit-log",
+  async ({ url, user }, { serverId }) => {
+    await requireManager(serverId!, user.id);
+    const before = url.searchParams.get("before") ?? undefined;
+    const limit = clampLimit(
+      url.searchParams.get("limit"),
+      AUDIT_LOG_PAGE_SIZE,
+      AUDIT_LOG_PAGE_MAX,
+    );
+    const rawAction = url.searchParams.get("action");
+    const action = rawAction
+      ? (auditActionSchema.safeParse(rawAction).data ?? undefined)
+      : undefined;
+    const actorId = url.searchParams.get("actorId") ?? undefined;
+    return listAuditLog(serverId!, { before, limit, action, actorId });
   },
 );
 
@@ -1325,6 +1471,14 @@ router.post(
       maxUses: body.maxUses,
       expiresInHours: body.expiresInHours,
     });
+    await logAudit({
+      serverId: serverId!,
+      actorId: user.id,
+      action: "invite.create",
+      targetType: "invite",
+      targetId: invite.id,
+      changes: [{ key: "code", old: null, new: invite.code }],
+    });
     return created({ invite: mapInvite(invite) });
   },
 );
@@ -1334,6 +1488,13 @@ router.delete(
   async ({ user }, { serverId, inviteId }) => {
     await requireManager(serverId!, user.id);
     await deleteInvite(serverId!, inviteId!);
+    await logAudit({
+      serverId: serverId!,
+      actorId: user.id,
+      action: "invite.delete",
+      targetType: "invite",
+      targetId: inviteId!,
+    });
     return { ok: true };
   },
 );

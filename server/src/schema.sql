@@ -427,3 +427,24 @@ CREATE TABLE IF NOT EXISTS link_embeds (
   failed BOOLEAN NOT NULL DEFAULT FALSE,
   fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- `id` (not `(created_at, id)`) is the whole cursor: a BIGSERIAL is already a
+-- strict total order matching insertion order, so unlike message history
+-- there is no tie to break and no "cursor row was deleted" fragility — the
+-- cursor is a bare integer, never a lookup of a row that retention may have
+-- already purged.
+CREATE TABLE IF NOT EXISTS audit_log (
+  id BIGSERIAL PRIMARY KEY,
+  server_id UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  -- SET NULL rather than CASCADE: the departed actor is exactly the fact an
+  -- audit entry exists to preserve, so their account going away must not take
+  -- the record of what they did with it.
+  actor_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  action TEXT NOT NULL,
+  target_type TEXT,
+  target_id UUID,
+  reason TEXT,
+  changes JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_audit_log_server_id ON audit_log (server_id, id DESC);

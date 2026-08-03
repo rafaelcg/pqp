@@ -1,5 +1,6 @@
 export * from "./api.js";
 export * from "./attachments.js";
+export * from "./audit.js";
 export * from "./auth.js";
 export * from "./chat.js";
 export * from "./dm.js";

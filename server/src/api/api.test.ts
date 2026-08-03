@@ -3023,6 +3023,258 @@ describeDb("API authorization", () => {
     });
   });
 
+  describe("audit log", () => {
+    interface Entry {
+      id: string;
+      actorId: string | null;
+      actorName: string | null;
+      action: string;
+      targetType: string | null;
+      targetId: string | null;
+      reason: string | null;
+      changes: Array<{ key: string; old: unknown; new: unknown }> | null;
+    }
+
+    async function auditLog(
+      serverId: string,
+      query = "",
+    ): Promise<{ entries: Entry[]; hasMore: boolean }> {
+      const res = await call<{ entries: Entry[]; hasMore: boolean }>(
+        owner,
+        "GET",
+        `/api/servers/${serverId}/audit-log${query}`,
+      );
+      expect(res.status).toBe(200);
+      return res.body;
+    }
+
+    it("logs channel create, update, move, and delete with before/after context", async () => {
+      const { serverId, textChannelId } = await makeServer();
+
+      const createRes = await call<{ channel: { id: string } }>(
+        owner,
+        "POST",
+        `/api/servers/${serverId}/channels`,
+        { name: "roadmap", type: "text" },
+      );
+      const channelId = createRes.body.channel.id;
+
+      await call(owner, "PATCH", `/api/channels/${channelId}`, {
+        name: "renamed",
+        topic: "new topic",
+      });
+      await call(owner, "PATCH", `/api/channels/${channelId}/move`, {
+        parentId: null,
+        index: 0,
+      });
+      await call(owner, "DELETE", `/api/channels/${channelId}`);
+
+      const { entries } = await auditLog(serverId);
+      // Newest first: delete, move, update, create — plus the default
+      // #general text channel this server was seeded with is untouched.
+      const actions = entries.map((e) => e.action);
+      expect(actions).toEqual([
+        "channel.delete",
+        "channel.move",
+        "channel.update",
+        "channel.create",
+      ]);
+
+      const created = entries.find((e) => e.action === "channel.create")!;
+      expect(created.targetId).toBe(channelId);
+      expect(created.changes).toMatchObject([
+        { key: "name", old: null, new: "roadmap" },
+      ]);
+
+      const updated = entries.find((e) => e.action === "channel.update")!;
+      expect(updated.changes).toMatchObject(
+        expect.arrayContaining([
+          { key: "name", old: "roadmap", new: "renamed" },
+          { key: "topic", old: null, new: "new topic" },
+        ]),
+      );
+
+      const deleted = entries.find((e) => e.action === "channel.delete")!;
+      expect(deleted.changes).toMatchObject([
+        { key: "name", old: "renamed", new: null },
+      ]);
+
+      void textChannelId;
+    });
+
+    it("logs kick, ban with a reason, and unban", async () => {
+      const { serverId } = await makeServer();
+
+      await call(admin, "DELETE", `/api/servers/${serverId}/members/${member.id}`, {
+        ban: false,
+      });
+      const { entries: afterKick } = await auditLog(serverId);
+      expect(afterKick[0]).toMatchObject({
+        action: "member.kick",
+        targetId: member.id,
+        actorId: admin.id,
+      });
+
+      // member is gone now (kicked) — ban the outsider instead so the
+      // membership precondition on ban does not get in the way.
+      await call(owner, "POST", `/api/servers/${serverId}/bans`, {
+        userId: outsider.id,
+        reason: "spam",
+      });
+      const { entries: afterBan } = await auditLog(serverId);
+      expect(afterBan[0]).toMatchObject({
+        action: "member.ban",
+        targetId: outsider.id,
+        reason: "spam",
+      });
+
+      await call(owner, "DELETE", `/api/servers/${serverId}/bans/${outsider.id}`);
+      const { entries: afterUnban } = await auditLog(serverId);
+      expect(afterUnban[0]).toMatchObject({
+        action: "member.unban",
+        targetId: outsider.id,
+      });
+    });
+
+    it("logs a role change with the previous role", async () => {
+      const { serverId } = await makeServer();
+      await call(owner, "PATCH", `/api/servers/${serverId}/members/${member.id}`, {
+        role: "admin",
+      });
+      const { entries } = await auditLog(serverId);
+      expect(entries[0]).toMatchObject({
+        action: "member.role_update",
+        targetId: member.id,
+        changes: [{ key: "role", old: "member", new: "admin" }],
+      });
+    });
+
+    it("logs a moderator deleting someone else's message, but not a self-delete", async () => {
+      const { serverId, textChannelId } = await makeServer();
+      const posted = await getPool().query<{ id: string }>(
+        `INSERT INTO messages (channel_id, author_id, body) VALUES ($1, $2, 'hi') RETURNING id`,
+        [textChannelId, member.id],
+      );
+      const messageId = posted.rows[0]!.id;
+
+      // The author deleting their own message is not a moderation action.
+      const selfPosted = await getPool().query<{ id: string }>(
+        `INSERT INTO messages (channel_id, author_id, body) VALUES ($1, $2, 'mine') RETURNING id`,
+        [textChannelId, owner.id],
+      );
+      await call(owner, "DELETE", `/api/messages/${selfPosted.rows[0]!.id}`);
+      expect((await auditLog(serverId)).entries).toHaveLength(0);
+
+      // A manager deleting someone else's message is.
+      await call(admin, "DELETE", `/api/messages/${messageId}`);
+      const { entries } = await auditLog(serverId);
+      expect(entries[0]).toMatchObject({
+        action: "message.delete",
+        targetId: messageId,
+        actorId: admin.id,
+      });
+    });
+
+    it("logs invite create and delete", async () => {
+      const { serverId } = await makeServer();
+      const invite = await call<{ invite: { id: string; code: string } }>(
+        owner,
+        "POST",
+        `/api/servers/${serverId}/invites`,
+        {},
+      );
+      await call(owner, "DELETE", `/api/servers/${serverId}/invites/${invite.body.invite.id}`);
+
+      const { entries } = await auditLog(serverId);
+      expect(entries.map((e) => e.action)).toEqual([
+        "invite.delete",
+        "invite.create",
+      ]);
+      expect(entries[1]!.changes).toMatchObject([
+        { key: "code", old: null, new: invite.body.invite.code },
+      ]);
+    });
+
+    it("logs server rename and ownership transfer", async () => {
+      const { serverId } = await makeServer();
+      await call(owner, "PATCH", `/api/servers/${serverId}`, {
+        ownerId: admin.id,
+      });
+      // The owner (now demoted to admin) can still rename it in the same call
+      // only as the new owner — do it as admin-turned-owner instead.
+      await call(admin, "PATCH", `/api/servers/${serverId}`, {
+        name: "renamed server",
+      });
+
+      const { entries } = await auditLog(serverId);
+      expect(entries.map((e) => e.action)).toEqual([
+        "server.update",
+        "server.ownership_transfer",
+      ]);
+      expect(entries[1]).toMatchObject({
+        changes: [{ key: "ownerId", old: owner.id, new: admin.id }],
+      });
+    });
+
+    it("requires manage permission, refusing a plain member", async () => {
+      const { serverId } = await makeServer();
+      const res = await call(member, "GET", `/api/servers/${serverId}/audit-log`);
+      expect(res.status).toBe(403);
+    });
+
+    it("paginates newest-first with a before cursor", async () => {
+      const { serverId } = await makeServer();
+      for (const name of ["a", "b", "c"]) {
+        await call(owner, "POST", `/api/servers/${serverId}/channels`, {
+          name,
+          type: "text",
+        });
+      }
+
+      const firstPage = await auditLog(serverId, "?limit=2");
+      expect(firstPage.entries).toHaveLength(2);
+      expect(firstPage.hasMore).toBe(true);
+      // Newest first: the last channel created ("c") leads.
+      expect(firstPage.entries[0]!.changes).toMatchObject([
+        { key: "name", old: null, new: "c" },
+      ]);
+
+      const secondPage = await auditLog(
+        serverId,
+        `?limit=2&before=${firstPage.entries[1]!.id}`,
+      );
+      expect(secondPage.entries).toHaveLength(1);
+      expect(secondPage.hasMore).toBe(false);
+      expect(secondPage.entries[0]!.changes).toMatchObject([
+        { key: "name", old: null, new: "a" },
+      ]);
+
+      // No entry repeated or skipped across the two pages.
+      const allIds = [...firstPage.entries, ...secondPage.entries].map(
+        (e) => e.id,
+      );
+      expect(new Set(allIds).size).toBe(3);
+    });
+
+    it("filters by action and by actor", async () => {
+      const { serverId } = await makeServer();
+      await call(owner, "POST", `/api/servers/${serverId}/channels`, {
+        name: "one",
+        type: "text",
+      });
+      await call(owner, "PATCH", `/api/servers/${serverId}/members/${member.id}`, {
+        role: "admin",
+      });
+
+      const byAction = await auditLog(serverId, "?action=channel.create");
+      expect(byAction.entries.map((e) => e.action)).toEqual(["channel.create"]);
+
+      const byActor = await auditLog(serverId, `?actorId=${owner.id}`);
+      expect(byActor.entries.length).toBeGreaterThanOrEqual(2);
+      expect(byActor.entries.every((e) => e.actorId === owner.id)).toBe(true);
+    });
+  });
+
   describe("request hygiene", () => {
     it("answers 404 for a malformed id rather than surfacing a database error", async () => {
       const res = await call(owner, "GET", "/api/servers/not-a-uuid/channels");

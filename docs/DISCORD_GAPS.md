@@ -50,7 +50,7 @@ They cost days, not weeks.
 | 18 | ✅ Direct messages (1:1 and group) | messaging | critical | large |
 | 19 | ✅ Blocking and DM privacy controls | safety | high | medium |
 | 20 | Timeouts, slow mode, and a real message-rejected path | moderation | medium | medium |
-| 21 | Audit log | moderation | medium | medium |
+| 21 | ✅ Audit log | moderation | medium | medium |
 | 22 | Real permission system: roles with bitfields and per-channel overwrites | permissions | high | large |
 | 23 | Incoming webhooks, Discord wire-compatible | integrations | high | large |
 | 24 | ✅ Pinned messages | conversation-structure | medium | small |
@@ -471,6 +471,8 @@ RETENTION: periodic `DELETE FROM audit_log WHERE created_at < NOW() - INTERVAL '
 CLIENT: a new tab in client/src/components/layout/server-settings-dialog.tsx (already a tabbed shell) plus `fetchAuditLog` in client/src/lib/api.ts.
 
 Effort is breadth, not depth: ~15 call sites, one query, one screen. It is a trust feature for a product whose whole pitch is that the operator is accountable to their own community.
+
+**What shipped, and where it differs from the sketch.** Written from the route layer, not the service layer as sketched: every mutation here already hands its route both the old and new state for free (a channel row read for its own authorization check, a role fetched to gate the change) or needs neither, so threading a pg client through `servers.ts`/`moderation.ts` transactions would have bought correctness this app does not need for a v1 audit trail — the same best-effort-follow-up-write tolerance this codebase already accepts elsewhere (`notifyChannelActivity` runs after `createMessage` commits, not inside it). The cursor is a bare `audit_log.id` (a `BIGSERIAL` is already a strict total order matching insertion order) rather than the sketch's `(created_at, id)` pair — simpler, and without the "cursor row was deleted" fragility keyset message pagination has to guard against, since retention can purge an old row without ever breaking a page built on ids alone. No `server.delete` action: that row would cascade away with the server it describes the instant it was written, and nobody can open the audit-log route for a server that no longer exists to read it back anyway. `message.delete` only logs a moderator acting on someone else's message — an author deleting their own is not a moderation action — and never records the deleted body itself, which is already gone and would otherwise become a second, longer-retained copy of content someone chose to remove. Client: a plain "Audit log" section at the bottom of `server-settings-dialog.tsx` (that dialog was not, in fact, already a tabbed shell) rather than a new tab, visible to admins as well as the owner — a moderator with the power to kick, ban, or delete needs to be accountable to the community for having used it, not just answerable to the owner. Retention ships as a daily sweep (`pruneAuditLog`, 90-day default) alongside the existing hourly attachment sweep in `index.ts`.
 
 ### Tier 4 — platform, expression, and reach
 
