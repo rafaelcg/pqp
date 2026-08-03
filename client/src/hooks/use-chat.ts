@@ -582,6 +582,10 @@ export function createChatController(transport: RealtimeTransport) {
         // Same reasoning as pins: unfurling happens after the message exists,
         // via the message-update broadcast the server sends once it resolves.
         embeds: [],
+        // The composer only ever sends as the signed-in user, never as a
+        // webhook — an optimistic bubble is never one.
+        isWebhook: false,
+        webhookEmbeds: [],
         // Built with the same helper the server uses, so the bubble does not
         // visibly rewrite itself when the broadcast comes back.
         replyTo: replyTo

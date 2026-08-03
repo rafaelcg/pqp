@@ -74,6 +74,7 @@ interface ChannelListProps {
   onDeleteChannel: (channelId: string) => void;
   onTogglePrivate: (channel: Channel) => void;
   onManageChannelMembers: (channel: Channel) => void;
+  onManageWebhooks: (channel: Channel) => void;
   onMoveChannel: (
     channelId: string,
     parentId: string | null,
@@ -104,6 +105,7 @@ export function ChannelList({
   onDeleteChannel,
   onTogglePrivate,
   onManageChannelMembers,
+  onManageWebhooks,
   onMoveChannel,
   onInvite,
   onOpenMembers,
@@ -227,6 +229,9 @@ export function ChannelList({
           onDelete={() => onDeleteChannel(channel.id)}
           onTogglePrivate={() => onTogglePrivate(channel)}
           onManageMembers={() => onManageChannelMembers(channel)}
+          onManageWebhooks={
+            channel.type === "text" ? () => onManageWebhooks(channel) : undefined
+          }
           categories={categoryOptions}
           onMoveToCategory={(categoryId) =>
             onMoveChannel(
@@ -635,6 +640,7 @@ function ChannelRow({
   onDelete,
   onTogglePrivate,
   onManageMembers,
+  onManageWebhooks,
   categories,
   onMoveToCategory,
   onMoveUp,
@@ -658,6 +664,7 @@ function ChannelRow({
   onDelete: () => void;
   onTogglePrivate: () => void;
   onManageMembers: () => void;
+  onManageWebhooks?: () => void;
   categories: Array<{ id: string; name: string }>;
   onMoveToCategory: (categoryId: string | null) => void;
   onMoveUp?: () => void;
@@ -689,6 +696,13 @@ function ChannelRow({
         id: "invite-private",
         label: "Manage private access",
         onSelect: onManageMembers,
+      });
+    }
+    if (onManageWebhooks) {
+      items.push({
+        id: "webhooks",
+        label: "Manage webhooks",
+        onSelect: onManageWebhooks,
       });
     }
     items.push({ id: "sep-1", label: "", separator: true });

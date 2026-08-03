@@ -1,4 +1,4 @@
-import type { Embed, MessageReaction } from "@pqp/shared";
+import type { Embed, MessageReaction, WebhookEmbed } from "@pqp/shared";
 import {
   AlertCircle,
   ArrowDown,
@@ -990,6 +990,14 @@ const MessageRow = memo(function MessageRow({
                 >
                   {message.authorName}
                 </span>
+                {message.isWebhook && (
+                  <span
+                    className="rounded bg-ink-4 px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-paper-muted"
+                    title="Posted by a webhook, not a member"
+                  >
+                    Webhook
+                  </span>
+                )}
                 {message.authorTag && (
                   <span className="font-mono text-[11px] text-paper-muted">
                     {message.authorTag}
@@ -1052,18 +1060,26 @@ const MessageRow = memo(function MessageRow({
                   </div>
                 )}
                 {/* Says nothing and carries nothing. The server refuses to
-                    create that, so reaching it means the attachments were
-                    withheld on read — which is what a deployment whose storage
-                    config went missing serves for an attachment-only message.
-                    Naming it beats an unexplained blank row. */}
-                {!message.body && attachments.length === 0 && (
-                  <p className="text-[15px] italic leading-relaxed text-paper-muted">
-                    Attachment unavailable.
-                  </p>
-                )}
+                    create that for an ordinary send, so reaching it means the
+                    attachments were withheld on read — which is what a
+                    deployment whose storage config went missing serves for an
+                    attachment-only message. A webhook message is the one other
+                    way to get here honestly: Discord's own webhooks allow an
+                    embed with no `content` at all, which is why this also
+                    checks for one before naming it a problem. */}
+                {!message.body &&
+                  attachments.length === 0 &&
+                  message.webhookEmbeds.length === 0 && (
+                    <p className="text-[15px] italic leading-relaxed text-paper-muted">
+                      Attachment unavailable.
+                    </p>
+                  )}
                 {showLinkEmbeds && message.embeds?.[0] && (
                   <EmbedCard embed={message.embeds[0]} />
                 )}
+                {message.webhookEmbeds.map((embed, index) => (
+                  <WebhookEmbedCard key={index} embed={embed} />
+                ))}
               </>
             )}
 
@@ -1327,6 +1343,73 @@ function EmbedCard({ embed }: { embed: Embed }) {
         />
       )}
     </a>
+  );
+}
+
+/** A packed 24-bit integer to a CSS color — the same encoding Discord's own
+ * embeds use, so a payload built for a real Discord webhook renders here
+ * with no conversion on the sender's side. */
+function colorFromInt(value: number | undefined): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  return `#${value.toString(16).padStart(6, "0")}`;
+}
+
+/**
+ * A webhook's own rich embed — a deliberate subset of Discord's embed object
+ * (title/description/url/color/fields/footer). Structurally similar to
+ * `EmbedCard` but a distinct component rather than a shared one: this data
+ * came from whoever holds the webhook token, not from this server's own
+ * automatic link unfurl, and the two are never interchangeable even where
+ * the rendering happens to rhyme.
+ */
+function WebhookEmbedCard({ embed }: { embed: WebhookEmbed }) {
+  const accent = colorFromInt(embed.color);
+  const Wrapper = embed.url ? "a" : "div";
+
+  return (
+    <Wrapper
+      {...(embed.url
+        ? { href: embed.url, target: "_blank", rel: "noopener noreferrer" }
+        : {})}
+      className="mt-1.5 block max-w-md space-y-1.5 rounded-md border border-border bg-surface-2/60 p-2.5"
+      style={{ borderLeftWidth: "3px", borderLeftColor: accent ?? "var(--color-signal)" }}
+    >
+      {embed.title && (
+        <p
+          className={cn(
+            "text-sm font-medium",
+            embed.url ? "text-signal" : "text-paper",
+          )}
+        >
+          {embed.title}
+        </p>
+      )}
+      {embed.description && (
+        <p className="whitespace-pre-wrap text-xs text-paper-muted">
+          {embed.description}
+        </p>
+      )}
+      {embed.fields && embed.fields.length > 0 && (
+        <div className="grid grid-cols-2 gap-2 pt-1">
+          {embed.fields.map((field, index) => (
+            <div
+              key={index}
+              className={field.inline ? "" : "col-span-2"}
+            >
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-paper-muted">
+                {field.name}
+              </p>
+              <p className="text-xs text-paper">{field.value}</p>
+            </div>
+          ))}
+        </div>
+      )}
+      {embed.footer?.text && (
+        <p className="pt-1 text-[11px] text-paper-muted">{embed.footer.text}</p>
+      )}
+    </Wrapper>
   );
 }
 

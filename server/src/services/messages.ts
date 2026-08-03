@@ -8,6 +8,7 @@ import {
   type MessagePinnedBy,
   type MessageReaction,
   type MessageReplyRef,
+  type WebhookEmbed,
 } from "@pqp/shared";
 import type { PoolClient } from "pg";
 import { getPool, type DbMessage, type DbUser } from "../db.js";
@@ -65,6 +66,8 @@ const MESSAGE_SELECT = `SELECT m.id, m.channel_id, m.author_id, m.body, m.create
             u.username as author_username,
             u.discriminator as author_discriminator,
             u.avatar_url as author_avatar_url,
+            u.is_webhook as author_is_webhook,
+            m.webhook_embeds, m.webhook_username, m.webhook_avatar_url,
             ${REPLY_COLUMNS},
             ${PIN_COLUMNS}
      FROM messages m
@@ -651,9 +654,12 @@ export function mapMessage(
     id: m.id,
     channelId: m.channel_id,
     authorId: m.author_id,
-    authorName: m.author_name ?? "User",
+    // A per-execution override (Discord's own webhooks allow one) wins over
+    // the webhook's own configured name/avatar, which in turn is already
+    // what `author_name`/`author_avatar_url` hold for a webhook's pseudo-user.
+    authorName: m.webhook_username ?? m.author_name ?? "User",
     authorTag: formatUserTag(m.author_username, m.author_discriminator),
-    authorAvatarUrl: m.author_avatar_url ?? null,
+    authorAvatarUrl: m.webhook_avatar_url ?? m.author_avatar_url ?? null,
     body: m.body,
     createdAt: m.created_at.toISOString(),
     editedAt: m.edited_at?.toISOString() ?? null,
@@ -669,6 +675,8 @@ export function mapMessage(
     blocked: m.blocked ?? false,
     pinnedAt: m.pinned_at?.toISOString() ?? null,
     pinnedBy: mapPinnedBy(m),
+    isWebhook: m.author_is_webhook ?? false,
+    webhookEmbeds: (m.webhook_embeds as WebhookEmbed[] | null) ?? [],
   };
 }
 

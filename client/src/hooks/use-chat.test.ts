@@ -74,6 +74,8 @@ function serverMessage(overrides: Partial<Message> = {}): Message {
     pinnedAt: null,
     pinnedBy: null,
     embeds: [],
+    isWebhook: false,
+    webhookEmbeds: [],
     ...overrides,
   };
 }

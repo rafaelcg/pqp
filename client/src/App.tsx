@@ -18,6 +18,7 @@ import {
 } from "@/components/layout/app-loading-shell";
 import { ChannelList } from "@/components/layout/channel-list";
 import { ChannelMembersPanel } from "@/components/layout/channel-members-panel";
+import { WebhooksPanel } from "@/components/layout/webhooks-panel";
 import { ChannelMetaDialog } from "@/components/layout/channel-meta-dialog";
 import { DmList } from "@/components/layout/dm-list";
 import { InvitePanel } from "@/components/layout/invite-panel";
@@ -240,6 +241,7 @@ function MainAppContent({
   const [pinsOpen, setPinsOpen] = useState(false);
   const [channelMembersChannel, setChannelMembersChannel] =
     useState<Channel | null>(null);
+  const [webhooksChannel, setWebhooksChannel] = useState<Channel | null>(null);
   const [channelPrompt, setChannelPrompt] = useState<ChannelPromptState | null>(
     null,
   );
@@ -1720,6 +1722,7 @@ function MainAppContent({
           }
           onTogglePrivate={(ch) => void handleTogglePrivate(ch)}
           onManageChannelMembers={setChannelMembersChannel}
+          onManageWebhooks={setWebhooksChannel}
           onInvite={() => setInviteMode("create")}
           onOpenMembers={() => setMembersOpen(true)}
           onOpenServerSettings={() => setServerSettingsOpen(true)}
@@ -1980,6 +1983,13 @@ function MainAppContent({
         channelName={channelMembersChannel?.name ?? null}
         serverId={selectedServerId}
         onClose={() => setChannelMembersChannel(null)}
+      />
+
+      <WebhooksPanel
+        open={webhooksChannel !== null}
+        channelId={webhooksChannel?.id ?? null}
+        channelName={webhooksChannel?.name ?? null}
+        onClose={() => setWebhooksChannel(null)}
       />
 
       <PinnedMessagesPanel
