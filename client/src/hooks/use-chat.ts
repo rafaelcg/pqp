@@ -579,6 +579,9 @@ export function createChatController(transport: RealtimeTransport) {
         // someone reacting to it once it exists.
         pinnedAt: null,
         pinnedBy: null,
+        // Same reasoning as pins: unfurling happens after the message exists,
+        // via the message-update broadcast the server sends once it resolves.
+        embeds: [],
         // Built with the same helper the server uses, so the bubble does not
         // visibly rewrite itself when the broadcast comes back.
         replyTo: replyTo

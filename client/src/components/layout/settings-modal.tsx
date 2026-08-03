@@ -31,6 +31,7 @@ export interface LocalSettings {
   outputDeviceId: string;
   inputVolume: number;
   outputVolume: number;
+  showLinkEmbeds: boolean;
 }
 
 const STORAGE_KEY = "pqp-local-settings";
@@ -53,6 +54,7 @@ export const defaultLocalSettings: LocalSettings = {
   outputDeviceId: "",
   inputVolume: 1,
   outputVolume: 1,
+  showLinkEmbeds: true,
 };
 
 export function loadLocalSettings(): LocalSettings {
@@ -115,6 +117,9 @@ export function preferencesFromLocal(
   if (settings.outputVolume !== undefined) {
     preferences.outputVolume = settings.outputVolume;
   }
+  if (settings.showLinkEmbeds !== undefined) {
+    preferences.showLinkEmbeds = settings.showLinkEmbeds;
+  }
   return preferences;
 }
 
@@ -144,6 +149,7 @@ export function applyRemotePreferences(
     compactPeers: preferences.compactPeers ?? local.compactPeers,
     inputVolume: preferences.inputVolume ?? local.inputVolume,
     outputVolume: preferences.outputVolume ?? local.outputVolume,
+    showLinkEmbeds: preferences.showLinkEmbeds ?? local.showLinkEmbeds,
   };
 }
 
@@ -805,6 +811,21 @@ export function SettingsModal({
             onUserUpdated={onUserUpdated}
             onUnblockUser={onUnblockUser}
           />
+        </div>
+
+        <div className="mt-4 border-t border-ink-4 pt-4">
+          <p className="text-xs uppercase tracking-wide text-paper-muted">
+            Chat
+          </p>
+          <label className="mt-2 flex cursor-pointer items-center gap-3">
+            <input
+              type="checkbox"
+              checked={draftLocal.showLinkEmbeds}
+              onChange={(e) => patchLocal({ showLinkEmbeds: e.target.checked })}
+              className="h-4 w-4 accent-[var(--color-signal)]"
+            />
+            <span className="text-sm">Show link previews</span>
+          </label>
         </div>
 
         <div className="mt-4 space-y-4 border-t border-ink-4 pt-4">

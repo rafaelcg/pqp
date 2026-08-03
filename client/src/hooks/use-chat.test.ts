@@ -73,6 +73,7 @@ function serverMessage(overrides: Partial<Message> = {}): Message {
     attachments: [],
     pinnedAt: null,
     pinnedBy: null,
+    embeds: [],
     ...overrides,
   };
 }

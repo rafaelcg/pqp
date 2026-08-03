@@ -1,4 +1,4 @@
-import type { MessageReaction } from "@pqp/shared";
+import type { Embed, MessageReaction } from "@pqp/shared";
 import {
   AlertCircle,
   ArrowDown,
@@ -43,6 +43,7 @@ import {
   formatDayLabel,
   formatFullTimestamp,
   formatTime,
+  getApiBaseUrl,
   isSameDay,
 } from "@/lib/utils";
 import { MessageListSkeleton } from "@/components/ui/skeleton";
@@ -99,6 +100,9 @@ interface MessageListProps {
   onReplyTo?: (message: ChatMessage) => void;
   onPinMessage?: (messageId: string) => Promise<void>;
   onUnpinMessage?: (messageId: string) => Promise<void>;
+  /** Client-render-only: the server unfurls and caches regardless, so turning
+   * this off only stops this reader's own client from drawing the card. */
+  showLinkEmbeds?: boolean;
 }
 
 interface Row {
@@ -157,6 +161,7 @@ export function MessageList({
   onReplyTo,
   onPinMessage,
   onUnpinMessage,
+  showLinkEmbeds = true,
 }: MessageListProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -590,6 +595,7 @@ export function MessageList({
               onDiscard={() =>
                 row.message.nonce && onDiscardMessage?.(row.message.nonce)
               }
+              showLinkEmbeds={showLinkEmbeds}
             />
           ))
         )}
@@ -775,6 +781,7 @@ interface MessageRowProps {
   onToggleReaction: (messageId: string, emoji: string) => void;
   onRetry: () => void;
   onDiscard: () => void;
+  showLinkEmbeds: boolean;
 }
 
 const MessageRow = memo(function MessageRow({
@@ -803,6 +810,7 @@ const MessageRow = memo(function MessageRow({
   onToggleReaction,
   onRetry,
   onDiscard,
+  showLinkEmbeds,
 }: MessageRowProps) {
   const { message, startsGroup, dayLabel } = row;
   // A body that is nothing but a GIF link is media, not prose — the URL is the
@@ -1053,6 +1061,9 @@ const MessageRow = memo(function MessageRow({
                     Attachment unavailable.
                   </p>
                 )}
+                {showLinkEmbeds && message.embeds?.[0] && (
+                  <EmbedCard embed={message.embeds[0]} />
+                )}
               </>
             )}
 
@@ -1233,6 +1244,89 @@ function GifAttachment({ media }: { media: GifMedia }) {
         </span>
       </span>
     </button>
+  );
+}
+
+/**
+ * A link preview: title, description, site name, and an optional thumbnail
+ * pulled from the page's Open Graph tags. `embed.imageUrl` is always this
+ * server's own proxy path (see `GET /api/embeds/:urlHash/image`), never the
+ * origin site's own URL, and is prefixed with the API's own origin here
+ * because the SPA and the API are routinely deployed on two different
+ * origins (Cloudflare Pages + Railway) — a bare relative path would resolve
+ * against the wrong one in production.
+ *
+ * An `image` embed (the link itself pointed straight at an image, not a
+ * page) has no title or description to show — it renders as the picture
+ * itself, the same way a GIF attachment does.
+ */
+function EmbedCard({ embed }: { embed: Embed }) {
+  const imageUrl = embed.imageUrl ? `${getApiBaseUrl()}${embed.imageUrl}` : null;
+
+  if (embed.kind === "image") {
+    if (!imageUrl) {
+      return null;
+    }
+    return (
+      <a
+        href={embed.url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="mt-1.5 block w-fit max-w-full overflow-hidden rounded-md border border-border"
+      >
+        <img
+          src={imageUrl}
+          alt=""
+          loading="lazy"
+          decoding="async"
+          style={{ maxHeight: `${GIF_MAX_HEIGHT_PX}px` }}
+          className="w-auto max-w-full"
+        />
+      </a>
+    );
+  }
+
+  // A page with no OG tags at all is cached as a non-failed row with every
+  // field null (see embeds.ts) so it is not endlessly re-fetched — nothing
+  // here means nothing to show, not an error.
+  if (!embed.title && !embed.description && !imageUrl) {
+    return null;
+  }
+
+  return (
+    <a
+      href={embed.url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="mt-1.5 flex max-w-md gap-3 overflow-hidden rounded-md border border-border border-l-[3px] border-l-signal bg-surface-2/60 p-2.5 transition-colors hover:bg-surface-2"
+    >
+      <div className="min-w-0 flex-1">
+        {embed.siteName && (
+          <p className="truncate text-[11px] uppercase tracking-wide text-paper-muted">
+            {embed.siteName}
+          </p>
+        )}
+        {embed.title && (
+          <p className="mt-0.5 line-clamp-2 text-sm font-medium text-signal">
+            {embed.title}
+          </p>
+        )}
+        {embed.description && (
+          <p className="mt-1 line-clamp-3 text-xs text-paper-muted">
+            {embed.description}
+          </p>
+        )}
+      </div>
+      {imageUrl && (
+        <img
+          src={imageUrl}
+          alt=""
+          loading="lazy"
+          decoding="async"
+          className="h-16 w-16 shrink-0 rounded object-cover"
+        />
+      )}
+    </a>
   );
 }
 

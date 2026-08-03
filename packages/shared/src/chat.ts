@@ -12,6 +12,7 @@ import {
   attachmentSchema,
   MAX_ATTACHMENTS_PER_MESSAGE,
 } from "./attachments.js";
+import { embedSchema } from "./embeds.js";
 
 export const joinChannelMessageSchema = z.object({
   type: z.literal("join-channel"),
@@ -111,6 +112,7 @@ const broadcastMessageSchema = z.object({
   attachments: z.array(attachmentSchema).default([]),
   pinnedAt: z.string().nullable().default(null),
   pinnedBy: messagePinnedBySchema.nullable().default(null),
+  embeds: z.array(embedSchema).default([]),
 });
 
 export const messageBroadcastSchema = z.object({

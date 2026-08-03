@@ -45,8 +45,18 @@ vi.mock("../auth/clerk.js", () => ({
   verifyAuthHeader: async () => null,
 }));
 
+// The real function drives an actual outbound HTTP request through the
+// SSRF-guarded path proved correct in lib/safe-fetch.test.ts; faking it here
+// keeps the embed-related tests below off the real network entirely, the
+// same way s3.js is faked in attachments.test.ts.
+vi.mock("../lib/safe-fetch.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/safe-fetch.js")>();
+  return { ...actual, safeFetch: vi.fn() };
+});
+
 const { handleApi, resetApiRateLimits } = await import("./index.js");
 const { getPool, initDb, closePool } = await import("../db.js");
+const { safeFetch } = await import("../lib/safe-fetch.js");
 const { upsertUser } = await import("../services/users.js");
 const { handleChatMessage, resetChatRateLimits } = await import(
   "../ws/chat.js"
@@ -118,9 +128,10 @@ describeDb("API authorization", () => {
       `TRUNCATE users, user_preferences, servers, channels, messages,
                 server_members, channel_members, server_invites, server_bans,
                 channel_reads, message_mentions, message_reactions,
-                message_attachments, user_blocks, dm_pairs
+                message_attachments, user_blocks, dm_pairs, link_embeds
        RESTART IDENTITY CASCADE`,
     );
+    vi.mocked(safeFetch).mockReset();
 
     owner = await upsertUser({
       clerkId: "clerk_owner",
@@ -2845,6 +2856,170 @@ describeDb("API authorization", () => {
       }>(owner, "GET", `/api/channels/${textChannelId}/messages`);
       expect(history.body.messages.map((m) => m.body)).toEqual(["one", "two"]);
       expect(history.body.messages.map((m) => m.blocked)).toEqual([true, false]);
+    });
+  });
+
+  describe("link embeds", () => {
+    async function send(
+      as: { id: string; clerk_id: string },
+      channelId: string,
+      body: string,
+    ) {
+      await handleChatMessage(
+        { socket: fakeSocket(), user: await asDbUser(as.id) },
+        { type: "message-create", channelId, body },
+      );
+    }
+
+    function htmlResponse(html: string) {
+      return {
+        statusCode: 200,
+        headers: { "content-type": "text/html" },
+        body: Buffer.from(html, "utf8"),
+        finalUrl: "https://example.com/article",
+      };
+    }
+
+    /** Wait past the microtask queue for the background fetch-then-broadcast
+     * chain in `resolveEmbedInBackground` to finish its real DB round trip. */
+    async function flush() {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+
+    it("broadcasts without an embed first, then a follow-up update once the fetch resolves", async () => {
+      const { textChannelId } = await makeServer();
+      const listener = recordingSocket();
+      await handleChatMessage(
+        { socket: listener.socket, user: await asDbUser(member.id) },
+        { type: "join-channel", channelId: textChannelId },
+      );
+
+      vi.mocked(safeFetch).mockResolvedValueOnce(
+        htmlResponse(`<meta property="og:title" content="Fresh link" />`),
+      );
+      await send(owner, textChannelId, "check this out https://example.com/article");
+
+      const created = JSON.parse(listener.received.at(-1)!) as {
+        type: string;
+        message: { embeds: unknown[] };
+      };
+      expect(created.type).toBe("message-broadcast");
+      expect(created.message.embeds).toEqual([]);
+
+      await flush();
+      const updates = listener.received
+        .map((raw) => JSON.parse(raw) as { type: string; message?: { embeds: unknown[] } })
+        .filter((frame) => frame.type === "message-update");
+      expect(updates).toHaveLength(1);
+      expect(updates[0]!.message!.embeds).toMatchObject([{ title: "Fresh link" }]);
+    });
+
+    it("attaches an already-cached embed to the very first broadcast, with no fetch at all", async () => {
+      const { textChannelId } = await makeServer();
+      const listener = recordingSocket();
+      await handleChatMessage(
+        { socket: listener.socket, user: await asDbUser(member.id) },
+        { type: "join-channel", channelId: textChannelId },
+      );
+
+      const url = "https://example.com/already-known";
+      const { createHash } = await import("node:crypto");
+      await getPool().query(
+        `INSERT INTO link_embeds (url_hash, url, kind, title, failed)
+         VALUES ($1, $2, 'link', 'Known already', false)`,
+        [createHash("sha256").update(url).digest("hex"), url],
+      );
+
+      await send(owner, textChannelId, `see ${url}`);
+      expect(safeFetch).not.toHaveBeenCalled();
+
+      const created = JSON.parse(listener.received.at(-1)!) as {
+        message: { embeds: Array<{ title: string }> };
+      };
+      expect(created.message.embeds).toMatchObject([{ title: "Known already" }]);
+    });
+
+    it("resolves an embed added by an edit, via the same background path", async () => {
+      const { textChannelId } = await makeServer();
+      const listener = recordingSocket();
+      await handleChatMessage(
+        { socket: listener.socket, user: await asDbUser(owner.id) },
+        { type: "join-channel", channelId: textChannelId },
+      );
+
+      await send(owner, textChannelId, "no link yet");
+      const messageId = (
+        await getPool().query<{ id: string }>(
+          `SELECT id FROM messages WHERE channel_id = $1`,
+          [textChannelId],
+        )
+      ).rows[0]!.id;
+      listener.received.length = 0;
+
+      vi.mocked(safeFetch).mockResolvedValueOnce(
+        htmlResponse(`<meta property="og:title" content="Edited in" />`),
+      );
+      const edited = await call<{ message: { embeds: unknown[] } }>(
+        owner,
+        "PATCH",
+        `/api/messages/${messageId}`,
+        { body: "now with a link https://example.com/edited" },
+      );
+      expect(edited.status).toBe(200);
+      expect(edited.body.message.embeds).toEqual([]);
+
+      await flush();
+      const updates = listener.received
+        .map((raw) => JSON.parse(raw) as { type: string; message?: { embeds: unknown[] } })
+        .filter((frame) => frame.type === "message-update");
+      expect(updates.at(-1)!.message!.embeds).toMatchObject([{ title: "Edited in" }]);
+    });
+
+    it("marks a fetch failure as cached, so nothing re-fetches on the very next message", async () => {
+      const { textChannelId } = await makeServer();
+      vi.mocked(safeFetch).mockRejectedValueOnce(new Error("connection refused"));
+      await send(owner, textChannelId, "dead link https://example.com/dead");
+      await flush();
+
+      await send(owner, textChannelId, "same dead link https://example.com/dead");
+      await flush();
+      // One outbound attempt total: the second message's history read is
+      // cache-only, and its own background trigger only fires on an empty
+      // `embeds` result — a failed row is deliberately excluded from that
+      // read, not retried, until FAILURE_TTL_MS passes.
+      expect(safeFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it("serves cached image bytes through the unauthenticated proxy route, and 404s for an unknown hash", async () => {
+      const { createHash } = await import("node:crypto");
+      const url = "https://cdn.example.com/pic.png";
+      const hash = createHash("sha256").update(url).digest("hex");
+      await getPool().query(
+        `INSERT INTO link_embeds (url_hash, url, kind, image_url, failed)
+         VALUES ($1, $2, 'image', $2, false)`,
+        [hash, url],
+      );
+
+      vi.mocked(safeFetch).mockResolvedValueOnce({
+        statusCode: 200,
+        headers: { "content-type": "image/png" },
+        body: Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+        finalUrl: url,
+      });
+
+      // No Authorization header at all — proving this route does not require
+      // Clerk auth, unlike every other /api/ route.
+      const ok = await fetch(`${baseUrl}/api/embeds/${hash}/image`);
+      expect(ok.status).toBe(200);
+      expect(ok.headers.get("content-type")).toBe("image/png");
+      expect(Buffer.from(await ok.arrayBuffer())).toEqual(
+        Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+      );
+
+      const missing = await fetch(
+        `${baseUrl}/api/embeds/${"0".repeat(64)}/image`,
+      );
+      expect(missing.status).toBe(404);
     });
   });
 

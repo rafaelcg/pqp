@@ -22,6 +22,7 @@ export {
   broadcastToChannel,
   evictChannelViewers,
   evictUserFromChannels,
+  resolveEmbedInBackground,
 } from "./chat.js";
 export {
   evictVoiceChannel,
