@@ -12,6 +12,8 @@ import {
   apiFetch,
   deleteMessage as deleteMessageRequest,
   editMessage as editMessageRequest,
+  pinMessage as pinMessageRequest,
+  unpinMessage as unpinMessageRequest,
 } from "@/lib/api";
 import { revokePreviewUrl, type OutgoingAttachment } from "@/lib/attachments";
 import type { RealtimeTransport } from "@/lib/realtime";
@@ -573,6 +575,10 @@ export function createChatController(transport: RealtimeTransport) {
         editedAt: null,
         reactions: [],
         attachments: optimisticAttachments,
+        // A message is never born pinned — only ever pinned after the fact by
+        // someone reacting to it once it exists.
+        pinnedAt: null,
+        pinnedBy: null,
         // Built with the same helper the server uses, so the bubble does not
         // visibly rewrite itself when the broadcast comes back.
         replyTo: replyTo
@@ -654,6 +660,49 @@ export function createChatController(transport: RealtimeTransport) {
       emit();
       try {
         await deleteMessageRequest(messageId);
+      } catch (error) {
+        messages = previous;
+        emit();
+        throw error;
+      }
+    },
+
+    // Optimistic pinnedAt only — pinnedBy is left for the response/broadcast to
+    // fill in, since the local session does not have its own display name to
+    // hand without a round trip, and the server is about to send the real row
+    // either way.
+    async pinMessage(messageId: string) {
+      const previous = messages;
+      const optimisticPinnedAt = new Date().toISOString();
+      messages = messages.map((message) =>
+        message.id === messageId && !message.pinnedAt
+          ? { ...message, pinnedAt: optimisticPinnedAt }
+          : message,
+      );
+      emit();
+      try {
+        const { message } = await pinMessageRequest(messageId);
+        messages = messages.map((entry) =>
+          entry.id === messageId ? { ...entry, ...toChatMessage(message) } : entry,
+        );
+        emit();
+      } catch (error) {
+        messages = previous;
+        emit();
+        throw error;
+      }
+    },
+
+    async unpinMessage(messageId: string) {
+      const previous = messages;
+      messages = messages.map((message) =>
+        message.id === messageId
+          ? { ...message, pinnedAt: null, pinnedBy: null }
+          : message,
+      );
+      emit();
+      try {
+        await unpinMessageRequest(messageId);
       } catch (error) {
         messages = previous;
         emit();

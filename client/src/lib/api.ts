@@ -368,6 +368,15 @@ export const editMessage = (messageId: string, body: string) =>
 export const deleteMessage = (messageId: string) =>
   del<{ ok: boolean }>(`/api/messages/${messageId}`);
 
+export const pinMessage = (messageId: string) =>
+  post<{ message: Message }>(`/api/messages/${messageId}/pin`);
+
+export const unpinMessage = (messageId: string) =>
+  del<{ message: Message }>(`/api/messages/${messageId}/pin`);
+
+export const fetchPinnedMessages = (channelId: string) =>
+  apiFetch<{ messages: Message[] }>(`/api/channels/${channelId}/pins`);
+
 // ------------------------------------------------------------------ members
 
 export interface ServerMember {

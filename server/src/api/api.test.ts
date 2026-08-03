@@ -742,6 +742,157 @@ describeDb("API authorization", () => {
     });
   });
 
+  describe("pinned messages", () => {
+    async function postMessage(channelId: string, author = owner) {
+      const result = await getPool().query<{ id: string }>(
+        `INSERT INTO messages (channel_id, author_id, body) VALUES ($1, $2, $3) RETURNING id`,
+        [channelId, author.id, "hello"],
+      );
+      return result.rows[0]!.id;
+    }
+
+    it("lets an admin pin, and refuses a plain member", async () => {
+      const { textChannelId } = await makeServer();
+      const messageId = await postMessage(textChannelId, member);
+
+      expect(
+        (await call(member, "POST", `/api/messages/${messageId}/pin`)).status,
+      ).toBe(403);
+
+      const pinned = await call<{
+        message: { pinnedAt: string | null; pinnedBy: { id: string } | null };
+      }>(admin, "POST", `/api/messages/${messageId}/pin`);
+      expect(pinned.status).toBe(200);
+      expect(pinned.body.message.pinnedAt).not.toBeNull();
+      expect(pinned.body.message.pinnedBy?.id).toBe(admin.id);
+    });
+
+    it("is idempotent: a second pin does not reassign credit or bump the time", async () => {
+      const { textChannelId } = await makeServer();
+      const messageId = await postMessage(textChannelId);
+
+      const first = await call<{
+        message: { pinnedAt: string | null; pinnedBy: { id: string } | null };
+      }>(admin, "POST", `/api/messages/${messageId}/pin`);
+      const second = await call<{
+        message: { pinnedAt: string | null; pinnedBy: { id: string } | null };
+      }>(owner, "POST", `/api/messages/${messageId}/pin`);
+
+      expect(second.status).toBe(200);
+      expect(second.body.message.pinnedAt).toBe(first.body.message.pinnedAt);
+      // Credit stays with whoever pinned it first, not whoever pinned it last.
+      expect(second.body.message.pinnedBy?.id).toBe(admin.id);
+    });
+
+    it("unpins, and unpinning twice is a no-op success rather than an error", async () => {
+      const { textChannelId } = await makeServer();
+      const messageId = await postMessage(textChannelId);
+      await call(admin, "POST", `/api/messages/${messageId}/pin`);
+
+      expect(
+        (await call(member, "DELETE", `/api/messages/${messageId}/pin`))
+          .status,
+      ).toBe(403);
+
+      const unpinned = await call<{ message: { pinnedAt: string | null } }>(
+        admin,
+        "DELETE",
+        `/api/messages/${messageId}/pin`,
+      );
+      expect(unpinned.status).toBe(200);
+      expect(unpinned.body.message.pinnedAt).toBeNull();
+
+      // Already unpinned — this must still succeed, not 404 or error, so the
+      // client never has to check state before offering the button.
+      expect(
+        (await call(admin, "DELETE", `/api/messages/${messageId}/pin`)).status,
+      ).toBe(200);
+    });
+
+    it("lists pins newest first, and never a message that was never pinned", async () => {
+      const { textChannelId } = await makeServer();
+      const first = await postMessage(textChannelId);
+      const second = await postMessage(textChannelId);
+      const neverPinned = await postMessage(textChannelId);
+      void neverPinned;
+
+      await call(admin, "POST", `/api/messages/${first}/pin`);
+      await call(admin, "POST", `/api/messages/${second}/pin`);
+
+      const list = await call<{ messages: Array<{ id: string }> }>(
+        member,
+        "GET",
+        `/api/channels/${textChannelId}/pins`,
+      );
+      expect(list.status).toBe(200);
+      expect(list.body.messages.map((m) => m.id)).toEqual([second, first]);
+    });
+
+    it("refuses a 51st pin, and a re-pin never counts against the cap", async () => {
+      const { textChannelId } = await makeServer();
+      const ids: string[] = [];
+      for (let i = 0; i < 50; i++) {
+        ids.push(await postMessage(textChannelId));
+      }
+      // Pinned directly rather than through 50 HTTP calls: the cap is what's
+      // under test here, not whether 50 rapid writes fit inside one test's
+      // rate-limit budget — the write limiter caps at 30 per window and would
+      // 429 partway through a real request loop.
+      await getPool().query(
+        `UPDATE messages SET pinned_at = NOW(), pinned_by = $1 WHERE id = ANY($2::uuid[])`,
+        [admin.id, ids],
+      );
+
+      // Re-pinning an already-pinned message must not be blocked by a channel
+      // sitting exactly at the cap — it changes nothing about the count.
+      expect(
+        (await call(admin, "POST", `/api/messages/${ids[0]}/pin`)).status,
+      ).toBe(200);
+
+      const overflow = await postMessage(textChannelId);
+      const blocked = await call(admin, "POST", `/api/messages/${overflow}/pin`);
+      expect(blocked.status).toBe(409);
+    });
+
+    it("lets either participant of a conversation pin — no server role involved", async () => {
+      await makeServer();
+      const opened = await call<{ conversation: { channelId: string } }>(
+        member,
+        "POST",
+        "/api/dms",
+        { userIds: [admin.id] },
+      );
+      expect(opened.status).toBe(201);
+      const channelId = opened.body.conversation.channelId;
+      const messageId = await postMessage(channelId, admin);
+
+      // Pinned by the OTHER participant, not the author and not a server
+      // admin acting on the server — proving the conversation branch of
+      // requirePinAccess, not the server branch, is what let this through.
+      const pinned = await call<{ message: { pinnedAt: string | null } }>(
+        member,
+        "POST",
+        `/api/messages/${messageId}/pin`,
+      );
+      expect(pinned.status).toBe(200);
+      expect(pinned.body.message.pinnedAt).not.toBeNull();
+    });
+
+    it("hides pin routes from someone who cannot see the channel at all", async () => {
+      const { textChannelId } = await makeServer();
+      const messageId = await postMessage(textChannelId);
+
+      expect(
+        (await call(outsider, "POST", `/api/messages/${messageId}/pin`))
+          .status,
+      ).toBe(404);
+      expect(
+        (await call(outsider, "GET", `/api/channels/${textChannelId}/pins`))
+          .status,
+      ).toBe(404);
+    });
+  });
+
   describe("replies", () => {
     interface HistoryMessage {
       id: string;

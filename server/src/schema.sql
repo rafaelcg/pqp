@@ -333,6 +333,24 @@ CREATE INDEX IF NOT EXISTS idx_message_attachments_message
 CREATE INDEX IF NOT EXISTS idx_message_attachments_unclaimed
   ON message_attachments (created_at) WHERE message_id IS NULL;
 
+-- Pinned messages surface the ones worth finding again without a search. Kept
+-- on the message row rather than a join table: a message can be pinned in
+-- only one place (its own channel), so a separate table would let two rows
+-- reference the same pin for no reason, and every existing read path already
+-- has the message row in hand.
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS pinned_at TIMESTAMPTZ;
+-- ON DELETE SET NULL, matching reply_to_id and message_attachments: the
+-- account that pinned something leaving the server must not silently unpin it
+-- or leave a dangling reference.
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS pinned_by UUID
+  REFERENCES users(id) ON DELETE SET NULL;
+
+-- Partial for the same reason idx_messages_reply_to is: the overwhelming
+-- majority of rows are never pinned, and this index exists only to make "list
+-- this channel's pins" and the cap check on pinning a new one cheap.
+CREATE INDEX IF NOT EXISTS idx_messages_pinned
+  ON messages (channel_id, pinned_at DESC) WHERE pinned_at IS NOT NULL;
+
 CREATE INDEX IF NOT EXISTS idx_channels_server
   ON channels (server_id, position);
 

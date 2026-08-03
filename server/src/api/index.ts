@@ -69,11 +69,15 @@ import {
   redeemInvite,
 } from "../services/invites.js";
 import {
+  ChannelPinLimitError,
   deleteMessage,
   getMessage,
   listMessages,
+  listPinnedMessages,
   mapMessage,
+  pinMessage,
   UnknownCursorError,
+  unpinMessage,
   updateMessageBody,
 } from "../services/messages.js";
 import {
@@ -1040,6 +1044,88 @@ router.delete("/api/messages/:messageId", async ({ user }, { messageId }) => {
   });
   return { ok: true };
 });
+
+/**
+ * A conversation has no moderators, so any participant — already proven by
+ * `requireChannelAccess` — may pin or unpin anything in it, the same way any
+ * participant there may delete their own message with nobody to escalate to.
+ * A server channel gates on the same permission as every other moderation
+ * action, matching Discord's own "Manage Messages" requirement rather than
+ * letting an author pin their own post unilaterally.
+ */
+async function requirePinAccess(
+  existing: { server_id: string | null },
+  userId: string,
+): Promise<void> {
+  if (
+    existing.server_id &&
+    !(await canManageServer(existing.server_id, userId))
+  ) {
+    throw new Forbidden("Only owners and admins can pin messages");
+  }
+}
+
+router.post(
+  "/api/messages/:messageId/pin",
+  async ({ user }, { messageId }) => {
+    const existing = await getMessage(messageId!);
+    if (!existing) {
+      throw new NotFound("Message not found");
+    }
+    await requireChannelAccess(existing.channel_id, user.id);
+    await requirePinAccess(existing, user.id);
+
+    try {
+      const pinned = await pinMessage(messageId!, user.id);
+      if (!pinned) {
+        throw new NotFound("Message not found");
+      }
+      const message = mapMessage(pinned);
+      broadcastToChannel(existing.channel_id, {
+        type: "message-update",
+        message,
+      });
+      return { message };
+    } catch (error) {
+      if (error instanceof ChannelPinLimitError) {
+        throw new HttpError(409, error.message);
+      }
+      throw error;
+    }
+  },
+);
+
+router.delete(
+  "/api/messages/:messageId/pin",
+  async ({ user }, { messageId }) => {
+    const existing = await getMessage(messageId!);
+    if (!existing) {
+      throw new NotFound("Message not found");
+    }
+    await requireChannelAccess(existing.channel_id, user.id);
+    await requirePinAccess(existing, user.id);
+
+    const unpinned = await unpinMessage(messageId!);
+    if (!unpinned) {
+      throw new NotFound("Message not found");
+    }
+    const message = mapMessage(unpinned);
+    broadcastToChannel(existing.channel_id, {
+      type: "message-update",
+      message,
+    });
+    return { message };
+  },
+);
+
+router.get(
+  "/api/channels/:channelId/pins",
+  async ({ user }, { channelId }) => {
+    await requireChannelAccess(channelId!, user.id);
+    const messages = await listPinnedMessages(channelId!);
+    return { messages: messages.map(mapMessage) };
+  },
+);
 
 // ----------------------------------------------------------------- search
 

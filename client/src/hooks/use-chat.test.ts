@@ -71,6 +71,8 @@ function serverMessage(overrides: Partial<Message> = {}): Message {
     reactions: [],
     replyTo: null,
     attachments: [],
+    pinnedAt: null,
+    pinnedBy: null,
     ...overrides,
   };
 }

@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   channelKindSchema,
   MESSAGE_MAX_LENGTH,
+  messagePinnedBySchema,
   messageReactionSchema,
   messageReplyRefSchema,
   reactionEmojiSchema,
@@ -108,6 +109,8 @@ const broadcastMessageSchema = z.object({
    * predates attachments.
    */
   attachments: z.array(attachmentSchema).default([]),
+  pinnedAt: z.string().nullable().default(null),
+  pinnedBy: messagePinnedBySchema.nullable().default(null),
 });
 
 export const messageBroadcastSchema = z.object({

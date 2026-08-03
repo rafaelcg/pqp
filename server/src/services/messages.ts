@@ -2,7 +2,9 @@ import {
   buildReplyExcerpt,
   extractMentionUsernames,
   formatUserTag,
+  MAX_PINS_PER_CHANNEL,
   type Attachment,
+  type MessagePinnedBy,
   type MessageReaction,
   type MessageReplyRef,
 } from "@pqp/shared";
@@ -50,16 +52,22 @@ const REPLY_COLUMNS = `m.reply_to_id,
 const REPLY_JOINS = `LEFT JOIN messages parent ON parent.id = m.reply_to_id
      LEFT JOIN users pu ON pu.id = parent.author_id`;
 
+/** Every history read needs to know who pinned a message, not just when. */
+const PIN_COLUMNS = `m.pinned_at, m.pinned_by, pinner.display_name as pinned_by_name`;
+const PIN_JOIN = `LEFT JOIN users pinner ON pinner.id = m.pinned_by`;
+
 /** Every history read selects the same shape; only the cursor clause differs. */
 const MESSAGE_SELECT = `SELECT m.id, m.channel_id, m.author_id, m.body, m.created_at, m.edited_at,
             u.display_name as author_name,
             u.username as author_username,
             u.discriminator as author_discriminator,
             u.avatar_url as author_avatar_url,
-            ${REPLY_COLUMNS}
+            ${REPLY_COLUMNS},
+            ${PIN_COLUMNS}
      FROM messages m
      JOIN users u ON u.id = m.author_id
-     ${REPLY_JOINS}`;
+     ${REPLY_JOINS}
+     ${PIN_JOIN}`;
 
 export interface MessagePage {
   messages: HydratedMessage[];
@@ -271,10 +279,12 @@ export async function getMessage(
             u.display_name as author_name,
             u.username as author_username,
             u.discriminator as author_discriminator,
-            u.avatar_url as author_avatar_url
+            u.avatar_url as author_avatar_url,
+            ${PIN_COLUMNS}
      FROM messages m
      JOIN channels c ON c.id = m.channel_id
      JOIN users u ON u.id = m.author_id
+     ${PIN_JOIN}
      WHERE m.id = $1`,
     [messageId],
   );
@@ -434,6 +444,8 @@ export async function createMessage(
        ${REPLY_JOINS}`,
       [channelId, author.id, body, replyToId ?? null],
     );
+    // A message is never born pinned, so the columns above are left out rather
+    // than joined for nothing — mapMessage already treats them as optional.
     const message = result.rows[0]!;
 
     const claimed = await claimAttachments(client, message.id, verified);
@@ -481,17 +493,20 @@ export async function updateMessageBody(
     `WITH updated AS (
        UPDATE messages SET body = $2, edited_at = NOW()
        WHERE id = $1
-       RETURNING id, channel_id, author_id, body, created_at, edited_at, reply_to_id
+       RETURNING id, channel_id, author_id, body, created_at, edited_at, reply_to_id,
+                 pinned_at, pinned_by
      )
      SELECT m.id, m.channel_id, m.author_id, m.body, m.created_at, m.edited_at,
             u.display_name as author_name,
             u.username as author_username,
             u.discriminator as author_discriminator,
             u.avatar_url as author_avatar_url,
-            ${REPLY_COLUMNS}
+            ${REPLY_COLUMNS},
+            ${PIN_COLUMNS}
      FROM updated m
      JOIN users u ON u.id = m.author_id
-     ${REPLY_JOINS}`,
+     ${REPLY_JOINS}
+     ${PIN_JOIN}`,
     [messageId, body],
   );
   const message = result.rows[0];
@@ -596,6 +611,18 @@ function mapReplyTo(m: DbMessage): MessageReplyRef | null {
  * same whether it happens here or a layer up. The batched *fetch* is the async
  * part, and it has already happened by the time a row reaches this.
  */
+/**
+ * Absent unless `pinned_at` is set — a set `pinned_by` with no display name
+ * means the pinner's account is gone (`ON DELETE SET NULL` clears the column
+ * itself, so this only fires in the gap between that and a row already read).
+ */
+function mapPinnedBy(m: DbMessage): MessagePinnedBy | null {
+  if (!m.pinned_at || !m.pinned_by) {
+    return null;
+  }
+  return { id: m.pinned_by, displayName: m.pinned_by_name ?? "User" };
+}
+
 export function mapMessage(
   m: DbMessage & {
     reactions?: MessageReaction[];
@@ -622,5 +649,147 @@ export function mapMessage(
     // "history ran out" in the middle of a conversation. The body travels and
     // the client draws the curtain.
     blocked: m.blocked ?? false,
+    pinnedAt: m.pinned_at?.toISOString() ?? null,
+    pinnedBy: mapPinnedBy(m),
   };
+}
+
+export class ChannelPinLimitError extends Error {
+  constructor(public readonly limit: number) {
+    super(`This channel already has ${limit} pinned messages`);
+    this.name = "ChannelPinLimitError";
+  }
+}
+
+async function hydrateOne(
+  message: DbMessage,
+): Promise<HydratedMessage> {
+  const [reactions, attachments] = await Promise.all([
+    listReactionsForMessages([message.id]),
+    listAttachmentsForMessages([message.id]),
+  ]);
+  return {
+    ...message,
+    reactions: reactions.get(message.id) ?? [],
+    attachments: attachments.get(message.id) ?? [],
+  };
+}
+
+/**
+ * Pin a message, or hand back its current state if it already is one.
+ *
+ * Idempotent by design rather than by accident: `COALESCE` on both columns
+ * means a second pin from a second admin does not reset who gets credit for
+ * it or bump the sort order in the panel. The cap is checked only on the path
+ * that would actually add a new pin — re-pinning an already-pinned message
+ * must never be blocked by a channel that happens to be at the ceiling.
+ *
+ * The count-then-update is two statements, not one transaction with a row
+ * lock: `MAX_PINS_PER_CHANNEL` is a soft UX ceiling, not a security boundary,
+ * so a race that lets two concurrent pins land at 51 instead of 50 is an
+ * accepted, harmless overshoot rather than something worth serializing every
+ * pin in a channel to prevent.
+ */
+export async function pinMessage(
+  messageId: string,
+  pinnedBy: string,
+): Promise<HydratedMessage | null> {
+  const existing = await getPool().query<{
+    channel_id: string;
+    pinned_at: Date | null;
+  }>(`SELECT channel_id, pinned_at FROM messages WHERE id = $1`, [messageId]);
+  const row = existing.rows[0];
+  if (!row) {
+    return null;
+  }
+
+  if (!row.pinned_at) {
+    const count = await getPool().query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM messages
+       WHERE channel_id = $1 AND pinned_at IS NOT NULL`,
+      [row.channel_id],
+    );
+    if (Number(count.rows[0]!.count) >= MAX_PINS_PER_CHANNEL) {
+      throw new ChannelPinLimitError(MAX_PINS_PER_CHANNEL);
+    }
+  }
+
+  const result = await getPool().query<DbMessage>(
+    `WITH updated AS (
+       UPDATE messages
+       SET pinned_at = COALESCE(pinned_at, NOW()),
+           pinned_by = COALESCE(pinned_by, $2)
+       WHERE id = $1
+       RETURNING id, channel_id, author_id, body, created_at, edited_at, reply_to_id,
+                 pinned_at, pinned_by
+     )
+     SELECT m.id, m.channel_id, m.author_id, m.body, m.created_at, m.edited_at,
+            u.display_name as author_name,
+            u.username as author_username,
+            u.discriminator as author_discriminator,
+            u.avatar_url as author_avatar_url,
+            ${REPLY_COLUMNS},
+            ${PIN_COLUMNS}
+     FROM updated m
+     JOIN users u ON u.id = m.author_id
+     ${REPLY_JOINS}
+     ${PIN_JOIN}`,
+    [messageId, pinnedBy],
+  );
+  return hydrateOne(result.rows[0]!);
+}
+
+/** Unpinning an already-unpinned message is a no-op success, not an error —
+ * the client never has to check "was this actually pinned" before offering
+ * the button. */
+export async function unpinMessage(
+  messageId: string,
+): Promise<HydratedMessage | null> {
+  const result = await getPool().query<DbMessage>(
+    `WITH updated AS (
+       UPDATE messages SET pinned_at = NULL, pinned_by = NULL
+       WHERE id = $1
+       RETURNING id, channel_id, author_id, body, created_at, edited_at, reply_to_id,
+                 pinned_at, pinned_by
+     )
+     SELECT m.id, m.channel_id, m.author_id, m.body, m.created_at, m.edited_at,
+            u.display_name as author_name,
+            u.username as author_username,
+            u.discriminator as author_discriminator,
+            u.avatar_url as author_avatar_url,
+            ${REPLY_COLUMNS},
+            ${PIN_COLUMNS}
+     FROM updated m
+     JOIN users u ON u.id = m.author_id
+     ${REPLY_JOINS}
+     ${PIN_JOIN}`,
+    [messageId],
+  );
+  const message = result.rows[0];
+  return message ? hydrateOne(message) : null;
+}
+
+/**
+ * Every pin in a channel, newest first. No pagination: the cap keeps this to
+ * at most `MAX_PINS_PER_CHANNEL` rows, which is one page by construction.
+ */
+export async function listPinnedMessages(
+  channelId: string,
+): Promise<HydratedMessage[]> {
+  const result = await getPool().query<DbMessage>(
+    `${MESSAGE_SELECT}
+     WHERE m.channel_id = $1 AND m.pinned_at IS NOT NULL
+     ORDER BY m.pinned_at DESC`,
+    [channelId],
+  );
+  const messageIds = result.rows.map((row) => row.id);
+  const [reactionsByMessage, attachmentsByMessage] = await Promise.all([
+    listReactionsForMessages(messageIds),
+    listAttachmentsForMessages(messageIds),
+  ]);
+  return result.rows.map((row) => ({
+    ...row,
+    reactions: reactionsByMessage.get(row.id) ?? [],
+    attachments: attachmentsByMessage.get(row.id) ?? [],
+  }));
 }
