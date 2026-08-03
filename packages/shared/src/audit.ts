@@ -27,6 +27,8 @@ export const AUDIT_ACTIONS = [
   "server.data_export",
   "invite.create",
   "invite.delete",
+  "webhook.create",
+  "webhook.delete",
 ] as const;
 
 export const auditActionSchema = z.enum(AUDIT_ACTIONS);

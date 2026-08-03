@@ -33,6 +33,8 @@ const AUDIT_ACTION_LABELS: Record<string, string> = {
   "server.data_export": "exported the server's data",
   "invite.create": "created an invite",
   "invite.delete": "revoked an invite",
+  "webhook.create": "created a webhook",
+  "webhook.delete": "deleted a webhook",
 };
 
 /**

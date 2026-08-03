@@ -13,6 +13,7 @@ import {
   MAX_ATTACHMENTS_PER_MESSAGE,
 } from "./attachments.js";
 import { embedSchema } from "./embeds.js";
+import { webhookEmbedSchema } from "./webhooks.js";
 
 export const joinChannelMessageSchema = z.object({
   type: z.literal("join-channel"),
@@ -113,6 +114,8 @@ const broadcastMessageSchema = z.object({
   pinnedAt: z.string().nullable().default(null),
   pinnedBy: messagePinnedBySchema.nullable().default(null),
   embeds: z.array(embedSchema).default([]),
+  isWebhook: z.boolean().default(false),
+  webhookEmbeds: z.array(webhookEmbedSchema).default([]),
 });
 
 export const messageBroadcastSchema = z.object({

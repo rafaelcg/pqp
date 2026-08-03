@@ -3422,6 +3422,184 @@ describeDb("API authorization", () => {
     });
   });
 
+  describe("incoming webhooks", () => {
+    async function makeWebhook(name = "Build Bot") {
+      const { serverId, textChannelId } = await makeServer();
+      const res = await call<{ webhook: { id: string; url: string } }>(
+        owner,
+        "POST",
+        `/api/channels/${textChannelId}/webhooks`,
+        { name },
+      );
+      expect(res.status).toBe(201);
+      return { serverId, textChannelId, webhook: res.body.webhook };
+    }
+
+    it("requires manage permission to create, list, and delete", async () => {
+      const { textChannelId, webhook } = await makeWebhook();
+      expect(
+        (
+          await call(member, "POST", `/api/channels/${textChannelId}/webhooks`, {
+            name: "Nope",
+          })
+        ).status,
+      ).toBe(403);
+      expect(
+        (await call(member, "GET", `/api/channels/${textChannelId}/webhooks`))
+          .status,
+      ).toBe(403);
+      expect(
+        (await call(member, "DELETE", `/api/webhooks/${webhook.id}`)).status,
+      ).toBe(403);
+    });
+
+    it("creates a webhook with an executable url, and lists it back", async () => {
+      const { textChannelId, webhook } = await makeWebhook("Deploy Bot");
+      expect(webhook.url).toMatch(
+        new RegExp(`^/api/webhooks/${webhook.id}/[A-Za-z0-9_-]+$`),
+      );
+
+      const list = await call<{
+        webhooks: Array<{ id: string; name: string; url: string }>;
+      }>(owner, "GET", `/api/channels/${textChannelId}/webhooks`);
+      expect(list.body.webhooks).toMatchObject([
+        { id: webhook.id, name: "Deploy Bot" },
+      ]);
+    });
+
+    it("executes with no Clerk auth, appears in history as a webhook message", async () => {
+      const { textChannelId, webhook } = await makeWebhook();
+      const res = await fetch(`${baseUrl}${webhook.url}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          content: "build passed",
+          embeds: [{ title: "Result", color: 0x00ff00 }],
+        }),
+      });
+      expect(res.status).toBe(200);
+
+      const history = await call<{
+        messages: Array<{
+          body: string;
+          authorName: string;
+          isWebhook: boolean;
+          webhookEmbeds: Array<{ title: string }>;
+        }>;
+      }>(owner, "GET", `/api/channels/${textChannelId}/messages`);
+      expect(history.body.messages).toMatchObject([
+        {
+          body: "build passed",
+          authorName: "Build Bot",
+          isWebhook: true,
+          webhookEmbeds: [{ title: "Result" }],
+        },
+      ]);
+    });
+
+    it("broadcasts the executed message live to whoever has the channel open", async () => {
+      const { textChannelId, webhook } = await makeWebhook();
+      const listener = recordingSocket();
+      await handleChatMessage(
+        { socket: listener.socket, user: await asDbUser(owner.id) },
+        { type: "join-channel", channelId: textChannelId },
+      );
+
+      await fetch(`${baseUrl}${webhook.url}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: "live update" }),
+      });
+
+      const frames = listener.received.map(
+        (raw) => JSON.parse(raw) as { type: string; message?: { body: string } },
+      );
+      expect(frames).toContainEqual(
+        expect.objectContaining({
+          type: "message-broadcast",
+          message: expect.objectContaining({ body: "live update" }),
+        }),
+      );
+    });
+
+    it("refuses execution with a wrong token or an unknown id", async () => {
+      const { webhook } = await makeWebhook();
+      const wrongToken = await fetch(
+        `${baseUrl}/api/webhooks/${webhook.id}/not-the-real-token`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ content: "nope" }),
+        },
+      );
+      expect(wrongToken.status).toBe(404);
+
+      const unknownId = await fetch(
+        `${baseUrl}/api/webhooks/00000000-0000-4000-8000-000000000000/${webhook.url.split("/").pop()}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ content: "nope" }),
+        },
+      );
+      expect(unknownId.status).toBe(404);
+    });
+
+    it("rejects a payload with neither content nor embeds", async () => {
+      const { webhook } = await makeWebhook();
+      const res = await fetch(`${baseUrl}${webhook.url}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it("stops working once deleted, but its past messages remain", async () => {
+      const { textChannelId, webhook } = await makeWebhook();
+      await fetch(`${baseUrl}${webhook.url}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: "before deletion" }),
+      });
+
+      expect(
+        (await call(owner, "DELETE", `/api/webhooks/${webhook.id}`)).status,
+      ).toBe(200);
+
+      const afterDelete = await fetch(`${baseUrl}${webhook.url}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: "after deletion" }),
+      });
+      expect(afterDelete.status).toBe(404);
+
+      const history = await call<{ messages: Array<{ body: string }> }>(
+        owner,
+        "GET",
+        `/api/channels/${textChannelId}/messages`,
+      );
+      expect(history.body.messages.map((m) => m.body)).toEqual([
+        "before deletion",
+      ]);
+    });
+
+    it("logs creation and deletion to the audit log", async () => {
+      const { serverId, webhook } = await makeWebhook("Audit Bot");
+      await call(owner, "DELETE", `/api/webhooks/${webhook.id}`);
+
+      const log = await call<{ entries: Array<{ action: string }> }>(
+        owner,
+        "GET",
+        `/api/servers/${serverId}/audit-log`,
+      );
+      expect(log.body.entries.map((e) => e.action)).toEqual([
+        "webhook.delete",
+        "webhook.create",
+      ]);
+    });
+  });
+
   describe("request hygiene", () => {
     it("answers 404 for a malformed id rather than surfacing a database error", async () => {
       const res = await call(owner, "GET", "/api/servers/not-a-uuid/channels");

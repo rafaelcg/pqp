@@ -13,6 +13,8 @@ import {
   createGifAttachmentSchema,
   createInviteSchema,
   createServerSchema,
+  createWebhookSchema,
+  executeWebhookSchema,
   GIF_PAGE_MAX,
   GIF_PAGE_SIZE,
   GIF_QUERY_MAX_LENGTH,
@@ -67,6 +69,15 @@ import { clientAddress, createRateLimiter } from "../lib/rate-limit.js";
 import { createRouter, type RequestContext } from "../lib/router.js";
 import { listAuditLog, logAudit } from "../services/audit.js";
 import { buildServerExport } from "../services/export.js";
+import {
+  createWebhook,
+  deleteWebhook,
+  executeWebhook,
+  getWebhook,
+  getWebhookForExecution,
+  listWebhooksForChannel,
+  type DbWebhook,
+} from "../services/webhooks.js";
 import {
   extractFirstUrl,
   getEmbedCacheState,
@@ -240,6 +251,17 @@ const userSearchLimiter = createRateLimiter({
  * is what stops it from being repeatable enough to matter as a scrape.
  */
 const exportLimiter = createRateLimiter({ capacity: 3, refillPerSecond: 0.02 });
+/**
+ * Keyed by webhook id rather than by caller identity — there is no Clerk
+ * session on this path, only the token in the URL, so the webhook itself is
+ * the only stable key available. Generous enough for real CI/monitoring
+ * traffic (a burst of a build's worth of steps) while still bounding what a
+ * leaked token could do.
+ */
+const webhookExecuteLimiter = createRateLimiter({
+  capacity: 20,
+  refillPerSecond: 1,
+});
 
 export function resetApiRateLimits(): void {
   apiLimiter.reset();
@@ -250,6 +272,7 @@ export function resetApiRateLimits(): void {
   uploadLimiter.reset();
   userSearchLimiter.reset();
   exportLimiter.reset();
+  webhookExecuteLimiter.reset();
 }
 
 class Forbidden extends HttpError {
@@ -1086,6 +1109,73 @@ router.post("/api/channels/:channelId/read", async ({ user }, { channelId }) => 
   return { ok: true };
 });
 
+// -------------------------------------------------------------- webhooks
+
+function mapWebhook(w: DbWebhook) {
+  return {
+    id: w.id,
+    channelId: w.channel_id,
+    name: w.name,
+    avatarUrl: w.avatar_url,
+    url: `/api/webhooks/${w.id}/${w.token}`,
+    createdAt: w.created_at.toISOString(),
+  };
+}
+
+router.get(
+  "/api/channels/:channelId/webhooks",
+  async ({ user }, { channelId }) => {
+    const channel = await requireServerChannel(channelId!);
+    await requireManager(channel.server_id, user.id);
+    return {
+      webhooks: (await listWebhooksForChannel(channelId!)).map(mapWebhook),
+    };
+  },
+);
+
+router.post(
+  "/api/channels/:channelId/webhooks",
+  async ({ req, user }, { channelId }) => {
+    const channel = await requireServerChannel(channelId!);
+    await requireManager(channel.server_id, user.id);
+    const body = createWebhookSchema.parse(await readJsonBody(req));
+    const webhook = await createWebhook(
+      channelId!,
+      channel.server_id,
+      body.name,
+      body.avatarUrl ?? null,
+      user.id,
+    );
+    await logAudit({
+      serverId: channel.server_id,
+      actorId: user.id,
+      action: "webhook.create",
+      targetType: "webhook",
+      targetId: webhook.id,
+      changes: [{ key: "name", old: null, new: webhook.name }],
+    });
+    return created({ webhook: mapWebhook(webhook) });
+  },
+);
+
+router.delete("/api/webhooks/:webhookId", async ({ user }, { webhookId }) => {
+  const webhook = await getWebhook(webhookId!);
+  if (!webhook) {
+    throw new NotFound("Webhook not found");
+  }
+  await requireManager(webhook.server_id, user.id);
+  await deleteWebhook(webhookId!);
+  await logAudit({
+    serverId: webhook.server_id,
+    actorId: user.id,
+    action: "webhook.delete",
+    targetType: "webhook",
+    targetId: webhookId!,
+    changes: [{ key: "name", old: webhook.name, new: null }],
+  });
+  return { ok: true };
+});
+
 // --------------------------------------------------------------- messages
 
 router.get(
@@ -1662,6 +1752,55 @@ async function serveEmbedImage(
   }
 }
 
+const WEBHOOK_EXECUTE_PATH =
+  /^\/api\/webhooks\/([0-9a-f-]{36})\/([A-Za-z0-9_-]+)$/;
+
+/**
+ * Deliberately unauthenticated, same reasoning as the embed-image proxy —
+ * except here the URL itself (id + token) *is* the credential, exactly the
+ * way a real Discord webhook URL is: whoever configured this address in
+ * GitHub, a CI job, or a monitoring tool never has a Clerk session to send.
+ * `getWebhookForExecution` requires both halves to match, so this answers
+ * the same 404 whether the id is wrong, the token is wrong, or both.
+ */
+async function handleWebhookExecute(
+  req: IncomingMessage,
+  res: ServerResponse,
+  webhookId: string,
+  token: string,
+): Promise<void> {
+  if (!webhookExecuteLimiter.take(`webhook:${webhookId}`)) {
+    res.setHeader(
+      "Retry-After",
+      String(webhookExecuteLimiter.retryAfter(`webhook:${webhookId}`)),
+    );
+    sendError(res, 429, "Too many requests", req);
+    return;
+  }
+
+  const webhook = await getWebhookForExecution(webhookId, token);
+  if (!webhook) {
+    sendError(res, 404, "Unknown webhook", req);
+    return;
+  }
+
+  let body;
+  try {
+    body = executeWebhookSchema.parse(await readJsonBody(req));
+  } catch {
+    sendError(res, 400, "Invalid webhook payload", req);
+    return;
+  }
+
+  const message = await executeWebhook(webhook, body);
+  const mapped = mapMessage(message);
+  broadcastToChannel(webhook.channel_id, {
+    type: "message-broadcast",
+    message: mapped,
+  });
+  sendJson(res, 200, { message: mapped }, req);
+}
+
 export async function handleApi(
   req: IncomingMessage,
   res: ServerResponse,
@@ -1682,6 +1821,13 @@ export async function handleApi(
     req.method === "GET" ? EMBED_IMAGE_PATH.exec(pathname) : null;
   if (imageMatch) {
     await serveEmbedImage(req, res, imageMatch[1]!);
+    return;
+  }
+
+  const webhookMatch =
+    req.method === "POST" ? WEBHOOK_EXECUTE_PATH.exec(pathname) : null;
+  if (webhookMatch) {
+    await handleWebhookExecute(req, res, webhookMatch[1]!, webhookMatch[2]!);
     return;
   }
 

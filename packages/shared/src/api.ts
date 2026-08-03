@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { attachmentSchema } from "./attachments.js";
 import { embedSchema } from "./embeds.js";
+import { webhookEmbedSchema } from "./webhooks.js";
 
 export const channelTypeSchema = z.enum(["text", "voice", "category"]);
 export type ChannelType = z.infer<typeof channelTypeSchema>;
@@ -312,6 +313,14 @@ export const messageSchema = z.object({
    * everywhere else in this shape.
    */
   embeds: z.array(embedSchema).default([]),
+  /** True when `authorId` is a webhook's pseudo-identity rather than a real
+   * account — the client shows a "Webhook" tag next to the name instead of
+   * treating it as someone to @mention or open a DM with. */
+  isWebhook: z.boolean().default(false),
+  /** The rich-embed subset a webhook payload supplied — see the schema
+   * comment on `messages.webhook_embeds`, an entirely different concept
+   * from `embeds` above (that is this server's own automatic link unfurl). */
+  webhookEmbeds: z.array(webhookEmbedSchema).default([]),
 });
 
 export const MESSAGE_MAX_LENGTH = 4000;

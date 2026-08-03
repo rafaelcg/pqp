@@ -17,6 +17,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_discrim
   ON users (username, discriminator)
   WHERE username IS NOT NULL AND discriminator IS NOT NULL;
 
+-- A webhook's pseudo-identity: `messages.author_id` is NOT NULL, and every
+-- read path already assumes an author row to join, so a webhook message gets
+-- a real row here rather than teaching every one of those paths to handle a
+-- null author. `is_webhook` is what excludes it from search, lookup, and
+-- mention resolution without a second predicate copied into each of those
+-- queries — see the WHERE clause on `searchUsersByPrefix`/`findUserByTag`.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS is_webhook BOOLEAN NOT NULL DEFAULT FALSE;
+
 -- Who is allowed to open a conversation with this user. 'server_members' —
 -- "someone I already share a server with" — is the default because a shared
 -- server is the only relationship this product models, and expressing the rule
@@ -463,3 +471,39 @@ BEGIN
 EXCEPTION
   WHEN others THEN NULL;
 END $$;
+
+-- Incoming webhooks: an external service POSTs Discord's own wire format
+-- (`content`/`username`/`avatar_url`/`embeds`) to
+-- `/api/webhooks/:id/:token` with no Clerk auth at all — `token` is the only
+-- credential, so it has to be long and looked up by unique index, not
+-- guessed. Deleting a webhook removes the row here but never the pseudo-user
+-- it posted as (see the `users.is_webhook` comment) or the messages it sent —
+-- Discord itself keeps a deleted webhook's history too.
+CREATE TABLE IF NOT EXISTS webhooks (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  channel_id UUID NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+  server_id UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  avatar_url TEXT,
+  token TEXT NOT NULL,
+  pseudo_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_webhooks_token ON webhooks (token);
+CREATE INDEX IF NOT EXISTS idx_webhooks_channel ON webhooks (channel_id);
+
+-- The rich-embed subset a webhook payload supplied (title/description/url/
+-- color/fields/footer) — a wholly different concept from `link_embeds`,
+-- which is the server's own automatic unfurl of a URL someone typed. A
+-- webhook message can carry both: pasted a link (auto-unfurled) and been
+-- sent with its own `embeds` array (this column) in the same request.
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS webhook_embeds JSONB;
+
+-- Discord's own webhooks let a single execution override the display name
+-- and avatar the webhook otherwise defaults to — one CI job posting as
+-- "Build Bot" and another as "Deploy Bot" through the same token. Per
+-- message rather than on the pseudo-user itself, since two executions of
+-- the same webhook can each choose a different override.
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS webhook_username TEXT;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS webhook_avatar_url TEXT;

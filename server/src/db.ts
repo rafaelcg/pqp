@@ -95,6 +95,12 @@ export interface DbMessage {
   pinned_by?: string | null;
   /** Joined from `pinned_by`; absent or null when the pinner has since left. */
   pinned_by_name?: string | null;
+  /** Joined from `author_id`; true when the author is a webhook's pseudo-identity. */
+  author_is_webhook?: boolean;
+  webhook_embeds?: unknown;
+  /** Per-message override of the webhook's own configured name/avatar. */
+  webhook_username?: string | null;
+  webhook_avatar_url?: string | null;
 }
 
 export interface DbInvite {

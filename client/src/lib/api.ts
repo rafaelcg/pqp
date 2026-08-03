@@ -22,6 +22,7 @@ import type {
   UserSearchResponse,
   VoiceBackendType,
   VoiceSessionInfo,
+  Webhook,
 } from "@pqp/shared";
 import { getApiBaseUrl } from "./utils";
 
@@ -500,6 +501,17 @@ export const fetchChannelMembers = (channelId: string) =>
       tag: string | null;
     }>;
   }>(`/api/channels/${channelId}/members`);
+
+export const fetchWebhooks = (channelId: string) =>
+  apiFetch<{ webhooks: Webhook[] }>(`/api/channels/${channelId}/webhooks`);
+
+export const createWebhook = (
+  channelId: string,
+  body: { name: string; avatarUrl?: string | null },
+) => post<{ webhook: Webhook }>(`/api/channels/${channelId}/webhooks`, body);
+
+export const deleteWebhook = (webhookId: string) =>
+  del<{ ok: boolean }>(`/api/webhooks/${webhookId}`);
 
 // ------------------------------------------------------- users, DMs, blocks
 
