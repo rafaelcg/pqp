@@ -127,7 +127,16 @@ const httpServer = createServer((req, res) => {
           "Content-Type": "application/json",
           "Cache-Control": "no-store",
         });
-        res.end(JSON.stringify({ ok: true }));
+        // The deployed commit, so "is the API actually running this code?" has
+        // an answer from outside. It did not, and a stalled deploy went
+        // unnoticed across five releases: every /api/ route answers 401 before
+        // it routes, so a missing route is indistinguishable from an
+        // unauthenticated one, and the client degrades quietly enough that the
+        // app still looks healthy. `/health` is the only unauthenticated
+        // surface, so the version belongs here.
+        res.end(
+          JSON.stringify({ ok: true, version: process.env.APP_VERSION ?? "dev" }),
+        );
       } catch {
         res.writeHead(503, {
           "Content-Type": "application/json",
