@@ -15,6 +15,7 @@ import {
   isAttachmentsConfigured,
   sweepOrphanedAttachments,
 } from "./services/attachments.js";
+import { pruneAuditLog } from "./services/audit.js";
 import { getSocketUser, handleWsConnection } from "./ws/index.js";
 
 const PORT = Number(process.env.PORT ?? 3001);
@@ -250,6 +251,17 @@ const attachmentSweep = setInterval(() => {
 // Unref'd like the rate-limit sweep: a timer this long must not be the reason
 // the process refuses to exit.
 attachmentSweep.unref?.();
+
+/** Daily is plenty for a 90-day retention window; a failure here costs
+ * nothing but disk, and resolves on the next run. */
+const AUDIT_LOG_PRUNE_INTERVAL_MS = 24 * 60 * 60_000;
+
+const auditLogPrune = setInterval(() => {
+  void pruneAuditLog().catch((error) => {
+    console.error("[audit] prune failed:", error);
+  });
+}, AUDIT_LOG_PRUNE_INTERVAL_MS);
+auditLogPrune.unref?.();
 
 async function main() {
   assertAuthConfig();

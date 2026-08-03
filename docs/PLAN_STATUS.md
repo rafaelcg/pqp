@@ -57,8 +57,8 @@ Feature gaps versus Discord are ranked with implementation sketches in
 shipped-but-broken items (permalink route, per-channel drafts, `@mention` autocomplete), plus
 replies, theming, message search, desktop notifications, per-server/channel notification
 levels, file/image attachments, user search by handle, direct and group messages, blocking
-with DM privacy controls, pinned messages, channel categories with drag-to-reorder, and link
-and image embeds (unfurling).
+with DM privacy controls, pinned messages, channel categories with drag-to-reorder, link
+and image embeds (unfurling), and a per-server audit log.
 
 Two subsystems landed alongside those features and shape what comes next:
 
@@ -71,10 +71,9 @@ Two subsystems landed alongside those features and shape what comes next:
   how a private channel or a DM leaks.
 
 Working through the remaining gap list now (2026-08-03), mobile PWA (#9) deliberately last so
-its scope reflects the full feature surface built before it. Next up, in rough order: **audit
-log** (#21), **retention policies**, **data export**, **incoming webhooks** (#23, Discord
-wire-compatible), **screen share** (#11), **SSO/SAML readiness**, and a **public status page** —
-then mobile PWA.
+its scope reflects the full feature surface built before it. Next up, in rough order:
+**retention policies**, **data export**, **incoming webhooks** (#23, Discord wire-compatible),
+**screen share** (#11), **SSO/SAML readiness**, and a **public status page** — then mobile PWA.
 
 ## Still open (operational)
 

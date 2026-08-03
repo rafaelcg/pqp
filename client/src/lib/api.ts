@@ -1,6 +1,7 @@
 import type {
   Attachment,
   AttachmentUrlResponse,
+  AuditLogPage,
   BlockListResponse,
   Channel,
   ChannelUnread,
@@ -443,6 +444,23 @@ export interface ServerBan {
 
 export const listBans = (serverId: string) =>
   apiFetch<{ bans: ServerBan[] }>(`/api/servers/${serverId}/bans`);
+
+/** `before` is the last-loaded entry's own `id` — a bare, ever-increasing
+ * cursor, unlike the message list's timestamp-plus-id pair (see the schema
+ * comment on `audit_log` for why the simpler cursor is safe here). */
+export const fetchAuditLog = (
+  serverId: string,
+  options: { before?: string; action?: string; actorId?: string } = {},
+) => {
+  const params = new URLSearchParams();
+  if (options.before) params.set("before", options.before);
+  if (options.action) params.set("action", options.action);
+  if (options.actorId) params.set("actorId", options.actorId);
+  const query = params.toString();
+  return apiFetch<AuditLogPage>(
+    `/api/servers/${serverId}/audit-log${query ? `?${query}` : ""}`,
+  );
+};
 
 export const addChannelMember = (channelId: string, userId: string) =>
   post<{ ok: boolean }>(`/api/channels/${channelId}/members`, { userId });

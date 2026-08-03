@@ -1,4 +1,4 @@
-import type { Server } from "@pqp/shared";
+import type { AuditLogEntry, Server } from "@pqp/shared";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
@@ -6,12 +6,144 @@ import { Input } from "@/components/ui/input";
 import {
   ApiError,
   deleteServer,
+  fetchAuditLog,
   fetchMembers,
   updateServer,
   type ServerMember,
 } from "@/lib/api";
 
 const TRANSFER_PHRASE = "TRANSFER";
+
+/** A short, human verb phrase per action — the actor's name and (for
+ * role/ban actions) the reason carry the rest of the sentence. */
+const AUDIT_ACTION_LABELS: Record<string, string> = {
+  "member.kick": "kicked a member",
+  "member.ban": "banned a member",
+  "member.unban": "unbanned a member",
+  "member.role_update": "changed a member's role",
+  "channel.create": "created a channel",
+  "channel.update": "updated a channel",
+  "channel.delete": "deleted a channel",
+  "channel.move": "reordered a channel",
+  "message.delete": "deleted someone's message",
+  "server.update": "renamed the server",
+  "server.ownership_transfer": "transferred ownership",
+  "invite.create": "created an invite",
+  "invite.delete": "revoked an invite",
+};
+
+/**
+ * Visible to owners and admins alike — the whole point is that a moderator
+ * with the power to kick, ban, or delete is accountable to the rest of the
+ * community for having used it, not just to the owner.
+ */
+function AuditLogSection({ serverId }: { serverId: string }) {
+  const [entries, setEntries] = useState<AuditLogEntry[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    fetchAuditLog(serverId)
+      .then((res) => {
+        if (!cancelled) {
+          setEntries(res.entries);
+          setHasMore(res.hasMore);
+        }
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setError(messageOf(err, "Failed to load the audit log"));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [serverId]);
+
+  async function loadMore() {
+    const last = entries.at(-1);
+    if (!last) {
+      return;
+    }
+    setLoadingMore(true);
+    try {
+      const res = await fetchAuditLog(serverId, { before: last.id });
+      setEntries((prev) => [...prev, ...res.entries]);
+      setHasMore(res.hasMore);
+    } catch (err) {
+      setError(messageOf(err, "Failed to load more"));
+    } finally {
+      setLoadingMore(false);
+    }
+  }
+
+  return (
+    <section className="space-y-2 border-t border-ink-4 pt-5">
+      <h3 className="font-display text-sm font-bold uppercase tracking-wider text-paper-muted">
+        Audit log
+      </h3>
+      {loading && (
+        <p role="status" aria-live="polite" className="text-sm text-paper-muted">
+          Loading…
+        </p>
+      )}
+      {error && (
+        <p role="alert" className="text-sm text-danger">
+          {error}
+        </p>
+      )}
+      {!loading && entries.length === 0 && !error && (
+        <p className="text-sm text-paper-muted">
+          Nothing recorded yet. Kicks, bans, role changes, and channel or
+          server edits will show up here.
+        </p>
+      )}
+      {entries.length > 0 && (
+        <ul className="max-h-72 space-y-1.5 overflow-y-auto">
+          {entries.map((entry) => (
+            <li
+              key={entry.id}
+              className="rounded-md border border-ink-4 bg-ink-3/40 p-2 text-sm"
+            >
+              <p className="text-paper">
+                <span className="font-semibold">
+                  {entry.actorName ?? "A departed account"}
+                </span>{" "}
+                {AUDIT_ACTION_LABELS[entry.action] ?? entry.action}
+                {entry.reason && (
+                  <span className="text-paper-muted"> — {entry.reason}</span>
+                )}
+              </p>
+              <p className="text-xs text-paper-muted">
+                {new Date(entry.createdAt).toLocaleString()}
+              </p>
+            </li>
+          ))}
+        </ul>
+      )}
+      {hasMore && (
+        <Button
+          variant="secondary"
+          size="sm"
+          disabled={loadingMore}
+          onClick={() => void loadMore()}
+        >
+          {loadingMore ? "Loading…" : "Load more"}
+        </Button>
+      )}
+    </section>
+  );
+}
 
 interface ServerSettingsDialogProps {
   open: boolean;
@@ -59,6 +191,7 @@ export function ServerSettingsDialog({
 
   const serverId = server?.id ?? null;
   const isOwner = server?.role === "owner";
+  const isManager = isOwner || server?.role === "admin";
 
   // Seeded from a ref so a rename landing in the parent does not overwrite what
   // is being typed here; the form only resets when the dialog opens.
@@ -187,12 +320,18 @@ export function ServerSettingsDialog({
           </Button>
         }
       >
-        <div className="px-5 py-5">
+        <div className="space-y-2 px-5 py-5">
           <p className="text-sm text-paper-muted">
-            Only the server owner can rename this server, transfer ownership, or
-            delete it. Ask an owner if something here needs to change.
+            {isManager
+              ? "Only the server owner can rename this server, transfer ownership, or delete it."
+              : "Only owners and admins can change server settings. Ask one if something here needs to change."}
           </p>
         </div>
+        {isManager && serverId && (
+          <div className="px-5 pb-5">
+            <AuditLogSection serverId={serverId} />
+          </div>
+        )}
       </Dialog>
     );
   }
@@ -397,6 +536,8 @@ export function ServerSettingsDialog({
             </p>
           )}
         </section>
+
+        {serverId && <AuditLogSection serverId={serverId} />}
       </div>
     </Dialog>
   );
