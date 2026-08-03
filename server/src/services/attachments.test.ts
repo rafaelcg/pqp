@@ -112,7 +112,7 @@ describeDb("attachments", () => {
     });
 
     if (!options.skipUpload) {
-      storage.objects.set(pending.attachment.storage_key, {
+      storage.objects.set(pending.attachment.storage_key!, {
         contentLength: options.realBytes ?? options.claimedBytes ?? 1024,
         contentType: options.storedContentType ?? contentType,
       });
@@ -384,7 +384,7 @@ describeDb("attachments", () => {
 
     it("drops an attachment whose storage cannot be reached", async () => {
       const row = await upload();
-      storage.unreachableKeys.add(row.storage_key);
+      storage.unreachableKeys.add(row.storage_key!);
       const messageId = await postMessage();
 
       // A storage outage must cost the file, never the message.
@@ -522,7 +522,7 @@ describeDb("attachments", () => {
     it("drops the row even when the object delete fails", async () => {
       const row = await upload();
       await age(row.id, "2 hours");
-      storage.unreachableKeys.add(row.storage_key);
+      storage.unreachableKeys.add(row.storage_key!);
 
       // Keeping it would only re-attempt the same failing delete on every run,
       // forever, and never free the row.

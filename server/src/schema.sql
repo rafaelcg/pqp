@@ -298,6 +298,31 @@ CREATE TABLE IF NOT EXISTS message_attachments (
 ALTER TABLE message_attachments
   ADD COLUMN IF NOT EXISTS position SMALLINT NOT NULL DEFAULT 0;
 
+-- An attachment whose bytes live on somebody else's host. GIFs are the case:
+-- the picker returns a GIPHY URL, and re-hosting a GIF we are allowed to hot-link
+-- would cost storage and egress to gain nothing.
+--
+-- Making a GIF an attachment rather than the message body is what lets it carry
+-- a caption, be edited without exposing the URL, and be previewed before
+-- sending. While a GIF *was* the body, adding a word to it stopped it rendering
+-- as media, because the render test is "the body is nothing but a GIF URL".
+--
+-- Exactly one source per row: `storage_key` for bytes we hold, `remote_url` for
+-- bytes we do not. The CHECK is what stops a row from being silently both or
+-- neither, which the delete and sweep paths would each read the wrong way.
+ALTER TABLE message_attachments ALTER COLUMN storage_key DROP NOT NULL;
+ALTER TABLE message_attachments ADD COLUMN IF NOT EXISTS remote_url TEXT;
+
+DO $$
+BEGIN
+  ALTER TABLE message_attachments DROP CONSTRAINT IF EXISTS message_attachments_source_check;
+  ALTER TABLE message_attachments
+    ADD CONSTRAINT message_attachments_source_check
+    CHECK ((storage_key IS NULL) <> (remote_url IS NULL));
+EXCEPTION
+  WHEN others THEN NULL;
+END $$;
+
 -- Partial on both sides, because the two access patterns never overlap: reads
 -- fetch attachments for a page of messages, the sweeper only ever looks at rows
 -- with no message. A single full index would carry each set through the other's

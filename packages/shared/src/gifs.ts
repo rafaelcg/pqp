@@ -101,6 +101,27 @@ export const gifSchema = z.object({
 
 export type Gif = z.infer<typeof gifSchema>;
 
+/**
+ * Staging a picked GIF as an attachment. The server re-checks `url` against the
+ * host allowlist rather than trusting this shape — everything here is a client
+ * claim, and `url` is the one that would otherwise let a caller render an
+ * arbitrary host inside a private channel.
+ *
+ * `title` becomes the attachment filename, which is what a screen reader
+ * announces and what a download is named, so it is bounded like any other
+ * display string.
+ */
+export const createGifAttachmentSchema = z.object({
+  url: z.string().url(),
+  width: z.number().int().positive().max(20000).optional(),
+  height: z.number().int().positive().max(20000).optional(),
+  title: z.string().max(200).optional(),
+});
+
+export type CreateGifAttachmentRequest = z.infer<
+  typeof createGifAttachmentSchema
+>;
+
 export const gifSearchResponseSchema = z.object({
   gifs: z.array(gifSchema),
 });

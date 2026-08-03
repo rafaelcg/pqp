@@ -6,6 +6,7 @@ import {
   createBlockSchema,
   createChannelSchema,
   createDmSchema,
+  createGifAttachmentSchema,
   createInviteSchema,
   createServerSchema,
   GIF_PAGE_MAX,
@@ -104,8 +105,11 @@ import {
   attachmentUrlTtlSeconds,
   AttachmentTooLargeError,
   createPendingAttachment,
+  createRemoteAttachment,
   getAttachmentForViewer,
   isAttachmentsConfigured,
+  toPublicAttachment,
+  UnsupportedRemoteHostError,
   maxAttachmentBytes,
 } from "../services/attachments.js";
 import {
@@ -665,6 +669,51 @@ router.post(
           413,
           `Attachments are limited to ${error.limit} bytes`,
         );
+      }
+      throw error;
+    }
+  },
+);
+
+/**
+ * Stage a picked GIF as an attachment on this channel.
+ *
+ * Deliberately not gated on `isAttachmentsConfigured()`. A GIF needs no bucket
+ * — its bytes never leave GIPHY — and the common deployment has GIF search on
+ * with S3 off, so gating this on storage would turn the GIF button into a 503
+ * on exactly the setup that has GIFs working.
+ */
+router.post(
+  "/api/channels/:channelId/attachments/gif",
+  async ({ req, res, user }, { channelId }) => {
+    await requireChannelAccess(channelId!, user.id);
+    if (await isDmSendBlocked(channelId!, user.id)) {
+      throw new Forbidden("You cannot send to this conversation");
+    }
+
+    const key = `user:${user.id}`;
+    if (!uploadLimiter.take(key)) {
+      res.setHeader("Retry-After", String(uploadLimiter.retryAfter(key)));
+      throw new HttpError(429, "Slow down");
+    }
+
+    const body = createGifAttachmentSchema.parse(await readJsonBody(req));
+    try {
+      const attachment = await createRemoteAttachment({
+        channelId: channelId!,
+        uploaderId: user.id,
+        url: body.url,
+        // GIPHY titles arrive with a trailing " GIF" and are occasionally
+        // empty; either way this is a display name, never a path.
+        filename: body.title?.trim() || "GIF",
+        contentType: "image/gif",
+        width: body.width,
+        height: body.height,
+      });
+      return created({ attachment: toPublicAttachment(attachment) });
+    } catch (error) {
+      if (error instanceof UnsupportedRemoteHostError) {
+        throw new HttpError(400, error.message);
       }
       throw error;
     }

@@ -9,6 +9,8 @@ interface GifPickerPanelProps {
   onSelect: (gif: Gif) => void;
   onClose: () => void;
   className?: string;
+  /** Prefilled search, so `/gif <query>` opens straight onto results. */
+  initialQuery?: string;
 }
 
 /** Long enough that a typed word is one request, short enough to feel live. */
@@ -25,11 +27,15 @@ export function GifPickerPanel({
   onSelect,
   onClose,
   className,
+  initialQuery = "",
 }: GifPickerPanelProps) {
   const panelRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const tileRefs = useRef(new Map<string, HTMLButtonElement>());
-  const [query, setQuery] = useState("");
+  // Seeded so `/gif cat` opens on results rather than on trending, which is
+  // the difference between the command doing the search and merely opening the
+  // thing you would then have to search in.
+  const [query, setQuery] = useState(initialQuery);
   const [gifs, setGifs] = useState<Gif[]>([]);
   const [status, setStatus] = useState<Status>("loading");
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -199,6 +205,18 @@ export function GifPickerPanel({
               aria-selected={index === selectedIndex}
               onMouseEnter={() => setSelectedIndex(index)}
               onClick={() => onSelect(gif)}
+              // The tile carries the GIF's own aspect ratio. Without it the
+              // button has no height of its own, so the `h-full` image below
+              // resolves against an auto-height parent, and every tile
+              // collapses into a thin strip. Sizing from the intrinsic
+              // dimensions also means the grid does not reflow as the previews
+              // arrive one by one.
+              style={{
+                aspectRatio:
+                  gif.width > 0 && gif.height > 0
+                    ? `${gif.width} / ${gif.height}`
+                    : "1 / 1",
+              }}
               className={cn(
                 "overflow-hidden rounded-md border bg-surface-2 outline-none",
                 index === selectedIndex
