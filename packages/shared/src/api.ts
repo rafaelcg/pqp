@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { attachmentSchema } from "./attachments.js";
 
-export const channelTypeSchema = z.enum(["text", "voice"]);
+export const channelTypeSchema = z.enum(["text", "voice", "category"]);
 export type ChannelType = z.infer<typeof channelTypeSchema>;
 
 /**
@@ -178,6 +178,13 @@ export const channelSchema = z.object({
   isPrivate: z.boolean(),
   topic: z.string().nullable().default(null),
   imageUrl: z.string().nullable().default(null),
+  /**
+   * The category this channel sits under in the sidebar, or null for a
+   * top-level channel. Always null for a category itself and for a
+   * conversation — defaulted so a client built against this schema still
+   * parses a response from an API that predates categories.
+   */
+  parentId: z.string().uuid().nullable().default(null),
 });
 
 /**
@@ -332,15 +339,24 @@ export const createServerSchema = z.object({
   name: z.string().min(1).max(100),
 });
 
-export const createChannelSchema = z.object({
-  name: z
-    .string()
-    .min(1)
-    .max(100)
-    .regex(/^[a-z0-9-_]+$/i, "Use letters, numbers, - or _"),
-  type: channelTypeSchema,
-  isPrivate: z.boolean().optional().default(false),
-});
+export const createChannelSchema = z
+  .object({
+    name: z
+      .string()
+      .min(1)
+      .max(100)
+      .regex(/^[a-z0-9-_]+$/i, "Use letters, numbers, - or _"),
+    type: channelTypeSchema,
+    isPrivate: z.boolean().optional().default(false),
+  })
+  // Permission-overwrite inheritance from a category to its children does
+  // not exist yet (gap #22), so a "private category" would restrict nothing
+  // and only imply a guarantee the product cannot keep. Refused here rather
+  // than silently accepted and ignored.
+  .refine((value) => !(value.type === "category" && value.isPrivate), {
+    message: "Categories cannot be private yet",
+    path: ["isPrivate"],
+  });
 
 export const updateChannelSchema = z.object({
   name: z
@@ -366,6 +382,19 @@ export const updateChannelSchema = z.object({
         [...value].length <= 8,
       "Use an image URL or a short emoji/icon",
     ),
+});
+
+/**
+ * Move a channel to a 0-based position among the siblings sharing
+ * `parentId` — a category for `parentId`, or top-level for `null`. The
+ * server renumbers the whole destination sibling group (and the group being
+ * left, if any) as a contiguous sequence; `index` is clamped rather than
+ * validated, so dropping past the end of a short list is "move to the end",
+ * not an error.
+ */
+export const moveChannelSchema = z.object({
+  parentId: z.string().uuid().nullable(),
+  index: z.number().int().min(0),
 });
 
 export const createInviteSchema = z.object({

@@ -296,7 +296,7 @@ export const fetchChannels = (serverId: string) =>
 export const createChannel = (
   serverId: string,
   name: string,
-  type: "text" | "voice",
+  type: "text" | "voice" | "category",
   isPrivate = false,
 ) =>
   post<{ channel: Channel }>(`/api/servers/${serverId}/channels`, {
@@ -317,6 +317,23 @@ export const updateChannel = (
 
 export const deleteChannel = (channelId: string) =>
   del<{ ok: boolean }>(`/api/channels/${channelId}`);
+
+/**
+ * Move a channel to a 0-based position among the siblings under `parentId`
+ * (a category, or null for top-level). Answers with the server's whole fresh
+ * channel list — reorders are not broadcast live, matching how create/rename/
+ * delete already behave, so the actor's own client is the only one that
+ * needs to update from this response.
+ */
+export const moveChannel = (
+  channelId: string,
+  parentId: string | null,
+  index: number,
+) =>
+  patch<{ channels: Channel[] }>(`/api/channels/${channelId}/move`, {
+    parentId,
+    index,
+  });
 
 export const markChannelRead = (channelId: string) =>
   post<{ ok: boolean }>(`/api/channels/${channelId}/read`);

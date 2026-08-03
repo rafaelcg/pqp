@@ -62,6 +62,7 @@ import {
   joinInvite,
   leaveServer,
   markChannelRead,
+  moveChannel,
   setAuthTokenProvider,
   unblockUser,
   updateChannel,
@@ -197,7 +198,7 @@ interface MainAppContentProps {
 
 interface ChannelPromptState {
   mode: "create" | "rename";
-  type?: "text" | "voice";
+  type?: "text" | "voice" | "category";
   isPrivate?: boolean;
   channel?: Channel;
 }
@@ -867,7 +868,9 @@ function MainAppContent({
         const { channels: list } = await fetchChannels(serverId);
         setChannels(list);
         void loadUnread(serverId);
-        const general = list.find((c) => c.type === "text") ?? list[0];
+        const general =
+          list.find((c) => c.type === "text") ??
+          list.find((c) => c.type !== "category");
         if (general) {
           await selectChannel(general.id, serverId);
         } else {
@@ -936,9 +939,14 @@ function MainAppContent({
         setChannels(next);
         setAppError(null);
         setChannelPrompt(null);
-        await selectChannel(channel.id);
-        if (channel.isPrivate) {
-          setChannelMembersChannel(channel);
+        // A category is a grouping header, not a place to be — selecting it
+        // would try to open a message pane for something that can never have
+        // one.
+        if (channel.type !== "category") {
+          await selectChannel(channel.id);
+          if (channel.isPrivate) {
+            setChannelMembersChannel(channel);
+          }
         }
         return;
       }
@@ -983,13 +991,24 @@ function MainAppContent({
     }
     try {
       await deleteChannel(channelId);
-      const next = channels.filter((c) => c.id !== channelId);
+      // The server SETs NULL any channel's parent_id that pointed at what was
+      // just deleted (a category going away uncategorizes its children rather
+      // than taking them with it) — mirrored here, or those children keep a
+      // parentId that resolves to nothing in this array and silently stop
+      // rendering anywhere at all, in the top-level list or the category.
+      const next = channels
+        .filter((c) => c.id !== channelId)
+        .map((c) =>
+          c.parentId === channelId ? { ...c, parentId: null } : c,
+        );
       setChannels(next);
       if (voiceState.voiceChannelId === channelId) {
         voice.leave();
       }
       if (selectedChannelId === channelId) {
-        const fallback = next.find((c) => c.type === "text") ?? next[0];
+        const fallback =
+          next.find((c) => c.type === "text") ??
+          next.find((c) => c.type !== "category");
         if (fallback) {
           await selectChannel(fallback.id);
         } else {
@@ -1000,6 +1019,28 @@ function MainAppContent({
     } catch (error) {
       setAppError(
         error instanceof Error ? error.message : "Failed to delete channel",
+      );
+    }
+  }
+
+  /**
+   * Replaces the whole channel list from the response rather than splicing
+   * locally — reordering touches every sibling in both the group a channel
+   * joined and the one it left, and re-deriving that client-side is exactly
+   * the kind of drift the delete-category fix above just caught. The server
+   * already did the work; trust its answer.
+   */
+  async function handleMoveChannel(
+    channelId: string,
+    parentId: string | null,
+    index: number,
+  ) {
+    try {
+      const { channels: next } = await moveChannel(channelId, parentId, index);
+      setChannels(next);
+    } catch (error) {
+      setAppError(
+        error instanceof Error ? error.message : "Failed to move channel",
       );
     }
   }
@@ -1117,7 +1158,9 @@ function MainAppContent({
           setAppError("That channel no longer exists or is private.");
         }
         const target =
-          requested ?? list.find((c) => c.type === "text") ?? list[0];
+          requested ??
+          list.find((c) => c.type === "text") ??
+          list.find((c) => c.type !== "category");
         if (target) {
           await selectChannel(target.id, serverId);
           // Only after the newest page is in hand: the list flashes the row if
@@ -1671,6 +1714,9 @@ function MainAppContent({
           }
           onEditChannelMeta={setChannelMetaChannel}
           onDeleteChannel={(id) => void handleDeleteChannel(id)}
+          onMoveChannel={(id, parentId, index) =>
+            void handleMoveChannel(id, parentId, index)
+          }
           onTogglePrivate={(ch) => void handleTogglePrivate(ch)}
           onManageChannelMembers={setChannelMembersChannel}
           onInvite={() => setInviteMode("create")}
@@ -1951,8 +1997,12 @@ function MainAppContent({
         open={channelPrompt !== null}
         title={
           channelPrompt?.mode === "rename"
-            ? "Rename channel"
-            : `Create ${channelPrompt?.type ?? "text"} channel`
+            ? channelPrompt.channel?.type === "category"
+              ? "Rename category"
+              : "Rename channel"
+            : channelPrompt?.type === "category"
+              ? "Create category"
+              : `Create ${channelPrompt?.type ?? "text"} channel`
         }
         placeholder="channel-name"
         confirmLabel={channelPrompt?.mode === "rename" ? "Rename" : "Create"}
@@ -1962,7 +2012,9 @@ function MainAppContent({
             : ""
         }
         checkboxLabel={
-          channelPrompt?.mode === "create" ? "Private channel" : undefined
+          channelPrompt?.mode === "create" && channelPrompt.type !== "category"
+            ? "Private channel"
+            : undefined
         }
         checkboxDefault={channelPrompt?.isPrivate ?? false}
         onClose={() => setChannelPrompt(null)}

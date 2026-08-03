@@ -62,6 +62,9 @@ export function conversationChannel(summary: DmSummary): Channel {
     isPrivate: false,
     topic: null,
     imageUrl: null,
+    // A conversation has no category to sit under — categories are a
+    // server-sidebar concept and a conversation lives in the Home rail.
+    parentId: null,
   };
 }
 

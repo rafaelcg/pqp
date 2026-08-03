@@ -893,6 +893,223 @@ describeDb("API authorization", () => {
     });
   });
 
+  describe("channel categories", () => {
+    async function createChannel(
+      serverId: string,
+      name: string,
+      type: "text" | "voice" | "category",
+      as = owner,
+    ) {
+      const res = await call<{ channel: { id: string; position: number } }>(
+        as,
+        "POST",
+        `/api/servers/${serverId}/channels`,
+        { name, type },
+      );
+      expect(res.status).toBe(201);
+      return res.body.channel;
+    }
+
+    async function channelRow(channelId: string) {
+      const result = await getPool().query<{
+        parent_id: string | null;
+        position: number;
+        type: string;
+      }>(
+        `SELECT parent_id, position, type FROM channels WHERE id = $1`,
+        [channelId],
+      );
+      return result.rows[0]!;
+    }
+
+    it("refuses a private category — inheritance to children does not exist yet", async () => {
+      const { serverId } = await makeServer();
+      const res = await call(owner, "POST", `/api/servers/${serverId}/channels`, {
+        name: "staff",
+        type: "category",
+        isPrivate: true,
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it("lets a manager move a channel into a category, and refuses a plain member", async () => {
+      const { serverId, textChannelId } = await makeServer();
+      const category = await createChannel(serverId, "topics", "category");
+
+      expect(
+        (
+          await call(member, "PATCH", `/api/channels/${textChannelId}/move`, {
+            parentId: category.id,
+            index: 0,
+          })
+        ).status,
+      ).toBe(403);
+
+      const moved = await call(
+        admin,
+        "PATCH",
+        `/api/channels/${textChannelId}/move`,
+        { parentId: category.id, index: 0 },
+      );
+      expect(moved.status).toBe(200);
+      expect((await channelRow(textChannelId)).parent_id).toBe(category.id);
+    });
+
+    it("refuses to nest a category under another category", async () => {
+      const { serverId } = await makeServer();
+      const outer = await createChannel(serverId, "outer", "category");
+      const inner = await createChannel(serverId, "inner", "category");
+
+      const res = await call(owner, "PATCH", `/api/channels/${inner.id}/move`, {
+        parentId: outer.id,
+        index: 0,
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it("refuses a channel naming itself as its own category", async () => {
+      const { textChannelId } = await makeServer();
+      const res = await call(
+        owner,
+        "PATCH",
+        `/api/channels/${textChannelId}/move`,
+        { parentId: textChannelId, index: 0 },
+      );
+      expect(res.status).toBe(400);
+    });
+
+    it("refuses a parent that is not a category at all", async () => {
+      const { serverId, textChannelId } = await makeServer();
+      const otherText = await createChannel(serverId, "other", "text");
+
+      const res = await call(
+        owner,
+        "PATCH",
+        `/api/channels/${textChannelId}/move`,
+        { parentId: otherText.id, index: 0 },
+      );
+      expect(res.status).toBe(400);
+    });
+
+    it("scopes top-level position by type: reordering text never perturbs voice", async () => {
+      // This is the one that would have silently broken without the type
+      // scope on the top-level sibling group: a naive "position among all
+      // top-level channels" would let a text-channel reorder renumber voice
+      // channels that share no visible list with it at all.
+      const { serverId, textChannelId: text0 } = await makeServer();
+      const text1 = await createChannel(serverId, "text-1", "text");
+      const voice0 = await createChannel(serverId, "voice-0", "voice");
+      const voice1 = await createChannel(serverId, "voice-1", "voice");
+
+      const voice0Before = await channelRow(voice0.id);
+      const voice1Before = await channelRow(voice1.id);
+
+      // Move the second text channel to the front of the text list.
+      const res = await call(owner, "PATCH", `/api/channels/${text1.id}/move`, {
+        parentId: null,
+        index: 0,
+      });
+      expect(res.status).toBe(200);
+
+      expect((await channelRow(text1.id)).position).toBe(0);
+      expect((await channelRow(text0)).position).toBe(1);
+      // Untouched — a different top-level group (type='voice').
+      expect(await channelRow(voice0.id)).toEqual(voice0Before);
+      expect(await channelRow(voice1.id)).toEqual(voice1Before);
+    });
+
+    it("closes the gap in the category a channel left, and keeps the category it joined contiguous", async () => {
+      const { serverId, textChannelId } = await makeServer();
+      const category = await createChannel(serverId, "topics", "category");
+      const inCategory = [
+        await createChannel(serverId, "c0", "text"),
+        await createChannel(serverId, "c1", "text"),
+        await createChannel(serverId, "c2", "text"),
+      ];
+      for (const channel of inCategory) {
+        await call(owner, "PATCH", `/api/channels/${channel.id}/move`, {
+          parentId: category.id,
+          index: 99,
+        });
+      }
+
+      // Pull the middle one back out to top-level.
+      await call(owner, "PATCH", `/api/channels/${inCategory[1]!.id}/move`, {
+        parentId: null,
+        index: 0,
+      });
+
+      const remaining = await Promise.all(
+        [inCategory[0]!.id, inCategory[2]!.id].map((id) => channelRow(id)),
+      );
+      expect(remaining.map((r) => r.position).sort()).toEqual([0, 1]);
+
+      // The channel it joined is now the front of the top-level TEXT group —
+      // ahead of the server's original default text channel.
+      expect((await channelRow(inCategory[1]!.id)).position).toBe(0);
+      expect((await channelRow(textChannelId)).position).toBe(1);
+    });
+
+    it("uncategorizes a category's children rather than deleting them, without a position collision", async () => {
+      // makeServer's default text channel is already at top-level position 0
+      // — deleting the category must not hand that same position to the
+      // channel it just released, or the two would tie for first forever.
+      const { serverId, textChannelId } = await makeServer();
+      const category = await createChannel(serverId, "topics", "category");
+      const child = await createChannel(serverId, "child", "text");
+      await call(owner, "PATCH", `/api/channels/${child.id}/move`, {
+        parentId: category.id,
+        index: 0,
+      });
+
+      expect((await call(owner, "DELETE", `/api/channels/${category.id}`)).status).toBe(
+        200,
+      );
+
+      const row = await channelRow(child.id);
+      expect(row.parent_id).toBeNull();
+      const stillExists = await getPool().query(
+        `SELECT 1 FROM channels WHERE id = $1`,
+        [child.id],
+      );
+      expect(stillExists.rows).toHaveLength(1);
+
+      const original = await channelRow(textChannelId);
+      expect([original.position, row.position].sort()).toEqual([0, 1]);
+    });
+
+    it("appends several orphaned children in their prior relative order, after existing top-level channels", async () => {
+      const { serverId, textChannelId } = await makeServer();
+      const category = await createChannel(serverId, "topics", "category");
+      const first = await createChannel(serverId, "first", "text");
+      const second = await createChannel(serverId, "second", "text");
+      for (const channel of [first, second]) {
+        await call(owner, "PATCH", `/api/channels/${channel.id}/move`, {
+          parentId: category.id,
+          index: 99,
+        });
+      }
+
+      await call(owner, "DELETE", `/api/channels/${category.id}`);
+
+      const positions = await Promise.all(
+        [textChannelId, first.id, second.id].map((id) => channelRow(id)),
+      );
+      expect(positions.map((p) => p.position)).toEqual([0, 1, 2]);
+    });
+
+    it("hides move routes from an outsider", async () => {
+      const { textChannelId } = await makeServer();
+      const res = await call(
+        outsider,
+        "PATCH",
+        `/api/channels/${textChannelId}/move`,
+        { parentId: null, index: 0 },
+      );
+      expect(res.status).toBe(404);
+    });
+  });
+
   describe("replies", () => {
     interface HistoryMessage {
       id: string;

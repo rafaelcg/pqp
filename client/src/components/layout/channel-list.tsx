@@ -1,4 +1,15 @@
-import { Hash, Lock, Mic, Plus, Search, Settings, Users, X } from "lucide-react";
+import {
+  ChevronRight,
+  FolderPlus,
+  Hash,
+  Lock,
+  Mic,
+  Plus,
+  Search,
+  Settings,
+  Users,
+  X,
+} from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import type { Channel, Server, VoiceParticipant } from "@pqp/shared";
 import { SearchDialog } from "@/components/search/search-dialog";
@@ -8,6 +19,10 @@ import {
 } from "@/components/ui/context-menu";
 import { ChannelListSkeleton } from "@/components/ui/skeleton";
 import { VoiceAvatar } from "@/components/voice/voice-avatar";
+import {
+  loadCollapsedCategories,
+  toggleCollapsedCategory,
+} from "@/lib/collapsed-categories";
 import {
   notificationLevelItems,
   useChannelNotificationLevel,
@@ -31,6 +46,14 @@ export function formatBadgeCount(value: number): string {
   return value > 99 ? "99+" : String(value);
 }
 
+/** A channel or category, positioned within the one sibling group it belongs
+ * to — see the comment on `moveChannel` (server/src/services/servers.ts) for
+ * what "sibling group" means: top-level text, top-level voice, and each
+ * category's own children are each scoped separately. */
+function sortByPosition(list: Channel[]): Channel[] {
+  return [...list].sort((a, b) => a.position - b.position);
+}
+
 interface ChannelListProps {
   server: Server | null;
   channels: Channel[];
@@ -42,12 +65,20 @@ interface ChannelListProps {
   activeVoiceChannelId: string | null;
   unread: Record<string, UnreadState>;
   onSelectChannel: (channelId: string) => void;
-  onCreateChannel: (type: "text" | "voice", isPrivate: boolean) => void;
+  onCreateChannel: (
+    type: "text" | "voice" | "category",
+    isPrivate: boolean,
+  ) => void;
   onRenameChannel: (channel: Channel) => void;
   onEditChannelMeta?: (channel: Channel) => void;
   onDeleteChannel: (channelId: string) => void;
   onTogglePrivate: (channel: Channel) => void;
   onManageChannelMembers: (channel: Channel) => void;
+  onMoveChannel: (
+    channelId: string,
+    parentId: string | null,
+    index: number,
+  ) => void;
   onInvite: () => void;
   onOpenMembers: () => void;
   onOpenServerSettings: () => void;
@@ -73,6 +104,7 @@ export function ChannelList({
   onDeleteChannel,
   onTogglePrivate,
   onManageChannelMembers,
+  onMoveChannel,
   onInvite,
   onOpenMembers,
   onOpenServerSettings,
@@ -80,10 +112,31 @@ export function ChannelList({
   mobileOpen = false,
   onMobileClose,
 }: ChannelListProps) {
-  const textChannels = channels.filter((c) => c.type === "text");
-  const voiceChannels = channels.filter((c) => c.type === "voice");
+  const topLevelText = sortByPosition(
+    channels.filter((c) => c.type === "text" && !c.parentId),
+  );
+  const topLevelVoice = sortByPosition(
+    channels.filter((c) => c.type === "voice" && !c.parentId),
+  );
+  const categories = sortByPosition(
+    channels.filter((c) => c.type === "category"),
+  );
+  const categoryOptions = categories.map((c) => ({ id: c.id, name: c.name }));
+  const childrenByCategory = new Map<string, Channel[]>();
+  for (const category of categories) {
+    childrenByCategory.set(
+      category.id,
+      sortByPosition(channels.filter((c) => c.parentId === category.id)),
+    );
+  }
+
   const speaking = new Set(speakingPeerIds);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState<Set<string>>(() =>
+    loadCollapsedCategories(),
+  );
+  const [draggedId, setDraggedId] = useState<string | null>(null);
+  const [dragOverId, setDragOverId] = useState<string | null>(null);
 
   const hasServer = !!server;
   useEffect(() => {
@@ -99,6 +152,130 @@ export function ChannelList({
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [hasServer]);
+
+  function toggleCollapsed(categoryId: string) {
+    setCollapsed(toggleCollapsedCategory(categoryId));
+  }
+
+  /**
+   * Dropping onto a category header files the dragged channel inside it, at
+   * the end. Dropping onto anything else takes that row's own slot within
+   * its own sibling group — pushing it and everything after it down by one,
+   * the ordinary "insert before" drag semantic. `position` is trusted as a
+   * dense 0..n-1 index directly: the server always renumbers a sibling group
+   * contiguously after every move, so there are never gaps to account for.
+   */
+  function handleDrop(target: Channel) {
+    if (!draggedId || draggedId === target.id) {
+      setDraggedId(null);
+      setDragOverId(null);
+      return;
+    }
+    const dragged = channels.find((c) => c.id === draggedId);
+    setDraggedId(null);
+    setDragOverId(null);
+    if (!dragged) {
+      return;
+    }
+    if (target.type === "category" && dragged.type !== "category") {
+      const kids = childrenByCategory.get(target.id) ?? [];
+      onMoveChannel(dragged.id, target.id, kids.length);
+      return;
+    }
+    onMoveChannel(dragged.id, target.parentId, target.position);
+  }
+
+  /** "Move up"/"Move down" swap a channel with its immediate neighbour within
+   * its own sibling group — the keyboard- and touch-reachable equivalent of
+   * dragging one slot, and the only way to reorder at all without a mouse. */
+  function moveWithinGroup(
+    group: Channel[],
+    channel: Channel,
+    direction: -1 | 1,
+  ) {
+    const index = group.findIndex((c) => c.id === channel.id);
+    const targetIndex = index + direction;
+    if (index === -1 || targetIndex < 0 || targetIndex >= group.length) {
+      return;
+    }
+    onMoveChannel(channel.id, channel.parentId, targetIndex);
+  }
+
+  function renderRow(channel: Channel, group: Channel[]) {
+    const index = group.findIndex((c) => c.id === channel.id);
+    const occupants =
+      channel.type === "voice" ? (voiceOccupancy[channel.id] ?? []) : [];
+    return (
+      <div key={channel.id} className="mb-0.5">
+        <ChannelRow
+          channel={channel}
+          selected={selectedChannelId === channel.id}
+          unread={unread[channel.id] ?? EMPTY_UNREAD}
+          connected={activeVoiceChannelId === channel.id}
+          canManage={canManage}
+          icon={<ChannelIcon channel={channel} />}
+          isDragging={draggedId === channel.id}
+          isDragOver={dragOverId === channel.id}
+          onSelect={() => {
+            onSelectChannel(channel.id);
+            onMobileClose?.();
+          }}
+          onRename={() => onRenameChannel(channel)}
+          onEditMeta={
+            onEditChannelMeta ? () => onEditChannelMeta(channel) : undefined
+          }
+          onDelete={() => onDeleteChannel(channel.id)}
+          onTogglePrivate={() => onTogglePrivate(channel)}
+          onManageMembers={() => onManageChannelMembers(channel)}
+          categories={categoryOptions}
+          onMoveToCategory={(categoryId) =>
+            onMoveChannel(
+              channel.id,
+              categoryId,
+              categoryId
+                ? (childrenByCategory.get(categoryId)?.length ?? 0)
+                : (channel.type === "voice"
+                    ? topLevelVoice.length
+                    : topLevelText.length),
+            )
+          }
+          onMoveUp={
+            index > 0 ? () => moveWithinGroup(group, channel, -1) : undefined
+          }
+          onMoveDown={
+            index < group.length - 1
+              ? () => moveWithinGroup(group, channel, 1)
+              : undefined
+          }
+          onDragStart={() => setDraggedId(channel.id)}
+          onDragEnd={() => {
+            setDraggedId(null);
+            setDragOverId(null);
+          }}
+          onDragOverRow={() => draggedId && setDragOverId(channel.id)}
+          onDrop={() => handleDrop(channel)}
+        />
+        {occupants.length > 0 && (
+          <ul className="ml-2 space-y-0.5 border-l border-ink-4/70 py-0.5 pl-2">
+            {occupants.map((person) => (
+              <li
+                key={person.peerId}
+                className="flex items-center gap-1.5 rounded px-1.5 py-0.5 text-xs text-paper-muted"
+              >
+                <VoiceAvatar
+                  name={person.displayName}
+                  avatarUrl={person.avatarUrl}
+                  isSpeaking={speaking.has(person.peerId)}
+                  size="sm"
+                />
+                <span className="truncate">{person.displayName}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    );
+  }
 
   const headerItems: ContextMenuItemDef[] = server
     ? [
@@ -217,29 +394,7 @@ export function ChannelList({
               onAdd={() => onCreateChannel("text", false)}
               onAddPrivate={() => onCreateChannel("text", true)}
             >
-              {textChannels.map((channel) => (
-                <ChannelRow
-                  key={channel.id}
-                  channel={channel}
-                  selected={selectedChannelId === channel.id}
-                  unread={unread[channel.id] ?? EMPTY_UNREAD}
-                  canManage={canManage}
-                  icon={<ChannelIcon channel={channel} />}
-                  onSelect={() => {
-                    onSelectChannel(channel.id);
-                    onMobileClose?.();
-                  }}
-                  onRename={() => onRenameChannel(channel)}
-                  onEditMeta={
-                    onEditChannelMeta
-                      ? () => onEditChannelMeta(channel)
-                      : undefined
-                  }
-                  onDelete={() => onDeleteChannel(channel.id)}
-                  onTogglePrivate={() => onTogglePrivate(channel)}
-                  onManageMembers={() => onManageChannelMembers(channel)}
-                />
-              ))}
+              {topLevelText.map((channel) => renderRow(channel, topLevelText))}
             </ChannelSection>
 
             <ChannelSection
@@ -248,53 +403,67 @@ export function ChannelList({
               onAdd={() => onCreateChannel("voice", false)}
               onAddPrivate={() => onCreateChannel("voice", true)}
             >
-              {voiceChannels.map((channel) => {
-                const occupants = voiceOccupancy[channel.id] ?? [];
-                return (
-                  <div key={channel.id} className="mb-0.5">
-                    <ChannelRow
-                      channel={channel}
-                      selected={selectedChannelId === channel.id}
-                      unread={unread[channel.id] ?? EMPTY_UNREAD}
-                      connected={activeVoiceChannelId === channel.id}
-                      canManage={canManage}
-                      icon={<ChannelIcon channel={channel} />}
-                      onSelect={() => {
-                        onSelectChannel(channel.id);
-                        onMobileClose?.();
-                      }}
-                      onRename={() => onRenameChannel(channel)}
-                      onEditMeta={
-                        onEditChannelMeta
-                          ? () => onEditChannelMeta(channel)
-                          : undefined
-                      }
-                      onDelete={() => onDeleteChannel(channel.id)}
-                      onTogglePrivate={() => onTogglePrivate(channel)}
-                      onManageMembers={() => onManageChannelMembers(channel)}
-                    />
-                    {occupants.length > 0 && (
-                      <ul className="ml-2 space-y-0.5 border-l border-ink-4/70 py-0.5 pl-2">
-                        {occupants.map((person) => (
-                          <li
-                            key={person.peerId}
-                            className="flex items-center gap-1.5 rounded px-1.5 py-0.5 text-xs text-paper-muted"
-                          >
-                            <VoiceAvatar
-                              name={person.displayName}
-                              avatarUrl={person.avatarUrl}
-                              isSpeaking={speaking.has(person.peerId)}
-                              size="sm"
-                            />
-                            <span className="truncate">{person.displayName}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-                );
-              })}
+              {topLevelVoice.map((channel) =>
+                renderRow(channel, topLevelVoice),
+              )}
             </ChannelSection>
+
+            {(categories.length > 0 || canManage) && (
+              <div className="mb-4">
+                <div className="mb-1 flex items-center justify-between px-2">
+                  <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-paper-muted">
+                    Categories
+                  </span>
+                  {canManage && (
+                    <button
+                      type="button"
+                      title="New category"
+                      className="rounded p-0.5 text-paper-muted hover:bg-ink-3 hover:text-paper"
+                      onClick={() => onCreateChannel("category", false)}
+                    >
+                      <FolderPlus className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                </div>
+                {categories.map((category) => {
+                  const kids = childrenByCategory.get(category.id) ?? [];
+                  const isCollapsed = collapsed.has(category.id);
+                  return (
+                    <div key={category.id} className="mb-1">
+                      <CategoryHeader
+                        category={category}
+                        collapsed={isCollapsed}
+                        onToggle={() => toggleCollapsed(category.id)}
+                        canManage={canManage}
+                        onRename={() => onRenameChannel(category)}
+                        onDelete={() => onDeleteChannel(category.id)}
+                        isDragOver={dragOverId === category.id}
+                        onDragStart={() => setDraggedId(category.id)}
+                        onDragEnd={() => {
+                          setDraggedId(null);
+                          setDragOverId(null);
+                        }}
+                        onDragOverRow={() =>
+                          draggedId && setDragOverId(category.id)
+                        }
+                        onDrop={() => handleDrop(category)}
+                      />
+                      {!isCollapsed && (
+                        <div className="ml-2 border-l border-ink-4/70 pl-2">
+                          {kids.length === 0 ? (
+                            <p className="px-2 py-1 text-xs italic text-paper-muted">
+                              Empty — drag a channel here.
+                            </p>
+                          ) : (
+                            kids.map((channel) => renderRow(channel, kids))
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </>
         )}
       </div>
@@ -375,6 +544,82 @@ function ChannelSection({
   );
 }
 
+function CategoryHeader({
+  category,
+  collapsed,
+  onToggle,
+  canManage,
+  onRename,
+  onDelete,
+  isDragOver,
+  onDragStart,
+  onDragEnd,
+  onDragOverRow,
+  onDrop,
+}: {
+  category: Channel;
+  collapsed: boolean;
+  onToggle: () => void;
+  canManage: boolean;
+  onRename: () => void;
+  onDelete: () => void;
+  isDragOver: boolean;
+  onDragStart: () => void;
+  onDragEnd: () => void;
+  onDragOverRow: () => void;
+  onDrop: () => void;
+}) {
+  const items: ContextMenuItemDef[] = canManage
+    ? [
+        { id: "rename", label: "Rename category", onSelect: onRename },
+        { id: "sep", label: "", separator: true },
+        {
+          id: "delete",
+          label: "Delete category",
+          danger: true,
+          onSelect: onDelete,
+        },
+      ]
+    : [];
+
+  return (
+    <ContextMenu items={items}>
+      <div
+        draggable={canManage}
+        onDragStart={onDragStart}
+        onDragEnd={onDragEnd}
+        onDragOver={(event) => {
+          event.preventDefault();
+          onDragOverRow();
+        }}
+        onDrop={(event) => {
+          event.preventDefault();
+          onDrop();
+        }}
+        className={cn(
+          "flex items-center gap-1 rounded-md px-2 py-1 text-xs font-semibold uppercase tracking-wide text-paper-muted hover:bg-ink-3/70",
+          isDragOver && "ring-1 ring-inset ring-signal/60",
+        )}
+      >
+        <button
+          type="button"
+          onClick={onToggle}
+          className="flex min-w-0 flex-1 items-center gap-1"
+          aria-expanded={!collapsed}
+        >
+          <ChevronRight
+            className={cn(
+              "h-3 w-3 shrink-0 transition-transform",
+              !collapsed && "rotate-90",
+            )}
+          />
+          <span className="truncate">{category.name}</span>
+        </button>
+      </div>
+    </ContextMenu>
+  );
+}
+
 function ChannelRow({
   channel,
   selected,
@@ -382,12 +627,22 @@ function ChannelRow({
   connected = false,
   canManage,
   icon,
+  isDragging,
+  isDragOver,
   onSelect,
   onRename,
   onEditMeta,
   onDelete,
   onTogglePrivate,
   onManageMembers,
+  categories,
+  onMoveToCategory,
+  onMoveUp,
+  onMoveDown,
+  onDragStart,
+  onDragEnd,
+  onDragOverRow,
+  onDrop,
 }: {
   channel: Channel;
   selected: boolean;
@@ -395,20 +650,28 @@ function ChannelRow({
   connected?: boolean;
   canManage: boolean;
   icon: ReactNode;
+  isDragging: boolean;
+  isDragOver: boolean;
   onSelect: () => void;
   onRename: () => void;
   onEditMeta?: () => void;
   onDelete: () => void;
   onTogglePrivate: () => void;
   onManageMembers: () => void;
+  categories: Array<{ id: string; name: string }>;
+  onMoveToCategory: (categoryId: string | null) => void;
+  onMoveUp?: () => void;
+  onMoveDown?: () => void;
+  onDragStart: () => void;
+  onDragEnd: () => void;
+  onDragOverRow: () => void;
+  onDrop: () => void;
 }) {
   const notifications = useChannelNotificationLevel(channel);
   const items: ContextMenuItemDef[] = [];
 
   if (canManage) {
-    items.push(
-      { id: "rename", label: "Rename channel", onSelect: onRename },
-    );
+    items.push({ id: "rename", label: "Rename channel", onSelect: onRename });
     if (onEditMeta) {
       items.push({
         id: "meta",
@@ -428,8 +691,36 @@ function ChannelRow({
         onSelect: onManageMembers,
       });
     }
+    items.push({ id: "sep-1", label: "", separator: true });
+    if (onMoveUp) {
+      items.push({ id: "move-up", label: "Move up", onSelect: onMoveUp });
+    }
+    if (onMoveDown) {
+      items.push({
+        id: "move-down",
+        label: "Move down",
+        onSelect: onMoveDown,
+      });
+    }
+    if (channel.parentId) {
+      items.push({
+        id: "uncategorize",
+        label: "Remove from category",
+        onSelect: () => onMoveToCategory(null),
+      });
+    }
+    for (const category of categories) {
+      if (category.id === channel.parentId) {
+        continue;
+      }
+      items.push({
+        id: `move-to-${category.id}`,
+        label: `Move to “${category.name}”`,
+        onSelect: () => onMoveToCategory(category.id),
+      });
+    }
     items.push(
-      { id: "sep-1", label: "", separator: true },
+      { id: "sep-2", label: "", separator: true },
       {
         id: "delete",
         label: "Delete channel",
@@ -441,7 +732,7 @@ function ChannelRow({
 
   items.push(
     ...(items.length > 0 && canManage
-      ? [{ id: "sep-2", label: "", separator: true } as ContextMenuItemDef]
+      ? [{ id: "sep-3", label: "", separator: true } as ContextMenuItemDef]
       : []),
     {
       id: "copy-id",
@@ -460,6 +751,17 @@ function ChannelRow({
   return (
     <ContextMenu items={items}>
       <div
+        draggable={canManage}
+        onDragStart={onDragStart}
+        onDragEnd={onDragEnd}
+        onDragOver={(event) => {
+          event.preventDefault();
+          onDragOverRow();
+        }}
+        onDrop={(event) => {
+          event.preventDefault();
+          onDrop();
+        }}
         className={cn(
           "group relative flex items-center gap-1 rounded-md px-2 py-1.5 text-sm",
           selected
@@ -468,6 +770,8 @@ function ChannelRow({
           connected && "bg-signal/10 text-signal ring-1 ring-inset ring-signal/30",
           hasUnread && !muted && !selected && !connected && "text-paper",
           muted && !selected && !connected && "opacity-50",
+          isDragging && "opacity-40",
+          isDragOver && "ring-1 ring-inset ring-signal/60",
         )}
       >
         {hasUnread && !muted && (

@@ -43,7 +43,7 @@ They cost days, not weeks.
 | 11 | Screen share with audio | screen-share | critical | large |
 | 12 | Call quality indicators and a TURN-relay badge | diagnostics | medium | small |
 | 13 | ✅ Theming: light mode, a token layer, and synced user preferences | theming | medium | medium |
-| 14 | Channel categories and drag-to-reorder | server-structure | high | medium |
+| 14 | ✅ Channel categories and drag-to-reorder | server-structure | high | medium |
 | 15 | Camera video in voice channels | video | medium | medium |
 | 16 | Keyboard access to message actions and a screen-reader-visible message log | accessibility | medium | small |
 | 17 | ✅ Find people by handle, and stop re-rolling their tag | identity | high | small |
@@ -313,25 +313,19 @@ MESH VS SFU: video mesh is O(n²) uplinks — usable at 2-3 people, unusable at 
 
 What a server needs once it outgrows a handful of friends. The permission system is the deepest item in the document and gates several others.
 
-#### 14. Channel categories and drag-to-reorder
+#### 14. ✅ Channel categories and drag-to-reorder
 
-*high pain · medium · server-structure*
+*high pain · medium · server-structure — shipped 2026-08*
 
-**Why it matters.** Channel order is fixed at creation with no way to change it, so a server is permanently stuck with two flat lists in whatever order things happened to be made.
+**What shipped, and where it differs from the original sketch.** A category is a channel row (`type='category'`), as sketched — `channels.parent_id` (server/src/schema.sql) points at one, `ON DELETE SET NULL` so deleting a category uncategorizes its children rather than taking them with it.
 
-**Today.** `channels.position INTEGER` exists (server/src/schema.sql:51) and is indexed (`idx_channels_server` on `(server_id, position)`, :136-137), but it is only ever assigned as MAX+1 at creation (server/src/services/servers.ts:83-87) and `updateChannelSchema` (packages/shared/src/api.ts:132-156) has no `position` field, so nothing can mutate it. The client ignores position for grouping and just partitions by type: `channels.filter(c => c.type === 'text')` at client/src/components/layout/channel-list.tsx:70-71.
+The one design point the sketch didn't anticipate: **`position` is scoped by `(parent_id, type)` at the top level, not by `parent_id` alone.** The sidebar renders top-level text, top-level voice and categories as three separate lists, never one interleaved one — so a naive "position among all top-level channels" would let reordering the text list silently renumber voice channels that share no visible list with it at all. Inside a real category the group is *not* type-scoped; text and voice channels mix together there, matching how the sidebar nests them under one heading. See the comment on `moveChannel` (server/src/services/servers.ts) for the full reasoning — a dedicated test (`scopes top-level position by type`) pins it, and reverting the scoping is what it's there to catch.
 
-**Sketch.**
+No `@dnd-kit` or any new dependency: native HTML5 drag-and-drop handles desktop pointer dragging with zero library weight, and every row's context menu carries "Move up"/"Move down"/"Move to \<category\>" as a keyboard- and touch-reachable equivalent — which doubles as the accessible path gap #16 wants, not just a fallback. No new WS broadcast either: channel create/rename/delete were never broadcast live to begin with, so a reorder joining that same silence is consistent rather than a new gap — the actor's own client updates from its own response, matching how the other three channel mutations already behave.
 
-SCHEMA: `ALTER TABLE channels ADD COLUMN parent_id UUID REFERENCES channels(id) ON DELETE SET NULL` and widen the type CHECK to `('text','voice','category')`. Modelling a category as a channel row (Discord's approach) beats a separate table because permission-overwrite inheritance later walks one table, not two. Index `(server_id, parent_id, position)`.
+`PATCH /api/channels/:channelId/move` takes `{parentId, index}` and renumbers both the sibling group a channel joins and the one it leaves as contiguous 0..n-1 sequences in one transaction, guarded by `requireManager`. Rejects nesting a category under a category, and a channel naming itself as its own parent.
 
-API: `PATCH /api/servers/:serverId/channels/order` accepting `[{id, parentId, position}]` applied in one transaction, guarded by `requireManager` until the permission work lands. Reject parenting a category under a category. Add `parentId` to `createChannelSchema`/`updateChannelSchema` and to `mapChannel` (server/src/services/servers.ts:299).
-
-WS: broadcast `channels-reordered {serverId, channels:[{id,parentId,position}]}` to server members (added to `chatServerMessageSchema` and `CHAT_SERVER_MESSAGE_TYPES`, packages/shared/src/chat.ts:116,136) — otherwise two admins reordering concurrently get silently divergent sidebars until a refresh.
-
-CLIENT: channel-list.tsx grows collapsible category sections (persist the collapsed-id set alongside the existing local settings) and drag handles. Use @dnd-kit/core, not HTML5 drag-and-drop — the sidebar is already a mobile drawer (channel-list.tsx:90-95) and HTML5 DnD does not work on touch. Reorder optimistically, PATCH, roll back on error. Add `reorderChannels()` to client/src/lib/api.ts.
-
-Most of the week is the drag interaction and nesting rules, not the backend.
+One real bug surfaced by testing with a pre-existing top-level channel already at position 0 (not by design — a browser check happened to have one): deleting a category renumbers its now-uncategorized former children to append after whatever top-level channels of the same type already existed, rather than keeping their old category-scoped position values, which collided. Caught by a test, mutation-checked (revert the fix, exactly that test fails).
 
 #### 22. Real permission system: roles with bitfields and per-channel overwrites
 
