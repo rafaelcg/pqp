@@ -187,7 +187,16 @@ export function GifPickerPanel({
           id={LISTBOX_ID}
           role="listbox"
           aria-label="GIF results"
-          className="grid flex-1 grid-cols-2 content-start gap-1.5 overflow-y-auto p-1.5"
+          // Explicit row height, and it is load-bearing. A tile's width comes
+          // from the column and its height would come from that width, so
+          // automatic track sizing is circular: the browser gives up and sizes
+          // the row to the button's ~17px line-height, then `overflow-hidden`
+          // clips every preview to a sliver. `aspect-ratio` on the tile does
+          // not rescue it either — it paints the right box but contributes
+          // nothing to track sizing, so the tiles just overlap the rows below.
+          // A fixed row makes the height definite, which is the one thing the
+          // circularity needs broken.
+          className="grid flex-1 auto-rows-[7rem] grid-cols-2 content-start gap-1.5 overflow-y-auto p-1.5"
         >
           {gifs.map((gif, index) => (
             <button
@@ -205,20 +214,8 @@ export function GifPickerPanel({
               aria-selected={index === selectedIndex}
               onMouseEnter={() => setSelectedIndex(index)}
               onClick={() => onSelect(gif)}
-              // The tile carries the GIF's own aspect ratio. Without it the
-              // button has no height of its own, so the `h-full` image below
-              // resolves against an auto-height parent, and every tile
-              // collapses into a thin strip. Sizing from the intrinsic
-              // dimensions also means the grid does not reflow as the previews
-              // arrive one by one.
-              style={{
-                aspectRatio:
-                  gif.width > 0 && gif.height > 0
-                    ? `${gif.width} / ${gif.height}`
-                    : "1 / 1",
-              }}
               className={cn(
-                "overflow-hidden rounded-md border bg-surface-2 outline-none",
+                "h-full overflow-hidden rounded-md border bg-surface-2 outline-none",
                 index === selectedIndex
                   ? "border-accent"
                   : "border-transparent hover:border-border-strong",
@@ -237,7 +234,10 @@ export function GifPickerPanel({
                 loading="lazy"
                 decoding="async"
                 referrerPolicy="no-referrer"
-                className="h-full w-full object-cover"
+                // Fills the fixed-height tile and crops rather than distorts.
+                // The `width`/`height` attributes stay because they still give
+                // the decoder the intrinsic ratio to crop from.
+                className="block h-full w-full object-cover"
               />
             </button>
           ))}
