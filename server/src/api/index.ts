@@ -5,6 +5,7 @@ import {
   createAttachmentSchema,
   createBlockSchema,
   createChannelSchema,
+  moveChannelSchema,
   createDmSchema,
   createGifAttachmentSchema,
   createInviteSchema,
@@ -94,12 +95,14 @@ import {
   deleteServer,
   getChannel,
   getChannelAudience,
+  InvalidChannelMoveError,
   listChannelMembers,
   listChannels,
   listServerChannelIds,
   listServersForUser,
   mapChannel,
   mapServer,
+  moveChannel,
   removeChannelMember,
   renameServer,
   transferOwnership,
@@ -879,6 +882,37 @@ router.delete("/api/channels/:channelId", async ({ user }, { channelId }) => {
   evictChannelViewers(channelId!);
   return { ok: true };
 });
+
+/**
+ * Reorder or re-parent one channel. Answers with the whole server's fresh
+ * channel list rather than a delta, matching how create/rename/delete already
+ * behave here: none of the three broadcast live either, so the actor's own
+ * client updates from its own response and everyone else sees the new order
+ * on their next load. Adding a live broadcast for reorders only, while the
+ * other three mutations stay silent, would be an inconsistency worth its own
+ * change rather than a side effect of this one.
+ */
+router.patch(
+  "/api/channels/:channelId/move",
+  async ({ req, user }, { channelId }) => {
+    const channel = await requireServerChannel(channelId!);
+    await requireManager(channel.server_id, user.id);
+    const body = moveChannelSchema.parse(await readJsonBody(req));
+
+    try {
+      await moveChannel(channel.server_id, channelId!, body.parentId, body.index);
+    } catch (error) {
+      if (error instanceof InvalidChannelMoveError) {
+        throw new HttpError(400, error.message);
+      }
+      throw error;
+    }
+
+    return {
+      channels: (await listChannels(channel.server_id, user.id)).map(mapChannel),
+    };
+  },
+);
 
 router.get(
   "/api/channels/:channelId/members",

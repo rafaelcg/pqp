@@ -354,6 +354,41 @@ CREATE INDEX IF NOT EXISTS idx_messages_pinned
 CREATE INDEX IF NOT EXISTS idx_channels_server
   ON channels (server_id, position);
 
+-- A category is another channel row (type='category') rather than a separate
+-- table: Discord's own model, and it means permission-overwrite inheritance —
+-- not built yet — will one day walk one table instead of two. `parent_id`
+-- only ever points at such a row; that a category cannot itself have a parent
+-- is enforced in the service layer, where the type of the prospective parent
+-- is already known from the same read that validates the rest of a move.
+--
+-- ON DELETE SET NULL, not CASCADE: deleting a category must not delete every
+-- channel that was ever inside it, only uncategorize them.
+--
+-- `position` is scoped by (parent_id, type) at the top level rather than by
+-- parent_id alone: the sidebar renders top-level text, top-level voice and
+-- categories as three separate lists, not one interleaved one, so `type` has
+-- to be part of a top-level sibling group or reordering one list would
+-- silently perturb the position numbers of a completely different one. Inside
+-- a real category the group is not type-scoped — text and voice channels mix
+-- together there, matching how the sidebar nests them under one heading. See
+-- the comment on `moveChannel` in services/servers.ts for where this is
+-- actually enforced.
+ALTER TABLE channels ADD COLUMN IF NOT EXISTS parent_id UUID
+  REFERENCES channels(id) ON DELETE SET NULL;
+
+DO $$
+BEGIN
+  ALTER TABLE channels DROP CONSTRAINT IF EXISTS channels_type_check;
+  ALTER TABLE channels
+    ADD CONSTRAINT channels_type_check
+    CHECK (type IN ('text', 'voice', 'category'));
+EXCEPTION
+  WHEN others THEN NULL;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_channels_parent
+  ON channels (server_id, parent_id, position);
+
 CREATE INDEX IF NOT EXISTS idx_server_members_user
   ON server_members (user_id);
 

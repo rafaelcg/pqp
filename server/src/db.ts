@@ -66,11 +66,12 @@ export interface DbChannel {
   id: string;
   server_id: string;
   name: string;
-  type: "text" | "voice";
+  type: "text" | "voice" | "category";
   position: number;
   is_private: boolean;
   topic: string | null;
   image_url: string | null;
+  parent_id: string | null;
 }
 
 export interface DbMessage {

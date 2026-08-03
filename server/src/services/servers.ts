@@ -19,7 +19,7 @@ export type ChannelRow = Omit<DbChannel, "server_id"> & {
 };
 
 /** Every channel read selects the same columns, `kind` included. */
-const CHANNEL_COLUMNS = `id, server_id, name, type, position, is_private, kind, topic, image_url`;
+const CHANNEL_COLUMNS = `id, server_id, name, type, position, is_private, kind, topic, image_url, parent_id`;
 
 /**
  * How many attachment objects one channel or server delete will clean up.
@@ -162,7 +162,7 @@ export async function listChannels(
 ): Promise<ChannelRow[]> {
   const result = await getPool().query<ChannelRow>(
     `SELECT c.id, c.server_id, c.name, c.type, c.position, c.is_private, c.kind,
-            c.topic, c.image_url
+            c.topic, c.image_url, c.parent_id
      FROM channels c
      JOIN server_members sm ON sm.server_id = c.server_id
      WHERE c.server_id = $1 AND sm.user_id = $2
@@ -176,12 +176,20 @@ export async function listChannels(
 export async function createChannel(
   serverId: string,
   name: string,
-  type: "text" | "voice",
+  type: "text" | "voice" | "category",
   isPrivate = false,
 ): Promise<ChannelRow> {
+  // Top-level text, top-level voice, and categories are three separate
+  // sibling groups sharing the `parent_id IS NULL` scope — the client renders
+  // them as three separate lists rather than one interleaved one, so `type`
+  // has to be part of the group key here or a new voice channel could land
+  // between two text channels' positions for no visible reason. A channel
+  // moved into a real category leaves this scope entirely; that group mixes
+  // types together, matching how the sidebar nests them under one heading.
   const positionResult = await getPool().query<{ max: number | null }>(
-    `SELECT MAX(position) as max FROM channels WHERE server_id = $1`,
-    [serverId],
+    `SELECT MAX(position) as max FROM channels
+     WHERE server_id = $1 AND parent_id IS NULL AND type = $2`,
+    [serverId, type],
   );
   const position = (positionResult.rows[0]?.max ?? -1) + 1;
 
@@ -192,6 +200,124 @@ export async function createChannel(
     [serverId, name, type, position, isPrivate],
   );
   return result.rows[0]!;
+}
+
+export class InvalidChannelMoveError extends Error {}
+
+/**
+ * Move a channel to a 0-based position among the siblings sharing
+ * `parentId`, renumbering both the destination group and — if the channel is
+ * changing groups — the group it left, so both stay a contiguous 0..n-1
+ * sequence. Small, low-frequency, admin-only: a handful of individual
+ * UPDATEs inside one transaction is simpler than hand-rolled batch SQL and
+ * costs nothing measurable for a sidebar-sized channel list.
+ *
+ * Returns null when `channelId` does not belong to `serverId` at all, so the
+ * route can answer 404 without confirming a channel id exists elsewhere.
+ * Throws `InvalidChannelMoveError` for a move that names a real channel but
+ * breaks an invariant — the two are different failures with different
+ * status codes, and only the caller knows which one 404 would leak.
+ */
+export async function moveChannel(
+  serverId: string,
+  channelId: string,
+  parentId: string | null,
+  index: number,
+): Promise<void> {
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+
+    const target = await client.query<{ type: string; parent_id: string | null }>(
+      `SELECT type, parent_id FROM channels WHERE id = $1 AND server_id = $2 FOR UPDATE`,
+      [channelId, serverId],
+    );
+    const row = target.rows[0];
+    if (!row) {
+      await client.query("ROLLBACK");
+      return;
+    }
+
+    if (parentId !== null) {
+      if (parentId === channelId) {
+        await client.query("ROLLBACK");
+        throw new InvalidChannelMoveError("A channel cannot contain itself");
+      }
+      if (row.type === "category") {
+        await client.query("ROLLBACK");
+        throw new InvalidChannelMoveError(
+          "A category cannot be nested under another category",
+        );
+      }
+      const parent = await client.query<{ type: string }>(
+        `SELECT type FROM channels WHERE id = $1 AND server_id = $2`,
+        [parentId, serverId],
+      );
+      if (!parent.rows[0] || parent.rows[0].type !== "category") {
+        await client.query("ROLLBACK");
+        throw new InvalidChannelMoveError(
+          "Not a category in this server",
+        );
+      }
+    }
+
+    const oldParentId = row.parent_id;
+
+    // The destination group, in order, with the moved channel spliced in —
+    // every existing member of this group already has parent_id = parentId,
+    // so writing it for the whole list is correct for them too, not just for
+    // the one that is actually moving.
+    //
+    // Top-level (parentId null) additionally scopes by the moved channel's own
+    // type: text, voice and categories are three separate lists in the
+    // sidebar, not one interleaved one, so "top-level" alone is not a single
+    // sibling group there the way it is inside a real category, which mixes
+    // types together under one heading.
+    const destination = await client.query<{ id: string }>(
+      `SELECT id FROM channels
+       WHERE server_id = $1 AND id <> $2 AND parent_id IS NOT DISTINCT FROM $3
+         AND ($3 IS NOT NULL OR type = $4)
+       ORDER BY position ASC`,
+      [serverId, channelId, parentId, row.type],
+    );
+    const destIds = destination.rows.map((r) => r.id);
+    const clampedIndex = Math.max(0, Math.min(index, destIds.length));
+    destIds.splice(clampedIndex, 0, channelId);
+
+    for (let i = 0; i < destIds.length; i++) {
+      await client.query(
+        `UPDATE channels SET position = $1, parent_id = $2 WHERE id = $3`,
+        [i, parentId, destIds[i]],
+      );
+    }
+
+    // Only the group being LEFT needs closing up — a same-group reorder
+    // already renumbered it above as the destination group.
+    const changedGroup =
+      oldParentId !== parentId && !(oldParentId === null && parentId === null);
+    if (changedGroup) {
+      const vacated = await client.query<{ id: string }>(
+        `SELECT id FROM channels
+         WHERE server_id = $1 AND id <> $2 AND parent_id IS NOT DISTINCT FROM $3
+           AND ($3 IS NOT NULL OR type = $4)
+         ORDER BY position ASC`,
+        [serverId, channelId, oldParentId, row.type],
+      );
+      for (let i = 0; i < vacated.rows.length; i++) {
+        await client.query(`UPDATE channels SET position = $1 WHERE id = $2`, [
+          i,
+          vacated.rows[i]!.id,
+        ]);
+      }
+    }
+
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function updateChannel(
@@ -227,18 +353,82 @@ export async function updateChannel(
 export async function deleteChannel(channelId: string): Promise<boolean> {
   const keys = await channelAttachmentKeys(channelId);
 
-  const result = await getPool().query(
-    `DELETE FROM channels WHERE id = $1`,
-    [channelId],
-  );
-  const deleted = (result.rowCount ?? 0) > 0;
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
 
-  // Only once the delete landed: a channel that was already gone, or that some
-  // other request is still using, must not have its objects removed.
-  if (deleted) {
-    deleteObjectsInBackground(keys);
+    // Deleting a category SETs NULL the parent_id of whatever was inside it,
+    // uncategorizing rather than deleting its children — but that only clears
+    // parent_id. Their `position` values still belong to the category's own
+    // sibling-group numbering, which routinely collides with positions
+    // already in use by the top-level group of the same type they land back
+    // in: a category's first child and the existing top-level channel at
+    // position 0 would both read position 0 once uncategorized, and every
+    // move computed against that group afterwards inherits the ambiguity.
+    // Read the children (and the server they belong to) before the delete —
+    // parent_id is still set, and a plain channel has none, so this is a
+    // no-op read for the common case.
+    const before = await client.query<{ server_id: string | null }>(
+      `SELECT server_id FROM channels WHERE id = $1`,
+      [channelId],
+    );
+    const serverId = before.rows[0]?.server_id ?? null;
+    const orphaned = serverId
+      ? await client.query<{ id: string; type: string }>(
+          `SELECT id, type FROM channels WHERE parent_id = $1 ORDER BY position ASC`,
+          [channelId],
+        )
+      : { rows: [] as Array<{ id: string; type: string }> };
+
+    const result = await client.query(`DELETE FROM channels WHERE id = $1`, [
+      channelId,
+    ]);
+    const deleted = (result.rowCount ?? 0) > 0;
+
+    if (deleted && serverId && orphaned.rows.length > 0) {
+      const newcomersByType = new Map<string, string[]>();
+      for (const row of orphaned.rows) {
+        const list = newcomersByType.get(row.type) ?? [];
+        list.push(row.id);
+        newcomersByType.set(row.type, list);
+      }
+      // One pass per type: the newcomers append, in the order they held
+      // inside the category, after whatever top-level channels of that same
+      // type already existed — the ordinary "join the back of the line"
+      // outcome, and the only one that leaves every position in the group
+      // unique afterwards.
+      for (const [type, newcomers] of newcomersByType) {
+        const existing = await client.query<{ id: string }>(
+          `SELECT id FROM channels
+           WHERE server_id = $1 AND parent_id IS NULL AND type = $2
+             AND id <> ALL($3::uuid[])
+           ORDER BY position ASC`,
+          [serverId, type, newcomers],
+        );
+        const ordered = [...existing.rows.map((r) => r.id), ...newcomers];
+        for (let i = 0; i < ordered.length; i++) {
+          await client.query(`UPDATE channels SET position = $1 WHERE id = $2`, [
+            i,
+            ordered[i],
+          ]);
+        }
+      }
+    }
+
+    await client.query("COMMIT");
+
+    // Only once the delete landed: a channel that was already gone, or that
+    // some other request is still using, must not have its objects removed.
+    if (deleted) {
+      deleteObjectsInBackground(keys);
+    }
+    return deleted;
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
   }
-  return deleted;
 }
 
 export async function deleteServer(serverId: string): Promise<boolean> {
@@ -446,6 +636,7 @@ export function mapChannel(c: ChannelRow) {
     isPrivate: c.is_private,
     topic: c.topic ?? null,
     imageUrl: c.image_url ?? null,
+    parentId: c.parent_id ?? null,
   };
 }
 
