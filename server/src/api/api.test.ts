@@ -3275,6 +3275,72 @@ describeDb("API authorization", () => {
     });
   });
 
+  describe("message retention", () => {
+    it("lets the owner set, change, and clear the retention window", async () => {
+      const { serverId } = await makeServer();
+
+      const set = await call<{ server: { messageRetentionDays: number | null } }>(
+        owner,
+        "PATCH",
+        `/api/servers/${serverId}`,
+        { messageRetentionDays: 90 },
+      );
+      expect(set.status).toBe(200);
+      expect(set.body.server.messageRetentionDays).toBe(90);
+
+      const cleared = await call<{
+        server: { messageRetentionDays: number | null };
+      }>(owner, "PATCH", `/api/servers/${serverId}`, {
+        messageRetentionDays: null,
+      });
+      expect(cleared.status).toBe(200);
+      expect(cleared.body.server.messageRetentionDays).toBeNull();
+    });
+
+    it("refuses a non-owner admin", async () => {
+      const { serverId } = await makeServer();
+      const res = await call(admin, "PATCH", `/api/servers/${serverId}`, {
+        messageRetentionDays: 30,
+      });
+      expect(res.status).toBe(403);
+    });
+
+    it("rejects a retention value outside the allowed range", async () => {
+      const { serverId } = await makeServer();
+      const zero = await call(owner, "PATCH", `/api/servers/${serverId}`, {
+        messageRetentionDays: 0,
+      });
+      expect(zero.status).toBe(400);
+
+      const tooLarge = await call(owner, "PATCH", `/api/servers/${serverId}`, {
+        messageRetentionDays: 100_000,
+      });
+      expect(tooLarge.status).toBe(400);
+    });
+
+    it("logs the change to the audit log, distinct from a rename, with the previous value", async () => {
+      const { serverId } = await makeServer();
+      await call(owner, "PATCH", `/api/servers/${serverId}`, {
+        messageRetentionDays: 30,
+      });
+      await call(owner, "PATCH", `/api/servers/${serverId}`, {
+        messageRetentionDays: 90,
+      });
+
+      const log = await call<{
+        entries: Array<{ action: string; changes: unknown }>;
+      }>(owner, "GET", `/api/servers/${serverId}/audit-log`);
+      expect(log.body.entries[0]).toMatchObject({
+        action: "server.retention_update",
+        changes: [{ key: "messageRetentionDays", old: 30, new: 90 }],
+      });
+      // Never conflated with a plain rename, which uses a different action.
+      expect(log.body.entries.every((e) => e.action !== "server.update")).toBe(
+        true,
+      );
+    });
+  });
+
   describe("request hygiene", () => {
     it("answers 404 for a malformed id rather than surfacing a database error", async () => {
       const res = await call(owner, "GET", "/api/servers/not-a-uuid/channels");

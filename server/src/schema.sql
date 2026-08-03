@@ -448,3 +448,18 @@ CREATE TABLE IF NOT EXISTS audit_log (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_audit_log_server_id ON audit_log (server_id, id DESC);
+
+-- Null means keep forever. Server-wide rather than per-channel for v1 — a
+-- community that wants different windows per channel is a real but much
+-- rarer request than "auto-clean this whole server after N days."
+ALTER TABLE servers ADD COLUMN IF NOT EXISTS message_retention_days INTEGER;
+
+DO $$
+BEGIN
+  ALTER TABLE servers DROP CONSTRAINT IF EXISTS servers_retention_positive;
+  ALTER TABLE servers
+    ADD CONSTRAINT servers_retention_positive
+    CHECK (message_retention_days IS NULL OR message_retention_days > 0);
+EXCEPTION
+  WHEN others THEN NULL;
+END $$;

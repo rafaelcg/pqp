@@ -21,6 +21,9 @@ export type ChannelRow = Omit<DbChannel, "server_id"> & {
 /** Every channel read selects the same columns, `kind` included. */
 const CHANNEL_COLUMNS = `id, server_id, name, type, position, is_private, kind, topic, image_url, parent_id`;
 
+/** Every server read selects the same columns. */
+const SERVER_COLUMNS = `id, name, owner_id, created_at, message_retention_days`;
+
 /**
  * How many attachment objects one channel or server delete will clean up.
  *
@@ -108,7 +111,7 @@ function deleteObjectsInBackground(keys: string[]): void {
 
 export async function listServersForUser(userId: string): Promise<DbServer[]> {
   const result = await getPool().query<DbServer>(
-    `SELECT s.id, s.name, s.owner_id, s.created_at, sm.role
+    `SELECT s.id, s.name, s.owner_id, s.created_at, s.message_retention_days, sm.role
      FROM servers s
      JOIN server_members sm ON sm.server_id = s.id
      WHERE sm.user_id = $1
@@ -128,7 +131,7 @@ export async function createServer(
 
     const serverResult = await client.query<DbServer>(
       `INSERT INTO servers (name, owner_id) VALUES ($1, $2)
-       RETURNING id, name, owner_id, created_at`,
+       RETURNING ${SERVER_COLUMNS}`,
       [name, ownerId],
     );
     const server = serverResult.rows[0]!;
@@ -453,10 +456,53 @@ export async function renameServer(
 ): Promise<DbServer | null> {
   const result = await getPool().query<DbServer>(
     `UPDATE servers SET name = $2 WHERE id = $1
-     RETURNING id, name, owner_id, created_at`,
+     RETURNING ${SERVER_COLUMNS}`,
     [serverId, name],
   );
   return result.rows[0] ?? null;
+}
+
+/**
+ * Null clears retention back to "keep forever." Server-wide, not per-channel
+ * — see the schema comment on `message_retention_days` for why. The sweep
+ * that actually deletes anything lives in `retention.ts`; this only ever
+ * writes the setting.
+ *
+ * Returns the previous value alongside the row: the caller's audit entry is
+ * only worth writing if both sides of the change are in it, and a plain
+ * `UPDATE ... RETURNING` only ever hands back the new row.
+ */
+export async function updateMessageRetention(
+  serverId: string,
+  days: number | null,
+): Promise<{ server: DbServer; previousDays: number | null } | null> {
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    const before = await client.query<{ message_retention_days: number | null }>(
+      `SELECT message_retention_days FROM servers WHERE id = $1 FOR UPDATE`,
+      [serverId],
+    );
+    if (before.rows.length === 0) {
+      await client.query("ROLLBACK");
+      return null;
+    }
+    const result = await client.query<DbServer>(
+      `UPDATE servers SET message_retention_days = $2 WHERE id = $1
+       RETURNING ${SERVER_COLUMNS}`,
+      [serverId, days],
+    );
+    await client.query("COMMIT");
+    return {
+      server: result.rows[0]!,
+      previousDays: before.rows[0]!.message_retention_days,
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 /**
@@ -647,5 +693,6 @@ export function mapServer(s: DbServer) {
     ownerId: s.owner_id,
     role: s.role as MemberRole | undefined,
     createdAt: s.created_at.toISOString(),
+    messageRetentionDays: s.message_retention_days,
   };
 }

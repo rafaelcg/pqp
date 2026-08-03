@@ -277,7 +277,7 @@ export const createServer = (name: string) =>
 
 export const updateServer = (
   serverId: string,
-  body: { name?: string; ownerId?: string },
+  body: { name?: string; ownerId?: string; messageRetentionDays?: number | null },
 ) => patch<{ ok: boolean; server?: Server }>(`/api/servers/${serverId}`, body);
 
 export const deleteServer = (serverId: string) =>

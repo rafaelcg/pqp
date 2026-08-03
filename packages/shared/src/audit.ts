@@ -18,6 +18,7 @@ export const AUDIT_ACTIONS = [
   "channel.move",
   "message.delete",
   "server.update",
+  "server.retention_update",
   "server.ownership_transfer",
   "invite.create",
   "invite.delete",

@@ -16,6 +16,7 @@ import {
   sweepOrphanedAttachments,
 } from "./services/attachments.js";
 import { pruneAuditLog } from "./services/audit.js";
+import { sweepMessageRetention } from "./services/retention.js";
 import { getSocketUser, handleWsConnection } from "./ws/index.js";
 
 const PORT = Number(process.env.PORT ?? 3001);
@@ -262,6 +263,17 @@ const auditLogPrune = setInterval(() => {
   });
 }, AUDIT_LOG_PRUNE_INTERVAL_MS);
 auditLogPrune.unref?.();
+
+/** Daily: retention is measured in days, so nothing is lost by checking once
+ * a day rather than continuously. */
+const RETENTION_SWEEP_INTERVAL_MS = 24 * 60 * 60_000;
+
+const retentionSweep = setInterval(() => {
+  void sweepMessageRetention().catch((error) => {
+    console.error("[retention] sweep failed:", error);
+  });
+}, RETENTION_SWEEP_INTERVAL_MS);
+retentionSweep.unref?.();
 
 async function main() {
   assertAuthConfig();
