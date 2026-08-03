@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { attachmentSchema } from "./attachments.js";
+import { embedSchema } from "./embeds.js";
 
 export const channelTypeSchema = z.enum(["text", "voice", "category"]);
 export type ChannelType = z.infer<typeof channelTypeSchema>;
@@ -99,6 +100,13 @@ export const userPreferencesSchema = z.object({
   inputVolume: z.number().min(0).max(2).optional(),
   outputVolume: z.number().min(0).max(1).optional(),
   notifications: notificationPreferencesSchema.optional(),
+  /**
+   * Client-render-only: the server unfurls and caches a link regardless of
+   * who has this off, since the cache is shared across every viewer. Turning
+   * it off just stops one person's client from drawing the card it already
+   * received.
+   */
+  showLinkEmbeds: z.boolean().optional(),
 });
 
 export type UserPreferences = z.infer<typeof userPreferencesSchema>;
@@ -289,6 +297,14 @@ export const messageSchema = z.object({
   attachments: z.array(attachmentSchema).default([]),
   pinnedAt: z.string().nullable().default(null),
   pinnedBy: messagePinnedBySchema.nullable().default(null),
+  /**
+   * At most one — only the first link in a body ever unfurls. Absent rather
+   * than a placeholder when nothing has resolved yet: a link just posted has
+   * no embed for the moment between the send and the async fetch finishing,
+   * and an empty array is what "nothing to show right now" already means
+   * everywhere else in this shape.
+   */
+  embeds: z.array(embedSchema).default([]),
 });
 
 export const MESSAGE_MAX_LENGTH = 4000;

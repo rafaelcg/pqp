@@ -7,6 +7,11 @@ import {
 import type { DbUser } from "../db.js";
 import { createRateLimiter } from "../lib/rate-limit.js";
 import {
+  extractFirstUrl,
+  fetchAndCacheEmbed,
+  getEmbedCacheState,
+} from "../services/embeds.js";
+import {
   createMessage,
   getReplyParent,
   mapMessage,
@@ -122,6 +127,41 @@ export function broadcastToChannel(
       conn.socket.send(payload);
     }
   }
+}
+
+/**
+ * A link with nothing cached yet must never delay the message it arrived on —
+ * the create/edit response and its first broadcast go out with no embed, and
+ * this resolves the fetch in the background, then pushes a `message-update`
+ * to everyone watching the channel once it lands. `fetchAndCacheEmbed` itself
+ * never throws, but the `.catch` stays anyway: an unhandled rejection here
+ * would crash the whole process for every connected client, the exact
+ * failure mode pitfall #8 in CLAUDE.md documents.
+ *
+ * Exported so the HTTP edit route can trigger the same resolution the WS
+ * create path does, without either owning a private copy of it.
+ */
+export function resolveEmbedInBackground(
+  channelId: string,
+  message: ReturnType<typeof mapMessage>,
+  url: string,
+): void {
+  void fetchAndCacheEmbed(url)
+    .then((embed) => {
+      if (!embed) {
+        return;
+      }
+      broadcastToChannel(channelId, {
+        type: "message-update",
+        message: { ...message, embeds: [embed] },
+      });
+    })
+    .catch((error) => {
+      console.error(
+        `[chat] embed resolution failed for message ${message.id}:`,
+        (error as Error).message,
+      );
+    });
 }
 
 /**
@@ -360,11 +400,26 @@ export async function handleChatMessage(
       return;
     }
 
+    const message = mapMessage(dbMessage);
+    // A link somebody else already shared resolves instantly from cache and
+    // rides the very first broadcast; a link nobody has posted before goes
+    // out without one and catches up over `resolveEmbedInBackground` below —
+    // either way this never blocks the message itself on a network fetch.
+    const url = extractFirstUrl(payload.body);
+    let cacheFresh = true;
+    if (url) {
+      const state = await getEmbedCacheState(url);
+      cacheFresh = state.fresh;
+      if (state.embed) {
+        message.embeds = [state.embed];
+      }
+    }
+
     broadcastToChannel(
       payload.channelId,
       {
         type: "message-broadcast",
-        message: mapMessage(dbMessage),
+        message,
         ...(payload.nonce ? { nonce: payload.nonce } : {}),
       },
       conn.socket,
@@ -376,6 +431,13 @@ export async function handleChatMessage(
       payload.body,
       parent?.author_id ?? null,
     );
+
+    // Only a genuine cache miss re-fetches — a fresh `failed` row already
+    // covers this url for FAILURE_TTL_MS, and re-trying it on every message
+    // that repeats a dead link would defeat that TTL entirely.
+    if (url && !cacheFresh) {
+      resolveEmbedInBackground(payload.channelId, message, url);
+    }
     return;
   }
 

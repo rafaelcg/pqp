@@ -54,7 +54,7 @@ They cost days, not weeks.
 | 22 | Real permission system: roles with bitfields and per-channel overwrites | permissions | high | large |
 | 23 | Incoming webhooks, Discord wire-compatible | integrations | high | large |
 | 24 | ✅ Pinned messages | conversation-structure | medium | small |
-| 25 | Link and image embeds (unfurling) | content-rendering | medium | medium |
+| 25 | ✅ Link and image embeds (unfurling) | content-rendering | medium | medium |
 | 26 | Custom server emoji | expression | medium | medium |
 | 27 | Persisted send queue and honest offline state | offline | medium | medium |
 | 28 | Electron shell hardening: auto-update, tray, global push-to-talk | platform | medium | medium |
@@ -581,6 +581,10 @@ Server: a new server/src/services/embeds.ts extracts the first 1-2 URLs after in
 Protocol: `embeds: z.array(embedSchema).default([])` on the shared `broadcastMessageSchema`; new server type added to both `chatServerMessageSchema` and `CHAT_SERVER_MESSAGE_TYPES`.
 
 Client: an `<EmbedCard>` under the body in message-list.tsx — left accent border, site name, title, description, thumbnail — plus inline rendering for `kind: 'image'`. Proxy embed images through the API or R2 rather than hotlinking so a malicious host cannot harvest viewer IPs, and offer a per-message "remove embed" plus a "don't unfurl my links" preference in the synced settings store.
+
+**What shipped, and where it differs from the sketch.** SSRF defence (`server/src/lib/safe-fetch.ts`) is DNS-resolve-then-pin, not resolve-then-reconnect: the socket connects to the exact address a one-time lookup returned via a custom `lookup` option, never re-resolving, which closes the DNS-rebinding TOCTOU window a naive "check the IP, then let Node re-resolve for the real request" approach leaves open. Blocks the full private/loopback/link-local/CGNAT/multicast range on both IPv4 and IPv6, including unwrapped `::ffff:`-mapped addresses. 5s timeout, 512 KB body cap enforced by counting bytes received rather than trusting `Content-Length`, 3 redirects, `text/html,application/xhtml+xml,image/*` accept.
+
+No new broadcast type, matching pins: an embed is a mutation of the message row, so it rides the existing `message-update` broadcast rather than the sketch's proposed `message-embed`. The cache-hit path is synchronous — a link someone already shared rides the very first `message-broadcast` — and only a genuine cache miss (including a fresh `failed` row, which must not be re-fetched on every repeat of a dead link within its 1-hour TTL) triggers a background fetch followed by a `message-update` once it resolves; the same trigger fires from the edit route for a link added or changed by an edit. `GET /api/embeds/:urlHash/image` is deliberately the one unauthenticated `/api/` route in the app — it only ever re-serves a hash already present in the cache, refetched through the same SSRF-guarded path, so gating it behind Clerk would buy no confidentiality while breaking the plain `<img src>` tag that renders it. Client toggle shipped as `showLinkEmbeds` in the synced preferences store (Settings → Chat → "Show link previews"); no per-message "remove embed" yet.
 
 #### 26. Custom server emoji
 

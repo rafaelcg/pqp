@@ -46,6 +46,7 @@ import {
   evictVoiceChannel,
   evictVoiceUser,
   evictVoiceUsersExcept,
+  resolveEmbedInBackground,
 } from "../ws/index.js";
 import { getVoicePeer } from "../ws/voice.js";
 import { invalidateUserCache, resolveAuthUser } from "../auth/clerk.js";
@@ -61,6 +62,12 @@ import {
 } from "../lib/http.js";
 import { clientAddress, createRateLimiter } from "../lib/rate-limit.js";
 import { createRouter, type RequestContext } from "../lib/router.js";
+import {
+  extractFirstUrl,
+  getEmbedCacheState,
+  getEmbedImageUrl,
+} from "../services/embeds.js";
+import { safeFetch } from "../lib/safe-fetch.js";
 import {
   createInvite,
   deleteInvite,
@@ -1047,6 +1054,21 @@ router.patch("/api/messages/:messageId", async ({ req, user }, { messageId }) =>
 
   const message = mapMessage(updated);
   broadcastToChannel(existing.channel_id, { type: "message-update", message });
+
+  // `updateMessageBody` only ever reads the embed cache, so a link just
+  // edited into a body that nobody has posted before comes back with no
+  // embed yet — resolve it the same way a fresh message does, in the
+  // background, followed by a second `message-update` once it lands. Only a
+  // genuine cache miss triggers this: a fresh `failed` row must not be
+  // re-fetched on every edit that keeps repeating the same dead link.
+  const url = extractFirstUrl(body.body);
+  if (url) {
+    const state = await getEmbedCacheState(url);
+    if (!state.fresh) {
+      resolveEmbedInBackground(existing.channel_id, message, url);
+    }
+  }
+
   return { message };
 });
 
@@ -1342,6 +1364,51 @@ router.get("/api/invites/:code", async ({ user }, { code }) => {
 
 const WRITE_METHODS = new Set(["POST", "PATCH", "DELETE"]);
 
+const EMBED_IMAGE_PATH = /^\/api\/embeds\/([0-9a-f]{64})\/image$/;
+
+/**
+ * Deliberately unauthenticated, unlike every other `/api/` route: it only
+ * ever re-serves a URL our own server already fetched from a link someone
+ * posted — `getEmbedImageUrl` returns null for any hash that is not already
+ * in the cache — refetched through the same SSRF-guarded path that cached it
+ * in the first place. That exposes nothing an unauthenticated visitor to the
+ * original page could not already see, so gating it behind Clerk would buy
+ * no confidentiality while breaking the plain `<img src>` tag that renders
+ * it: a browser cannot attach a Bearer token to an image request.
+ */
+async function serveEmbedImage(
+  req: IncomingMessage,
+  res: ServerResponse,
+  urlHash: string,
+): Promise<void> {
+  const imageUrl = await getEmbedImageUrl(urlHash);
+  if (!imageUrl) {
+    sendError(res, 404, "Not found", req);
+    return;
+  }
+  try {
+    const response = await safeFetch(imageUrl, { accept: "image/*" });
+    const contentType = (response.headers["content-type"] ?? "")
+      .split(";")[0]!
+      .trim();
+    if (
+      response.statusCode < 200 ||
+      response.statusCode >= 300 ||
+      !contentType.startsWith("image/")
+    ) {
+      sendError(res, 404, "Not found", req);
+      return;
+    }
+    res.writeHead(200, {
+      "content-type": contentType,
+      "cache-control": "public, max-age=86400",
+    });
+    res.end(response.body);
+  } catch {
+    sendError(res, 404, "Not found", req);
+  }
+}
+
 export async function handleApi(
   req: IncomingMessage,
   res: ServerResponse,
@@ -1355,6 +1422,13 @@ export async function handleApi(
   if (!anonLimiter.take(`ip:${address}`)) {
     res.setHeader("Retry-After", String(anonLimiter.retryAfter(`ip:${address}`)));
     sendError(res, 429, "Too many requests", req);
+    return;
+  }
+
+  const imageMatch =
+    req.method === "GET" ? EMBED_IMAGE_PATH.exec(pathname) : null;
+  if (imageMatch) {
+    await serveEmbedImage(req, res, imageMatch[1]!);
     return;
   }
 

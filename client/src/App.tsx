@@ -1588,6 +1588,7 @@ function MainAppContent({
         onUnpinMessage={(messageId) => chat.unpinMessage(messageId)}
         onRetryMessage={(nonce) => chat.retryMessage(nonce)}
         onDiscardMessage={(nonce) => chat.discardMessage(nonce)}
+        showLinkEmbeds={localSettings.showLinkEmbeds}
       />
       <MessageComposer
         // Remount per channel: the draft is component state, so without this a

@@ -3,6 +3,7 @@ export * from "./attachments.js";
 export * from "./auth.js";
 export * from "./chat.js";
 export * from "./dm.js";
+export * from "./embeds.js";
 export * from "./gifs.js";
 export * from "./search.js";
 export * from "./signaling.js";

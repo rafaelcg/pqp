@@ -402,3 +402,28 @@ CREATE INDEX IF NOT EXISTS idx_channel_members_user_channel
 DROP INDEX IF EXISTS idx_server_invites_code;
 DROP INDEX IF EXISTS idx_message_reactions_message;
 DROP INDEX IF EXISTS idx_channel_members_user;
+
+-- A pasted link's unfurl, cached by the URL itself rather than by the message
+-- that posted it: the same link shared in ten channels costs one fetch, not
+-- ten, and `server/src/lib/safe-fetch.ts` is the only thing in this process
+-- ever allowed to make that fetch. `url_hash` is sha256 of the normalised URL
+-- (see embeds.ts) rather than the URL itself as the key, so an absurdly long
+-- URL cannot make this the row that breaks a btree entry size limit.
+--
+-- `failed` gets its own short TTL in the service layer rather than its own
+-- column here: a site that was briefly down is worth retrying sooner than a
+-- working unfurl is worth re-fetching, and that is a policy decision, not a
+-- fact about the row.
+CREATE TABLE IF NOT EXISTS link_embeds (
+  url_hash TEXT PRIMARY KEY,
+  url TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('link', 'image')),
+  title TEXT,
+  description TEXT,
+  site_name TEXT,
+  image_url TEXT,
+  image_width INTEGER,
+  image_height INTEGER,
+  failed BOOLEAN NOT NULL DEFAULT FALSE,
+  fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

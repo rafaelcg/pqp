@@ -4,6 +4,7 @@ import {
   formatUserTag,
   MAX_PINS_PER_CHANNEL,
   type Attachment,
+  type Embed,
   type MessagePinnedBy,
   type MessageReaction,
   type MessageReplyRef,
@@ -18,6 +19,7 @@ import {
   verifyPendingAttachments,
 } from "./attachments.js";
 import { listBlockedAmong, notBlockedSql } from "./blocks.js";
+import { listEmbedsForMessages } from "./embeds.js";
 import { listReactionsForMessages } from "./reactions.js";
 
 /**
@@ -28,10 +30,11 @@ import { listReactionsForMessages } from "./reactions.js";
  */
 type Queryable = Pick<PoolClient, "query">;
 
-/** What every read path hands back: a row plus its two batched relations. */
+/** What every read path hands back: a row plus its batched relations. */
 export type HydratedMessage = DbMessage & {
   reactions: MessageReaction[];
   attachments: Attachment[];
+  embeds: Embed[];
   /**
    * Whether the viewer of *this* read has blocked the author.
    *
@@ -180,10 +183,14 @@ async function hydrate(
   viewerId?: string,
 ): Promise<MessagePage> {
   const messageIds = rows.map((row) => row.id);
-  const [reactionsByMessage, attachmentsByMessage, blockedAuthors] =
+  const [reactionsByMessage, attachmentsByMessage, embedsByMessage, blockedAuthors] =
     await Promise.all([
       listReactionsForMessages(messageIds, viewerId),
       listAttachmentsForMessages(messageIds),
+      // Cache-only — a history read must never trigger a network fetch on
+      // someone else's behalf, so a link nobody has posted before yet simply
+      // shows no embed until whoever's create/edit request resolves one.
+      listEmbedsForMessages(rows),
       // One query for the page, not one per row, and only over the authors
       // actually on it — the viewer's whole block list is unbounded and most of
       // it is irrelevant to any given fifty messages.
@@ -200,6 +207,7 @@ async function hydrate(
       ...row,
       reactions: reactionsByMessage.get(row.id) ?? [],
       attachments: attachmentsByMessage.get(row.id) ?? [],
+      embeds: embedsByMessage.get(row.id) ?? [],
       blocked: blockedAuthors.has(row.author_id),
     })),
   };
@@ -476,6 +484,10 @@ export async function createMessage(
       author_avatar_url: author.avatar_url,
       reactions: [],
       attachments: claimed.map(toPublicAttachment),
+      // A message is never born with an embed — whether the body contains an
+      // unfurlable link is resolved after the fact by the caller, same as the
+      // background fetch that follows a fresh create over the WS.
+      embeds: [],
     };
   } catch (error) {
     await client.query("ROLLBACK");
@@ -532,15 +544,19 @@ export async function updateMessageBody(
 
   // An edit never touches attachments, but the broadcast it produces is a whole
   // message — dropping them here would blank the images out of every open tab
-  // until the next history load.
-  const [reactions, attachments] = await Promise.all([
+  // until the next history load. Embeds are cache-only here, same as every
+  // other read: whether an edited-in link needs a fresh fetch is the caller's
+  // decision, not this function's.
+  const [reactions, attachments, embeds] = await Promise.all([
     listReactionsForMessages([messageId]),
     listAttachmentsForMessages([messageId]),
+    listEmbedsForMessages([message]),
   ]);
   return {
     ...message,
     reactions: reactions.get(messageId) ?? [],
     attachments: attachments.get(messageId) ?? [],
+    embeds: embeds.get(messageId) ?? [],
   };
 }
 
@@ -627,6 +643,7 @@ export function mapMessage(
   m: DbMessage & {
     reactions?: MessageReaction[];
     attachments?: Attachment[];
+    embeds?: Embed[];
     blocked?: boolean;
   },
 ) {
@@ -643,6 +660,7 @@ export function mapMessage(
     reactions: m.reactions ?? [],
     replyTo: mapReplyTo(m),
     attachments: m.attachments ?? [],
+    embeds: m.embeds ?? [],
     // Sent rather than filtered. Dropping the row instead would corrupt
     // `listMessages`: it pages by keyset and reports `hasMore` from how many
     // rows the query read, so a page silently short of its limit reads as
@@ -664,14 +682,16 @@ export class ChannelPinLimitError extends Error {
 async function hydrateOne(
   message: DbMessage,
 ): Promise<HydratedMessage> {
-  const [reactions, attachments] = await Promise.all([
+  const [reactions, attachments, embeds] = await Promise.all([
     listReactionsForMessages([message.id]),
     listAttachmentsForMessages([message.id]),
+    listEmbedsForMessages([message]),
   ]);
   return {
     ...message,
     reactions: reactions.get(message.id) ?? [],
     attachments: attachments.get(message.id) ?? [],
+    embeds: embeds.get(message.id) ?? [],
   };
 }
 
@@ -783,13 +803,15 @@ export async function listPinnedMessages(
     [channelId],
   );
   const messageIds = result.rows.map((row) => row.id);
-  const [reactionsByMessage, attachmentsByMessage] = await Promise.all([
+  const [reactionsByMessage, attachmentsByMessage, embedsByMessage] = await Promise.all([
     listReactionsForMessages(messageIds),
     listAttachmentsForMessages(messageIds),
+    listEmbedsForMessages(result.rows),
   ]);
   return result.rows.map((row) => ({
     ...row,
     reactions: reactionsByMessage.get(row.id) ?? [],
     attachments: attachmentsByMessage.get(row.id) ?? [],
+    embeds: embedsByMessage.get(row.id) ?? [],
   }));
 }
