@@ -17,6 +17,7 @@ interface GifPickerPanelProps {
   onSelect: (gif: Gif) => void;
   onClose: () => void;
   className?: string;
+  initialQuery?: string;
 }
 
 export function GifPickerPanel(props: GifPickerPanelProps) {

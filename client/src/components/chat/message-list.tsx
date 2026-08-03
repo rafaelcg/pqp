@@ -334,6 +334,35 @@ export function MessageList({
     }
   }, [messages.length, scrollToBottom]);
 
+  // Media loads after the row is already on screen, and growing it pushes the
+  // bottom away from a reader who was sitting on it. The pin effect above only
+  // runs on a change in message count, which has long since fired by then — so
+  // sending a GIF scrolled to the bottom of a row that was still zero pixels
+  // tall and left you above the message you just sent.
+  //
+  // Watching the container's height covers every late-sizing thing at once
+  // (GIFs, images without intrinsic dimensions, embeds) instead of threading an
+  // onLoad through each one. Guarded on the same two conditions as the pin
+  // effect: never fight a reader who has scrolled up, and never undo a jump.
+  useEffect(() => {
+    const container = scrollRef.current;
+    if (!container || typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const observer = new ResizeObserver(() => {
+      if (isPinnedRef.current && !hasNewerRef.current) {
+        // "auto": the growth already happened, so animating to it reads as a
+        // second, unexplained scroll.
+        scrollToBottom("auto");
+      }
+    });
+    observer.observe(container, { box: "border-box" });
+    for (const child of Array.from(container.children)) {
+      observer.observe(child);
+    }
+    return () => observer.disconnect();
+  }, [scrollToBottom, messages.length]);
+
   // Land at the bottom after a jump back to the present.
   //
   // A tail reset swaps the entire window rather than adding to it, so a scroll

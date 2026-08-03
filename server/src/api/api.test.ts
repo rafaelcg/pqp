@@ -1415,6 +1415,71 @@ describeDb("API authorization", () => {
       expect(await attachmentCount()).toBe(0);
     });
 
+    it("stages a GIF on a deployment with no storage at all", async () => {
+      // The common shape is GIF search on and S3 off. A GIF's bytes never reach
+      // our bucket, so gating this on storage would break the GIF button on
+      // exactly the deployment that has GIFs working — which is production.
+      const { textChannelId } = await makeServer();
+      const res = await call<{ attachment: { id: string; url: string } }>(
+        owner,
+        "POST",
+        `/api/channels/${textChannelId}/attachments/gif`,
+        {
+          url: "https://media0.giphy.com/media/abc/giphy.gif",
+          width: 480,
+          height: 270,
+          title: "a cat",
+        },
+      );
+      expect(res.status).toBe(201);
+      // Handed back verbatim: there is nothing to sign on a host we do not own.
+      expect(res.body.attachment.url).toBe(
+        "https://media0.giphy.com/media/abc/giphy.gif",
+      );
+    });
+
+    it("refuses a remote attachment on a host outside the allowlist", async () => {
+      // The allowlist is the entire boundary here. Without it this route
+      // renders an attacker-chosen URL as an image inside a private channel,
+      // which leaks every viewer's IP to that host on render.
+      const { textChannelId } = await makeServer();
+      const res = await call(
+        owner,
+        "POST",
+        `/api/channels/${textChannelId}/attachments/gif`,
+        { url: "https://evil.example.com/tracker.gif" },
+      );
+      expect(res.status).toBe(400);
+      expect(await attachmentCount()).toBe(0);
+    });
+
+    it("serves a staged GIF in history while storage stays unconfigured", async () => {
+      const { textChannelId } = await makeServer();
+      const staged = await call<{ attachment: { id: string } }>(
+        owner,
+        "POST",
+        `/api/channels/${textChannelId}/attachments/gif`,
+        { url: "https://media0.giphy.com/media/abc/giphy.gif", title: "cat" },
+      );
+      await handleChatMessage(
+        { socket: fakeSocket(), user: await asDbUser(owner.id) },
+        {
+          type: "message-create",
+          channelId: textChannelId,
+          body: "look",
+          attachmentIds: [staged.body.attachment.id],
+        },
+      );
+
+      const history = await call<{
+        messages: Array<{ body: string; attachments: Array<{ url: string }> }>;
+      }>(owner, "GET", `/api/channels/${textChannelId}/messages`);
+      // The caption is the body, so editing it never exposes the URL — the
+      // whole reason a GIF became an attachment rather than the message.
+      expect(history.body.messages[0]!.body).toBe("look");
+      expect(history.body.messages[0]!.attachments).toHaveLength(1);
+    });
+
     it("answers 413 for a file over this deployment's own cap", async () => {
       configureStorage();
       // Under the shared ceiling the schema enforces, over what this server has

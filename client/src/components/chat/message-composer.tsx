@@ -33,6 +33,7 @@ import {
   type AcceptedFile,
   type OutgoingAttachment,
 } from "@/lib/attachments";
+import { createGifAttachment } from "@/lib/api";
 import { expandEmojiShortcodes } from "@/lib/emoji-shortcodes";
 import { loadGifSearchEnabled } from "@/lib/gifs";
 import {
@@ -135,6 +136,7 @@ export function MessageComposer({
   const [caret, setCaret] = useState(0);
   const [isPickerOpen, setIsPickerOpen] = useState(false);
   const [isGifPickerOpen, setIsGifPickerOpen] = useState(false);
+  const [gifQuery, setGifQuery] = useState("");
   const [isGifSearchEnabled, setIsGifSearchEnabled] = useState(false);
   const [attachmentLimits, setAttachmentLimits] = useState<{
     enabled: boolean;
@@ -339,13 +341,56 @@ export function MessageComposer({
   }
 
   /**
-   * A GIF is a whole message, not text to keep editing — inserting the URL into
-   * the draft would only ever be followed by pressing Enter, and would mix it
-   * with whatever else is half-typed there.
+   * A picked GIF is staged like any other attachment rather than sent on the
+   * spot. Sending immediately meant the pick was final — no way to see what you
+   * actually chose at full size, no way to say anything alongside it, and a
+   * misclick was a message. Staging also puts the GIF on the attachment path,
+   * which is what lets it carry a caption and be edited later without the URL
+   * ever being the message.
    */
-  function sendGif(gif: Gif) {
+  async function stageGif(gif: Gif) {
     setIsGifPickerOpen(false);
-    onSend(gif.url);
+    if (!channelId) {
+      return;
+    }
+    const localId = nextLocalId();
+    setPending((list) => [
+      ...list,
+      {
+        localId,
+        filename: gif.title || "GIF",
+        contentType: "image/gif",
+        // Not our bytes and never counted against the cap; the chip shows a
+        // dimension rather than a size for these.
+        byteSize: 0,
+        previewUrl: gif.previewUrl,
+        status: "uploading",
+        progress: 0,
+        attachmentId: null,
+        width: gif.width,
+        height: gif.height,
+        error: null,
+      },
+    ]);
+
+    try {
+      const { attachment } = await createGifAttachment(channelId, {
+        url: gif.url,
+        width: gif.width,
+        height: gif.height,
+        title: gif.title,
+      });
+      updatePending(localId, {
+        status: "ready",
+        progress: 1,
+        attachmentId: attachment.id,
+      });
+    } catch (error) {
+      updatePending(localId, {
+        status: "failed",
+        error: error instanceof Error ? error.message : "Could not add that GIF",
+      });
+    }
   }
 
   function updatePending(
@@ -522,6 +567,11 @@ export function MessageComposer({
         sendMessage: (messageBody) => {
           onSend(expandEmojiShortcodes(messageBody).trim());
         },
+        openGifPicker: (query) => {
+          setGifQuery(query);
+          setIsGifPickerOpen(true);
+        },
+        isGifSearchEnabled,
         ...slashContext,
       });
       if (result.feedback) {
@@ -534,7 +584,6 @@ export function MessageComposer({
     } finally {
       setIsRunningSlash(false);
       setIsPickerOpen(false);
-      setIsGifPickerOpen(false);
     }
   }
 
@@ -648,11 +697,28 @@ export function MessageComposer({
       if (!selected) {
         return;
       }
+      // Every path here must consume the Enter. The earlier send branch is
+      // skipped while this menu is open, so falling through lands in the
+      // textarea's default and types a newline — which is what `/help` plus
+      // Enter used to do: the menu was open, the name was already complete, no
+      // branch matched, and the command silently became a blank line.
+      event.preventDefault();
       const query = getSlashQuery(body).toLowerCase();
-      if (selected.takesArgs && query !== selected.name) {
-        event.preventDefault();
-        applySlashSelection(selected);
+      if (query !== selected.name) {
+        // Half-typed: complete it. applySelection runs no-argument commands
+        // outright, matching what clicking the row does.
+        applySelection(selectedIndex);
+        return;
       }
+      if (selected.takesArgs) {
+        // Fully typed and takes arguments, but none were given. Run it anyway:
+        // the ones with optional arguments are valid bare, and the ones that
+        // require them answer with their own usage line, which is more useful
+        // than swallowing the keystroke.
+        void handleSubmit();
+        return;
+      }
+      void runSlash(`/${selected.name}`);
     }
   }
 
@@ -683,7 +749,8 @@ export function MessageComposer({
       {isGifPickerOpen && !menuKind && (
         <GifPickerPanel
           className="absolute bottom-[calc(100%-0.25rem)] left-3 sm:left-4"
-          onSelect={sendGif}
+          initialQuery={gifQuery}
+          onSelect={stageGif}
           onClose={() => setIsGifPickerOpen(false)}
         />
       )}
@@ -804,6 +871,9 @@ export function MessageComposer({
             aria-expanded={isGifPickerOpen}
             onClick={() => {
               setIsPickerOpen(false);
+              // The button always opens on trending. Without this it would
+              // reopen on whatever a previous `/gif <query>` had seeded.
+              setGifQuery("");
               setIsGifPickerOpen((open) => !open);
             }}
             onMouseDown={(event) => {
@@ -897,7 +967,14 @@ function AttachmentChip({
           </span>
         ) : (
           <span className="block text-[11px] text-paper-muted">
-            {formatByteSize(attachment.byteSize)}
+            {/* A GIF's bytes are the provider's, never measured here, so the
+                row would read "0 B" — the dimensions are the honest thing to
+                show for one. */}
+            {attachment.byteSize > 0
+              ? formatByteSize(attachment.byteSize)
+              : attachment.width && attachment.height
+                ? `${attachment.width}×${attachment.height}`
+                : "GIF"}
           </span>
         )}
         {attachment.status === "uploading" && (

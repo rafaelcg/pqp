@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   DEFAULT_MAX_ATTACHMENT_BYTES,
+  isGifMediaUrl,
   isImageContentType,
   MAX_ATTACHMENTS_PER_MESSAGE,
   type Attachment,
@@ -33,7 +34,10 @@ export interface DbAttachment {
   message_id: string | null;
   channel_id: string;
   uploader_id: string;
-  storage_key: string;
+  /** Null exactly when `remote_url` is set — bytes we hold vs bytes we link. */
+  storage_key: string | null;
+  /** Null exactly when `storage_key` is set. Bytes on somebody else's host. */
+  remote_url: string | null;
   filename: string;
   content_type: string;
   /** BIGINT: node-postgres hands int8 back as a string, never a number. */
@@ -51,8 +55,8 @@ export interface DbAttachment {
  * RETURNING list is ambiguous and fails at runtime.
  */
 const ATTACHMENT_COLUMNS = `a.id, a.message_id, a.channel_id, a.uploader_id,
-       a.storage_key, a.filename, a.content_type, a.byte_size, a.width,
-       a.height, a.position, a.created_at`;
+       a.storage_key, a.remote_url, a.filename, a.content_type, a.byte_size,
+       a.width, a.height, a.position, a.created_at`;
 
 /**
  * Upload URL lifetime. Long enough for a phone on bad signal to finish 10 MiB,
@@ -222,6 +226,62 @@ export async function createPendingAttachment(
   };
 }
 
+export interface CreateRemoteAttachmentInput {
+  channelId: string;
+  uploaderId: string;
+  url: string;
+  filename: string;
+  contentType: string;
+  width?: number | null;
+  height?: number | null;
+}
+
+export class UnsupportedRemoteHostError extends Error {
+  constructor() {
+    super("That link is not a supported GIF host");
+    this.name = "UnsupportedRemoteHostError";
+  }
+}
+
+/**
+ * Stage an attachment whose bytes stay on somebody else's host.
+ *
+ * The host allowlist is the whole security boundary here and it is applied
+ * server-side, not merely mirrored from the client: without it this is an
+ * endpoint that renders an arbitrary attacker-chosen URL as an image inside a
+ * private channel, which leaks a viewer's IP to that host and makes every
+ * message a request the sender controls.
+ *
+ * `byte_size` is 0 rather than a probe. We do not hold these bytes, the size
+ * cap is about our own storage bill, and a HEAD against a third party on the
+ * send path would put their latency inside our message write.
+ */
+export async function createRemoteAttachment(
+  input: CreateRemoteAttachmentInput,
+): Promise<DbAttachment> {
+  if (!isGifMediaUrl(input.url)) {
+    throw new UnsupportedRemoteHostError();
+  }
+
+  const result = await getPool().query<DbAttachment>(
+    `INSERT INTO message_attachments AS a
+       (channel_id, uploader_id, remote_url, filename, content_type, byte_size,
+        width, height)
+     VALUES ($1, $2, $3, $4, $5, 0, $6, $7)
+     RETURNING ${ATTACHMENT_COLUMNS}`,
+    [
+      input.channelId,
+      input.uploaderId,
+      input.url,
+      input.filename,
+      input.contentType,
+      input.width ?? null,
+      input.height ?? null,
+    ],
+  );
+  return result.rows[0]!;
+}
+
 /**
  * What the object store says is there, or null when it cannot be trusted.
  *
@@ -234,9 +294,25 @@ export async function createPendingAttachment(
  * ignores a signed length.
  */
 async function verifyUpload(row: DbAttachment): Promise<number | null> {
+  // Nothing was uploaded, so there is nothing to verify: the row points at a
+  // host we do not control. What stands in for this check is the host
+  // allowlist applied when the row was created — the only URLs that reach here
+  // are ones `isGifMediaUrl` already accepted. HEADing a third party on the
+  // send path would also put their latency inside our message write.
+  if (row.remote_url) {
+    return Number(row.byte_size);
+  }
+
+  // Bytes we were meant to hold, on a deployment that cannot reach the store.
+  // Unverifiable is indistinguishable from absent here, and attaching a row
+  // whose object may not exist would render a permanently broken tile.
+  if (!isStorageConfigured()) {
+    return null;
+  }
+
   let head;
   try {
-    head = await headObject(row.storage_key);
+    head = await headObject(row.storage_key!);
   } catch (error) {
     console.error(
       `[attachments] HEAD failed for ${row.storage_key}:`,
@@ -290,7 +366,11 @@ export async function verifyPendingAttachments(
   attachmentIds: string[],
 ): Promise<VerifiedAttachment[]> {
   const requested = attachmentIds.slice(0, MAX_ATTACHMENTS_PER_MESSAGE);
-  if (requested.length === 0 || !isStorageConfigured()) {
+  // Not gated on storage: a remote row never touched the bucket, and gating
+  // here dropped every staged GIF on a deployment with S3 off — which is the
+  // deployment shape GIFs actually run on. Rows that DO need the bucket are
+  // dropped one at a time by `verifyUpload` below.
+  if (requested.length === 0) {
     return [];
   }
 
@@ -392,7 +472,11 @@ export function toPublicAttachment(row: DbAttachment): Attachment {
     byteSize: Number(row.byte_size),
     width: row.width,
     height: row.height,
-    url: presignGet(row.storage_key, {
+    // Somebody else's bytes: hand back the URL as-is. There is nothing to sign,
+    // and signing a host we do not hold the keys for would produce a dead link.
+    url: row.remote_url
+      ? row.remote_url
+      : presignGet(row.storage_key!, {
       ttlSeconds: attachmentUrlTtlSeconds(),
       // Anything that is not an inline image is signed as a download. A
       // `text/plain` or `application/pdf` opened as a top-level document runs
@@ -401,7 +485,7 @@ export function toPublicAttachment(row: DbAttachment): Attachment {
       ...(isImageContentType(row.content_type)
         ? {}
         : { downloadFilename: row.filename }),
-    }),
+        }),
   };
 }
 
@@ -419,12 +503,15 @@ export async function listAttachmentsForMessages(
   messageIds: string[],
 ): Promise<Map<string, Attachment[]>> {
   const byMessage = new Map<string, Attachment[]>();
-  // A deployment that loses its storage configuration must still serve its
-  // history: the messages read normally and the attachments simply do not
-  // appear, rather than every read failing on an unsignable URL.
-  if (messageIds.length === 0 || !isStorageConfigured()) {
+  if (messageIds.length === 0) {
     return byMessage;
   }
+  // Deliberately NOT gated on storage being configured. Remote attachments —
+  // GIFs — need no signing key, and a deployment with GIF search on and S3 off
+  // is the normal case rather than an edge one, so gating the whole read on
+  // storage would make every GIF invisible in exactly that setup. Rows that do
+  // need a signature are dropped individually below.
+  const canSign = isStorageConfigured();
 
   const result = await getPool().query<DbAttachment>(
     `SELECT ${ATTACHMENT_COLUMNS}
@@ -435,6 +522,12 @@ export async function listAttachmentsForMessages(
   );
 
   for (const row of result.rows) {
+    // An unsignable row is skipped rather than served with a dead URL: history
+    // still reads, the stored file just does not appear. The same trade as
+    // before, now made per row instead of for the whole query.
+    if (!row.remote_url && !canSign) {
+      continue;
+    }
     const list = byMessage.get(row.message_id!) ?? [];
     list.push(toPublicAttachment(row));
     byMessage.set(row.message_id!, list);
@@ -488,11 +581,14 @@ export async function getAttachmentForViewer(
  * recoverable.
  */
 export async function sweepOrphanedAttachments(): Promise<number> {
-  if (!isStorageConfigured()) {
-    return 0;
-  }
-
-  const orphans = await getPool().query<{ id: string; storage_key: string }>(
+  // Not gated on storage being configured: a remote row has an object store
+  // nowhere in its life cycle, and an abandoned GIF pick still leaves a row
+  // behind. Gating here would leak those rows forever on the deployment shape
+  // that has GIFs on and S3 off.
+  const orphans = await getPool().query<{
+    id: string;
+    storage_key: string | null;
+  }>(
     `SELECT id, storage_key
      FROM message_attachments
      WHERE message_id IS NULL
@@ -504,8 +600,15 @@ export async function sweepOrphanedAttachments(): Promise<number> {
     return 0;
   }
 
+  // Only rows that own bytes have anything to delete.
+  const stored = isStorageConfigured()
+    ? orphans.rows.filter(
+        (row): row is { id: string; storage_key: string } =>
+          row.storage_key !== null,
+      )
+    : [];
   await Promise.all(
-    orphans.rows.map((row) =>
+    stored.map((row) =>
       deleteObject(row.storage_key).catch((error: unknown) => {
         console.error(
           `[attachments] leaked object ${row.storage_key}:`,

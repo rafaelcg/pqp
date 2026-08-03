@@ -1,9 +1,11 @@
 import type {
+  Attachment,
   AttachmentUrlResponse,
   BlockListResponse,
   Channel,
   ChannelUnread,
   CreateAttachmentRequest,
+  CreateGifAttachmentRequest,
   CreateAttachmentResponse,
   DmListResponse,
   DmPrivacy,
@@ -236,6 +238,25 @@ export const createAttachment = (
     body: JSON.stringify(body),
     ...(signal ? { signal } : {}),
   });
+
+/**
+ * Stage a picked GIF as an attachment. Nothing is uploaded — the bytes stay on
+ * the provider — so this is one call rather than the mint-then-PUT dance, and
+ * it works on a deployment with no object storage at all.
+ */
+export const createGifAttachment = (
+  channelId: string,
+  body: CreateGifAttachmentRequest,
+  signal?: AbortSignal,
+) =>
+  apiFetch<{ attachment: Attachment }>(
+    `/api/channels/${channelId}/attachments/gif`,
+    {
+      method: "POST",
+      body: JSON.stringify(body),
+      ...(signal ? { signal } : {}),
+    },
+  );
 
 /**
  * A fresh presigned GET for one attachment. Read URLs are minted per response

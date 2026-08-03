@@ -22,6 +22,9 @@ export interface SlashCommandContext {
   setMuted: (muted: boolean) => void;
   isInVoice: boolean;
   isMuted: boolean;
+  /** Opens the GIF picker, seeded with a query when one was typed. */
+  openGifPicker: (query: string) => void;
+  isGifSearchEnabled: boolean;
 }
 
 export type SlashExecuteResult =
@@ -193,16 +196,21 @@ const commands: SlashCommand[] = [
   },
   {
     name: "gif",
-    description: "Search GIFs (not configured)",
-    usage: "/gif <query>",
+    description: "Search GIFs",
+    usage: "/gif [query]",
     takesArgs: true,
-    execute({ args }) {
-      if (!args.trim()) {
-        return err("Usage: /gif <query>");
+    execute({ args, openGifPicker, isGifSearchEnabled }) {
+      // The deployment answers this at boot; hard-coding "not configured" here
+      // meant the command kept saying so long after a key was set.
+      if (!isGifSearchEnabled) {
+        return err(
+          "GIF search isn’t configured on this server. Paste a GIF link instead.",
+        );
       }
-      return err(
-        "GIF search isn’t configured — no API key. Try pasting a GIF link instead.",
-      );
+      // No argument is a valid way to ask — it opens on trending, which is what
+      // the button does.
+      openGifPicker(args.trim());
+      return ok();
     },
   },
   {
