@@ -118,6 +118,7 @@ import {
   renameServer,
   transferOwnership,
   updateChannel,
+  updateMessageRetention,
 } from "../services/servers.js";
 import {
   attachmentUrlTtlSeconds,
@@ -801,7 +802,7 @@ router.patch("/api/servers/:serverId", async ({ req, user }, { serverId }) => {
       changes: [{ key: "ownerId", old: user.id, new: body.ownerId }],
     });
   }
-  const server = body.name ? await renameServer(serverId!, body.name) : null;
+  let server = body.name ? await renameServer(serverId!, body.name) : null;
   if (server) {
     // The old name is not fetched first — a rename is common enough, and low
     // enough stakes, that the entry recording what it became is worth more
@@ -814,6 +815,27 @@ router.patch("/api/servers/:serverId", async ({ req, user }, { serverId }) => {
       targetId: serverId!,
       changes: [{ key: "name", old: null, new: body.name }],
     });
+  }
+
+  if (body.messageRetentionDays !== undefined) {
+    const updated = await updateMessageRetention(serverId!, body.messageRetentionDays);
+    if (updated) {
+      server = updated.server;
+      await logAudit({
+        serverId: serverId!,
+        actorId: user.id,
+        action: "server.retention_update",
+        targetType: "server",
+        targetId: serverId!,
+        changes: [
+          {
+            key: "messageRetentionDays",
+            old: updated.previousDays,
+            new: body.messageRetentionDays,
+          },
+        ],
+      });
+    }
   }
 
   return { ok: true, ...(server ? { server: mapServer(server) } : {}) };

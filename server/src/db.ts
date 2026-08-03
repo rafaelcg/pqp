@@ -59,6 +59,7 @@ export interface DbServer {
   name: string;
   owner_id: string;
   created_at: Date;
+  message_retention_days: number | null;
   role?: "owner" | "admin" | "member";
 }
 

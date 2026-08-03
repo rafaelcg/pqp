@@ -159,12 +159,19 @@ export const publicUserSchema = z.object({
 
 export type PublicUser = z.infer<typeof publicUserSchema>;
 
+/** ~10 years — generous enough for any real policy, bounded so a typo
+ * (a year expressed in days times itself, say) cannot request forever
+ * through a very large finite number instead of through `null`. */
+export const MAX_MESSAGE_RETENTION_DAYS = 3650;
+
 export const serverSchema = z.object({
   id: z.string().uuid(),
   name: z.string(),
   ownerId: z.string().uuid(),
   role: memberRoleSchema.optional(),
   createdAt: z.string(),
+  /** Null means keep forever. */
+  messageRetentionDays: z.number().int().positive().max(MAX_MESSAGE_RETENTION_DAYS).nullable(),
 });
 
 export const channelSchema = z.object({
@@ -520,6 +527,16 @@ export const addChannelMemberSchema = z.object({
 export const updateServerSchema = z.object({
   name: z.string().min(1).max(100).optional(),
   ownerId: z.string().uuid().optional(),
+  /** Explicit `null` clears retention back to "keep forever" — absent means
+   * "not changing this," the same distinction `imageUrl` already draws on
+   * `updateChannelSchema`. */
+  messageRetentionDays: z
+    .number()
+    .int()
+    .positive()
+    .max(MAX_MESSAGE_RETENTION_DAYS)
+    .nullable()
+    .optional(),
 });
 
 export const removeMemberSchema = z.object({

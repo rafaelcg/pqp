@@ -27,6 +27,7 @@ const AUDIT_ACTION_LABELS: Record<string, string> = {
   "channel.move": "reordered a channel",
   "message.delete": "deleted someone's message",
   "server.update": "renamed the server",
+  "server.retention_update": "changed message retention",
   "server.ownership_transfer": "transferred ownership",
   "invite.create": "created an invite",
   "invite.delete": "revoked an invite",
@@ -189,6 +190,11 @@ export function ServerSettingsDialog({
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
 
+  const [retentionDays, setRetentionDays] = useState<number | null>(null);
+  const [retentionError, setRetentionError] = useState<string | null>(null);
+  const [retentionSaved, setRetentionSaved] = useState(false);
+  const [savingRetention, setSavingRetention] = useState(false);
+
   const serverId = server?.id ?? null;
   const isOwner = server?.role === "owner";
   const isManager = isOwner || server?.role === "admin";
@@ -197,6 +203,8 @@ export function ServerSettingsDialog({
   // is being typed here; the form only resets when the dialog opens.
   const serverNameRef = useRef(server?.name ?? "");
   serverNameRef.current = server?.name ?? "";
+  const retentionRef = useRef(server?.messageRetentionDays ?? null);
+  retentionRef.current = server?.messageRetentionDays ?? null;
 
   useEffect(() => {
     if (!open) {
@@ -212,6 +220,9 @@ export function ServerSettingsDialog({
     setDeleteArmed(false);
     setDeletePhrase("");
     setDeleteError(null);
+    setRetentionDays(retentionRef.current);
+    setRetentionError(null);
+    setRetentionSaved(false);
   }, [open, serverId]);
 
   useEffect(() => {
@@ -248,6 +259,29 @@ export function ServerSettingsDialog({
   const busy = savingName || transferring || deleting;
   const trimmedName = name.trim();
   const target = candidates.find((m) => m.id === targetId) ?? null;
+
+  async function saveRetention(days: number | null) {
+    if (!serverId) {
+      return;
+    }
+    setSavingRetention(true);
+    setRetentionError(null);
+    setRetentionSaved(false);
+    try {
+      const res = await updateServer(serverId, { messageRetentionDays: days });
+      if (res.server) {
+        onRenamed(res.server);
+        setRetentionDays(days);
+        setRetentionSaved(true);
+      } else {
+        setRetentionError("Server did not return the updated server.");
+      }
+    } catch (err) {
+      setRetentionError(messageOf(err, "Failed to update retention"));
+    } finally {
+      setSavingRetention(false);
+    }
+  }
 
   async function saveName() {
     if (!serverId || !trimmedName || trimmedName === server?.name) {
@@ -533,6 +567,38 @@ export function ServerSettingsDialog({
           {deleteError && (
             <p role="alert" className="text-sm text-danger">
               {deleteError}
+            </p>
+          )}
+        </section>
+
+        <section className="space-y-2 border-t border-ink-4 pt-5">
+          <h3 className="font-display text-sm font-bold uppercase tracking-wider text-paper-muted">
+            Message retention
+          </h3>
+          <p className="text-sm text-paper-muted">
+            Automatically delete messages older than this, across every
+            channel in {server.name}. Pinned messages are never touched.
+          </p>
+          <select
+            value={retentionDays === null ? "" : String(retentionDays)}
+            aria-label="Message retention"
+            disabled={savingRetention}
+            className="h-10 w-full rounded-md border border-ink-4 bg-ink px-3 text-sm text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/50 disabled:opacity-50"
+            onChange={(e) =>
+              void saveRetention(e.target.value === "" ? null : Number(e.target.value))
+            }
+          >
+            <option value="">Keep forever</option>
+            <option value="30">30 days</option>
+            <option value="90">90 days</option>
+            <option value="365">1 year</option>
+          </select>
+          <p role="status" aria-live="polite" className="text-xs text-paper-muted">
+            {retentionSaved ? "Retention updated." : ""}
+          </p>
+          {retentionError && (
+            <p role="alert" className="text-sm text-danger">
+              {retentionError}
             </p>
           )}
         </section>
