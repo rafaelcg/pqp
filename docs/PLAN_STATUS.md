@@ -50,6 +50,7 @@
 | Per-server message retention policy | Done (owner-configurable window, daily sweep, pinned messages exempt — `servers.message_retention_days`) |
 | Per-server data export | Done (owner-only JSON download of channels/members/messages, capped at 50k messages, audit-logged) |
 | Incoming webhooks | Done (Discord wire-compatible payload shape; per-channel management UI; pseudo-user authors messages so no read path had to change; audit-logged) |
+| Screen share | Done (mesh: second video track + manual renegotiation per peer; SFU: LiveKit `Track.Source.ScreenShare`; one presenter per voice channel, server-enforced) |
 
 ## Product roadmap
 
@@ -62,7 +63,7 @@ replies, theming, message search, desktop notifications, per-server/channel noti
 levels, file/image attachments, user search by handle, direct and group messages, blocking
 with DM privacy controls, pinned messages, channel categories with drag-to-reorder, link
 and image embeds (unfurling), a per-server audit log, message retention policies, per-server
-data export, and incoming webhooks (#23, Discord wire-compatible).
+data export, incoming webhooks (#23, Discord wire-compatible), and screen share (#11).
 
 Two subsystems landed alongside those features and shape what comes next:
 
@@ -74,9 +75,9 @@ Two subsystems landed alongside those features and shape what comes next:
   five verbatim copies. Anything new that reads a channel must go through it — a second copy is
   how a private channel or a DM leaks.
 
-Working through the remaining gap list now (2026-08-03), mobile PWA (#9) deliberately last so
+Working through the remaining gap list now (2026-08-04), mobile PWA (#9) deliberately last so
 its scope reflects the full feature surface built before it. Next up, in rough order:
-**screen share** (#11), **SSO/SAML readiness**, and a **public status page** — then mobile PWA.
+**SSO/SAML readiness** and a **public status page** — then mobile PWA.
 
 ## Still open (operational)
 

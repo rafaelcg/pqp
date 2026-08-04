@@ -6,6 +6,8 @@ export interface RemotePeer {
   peerId: string;
   connectionState: PeerConnectionState;
   stream: MediaStream | null;
+  /** Screen-share video, if this peer is currently presenting. */
+  screenStream: MediaStream | null;
   userId?: string;
   displayName?: string;
   avatarUrl?: string | null;
@@ -90,6 +92,7 @@ interface ManagedPeer {
   isSettingRemoteAnswerPending: boolean;
   connectionState: PeerConnectionState;
   stream: MediaStream | null;
+  screenStream: MediaStream | null;
   pendingCandidates: RTCIceCandidateInit[];
   userId?: string;
   displayName?: string;
@@ -104,6 +107,8 @@ const MAX_ICE_RESTARTS = 3;
 export interface PeerConnectionManager {
   setLocalStream(stream: MediaStream): void;
   replaceLocalTrack(stream: MediaStream): Promise<void>;
+  /** Publish (stream set) or stop (null) a screen-share video track to every peer. */
+  setLocalScreenStream(stream: MediaStream | null): Promise<void>;
   setIceServers(servers: RTCIceServer[]): void;
   connectToPeer(remotePeerId: string, identity?: PeerIdentity): void;
   setPeerIdentity(remotePeerId: string, identity: PeerIdentity): void;
@@ -126,6 +131,7 @@ export function createPeerConnectionManager(
 ): PeerConnectionManager {
   const peers = new Map<string, ManagedPeer>();
   let localStream: MediaStream | null = null;
+  let localScreenStream: MediaStream | null = null;
   let stateHandler: PeerStateChangeHandler | null = null;
   let currentIceServers = iceServers;
 
@@ -134,6 +140,7 @@ export function createPeerConnectionManager(
       peerId: peer.peerId,
       connectionState: peer.connectionState,
       stream: peer.stream,
+      screenStream: peer.screenStream,
       userId: peer.userId,
       displayName: peer.displayName,
       avatarUrl: peer.avatarUrl,
@@ -256,7 +263,17 @@ export function createPeerConnectionManager(
 
     pc.ontrack = (event) => {
       const stream = event.streams[0] ?? new MediaStream([event.track]);
-      managed.stream = stream;
+      if (event.track.kind === "video") {
+        managed.screenStream = stream;
+        // Fires when the sender stops the track (screen-share ended or the
+        // sender removed it and renegotiated) — nothing else observes that.
+        event.track.onended = () => {
+          managed.screenStream = null;
+          emitState();
+        };
+      } else {
+        managed.stream = stream;
+      }
       emitState();
     };
 
@@ -309,6 +326,7 @@ export function createPeerConnectionManager(
       isSettingRemoteAnswerPending: false,
       connectionState: "connecting",
       stream: null,
+      screenStream: null,
       pendingCandidates: [],
       iceRestartTimer: null,
       politeRestartFallback: null,
@@ -322,11 +340,22 @@ export function createPeerConnectionManager(
         pc.addTrack(track, localStream);
       }
     }
+    if (localScreenStream) {
+      for (const track of localScreenStream.getTracks()) {
+        pc.addTrack(track, localScreenStream);
+      }
+    }
 
     return managed;
   }
 
-  async function negotiateAsImpolite(peer: ManagedPeer, iceRestart = false) {
+  /**
+   * Create-offer-and-send. Named generically because either side of a pair may
+   * call it (initial connect, ICE restart, or adding a track later) — the
+   * actual politeness/glare resolution happens in `applyRemoteDescription` on
+   * whichever side receives the resulting offer, not here.
+   */
+  async function negotiate(peer: ManagedPeer, iceRestart = false) {
     try {
       peer.makingOffer = true;
       await peer.pc.setLocalDescription(
@@ -429,6 +458,27 @@ export function createPeerConnectionManager(
       }
     },
 
+    async setLocalScreenStream(stream: MediaStream | null) {
+      localScreenStream = stream;
+      const nextTrack = stream?.getVideoTracks()[0] ?? null;
+      for (const peer of peers.values()) {
+        const sender = peer.pc
+          .getSenders()
+          .find((s) => s.track?.kind === "video");
+        if (nextTrack) {
+          if (sender) {
+            await sender.replaceTrack(nextTrack);
+          } else {
+            peer.pc.addTrack(nextTrack, stream!);
+            await negotiate(peer);
+          }
+        } else if (sender) {
+          peer.pc.removeTrack(sender);
+          await negotiate(peer);
+        }
+      }
+    },
+
     setIceServers(servers: RTCIceServer[]) {
       if (servers.length === 0) {
         return;
@@ -461,7 +511,7 @@ export function createPeerConnectionManager(
       emitState();
 
       if (isImpolite(localPeerId, remotePeerId)) {
-        void negotiateAsImpolite(managed);
+        void negotiate(managed);
       }
     },
 
@@ -535,7 +585,7 @@ export function createPeerConnectionManager(
       const managed = createPeerConnection(remotePeerId, preservedIdentity);
       peers.set(remotePeerId, managed);
       emitState();
-      await negotiateAsImpolite(managed, true);
+      await negotiate(managed, true);
     },
 
     removePeer(remotePeerId: string) {

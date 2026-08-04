@@ -2,7 +2,7 @@
 
 pqp abstracts voice transport behind a media-path switch. The channel UX stays identical; only the media path changes.
 
-**Presence is always the app WebSocket.** Roster, occupancy, join/leave and speaking rings ride `/ws` in every mode — the SFU replaces only the *audio* transport. That is why SFU participants use the WS-assigned `peerId` as their SFU identity: the roster lines up 1:1 with the mesh path.
+**Presence is always the app WebSocket.** Roster, occupancy, join/leave and speaking rings ride `/ws` in every mode — the SFU replaces only the *media* transport (mic, and screen share when someone is presenting). That is why SFU participants use the WS-assigned `peerId` as their SFU identity: the roster lines up 1:1 with the mesh path.
 
 ## Choosing a backend
 
@@ -56,8 +56,8 @@ Restart the server and join a voice channel — the "mesh limit" warning disappe
 
 1. Client joins the voice room over `/ws` and receives `welcome` with its `peerId`.
 2. Client `POST /api/voice/token` `{ voiceChannelId, peerId }`.
-3. Server verifies the peer is live, owned by the caller, and in that channel, then mints a LiveKit JWT (room = channel id, identity = `peerId`, 6h TTL, audio publish/subscribe only).
-4. Client connects to LiveKit and publishes the processed mic track; remote audio tracks are mapped back onto the same `RemotePeer[]` the mesh path produces.
+3. Server verifies the peer is live, owned by the caller, and in that channel, then mints a LiveKit JWT (room = channel id, identity = `peerId`, 6h TTL, publish/subscribe — covers mic and screen-share video alike).
+4. Client connects to LiveKit and publishes the processed mic track; remote audio tracks are mapped back onto the same `RemotePeer[]` the mesh path produces. A screen share publishes a second track tagged `Track.Source.ScreenShare`, subscribed separately into `RemotePeer.screenStream`.
 
 `livekit-client` is loaded via dynamic `import()`, so mesh deployments never download it (it is emitted as a separate ~530 kB chunk).
 

@@ -80,10 +80,16 @@ Per **voice channel** mesh room. Same offer/answer/ICE relay as the seed MVP, sc
 |---|---|---|
 | Client → Server | `join-voice-room` | Enter voice channel |
 | Client → Server | `leave-voice-room` | Leave voice channel |
+| Client → Server | `set-sharing-screen` | Start/stop presenting; server denies a second concurrent sharer |
 | Server → Client | `welcome` | Assigned `peerId` + existing peers |
-| Relayed | `offer` / `answer` / `ice-candidate` | WebRTC negotiation |
+| Server → Client | `screen-share-denied` | Someone else is already presenting |
+| Relayed | `offer` / `answer` / `ice-candidate` | WebRTC negotiation (mic and, when presenting, a second video track) |
 
 **Mesh limit:** ~5–8 users per voice channel. UI warns at 6+. SFU backends scale beyond this.
+Screen share is capped at one presenter per voice channel — in mesh mode a second
+concurrent share would multiply every peer's video-encode cost, so the limit is
+enforced uniformly for mesh and SFU alike rather than only where it's structurally
+required.
 
 ## Attachments
 

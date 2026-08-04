@@ -36,6 +36,7 @@ import {
   type LocalSettings,
 } from "@/components/layout/settings-modal";
 import { UserPanel } from "@/components/layout/user-panel";
+import { ScreenShareView } from "@/components/voice/screen-share-view";
 import { VoiceAudioSinks } from "@/components/voice/voice-audio-sinks";
 import { VoicePanel } from "@/components/voice/voice-panel";
 import { VoiceStatusBar } from "@/components/voice/voice-status-bar";
@@ -1882,6 +1883,12 @@ function MainAppContent({
                 error={voiceState.error}
                 compactPeers={localSettings.compactPeers}
                 usingSfu={voiceState.usingSfu}
+                isSharingScreen={voiceState.isSharingScreen}
+                screenSharePeerId={
+                  voiceState.voiceChannelId === selectedChannel.id
+                    ? voiceState.screenSharePeerId
+                    : null
+                }
                 onJoin={() => void handleJoinVoice(selectedChannel.id)}
                 onLeave={() => voice.leave()}
                 onToggleMute={() => voice.toggleMute()}
@@ -1892,9 +1899,32 @@ function MainAppContent({
                 onRetryPeer={(peerId) => {
                   void voice.retryPeer(peerId);
                 }}
+                onStartScreenShare={() => void voice.startScreenShare()}
+                onStopScreenShare={() => void voice.stopScreenShare()}
               />
             </div>
-            {chatPane}
+            <div className="flex min-h-0 flex-1 flex-col">
+              {voiceState.voiceChannelId === selectedChannel.id &&
+                voiceState.screenSharePeerId && (
+                  <ScreenShareView
+                    stream={
+                      voiceState.screenSharePeerId === voiceState.peerId
+                        ? voiceState.localScreenStream
+                        : (voiceState.remotePeers.find(
+                            (p) => p.peerId === voiceState.screenSharePeerId,
+                          )?.screenStream ?? null)
+                    }
+                    presenterName={
+                      voiceState.remotePeers.find(
+                        (p) => p.peerId === voiceState.screenSharePeerId,
+                      )?.displayName ?? "Someone"
+                    }
+                    isSelf={voiceState.screenSharePeerId === voiceState.peerId}
+                    onStopSharing={() => void voice.stopScreenShare()}
+                  />
+                )}
+              {chatPane}
+            </div>
           </div>
         )}
       </main>

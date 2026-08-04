@@ -26,6 +26,7 @@ interface VoicePeer {
   displayName: string;
   avatarUrl: string | null;
   voiceChannelId: string;
+  sharingScreen: boolean;
 }
 
 const peers = new Map<string, VoicePeer>();
@@ -53,6 +54,7 @@ function toParticipant(peer: VoicePeer): VoiceParticipant {
     userId: peer.userId,
     displayName: peer.displayName,
     avatarUrl: peer.avatarUrl,
+    sharingScreen: peer.sharingScreen,
   };
 }
 
@@ -330,6 +332,7 @@ export async function handleVoiceMessage(
       displayName: user.display_name,
       avatarUrl: user.avatar_url,
       voiceChannelId: payload.voiceChannelId,
+      sharingScreen: false,
     };
     peers.set(peerId, peer);
     socketToPeerId.set(socket, peerId);
@@ -366,6 +369,34 @@ export async function handleVoiceMessage(
     if (existingPeerId) {
       removePeer(existingPeerId);
     }
+    return;
+  }
+
+  if (payload.type === "set-sharing-screen") {
+    if (!existingPeerId) {
+      return;
+    }
+    const peer = peers.get(existingPeerId);
+    if (!peer) {
+      return;
+    }
+    // Mesh mode would otherwise multiply every peer's video-encode cost by the
+    // number of concurrent sharers; capping to one keeps the limit uniform
+    // across mesh and SFU rather than only enforcing it for mesh.
+    if (payload.sharing) {
+      const alreadySharing = getRoomPeers(peer.voiceChannelId).some(
+        (p) => p.id !== peer.id && p.sharingScreen,
+      );
+      if (alreadySharing) {
+        send(peer.socket, {
+          type: "screen-share-denied",
+          voiceChannelId: peer.voiceChannelId,
+        });
+        return;
+      }
+    }
+    peer.sharingScreen = payload.sharing;
+    await broadcastRoster(peer.voiceChannelId);
     return;
   }
 

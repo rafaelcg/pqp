@@ -60,7 +60,8 @@ export async function createLiveKitSession(
     roomJoin: true,
     canPublish: true,
     canSubscribe: true,
-    // Audio-only today; no data channel needed (chat rides the app WS).
+    // Covers mic and screen-share video alike; no data channel needed (chat
+    // rides the app WS).
     canPublishData: false,
   });
 

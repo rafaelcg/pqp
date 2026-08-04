@@ -17,6 +17,10 @@ export interface LiveKitSession {
   /** Swap the published track after a mic device change. */
   replaceTrack(stream: MediaStream): Promise<void>;
   setMuted(muted: boolean): Promise<void>;
+  /** Publish a screen-share video track. */
+  publishScreen(stream: MediaStream): Promise<void>;
+  /** Stop publishing the screen-share video track. */
+  unpublishScreen(): Promise<void>;
   disconnect(): Promise<void>;
 }
 
@@ -59,6 +63,8 @@ export async function connectLiveKit({
 
   /** peerId → MediaStream assembled from that participant's audio tracks. */
   const streams = new Map<string, MediaStream>();
+  /** peerId → MediaStream for whoever is currently screen-sharing. */
+  const screenStreams = new Map<string, MediaStream>();
 
   function snapshot() {
     const peers: RemotePeer[] = [];
@@ -69,6 +75,7 @@ export async function connectLiveKit({
         peerId,
         connectionState: connectionStateFor(streams.has(peerId)),
         stream: streams.get(peerId) ?? null,
+        screenStream: screenStreams.get(peerId) ?? null,
         userId: identity?.userId,
         displayName: identity?.displayName ?? participant.name ?? undefined,
         avatarUrl: identity?.avatarUrl ?? null,
@@ -78,7 +85,17 @@ export async function connectLiveKit({
   }
 
   room
-    .on(RoomEvent.TrackSubscribed, (track, _pub, participant) => {
+    .on(RoomEvent.TrackSubscribed, (track, pub, participant) => {
+      if (track.kind === Track.Kind.Video) {
+        if (pub.source === Track.Source.ScreenShare) {
+          screenStreams.set(
+            participant.identity,
+            new MediaStream([track.mediaStreamTrack]),
+          );
+          snapshot();
+        }
+        return;
+      }
       if (track.kind !== Track.Kind.Audio) {
         return;
       }
@@ -86,7 +103,14 @@ export async function connectLiveKit({
       streams.set(participant.identity, stream);
       snapshot();
     })
-    .on(RoomEvent.TrackUnsubscribed, (track, _pub, participant) => {
+    .on(RoomEvent.TrackUnsubscribed, (track, pub, participant) => {
+      if (track.kind === Track.Kind.Video) {
+        if (pub.source === Track.Source.ScreenShare) {
+          screenStreams.delete(participant.identity);
+          snapshot();
+        }
+        return;
+      }
       if (track.kind !== Track.Kind.Audio) {
         return;
       }
@@ -96,15 +120,18 @@ export async function connectLiveKit({
     .on(RoomEvent.ParticipantConnected, snapshot)
     .on(RoomEvent.ParticipantDisconnected, (participant) => {
       streams.delete(participant.identity);
+      screenStreams.delete(participant.identity);
       snapshot();
     })
     .on(RoomEvent.Disconnected, () => {
       streams.clear();
+      screenStreams.clear();
       snapshot();
     })
     .on(RoomEvent.ConnectionStateChanged, (state) => {
       if (state === ConnectionState.Disconnected) {
         streams.clear();
+        screenStreams.clear();
         snapshot();
       }
     })
@@ -116,6 +143,8 @@ export async function connectLiveKit({
 
   /** Track we published, kept so we can replace/mute it later. */
   let published: InstanceType<typeof LocalAudioTrack> | null = null;
+  /** Raw screen-share track we published, kept so we can unpublish it later. */
+  let publishedScreenTrack: MediaStreamTrack | null = null;
 
   async function publish(stream: MediaStream) {
     const [audioTrack] = stream.getAudioTracks();
@@ -148,9 +177,34 @@ export async function connectLiveKit({
       }
     },
 
+    async publishScreen(stream: MediaStream) {
+      const [videoTrack] = stream.getVideoTracks();
+      if (!videoTrack) {
+        throw new Error("No video track to publish");
+      }
+      if (publishedScreenTrack) {
+        await room.localParticipant.unpublishTrack(publishedScreenTrack);
+      }
+      publishedScreenTrack = videoTrack;
+      await room.localParticipant.publishTrack(videoTrack, {
+        source: Track.Source.ScreenShare,
+        simulcast: false,
+      });
+    },
+
+    async unpublishScreen() {
+      if (!publishedScreenTrack) {
+        return;
+      }
+      await room.localParticipant.unpublishTrack(publishedScreenTrack);
+      publishedScreenTrack = null;
+    },
+
     async disconnect() {
       streams.clear();
+      screenStreams.clear();
       published = null;
+      publishedScreenTrack = null;
       await room.disconnect();
     },
   };
