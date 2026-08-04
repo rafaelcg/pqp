@@ -53,6 +53,12 @@ export interface VoiceState {
   peerVolumes: Record<string, number>;
   /** True when media is flowing through an SFU rather than a peer mesh. */
   usingSfu: boolean;
+  /** True when this client is the one presenting. */
+  isSharingScreen: boolean;
+  /** peerId of whoever is presenting (self or remote), or null if nobody is. */
+  screenSharePeerId: string | null;
+  /** Our own outgoing capture, for a local preview of what's being shared. */
+  localScreenStream: MediaStream | null;
 }
 
 interface MicPipeline {
@@ -139,6 +145,19 @@ function micErrorMessage(err: unknown): string {
   return err.message;
 }
 
+function screenShareErrorMessage(err: unknown): string {
+  if (!(err instanceof Error)) {
+    return "Failed to start screen share";
+  }
+  if (err.name === "NotAllowedError") {
+    // Also covers the user dismissing the OS/browser picker without choosing
+    // a source — that rejects with the same error name, so this isn't really
+    // a permissions problem in the usual sense, but the copy still fits.
+    return "Screen share was blocked or cancelled.";
+  }
+  return err.message;
+}
+
 /**
  * Supplies an SFU session for a voice channel. When set, the controller routes
  * media through the SFU instead of building a mesh. Presence/roster still come
@@ -156,6 +175,8 @@ export function createVoiceController(transport: RealtimeTransport) {
   /** peerId → roster identity, used to label SFU participants. */
   const identities = new Map<string, LiveKitIdentity>();
   let pipeline: MicPipeline | null = null;
+  /** Owns the getDisplayMedia() capture; mirrored into state.localScreenStream. */
+  let screenCaptureStream: MediaStream | null = null;
   let joinTimeoutId: ReturnType<typeof setTimeout> | null = null;
   let speakingRaf = 0;
   let iceServers: RTCIceServer[] = getDefaultIceServers();
@@ -188,6 +209,9 @@ export function createVoiceController(transport: RealtimeTransport) {
     occupancy: {},
     peerVolumes: {},
     usingSfu: false,
+    isSharingScreen: false,
+    screenSharePeerId: null,
+    localScreenStream: null,
   };
   let listener: ((state: VoiceState) => void) | null = null;
 
@@ -368,6 +392,32 @@ export function createVoiceController(transport: RealtimeTransport) {
     }
   }
 
+  /** Stops the capture tracks only — no network call, no peer teardown. */
+  function releaseScreenCapture() {
+    if (!screenCaptureStream) {
+      return;
+    }
+    for (const track of screenCaptureStream.getTracks()) {
+      track.stop();
+    }
+    screenCaptureStream = null;
+    state.isSharingScreen = false;
+    state.localScreenStream = null;
+  }
+
+  /** Full stop while still in-call: releases the capture and tells everyone. */
+  async function stopScreenShareInternal() {
+    if (!screenCaptureStream) {
+      return;
+    }
+    releaseScreenCapture();
+    transport.sendVoice({ type: "set-sharing-screen", sharing: false });
+    await manager?.setLocalScreenStream(null);
+    if (sfu) {
+      await sfu.unpublishScreen();
+    }
+  }
+
   /**
    * SFU media path. Falls back to mesh if the session cannot be established,
    * so a misconfigured SFU degrades instead of leaving the user with no audio.
@@ -416,6 +466,13 @@ export function createVoiceController(transport: RealtimeTransport) {
         await sfu.publish(pipeline.processedStream);
         await sfu.setMuted(state.isMuted);
       }
+      // A screen share started before a reconnect rebuilds the session — the
+      // capture itself survives the WS drop (it's a browser-level grant, not
+      // tied to the connection), only the publish needs redoing.
+      if (screenCaptureStream) {
+        await sfu.publishScreen(screenCaptureStream);
+        transport.sendVoice({ type: "set-sharing-screen", sharing: true });
+      }
       state.usingSfu = true;
       emit();
       return true;
@@ -430,6 +487,12 @@ export function createVoiceController(transport: RealtimeTransport) {
     manager = createPeerConnectionManager(peerId, sendRelay, iceServers);
     if (pipeline) {
       manager.setLocalStream(pipeline.processedStream);
+    }
+    // See the matching comment in startSfuSession: carry an in-progress share
+    // forward across a rebuilt mesh (e.g. after a WS reconnect).
+    if (screenCaptureStream) {
+      void manager.setLocalScreenStream(screenCaptureStream);
+      transport.sendVoice({ type: "set-sharing-screen", sharing: true });
     }
     manager.onPeerStateChange((remote) => {
       state.remotePeers = remote;
@@ -465,7 +528,17 @@ export function createVoiceController(transport: RealtimeTransport) {
               knownPeerIds.add(participant.peerId);
             }
           }
+          state.screenSharePeerId =
+            message.participants.find((p) => p.sharingScreen)?.peerId ?? null;
         }
+        emit();
+        break;
+      case "screen-share-denied":
+        if (message.voiceChannelId !== state.voiceChannelId) {
+          return;
+        }
+        void stopScreenShareInternal();
+        state.error = "Someone else is already sharing their screen.";
         emit();
         break;
       case "voice-room-full":
@@ -672,6 +745,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       void teardownSfu();
       stopMicPipeline(pipeline);
       pipeline = null;
+      releaseScreenCapture();
       state = {
         status: "idle",
         peerId: null,
@@ -685,6 +759,9 @@ export function createVoiceController(transport: RealtimeTransport) {
         occupancy: state.occupancy,
         peerVolumes: state.peerVolumes,
         usingSfu: false,
+        isSharingScreen: false,
+        screenSharePeerId: null,
+        localScreenStream: null,
       };
       emit();
     },
@@ -754,6 +831,64 @@ export function createVoiceController(transport: RealtimeTransport) {
       // Deafening also mutes; undeafening restores an open mic.
       state.isMuted = state.isDeafened;
       applyMute();
+      emit();
+    },
+
+    async startScreenShare() {
+      if (state.status !== "connected") {
+        return;
+      }
+      // Only one presenter per room (mesh and SFU alike — see the server-side
+      // comment in voice.ts). Checking the roster here skips the OS picker
+      // when we already know it'll be refused; the server call below is still
+      // the authoritative check for the rare simultaneous-click race.
+      if (state.screenSharePeerId && state.screenSharePeerId !== state.peerId) {
+        state.error = "Someone else is already sharing their screen.";
+        emit();
+        return;
+      }
+
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+      } catch (err) {
+        state.error = screenShareErrorMessage(err);
+        emit();
+        return;
+      }
+      const track = stream.getVideoTracks()[0];
+      if (!track) {
+        for (const t of stream.getTracks()) t.stop();
+        state.error = "No video track from screen capture";
+        emit();
+        return;
+      }
+      // Fires on the browser's native "Stop sharing" control, not just our
+      // own button.
+      track.onended = () => {
+        void stopScreenShareInternal();
+        emit();
+      };
+      screenCaptureStream = stream;
+      state.isSharingScreen = true;
+      state.localScreenStream = stream;
+      emit();
+      transport.sendVoice({ type: "set-sharing-screen", sharing: true });
+
+      try {
+        await manager?.setLocalScreenStream(stream);
+        if (sfu) {
+          await sfu.publishScreen(stream);
+        }
+      } catch (err) {
+        state.error = screenShareErrorMessage(err);
+        await stopScreenShareInternal();
+        emit();
+      }
+    },
+
+    async stopScreenShare() {
+      await stopScreenShareInternal();
       emit();
     },
 

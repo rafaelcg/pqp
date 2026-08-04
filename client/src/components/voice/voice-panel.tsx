@@ -7,6 +7,8 @@ import {
   Mic,
   MicOff,
   PhoneOff,
+  ScreenShare,
+  ScreenShareOff,
   Volume2,
   VolumeX,
 } from "lucide-react";
@@ -20,6 +22,7 @@ interface PeerRowProps {
   peer: RemotePeer;
   compact: boolean;
   isSpeaking: boolean;
+  isSharingScreen: boolean;
   volume: number;
   onSetVolume: (volume: number) => void;
   onRetry?: () => void;
@@ -29,6 +32,7 @@ function PeerRow({
   peer,
   compact,
   isSpeaking,
+  isSharingScreen,
   volume,
   onSetVolume,
   onRetry,
@@ -55,6 +59,12 @@ function PeerRow({
           size={compact ? "sm" : "md"}
         />
         <span className="min-w-0 flex-1 truncate font-medium">{name}</span>
+        {isSharingScreen && (
+          <span className="flex shrink-0 items-center gap-1 rounded bg-signal/20 px-1.5 py-0.5 text-[10px] uppercase text-signal">
+            <ScreenShare className="h-3 w-3" aria-hidden="true" />
+            Presenting
+          </span>
+        )}
         {silenced && (
           <span className="flex shrink-0 items-center text-paper-muted">
             <VolumeX className="h-3.5 w-3.5" aria-hidden="true" />
@@ -151,12 +161,17 @@ interface VoicePanelProps {
   compactPeers?: boolean;
   /** Media is going through an SFU — the mesh peer ceiling does not apply. */
   usingSfu?: boolean;
+  isSharingScreen?: boolean;
+  /** peerId of whoever is presenting (self or remote), or null if nobody is. */
+  screenSharePeerId?: string | null;
   onJoin: () => void;
   onLeave: () => void;
   onToggleMute: () => void;
   onToggleDeafen: () => void;
   onSetPeerVolume: (peerId: string, volume: number) => void;
   onRetryPeer?: (peerId: string) => void;
+  onStartScreenShare?: () => void;
+  onStopScreenShare?: () => void;
 }
 
 export function VoicePanel({
@@ -172,14 +187,20 @@ export function VoicePanel({
   error,
   compactPeers = false,
   usingSfu = false,
+  isSharingScreen = false,
+  screenSharePeerId = null,
   onJoin,
   onLeave,
   onToggleMute,
   onToggleDeafen,
   onSetPeerVolume,
   onRetryPeer,
+  onStartScreenShare,
+  onStopScreenShare,
 }: VoicePanelProps) {
   const showWarning = !usingSfu && remotePeers.length >= MESH_VOICE_WARNING;
+  const someoneElseSharing =
+    !!screenSharePeerId && screenSharePeerId !== localPeerId;
   const speaking = new Set(speakingPeerIds);
   const connectedCount =
     (status === "connected" && self ? 1 : 0) + remotePeers.length;
@@ -267,6 +288,33 @@ export function VoicePanel({
                   <Headphones className="h-4 w-4" />
                 )}
               </Button>
+              {(onStartScreenShare || onStopScreenShare) && (
+                <Button
+                  variant="secondary"
+                  size="icon"
+                  aria-label={
+                    isSharingScreen
+                      ? "Stop sharing your screen"
+                      : "Share your screen"
+                  }
+                  aria-pressed={isSharingScreen}
+                  disabled={someoneElseSharing}
+                  title={
+                    someoneElseSharing
+                      ? "Someone else is already sharing their screen"
+                      : undefined
+                  }
+                  onClick={
+                    isSharingScreen ? onStopScreenShare : onStartScreenShare
+                  }
+                >
+                  {isSharingScreen ? (
+                    <ScreenShareOff className="h-4 w-4 text-signal" />
+                  ) : (
+                    <ScreenShare className="h-4 w-4" />
+                  )}
+                </Button>
+              )}
               <Button variant="danger" size="sm" onClick={onLeave}>
                 <PhoneOff className="h-4 w-4" aria-hidden="true" />
                 Leave
@@ -295,6 +343,12 @@ export function VoicePanel({
                         (you)
                       </span>
                     </span>
+                    {isSharingScreen && (
+                      <span className="flex shrink-0 items-center gap-1 rounded bg-signal/20 px-1.5 py-0.5 text-[10px] uppercase text-signal">
+                        <ScreenShare className="h-3 w-3" aria-hidden="true" />
+                        Presenting
+                      </span>
+                    )}
                     {isDeafened ? (
                       <span className="flex items-center gap-1 rounded bg-danger/20 px-2 py-0.5 text-[10px] uppercase text-danger">
                         <HeadphoneOff className="h-3 w-3" aria-hidden="true" />
@@ -316,6 +370,7 @@ export function VoicePanel({
                     peer={peer}
                     compact={compactPeers}
                     isSpeaking={speaking.has(peer.peerId) && !isDeafened}
+                    isSharingScreen={peer.peerId === screenSharePeerId}
                     volume={peerVolumes[peer.userId ?? peer.peerId] ?? 1}
                     onSetVolume={(volume) =>
                       onSetPeerVolume(peer.userId ?? peer.peerId, volume)

@@ -12,6 +12,7 @@ export const voiceParticipantSchema = z.object({
   userId: z.string().uuid(),
   displayName: z.string(),
   avatarUrl: z.string().nullable(),
+  sharingScreen: z.boolean().default(false),
 });
 
 export const welcomeMessageSchema = z.object({
@@ -44,6 +45,11 @@ export const voiceRoomFullMessageSchema = z.object({
   limit: z.number(),
 });
 
+export const screenShareDeniedMessageSchema = z.object({
+  type: z.literal("screen-share-denied"),
+  voiceChannelId: z.string(),
+});
+
 export const offerMessageSchema = z.object({
   type: z.literal("offer"),
   from: z.string(),
@@ -71,6 +77,7 @@ export const voiceSignalingMessageSchema = z.discriminatedUnion("type", [
   peerLeftMessageSchema,
   voiceRosterMessageSchema,
   voiceRoomFullMessageSchema,
+  screenShareDeniedMessageSchema,
   offerMessageSchema,
   answerMessageSchema,
   iceCandidateMessageSchema,
@@ -82,6 +89,9 @@ export type PeerJoinedMessage = z.infer<typeof peerJoinedMessageSchema>;
 export type PeerLeftMessage = z.infer<typeof peerLeftMessageSchema>;
 export type VoiceRosterMessage = z.infer<typeof voiceRosterMessageSchema>;
 export type VoiceRoomFullMessage = z.infer<typeof voiceRoomFullMessageSchema>;
+export type ScreenShareDeniedMessage = z.infer<
+  typeof screenShareDeniedMessageSchema
+>;
 export type OfferMessage = z.infer<typeof offerMessageSchema>;
 export type AnswerMessage = z.infer<typeof answerMessageSchema>;
 export type IceCandidateMessage = z.infer<typeof iceCandidateMessageSchema>;
@@ -114,9 +124,15 @@ export const leaveVoiceRoomMessageSchema = z.object({
   type: z.literal("leave-voice-room"),
 });
 
+export const setSharingScreenMessageSchema = z.object({
+  type: z.literal("set-sharing-screen"),
+  sharing: z.boolean(),
+});
+
 export const voiceClientMessageSchema = z.discriminatedUnion("type", [
   joinVoiceRoomMessageSchema,
   leaveVoiceRoomMessageSchema,
+  setSharingScreenMessageSchema,
   offerMessageSchema,
   answerMessageSchema,
   iceCandidateMessageSchema,

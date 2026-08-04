@@ -44,6 +44,7 @@ const CHAT_MESSAGE_TYPES = new Set([
 const VOICE_MESSAGE_TYPES = new Set([
   "join-voice-room",
   "leave-voice-room",
+  "set-sharing-screen",
   "offer",
   "answer",
   "ice-candidate",
