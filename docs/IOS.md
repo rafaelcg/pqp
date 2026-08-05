@@ -241,8 +241,7 @@ This is the foundation, not the finished app.
   exercises.
 - **Push notifications** — needs APNs and a server-side sender, which does not
   exist for web either.
-- **Pinning, invites, moderation, message search.** Pins render; none of these
-  can be performed yet.
+- **Moderation** — kick, ban, role changes.
 - **Group DMs.** The API takes up to nine participants; the picker starts one
   conversation with one person.
 - **iPad layout.** The target builds universal but the layout is phone-first.

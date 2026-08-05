@@ -214,6 +214,9 @@ actor APIClient {
 
 struct EmptyResponse: Codable, Sendable {}
 
+/// An explicit empty JSON body, for POSTs that take no arguments.
+struct EmptyBody: Encodable, Sendable {}
+
 // MARK: - Endpoints
 
 extension APIClient {
@@ -271,6 +274,12 @@ extension APIClient {
         return response.message
     }
 
+    func deleteServer(id: String) async throws {
+        let _: EmptyResponse = try await send(
+            path: "/api/servers/\(id)", method: "DELETE", query: [], body: nil
+        )
+    }
+
     func deleteMessage(id: String) async throws {
         let _: EmptyResponse = try await send(
             path: "/api/messages/\(id)", method: "DELETE", query: [], body: nil
@@ -300,6 +309,40 @@ extension APIClient {
         struct Response: Decodable { let conversation: DmSummary }
         let response: Response = try await post("/api/dms", body: Body(userIds: userIds))
         return response.conversation
+    }
+
+    func invites(serverId: String) async throws -> [Invite] {
+        let response: InvitesResponse = try await get("/api/servers/\(serverId)/invites")
+        return response.invites
+    }
+
+    func createInvite(serverId: String) async throws -> Invite {
+        struct Response: Decodable { let invite: Invite }
+        let response: Response = try await post(
+            "/api/servers/\(serverId)/invites", body: EmptyBody()
+        )
+        return response.invite
+    }
+
+    func pinnedMessages(channelId: String) async throws -> [Message] {
+        let response: PinnedResponse = try await get("/api/channels/\(channelId)/pins")
+        return response.messages
+    }
+
+    func setPinned(messageId: String, pinned: Bool) async throws -> Message {
+        struct Response: Decodable { let message: Message }
+        let path = "/api/messages/\(messageId)/pin"
+        let response: Response = pinned
+            ? try await post(path, body: EmptyBody())
+            : try await send(path: path, method: "DELETE", query: [], body: nil)
+        return response.message
+    }
+
+    func searchMessages(serverId: String, query: String) async throws -> SearchResponse {
+        try await get(
+            "/api/servers/\(serverId)/search",
+            query: [URLQueryItem(name: "q", value: query)]
+        )
     }
 
     func joinInvite(code: String) async throws -> String {

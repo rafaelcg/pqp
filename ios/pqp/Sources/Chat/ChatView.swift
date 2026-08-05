@@ -8,6 +8,7 @@ struct ChatView: View {
 
     @State private var model = ChatModel()
     @State private var showingPicker = false
+    @State private var showingPins = false
     @State private var pickerItem: PhotosPickerItem?
     @FocusState private var composerFocused: Bool
 
@@ -36,6 +37,14 @@ struct ChatView: View {
         .navigationBarTitleDisplayMode(.inline)
         .animation(Motion.standard, value: model.replyingTo?.id)
         .animation(Motion.standard, value: model.editing?.id)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button { showingPins = true } label: { Image(systemName: "pin") }
+                    .tint(Palette.signal)
+                    .accessibilityLabel("Pinned messages")
+            }
+        }
+        .sheet(isPresented: $showingPins) { PinnedMessagesView(channelId: channelId) }
         .photosPicker(isPresented: $showingPicker, selection: $pickerItem, matching: .images)
         .onChange(of: pickerItem) { _, item in
             guard let item else { return }
@@ -134,6 +143,15 @@ struct ChatView: View {
             UIPasteboard.general.string = message.body
         } label: {
             Label("Copy text", systemImage: "doc.on.doc")
+        }
+
+        Button {
+            Task { await model.togglePin(message) }
+        } label: {
+            Label(
+                message.pinnedAt == nil ? "Pin" : "Unpin",
+                systemImage: message.pinnedAt == nil ? "pin" : "pin.slash"
+            )
         }
 
         // Edit and delete are only ever offered on your own messages; the

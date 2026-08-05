@@ -8,6 +8,8 @@ struct ChannelListView: View {
     @State private var unread: [String: UnreadEntry] = [:]
     @State private var isLoading = true
     @State private var error: String?
+    @State private var showingInvites = false
+    @State private var showingSearch = false
 
     private var textChannels: [Channel] { channels.filter(\.isText) }
     private var voiceChannels: [Channel] { channels.filter(\.isVoice) }
@@ -65,6 +67,23 @@ struct ChannelListView: View {
         }
         .navigationTitle(server.name)
         .navigationBarTitleDisplayMode(.large)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Button { showingSearch = true } label: {
+                        Label("Search messages", systemImage: "magnifyingglass")
+                    }
+                    Button { showingInvites = true } label: {
+                        Label("Invite people", systemImage: "person.badge.plus")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+                .tint(Palette.signal)
+            }
+        }
+        .sheet(isPresented: $showingInvites) { InviteView(server: server) }
+        .sheet(isPresented: $showingSearch) { SearchView(server: server) }
         .task { await load() }
     }
 

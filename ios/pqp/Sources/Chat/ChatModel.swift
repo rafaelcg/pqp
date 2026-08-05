@@ -245,6 +245,22 @@ final class ChatModel {
         )
     }
 
+    func togglePin(_ message: Message) async {
+        guard let session else { return }
+        do {
+            let updated = try await session.api.setPinned(
+                messageId: message.id, pinned: message.pinnedAt == nil
+            )
+            if let index = messages.firstIndex(where: { $0.id == updated.id }) {
+                messages[index] = updated
+            }
+        } catch {
+            // Includes the per-channel pin limit, which the server answers with
+            // a 409 and its own wording.
+            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
     func isMine(_ message: Message) -> Bool {
         message.authorId == session?.currentUser?.id
     }

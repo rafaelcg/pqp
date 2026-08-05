@@ -31,11 +31,20 @@ final class AttachmentUploadTests: XCTestCase {
         return image.jpegData(compressionQuality: 0.9)!
     }
 
-    private func firstTextChannelId() async throws -> String {
-        let servers = try await api.servers()
-        let server = try XCTUnwrap(servers.first, "Seed a server before running this")
+    /// Creates its own server rather than assuming one exists.
+    ///
+    /// These used to take whatever `servers.first` happened to be, which meant
+    /// they failed the moment the database was clean — a test that depends on
+    /// leftover state is not testing what it claims to.
+    private func freshTextChannel() async throws -> (serverId: String, channelId: String) {
+        let server = try await api.createServer(name: "AttachTest \(Int.random(in: 100_000...999_999))")
         let channels = try await api.channels(serverId: server.id)
-        return try XCTUnwrap(channels.first(where: { $0.isText })?.id)
+        let channelId = try XCTUnwrap(channels.first(where: { $0.isText })?.id)
+        return (server.id, channelId)
+    }
+
+    private func deleteServer(_ id: String) async {
+        try? await api.deleteServer(id: id)
     }
 
     func testStorageIsConfigured() async throws {
@@ -55,7 +64,7 @@ final class AttachmentUploadTests: XCTestCase {
     /// that stopped after the PUT would pass while the feature was broken for
     /// anyone actually trying to send a photo.
     func testUploadingAndSendingMakesTheAttachmentReadable() async throws {
-        let channelId = try await firstTextChannelId()
+        let (serverId, channelId) = try await freshTextChannel()
         let pending = PendingAttachment(
             filename: "test.jpg",
             contentType: "image/jpeg",
@@ -110,13 +119,15 @@ final class AttachmentUploadTests: XCTestCase {
         let (data, response) = try await URLSession.shared.data(from: url)
         XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
         XCTAssertEqual(data.count, pending.byteSize, "Downloaded bytes should match what was sent")
+
+        await deleteServer(serverId)
     }
 
     /// The size is signed into the presigned PUT, so a body of a different
     /// length must be refused by storage rather than quietly accepted. This is
     /// the check that cannot be done against a mock.
     func testStorageRejectsABodyThatDoesNotMatchTheSignedSize() async throws {
-        let channelId = try await firstTextChannelId()
+        let (serverId, channelId) = try await freshTextChannel()
         let honest = makeImageData()
 
         // Declare the real size, then send more bytes than that.
@@ -151,5 +162,7 @@ final class AttachmentUploadTests: XCTestCase {
             (200..<300).contains(status),
             "Storage accepted \(lying.data.count) bytes against a URL signed for \(honest.count)"
         )
+
+        await deleteServer(serverId)
     }
 }

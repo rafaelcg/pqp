@@ -244,3 +244,60 @@ struct DmsResponse: Codable, Sendable { let conversations: [DmSummary] }
 struct UnreadResponse: Codable, Sendable { let unread: [UnreadEntry] }
 struct MembersResponse: Codable, Sendable { let members: [ServerMember] }
 struct ApiErrorBody: Codable, Sendable { let error: String }
+
+// MARK: - Invites, pins, search
+
+struct Invite: Codable, Identifiable, Hashable, Sendable {
+    let id: String
+    let code: String
+    let serverId: String
+    let serverName: String?
+    let maxUses: Int?
+    let uses: Int
+    let expiresAt: Date?
+    let createdAt: Date
+}
+
+struct SearchResult: Codable, Identifiable, Hashable, Sendable {
+    let messageId: String
+    let channelId: String
+    let channelName: String
+    let authorId: String
+    let authorName: String
+    /// Carries the server's highlight markers (U+0002 / U+0003) around the
+    /// matched terms — stripped or styled at render time, never shown raw.
+    let snippet: String
+    let createdAt: Date
+
+    var id: String { messageId }
+
+    /// The snippet split into (text, isMatch) runs.
+    var runs: [(text: String, isMatch: Bool)] {
+        var result: [(String, Bool)] = []
+        var current = ""
+        var matching = false
+        for character in snippet {
+            switch character {
+            case "\u{0002}":
+                if !current.isEmpty { result.append((current, matching)) }
+                current = ""
+                matching = true
+            case "\u{0003}":
+                if !current.isEmpty { result.append((current, matching)) }
+                current = ""
+                matching = false
+            default:
+                current.append(character)
+            }
+        }
+        if !current.isEmpty { result.append((current, matching)) }
+        return result
+    }
+}
+
+struct InvitesResponse: Codable, Sendable { let invites: [Invite] }
+struct SearchResponse: Codable, Sendable {
+    let results: [SearchResult]
+    let hasMore: Bool
+}
+struct PinnedResponse: Codable, Sendable { let messages: [Message] }
