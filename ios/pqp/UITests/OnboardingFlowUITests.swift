@@ -57,7 +57,9 @@ final class OnboardingFlowUITests: XCTestCase {
     /// The one that proves the wire contract: real servers, fetched over HTTP,
     /// decoded into the real models, rendered.
     func testServersLoadFromTheLiveAPI() {
-        let name = TestSeed.createServer(self)
+        let server = TestSeed.createServer(self)
+        defer { TestSeed.deleteServer(self, id: server.id) }
+        let name = server.name
         let app = launchFresh()
         app.buttons["Skip"].tap()
 
@@ -73,7 +75,9 @@ final class OnboardingFlowUITests: XCTestCase {
     func testSendingAMessageEchoesBackFromTheServer() {
         // Its own server, so the transcript is empty. Sharing one made this
         // test slower every run until XCUITest timed out snapshotting the tree.
-        let name = TestSeed.createServer(self)
+        let server = TestSeed.createServer(self)
+        defer { TestSeed.deleteServer(self, id: server.id) }
+        let name = server.name
         let app = launchFresh()
         app.buttons["Skip"].tap()
 
@@ -147,7 +151,14 @@ final class LaunchResilienceUITests: XCTestCase {
 /// wire calls as much as the UI: a reaction goes out over the WebSocket, an
 /// edit over HTTP, and both come back as broadcasts.
 final class MessageActionUITests: XCTestCase {
-    private var serverName = ""
+    private var seeded: TestSeed.SeededServer?
+    private var serverName: String { seeded?.name ?? "" }
+
+    override func tearDown() {
+        if let seeded { TestSeed.deleteServer(self, id: seeded.id) }
+        seeded = nil
+        super.tearDown()
+    }
 
     override func setUp() {
         continueAfterFailure = false
@@ -157,7 +168,7 @@ final class MessageActionUITests: XCTestCase {
         // the suite took minutes. Hermetic is also simply correct: a test that
         // depends on leftover state fails for reasons that have nothing to do
         // with what it claims to check.
-        serverName = TestSeed.createServer(self)
+        seeded = TestSeed.createServer(self)
     }
 
     private func openGeneral() -> XCUIApplication {

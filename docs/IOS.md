@@ -188,11 +188,14 @@ Not yet done here: per-peer volume and screen share (the web client has both).
 
 Three things this suite learned the hard way.
 
-**Tests must be hermetic.** The message-action tests originally ran against a
-shared seeded channel, so every run added to the same transcript. Eventually it
-held eighteen messages *and an inline image*, and the suite went from 20s to
-over six minutes before failing. Each test now creates its own server over HTTP
-in `setUp`.
+**Tests must be hermetic — which means cleaning up, not just seeding.** The
+message-action tests originally ran against a shared channel, so every run added
+to the same transcript; once it held eighteen messages *and an inline image* the
+suite went from 20s to 223s and failed with "Timed out while evaluating UI
+query". Seeding a fresh server per test fixed that and then reproduced it one
+level up: nothing deleted them, so 24 servers accumulated and the *list* became
+the slow screen. `TestSeed` now creates and deletes, and the suite is checked by
+asserting the server count returns to zero after a run.
 
 **Never poll `.value` in a loop.** Every XCUITest query snapshots the entire
 accessibility tree. A 10Hz poll against a long transcript costs minutes — that
