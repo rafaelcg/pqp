@@ -1,0 +1,17 @@
+# Cloudflare Pages response headers.
+#
+# The service worker and the manifest must never be served from a cache. A
+# stale `sw.js` is the one file that can pin a user to an old build
+# indefinitely: the browser only learns there is a new worker by re-fetching
+# this exact file, so if an intermediary answers it from cache the update check
+# can never succeed.
+/sw.js
+  Cache-Control: no-cache
+
+/manifest.webmanifest
+  Cache-Control: no-cache
+
+# Vite emits content-hashed filenames under /assets, so those are immutable by
+# construction and safe to cache hard.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable

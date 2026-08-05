@@ -50,6 +50,7 @@
 | Per-server message retention policy | Done (owner-configurable window, daily sweep, pinned messages exempt — `servers.message_retention_days`) |
 | Per-server data export | Done (owner-only JSON download of channels/members/messages, capped at 50k messages, audit-logged) |
 | Incoming webhooks | Done (Discord wire-compatible payload shape; per-channel management UI; pseudo-user authors messages so no read path had to change; audit-logged) |
+| Mobile PWA | Done (installable, shell precache + offline fallback, prompted updates, iOS safe-area/`dvh`, SW notification path for Android — `docs/PWA.md`) |
 | Public status page | Done (`/status` + unauthenticated `/status.json`; per-component probes sampled once a minute, real 24h/7d uptime kept 30 days) |
 | SSO / SAML readiness | Done (Clerk federates; app adds verified-email-domain joining per server, owner-only, exact-match, bans still apply — `docs/SSO.md`) |
 | Screen share | Done (mesh: second video track + manual renegotiation per peer; SFU: LiveKit `Track.Source.ScreenShare`; one presenter per voice channel, server-enforced) |
@@ -66,7 +67,7 @@ levels, file/image attachments, user search by handle, direct and group messages
 with DM privacy controls, pinned messages, channel categories with drag-to-reorder, link
 and image embeds (unfurling), a per-server audit log, message retention policies, per-server
 data export, incoming webhooks (#23, Discord wire-compatible), screen share (#11), and
-SSO/SAML readiness, and a public status page.
+SSO/SAML readiness, a public status page, and the mobile PWA.
 
 Two subsystems landed alongside those features and shape what comes next:
 
@@ -78,9 +79,8 @@ Two subsystems landed alongside those features and shape what comes next:
   five verbatim copies. Anything new that reads a channel must go through it — a second copy is
   how a private channel or a DM leaks.
 
-Working through the remaining gap list now (2026-08-04), mobile PWA (#9) deliberately last so
-its scope reflects the full feature surface built before it. Next up, in rough order:
-**mobile PWA** (#9) — the last item.
+The ranked gap list is now worked through (2026-08-05). Mobile PWA (#9) was taken last on
+purpose, so its scope reflected the full feature surface rather than guessing at it.
 
 ## Still open (operational)
 
