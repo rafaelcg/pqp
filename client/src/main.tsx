@@ -26,6 +26,7 @@ import { isDesktopApp } from "./lib/desktop";
 import { isDevAuthBypassEnabled } from "./lib/dev-auth";
 import { forceTheme } from "./lib/theme";
 import { LandingPage } from "./pages/landing-page";
+import { UpdatePrompt } from "./components/layout/update-prompt";
 import "./index.css";
 
 // The chat client, the emoji picker's data, and the legal pages are all dead
@@ -61,6 +62,7 @@ function DarkRoutes() {
 function AppRoutes({ devBypass = false }: { devBypass?: boolean }) {
   return (
     <Suspense fallback={<AppLoadingShell label="Loading…" />}>
+      <UpdatePrompt />
       <Routes>
         <Route element={<DarkRoutes />}>
           <Route path="/" element={<LandingPage />} />

@@ -102,5 +102,5 @@ CI workflows: `.github/workflows/ci.yml`, `deploy-web.yml`, `electron.yml`.
 ## Agent norms
 
 - Do not invent secret values in docs or commits.
-- Point humans to `docs/CLERK_SETUP.md` for Clerk CLI setup; `docs/SSO.md` for SAML/enterprise domain joining; `docs/voice-backends.md` for SFU notes; `docs/ATTACHMENTS.md` for R2/MinIO setup.
+- Point humans to `docs/CLERK_SETUP.md` for Clerk CLI setup; `docs/SSO.md` for SAML/enterprise domain joining; `docs/voice-backends.md` for SFU notes; `docs/ATTACHMENTS.md` for R2/MinIO setup; `docs/PWA.md` for the mobile/installable app.
 - Update `docs/HANDOVER.md` + `docs/PLAN_STATUS.md` when phase status changes.

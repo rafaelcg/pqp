@@ -25,7 +25,22 @@
       content="Chaotic group chat you own. Text, voice, invites — self-host or use pqp.gg."
     />
     <meta name="twitter:image" content="https://pqp.gg/images/og-image.jpg" />
-    <meta name="theme-color" content="#1a1c22" />
+    <!-- Matches the manifest's background/theme so the standalone splash and
+         the status bar do not flash a different colour on launch. -->
+    <meta name="theme-color" content="#090e12" />
+
+    <link rel="icon" href="/icons/favicon-32.png" sizes="32x32" type="image/png" />
+    <link rel="icon" href="/icons/favicon-16.png" sizes="16x16" type="image/png" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+
+    <!-- iOS ignores the web app manifest for these, so they are stated twice on
+         purpose. `black-translucent` is what lets the app draw under the status
+         bar, which only works because the viewport is already viewport-fit=cover
+         and the shell honours safe-area insets. -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="pqp" />
+    <meta name="mobile-web-app-capable" content="yes" />
     <!--
       Vite injects the app bundle at the end of <body>, so this runs first and
       the theme is on the element before the first paint rather than one frame

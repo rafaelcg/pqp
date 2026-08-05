@@ -512,8 +512,40 @@ function deliver(burst: Burst): void {
       openNotificationTarget(path);
     };
   } catch {
-    // Some platforms only allow notifications through a service worker, and
-    // Android Chrome throws outright. Nothing else in the app depends on this.
+    // Android Chrome throws on `new Notification()` outright — it only permits
+    // notifications raised from a service worker. Now that the PWA registers
+    // one, fall through to it rather than silently dropping the notification,
+    // which is the whole feature on the platform most likely to be someone's
+    // only device.
+    void deliverViaServiceWorker(title, body, channelId, path);
+  }
+}
+
+/**
+ * The Android Chrome path. `showNotification` is fire-and-forget — the click is
+ * handled by the worker, not here — so `data.path` carries where to go and the
+ * default vite-plugin-pwa worker's `notificationclick` focuses the client.
+ */
+async function deliverViaServiceWorker(
+  title: string,
+  body: string,
+  channelId: string,
+  path: string,
+): Promise<void> {
+  if (!("serviceWorker" in navigator)) {
+    return;
+  }
+  try {
+    const registration = await navigator.serviceWorker.ready;
+    await registration.showNotification(title, {
+      body,
+      tag: channelId,
+      silent: true,
+      data: { path },
+    });
+  } catch {
+    // No worker, or notifications refused at the OS level. Nothing else in the
+    // app depends on this.
   }
 }
 
