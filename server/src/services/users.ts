@@ -164,19 +164,23 @@ export async function searchUsersByPrefix(
 
 export async function upsertUser(auth: AuthUser): Promise<DbUser> {
   const existing = await getPool().query<DbUser>(
-    `SELECT id, clerk_id, display_name, username, discriminator, avatar_url
+    `SELECT id, clerk_id, display_name, username, discriminator, avatar_url, email_domains
      FROM users WHERE clerk_id = $1`,
     [auth.clerkId],
   );
 
   if (existing.rows[0]) {
-    // Do not clobber profile edits on every auth; only fill empty avatar from Clerk.
+    // Do not clobber profile edits on every auth; only fill empty avatar from
+    // Clerk. `email_domains` is the exception — it is not user-editable, and it
+    // is overwritten rather than merged so that *un*verifying or removing an
+    // address actually revokes the access it granted.
     const result = await getPool().query<DbUser>(
       `UPDATE users SET
-         avatar_url = COALESCE(avatar_url, $2)
+         avatar_url = COALESCE(avatar_url, $2),
+         email_domains = $3
        WHERE clerk_id = $1
-       RETURNING id, clerk_id, display_name, username, discriminator, avatar_url`,
-      [auth.clerkId, auth.avatarUrl],
+       RETURNING id, clerk_id, display_name, username, discriminator, avatar_url, email_domains`,
+      [auth.clerkId, auth.avatarUrl, auth.emailDomains ?? []],
     );
     const user = result.rows[0]!;
     if (!user.username || !user.discriminator) {
@@ -189,10 +193,17 @@ export async function upsertUser(auth: AuthUser): Promise<DbUser> {
   const discriminator = await allocateDiscriminator(username);
 
   const result = await getPool().query<DbUser>(
-    `INSERT INTO users (clerk_id, display_name, username, discriminator, avatar_url)
-     VALUES ($1, $2, $3, $4, $5)
-     RETURNING id, clerk_id, display_name, username, discriminator, avatar_url`,
-    [auth.clerkId, auth.displayName, username, discriminator, auth.avatarUrl],
+    `INSERT INTO users (clerk_id, display_name, username, discriminator, avatar_url, email_domains)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     RETURNING id, clerk_id, display_name, username, discriminator, avatar_url, email_domains`,
+    [
+      auth.clerkId,
+      auth.displayName,
+      username,
+      discriminator,
+      auth.avatarUrl,
+      auth.emailDomains ?? [],
+    ],
   );
   return result.rows[0]!;
 }

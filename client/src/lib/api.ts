@@ -278,8 +278,23 @@ export const createServer = (name: string) =>
 
 export const updateServer = (
   serverId: string,
-  body: { name?: string; ownerId?: string; messageRetentionDays?: number | null },
+  body: {
+    name?: string;
+    ownerId?: string;
+    messageRetentionDays?: number | null;
+    ssoEmailDomain?: string | null;
+  },
 ) => patch<{ ok: boolean; server?: Server }>(`/api/servers/${serverId}`, body);
+
+/** Servers a verified email domain lets this user join without an invite. */
+export const fetchSsoAvailableServers = () =>
+  apiFetch<{ servers: Server[] }>("/api/servers/sso-available");
+
+export const joinServerBySso = (serverId: string) =>
+  post<{ ok: boolean; server: Server }>(
+    `/api/servers/${serverId}/sso-join`,
+    {},
+  );
 
 export const deleteServer = (serverId: string) =>
   del<{ ok: boolean }>(`/api/servers/${serverId}`);

@@ -33,6 +33,8 @@ const AUDIT_ACTION_LABELS: Record<string, string> = {
   "server.data_export": "exported the server's data",
   "invite.create": "created an invite",
   "invite.delete": "revoked an invite",
+  "server.sso_domain_update": "changed the SSO email domain",
+  "member.sso_join": "joined via SSO email domain",
   "webhook.create": "created a webhook",
   "webhook.delete": "deleted a webhook",
 };
@@ -197,6 +199,10 @@ export function ServerSettingsDialog({
   const [retentionDays, setRetentionDays] = useState<number | null>(null);
   const [retentionError, setRetentionError] = useState<string | null>(null);
   const [retentionSaved, setRetentionSaved] = useState(false);
+  const [ssoDomain, setSsoDomain] = useState("");
+  const [savingSso, setSavingSso] = useState(false);
+  const [ssoError, setSsoError] = useState<string | null>(null);
+  const [ssoSaved, setSsoSaved] = useState(false);
   const [savingRetention, setSavingRetention] = useState(false);
 
   const [exportError, setExportError] = useState<string | null>(null);
@@ -212,6 +218,8 @@ export function ServerSettingsDialog({
   serverNameRef.current = server?.name ?? "";
   const retentionRef = useRef(server?.messageRetentionDays ?? null);
   retentionRef.current = server?.messageRetentionDays ?? null;
+  const ssoRef = useRef(server?.ssoEmailDomain ?? null);
+  ssoRef.current = server?.ssoEmailDomain ?? null;
 
   useEffect(() => {
     if (!open) {
@@ -230,6 +238,9 @@ export function ServerSettingsDialog({
     setRetentionDays(retentionRef.current);
     setRetentionError(null);
     setRetentionSaved(false);
+    setSsoDomain(ssoRef.current ?? "");
+    setSsoError(null);
+    setSsoSaved(false);
     setExportError(null);
   }, [open, serverId]);
 
@@ -288,6 +299,34 @@ export function ServerSettingsDialog({
       setRetentionError(messageOf(err, "Failed to update retention"));
     } finally {
       setSavingRetention(false);
+    }
+  }
+
+  async function saveSso() {
+    if (!serverId) {
+      return;
+    }
+    setSavingSso(true);
+    setSsoError(null);
+    setSsoSaved(false);
+    try {
+      // An empty box means "turn it off", which the API spells as explicit null
+      // — sending "" would fail validation rather than clear the setting.
+      const trimmed = ssoDomain.trim();
+      const res = await updateServer(serverId, {
+        ssoEmailDomain: trimmed === "" ? null : trimmed,
+      });
+      if (res.server) {
+        onRenamed(res.server);
+        setSsoDomain(res.server.ssoEmailDomain ?? "");
+        setSsoSaved(true);
+      } else {
+        setSsoError("Server did not return the updated server.");
+      }
+    } catch (err) {
+      setSsoError(messageOf(err, "Failed to update the SSO domain"));
+    } finally {
+      setSavingSso(false);
     }
   }
 
@@ -653,6 +692,45 @@ export function ServerSettingsDialog({
           {retentionError && (
             <p role="alert" className="text-sm text-danger">
               {retentionError}
+            </p>
+          )}
+        </section>
+
+        <section className="space-y-2 border-t border-ink-4 pt-5">
+          <h3 className="font-display text-sm font-bold uppercase tracking-wider text-paper-muted">
+            SSO email domain
+          </h3>
+          <p className="text-sm text-paper-muted">
+            Anyone with a verified email at this domain can join {server.name}{" "}
+            without an invite. Only verified addresses count, and existing bans
+            still apply. Leave empty to turn this off.
+          </p>
+          <div className="flex gap-2">
+            <Input
+              value={ssoDomain}
+              placeholder="acme.com"
+              aria-label="SSO email domain"
+              disabled={savingSso}
+              onChange={(e) => {
+                setSsoDomain(e.target.value);
+                setSsoSaved(false);
+                setSsoError(null);
+              }}
+            />
+            <Button
+              variant="secondary"
+              disabled={savingSso}
+              onClick={() => void saveSso()}
+            >
+              {savingSso ? "Saving…" : "Save"}
+            </Button>
+          </div>
+          <p role="status" aria-live="polite" className="text-xs text-paper-muted">
+            {ssoSaved ? "SSO domain updated." : ""}
+          </p>
+          {ssoError && (
+            <p role="alert" className="text-sm text-danger">
+              {ssoError}
             </p>
           )}
         </section>

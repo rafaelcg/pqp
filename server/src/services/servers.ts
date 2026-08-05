@@ -22,7 +22,7 @@ export type ChannelRow = Omit<DbChannel, "server_id"> & {
 const CHANNEL_COLUMNS = `id, server_id, name, type, position, is_private, kind, topic, image_url, parent_id`;
 
 /** Every server read selects the same columns. */
-const SERVER_COLUMNS = `id, name, owner_id, created_at, message_retention_days`;
+const SERVER_COLUMNS = `id, name, owner_id, created_at, message_retention_days, sso_email_domain`;
 
 /**
  * How many attachment objects one channel or server delete will clean up.
@@ -111,7 +111,8 @@ function deleteObjectsInBackground(keys: string[]): void {
 
 export async function listServersForUser(userId: string): Promise<DbServer[]> {
   const result = await getPool().query<DbServer>(
-    `SELECT s.id, s.name, s.owner_id, s.created_at, s.message_retention_days, sm.role
+    `SELECT s.id, s.name, s.owner_id, s.created_at, s.message_retention_days,
+            s.sso_email_domain, sm.role
      FROM servers s
      JOIN server_members sm ON sm.server_id = s.id
      WHERE sm.user_id = $1
@@ -505,6 +506,144 @@ export async function updateMessageRetention(
   }
 }
 
+export async function updateSsoEmailDomain(
+  serverId: string,
+  domain: string | null,
+): Promise<{ server: DbServer; previousDomain: string | null } | null> {
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    const before = await client.query<{ sso_email_domain: string | null }>(
+      `SELECT sso_email_domain FROM servers WHERE id = $1 FOR UPDATE`,
+      [serverId],
+    );
+    if (before.rows.length === 0) {
+      await client.query("ROLLBACK");
+      return null;
+    }
+    const result = await client.query<DbServer>(
+      `UPDATE servers SET sso_email_domain = $2 WHERE id = $1
+       RETURNING ${SERVER_COLUMNS}`,
+      [serverId, domain],
+    );
+    await client.query("COMMIT");
+    return {
+      server: result.rows[0]!,
+      previousDomain: before.rows[0]!.sso_email_domain,
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Servers this user could join right now on the strength of a verified email
+ * domain — excluding ones they are already in or banned from.
+ *
+ * The domain match happens in SQL against `users.email_domains`, read from the
+ * row rather than taken from the caller, so a request cannot assert a domain it
+ * has not proved.
+ */
+export async function listSsoJoinableServers(
+  userId: string,
+): Promise<DbServer[]> {
+  const result = await getPool().query<DbServer>(
+    `SELECT ${SERVER_COLUMNS.split(", ")
+      .map((c) => `s.${c}`)
+      .join(", ")}
+     FROM servers s
+     JOIN users u ON u.id = $1
+     WHERE s.sso_email_domain IS NOT NULL
+       AND s.sso_email_domain = ANY(u.email_domains)
+       AND NOT EXISTS (
+         SELECT 1 FROM server_members m
+         WHERE m.server_id = s.id AND m.user_id = $1
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM server_bans b
+         WHERE b.server_id = s.id AND b.user_id = $1
+       )
+     ORDER BY s.name ASC`,
+    [userId],
+  );
+  return result.rows;
+}
+
+export type SsoJoinResult =
+  | { ok: true; server: DbServer; joinedNow: boolean }
+  | { ok: false; reason: "not_found" | "domain_mismatch" | "banned" };
+
+/**
+ * Join a server by verified email domain, no invite required.
+ *
+ * Re-checks the domain inside the transaction against the stored `email_domains`
+ * rather than trusting anything the caller sent, and holds the server row so a
+ * concurrent "turn SSO off" cannot be raced by a join that already read it as on.
+ */
+export async function joinServerBySso(
+  serverId: string,
+  userId: string,
+): Promise<SsoJoinResult> {
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+
+    const serverResult = await client.query<DbServer>(
+      `SELECT ${SERVER_COLUMNS} FROM servers WHERE id = $1 FOR UPDATE`,
+      [serverId],
+    );
+    const server = serverResult.rows[0];
+    if (!server) {
+      await client.query("ROLLBACK");
+      return { ok: false, reason: "not_found" };
+    }
+
+    const matched = await client.query(
+      `SELECT 1 FROM users
+       WHERE id = $1 AND $2::text = ANY(email_domains)`,
+      [userId, server.sso_email_domain],
+    );
+    // Covers both "this server has SSO off" (NULL never equals ANY) and "your
+    // verified domains do not include it". Reported as one reason on purpose:
+    // distinguishing them would confirm a server exists to a stranger probing ids.
+    if (!server.sso_email_domain || matched.rows.length === 0) {
+      await client.query("ROLLBACK");
+      return { ok: false, reason: "domain_mismatch" };
+    }
+
+    const banned = await client.query(
+      `SELECT 1 FROM server_bans WHERE server_id = $1 AND user_id = $2`,
+      [serverId, userId],
+    );
+    if (banned.rows.length > 0) {
+      await client.query("ROLLBACK");
+      return { ok: false, reason: "banned" };
+    }
+
+    const inserted = await client.query(
+      `INSERT INTO server_members (server_id, user_id, role)
+       VALUES ($1, $2, 'member')
+       ON CONFLICT DO NOTHING`,
+      [serverId, userId],
+    );
+
+    await client.query("COMMIT");
+    return {
+      ok: true,
+      server,
+      joinedNow: (inserted.rowCount ?? 0) > 0,
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 /**
  * Hand the server to another member. Both role rows and `servers.owner_id` move
  * together or not at all — a half-applied transfer would leave a server with two
@@ -694,5 +833,6 @@ export function mapServer(s: DbServer) {
     role: s.role as MemberRole | undefined,
     createdAt: s.created_at.toISOString(),
     messageRetentionDays: s.message_retention_days,
+    ssoEmailDomain: s.sso_email_domain,
   };
 }

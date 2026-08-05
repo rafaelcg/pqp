@@ -1,5 +1,9 @@
 import { createClerkClient, verifyToken } from "@clerk/backend";
-import { DEV_AUTH_TOKEN } from "@pqp/shared";
+import {
+  DEV_AUTH_TOKEN,
+  emailDomainOf,
+  normalizeEmailDomain,
+} from "@pqp/shared";
 import { upsertUser } from "../services/users.js";
 import type { DbUser } from "../db.js";
 
@@ -11,6 +15,15 @@ export interface AuthUser {
   clerkId: string;
   displayName: string;
   avatarUrl: string | null;
+  /**
+   * Domains of every *verified* email on the Clerk account, deduped and sorted.
+   * Drives SSO domain joins, so an unverified address must never reach it —
+   * see `verifiedEmailDomains`.
+   *
+   * Optional, and absent means the empty set: the default has to be the one
+   * that grants nothing, so a caller that forgets this field fails closed.
+   */
+  emailDomains?: string[];
 }
 
 export { DEV_AUTH_TOKEN };
@@ -84,6 +97,46 @@ export function clearAuthCaches(): void {
   userInflight.clear();
 }
 
+/** Domains the dev-bypass account should present as verified. Dev only. */
+function devEmailDomains(): string[] {
+  const raw = process.env.DEV_AUTH_EMAIL_DOMAINS;
+  if (!raw) {
+    return [];
+  }
+  const domains = raw
+    .split(",")
+    .map((value) => normalizeEmailDomain(value))
+    .filter((value): value is string => value !== null);
+  return [...new Set(domains)].sort();
+}
+
+/**
+ * The domains of the account's verified emails, deduped and sorted.
+ *
+ * The `status === "verified"` test is the whole security boundary for SSO
+ * domain joins: Clerk will happily hold an address nobody proved control of,
+ * and trusting one would let anyone type `someone@acme.com` into their profile
+ * and walk into Acme's private server.
+ */
+function verifiedEmailDomains(
+  emails: readonly {
+    emailAddress: string;
+    verification: { status: string } | null;
+  }[],
+): string[] {
+  const domains = new Set<string>();
+  for (const email of emails) {
+    if (email.verification?.status !== "verified") {
+      continue;
+    }
+    const domain = emailDomainOf(email.emailAddress);
+    if (domain) {
+      domains.add(domain);
+    }
+  }
+  return [...domains].sort();
+}
+
 async function loadProfile(clerkId: string): Promise<AuthUser | null> {
   const cached = profileCache.get(clerkId);
   if (cached && cached.expiresAt > Date.now()) {
@@ -106,6 +159,7 @@ async function loadProfile(clerkId: string): Promise<AuthUser | null> {
           user.primaryEmailAddress?.emailAddress ??
           "User",
         avatarUrl: user.imageUrl ?? null,
+        emailDomains: verifiedEmailDomains(user.emailAddresses),
       };
       profileCache.set(clerkId, {
         user: profile,
@@ -192,6 +246,14 @@ export async function verifyAuthHeader(
       clerkId: "dev_local_user",
       displayName: "Dev User",
       avatarUrl: null,
+      // The bypass proves no email, so it grants no domain by default — a
+      // local dev account must not walk into an SSO-gated server for free.
+      // `DEV_AUTH_EMAIL_DOMAINS` exists because there is otherwise no way to
+      // exercise domain joining locally at all: every request re-runs this and
+      // overwrites `users.email_domains`, so setting the column by hand does
+      // not survive the next call. Reachable only under the bypass, which
+      // already refuses to run when NODE_ENV=production.
+      emailDomains: devEmailDomains(),
     };
   }
 

@@ -24,6 +24,7 @@ import {
   messageSearchQuerySchema,
   removeMemberSchema,
   safeTextSchema,
+  ssoEmailDomainSchema,
   SEARCH_PAGE_MAX,
   SEARCH_PAGE_SIZE,
   updateChannelSchema,
@@ -131,6 +132,9 @@ import {
   transferOwnership,
   updateChannel,
   updateMessageRetention,
+  updateSsoEmailDomain,
+  listSsoJoinableServers,
+  joinServerBySso,
 } from "../services/servers.js";
 import {
   attachmentUrlTtlSeconds,
@@ -885,7 +889,76 @@ router.patch("/api/servers/:serverId", async ({ req, user }, { serverId }) => {
     }
   }
 
+  if (body.ssoEmailDomain !== undefined) {
+    // Validated here rather than in `updateServerSchema` so the specific reason
+    // reaches the owner — see the note on that field.
+    let domain: string | null = null;
+    if (body.ssoEmailDomain !== null) {
+      const parsed = ssoEmailDomainSchema.safeParse(body.ssoEmailDomain);
+      if (!parsed.success) {
+        throw new HttpError(
+          400,
+          parsed.error.issues[0]?.message ?? "Enter a valid domain",
+        );
+      }
+      domain = parsed.data;
+    }
+    const updated = await updateSsoEmailDomain(serverId!, domain);
+    if (updated) {
+      server = updated.server;
+      await logAudit({
+        serverId: serverId!,
+        actorId: user.id,
+        action: "server.sso_domain_update",
+        targetType: "server",
+        targetId: serverId!,
+        changes: [
+          {
+            key: "ssoEmailDomain",
+            old: updated.previousDomain,
+            new: domain,
+          },
+        ],
+      });
+    }
+  }
+
   return { ok: true, ...(server ? { server: mapServer(server) } : {}) };
+});
+
+/**
+ * Servers the caller can join right now on the strength of a verified email
+ * domain. Membership-independent by design — this is what makes an
+ * SSO-provisioned user's first login land somewhere instead of an empty app.
+ */
+router.get("/api/servers/sso-available", async ({ user }) => {
+  const servers = await listSsoJoinableServers(user.id);
+  return { servers: servers.map(mapServer) };
+});
+
+router.post("/api/servers/:serverId/sso-join", async ({ user }, { serverId }) => {
+  const result = await joinServerBySso(serverId!, user.id);
+  if (!result.ok) {
+    if (result.reason === "banned") {
+      throw new HttpError(403, "You are banned from this server");
+    }
+    // `not_found` and `domain_mismatch` deliberately return the same 404: a
+    // different answer would let a stranger enumerate which server ids exist.
+    throw new HttpError(404, "Server not found");
+  }
+  if (result.joinedNow) {
+    await logAudit({
+      serverId: serverId!,
+      actorId: user.id,
+      action: "member.sso_join",
+      targetType: "user",
+      targetId: user.id,
+      changes: [
+        { key: "ssoEmailDomain", old: null, new: result.server.sso_email_domain },
+      ],
+    });
+  }
+  return { ok: true, server: mapServer(result.server) };
 });
 
 router.delete("/api/servers/:serverId", async ({ user }, { serverId }) => {
