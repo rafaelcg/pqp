@@ -531,3 +531,19 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS email_domains TEXT[] NOT NULL DEFAULT
 ALTER TABLE servers ADD COLUMN IF NOT EXISTS sso_email_domain TEXT;
 CREATE INDEX IF NOT EXISTS idx_servers_sso_email_domain
   ON servers (sso_email_domain) WHERE sso_email_domain IS NOT NULL;
+
+-- Public status page samples. One row per component per probe, which is what
+-- turns "is it up right now" into a real uptime figure rather than a claim.
+--
+-- Deliberately not tied to any user or server: this is the only table whose
+-- contents are readable without authenticating, so nothing about who uses the
+-- instance may ever be recorded here.
+CREATE TABLE IF NOT EXISTS status_samples (
+  id BIGSERIAL PRIMARY KEY,
+  component TEXT NOT NULL,
+  ok BOOLEAN NOT NULL,
+  latency_ms INTEGER,
+  checked_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_status_samples_component
+  ON status_samples (component, checked_at DESC);

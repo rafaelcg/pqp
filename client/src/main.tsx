@@ -41,6 +41,9 @@ const TermsPage = lazy(() =>
 const CookiesPage = lazy(() =>
   import("./pages/cookies-page").then((m) => ({ default: m.CookiesPage })),
 );
+const StatusPage = lazy(() =>
+  import("./pages/status-page").then((m) => ({ default: m.StatusPage })),
+);
 
 const publishableKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY;
 
@@ -64,6 +67,7 @@ function AppRoutes({ devBypass = false }: { devBypass?: boolean }) {
           <Route path="/privacy" element={<PrivacyPage />} />
           <Route path="/terms" element={<TermsPage />} />
           <Route path="/cookies" element={<CookiesPage />} />
+          <Route path="/status" element={<StatusPage />} />
         </Route>
         <Route path="/app/*" element={<App devBypass={devBypass} />} />
         <Route

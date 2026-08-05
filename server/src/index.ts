@@ -8,15 +8,24 @@ import { WebSocketServer } from "ws";
 import { handleApi } from "./api/index.js";
 import { assertAuthConfig, isDevAuthBypassEnabled } from "./auth/clerk.js";
 import { closePool, getPool, initDb } from "./db.js";
-import { SECURITY_HEADERS, sendError } from "./lib/http.js";
+import { corsHeaders, handleCors, SECURITY_HEADERS, sendError } from "./lib/http.js";
 import { logEvent } from "./lib/log.js";
-import { clientAddress, sweepRateLimits } from "./lib/rate-limit.js";
+import {
+  clientAddress,
+  createRateLimiter,
+  sweepRateLimits,
+} from "./lib/rate-limit.js";
 import {
   isAttachmentsConfigured,
   sweepOrphanedAttachments,
 } from "./services/attachments.js";
 import { pruneAuditLog } from "./services/audit.js";
 import { sweepMessageRetention } from "./services/retention.js";
+import {
+  getStatusSummary,
+  pruneStatusSamples,
+  recordStatusSamples,
+} from "./services/status.js";
 import { getSocketUser, handleWsConnection } from "./ws/index.js";
 
 const PORT = Number(process.env.PORT ?? 3001);
@@ -149,6 +158,51 @@ const httpServer = createServer((req, res) => {
       return;
     }
 
+    if (pathname === "/status.json") {
+      // This route is answered before `handleApi`, which is where every /api/
+      // route picks up CORS — so it has to do it itself. Without this the
+      // status page is broken in exactly one environment: production, where
+      // the SPA and the API are on different origins. It works locally either
+      // way, which is what makes it easy to ship.
+      if (handleCors(req, res)) {
+        return;
+      }
+      // Unauthenticated and therefore scriptable by anyone. Keyed by address
+      // rather than identity because there is no identity here; the budget is
+      // generous for a page that polls itself, hostile to a scraper.
+      if (!statusLimiter.take(clientAddress(req))) {
+        res.writeHead(429, {
+          ...corsHeaders(req),
+          "Content-Type": "application/json",
+          "Cache-Control": "no-store",
+        });
+        res.end(JSON.stringify({ error: "Too many requests" }));
+        return;
+      }
+      try {
+        const summary = await getStatusSummary();
+        res.writeHead(200, {
+          ...corsHeaders(req),
+          "Content-Type": "application/json",
+          // Short, not none: a status page is what people refresh during an
+          // incident, and that is exactly when the origin is least able to
+          // absorb it.
+          "Cache-Control": "public, max-age=15",
+        });
+        res.end(JSON.stringify(summary));
+      } catch {
+        // Deliberately opaque — the reason a status check failed is not
+        // something an unauthenticated caller gets to learn.
+        res.writeHead(503, {
+          ...corsHeaders(req),
+          "Content-Type": "application/json",
+          "Cache-Control": "no-store",
+        });
+        res.end(JSON.stringify({ error: "status unavailable" }));
+      }
+      return;
+    }
+
     if (pathname.startsWith("/api/")) {
       try {
         await handleApi(req, res, pathname);
@@ -267,6 +321,26 @@ auditLogPrune.unref?.();
 /** Daily: retention is measured in days, so nothing is lost by checking once
  * a day rather than continuously. */
 const RETENTION_SWEEP_INTERVAL_MS = 24 * 60 * 60_000;
+
+/** One probe a minute: fine enough to catch a short outage, cheap enough to
+ * keep 30 days of history small. */
+const STATUS_SAMPLE_INTERVAL_MS = 60_000;
+
+const statusLimiter = createRateLimiter({ capacity: 60, refillPerSecond: 1 });
+
+const statusSampler = setInterval(() => {
+  void recordStatusSamples().catch((error) => {
+    console.error("[status] sample failed:", error);
+  });
+}, STATUS_SAMPLE_INTERVAL_MS);
+statusSampler.unref?.();
+
+const statusPrune = setInterval(() => {
+  void pruneStatusSamples().catch((error) => {
+    console.error("[status] prune failed:", error);
+  });
+}, 24 * 60 * 60_000);
+statusPrune.unref?.();
 
 const retentionSweep = setInterval(() => {
   void sweepMessageRetention().catch((error) => {

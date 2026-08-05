@@ -91,6 +91,20 @@ concurrent share would multiply every peer's video-encode cost, so the limit is
 enforced uniformly for mesh and SFU alike rather than only where it's structurally
 required.
 
+## Public status page
+
+`GET /status.json` is answered next to `/health`, **before** `/api/` routing, so
+it skips the Bearer-token resolution every `/api/` route runs first — and
+therefore has to apply CORS itself, since `handleApi` is where every other route
+picks it up. It is the only data served unauthenticated, so it carries no
+hostnames, provider names, error strings, or counts — only a component label, a
+state, and a latency.
+
+A sampler probes each component once a minute into `status_samples` (pruned at
+30 days), which is what makes the 24h/7d uptime real rather than a claim. A
+component that is not configured reports `disabled` and is excluded from the
+headline: an instance with attachments turned off is healthy, not degraded.
+
 ## Attachments
 
 An optional feature — with no `S3_*` env the whole path is absent and the composer hides the
