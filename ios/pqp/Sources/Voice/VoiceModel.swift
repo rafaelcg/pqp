@@ -21,6 +21,18 @@ final class VoiceModel {
     var isMuted = false {
         didSet { Task { await voice.setMuted(isMuted) } }
     }
+    /// Deafening also mutes, matching the web client: being heard while
+    /// hearing nothing is a trap rather than a feature.
+    var isDeafened = false {
+        didSet {
+            if isDeafened { isMuted = true }
+            Task { await voice.setDeafened(isDeafened) }
+        }
+    }
+
+    /// The channel we intend to be in, kept across a socket drop so the call
+    /// can be rebuilt rather than silently ending.
+    private var intendedChannel: Channel?
 
     private let voice = VoiceClient()
     private var session: SessionStore?
@@ -32,6 +44,7 @@ final class VoiceModel {
         self.session = session
         channelId = channel.id
         channelName = channel.name
+        intendedChannel = channel
         status = .joining
 
         // Asked for before joining rather than after: joining a room you cannot
@@ -66,6 +79,7 @@ final class VoiceModel {
     }
 
     func leave() async {
+        intendedChannel = nil
         session?.eventHandlers.removeValue(forKey: handlerKey)
         await session?.realtime.leaveVoice()
         await voice.disconnectAll()
@@ -75,6 +89,7 @@ final class VoiceModel {
         peers = []
         selfPeerId = nil
         isMuted = false
+        isDeafened = false
     }
 
     private func requestMicrophone() async -> Bool {
@@ -106,6 +121,17 @@ final class VoiceModel {
 
     private func apply(_ event: RealtimeEvent) {
         switch event {
+        // The socket came back. The server dropped our voice peer when it
+        // closed, and a reconnect mints a *new* peer id — so the old mesh is
+        // unusable and has to be torn down and rebuilt rather than resumed.
+        case .ready:
+            guard let intendedChannel, status != .idle else { return }
+            Task {
+                await voice.disconnectAll()
+                try? await voice.startAudio()
+                await session?.realtime.joinVoice(channelId: intendedChannel.id)
+            }
+
         case .voiceWelcome(let peerId, let voiceChannelId, let existing, _):
             guard voiceChannelId == channelId else { return }
             selfPeerId = peerId

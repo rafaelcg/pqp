@@ -147,8 +147,19 @@ Other things the mesh depends on:
 Verified with **two simulators in one room**: both reached `connected`, which
 exercises the real negotiation rather than one client talking to itself.
 
-Not yet done here: speaking indicators, per-peer volume, deafen, screen share
-(the web client has all four), and reconnecting a call across a socket drop.
+Speaking indicators come from polling each connection's `audioLevel` in the
+WebRTC stats report every 300ms — there is no "is speaking" event to subscribe
+to. Deafening silences remote tracks and forces the mic off, matching the web
+client: being heard while hearing nothing is a trap rather than a feature. That
+needs a reference to each remote track, which is why they are captured on
+`didAdd stream` — WebRTC plays received audio automatically, so without one
+there is no way to turn it off short of tearing the connection down.
+
+A call survives a socket drop by being **rebuilt, not resumed**. The server
+drops the voice peer when the socket closes and a reconnect mints a *new* peer
+id, so the old mesh is unusable; `ready` tears everything down and rejoins.
+
+Not yet done here: per-peer volume and screen share (the web client has both).
 
 ## UI test identifiers
 

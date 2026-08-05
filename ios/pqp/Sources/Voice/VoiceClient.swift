@@ -37,6 +37,13 @@ actor VoiceClient {
 
     private var localAudioTrack: RTCAudioTrack?
     private var localStream: RTCMediaStream?
+    /// Remote audio, kept per peer so deafening can silence it. WebRTC plays
+    /// received audio automatically, so without a reference there is no way to
+    /// turn it off short of tearing the connection down.
+    private var remoteTracks: [String: RTCAudioTrack] = [:]
+    private var isDeafened = false
+    private var statsTimer: Task<Void, Never>?
+    private var speaking: Set<String> = []
     private var iceServers: [RTCIceServer] = []
     private var selfPeerId: String?
 
@@ -110,6 +117,56 @@ actor VoiceClient {
         localAudioTrack?.isEnabled = !muted
     }
 
+    /// Deafening silences everyone else and forces your own mic off, matching
+    /// the web client — being heard while hearing nothing is a trap.
+    func setDeafened(_ deafened: Bool) {
+        isDeafened = deafened
+        for track in remoteTracks.values {
+            track.isEnabled = !deafened
+        }
+        if deafened {
+            localAudioTrack?.isEnabled = false
+        }
+    }
+
+    fileprivate func addRemoteTrack(_ box: UncheckedBox<RTCAudioTrack>, for peerId: String) {
+        let track = box.value
+        track.isEnabled = !isDeafened
+        remoteTracks[peerId] = track
+    }
+
+    /// Polls each connection's audio level.
+    ///
+    /// WebRTC exposes no "is speaking" event, so this samples `audioLevel` from
+    /// the stats report. 300ms is a deliberate compromise: fast enough that a
+    /// ring appears while someone is still talking, slow enough that it is not
+    /// a stats query per frame.
+    private func startSpeakingPolling() {
+        statsTimer?.cancel()
+        statsTimer = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(300))
+                guard let self else { return }
+                await self.sampleAudioLevels()
+            }
+        }
+    }
+
+    private func sampleAudioLevels() async {
+        var loud: Set<String> = []
+        for (peerId, connection) in connections {
+            let report = await connection.statistics()
+            for (_, stat) in report.statistics where stat.type == "inbound-rtp" {
+                if let level = stat.values["audioLevel"] as? Double, level > 0.01 {
+                    loud.insert(peerId)
+                }
+            }
+        }
+        guard loud != speaking else { return }
+        speaking = loud
+        emit()
+    }
+
     /// Whether *we* open the connection to this peer.
     ///
     /// Identical to `isImpolite` in the web client: higher id offers.
@@ -126,6 +183,7 @@ actor VoiceClient {
         guard let connection = makeConnection(for: participant.peerId) else { return }
         connections[participant.peerId] = connection
         peerConnectionState[participant.peerId] = "connecting"
+        startSpeakingPolling()
         emit()
 
         if isImpolite(towards: participant.peerId) {
@@ -136,6 +194,8 @@ actor VoiceClient {
     func remove(peerId: String) {
         connections[peerId]?.close()
         connections[peerId] = nil
+        remoteTracks[peerId] = nil
+        speaking.remove(peerId)
         pendingCandidates[peerId] = nil
         peerNames[peerId] = nil
         peerUserIds[peerId] = nil
@@ -144,6 +204,11 @@ actor VoiceClient {
     }
 
     func disconnectAll() {
+        statsTimer?.cancel()
+        statsTimer = nil
+        speaking.removeAll()
+        remoteTracks.removeAll()
+        isDeafened = false
         for (_, connection) in connections { connection.close() }
         connections.removeAll()
         pendingCandidates.removeAll()
@@ -302,12 +367,21 @@ actor VoiceClient {
                 peerId: peerId,
                 displayName: peerNames[peerId] ?? "Someone",
                 userId: peerUserIds[peerId] ?? "",
-                connection: peerConnectionState[peerId] ?? "connecting"
+                connection: peerConnectionState[peerId] ?? "connecting",
+                isSpeaking: speaking.contains(peerId)
             )
         }
         .sorted { $0.displayName < $1.displayName }
         onStateChange?(states)
     }
+}
+
+/// Carries a non-Sendable reference across an isolation boundary where the
+/// handoff is known to be safe: the value is produced on one thread, handed
+/// over once, and only ever used on the actor afterwards.
+struct UncheckedBox<T>: @unchecked Sendable {
+    let value: T
+    init(_ value: T) { self.value = value }
 }
 
 /// ICE server as `/api/ice-servers` returns it. `urls` is a string or an array
@@ -373,7 +447,15 @@ private final class PeerDelegate: NSObject, RTCPeerConnectionDelegate, @unchecke
 
     // Required by the protocol, unused for audio-only mesh.
     func peerConnection(_ peerConnection: RTCPeerConnection, didChange stateChanged: RTCSignalingState) {}
-    func peerConnection(_ peerConnection: RTCPeerConnection, didAdd stream: RTCMediaStream) {}
+    func peerConnection(_ peerConnection: RTCPeerConnection, didAdd stream: RTCMediaStream) {
+        guard let track = stream.audioTracks.first else { return }
+        // `RTCAudioTrack` is an Objective-C class and not Sendable, but unlike
+        // an ICE candidate its identity is the point — the reference is what
+        // deafening toggles. Boxed rather than copied, and only ever touched on
+        // the actor after this handoff.
+        let box = UncheckedBox(track)
+        Task { [owner, peerId] in await owner?.addRemoteTrack(box, for: peerId) }
+    }
     func peerConnection(_ peerConnection: RTCPeerConnection, didRemove stream: RTCMediaStream) {}
     func peerConnectionShouldNegotiate(_ peerConnection: RTCPeerConnection) {}
     func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceConnectionState) {}

@@ -77,7 +77,11 @@ struct VoiceView: View {
     private var participants: some View {
         VStack(spacing: 8) {
             if case .connected = model.status {
-                SelfRow(isMuted: model.isMuted, name: session.currentUser?.displayName ?? "You")
+                SelfRow(
+                    isMuted: model.isMuted,
+                    isDeafened: model.isDeafened,
+                    name: session.currentUser?.displayName ?? "You"
+                )
             }
             ForEach(model.peers) { peer in
                 PeerRow(peer: peer)
@@ -96,6 +100,21 @@ struct VoiceView: View {
                     .frame(width: 60, height: 60)
                     .background(Circle().fill(Palette.surfaceRaised))
             }
+            .accessibilityIdentifier("voice.mute")
+            .accessibilityLabel(model.isMuted ? "Unmute" : "Mute")
+            .disabled(model.status != .connected)
+
+            Button {
+                model.isDeafened.toggle()
+            } label: {
+                Image(systemName: model.isDeafened ? "speaker.slash.fill" : "headphones")
+                    .font(.system(size: 20))
+                    .foregroundStyle(model.isDeafened ? Palette.danger : Palette.paper)
+                    .frame(width: 60, height: 60)
+                    .background(Circle().fill(Palette.surfaceRaised))
+            }
+            .accessibilityIdentifier("voice.deafen")
+            .accessibilityLabel(model.isDeafened ? "Undeafen" : "Deafen")
             .disabled(model.status != .connected)
 
             Button {
@@ -116,11 +135,12 @@ struct VoiceView: View {
 
 private struct SelfRow: View {
     let isMuted: Bool
+    let isDeafened: Bool
     let name: String
 
     var body: some View {
         HStack(spacing: 12) {
-            Avatar(name: name, seed: "self", size: 40)
+            Avatar(name: name, seed: "self", size: 40, isSpeaking: false)
             Text(name)
                 .font(Typography.bodyMedium)
                 .foregroundStyle(Palette.paper)
@@ -128,7 +148,11 @@ private struct SelfRow: View {
                 .font(Typography.caption)
                 .foregroundStyle(Palette.paperMuted)
             Spacer()
-            if isMuted {
+            if isDeafened {
+                Image(systemName: "speaker.slash.fill")
+                    .font(.system(size: 13))
+                    .foregroundStyle(Palette.danger)
+            } else if isMuted {
                 Image(systemName: "mic.slash.fill")
                     .font(.system(size: 13))
                     .foregroundStyle(Palette.danger)
@@ -152,7 +176,12 @@ private struct PeerRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Avatar(name: peer.displayName, seed: peer.userId.isEmpty ? peer.peerId : peer.userId, size: 40)
+            Avatar(
+                name: peer.displayName,
+                seed: peer.userId.isEmpty ? peer.peerId : peer.userId,
+                size: 40,
+                isSpeaking: peer.isSpeaking
+            )
             Text(peer.displayName)
                 .font(Typography.bodyMedium)
                 .foregroundStyle(Palette.paper)
