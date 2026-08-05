@@ -53,7 +53,11 @@ actor RealtimeClient {
         self.backend = backend
         self.tokenProvider = tokenProvider
         let config = URLSessionConfiguration.default
-        config.waitsForConnectivity = true
+        // Same reasoning as APIClient: waiting for connectivity here would
+        // swallow the failure that drives reconnection, so the socket would
+        // never retry on its own schedule.
+        config.waitsForConnectivity = false
+        config.timeoutIntervalForResource = 30
         self.session = URLSession(configuration: config)
     }
 

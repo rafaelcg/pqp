@@ -14,6 +14,30 @@ enum SessionPhase: Equatable, Sendable {
 /// `@MainActor` on the whole type rather than sprinkled per property: every
 /// mutation here drives SwiftUI, and Swift 6 strict concurrency turns the
 /// alternative into a pile of hops that are easy to get subtly wrong.
+struct DeadlineExceeded: Error {}
+
+/// Runs `work`, or throws `DeadlineExceeded` if it outlives `seconds`.
+///
+/// A plain `Task.sleep` race rather than anything clever: whichever finishes
+/// first wins and the loser is cancelled.
+func withDeadline<T: Sendable>(
+    seconds: Double,
+    _ work: @escaping @Sendable () async throws -> T
+) async throws -> T {
+    try await withThrowingTaskGroup(of: T.self) { group in
+        group.addTask { try await work() }
+        group.addTask {
+            try await Task.sleep(for: .seconds(seconds))
+            throw DeadlineExceeded()
+        }
+        guard let first = try await group.next() else {
+            throw DeadlineExceeded()
+        }
+        group.cancelAll()
+        return first
+    }
+}
+
 @MainActor
 @Observable
 final class SessionStore {
@@ -81,13 +105,31 @@ final class SessionStore {
             return
         }
         do {
-            let user = try await api.currentUser()
+            // Hard deadline. The splash has no controls on it, so anything that
+            // can hang here is a way to strand the app on a logo with no way
+            // out — which is exactly what shipped once already. The network
+            // layer should now fail fast on its own; this is the backstop that
+            // holds even if some future call does not.
+            let user = try await withDeadline(seconds: 12) {
+                try await self.api.currentUser()
+            }
             currentUser = user
             await startRealtime()
             phase = .ready
         } catch {
-            // Not an error worth showing: "no session" is the expected state on
-            // a first launch, and onboarding is where that leads.
+            // "No session" is the expected state on a first launch, so this is
+            // not surfaced as a failure — but a *connection* problem is worth
+            // saying out loud, because otherwise onboarding looks fine and the
+            // sign-in button just quietly does nothing.
+            if case APIError.transport(let detail) = error {
+                // `detail` is URLError's own sentence ("Could not connect to
+                // the server."), so it is used as-is rather than prefixed —
+                // otherwise the two stack into "Can't reach the server. Could
+                // not connect to the server."
+                lastError = detail
+            } else if error is DeadlineExceeded {
+                lastError = "The server did not respond. Is it running?"
+            }
             phase = .onboarding
         }
     }

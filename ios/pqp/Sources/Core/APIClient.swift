@@ -48,6 +48,15 @@ struct Backend: Sendable, Equatable {
 
     static var current: Backend {
         #if DEBUG
+        // Lets a UI test point the app at a dead port to prove launch survives
+        // an unreachable server. Debug-only, so it cannot affect a release.
+        if let override = ProcessInfo.processInfo.environment["PQP_API_OVERRIDE"],
+           let url = URL(string: override) {
+            return Backend(
+                apiBaseURL: url,
+                webSocketURL: URL(string: "ws://127.0.0.1:9/ws")!
+            )
+        }
         return .local
         #else
         return .hosted
@@ -110,8 +119,15 @@ actor APIClient {
         self.backend = backend
         self.tokenProvider = tokenProvider
         let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 20
-        config.waitsForConnectivity = true
+        config.timeoutIntervalForRequest = 15
+        // Deliberately NOT waitsForConnectivity. That flag parks a request
+        // until the network comes back, bounded only by
+        // `timeoutIntervalForResource` — which defaults to seven days. With an
+        // unreachable server the very first call never returns, and an app
+        // whose launch awaits it sits on its splash screen forever. Failing
+        // fast and showing something is strictly better.
+        config.waitsForConnectivity = false
+        config.timeoutIntervalForResource = 30
         self.session = URLSession(configuration: config)
     }
 

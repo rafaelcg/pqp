@@ -15,7 +15,8 @@ open pqp.xcodeproj
 ```
 
 Debug builds point at `http://localhost:3001` and authenticate with the
-dev-bypass token, so bring the server up first:
+dev-bypass token, **so the server has to be running** — without it the app lands
+on onboarding with "Could not connect to the server." rather than signing in:
 
 ```bash
 # root .env
@@ -103,6 +104,14 @@ struct cannot serve both, hence `PresenceUser`.
 **Two Swift names had to avoid SwiftUI's.** `Layout` and `Environment` are both
 SwiftUI symbols; same-named types resolve to *those* at use sites and fail with
 errors that do not mention shadowing at all. They are `Metrics` and `Backend`.
+
+**Nothing on the launch path may wait indefinitely.** The splash has no
+controls, so anything that hangs during `restore()` strands the app on a logo
+with no way out — which shipped once, because `waitsForConnectivity` parks a
+request until the network returns, bounded only by `timeoutIntervalForResource`
+(seven days by default). Both clients now fail fast, and `restore()` additionally
+carries a 12s deadline as a backstop. `LaunchResilienceUITests` bounds this on
+*time*, not just on eventually arriving, so the backstop alone cannot satisfy it.
 
 **Onboarding is gated on a stored flag, not on "is there a session".** A
 restorable session does not mean the person has seen the product explained — and

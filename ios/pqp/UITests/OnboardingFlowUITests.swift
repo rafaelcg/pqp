@@ -99,3 +99,40 @@ final class OnboardingFlowUITests: XCTestCase {
         )
     }
 }
+
+/// Launch resilience.
+///
+/// The splash screen has no controls on it, so anything that can hang during
+/// `restore()` strands the app on a logo with no way out. That shipped once:
+/// `waitsForConnectivity` parked the first request until the network returned,
+/// bounded only by a seven-day resource timeout.
+final class LaunchResilienceUITests: XCTestCase {
+    override func setUp() { continueAfterFailure = false }
+
+    func testReachesOnboardingEvenWhenTheServerIsUnreachable() {
+        let app = XCUIApplication()
+        app.launchArguments += ["-pqp.hasCompletedOnboarding", "YES"]
+        // A port nothing is listening on, so the bootstrap call cannot succeed.
+        app.launchEnvironment["PQP_API_OVERRIDE"] = "http://127.0.0.1:9"
+        let started = Date()
+        app.launch()
+
+        XCTAssertTrue(
+            app.buttons["Skip"].waitForExistence(timeout: 25),
+            "An unreachable server must land on onboarding, never hang on the splash"
+        )
+
+        // Bounded on *time*, not just on eventually arriving. There are two
+        // independent guards here — the URLSession config, and a 12s deadline
+        // in `restore()` — and without a bound the deadline alone satisfies the
+        // test, so a regression in the network config would pass unnoticed.
+        // A connection refused on a dead local port resolves in well under a
+        // second; 8s leaves room for simulator launch and nothing else.
+        let elapsed = Date().timeIntervalSince(started)
+        XCTAssertLessThan(
+            elapsed, 8,
+            "Reached onboarding in \(elapsed)s — that is the deadline backstop firing, "
+            + "not a fast connection failure. Check waitsForConnectivity."
+        )
+    }
+}
