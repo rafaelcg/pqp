@@ -1,0 +1,290 @@
+import SwiftUI
+
+struct ChatView: View {
+    @Environment(SessionStore.self) private var session
+    let channelId: String
+    let title: String
+
+    @State private var model = ChatModel()
+    @FocusState private var composerFocused: Bool
+
+    var body: some View {
+        ZStack {
+            Palette.ink.ignoresSafeArea()
+
+            VStack(spacing: 0) {
+                messageList
+                typingRow
+                Composer(
+                    text: $model.draft,
+                    isSending: model.isSending,
+                    onSend: { Task { await model.send() } },
+                    onType: { model.noteTyping() }
+                )
+                .focused($composerFocused)
+            }
+        }
+        .navigationTitle(title)
+        .navigationBarTitleDisplayMode(.inline)
+        .task { await model.open(channelId: channelId, session: session) }
+        .onDisappear { model.close() }
+    }
+
+    private var messageList: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 2) {
+                    if model.hasMore {
+                        Button("Load earlier messages") {
+                            Task { await model.loadEarlier() }
+                        }
+                        .font(Typography.callout)
+                        .foregroundStyle(Palette.paperMuted)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                    }
+
+                    ForEach(Array(model.messages.enumerated()), id: \.element.id) { index, message in
+                        MessageRow(
+                            message: message,
+                            // Consecutive messages from one person collapse into
+                            // a block, the way the web client groups them — a
+                            // repeated avatar every line eats a phone screen.
+                            isGrouped: model.isGrouped(at: index)
+                        )
+                        .id(message.id)
+                    }
+
+                    if model.messages.isEmpty && !model.isLoading {
+                        EmptyState(
+                            icon: "text.bubble",
+                            title: "Start the thread",
+                            message: "Nothing here yet. Say something."
+                        )
+                        .padding(.top, 40)
+                    }
+                }
+                .padding(.horizontal, Metrics.hPadding)
+                .padding(.vertical, 12)
+            }
+            .scrollDismissesKeyboard(.interactively)
+            .onChange(of: model.messages.count) {
+                guard let last = model.messages.last else { return }
+                // Only follow the tail. Scrolling someone back to the bottom
+                // while they are reading history is the classic chat-app sin.
+                if model.isNearBottom {
+                    withAnimation(Motion.standard) {
+                        proxy.scrollTo(last.id, anchor: .bottom)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var typingRow: some View {
+        if !model.typingNames.isEmpty {
+            HStack(spacing: 8) {
+                TypingDots()
+                Text(model.typingDescription)
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.paperMuted)
+                Spacer()
+            }
+            .padding(.horizontal, Metrics.hPadding)
+            .padding(.bottom, 4)
+            .transition(.opacity.combined(with: .move(edge: .bottom)))
+        }
+    }
+}
+
+struct Composer: View {
+    @Binding var text: String
+    let isSending: Bool
+    let onSend: () -> Void
+    let onType: () -> Void
+
+    private var canSend: Bool {
+        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isSending
+    }
+
+    var body: some View {
+        HStack(alignment: .bottom, spacing: 10) {
+            TextField("Message", text: $text, axis: .vertical)
+                .textFieldStyle(.plain)
+                .font(Typography.body)
+                .foregroundStyle(Palette.paper)
+                .lineLimit(1...5)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 11)
+                .background(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .fill(Palette.surface)
+                )
+                .onChange(of: text) { _, _ in onType() }
+
+            Button(action: onSend) {
+                Image(systemName: "arrow.up")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(Palette.inkDeep)
+                    .frame(width: 40, height: 40)
+                    .background(
+                        Circle().fill(canSend ? Palette.signal : Palette.surfaceRaised)
+                    )
+            }
+            .disabled(!canSend)
+            .scaleEffect(canSend ? 1 : 0.92)
+            .animation(Motion.press, value: canSend)
+        }
+        .padding(.horizontal, Metrics.hPadding)
+        .padding(.vertical, 10)
+        .background(Palette.inkDeep)
+    }
+}
+
+struct MessageRow: View {
+    let message: Message
+    let isGrouped: Bool
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            if isGrouped {
+                // Keeps the text column aligned without repeating the avatar.
+                Color.clear.frame(width: 36, height: 1)
+            } else {
+                Avatar(name: message.authorName, seed: message.authorId, size: 36)
+            }
+
+            VStack(alignment: .leading, spacing: 3) {
+                if !isGrouped {
+                    HStack(spacing: 6) {
+                        Text(message.authorName)
+                            .font(Typography.bodyMedium)
+                            .foregroundStyle(Palette.paper)
+                        if message.isWebhook {
+                            Text("WEBHOOK")
+                                .font(.system(size: 9, weight: .bold))
+                                .tracking(0.6)
+                                .foregroundStyle(Palette.inkDeep)
+                                .padding(.horizontal, 4)
+                                .padding(.vertical, 1.5)
+                                .background(Capsule().fill(Palette.signal))
+                        }
+                        Text(message.createdAt, format: .dateTime.hour().minute())
+                            .font(Typography.caption)
+                            .foregroundStyle(Palette.paperMuted)
+                    }
+                }
+
+                if let reply = message.replyTo {
+                    ReplyChip(reply: reply)
+                }
+
+                if message.blocked {
+                    Text("Message hidden — you blocked this person.")
+                        .font(Typography.callout)
+                        .italic()
+                        .foregroundStyle(Palette.paperMuted)
+                } else if !message.body.isEmpty {
+                    Text(message.body)
+                        .font(Typography.body)
+                        .foregroundStyle(Palette.paper)
+                        .textSelection(.enabled)
+                }
+
+                ForEach(message.attachments) { attachment in
+                    AttachmentChip(attachment: attachment)
+                }
+
+                if message.editedAt != nil {
+                    Text("edited")
+                        .font(.system(size: 10))
+                        .foregroundStyle(Palette.paperMuted)
+                }
+
+                if !message.reactions.isEmpty {
+                    ReactionRow(reactions: message.reactions)
+                }
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, isGrouped ? 1 : 6)
+        // A pending message is dimmed rather than hidden, so the text is
+        // visibly "yours already" while the round trip completes.
+        .opacity(message.isPending ? 0.55 : 1)
+        .animation(Motion.standard, value: message.isPending)
+    }
+}
+
+struct ReplyChip: View {
+    let reply: MessageReplyRef
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "arrowshape.turn.up.left.fill")
+                .font(.system(size: 9))
+            Text(reply.deleted ? "Deleted message" : "\(reply.authorName ?? "Someone"): \(reply.excerpt)")
+                .lineLimit(1)
+        }
+        .font(Typography.caption)
+        .foregroundStyle(Palette.paperMuted)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Palette.surface)
+        )
+    }
+}
+
+struct AttachmentChip: View {
+    let attachment: Attachment
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: attachment.isImage ? "photo" : "doc")
+                .foregroundStyle(Palette.signal)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(attachment.filename)
+                    .font(Typography.callout)
+                    .foregroundStyle(Palette.paper)
+                    .lineLimit(1)
+                Text(ByteCountFormatter.string(fromByteCount: Int64(attachment.byteSize), countStyle: .file))
+                    .font(.system(size: 10))
+                    .foregroundStyle(Palette.paperMuted)
+            }
+        }
+        .padding(10)
+        .pqpSurface(cornerRadius: Metrics.cornerRadiusSmall)
+    }
+}
+
+struct ReactionRow: View {
+    let reactions: [MessageReaction]
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ForEach(reactions, id: \.emoji) { reaction in
+                HStack(spacing: 4) {
+                    Text(reaction.emoji).font(.system(size: 13))
+                    Text("\(reaction.count)")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(reaction.me ? Palette.signal : Palette.paperMuted)
+                }
+                .padding(.horizontal, 7)
+                .padding(.vertical, 3)
+                .background(
+                    Capsule()
+                        .fill(Palette.surface)
+                        .overlay(
+                            Capsule().strokeBorder(
+                                reaction.me ? Palette.signal : .clear,
+                                lineWidth: 1
+                            )
+                        )
+                )
+            }
+        }
+        .padding(.top, 2)
+    }
+}

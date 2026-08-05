@@ -1,0 +1,178 @@
+import Foundation
+import Observation
+
+@MainActor
+@Observable
+final class ChatModel {
+    private(set) var messages: [Message] = []
+    private(set) var isLoading = false
+    private(set) var isSending = false
+    private(set) var hasMore = false
+    private(set) var typingNames: [String: Date] = [:]
+    var draft = ""
+    var error: String?
+
+    /// The scroll view reports this; the model only uses it to decide whether
+    /// a new message should pull the view down.
+    var isNearBottom = true
+
+    private var session: SessionStore?
+    private var channelId: String?
+    private var handlerKey = UUID().uuidString
+    private var lastTypingSentAt: Date?
+    private var typingSweeper: Task<Void, Never>?
+
+    var typingDescription: String {
+        let names = typingNames.keys.sorted()
+        switch names.count {
+        case 0: return ""
+        case 1: return "\(names[0]) is typing"
+        case 2: return "\(names[0]) and \(names[1]) are typing"
+        default: return "Several people are typing"
+        }
+    }
+
+    func isGrouped(at index: Int) -> Bool {
+        guard index > 0, index < messages.count else { return false }
+        let current = messages[index]
+        let previous = messages[index - 1]
+        guard current.authorId == previous.authorId, !current.isWebhook, !previous.isWebhook else {
+            return false
+        }
+        // Same person, but a long pause restarts the block — otherwise a reply
+        // hours later reads as part of the earlier burst.
+        return current.createdAt.timeIntervalSince(previous.createdAt) < 300
+    }
+
+    func open(channelId: String, session: SessionStore) async {
+        self.session = session
+        self.channelId = channelId
+
+        session.eventHandlers[handlerKey] = { [weak self] event in
+            self?.apply(event)
+        }
+        await session.realtime.join(channelId: channelId)
+
+        isLoading = true
+        do {
+            let page = try await session.api.messages(channelId: channelId)
+            messages = page.messages
+            hasMore = page.hasMore
+            // Clearing on open is what makes the badge disappear when you
+            // actually read something, rather than on some timer.
+            try? await session.api.markRead(channelId: channelId)
+        } catch {
+            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+        }
+        isLoading = false
+
+        startTypingSweeper()
+    }
+
+    func close() {
+        session?.eventHandlers.removeValue(forKey: handlerKey)
+        typingSweeper?.cancel()
+        typingSweeper = nil
+    }
+
+    func loadEarlier() async {
+        guard let session, let channelId, let oldest = messages.first else { return }
+        do {
+            // The cursor is the oldest message's *id*, not its timestamp.
+            let page = try await session.api.messages(channelId: channelId, before: oldest.id)
+            messages.insert(contentsOf: page.messages, at: 0)
+            hasMore = page.hasMore
+        } catch {
+            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    func send() async {
+        guard let session, let channelId, let user = session.currentUser else { return }
+        let body = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !body.isEmpty else { return }
+
+        draft = ""
+        isSending = true
+
+        // Optimistic echo. The protocol has no ack, so the nonce coming back on
+        // `message-broadcast` is what retires this row.
+        var pending = Message(pendingBody: body, channelId: channelId, author: user)
+        let nonce = await session.realtime.sendMessage(channelId: channelId, body: body)
+        pending.pendingNonce = nonce
+        messages.append(pending)
+        isNearBottom = true
+        isSending = false
+    }
+
+    func noteTyping() {
+        guard let session, let channelId, !draft.isEmpty else { return }
+        // The server rate-limits typing to ~1/s and silently drops the rest, so
+        // there is no point sending one per keystroke.
+        let now = Date()
+        if let last = lastTypingSentAt, now.timeIntervalSince(last) < 2 { return }
+        lastTypingSentAt = now
+        Task { await session.realtime.sendTyping(channelId: channelId) }
+    }
+
+    // MARK: - Realtime
+
+    private func apply(_ event: RealtimeEvent) {
+        switch event {
+        case .messageCreated(let message, let nonce):
+            guard message.channelId == channelId else { return }
+            // Replace our optimistic row if this is the echo of it; the server
+            // copy has the real id, timestamp and any resolved embeds.
+            if let nonce, let index = messages.firstIndex(where: { $0.pendingNonce == nonce }) {
+                messages[index] = message
+            } else if !messages.contains(where: { $0.id == message.id }) {
+                messages.append(message)
+            }
+
+        case .messageUpdated(let message):
+            guard message.channelId == channelId else { return }
+            if let index = messages.firstIndex(where: { $0.id == message.id }) {
+                messages[index] = message
+            }
+
+        case .messageDeleted(let deletedChannelId, let messageId):
+            guard deletedChannelId == channelId else { return }
+            messages.removeAll { $0.id == messageId }
+
+        case .reaction(let reactionChannelId, let messageId, let emoji, _, let added):
+            guard reactionChannelId == channelId,
+                  let index = messages.firstIndex(where: { $0.id == messageId }) else { return }
+            // A delta, not a count — apply it rather than replacing.
+            var reactions = messages[index].reactions
+            if let existing = reactions.firstIndex(where: { $0.emoji == emoji }) {
+                reactions[existing].count += added ? 1 : -1
+                if reactions[existing].count <= 0 {
+                    reactions.remove(at: existing)
+                }
+            } else if added {
+                reactions.append(MessageReaction(emoji: emoji, count: 1, me: false))
+            }
+            messages[index].reactions = reactions
+
+        case .typing(let typingChannelId, _, let displayName):
+            guard typingChannelId == channelId else { return }
+            typingNames[displayName] = Date()
+
+        case .ready, .presence, .activity, .other:
+            break
+        }
+    }
+
+    /// There is no "stopped typing" frame, so indicators have to expire locally.
+    private func startTypingSweeper() {
+        typingSweeper?.cancel()
+        typingSweeper = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(1))
+                guard let self else { return }
+                let cutoff = Date().addingTimeInterval(-4)
+                self.typingNames = self.typingNames.filter { $0.value > cutoff }
+            }
+        }
+    }
+}
