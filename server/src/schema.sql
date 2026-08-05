@@ -507,3 +507,27 @@ ALTER TABLE messages ADD COLUMN IF NOT EXISTS webhook_embeds JSONB;
 -- the same webhook can each choose a different override.
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS webhook_username TEXT;
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS webhook_avatar_url TEXT;
+
+-- SSO / enterprise domain join. Clerk performs the actual SAML/OIDC handshake,
+-- so nothing here speaks SAML — what the app needs is the piece Clerk cannot
+-- know: which pqp server a federated user should land in.
+--
+-- Only the *domain* is stored, never the address. It is all this feature needs,
+-- and a domain is not personal data the way a mailbox is.
+--
+-- Written only from Clerk emails whose verification status is "verified".
+-- An unverified address is self-asserted, so honouring one would let anyone
+-- type `someone@acme.com` and walk into Acme's private server.
+--
+-- Every verified address contributes, not just the primary: someone whose
+-- primary is personal and whose work address is a verified secondary would
+-- otherwise be locked out of their own employer's server.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS email_domains TEXT[] NOT NULL DEFAULT '{}';
+
+-- Null means the feature is off for this server (the default). When set, any
+-- user whose verified `users.email_domain` matches exactly may join without an
+-- invite. Exact match only — no subdomain or suffix matching, or `acme.com`
+-- would also admit `acme.com.evil.test`.
+ALTER TABLE servers ADD COLUMN IF NOT EXISTS sso_email_domain TEXT;
+CREATE INDEX IF NOT EXISTS idx_servers_sso_email_domain
+  ON servers (sso_email_domain) WHERE sso_email_domain IS NOT NULL;

@@ -52,6 +52,8 @@ export interface DbUser {
   username: string | null;
   discriminator: string | null;
   avatar_url: string | null;
+  /** Domains of verified emails only — see `verifiedEmailDomains` in auth/clerk.ts. */
+  email_domains?: string[];
 }
 
 export interface DbServer {
@@ -60,6 +62,7 @@ export interface DbServer {
   owner_id: string;
   created_at: Date;
   message_retention_days: number | null;
+  sso_email_domain: string | null;
   role?: "owner" | "admin" | "member";
 }
 

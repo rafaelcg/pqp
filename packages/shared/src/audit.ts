@@ -23,6 +23,8 @@ export const AUDIT_ACTIONS = [
   "message.delete",
   "server.update",
   "server.retention_update",
+  "server.sso_domain_update",
+  "member.sso_join",
   "server.ownership_transfer",
   "server.data_export",
   "invite.create",

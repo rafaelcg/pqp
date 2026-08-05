@@ -173,6 +173,8 @@ export const serverSchema = z.object({
   createdAt: z.string(),
   /** Null means keep forever. */
   messageRetentionDays: z.number().int().positive().max(MAX_MESSAGE_RETENTION_DAYS).nullable(),
+  /** Null means SSO domain joining is off for this server. */
+  ssoEmailDomain: z.string().nullable().default(null),
 });
 
 export const channelSchema = z.object({
@@ -546,6 +548,12 @@ export const updateServerSchema = z.object({
     .max(MAX_MESSAGE_RETENTION_DAYS)
     .nullable()
     .optional(),
+  /** Explicit `null` turns SSO domain joining off; absent means "not changing".
+   * Deliberately a loose string here and validated with `ssoEmailDomainSchema`
+   * in the route: the refusal reasons ("that is a public provider") are meant
+   * for the owner to read, and the generic ZodError handler flattens every
+   * schema failure to "Invalid request". */
+  ssoEmailDomain: z.string().max(253).nullable().optional(),
 });
 
 export const removeMemberSchema = z.object({

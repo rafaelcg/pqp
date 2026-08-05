@@ -35,6 +35,7 @@ import {
   SettingsModal,
   type LocalSettings,
 } from "@/components/layout/settings-modal";
+import { SsoServerSuggestions } from "@/components/layout/sso-server-suggestions";
 import { UserPanel } from "@/components/layout/user-panel";
 import { ScreenShareView } from "@/components/voice/screen-share-view";
 import { VoiceAudioSinks } from "@/components/voice/voice-audio-sinks";
@@ -1819,6 +1820,15 @@ function MainAppContent({
                   ? "Create a server or join with an invite code."
                   : "Open the sidebar and choose text or voice."}
             </p>
+            {/* Also shown in the DM view when there are no servers at all:
+                that is where a freshly federated account actually lands, and
+                it is the one person this panel exists for. */}
+            {(selection.kind !== "dm" || servers.length === 0) && (
+              <SsoServerSuggestions
+                refreshKey={servers.length}
+                onJoined={(serverId) => refreshAfterJoin(serverId)}
+              />
+            )}
             {selection.kind === "dm" ? (
               <Button onClick={() => setNewDmOpen(true)}>New message</Button>
             ) : (

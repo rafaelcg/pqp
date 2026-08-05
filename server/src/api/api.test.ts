@@ -3341,6 +3341,142 @@ describeDb("API authorization", () => {
     });
   });
 
+  describe("SSO email domain", () => {
+    async function verifyDomains(user: { clerk_id: string }, domains: string[]) {
+      await getPool().query(`UPDATE users SET email_domains = $2 WHERE clerk_id = $1`, [
+        user.clerk_id,
+        domains,
+      ]);
+    }
+
+    it("lets the owner set a domain and reports it back on the server list", async () => {
+      const { serverId } = await makeServer();
+      const res = await call<{ server: { ssoEmailDomain: string } }>(
+        owner,
+        "PATCH",
+        `/api/servers/${serverId}`,
+        { ssoEmailDomain: "ACME.com" },
+      );
+      expect(res.status).toBe(200);
+      // Normalised on the way in, not stored as typed.
+      expect(res.body.server.ssoEmailDomain).toBe("acme.com");
+
+      // The sidebar list is a different query from the PATCH response, and it
+      // is the one the settings dialog reads back — so it has to carry the
+      // column too, or the field renders empty for a server that has one set.
+      const list = await call<{
+        servers: Array<{ id: string; ssoEmailDomain: string | null }>;
+      }>(owner, "GET", "/api/servers");
+      expect(
+        list.body.servers.find((s) => s.id === serverId)?.ssoEmailDomain,
+      ).toBe("acme.com");
+    });
+
+    it("refuses an admin — this is an owner-only setting", async () => {
+      const { serverId } = await makeServer();
+      const res = await call(admin, "PATCH", `/api/servers/${serverId}`, {
+        ssoEmailDomain: "acme.com",
+      });
+      expect(res.status).toBe(403);
+    });
+
+    it("rejects a public email provider, and says why", async () => {
+      const { serverId } = await makeServer();
+      const res = await call<{ error: string }>(
+        owner,
+        "PATCH",
+        `/api/servers/${serverId}`,
+        { ssoEmailDomain: "gmail.com" },
+      );
+      expect(res.status).toBe(400);
+      // The generic ZodError handler flattens everything to "Invalid request",
+      // which tells an owner nothing about why their domain was refused — the
+      // whole point of this guard is to explain the footgun.
+      expect(res.body.error).toMatch(/public email provider/i);
+    });
+
+    it("rejects a malformed domain", async () => {
+      const { serverId } = await makeServer();
+      const res = await call(owner, "PATCH", `/api/servers/${serverId}`, {
+        ssoEmailDomain: "not a domain",
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it("joins by verified domain and logs it to the audit log", async () => {
+      const { serverId } = await makeServer();
+      await call(owner, "PATCH", `/api/servers/${serverId}`, {
+        ssoEmailDomain: "acme.com",
+      });
+      await verifyDomains(outsider, ["acme.com"]);
+
+      const available = await call<{ servers: Array<{ id: string }> }>(
+        outsider,
+        "GET",
+        "/api/servers/sso-available",
+      );
+      expect(available.body.servers.map((s) => s.id)).toEqual([serverId]);
+
+      const joined = await call(
+        outsider,
+        "POST",
+        `/api/servers/${serverId}/sso-join`,
+      );
+      expect(joined.status).toBe(200);
+
+      const audit = await call<{ entries: Array<{ action: string }> }>(
+        owner,
+        "GET",
+        `/api/servers/${serverId}/audit-log`,
+      );
+      expect(audit.body.entries.some((e) => e.action === "member.sso_join")).toBe(
+        true,
+      );
+    });
+
+    it("404s a join when the domain does not match, not 403", async () => {
+      const { serverId } = await makeServer();
+      await call(owner, "PATCH", `/api/servers/${serverId}`, {
+        ssoEmailDomain: "acme.com",
+      });
+      await verifyDomains(outsider, ["evil.test"]);
+
+      const res = await call(
+        outsider,
+        "POST",
+        `/api/servers/${serverId}/sso-join`,
+      );
+      // Same answer as an unknown id on purpose — a 403 would confirm the
+      // server exists to somebody probing ids.
+      expect(res.status).toBe(404);
+    });
+
+    it("404s a join against a server with the feature off", async () => {
+      const { serverId } = await makeServer();
+      await verifyDomains(outsider, ["acme.com"]);
+      const res = await call(
+        outsider,
+        "POST",
+        `/api/servers/${serverId}/sso-join`,
+      );
+      expect(res.status).toBe(404);
+    });
+
+    it("clears the domain with an explicit null", async () => {
+      const { serverId } = await makeServer();
+      await call(owner, "PATCH", `/api/servers/${serverId}`, {
+        ssoEmailDomain: "acme.com",
+      });
+      const res = await call<{ server: { ssoEmailDomain: string | null } }>(
+        owner,
+        "PATCH",
+        `/api/servers/${serverId}`,
+        { ssoEmailDomain: null },
+      );
+      expect(res.body.server.ssoEmailDomain).toBeNull();
+    });
+  });
+
   describe("data export", () => {
     it("requires the owner, refusing an admin", async () => {
       const { serverId } = await makeServer();
