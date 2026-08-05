@@ -25,6 +25,9 @@ export function MarketingFooter() {
             <a href="/#hosting" className="text-paper hover:text-signal">
               Self-host
             </a>
+            <Link to="/status" className="text-paper hover:text-signal">
+              Status
+            </Link>
           </div>
           <div className="flex flex-col gap-2">
             <p className="text-xs font-medium uppercase tracking-[0.16em] text-paper-muted">
