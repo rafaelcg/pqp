@@ -25,8 +25,8 @@ DEV_AUTH_BYPASS=true
 docker compose up -d postgres && pnpm dev
 ```
 
-Release builds point at the hosted API (`Backend.hosted`) — see *Auth* below for
-why that does not work yet.
+Release builds point at the hosted API (`Backend.hosted`), which requires a
+Clerk key — see **Auth** below.
 
 ## Layout
 
@@ -39,6 +39,43 @@ why that does not work yet.
 | `Sources/Home` | Servers / conversations / profile tabs |
 | `Sources/Chat` | Channel list, transcript, composer |
 | `UITests` | End-to-end against a **running** local server |
+
+## Auth
+
+Two modes, chosen at launch by whether a publishable key is present:
+
+| `CLERK_PUBLISHABLE_KEY` | Mode | Reaches |
+|---|---|---|
+| unset (default) | dev bypass | local server only |
+| `pk_…` | Clerk | any deployment |
+
+The key is a build setting written into `Info.plist`, so a fork changes it
+without editing Swift. Clerk publishable keys are public by design — the web
+client ships one in its JS bundle — but it is still not committed:
+
+```bash
+cd ios
+xcodebuild -project pqp.xcodeproj -scheme pqp \
+  -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
+  CLERK_PUBLISHABLE_KEY=pk_test_… build
+```
+
+Or set it once in Xcode under the target's build settings.
+
+Sign-in uses Clerk's own `AuthView` as shipped rather than a hand-built form.
+It covers email codes, OAuth and MFA, none of which can be exercised here
+without a real inbox — a bespoke version would be unverifiable code on the one
+path where being wrong locks everybody out.
+
+`ClerkTokenProvider` reads a **fresh** token per request. Clerk session tokens
+live about a minute, so caching one — or capturing it at launch — makes
+everything work for sixty seconds and then 401 forever. That exact bug already
+shipped once on the web client.
+
+**Configuring Clerk is not enough: it must also be put into the SwiftUI
+environment.** Clerk's views read `@Environment(Clerk.self)`, and a missing
+environment value traps inside SwiftUI with a stack that never mentions Clerk —
+`PqpApp` injects it via `ClerkEnvironment`.
 
 ## Decisions worth knowing
 
@@ -92,10 +129,11 @@ They will fail without the server running. That is intentional.
 
 This is the foundation, not the finished app.
 
-- **Real auth.** Everything runs on the dev-bypass token, so the app cannot talk
-  to production. `TokenProviding` is the seam: implementing it against Clerk's
-  Swift SDK is the only change needed, and nothing else in the app touches
-  tokens.
+- **A completed Clerk sign-in.** The flow is wired and the sheet renders against
+  the real Clerk application, but finishing a sign-in needs a working inbox, so
+  the post-authentication path (token → `/api/me` → `.ready`) is unverified on
+  device. Everything after that point is the same code the bypass already
+  exercises.
 - **Voice.** Channels are listed and marked `SOON`. Needs WebRTC (mesh) or the
   LiveKit Swift SDK, plus the signalling frames already defined in
   `signaling.ts`.

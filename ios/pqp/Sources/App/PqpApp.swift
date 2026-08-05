@@ -1,15 +1,53 @@
 import SwiftUI
+import ClerkKit
 
 @main
 struct PqpApp: App {
     @State private var session = SessionStore()
 
+    /// Non-nil only when a publishable key is configured. Held so it can be put
+    /// into the SwiftUI environment, which Clerk's own views require.
+    private let clerk: Clerk?
+
+    init() {
+        // Must happen before anything touches `Clerk.shared`, which asserts in
+        // debug builds if it is unconfigured. With no key the app runs on the
+        // dev bypass and Clerk is never consulted.
+        if let key = AppConfig.clerkPublishableKey {
+            clerk = Clerk.configure(publishableKey: key)
+        } else {
+            clerk = nil
+        }
+    }
+
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environment(session)
+                // Clerk's views read `@Environment(Clerk.self)`. Configuring is
+                // not enough — without this injection, presenting `AuthView`
+                // traps inside SwiftUI's environment lookup with a stack that
+                // never mentions Clerk at all.
+                .modifier(ClerkEnvironment(clerk: clerk))
                 .preferredColorScheme(.dark)
                 .tint(Palette.signal)
+        }
+    }
+}
+
+/// Injects Clerk only when it exists.
+///
+/// A modifier rather than an `if` around the view, so both branches stay the
+/// same view identity — branching in the body would tear down and rebuild the
+/// whole tree when the key is present.
+private struct ClerkEnvironment: ViewModifier {
+    let clerk: Clerk?
+
+    func body(content: Content) -> some View {
+        if let clerk {
+            content.environment(clerk)
+        } else {
+            content
         }
     }
 }

@@ -1,4 +1,6 @@
 import SwiftUI
+import ClerkKit
+import ClerkKitUI
 
 /// Onboarding.
 ///
@@ -11,6 +13,7 @@ struct OnboardingView: View {
     @State private var step = 0
     @State private var markProgress = 0.0
     @State private var signingIn = false
+    @State private var showingAuth = false
     @Namespace private var mark
 
     private let beats: [(title: String, body: String)] = [
@@ -56,6 +59,21 @@ struct OnboardingView: View {
             withAnimation(.easeOut(duration: 1.1).delay(0.25)) {
                 markProgress = 1
             }
+        }
+        // Clerk's own flow, used as shipped. It covers email codes, OAuth and
+        // MFA — none of which can be exercised without a real inbox, so a
+        // hand-rolled replacement would be unverifiable code on the one path
+        // where being wrong locks everybody out.
+        .sheet(isPresented: $showingAuth) {
+            AuthView(mode: .signInOrUp)
+                .onDisappear {
+                    guard session.hasClerkSession else { return }
+                    signingIn = true
+                    Task {
+                        await session.signIn()
+                        signingIn = false
+                    }
+                }
         }
     }
 
@@ -136,11 +154,17 @@ struct OnboardingView: View {
     }
 
     private func signIn() {
-        signingIn = true
-        Task {
-            await session.signIn()
-            signingIn = false
+        // Under the bypass there is nothing to sign into — the server accepts a
+        // fixed token — so onboarding completes straight through.
+        guard session.authMode == .clerk else {
+            signingIn = true
+            Task {
+                await session.signIn()
+                signingIn = false
+            }
+            return
         }
+        showingAuth = true
     }
 }
 

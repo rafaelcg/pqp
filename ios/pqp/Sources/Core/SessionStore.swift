@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import ClerkKit
 
 enum SessionPhase: Equatable, Sendable {
     case loading
@@ -21,9 +22,8 @@ final class SessionStore {
     private(set) var realtimeStatus: RealtimeStatus = .idle
     private(set) var lastError: String?
 
-    /// Development identity. Real Clerk sign-in replaces this provider without
-    /// anything else in the app changing — see docs/IOS.md.
     private let tokenProvider: any TokenProviding
+    let authMode: AuthMode
 
     // Stored, not lazy: @Observable rewrites stored properties into computed
     // ones, and `lazy` is illegal on those.
@@ -31,10 +31,21 @@ final class SessionStore {
     let realtime: RealtimeClient
 
     init() {
-        let provider = DevTokenProvider()
+        let mode = AppConfig.authMode
+        authMode = mode
+        let provider: any TokenProviding = switch mode {
+        case .clerk: ClerkTokenProvider()
+        case .devBypass: DevTokenProvider()
+        }
         tokenProvider = provider
         api = APIClient(tokenProvider: provider)
         realtime = RealtimeClient(tokenProvider: provider)
+    }
+
+    /// Whether Clerk currently holds a session. Meaningless under the bypass,
+    /// where there is nothing to hold.
+    var hasClerkSession: Bool {
+        authMode == .clerk && Clerk.shared.session != nil
     }
 
     private var eventTask: Task<Void, Never>?
@@ -60,6 +71,12 @@ final class SessionStore {
     func restore() async {
         guard phase == .loading else { return }
         guard hasOnboarded else {
+            phase = .onboarding
+            return
+        }
+        // Clerk restores its own session from the keychain; without a session
+        // there is no token to send and `/api/me` would just 401.
+        if authMode == .clerk, !hasClerkSession {
             phase = .onboarding
             return
         }
@@ -95,6 +112,9 @@ final class SessionStore {
         // back to a first-run state, and on a dev build that is how the intro
         // gets exercised.
         hasOnboarded = false
+        if authMode == .clerk {
+            try? await Clerk.shared.auth.signOut()
+        }
         await realtime.stop()
         eventTask?.cancel()
         eventTask = nil

@@ -11,6 +11,11 @@ options:
   createIntermediateGroups: true
   groupSortPosition: top
 
+packages:
+  Clerk:
+    url: https://github.com/clerk/clerk-ios
+    from: "1.3.6"
+
 settings:
   base:
     SWIFT_VERSION: "6.0"
@@ -32,6 +37,9 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: gg.pqp.app
+        # Set to a pk_… value to switch the app onto real Clerk auth.
+        # Empty means the dev-bypass token, which only a local server accepts.
+        CLERK_PUBLISHABLE_KEY: ""
         PRODUCT_NAME: pqp
         INFOPLIST_FILE: pqp/Info.plist
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
@@ -43,6 +51,15 @@ targets:
         UIUserInterfaceStyle: Dark
     resources:
       - path: pqp/Resources
+    dependencies:
+      # ClerkKit is the client; ClerkKitUI supplies the prebuilt auth flow.
+      # The auth UI is used as-shipped rather than rebuilt: it covers email
+      # codes, OAuth and MFA, none of which can be exercised here without a
+      # real inbox, and a hand-rolled version would be unverifiable.
+      - package: Clerk
+        product: ClerkKit
+      - package: Clerk
+        product: ClerkKitUI
 
   pqpTests:
     type: bundle.unit-test
