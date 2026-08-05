@@ -39,6 +39,7 @@ Clerk key — see **Auth** below.
 | `Sources/Onboarding` | The three-beat intro |
 | `Sources/Home` | Servers / conversations / profile tabs |
 | `Sources/Chat` | Channel list, transcript, composer |
+| `Sources/Voice` | Mesh WebRTC engine, room state, call UI |
 | `UITests` | End-to-end against a **running** local server |
 
 ## Auth
@@ -119,6 +120,36 @@ with the dev bypass a session *always* restores, which would have made
 onboarding unreachable and therefore untested. Signing out clears the flag,
 which is how to see the intro again.
 
+## Voice
+
+Full-mesh WebRTC, matching the server's default backend. The signalling relay is
+the same `/ws` socket the chat uses; `VoiceClient` owns the peer connections.
+
+**The politeness rule has to match `peer-connection-manager.ts` exactly.** There,
+the peer whose id sorts *higher* is "impolite" and sends the initial offer.
+Invert it and two peers either both offer (glare) or neither does (a silent
+deadlock where everyone sits in `connecting` forever) — and it looks fine until
+two *different* clients meet in one room, which is exactly the case no
+single-client test covers.
+
+Other things the mesh depends on:
+
+- **ICE candidates are queued until a remote description exists.** They routinely
+  arrive before the answer, and adding one early throws.
+- **A `null` candidate is end-of-candidates**, not an error.
+- **The delegate must be retained.** `RTCPeerConnectionFactory` does not hold it,
+  so callbacks stop arriving mid-call if it is allowed to deallocate.
+- **`RTCIceCandidate` is not `Sendable`** — its fields are copied out on the
+  delegate's thread before crossing into the actor, which Swift 6 enforces.
+- Audio uses `.playAndRecord` with mode `.voiceChat`, which is what turns on echo
+  cancellation; `.playAndRecord` alone does neither that nor sensible routing.
+
+Verified with **two simulators in one room**: both reached `connected`, which
+exercises the real negotiation rather than one client talking to itself.
+
+Not yet done here: speaking indicators, per-peer volume, deafen, screen share
+(the web client has all four), and reconnecting a call across a socket drop.
+
 ## Tests
 
 The UI tests run against a **live local server** rather than mocks. That is the
@@ -143,9 +174,6 @@ This is the foundation, not the finished app.
   the post-authentication path (token → `/api/me` → `.ready`) is unverified on
   device. Everything after that point is the same code the bypass already
   exercises.
-- **Voice.** Channels are listed and marked `SOON`. Needs WebRTC (mesh) or the
-  LiveKit Swift SDK, plus the signalling frames already defined in
-  `signaling.ts`.
 - **Attachments** — upload is a three-step presign/PUT/claim dance; the app
   currently renders received attachments as chips but cannot send them.
 - **Push notifications** — needs APNs and a server-side sender, which does not

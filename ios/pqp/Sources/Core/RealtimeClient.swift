@@ -14,7 +14,50 @@ enum RealtimeEvent: Sendable {
     case typing(channelId: String, userId: String, displayName: String)
     case presence(channelId: String, users: [PresenceUser])
     case activity(channelId: String, serverId: String?, mention: Bool)
+
+    // Voice signalling. The server is a pure relay for offer/answer/candidate;
+    // everything else here is room membership.
+    case voiceWelcome(peerId: String, voiceChannelId: String, peers: [VoiceParticipant], selfPeer: VoiceParticipant)
+    case voicePeerJoined(VoiceParticipant)
+    case voicePeerLeft(peerId: String)
+    case voiceRoster(voiceChannelId: String, participants: [VoiceParticipant])
+    case voiceRoomFull(limit: Int)
+    case voiceOffer(from: String, sdp: String)
+    case voiceAnswer(from: String, sdp: String)
+    case voiceCandidate(from: String, candidate: IceCandidatePayload?)
     case other
+}
+
+struct VoiceParticipant: Codable, Identifiable, Hashable, Sendable {
+    let peerId: String
+    let userId: String
+    let displayName: String
+    let avatarUrl: String?
+    /// Defaulted: older servers predate screen share and omit the key.
+    var sharingScreen: Bool = false
+
+    var id: String { peerId }
+
+    enum CodingKeys: String, CodingKey {
+        case peerId, userId, displayName, avatarUrl, sharingScreen
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        peerId = try c.decode(String.self, forKey: .peerId)
+        userId = try c.decode(String.self, forKey: .userId)
+        displayName = try c.decodeIfPresent(String.self, forKey: .displayName) ?? "Someone"
+        avatarUrl = try c.decodeIfPresent(String.self, forKey: .avatarUrl)
+        sharingScreen = try c.decodeIfPresent(Bool.self, forKey: .sharingScreen) ?? false
+    }
+}
+
+/// Mirrors `iceCandidateInitSchema`. Every field is optional on the wire, and
+/// an end-of-candidates signal arrives as an explicit `null` candidate.
+struct IceCandidatePayload: Codable, Hashable, Sendable {
+    let candidate: String?
+    let sdpMid: String?
+    let sdpMLineIndex: Int?
 }
 
 struct PresenceUser: Codable, Identifiable, Hashable, Sendable {
@@ -172,6 +215,43 @@ actor RealtimeClient {
         return nonce
     }
 
+    // MARK: - Voice
+
+    func joinVoice(channelId: String) async {
+        await send(raw: ["type": "join-voice-room", "voiceChannelId": channelId])
+    }
+
+    func leaveVoice() async {
+        await send(raw: ["type": "leave-voice-room"])
+    }
+
+    func sendOffer(to peerId: String, from selfPeerId: String, sdp: String) async {
+        await send(raw: ["type": "offer", "from": selfPeerId, "to": peerId, "sdp": sdp])
+    }
+
+    func sendAnswer(to peerId: String, from selfPeerId: String, sdp: String) async {
+        await send(raw: ["type": "answer", "from": selfPeerId, "to": peerId, "sdp": sdp])
+    }
+
+    func sendCandidate(
+        to peerId: String,
+        from selfPeerId: String,
+        sdp: String,
+        sdpMid: String?,
+        sdpMLineIndex: Int32
+    ) async {
+        await send(raw: [
+            "type": "ice-candidate",
+            "from": selfPeerId,
+            "to": peerId,
+            "candidate": [
+                "candidate": sdp,
+                "sdpMid": sdpMid as Any,
+                "sdpMLineIndex": Int(sdpMLineIndex),
+            ],
+        ])
+    }
+
     func sendTyping(channelId: String) async {
         await send(raw: ["type": "typing", "channelId": channelId])
     }
@@ -200,6 +280,26 @@ actor RealtimeClient {
         let users: [PresenceUser]?
         let serverId: String?
         let mention: Bool?
+        // Voice
+        let peerId: String?
+        let voiceChannelId: String?
+        let peers: [VoiceParticipant]?
+        let participants: [VoiceParticipant]?
+        let peer: VoiceParticipant?
+        let selfPeer: VoiceParticipant?
+        let sdp: String?
+        let from: String?
+        let candidate: IceCandidatePayload?
+        let limit: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case type, nonce, message, channelId, messageId, emoji, userId
+            case displayName, added, users, serverId, mention
+            case peerId, voiceChannelId, peers, participants, peer, sdp, from
+            case candidate, limit
+            // `self` is a Swift keyword, so the wire key is remapped.
+            case selfPeer = "self"
+        }
     }
 
     private func decode(_ data: Data) {
@@ -241,6 +341,34 @@ actor RealtimeClient {
             guard let channelId = envelope.channelId else { return }
             event = .activity(channelId: channelId, serverId: envelope.serverId,
                               mention: envelope.mention ?? false)
+
+        case "welcome":
+            guard let peerId = envelope.peerId,
+                  let voiceChannelId = envelope.voiceChannelId,
+                  let selfPeer = envelope.selfPeer else { return }
+            event = .voiceWelcome(peerId: peerId, voiceChannelId: voiceChannelId,
+                                  peers: envelope.peers ?? [], selfPeer: selfPeer)
+        case "peer-joined":
+            guard let peer = envelope.peer else { return }
+            event = .voicePeerJoined(peer)
+        case "peer-left":
+            guard let peerId = envelope.peerId else { return }
+            event = .voicePeerLeft(peerId: peerId)
+        case "voice-roster":
+            guard let voiceChannelId = envelope.voiceChannelId else { return }
+            event = .voiceRoster(voiceChannelId: voiceChannelId,
+                                 participants: envelope.participants ?? [])
+        case "voice-room-full":
+            event = .voiceRoomFull(limit: envelope.limit ?? 0)
+        case "offer":
+            guard let from = envelope.from, let sdp = envelope.sdp else { return }
+            event = .voiceOffer(from: from, sdp: sdp)
+        case "answer":
+            guard let from = envelope.from, let sdp = envelope.sdp else { return }
+            event = .voiceAnswer(from: from, sdp: sdp)
+        case "ice-candidate":
+            guard let from = envelope.from else { return }
+            event = .voiceCandidate(from: from, candidate: envelope.candidate)
         default:
             event = .other
         }

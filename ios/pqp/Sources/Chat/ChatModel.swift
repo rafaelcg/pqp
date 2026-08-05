@@ -158,7 +158,11 @@ final class ChatModel {
             guard typingChannelId == channelId else { return }
             typingNames[displayName] = Date()
 
-        case .ready, .presence, .activity, .other:
+        // Voice frames arrive on the same socket and are none of this
+        // model's business.
+        case .ready, .presence, .activity, .other,
+             .voiceWelcome, .voicePeerJoined, .voicePeerLeft, .voiceRoster,
+             .voiceRoomFull, .voiceOffer, .voiceAnswer, .voiceCandidate:
             break
         }
     }

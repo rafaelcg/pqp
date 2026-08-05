@@ -48,11 +48,12 @@ struct ChannelListView: View {
                                 .padding(.horizontal, 4)
                                 .padding(.top, 12)
                             ForEach(voiceChannels) { channel in
-                                // Voice is a later phase. Shown, but honest
-                                // about not being connectable yet rather than
-                                // hidden — the channels exist on the server and
-                                // pretending otherwise is more confusing.
-                                ChannelRow(channel: channel, unread: nil, isDisabled: true)
+                                NavigationLink {
+                                    VoiceView(channel: channel)
+                                } label: {
+                                    ChannelRow(channel: channel, unread: nil)
+                                }
+                                .buttonStyle(.plain)
                             }
                         }
                     }
