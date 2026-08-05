@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import UIKit
 
 @MainActor
 @Observable
@@ -17,6 +18,11 @@ final class ChatModel {
     /// The message being edited. Mutually exclusive with `replyingTo` — the
     /// composer can only be doing one job at a time.
     var editing: Message?
+
+    /// Files staged in the composer, not yet sent.
+    private(set) var pendingAttachments: [PendingAttachment] = []
+    private(set) var attachmentsEnabled = false
+    private var uploader: AttachmentUploader?
 
     /// Quick reactions offered on long-press. Kept short: a picker with
     /// everything is a different feature, and six covers the common cases.
@@ -63,6 +69,11 @@ final class ChatModel {
         }
         await session.realtime.join(channelId: channelId)
 
+        uploader = AttachmentUploader(api: session.api)
+        // Attachments are off entirely unless the deployment configured
+        // storage, so the button is hidden rather than failing on tap.
+        attachmentsEnabled = (try? await session.api.attachmentConfig())?.enabled ?? false
+
         isLoading = true
         do {
             let page = try await session.api.messages(channelId: channelId)
@@ -97,10 +108,21 @@ final class ChatModel {
         }
     }
 
+    func attach(_ image: UIImage) {
+        guard let pending = PendingAttachment.fromImage(image) else { return }
+        pendingAttachments.append(pending)
+    }
+
+    func removeAttachment(_ id: UUID) {
+        pendingAttachments.removeAll { $0.id == id }
+    }
+
     func send() async {
         guard let session, let channelId, let user = session.currentUser else { return }
         let body = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !body.isEmpty else { return }
+        // The server accepts an empty body when there are attachments, so a
+        // photo with no caption is a valid message.
+        guard !body.isEmpty || !pendingAttachments.isEmpty else { return }
 
         // An in-flight edit takes precedence: the composer is showing that
         // message's text, so sending must save it rather than post a duplicate.
@@ -110,15 +132,35 @@ final class ChatModel {
         }
 
         let replyId = replyingTo?.id
+        let staged = pendingAttachments
         draft = ""
         replyingTo = nil
+        pendingAttachments = []
         isSending = true
+
+        // Uploaded before the message is sent, because the ids have to ride on
+        // `message-create` — there is no way to attach to a message after the
+        // fact.
+        var attachmentIds: [String] = []
+        for item in staged {
+            do {
+                if let uploader {
+                    attachmentIds.append(try await uploader.upload(item, channelId: channelId))
+                }
+            } catch {
+                self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+                // Put the text back so the message is not silently lost.
+                draft = body
+                isSending = false
+                return
+            }
+        }
 
         // Optimistic echo. The protocol has no ack, so the nonce coming back on
         // `message-broadcast` is what retires this row.
         var pending = Message(pendingBody: body, channelId: channelId, author: user)
         let nonce = await session.realtime.sendMessage(
-            channelId: channelId, body: body, replyToId: replyId
+            channelId: channelId, body: body, replyToId: replyId, attachmentIds: attachmentIds
         )
         pending.pendingNonce = nonce
         messages.append(pending)

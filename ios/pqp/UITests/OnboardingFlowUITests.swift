@@ -57,24 +57,28 @@ final class OnboardingFlowUITests: XCTestCase {
     /// The one that proves the wire contract: real servers, fetched over HTTP,
     /// decoded into the real models, rendered.
     func testServersLoadFromTheLiveAPI() {
+        let name = TestSeed.createServer(self)
         let app = launchFresh()
         app.buttons["Skip"].tap()
 
         XCTAssertTrue(app.navigationBars["Servers"].waitForExistence(timeout: 10))
-        // Seeded by the test setup script; if decoding broke, the list is empty
-        // and this fails rather than quietly showing an empty state.
+        // If decoding broke, the list is empty and this fails rather than
+        // quietly showing an empty state.
         XCTAssertTrue(
-            app.staticTexts["Design Crew"].waitForExistence(timeout: 10),
+            app.staticTexts[name].waitForExistence(timeout: 10),
             "A seeded server should decode and render"
         )
     }
 
     func testSendingAMessageEchoesBackFromTheServer() {
+        // Its own server, so the transcript is empty. Sharing one made this
+        // test slower every run until XCUITest timed out snapshotting the tree.
+        let name = TestSeed.createServer(self)
         let app = launchFresh()
         app.buttons["Skip"].tap()
 
-        XCTAssertTrue(app.staticTexts["Design Crew"].waitForExistence(timeout: 10))
-        app.staticTexts["Design Crew"].tap()
+        XCTAssertTrue(app.staticTexts[name].waitForExistence(timeout: 10))
+        app.staticTexts[name].tap()
 
         XCTAssertTrue(app.staticTexts["general"].waitForExistence(timeout: 5),
                       "The default #general channel should be listed")
@@ -143,7 +147,18 @@ final class LaunchResilienceUITests: XCTestCase {
 /// wire calls as much as the UI: a reaction goes out over the WebSocket, an
 /// edit over HTTP, and both come back as broadcasts.
 final class MessageActionUITests: XCTestCase {
-    override func setUp() { continueAfterFailure = false }
+    private var serverName = ""
+
+    override func setUp() {
+        continueAfterFailure = false
+        // A fresh server per test. These used to run against whichever channel
+        // previous runs had filled up, so the transcript grew every time —
+        // including an inline image — and the accessibility tree with it, until
+        // the suite took minutes. Hermetic is also simply correct: a test that
+        // depends on leftover state fails for reasons that have nothing to do
+        // with what it claims to check.
+        serverName = TestSeed.createServer(self)
+    }
 
     private func openGeneral() -> XCUIApplication {
         let app = XCUIApplication()
@@ -151,8 +166,8 @@ final class MessageActionUITests: XCTestCase {
         app.launch()
         XCTAssertTrue(app.buttons["Skip"].waitForExistence(timeout: 5))
         app.buttons["Skip"].tap()
-        XCTAssertTrue(app.staticTexts["Design Crew"].waitForExistence(timeout: 10))
-        app.staticTexts["Design Crew"].tap()
+        XCTAssertTrue(app.staticTexts[serverName].waitForExistence(timeout: 10))
+        app.staticTexts[serverName].tap()
         XCTAssertTrue(app.staticTexts["general"].waitForExistence(timeout: 5))
         app.staticTexts["general"].tap()
         return app
@@ -176,8 +191,17 @@ final class MessageActionUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Edit"].waitForExistence(timeout: 5))
         app.buttons["Edit"].tap()
 
+        // `beginEdit` sets the draft and SwiftUI propagates it into the field a
+        // beat later; typing into that gap gets clobbered by the prefill. One
+        // settle rather than a polling loop — every XCUITest query snapshots
+        // the whole accessibility tree, so polling `.value` at 10Hz against a
+        // long transcript costs minutes, which is how the "fix" for this race
+        // first made the test 10x slower.
         let composer = app.textFields["composer.input"]
         XCTAssertTrue(composer.waitForExistence(timeout: 3))
+        Thread.sleep(forTimeInterval: 0.6)
+        XCTAssertEqual(composer.value as? String, original,
+                       "Composer should be prefilled with the original body before typing")
         composer.tap()
         composer.typeText(" v2")
         app.buttons["composer.send"].tap()

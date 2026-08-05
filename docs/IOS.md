@@ -120,6 +120,29 @@ with the dev bypass a session *always* restores, which would have made
 onboarding unreachable and therefore untested. Signing out clears the flag,
 which is how to see the intro again.
 
+## Attachments
+
+Sending a photo is the server's three-step dance: mint a presigned PUT, send the
+bytes **straight to storage**, then claim by putting the id on `message-create`.
+There is no HTTP route that claims — the claim *is* the message.
+
+An uploaded-but-unclaimed attachment is deliberately invisible, and `/url` 404s
+for it. Worth knowing, because a test that stops after the PUT passes while the
+feature is broken for anyone actually sending a photo; `AttachmentUploadTests`
+covers the whole path and downloads the bytes back.
+
+Images are re-encoded to JPEG on the way out. An iPhone stores HEIC, which a web
+client cannot display — the other end of the conversation would see nothing.
+
+Requires storage to be configured, so locally:
+
+```bash
+docker compose --profile storage up -d postgres minio minio-init
+# then the S3_* block from docs/ATTACHMENTS.md in .env
+```
+
+Without it the app hides the attach button rather than failing on tap.
+
 ## Voice
 
 Full-mesh WebRTC, matching the server's default backend. The signalling relay is
@@ -161,6 +184,25 @@ id, so the old mesh is unusable; `ready` tears everything down and rejoins.
 
 Not yet done here: per-peer volume and screen share (the web client has both).
 
+## Writing UI tests here
+
+Three things this suite learned the hard way.
+
+**Tests must be hermetic.** The message-action tests originally ran against a
+shared seeded channel, so every run added to the same transcript. Eventually it
+held eighteen messages *and an inline image*, and the suite went from 20s to
+over six minutes before failing. Each test now creates its own server over HTTP
+in `setUp`.
+
+**Never poll `.value` in a loop.** Every XCUITest query snapshots the entire
+accessibility tree. A 10Hz poll against a long transcript costs minutes — that
+"fix" for a race made the test ten times slower and still failed.
+
+**Screenshots find what assertions cannot.** Two separate bugs this session were
+diagnosed from screenshots taken mid-run, not from failure messages: an app that
+had crashed while its test still passed, and an edit race that surfaced as an
+unrelated-looking assertion about a message body.
+
 ## UI test identifiers
 
 Controls that tests drive carry an explicit `accessibilityIdentifier`
@@ -194,8 +236,6 @@ This is the foundation, not the finished app.
   the post-authentication path (token → `/api/me` → `.ready`) is unverified on
   device. Everything after that point is the same code the bypass already
   exercises.
-- **Attachments** — upload is a three-step presign/PUT/claim dance; the app
-  currently renders received attachments as chips but cannot send them.
 - **Push notifications** — needs APNs and a server-side sender, which does not
   exist for web either.
 - **Pinning, invites, moderation, message search.** Pins render; none of these

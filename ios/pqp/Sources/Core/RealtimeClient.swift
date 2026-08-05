@@ -202,7 +202,12 @@ actor RealtimeClient {
     /// row. There is no ack frame and no error frame — the nonce is the only
     /// correlation the protocol offers.
     @discardableResult
-    func sendMessage(channelId: String, body: String, replyToId: String? = nil) async -> String {
+    func sendMessage(
+        channelId: String,
+        body: String,
+        replyToId: String? = nil,
+        attachmentIds: [String] = []
+    ) async -> String {
         let nonce = UUID().uuidString
         var frame: [String: Any] = [
             "type": "message-create",
@@ -211,6 +216,7 @@ actor RealtimeClient {
             "nonce": nonce,
         ]
         if let replyToId { frame["replyToId"] = replyToId }
+        if !attachmentIds.isEmpty { frame["attachmentIds"] = attachmentIds }
         await send(raw: frame)
         return nonce
     }

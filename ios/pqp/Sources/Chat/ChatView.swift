@@ -1,4 +1,5 @@
 import SwiftUI
+import PhotosUI
 
 struct ChatView: View {
     @Environment(SessionStore.self) private var session
@@ -6,6 +7,8 @@ struct ChatView: View {
     let title: String
 
     @State private var model = ChatModel()
+    @State private var showingPicker = false
+    @State private var pickerItem: PhotosPickerItem?
     @FocusState private var composerFocused: Bool
 
     var body: some View {
@@ -16,11 +19,15 @@ struct ChatView: View {
                 messageList
                 typingRow
                 composerContext
+                attachmentStrip
                 Composer(
                     text: $model.draft,
                     isSending: model.isSending,
+                    canAttach: model.attachmentsEnabled,
+                    hasAttachments: !model.pendingAttachments.isEmpty,
                     onSend: { Task { await model.send() } },
-                    onType: { model.noteTyping() }
+                    onType: { model.noteTyping() },
+                    onAttach: { showingPicker = true }
                 )
                 .focused($composerFocused)
             }
@@ -29,6 +36,19 @@ struct ChatView: View {
         .navigationBarTitleDisplayMode(.inline)
         .animation(Motion.standard, value: model.replyingTo?.id)
         .animation(Motion.standard, value: model.editing?.id)
+        .photosPicker(isPresented: $showingPicker, selection: $pickerItem, matching: .images)
+        .onChange(of: pickerItem) { _, item in
+            guard let item else { return }
+            Task {
+                // Loaded as Data and re-encoded rather than passed through:
+                // an iPhone stores HEIC, which a web client cannot display.
+                if let data = try? await item.loadTransferable(type: Data.self),
+                   let image = UIImage(data: data) {
+                    model.attach(image)
+                }
+                pickerItem = nil
+            }
+        }
         .task { await model.open(channelId: channelId, session: session) }
         .onDisappear { model.close() }
     }
@@ -136,6 +156,39 @@ struct ChatView: View {
     }
 
     @ViewBuilder
+    private var attachmentStrip: some View {
+        if !model.pendingAttachments.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(model.pendingAttachments) { item in
+                        ZStack(alignment: .topTrailing) {
+                            if let image = UIImage(data: item.data) {
+                                Image(uiImage: image)
+                                    .resizable()
+                                    .scaledToFill()
+                                    .frame(width: 64, height: 64)
+                                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            }
+                            Button {
+                                model.removeAttachment(item.id)
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.system(size: 17))
+                                    .foregroundStyle(Palette.paper, Palette.inkDeep)
+                            }
+                            .offset(x: 5, y: -5)
+                        }
+                    }
+                }
+                .padding(.horizontal, Metrics.hPadding)
+                .padding(.vertical, 8)
+            }
+            .background(Palette.inkDeep)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
+    }
+
+    @ViewBuilder
     private var composerContext: some View {
         if let target = model.replyingTo ?? model.editing {
             let isEdit = model.editing != nil
@@ -183,15 +236,32 @@ struct ChatView: View {
 struct Composer: View {
     @Binding var text: String
     let isSending: Bool
+    var canAttach: Bool = false
+    var hasAttachments: Bool = false
     let onSend: () -> Void
     let onType: () -> Void
+    var onAttach: () -> Void = {}
 
     private var canSend: Bool {
-        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isSending
+        // A photo with no caption is a valid message, so attachments alone
+        // are enough to enable sending.
+        (!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || hasAttachments)
+            && !isSending
     }
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 10) {
+            if canAttach {
+                Button(action: onAttach) {
+                    Image(systemName: "plus.circle.fill")
+                        .font(.system(size: 26))
+                        .foregroundStyle(Palette.paperMuted)
+                }
+                .accessibilityIdentifier("composer.attach")
+                .accessibilityLabel("Add photo")
+                .padding(.bottom, 3)
+            }
+
             TextField("Message", text: $text, axis: .vertical)
                 // Stable identifiers: a SwiftUI TextField's accessibility label
                 // is its placeholder, which vanishes once the field has text —
@@ -332,6 +402,30 @@ struct AttachmentChip: View {
     let attachment: Attachment
 
     var body: some View {
+        // Images are shown, not described. A filename chip for a photo is the
+        // one case where the chip is strictly worse than the thing itself.
+        if attachment.isImage, let url = URL(string: attachment.url) {
+            AsyncImage(url: url) { phase in
+                switch phase {
+                case .success(let image):
+                    image.resizable().scaledToFit()
+                case .failure:
+                    fileChip
+                default:
+                    RoundedRectangle(cornerRadius: Metrics.cornerRadiusSmall, style: .continuous)
+                        .fill(Palette.surface)
+                        .frame(height: 140)
+                        .overlay(ProgressView().tint(Palette.paperMuted))
+                }
+            }
+            .frame(maxWidth: 260, maxHeight: 260)
+            .clipShape(RoundedRectangle(cornerRadius: Metrics.cornerRadiusSmall, style: .continuous))
+        } else {
+            fileChip
+        }
+    }
+
+    private var fileChip: some View {
         HStack(spacing: 8) {
             Image(systemName: attachment.isImage ? "photo" : "doc")
                 .foregroundStyle(Palette.signal)
