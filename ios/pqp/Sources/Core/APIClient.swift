@@ -148,7 +148,7 @@ actor APIClient {
         try await send(path: path, method: "PATCH", query: [], body: try Coding.encoder.encode(body))
     }
 
-    private func send<T: Decodable>(
+    fileprivate func send<T: Decodable>(
         path: String,
         method: String,
         query: [URLQueryItem],
@@ -262,6 +262,44 @@ extension APIClient {
         struct Response: Decodable { let server: Server }
         let response: Response = try await post("/api/servers", body: Body(name: name))
         return response.server
+    }
+
+    func editMessage(id: String, body: String) async throws -> Message {
+        struct Body: Encodable { let body: String }
+        struct Response: Decodable { let message: Message }
+        let response: Response = try await patch("/api/messages/\(id)", body: Body(body: body))
+        return response.message
+    }
+
+    func deleteMessage(id: String) async throws {
+        let _: EmptyResponse = try await send(
+            path: "/api/messages/\(id)", method: "DELETE", query: [], body: nil
+        )
+    }
+
+    /// Prefix search over handles. Excludes the caller server-side.
+    func searchUsers(query: String) async throws -> [PublicUser] {
+        struct Response: Decodable { let users: [PublicUser] }
+        let response: Response = try await get(
+            "/api/users/search", query: [URLQueryItem(name: "q", value: query)]
+        )
+        return response.users
+    }
+
+    /// Exact `name#1234` lookup — the half of discovery that is not enumerable.
+    func lookupUser(tag: String) async throws -> PublicUser {
+        struct Response: Decodable { let user: PublicUser }
+        let response: Response = try await get(
+            "/api/users/lookup", query: [URLQueryItem(name: "tag", value: tag)]
+        )
+        return response.user
+    }
+
+    func openConversation(userIds: [String]) async throws -> DmSummary {
+        struct Body: Encodable { let userIds: [String] }
+        struct Response: Decodable { let conversation: DmSummary }
+        let response: Response = try await post("/api/dms", body: Body(userIds: userIds))
+        return response.conversation
     }
 
     func joinInvite(code: String) async throws -> String {

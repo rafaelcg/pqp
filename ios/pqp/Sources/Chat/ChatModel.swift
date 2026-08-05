@@ -12,6 +12,16 @@ final class ChatModel {
     var draft = ""
     var error: String?
 
+    /// The message being replied to, shown above the composer until cleared.
+    var replyingTo: Message?
+    /// The message being edited. Mutually exclusive with `replyingTo` — the
+    /// composer can only be doing one job at a time.
+    var editing: Message?
+
+    /// Quick reactions offered on long-press. Kept short: a picker with
+    /// everything is a different feature, and six covers the common cases.
+    static let quickReactions = ["👍", "😂", "🔥", "❤️", "🎉", "👀"]
+
     /// The scroll view reports this; the model only uses it to decide whether
     /// a new message should pull the view down.
     var isNearBottom = true
@@ -92,17 +102,109 @@ final class ChatModel {
         let body = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !body.isEmpty else { return }
 
+        // An in-flight edit takes precedence: the composer is showing that
+        // message's text, so sending must save it rather than post a duplicate.
+        if let editing {
+            await commitEdit(editing, newBody: body)
+            return
+        }
+
+        let replyId = replyingTo?.id
         draft = ""
+        replyingTo = nil
         isSending = true
 
         // Optimistic echo. The protocol has no ack, so the nonce coming back on
         // `message-broadcast` is what retires this row.
         var pending = Message(pendingBody: body, channelId: channelId, author: user)
-        let nonce = await session.realtime.sendMessage(channelId: channelId, body: body)
+        let nonce = await session.realtime.sendMessage(
+            channelId: channelId, body: body, replyToId: replyId
+        )
         pending.pendingNonce = nonce
         messages.append(pending)
         isNearBottom = true
         isSending = false
+    }
+
+    // MARK: - Message actions
+
+    func beginReply(to message: Message) {
+        editing = nil
+        draft = ""
+        replyingTo = message
+    }
+
+    func beginEdit(_ message: Message) {
+        replyingTo = nil
+        editing = message
+        draft = message.body
+    }
+
+    func cancelComposerContext() {
+        replyingTo = nil
+        editing = nil
+        draft = ""
+    }
+
+    private func commitEdit(_ message: Message, newBody: String) async {
+        guard let session else { return }
+        editing = nil
+        draft = ""
+        isSending = true
+        do {
+            let updated = try await session.api.editMessage(id: message.id, body: newBody)
+            // The broadcast will also arrive; applying it here means the change
+            // is visible immediately rather than after a round trip.
+            if let index = messages.firstIndex(where: { $0.id == updated.id }) {
+                messages[index] = updated
+            }
+        } catch {
+            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+        }
+        isSending = false
+    }
+
+    func delete(_ message: Message) async {
+        guard let session else { return }
+        // Removed locally first; the broadcast confirms it for everyone else.
+        let previous = messages
+        messages.removeAll { $0.id == message.id }
+        do {
+            try await session.api.deleteMessage(id: message.id)
+        } catch {
+            // Put it back rather than leaving a gap that looks like it worked.
+            messages = previous
+            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    func toggleReaction(_ emoji: String, on message: Message) async {
+        guard let session, let channelId else { return }
+        // Applied locally straight away; `reaction-broadcast` is a delta and
+        // will echo this back, so the local edit is skipped for our own id.
+        if let index = messages.firstIndex(where: { $0.id == message.id }) {
+            var reactions = messages[index].reactions
+            if let existing = reactions.firstIndex(where: { $0.emoji == emoji }) {
+                if reactions[existing].me {
+                    reactions[existing].count -= 1
+                    reactions[existing].me = false
+                    if reactions[existing].count <= 0 { reactions.remove(at: existing) }
+                } else {
+                    reactions[existing].count += 1
+                    reactions[existing].me = true
+                }
+            } else {
+                reactions.append(MessageReaction(emoji: emoji, count: 1, me: true))
+            }
+            messages[index].reactions = reactions
+        }
+        await session.realtime.toggleReaction(
+            channelId: channelId, messageId: message.id, emoji: emoji
+        )
+    }
+
+    func isMine(_ message: Message) -> Bool {
+        message.authorId == session?.currentUser?.id
     }
 
     func noteTyping() {
@@ -139,9 +241,12 @@ final class ChatModel {
             guard deletedChannelId == channelId else { return }
             messages.removeAll { $0.id == messageId }
 
-        case .reaction(let reactionChannelId, let messageId, let emoji, _, let added):
+        case .reaction(let reactionChannelId, let messageId, let emoji, let userId, let added):
             guard reactionChannelId == channelId,
                   let index = messages.firstIndex(where: { $0.id == messageId }) else { return }
+            // Our own toggle was already applied optimistically; applying the
+            // echo too would double-count it.
+            if userId == session?.currentUser?.id { return }
             // A delta, not a count — apply it rather than replacing.
             var reactions = messages[index].reactions
             if let existing = reactions.firstIndex(where: { $0.emoji == emoji }) {

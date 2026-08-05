@@ -174,6 +174,8 @@ struct ServerRow: View {
 
 struct ConversationListView: View {
     @Bindable var model: HomeModel
+    @State private var showingNew = false
+    @State private var openedConversation: DmSummary?
 
     var body: some View {
         ZStack {
@@ -183,7 +185,9 @@ struct ConversationListView: View {
                 EmptyState(
                     icon: "envelope",
                     title: "No conversations",
-                    message: "Direct messages you start will show up here."
+                    message: "Direct messages you start will show up here.",
+                    actionTitle: "New message",
+                    action: { showingNew = true }
                 )
             } else {
                 ScrollView {
@@ -207,6 +211,24 @@ struct ConversationListView: View {
             }
         }
         .navigationTitle("Messages")
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button { showingNew = true } label: { Image(systemName: "square.and.pencil") }
+                    .tint(Palette.signal)
+            }
+        }
+        .sheet(isPresented: $showingNew) {
+            NewConversationView { conversation in
+                // Refresh so the new thread is in the list behind the sheet,
+                // then open it — otherwise dismissing lands on a list that does
+                // not yet contain the conversation just created.
+                Task { await model.refresh() }
+                openedConversation = conversation
+            }
+        }
+        .navigationDestination(item: $openedConversation) { conversation in
+            ChatView(channelId: conversation.channelId, title: conversation.title)
+        }
     }
 }
 

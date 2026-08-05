@@ -150,6 +150,15 @@ exercises the real negotiation rather than one client talking to itself.
 Not yet done here: speaking indicators, per-peer volume, deafen, screen share
 (the web client has all four), and reconnecting a call across a socket drop.
 
+## UI test identifiers
+
+Controls that tests drive carry an explicit `accessibilityIdentifier`
+(`composer.input`, `composer.send`). This is not decoration: a SwiftUI
+`TextField`'s accessibility label is its *placeholder*, which disappears the
+moment the field has text — so a test that queries by `"Message"` silently stops
+finding the composer exactly when it is mid-edit, and fails somewhere later with
+an unrelated-looking assertion.
+
 ## Tests
 
 The UI tests run against a **live local server** rather than mocks. That is the
@@ -178,6 +187,8 @@ This is the foundation, not the finished app.
   currently renders received attachments as chips but cannot send them.
 - **Push notifications** — needs APNs and a server-side sender, which does not
   exist for web either.
-- **Reactions, editing, pinning, search, moderation, DM creation, invites.**
-  Reactions and pins *render*; none of them can be performed yet.
+- **Pinning, invites, moderation, message search.** Pins render; none of these
+  can be performed yet.
+- **Group DMs.** The API takes up to nine participants; the picker starts one
+  conversation with one person.
 - **iPad layout.** The target builds universal but the layout is phone-first.

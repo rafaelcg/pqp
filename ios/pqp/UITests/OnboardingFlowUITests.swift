@@ -80,14 +80,14 @@ final class OnboardingFlowUITests: XCTestCase {
                       "The default #general channel should be listed")
         app.staticTexts["general"].tap()
 
-        let composer = app.textFields["Message"]
+        let composer = app.textFields["composer.input"]
         XCTAssertTrue(composer.waitForExistence(timeout: 5))
         composer.tap()
 
         let sent = "hello from ios \(Int.random(in: 1000...9999))"
         composer.typeText(sent)
         // The send button is the only other control in the composer row.
-        app.buttons.matching(identifier: "arrow.up").firstMatch.tap()
+        app.buttons["composer.send"].tap()
 
         // Sending goes out over the WebSocket and comes back as a broadcast.
         // Asserting on the text appearing proves the whole round trip, not just
@@ -134,5 +134,79 @@ final class LaunchResilienceUITests: XCTestCase {
             "Reached onboarding in \(elapsed)s — that is the deadline backstop firing, "
             + "not a fast connection failure. Check waitsForConnectivity."
         )
+    }
+}
+
+/// Message interactions, against the live server.
+///
+/// Reactions and edits both round-trip through the server, so these prove the
+/// wire calls as much as the UI: a reaction goes out over the WebSocket, an
+/// edit over HTTP, and both come back as broadcasts.
+final class MessageActionUITests: XCTestCase {
+    override func setUp() { continueAfterFailure = false }
+
+    private func openGeneral() -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchArguments += ["-pqp.hasCompletedOnboarding", "NO"]
+        app.launch()
+        XCTAssertTrue(app.buttons["Skip"].waitForExistence(timeout: 5))
+        app.buttons["Skip"].tap()
+        XCTAssertTrue(app.staticTexts["Design Crew"].waitForExistence(timeout: 10))
+        app.staticTexts["Design Crew"].tap()
+        XCTAssertTrue(app.staticTexts["general"].waitForExistence(timeout: 5))
+        app.staticTexts["general"].tap()
+        return app
+    }
+
+    private func send(_ text: String, in app: XCUIApplication) {
+        let composer = app.textFields["composer.input"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 5))
+        composer.tap()
+        composer.typeText(text)
+        app.buttons["composer.send"].tap()
+        XCTAssertTrue(app.staticTexts[text].waitForExistence(timeout: 10))
+    }
+
+    func testEditingAMessageUpdatesItAndMarksItEdited() {
+        let app = openGeneral()
+        let original = "edit me \(Int.random(in: 1000...9999))"
+        send(original, in: app)
+
+        app.staticTexts[original].press(forDuration: 1.2)
+        XCTAssertTrue(app.buttons["Edit"].waitForExistence(timeout: 5))
+        app.buttons["Edit"].tap()
+
+        let composer = app.textFields["composer.input"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 3))
+        composer.tap()
+        composer.typeText(" v2")
+        app.buttons["composer.send"].tap()
+
+        XCTAssertTrue(
+            app.staticTexts["\(original) v2"].waitForExistence(timeout: 10),
+            "The edited body should replace the original"
+        )
+        XCTAssertTrue(app.staticTexts["edited"].waitForExistence(timeout: 5),
+                      "An edited message should be labelled as such")
+    }
+
+    func testDeletingAMessageRemovesIt() {
+        let app = openGeneral()
+        let doomed = "delete me \(Int.random(in: 1000...9999))"
+        send(doomed, in: app)
+
+        app.staticTexts[doomed].press(forDuration: 1.2)
+        XCTAssertTrue(app.buttons["Delete"].waitForExistence(timeout: 5))
+        app.buttons["Delete"].tap()
+
+        // Polls for absence rather than asserting immediately: the optimistic
+        // removal and the broadcast are two different moments. A plain loop
+        // rather than an NSPredicate expectation, which Swift 6 rejects here
+        // because XCTestCase is not Sendable.
+        let deadline = Date().addingTimeInterval(10)
+        while app.staticTexts[doomed].exists && Date() < deadline {
+            usleep(200_000)
+        }
+        XCTAssertFalse(app.staticTexts[doomed].exists, "Deleted message should disappear")
     }
 }

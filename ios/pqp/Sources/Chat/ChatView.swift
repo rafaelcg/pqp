@@ -15,6 +15,7 @@ struct ChatView: View {
             VStack(spacing: 0) {
                 messageList
                 typingRow
+                composerContext
                 Composer(
                     text: $model.draft,
                     isSending: model.isSending,
@@ -26,6 +27,8 @@ struct ChatView: View {
         }
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
+        .animation(Motion.standard, value: model.replyingTo?.id)
+        .animation(Motion.standard, value: model.editing?.id)
         .task { await model.open(channelId: channelId, session: session) }
         .onDisappear { model.close() }
     }
@@ -50,9 +53,15 @@ struct ChatView: View {
                             // Consecutive messages from one person collapse into
                             // a block, the way the web client groups them — a
                             // repeated avatar every line eats a phone screen.
-                            isGrouped: model.isGrouped(at: index)
+                            isGrouped: model.isGrouped(at: index),
+                            onToggleReaction: { emoji in
+                                Task { await model.toggleReaction(emoji, on: message) }
+                            }
                         )
                         .id(message.id)
+                        .contextMenu {
+                            messageActions(for: message)
+                        }
                     }
 
                     if model.messages.isEmpty && !model.isLoading {
@@ -78,6 +87,79 @@ struct ChatView: View {
                     }
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private func messageActions(for message: Message) -> some View {
+        // The quick row first: reacting is by far the most common thing anyone
+        // does to someone else's message.
+        ControlGroup {
+            ForEach(ChatModel.quickReactions, id: \.self) { emoji in
+                Button(emoji) {
+                    Task { await model.toggleReaction(emoji, on: message) }
+                }
+            }
+        }
+        .controlGroupStyle(.compactMenu)
+
+        Button {
+            model.beginReply(to: message)
+            composerFocused = true
+        } label: {
+            Label("Reply", systemImage: "arrowshape.turn.up.left")
+        }
+
+        Button {
+            UIPasteboard.general.string = message.body
+        } label: {
+            Label("Copy text", systemImage: "doc.on.doc")
+        }
+
+        // Edit and delete are only ever offered on your own messages; the
+        // server would refuse anyway, and offering an action that always fails
+        // is worse than not offering it.
+        if model.isMine(message) {
+            Button {
+                model.beginEdit(message)
+                composerFocused = true
+            } label: {
+                Label("Edit", systemImage: "pencil")
+            }
+
+            Button(role: .destructive) {
+                Task { await model.delete(message) }
+            } label: {
+                Label("Delete", systemImage: "trash")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var composerContext: some View {
+        if let target = model.replyingTo ?? model.editing {
+            let isEdit = model.editing != nil
+            HStack(spacing: 8) {
+                Image(systemName: isEdit ? "pencil" : "arrowshape.turn.up.left.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Palette.signal)
+                Text(isEdit ? "Editing message" : "Replying to \(target.authorName)")
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.paperMuted)
+                    .lineLimit(1)
+                Spacer()
+                Button {
+                    model.cancelComposerContext()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(Palette.paperMuted)
+                }
+            }
+            .padding(.horizontal, Metrics.hPadding)
+            .padding(.vertical, 8)
+            .background(Palette.surface)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
         }
     }
 
@@ -111,6 +193,11 @@ struct Composer: View {
     var body: some View {
         HStack(alignment: .bottom, spacing: 10) {
             TextField("Message", text: $text, axis: .vertical)
+                // Stable identifiers: a SwiftUI TextField's accessibility label
+                // is its placeholder, which vanishes once the field has text —
+                // so a UI test that queries by "Message" stops finding it
+                // exactly when it is being edited.
+                .accessibilityIdentifier("composer.input")
                 .textFieldStyle(.plain)
                 .font(Typography.body)
                 .foregroundStyle(Palette.paper)
@@ -125,6 +212,7 @@ struct Composer: View {
 
             Button(action: onSend) {
                 Image(systemName: "arrow.up")
+                    .accessibilityHidden(true)
                     .font(.system(size: 16, weight: .bold))
                     .foregroundStyle(Palette.inkDeep)
                     .frame(width: 40, height: 40)
@@ -132,6 +220,8 @@ struct Composer: View {
                         Circle().fill(canSend ? Palette.signal : Palette.surfaceRaised)
                     )
             }
+            .accessibilityIdentifier("composer.send")
+            .accessibilityLabel("Send")
             .disabled(!canSend)
             .scaleEffect(canSend ? 1 : 0.92)
             .animation(Motion.press, value: canSend)
@@ -145,6 +235,7 @@ struct Composer: View {
 struct MessageRow: View {
     let message: Message
     let isGrouped: Bool
+    var onToggleReaction: (String) -> Void = { _ in }
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -203,7 +294,7 @@ struct MessageRow: View {
                 }
 
                 if !message.reactions.isEmpty {
-                    ReactionRow(reactions: message.reactions)
+                    ReactionRow(reactions: message.reactions, onTap: onToggleReaction)
                 }
             }
 
@@ -261,10 +352,12 @@ struct AttachmentChip: View {
 
 struct ReactionRow: View {
     let reactions: [MessageReaction]
+    var onTap: (String) -> Void = { _ in }
 
     var body: some View {
         HStack(spacing: 6) {
             ForEach(reactions, id: \.emoji) { reaction in
+                Button { onTap(reaction.emoji) } label: {
                 HStack(spacing: 4) {
                     Text(reaction.emoji).font(.system(size: 13))
                     Text("\(reaction.count)")
@@ -283,8 +376,11 @@ struct ReactionRow: View {
                             )
                         )
                 )
+                }
+                .buttonStyle(.plain)
             }
         }
         .padding(.top, 2)
+        .animation(Motion.press, value: reactions)
     }
 }
