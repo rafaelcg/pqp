@@ -301,3 +301,15 @@ struct SearchResponse: Codable, Sendable {
     let hasMore: Bool
 }
 struct PinnedResponse: Codable, Sendable { let messages: [Message] }
+
+struct ServerBan: Codable, Identifiable, Hashable, Sendable {
+    let userId: String
+    let displayName: String?
+    let tag: String?
+    let reason: String?
+    let createdAt: Date?
+
+    var id: String { userId }
+}
+
+struct BansResponse: Codable, Sendable { let bans: [ServerBan] }

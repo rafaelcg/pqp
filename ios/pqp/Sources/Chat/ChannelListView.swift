@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ChannelListView: View {
     @Environment(SessionStore.self) private var session
+    @Environment(\.dismiss) private var dismiss
     let server: Server
 
     @State private var channels: [Channel] = []
@@ -10,6 +11,13 @@ struct ChannelListView: View {
     @State private var error: String?
     @State private var showingInvites = false
     @State private var showingSearch = false
+    @State private var showingMembers = false
+    @State private var showingNewChannel = false
+    @State private var newChannelName = ""
+    @State private var newChannelIsVoice = false
+    @State private var renaming: Channel?
+    @State private var renameText = ""
+    @State private var confirmingLeave = false
 
     private var textChannels: [Channel] { channels.filter(\.isText) }
     private var voiceChannels: [Channel] { channels.filter(\.isVoice) }
@@ -42,6 +50,7 @@ struct ChannelListView: View {
                                     ChannelRow(channel: channel, unread: unread[channel.id])
                                 }
                                 .buttonStyle(.plain)
+                                .contextMenu { channelActions(for: channel) }
                             }
                         }
 
@@ -56,6 +65,7 @@ struct ChannelListView: View {
                                     ChannelRow(channel: channel, unread: nil)
                                 }
                                 .buttonStyle(.plain)
+                                .contextMenu { channelActions(for: channel) }
                             }
                         }
                     }
@@ -73,8 +83,25 @@ struct ChannelListView: View {
                     Button { showingSearch = true } label: {
                         Label("Search messages", systemImage: "magnifyingglass")
                     }
+                    Button { showingMembers = true } label: {
+                        Label("Members", systemImage: "person.2")
+                    }
                     Button { showingInvites = true } label: {
                         Label("Invite people", systemImage: "person.badge.plus")
+                    }
+                    if isManager {
+                        Button { showingNewChannel = true } label: {
+                            Label("New channel", systemImage: "plus.square")
+                        }
+                    }
+                    Divider()
+                    // Leaving is offered to everyone except the owner, who has
+                    // to transfer or delete instead — the server refuses the
+                    // last-owner case and there is no sense offering it.
+                    if server.role != "owner" {
+                        Button(role: .destructive) { confirmingLeave = true } label: {
+                            Label("Leave server", systemImage: "rectangle.portrait.and.arrow.right")
+                        }
                     }
                 } label: {
                     Image(systemName: "ellipsis.circle")
@@ -84,7 +111,86 @@ struct ChannelListView: View {
         }
         .sheet(isPresented: $showingInvites) { InviteView(server: server) }
         .sheet(isPresented: $showingSearch) { SearchView(server: server) }
+        .sheet(isPresented: $showingMembers) { MembersView(server: server) }
+        .alert("New channel", isPresented: $showingNewChannel) {
+            TextField("Channel name", text: $newChannelName)
+            Button("Cancel", role: .cancel) { newChannelName = "" }
+            Button("Create text") { Task { await createChannel(voice: false) } }
+            Button("Create voice") { Task { await createChannel(voice: true) } }
+        }
+        .alert("Rename channel", isPresented: Binding(
+            get: { renaming != nil },
+            set: { if !$0 { renaming = nil } }
+        )) {
+            TextField("Name", text: $renameText)
+            Button("Cancel", role: .cancel) { renaming = nil }
+            Button("Rename") { Task { await commitRename() } }
+        }
+        .alert("Leave \(server.name)?", isPresented: $confirmingLeave) {
+            Button("Cancel", role: .cancel) {}
+            Button("Leave", role: .destructive) {
+                Task {
+                    try? await session.api.leaveServer(id: server.id)
+                    dismiss()
+                }
+            }
+        } message: {
+            Text("You'll need a new invite to get back in.")
+        }
         .task { await load() }
+    }
+
+    private var isManager: Bool { server.role == "owner" || server.role == "admin" }
+
+    private func createChannel(voice: Bool) async {
+        let name = newChannelName.trimmingCharacters(in: .whitespacesAndNewlines)
+        newChannelName = ""
+        guard !name.isEmpty else { return }
+        do {
+            let channel = try await session.api.createChannel(
+                serverId: server.id, name: name, type: voice ? "voice" : "text", isPrivate: false
+            )
+            channels.append(channel)
+        } catch {
+            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    private func commitRename() async {
+        guard let target = renaming else { return }
+        let name = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
+        renaming = nil
+        guard !name.isEmpty else { return }
+        if let updated = try? await session.api.renameChannel(id: target.id, name: name),
+           let index = channels.firstIndex(where: { $0.id == updated.id }) {
+            channels[index] = updated
+        }
+    }
+
+    private func deleteChannel(_ channel: Channel) async {
+        do {
+            try await session.api.deleteChannel(id: channel.id)
+            channels.removeAll { $0.id == channel.id }
+        } catch {
+            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    @ViewBuilder
+    private func channelActions(for channel: Channel) -> some View {
+        if isManager {
+            Button {
+                renameText = channel.name
+                renaming = channel
+            } label: {
+                Label("Rename", systemImage: "pencil")
+            }
+            Button(role: .destructive) {
+                Task { await deleteChannel(channel) }
+            } label: {
+                Label("Delete channel", systemImage: "trash")
+            }
+        }
     }
 
     private func load() async {

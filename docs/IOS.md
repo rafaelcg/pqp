@@ -230,6 +230,21 @@ xcodebuild -project pqp.xcodeproj -scheme pqp \
 
 They will fail without the server running. That is intentional.
 
+## Parity with the web client
+
+Both clients talk to the same API — there is no mobile backend and no BFF — so
+parity is a matter of building the remaining screens, not of architecture.
+
+Done: servers, channels (create/rename/delete), text chat with reply/edit/
+delete/react/pin, attachments, DMs and DM creation, invites, message search,
+members with kick/ban/roles and a ban list, leaving a server, and mesh voice
+with mute/deafen/speaking indicators.
+
+Still only on web: link-embed cards, notification preferences, blocking UI,
+profile editing, channel categories and reordering, private-channel member
+picker, webhook management, server settings (retention, SSO domain, export,
+audit log), group DMs, emoji/GIF pickers, screen share, per-peer volume.
+
 ## Not built yet
 
 This is the foundation, not the finished app.
@@ -241,7 +256,6 @@ This is the foundation, not the finished app.
   exercises.
 - **Push notifications** — needs APNs and a server-side sender, which does not
   exist for web either.
-- **Moderation** — kick, ban, role changes.
 - **Group DMs.** The API takes up to nine participants; the picker starts one
   conversation with one person.
 - **iPad layout.** The target builds universal but the layout is phone-first.

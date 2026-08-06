@@ -20,6 +20,8 @@
 	<string>0.1.0</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
+	<key>PqpApiHost</key>
+	<string>$(PQP_API_HOST)</string>
 	<key>ClerkPublishableKey</key>
 	<string>$(CLERK_PUBLISHABLE_KEY)</string>
 	<key>LSRequiresIPhoneOS</key>

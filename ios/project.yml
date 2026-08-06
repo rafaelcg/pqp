@@ -46,6 +46,9 @@ targets:
         # Set to a pk_… value to switch the app onto real Clerk auth.
         # Empty means the dev-bypass token, which only a local server accepts.
         CLERK_PUBLISHABLE_KEY: ""
+        # Debug device builds only: the LAN address of the Mac running
+        # `pnpm dev`. Empty means localhost, which is what the simulator wants.
+        PQP_API_HOST: ""
         PRODUCT_NAME: pqp
         INFOPLIST_FILE: pqp/Info.plist
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon

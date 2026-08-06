@@ -57,6 +57,15 @@ struct Backend: Sendable, Equatable {
                 webSocketURL: URL(string: "ws://127.0.0.1:9/ws")!
             )
         }
+        // On a physical device `localhost` is the phone, not the Mac running
+        // the dev server — so a device build has to be told the Mac's address.
+        // Set `PQP_API_HOST` at build time; the simulator needs nothing.
+        if let host = Bundle.main.object(forInfoDictionaryKey: "PqpApiHost") as? String,
+           !host.isEmpty, !host.hasPrefix("$("),
+           let api = URL(string: "http://\(host):3001"),
+           let ws = URL(string: "ws://\(host):3001/ws") {
+            return Backend(apiBaseURL: api, webSocketURL: ws)
+        }
         return .local
         #else
         return .hosted
@@ -309,6 +318,108 @@ extension APIClient {
         struct Response: Decodable { let conversation: DmSummary }
         let response: Response = try await post("/api/dms", body: Body(userIds: userIds))
         return response.conversation
+    }
+
+    // MARK: Moderation
+
+    func bans(serverId: String) async throws -> [ServerBan] {
+        let response: BansResponse = try await get("/api/servers/\(serverId)/bans")
+        return response.bans
+    }
+
+    func setMemberRole(serverId: String, userId: String, role: String) async throws {
+        struct Body: Encodable { let role: String }
+        let _: EmptyResponse = try await patch(
+            "/api/servers/\(serverId)/members/\(userId)", body: Body(role: role)
+        )
+    }
+
+    /// Kick, or kick and ban. One call because the server models it that way —
+    /// banning is removing with the door locked behind them.
+    func removeMember(serverId: String, userId: String, ban: Bool) async throws {
+        struct Body: Encodable { let ban: Bool }
+        let data = try Coding.encoder.encode(Body(ban: ban))
+        let _: EmptyResponse = try await send(
+            path: "/api/servers/\(serverId)/members/\(userId)",
+            method: "DELETE", query: [], body: data
+        )
+    }
+
+    func unban(serverId: String, userId: String) async throws {
+        let _: EmptyResponse = try await send(
+            path: "/api/servers/\(serverId)/bans/\(userId)",
+            method: "DELETE", query: [], body: nil
+        )
+    }
+
+    // MARK: Server + channel management
+
+    func renameServer(id: String, name: String) async throws -> Server {
+        struct Body: Encodable { let name: String }
+        struct Response: Decodable { let server: Server? }
+        let response: Response = try await patch("/api/servers/\(id)", body: Body(name: name))
+        guard let server = response.server else {
+            throw APIError.server(status: 200, message: "Server did not return the update")
+        }
+        return server
+    }
+
+    func leaveServer(id: String) async throws {
+        let _: EmptyResponse = try await post("/api/servers/\(id)/leave", body: EmptyBody())
+    }
+
+    func createChannel(serverId: String, name: String, type: String, isPrivate: Bool) async throws -> Channel {
+        struct Body: Encodable {
+            let name: String
+            let type: String
+            let isPrivate: Bool
+        }
+        struct Response: Decodable { let channel: Channel }
+        let response: Response = try await post(
+            "/api/servers/\(serverId)/channels",
+            body: Body(name: name, type: type, isPrivate: isPrivate)
+        )
+        return response.channel
+    }
+
+    func renameChannel(id: String, name: String) async throws -> Channel {
+        struct Body: Encodable { let name: String }
+        struct Response: Decodable { let channel: Channel }
+        let response: Response = try await patch("/api/channels/\(id)", body: Body(name: name))
+        return response.channel
+    }
+
+    func deleteChannel(id: String) async throws {
+        let _: EmptyResponse = try await send(
+            path: "/api/channels/\(id)", method: "DELETE", query: [], body: nil
+        )
+    }
+
+    // MARK: Profile + blocking
+
+    func updateProfile(displayName: String?, dmPrivacy: String?) async throws -> CurrentUser {
+        struct Body: Encodable {
+            let displayName: String?
+            let dmPrivacy: String?
+        }
+        return try await patch("/api/me", body: Body(displayName: displayName, dmPrivacy: dmPrivacy))
+    }
+
+    func blocks() async throws -> [PublicUser] {
+        struct Response: Decodable { let blocked: [PublicUser] }
+        let response: Response = try await get("/api/blocks")
+        return response.blocked
+    }
+
+    func setBlocked(userId: String, blocked: Bool) async throws {
+        if blocked {
+            struct Body: Encodable { let userId: String }
+            let _: EmptyResponse = try await post("/api/blocks", body: Body(userId: userId))
+        } else {
+            let _: EmptyResponse = try await send(
+                path: "/api/blocks/\(userId)", method: "DELETE", query: [], body: nil
+            )
+        }
     }
 
     func invites(serverId: String) async throws -> [Invite] {
