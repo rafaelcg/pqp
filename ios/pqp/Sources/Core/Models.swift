@@ -313,3 +313,62 @@ struct ServerBan: Codable, Identifiable, Hashable, Sendable {
 }
 
 struct BansResponse: Codable, Sendable { let bans: [ServerBan] }
+
+struct Gif: Codable, Identifiable, Hashable, Sendable {
+    let id: String
+    let url: String
+    let previewUrl: String
+    let previewStillUrl: String?
+    let width: Int
+    let height: Int
+    let title: String
+}
+
+struct GifsResponse: Codable, Sendable { let gifs: [Gif] }
+struct GifConfig: Codable, Sendable { let enabled: Bool }
+
+struct AuditEntry: Codable, Identifiable, Hashable, Sendable {
+    let id: String
+    let actorName: String?
+    let action: String
+    let reason: String?
+    let createdAt: Date
+}
+
+struct AuditResponse: Codable, Sendable {
+    let entries: [AuditEntry]
+    let hasMore: Bool
+}
+
+struct Webhook: Codable, Identifiable, Hashable, Sendable {
+    let id: String
+    let channelId: String
+    let name: String
+    /// A server-relative path, not a full URL — the server has no reliable way
+    /// to know its own public origin.
+    let url: String
+    let createdAt: Date
+}
+
+struct WebhooksResponse: Codable, Sendable { let webhooks: [Webhook] }
+struct ChannelMembersResponse: Codable, Sendable { let members: [PublicUser] }
+
+/// Per-place notification levels. Absent keys inherit from `default`, which is
+/// why everything here is optional rather than defaulted client-side.
+struct NotificationPreferences: Codable, Hashable, Sendable {
+    var desktop: Bool?
+    var `default`: String?
+    var servers: [String: String]?
+    var channels: [String: String]?
+}
+
+struct UserPreferences: Codable, Hashable, Sendable {
+    var theme: String?
+    var muteOnJoin: Bool?
+    var inputVolume: Double?
+    var outputVolume: Double?
+    var notifications: NotificationPreferences?
+    var showLinkEmbeds: Bool?
+}
+
+struct PreferencesResponse: Codable, Sendable { let preferences: UserPreferences }

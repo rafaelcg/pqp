@@ -97,6 +97,9 @@ actor VoiceClient {
         // earpiece/speaker sensibly; `.playAndRecord` alone does neither.
         try session.setCategory(.playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetooth])
         try session.setActive(true)
+        // Speaker by default: a group voice channel is nearly always a
+        // hands-free situation, unlike a one-to-one phone call.
+        try? session.overrideOutputAudioPort(.speaker)
 
         let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
         let source = factory.audioSource(with: constraints)
@@ -115,6 +118,18 @@ actor VoiceClient {
 
     func setMuted(_ muted: Bool) {
         localAudioTrack?.isEnabled = !muted
+    }
+
+    /// Earpiece or speaker.
+    ///
+    /// `.voiceChat` mode routes to the earpiece by default, which is right for
+    /// a phone call held to your head and wrong for a group call on a desk.
+    /// iOS has no way to ask for this on the user's behalf, so it is a control.
+    func setSpeaker(_ on: Bool) {
+        let session = RTCAudioSession.sharedInstance()
+        session.lockForConfiguration()
+        defer { session.unlockForConfiguration() }
+        try? session.overrideOutputAudioPort(on ? .speaker : .none)
     }
 
     /// Deafening silences everyone else and forces your own mic off, matching

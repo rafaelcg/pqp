@@ -320,6 +320,131 @@ extension APIClient {
         return response.conversation
     }
 
+    // MARK: Preferences, audit, webhooks, channel members
+
+    func preferences() async throws -> UserPreferences {
+        struct Me: Decodable { let preferences: UserPreferences? }
+        let me: Me = try await get("/api/me")
+        return me.preferences ?? UserPreferences()
+    }
+
+    /// Preferences merge one level deep server-side, so the whole notification
+    /// object is sent every time — patching a single key would drop the rest.
+    func updatePreferences(_ preferences: UserPreferences) async throws -> UserPreferences {
+        let response: PreferencesResponse = try await patch("/api/me/preferences", body: preferences)
+        return response.preferences
+    }
+
+    func auditLog(serverId: String) async throws -> [AuditEntry] {
+        let response: AuditResponse = try await get("/api/servers/\(serverId)/audit-log")
+        return response.entries
+    }
+
+    func webhooks(channelId: String) async throws -> [Webhook] {
+        let response: WebhooksResponse = try await get("/api/channels/\(channelId)/webhooks")
+        return response.webhooks
+    }
+
+    func createWebhook(channelId: String, name: String) async throws -> Webhook {
+        struct Body: Encodable { let name: String }
+        struct Response: Decodable { let webhook: Webhook }
+        let response: Response = try await post(
+            "/api/channels/\(channelId)/webhooks", body: Body(name: name)
+        )
+        return response.webhook
+    }
+
+    func deleteWebhook(id: String) async throws {
+        let _: EmptyResponse = try await send(
+            path: "/api/webhooks/\(id)", method: "DELETE", query: [], body: nil
+        )
+    }
+
+    func channelMembers(channelId: String) async throws -> [PublicUser] {
+        let response: ChannelMembersResponse = try await get("/api/channels/\(channelId)/members")
+        return response.members
+    }
+
+    func addChannelMember(channelId: String, userId: String) async throws {
+        struct Body: Encodable { let userId: String }
+        let _: EmptyResponse = try await post(
+            "/api/channels/\(channelId)/members", body: Body(userId: userId)
+        )
+    }
+
+    func removeChannelMember(channelId: String, userId: String) async throws {
+        let _: EmptyResponse = try await send(
+            path: "/api/channels/\(channelId)/members/\(userId)",
+            method: "DELETE", query: [], body: nil
+        )
+    }
+
+    func setRetention(serverId: String, days: Int?) async throws -> Server {
+        struct Body: Encodable { let messageRetentionDays: Int? }
+        struct Response: Decodable { let server: Server? }
+        let response: Response = try await patch(
+            "/api/servers/\(serverId)", body: Body(messageRetentionDays: days)
+        )
+        guard let server = response.server else {
+            throw APIError.server(status: 200, message: "Server did not return the update")
+        }
+        return server
+    }
+
+    func setSsoDomain(serverId: String, domain: String?) async throws -> Server {
+        struct Body: Encodable { let ssoEmailDomain: String? }
+        struct Response: Decodable { let server: Server? }
+        let response: Response = try await patch(
+            "/api/servers/\(serverId)", body: Body(ssoEmailDomain: domain)
+        )
+        guard let server = response.server else {
+            throw APIError.server(status: 200, message: "Server did not return the update")
+        }
+        return server
+    }
+
+    func moveChannel(id: String, parentId: String?, index: Int) async throws {
+        struct Body: Encodable { let parentId: String?; let index: Int }
+        let _: EmptyResponse = try await patch(
+            "/api/channels/\(id)/move", body: Body(parentId: parentId, index: index)
+        )
+    }
+
+    // MARK: GIFs
+
+    func gifConfig() async throws -> GifConfig {
+        try await get("/api/gifs/config")
+    }
+
+    func trendingGifs() async throws -> [Gif] {
+        let response: GifsResponse = try await get("/api/gifs/trending")
+        return response.gifs
+    }
+
+    func searchGifs(query: String) async throws -> [Gif] {
+        let response: GifsResponse = try await get(
+            "/api/gifs/search", query: [URLQueryItem(name: "q", value: query)]
+        )
+        return response.gifs
+    }
+
+    /// GIFs are attached by URL rather than uploaded — the server fetches the
+    /// bytes itself, so there is no presign/PUT step.
+    func attachGif(channelId: String, gif: Gif) async throws -> String {
+        struct Body: Encodable {
+            let url: String
+            let width: Int
+            let height: Int
+            let title: String
+        }
+        struct Response: Decodable { let attachment: Attachment }
+        let response: Response = try await post(
+            "/api/channels/\(channelId)/attachments/gif",
+            body: Body(url: gif.url, width: gif.width, height: gif.height, title: gif.title)
+        )
+        return response.attachment.id
+    }
+
     // MARK: Moderation
 
     func bans(serverId: String) async throws -> [ServerBan] {

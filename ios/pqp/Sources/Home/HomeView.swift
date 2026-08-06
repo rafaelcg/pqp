@@ -285,6 +285,7 @@ struct UnreadBadge: View {
 
 struct ProfileView: View {
     @Environment(SessionStore.self) private var session
+    @State private var showingSettings = false
 
     var body: some View {
         ZStack {
@@ -311,15 +312,20 @@ struct ProfileView: View {
 
                 Spacer()
 
-                Button("Sign out") {
-                    Task { await session.signOut() }
+                VStack(spacing: 10) {
+                    Button("Settings") { showingSettings = true }
+                        .buttonStyle(PrimaryButtonStyle())
+                    Button("Sign out") {
+                        Task { await session.signOut() }
+                    }
+                    .buttonStyle(SecondaryButtonStyle())
                 }
-                .buttonStyle(SecondaryButtonStyle())
                 .padding(.horizontal, Metrics.hPadding)
                 .padding(.bottom, 20)
             }
         }
         .navigationTitle("You")
+        .sheet(isPresented: $showingSettings) { AccountSettingsView() }
     }
 }
 

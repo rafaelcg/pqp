@@ -149,6 +149,14 @@ final class SessionStore {
         }
     }
 
+    /// Re-reads `/api/me` after a profile edit so the change is visible without
+    /// signing out and back in.
+    func refreshCurrentUser() async {
+        if let user = try? await api.currentUser() {
+            currentUser = user
+        }
+    }
+
     func signOut() async {
         // Deliberately also forgets onboarding: signing out is the only way
         // back to a first-run state, and on a dev build that is how the intro

@@ -9,6 +9,8 @@ struct ChatView: View {
     @State private var model = ChatModel()
     @State private var showingPicker = false
     @State private var showingPins = false
+    @State private var showingGifs = false
+    @State private var emojiTarget: Message?
     @State private var pickerItem: PhotosPickerItem?
     @FocusState private var composerFocused: Bool
 
@@ -25,10 +27,12 @@ struct ChatView: View {
                     text: $model.draft,
                     isSending: model.isSending,
                     canAttach: model.attachmentsEnabled,
+                    canSendGif: model.gifsEnabled,
                     hasAttachments: !model.pendingAttachments.isEmpty,
                     onSend: { Task { await model.send() } },
                     onType: { model.noteTyping() },
-                    onAttach: { showingPicker = true }
+                    onAttach: { showingPicker = true },
+                    onGif: { showingGifs = true }
                 )
                 .focused($composerFocused)
             }
@@ -45,6 +49,14 @@ struct ChatView: View {
             }
         }
         .sheet(isPresented: $showingPins) { PinnedMessagesView(channelId: channelId) }
+        .sheet(isPresented: $showingGifs) {
+            GifPicker { gif in Task { await model.sendGif(gif) } }
+        }
+        .sheet(item: $emojiTarget) { target in
+            EmojiPicker { emoji in
+                Task { await model.toggleReaction(emoji, on: target) }
+            }
+        }
         .photosPicker(isPresented: $showingPicker, selection: $pickerItem, matching: .images)
         .onChange(of: pickerItem) { _, item in
             guard let item else { return }
@@ -131,6 +143,12 @@ struct ChatView: View {
             }
         }
         .controlGroupStyle(.compactMenu)
+
+        Button {
+            emojiTarget = message
+        } label: {
+            Label("More reactions…", systemImage: "face.smiling")
+        }
 
         Button {
             model.beginReply(to: message)
@@ -255,10 +273,12 @@ struct Composer: View {
     @Binding var text: String
     let isSending: Bool
     var canAttach: Bool = false
+    var canSendGif: Bool = false
     var hasAttachments: Bool = false
     let onSend: () -> Void
     let onType: () -> Void
     var onAttach: () -> Void = {}
+    var onGif: () -> Void = {}
 
     private var canSend: Bool {
         // A photo with no caption is a valid message, so attachments alone
@@ -278,6 +298,16 @@ struct Composer: View {
                 .accessibilityIdentifier("composer.attach")
                 .accessibilityLabel("Add photo")
                 .padding(.bottom, 3)
+            }
+
+            if canSendGif {
+                Button(action: onGif) {
+                    Text("GIF")
+                        .font(.system(size: 12, weight: .heavy))
+                        .foregroundStyle(Palette.paperMuted)
+                }
+                .accessibilityIdentifier("composer.gif")
+                .padding(.bottom, 12)
             }
 
             TextField("Message", text: $text, axis: .vertical)
@@ -373,6 +403,10 @@ struct MessageRow: View {
 
                 ForEach(message.attachments) { attachment in
                     AttachmentChip(attachment: attachment)
+                }
+
+                ForEach(message.embeds, id: \.url) { embed in
+                    EmbedCard(embed: embed)
                 }
 
                 if message.editedAt != nil {

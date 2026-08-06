@@ -30,6 +30,10 @@ final class VoiceModel {
         }
     }
 
+    var isSpeakerOn = true {
+        didSet { Task { await voice.setSpeaker(isSpeakerOn) } }
+    }
+
     /// The channel we intend to be in, kept across a socket drop so the call
     /// can be rebuilt rather than silently ending.
     private var intendedChannel: Channel?

@@ -22,6 +22,7 @@ final class ChatModel {
     /// Files staged in the composer, not yet sent.
     private(set) var pendingAttachments: [PendingAttachment] = []
     private(set) var attachmentsEnabled = false
+    private(set) var gifsEnabled = false
     private var uploader: AttachmentUploader?
 
     /// Quick reactions offered on long-press. Kept short: a picker with
@@ -73,6 +74,7 @@ final class ChatModel {
         // Attachments are off entirely unless the deployment configured
         // storage, so the button is hidden rather than failing on tap.
         attachmentsEnabled = (try? await session.api.attachmentConfig())?.enabled ?? false
+        gifsEnabled = (try? await session.api.gifConfig())?.enabled ?? false
 
         isLoading = true
         do {
@@ -111,6 +113,26 @@ final class ChatModel {
     func attach(_ image: UIImage) {
         guard let pending = PendingAttachment.fromImage(image) else { return }
         pendingAttachments.append(pending)
+    }
+
+    /// GIFs skip the upload dance entirely — the server fetches the bytes from
+    /// the provider itself, so this posts immediately rather than staging.
+    func sendGif(_ gif: Gif) async {
+        guard let session, let channelId, let user = session.currentUser else { return }
+        isSending = true
+        do {
+            let attachmentId = try await session.api.attachGif(channelId: channelId, gif: gif)
+            var pending = Message(pendingBody: "", channelId: channelId, author: user)
+            let nonce = await session.realtime.sendMessage(
+                channelId: channelId, body: "", attachmentIds: [attachmentId]
+            )
+            pending.pendingNonce = nonce
+            messages.append(pending)
+            isNearBottom = true
+        } catch {
+            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+        }
+        isSending = false
     }
 
     func removeAttachment(_ id: UUID) {

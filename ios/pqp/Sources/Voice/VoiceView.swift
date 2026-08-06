@@ -90,7 +90,7 @@ struct VoiceView: View {
     }
 
     private var controls: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 10) {
             Button {
                 model.isMuted.toggle()
             } label: {
@@ -115,6 +115,19 @@ struct VoiceView: View {
             }
             .accessibilityIdentifier("voice.deafen")
             .accessibilityLabel(model.isDeafened ? "Undeafen" : "Deafen")
+            .disabled(model.status != .connected)
+
+            Button {
+                model.isSpeakerOn.toggle()
+            } label: {
+                Image(systemName: model.isSpeakerOn ? "speaker.wave.3.fill" : "iphone.gen3")
+                    .font(.system(size: 20))
+                    .foregroundStyle(model.isSpeakerOn ? Palette.signal : Palette.paper)
+                    .frame(width: 60, height: 60)
+                    .background(Circle().fill(Palette.surfaceRaised))
+            }
+            .accessibilityIdentifier("voice.speaker")
+            .accessibilityLabel(model.isSpeakerOn ? "Switch to earpiece" : "Switch to speaker")
             .disabled(model.status != .connected)
 
             Button {

@@ -5,6 +5,11 @@ struct ChannelListView: View {
     @Environment(\.dismiss) private var dismiss
     let server: Server
 
+    init(server: Server) {
+        self.server = server
+        _current = State(initialValue: server)
+    }
+
     @State private var channels: [Channel] = []
     @State private var unread: [String: UnreadEntry] = [:]
     @State private var isLoading = true
@@ -18,6 +23,9 @@ struct ChannelListView: View {
     @State private var renaming: Channel?
     @State private var renameText = ""
     @State private var confirmingLeave = false
+    @State private var showingSettings = false
+    @State private var webhooksFor: Channel?
+    @State private var current: Server
 
     private var textChannels: [Channel] { channels.filter(\.isText) }
     private var voiceChannels: [Channel] { channels.filter(\.isVoice) }
@@ -75,7 +83,7 @@ struct ChannelListView: View {
                 .refreshable { await load() }
             }
         }
-        .navigationTitle(server.name)
+        .navigationTitle(current.name)
         .navigationBarTitleDisplayMode(.large)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -92,6 +100,9 @@ struct ChannelListView: View {
                     if isManager {
                         Button { showingNewChannel = true } label: {
                             Label("New channel", systemImage: "plus.square")
+                        }
+                        Button { showingSettings = true } label: {
+                            Label("Server settings", systemImage: "gearshape")
                         }
                     }
                     Divider()
@@ -111,7 +122,15 @@ struct ChannelListView: View {
         }
         .sheet(isPresented: $showingInvites) { InviteView(server: server) }
         .sheet(isPresented: $showingSearch) { SearchView(server: server) }
-        .sheet(isPresented: $showingMembers) { MembersView(server: server) }
+        .sheet(isPresented: $showingMembers) { MembersView(server: current) }
+        .sheet(isPresented: $showingSettings) {
+            ServerSettingsView(
+                server: current,
+                onChanged: { current = $0 },
+                onDeleted: { dismiss() }
+            )
+        }
+        .sheet(item: $webhooksFor) { channel in WebhooksView(channel: channel) }
         .alert("New channel", isPresented: $showingNewChannel) {
             TextField("Channel name", text: $newChannelName)
             Button("Cancel", role: .cancel) { newChannelName = "" }
@@ -184,6 +203,11 @@ struct ChannelListView: View {
                 renaming = channel
             } label: {
                 Label("Rename", systemImage: "pencil")
+            }
+            if channel.isText {
+                Button { webhooksFor = channel } label: {
+                    Label("Webhooks", systemImage: "link")
+                }
             }
             Button(role: .destructive) {
                 Task { await deleteChannel(channel) }

@@ -240,10 +240,13 @@ delete/react/pin, attachments, DMs and DM creation, invites, message search,
 members with kick/ban/roles and a ban list, leaving a server, and mesh voice
 with mute/deafen/speaking indicators.
 
-Still only on web: link-embed cards, notification preferences, blocking UI,
-profile editing, channel categories and reordering, private-channel member
-picker, webhook management, server settings (retention, SSO domain, export,
-audit log), group DMs, emoji/GIF pickers, screen share, per-peer volume.
+Also done: link-embed cards, emoji and GIF pickers, notification preferences,
+blocking, profile editing, server settings (rename, retention, SSO domain, audit
+log, delete), webhook management, and speaker/earpiece routing in voice.
+
+Still only on web: channel categories and reordering, the private-channel member
+picker, group DMs, data export, ownership transfer, screen share, and per-peer
+volume.
 
 ## Not built yet
 
