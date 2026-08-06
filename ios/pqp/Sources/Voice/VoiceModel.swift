@@ -37,6 +37,9 @@ final class VoiceModel {
     /// The channel we intend to be in, kept across a socket drop so the call
     /// can be rebuilt rather than silently ending.
     private var intendedChannel: Channel?
+    /// Keyed by *user* id, not peer id — a peer id is minted fresh on every
+    /// join, so a peer-keyed level would reset whenever they reconnected.
+    private var volumeByUser: [String: Double] = [:]
 
     private let voice = VoiceClient()
     private var session: SessionStore?
@@ -96,6 +99,15 @@ final class VoiceModel {
         isDeafened = false
     }
 
+    func setVolume(_ volume: Double, for peer: VoicePeerState) {
+        volumeByUser[peer.userId] = volume
+        Task { await voice.setVolume(volume, for: peer.peerId) }
+    }
+
+    func volume(for peer: VoicePeerState) -> Double {
+        volumeByUser[peer.userId] ?? 1
+    }
+
     private func requestMicrophone() async -> Bool {
         switch AVAudioApplication.shared.recordPermission {
         case .granted: return true
@@ -151,7 +163,13 @@ final class VoiceModel {
             }
 
         case .voicePeerJoined(let participant):
-            Task { await voice.connect(to: participant) }
+            Task {
+                await voice.connect(to: participant)
+                // Re-apply a remembered level for this person straight away.
+                if let volume = volumeByUser[participant.userId] {
+                    await voice.setVolume(volume, for: participant.peerId)
+                }
+            }
 
         case .voicePeerLeft(let peerId):
             Task { await voice.remove(peerId: peerId) }

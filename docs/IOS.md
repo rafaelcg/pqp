@@ -244,9 +244,14 @@ Also done: link-embed cards, emoji and GIF pickers, notification preferences,
 blocking, profile editing, server settings (rename, retention, SSO domain, audit
 log, delete), webhook management, and speaker/earpiece routing in voice.
 
-Still only on web: channel categories and reordering, the private-channel member
-picker, group DMs, data export, ownership transfer, screen share, and per-peer
-volume.
+Also done: channel categories with move-between, the private-channel member
+picker, group DMs, data export (via the share sheet), ownership transfer, and
+per-peer volume.
+
+Still only on web: **screen share** (needs a second video track through the
+existing mesh) and drag-to-reorder within a category (channels can be moved
+between categories, but not dragged into a position). Neither client has push
+notifications.
 
 ## Not built yet
 

@@ -9,6 +9,7 @@ struct VoicePeerState: Identifiable, Hashable, Sendable {
     var userId: String
     var connection: String
     var isSpeaking: Bool = false
+    var volume: Double = 1
 
     var id: String { peerId }
 }
@@ -42,6 +43,7 @@ actor VoiceClient {
     /// turn it off short of tearing the connection down.
     private var remoteTracks: [String: RTCAudioTrack] = [:]
     private var isDeafened = false
+    private var volumes: [String: Double] = [:]
     private var statsTimer: Task<Void, Never>?
     private var speaking: Set<String> = []
     private var iceServers: [RTCIceServer] = []
@@ -147,7 +149,20 @@ actor VoiceClient {
     fileprivate func addRemoteTrack(_ box: UncheckedBox<RTCAudioTrack>, for peerId: String) {
         let track = box.value
         track.isEnabled = !isDeafened
+        // Re-apply any volume already chosen for this person: on a reconnect
+        // the track is new but the preference is not.
+        if let volume = volumes[peerId] { track.source.volume = volume }
         remoteTracks[peerId] = track
+    }
+
+    /// Per-person playback level, 0…2 where 1 is unchanged.
+    ///
+    /// Keyed by peer id here, but the *caller* keys its own memory by user id —
+    /// the server mints a fresh peer id on every join, so a peer-keyed
+    /// preference would reset whenever that person reconnected.
+    func setVolume(_ volume: Double, for peerId: String) {
+        volumes[peerId] = volume
+        remoteTracks[peerId]?.source.volume = volume
     }
 
     /// Polls each connection's audio level.
@@ -383,7 +398,8 @@ actor VoiceClient {
                 displayName: peerNames[peerId] ?? "Someone",
                 userId: peerUserIds[peerId] ?? "",
                 connection: peerConnectionState[peerId] ?? "connecting",
-                isSpeaking: speaking.contains(peerId)
+                isSpeaking: speaking.contains(peerId),
+                volume: volumes[peerId] ?? 1
             )
         }
         .sorted { $0.displayName < $1.displayName }

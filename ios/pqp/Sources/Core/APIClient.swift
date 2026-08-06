@@ -403,6 +403,37 @@ extension APIClient {
         return server
     }
 
+    /// Raw bytes, not JSON-decoded: this is a file the user is about to save,
+    /// not data the app reads.
+    func exportServer(id: String) async throws -> Data {
+        var request = URLRequest(
+            url: backend.apiBaseURL.appendingPathComponent("/api/servers/\(id)/export")
+        )
+        if let token = await tokenProvider.currentToken() {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw APIError.server(
+                status: (response as? HTTPURLResponse)?.statusCode ?? 0,
+                message: "Export failed"
+            )
+        }
+        return data
+    }
+
+    func transferOwnership(serverId: String, to userId: String) async throws -> Server {
+        struct Body: Encodable { let ownerId: String }
+        struct Response: Decodable { let server: Server? }
+        let response: Response = try await patch(
+            "/api/servers/\(serverId)", body: Body(ownerId: userId)
+        )
+        guard let server = response.server else {
+            throw APIError.server(status: 200, message: "Server did not return the update")
+        }
+        return server
+    }
+
     func moveChannel(id: String, parentId: String?, index: Int) async throws {
         struct Body: Encodable { let parentId: String?; let index: Int }
         let _: EmptyResponse = try await patch(

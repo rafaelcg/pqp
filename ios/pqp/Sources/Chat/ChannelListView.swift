@@ -25,10 +25,25 @@ struct ChannelListView: View {
     @State private var confirmingLeave = false
     @State private var showingSettings = false
     @State private var webhooksFor: Channel?
+    @State private var memberPickerFor: Channel?
     @State private var current: Server
 
-    private var textChannels: [Channel] { channels.filter(\.isText) }
-    private var voiceChannels: [Channel] { channels.filter(\.isVoice) }
+    private var categories: [Channel] {
+        channels.filter(\.isCategory).sorted { $0.position < $1.position }
+    }
+    /// Channels with no category, which the sidebar shows above the grouped
+    /// ones — matching the web client's layout.
+    private var looseText: [Channel] { channels.filter { $0.isText && $0.parentId == nil } }
+    private var looseVoice: [Channel] { channels.filter { $0.isVoice && $0.parentId == nil } }
+
+    private func children(of category: Channel) -> [Channel] {
+        channels
+            .filter { $0.parentId == category.id && !$0.isCategory }
+            .sorted { $0.position < $1.position }
+    }
+
+    private var textChannels: [Channel] { looseText }
+    private var voiceChannels: [Channel] { looseVoice }
 
     var body: some View {
         ZStack {
@@ -59,6 +74,30 @@ struct ChannelListView: View {
                                 }
                                 .buttonStyle(.plain)
                                 .contextMenu { channelActions(for: channel) }
+                            }
+                        }
+
+                        ForEach(categories) { category in
+                            SectionLabel(text: category.name)
+                                .padding(.horizontal, 4)
+                                .padding(.top, 12)
+                                .contextMenu { channelActions(for: category) }
+                            ForEach(children(of: category)) { channel in
+                                if channel.isVoice {
+                                    NavigationLink { VoiceView(channel: channel) } label: {
+                                        ChannelRow(channel: channel, unread: nil)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .contextMenu { channelActions(for: channel) }
+                                } else {
+                                    NavigationLink {
+                                        ChatView(channelId: channel.id, title: "#\(channel.name)")
+                                    } label: {
+                                        ChannelRow(channel: channel, unread: unread[channel.id])
+                                    }
+                                    .buttonStyle(.plain)
+                                    .contextMenu { channelActions(for: channel) }
+                                }
                             }
                         }
 
@@ -131,11 +170,15 @@ struct ChannelListView: View {
             )
         }
         .sheet(item: $webhooksFor) { channel in WebhooksView(channel: channel) }
+        .sheet(item: $memberPickerFor) { channel in
+            ChannelMembersView(channel: channel, server: current)
+        }
         .alert("New channel", isPresented: $showingNewChannel) {
             TextField("Channel name", text: $newChannelName)
             Button("Cancel", role: .cancel) { newChannelName = "" }
-            Button("Create text") { Task { await createChannel(voice: false) } }
-            Button("Create voice") { Task { await createChannel(voice: true) } }
+            Button("Create text") { Task { await createChannel(type: "text") } }
+            Button("Create voice") { Task { await createChannel(type: "voice") } }
+            Button("Create category") { Task { await createChannel(type: "category") } }
         }
         .alert("Rename channel", isPresented: Binding(
             get: { renaming != nil },
@@ -161,15 +204,30 @@ struct ChannelListView: View {
 
     private var isManager: Bool { server.role == "owner" || server.role == "admin" }
 
-    private func createChannel(voice: Bool) async {
-        let name = newChannelName.trimmingCharacters(in: .whitespacesAndNewlines)
+    private func createChannel(type: String) async {
+        // The server only accepts letters, numbers, - and _; spaces are the
+        // obvious thing a person types, so they become hyphens rather than a
+        // validation error.
+        let name = newChannelName
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: " ", with: "-")
         newChannelName = ""
         guard !name.isEmpty else { return }
         do {
             let channel = try await session.api.createChannel(
-                serverId: server.id, name: name, type: voice ? "voice" : "text", isPrivate: false
+                serverId: server.id, name: name, type: type, isPrivate: false
             )
             channels.append(channel)
+        } catch {
+            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    /// Moves a channel into a category, or back out to the top level.
+    private func move(_ channel: Channel, to parentId: String?) async {
+        do {
+            try await session.api.moveChannel(id: channel.id, parentId: parentId, index: 0)
+            await load()
         } catch {
             self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
         }
@@ -207,6 +265,23 @@ struct ChannelListView: View {
             if channel.isText {
                 Button { webhooksFor = channel } label: {
                     Label("Webhooks", systemImage: "link")
+                }
+            }
+            if channel.isPrivate {
+                Button { memberPickerFor = channel } label: {
+                    Label("Who can see this", systemImage: "person.2.badge.key")
+                }
+            }
+            if !channel.isCategory && !categories.isEmpty {
+                Menu {
+                    if channel.parentId != nil {
+                        Button("Top level") { Task { await move(channel, to: nil) } }
+                    }
+                    ForEach(categories.filter { $0.id != channel.parentId }) { category in
+                        Button(category.name) { Task { await move(channel, to: category.id) } }
+                    }
+                } label: {
+                    Label("Move to…", systemImage: "folder")
                 }
             }
             Button(role: .destructive) {

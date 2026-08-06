@@ -146,6 +146,11 @@ struct ServerSettingsView: View {
     @State private var error: String?
     @State private var confirmingDelete = false
     @State private var deleteConfirmText = ""
+    @State private var exporting = false
+    @State private var exportSummary: String?
+    @State private var transferCandidates: [ServerMember] = []
+    @State private var transferTo = ""
+    @State private var shareURL: URL?
 
     private var isOwner: Bool { server.role == "owner" }
 
@@ -211,6 +216,36 @@ struct ServerSettingsView: View {
                 }
 
                 if isOwner {
+                    Section("Data") {
+                        Button(exporting ? "Exporting…" : "Export server data") {
+                            Task { await export() }
+                        }
+                        .disabled(exporting)
+                        if let exportSummary {
+                            Text(exportSummary)
+                                .font(Typography.caption)
+                                .foregroundStyle(Palette.paperMuted)
+                        }
+                    }
+
+                    Section("Transfer ownership") {
+                        if transferCandidates.isEmpty {
+                            Text("Nobody else is in this server.")
+                                .foregroundStyle(Palette.paperMuted)
+                        } else {
+                            Picker("New owner", selection: $transferTo) {
+                                Text("Choose someone").tag("")
+                                ForEach(transferCandidates) { member in
+                                    Text(member.displayName).tag(member.id)
+                                }
+                            }
+                            Button("Transfer", role: .destructive) {
+                                Task { await transfer() }
+                            }
+                            .disabled(transferTo.isEmpty)
+                        }
+                    }
+
                     Section {
                         Button("Delete server", role: .destructive) { confirmingDelete = true }
                     } footer: {
@@ -226,6 +261,12 @@ struct ServerSettingsView: View {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Done") { dismiss() }.tint(Palette.paperMuted)
                 }
+            }
+            .sheet(item: Binding(
+                get: { shareURL.map { ShareItem(url: $0) } },
+                set: { if $0 == nil { shareURL = nil } }
+            )) { item in
+                ShareSheet(url: item.url)
             }
             .alert("Delete \(server.name)?", isPresented: $confirmingDelete) {
                 // Typed confirmation, matching the web client: a destructive
@@ -244,6 +285,8 @@ struct ServerSettingsView: View {
                 retention = server.messageRetentionDays
                 ssoDomain = server.ssoEmailDomain ?? ""
                 audit = (try? await session.api.auditLog(serverId: server.id)) ?? []
+                transferCandidates = ((try? await session.api.members(serverId: server.id)) ?? [])
+                    .filter { $0.id != session.currentUser?.id }
             }
         }
     }
@@ -273,6 +316,30 @@ struct ServerSettingsView: View {
         do {
             try await session.api.deleteServer(id: server.id)
             onDeleted()
+            dismiss()
+        } catch { self.error = message(error) }
+    }
+
+    /// The export is a JSON download. On a phone there is nowhere useful to
+    /// "download" to, so it is written to a temp file and handed to the share
+    /// sheet — which is how a file leaves an iOS app.
+    private func export() async {
+        exporting = true
+        exportSummary = nil
+        do {
+            let data = try await session.api.exportServer(id: server.id)
+            let url = FileManager.default.temporaryDirectory
+                .appendingPathComponent("\(server.name)-export.json")
+            try data.write(to: url)
+            exportSummary = "Saved \(ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file))"
+            shareURL = url
+        } catch { self.error = message(error) }
+        exporting = false
+    }
+
+    private func transfer() async {
+        do {
+            onChanged(try await session.api.transferOwnership(serverId: server.id, to: transferTo))
             dismiss()
         } catch { self.error = message(error) }
     }
@@ -443,4 +510,22 @@ struct WebhooksView: View {
             self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
         }
     }
+}
+
+
+private struct ShareItem: Identifiable {
+    let url: URL
+    var id: String { url.absoluteString }
+}
+
+/// UIKit's share sheet, which SwiftUI has no direct equivalent for when the
+/// thing being shared is a file on disk.
+private struct ShareSheet: UIViewControllerRepresentable {
+    let url: URL
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: [url], applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
 }

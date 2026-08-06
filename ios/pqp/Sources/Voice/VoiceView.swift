@@ -84,7 +84,11 @@ struct VoiceView: View {
                 )
             }
             ForEach(model.peers) { peer in
-                PeerRow(peer: peer)
+                PeerRow(
+                    peer: peer,
+                    volume: model.volume(for: peer),
+                    onVolume: { model.setVolume($0, for: peer) }
+                )
             }
         }
     }
@@ -178,6 +182,9 @@ private struct SelfRow: View {
 
 private struct PeerRow: View {
     let peer: VoicePeerState
+    var volume: Double = 1
+    var onVolume: (Double) -> Void = { _ in }
+    @State private var expanded = false
 
     private var stateColor: Color {
         switch peer.connection {
@@ -212,6 +219,31 @@ private struct PeerRow: View {
             .animation(Motion.standard, value: peer.connection)
         }
         .padding(12)
+        // The slider is behind a tap rather than always shown: a row per person
+        // with a permanent slider turns a four-person call into a mixing desk.
+        .overlay(alignment: .bottom) {
+            if expanded {
+                HStack(spacing: 8) {
+                    Image(systemName: volume == 0 ? "speaker.slash.fill" : "speaker.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(volume == 0 ? Palette.danger : Palette.paperMuted)
+                    Slider(
+                        value: Binding(get: { volume }, set: onVolume),
+                        in: 0...2
+                    )
+                    .tint(Palette.signal)
+                    Text("\(Int(volume * 100))%")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(Palette.paperMuted)
+                        .frame(width: 38, alignment: .trailing)
+                }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 8)
+                .offset(y: 26)
+            }
+        }
+        .padding(.bottom, expanded ? 34 : 0)
         .pqpSurface()
+        .onTapGesture { withAnimation(Motion.standard) { expanded.toggle() } }
     }
 }

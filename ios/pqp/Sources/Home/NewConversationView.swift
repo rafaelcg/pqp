@@ -18,6 +18,9 @@ struct NewConversationView: View {
     @State private var opening: String?
     @State private var error: String?
     @State private var searchTask: Task<Void, Never>?
+    /// Picking more than one person opens a group conversation. The server caps
+    /// it at nine, so the button says so rather than failing at ten.
+    @State private var selected: [PublicUser] = []
 
     private var looksLikeTag: Bool {
         query.contains("#") && query.split(separator: "#").count == 2
@@ -56,14 +59,25 @@ struct NewConversationView: View {
                         LazyVStack(spacing: 8) {
                             ForEach(results) { user in
                                 Button {
-                                    Task { await open(with: user) }
+                                    toggle(user)
                                 } label: {
-                                    UserRow(user: user, isBusy: opening == user.id)
+                                    UserRow(
+                                        user: user,
+                                        isBusy: opening == user.id,
+                                        isSelected: selected.contains { $0.id == user.id }
+                                    )
                                 }
                                 .buttonStyle(.plain)
                             }
                         }
                         .padding(.horizontal, Metrics.hPadding)
+                    }
+
+                    if !selected.isEmpty {
+                        Button(startLabel) { Task { await openSelected() } }
+                            .buttonStyle(PrimaryButtonStyle())
+                            .padding(.horizontal, Metrics.hPadding)
+                            .padding(.bottom, 10)
                     }
 
                     Spacer(minLength: 0)
@@ -139,11 +153,30 @@ struct NewConversationView: View {
         searching = false
     }
 
-    private func open(with user: PublicUser) async {
-        opening = user.id
+    private var startLabel: String {
+        selected.count == 1
+            ? "Message \(selected[0].displayName)"
+            : "Start group with \(selected.count)"
+    }
+
+    private func toggle(_ user: PublicUser) {
+        if let index = selected.firstIndex(where: { $0.id == user.id }) {
+            selected.remove(at: index)
+        } else if selected.count < 9 {
+            selected.append(user)
+        } else {
+            error = "A group conversation tops out at nine people."
+        }
+    }
+
+    private func openSelected() async {
+        guard !selected.isEmpty else { return }
+        opening = selected.first?.id
         defer { opening = nil }
         do {
-            let conversation = try await session.api.openConversation(userIds: [user.id])
+            let conversation = try await session.api.openConversation(
+                userIds: selected.map(\.id)
+            )
             onOpened(conversation)
             dismiss()
         } catch {
@@ -157,6 +190,7 @@ struct NewConversationView: View {
 private struct UserRow: View {
     let user: PublicUser
     let isBusy: Bool
+    var isSelected: Bool = false
 
     var body: some View {
         HStack(spacing: 12) {
@@ -174,9 +208,16 @@ private struct UserRow: View {
             Spacer()
             if isBusy {
                 ProgressView().tint(Palette.signal)
+            } else if isSelected {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(Palette.signal)
             }
         }
         .padding(12)
         .pqpSurface()
+        .overlay(
+            RoundedRectangle(cornerRadius: Metrics.cornerRadius, style: .continuous)
+                .strokeBorder(isSelected ? Palette.signal : .clear, lineWidth: 1.5)
+        )
     }
 }
