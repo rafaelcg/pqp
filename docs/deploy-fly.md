@@ -190,6 +190,59 @@ fly mpg connect <CLUSTER_ID>
 
 ---
 
+## 3b. Fix the connection string `attach` wrote — VERIFIED 2026-08-07
+
+Everything in this section was run for real against cluster `82ylg01v4n30zx19`;
+it corrects three things this runbook originally got wrong.
+
+**`fly mpg attach` writes the POOLER URL by default**, with no flag to change it:
+
+```
+postgresql://fly-user:...@pgbouncer.<CLUSTER>.flympg.net/fly-db
+```
+
+That is the transaction-mode pooler. PgBouncer lists `LISTEN` as `Never` under
+transaction pooling while `NOTIFY` keeps working — so the cluster bus would
+publish fine and receive nothing, with no error anywhere. Harmless while
+`CLUSTER_BUS=off`; a silent, delayed landmine the day it is turned on.
+
+**Use the direct hostname, not the IP.** `fly mpg status` prints a `Direct IP`
+(a 6PN address), and putting it in `DATABASE_URL` **does not work**:
+
+```
+Failed to start server: Error: getaddrinfo ENOTFOUND [fdaa:45:af28:0:1::3]
+  hostname: '[fdaa:45:af28:0:1::3]'
+```
+
+`node-postgres` passes the bracketed literal straight to `getaddrinfo` as a
+hostname. The machine restart-looped ten times and gave up. The right value is a
+hostname that only resolves *inside* Fly's network:
+
+```bash
+fly secrets set --app pqp-api \
+  'DATABASE_URL=postgresql://fly-user:<PW>@direct.<CLUSTER>.flympg.net:5432/fly-db'
+```
+
+Confirmed from inside a machine (`fly ssh console -a pqp-api`):
+
+| Name | Resolves to |
+|---|---|
+| `direct.<CLUSTER>.flympg.net` | the direct Postgres — **use this** |
+| `pgbouncer.<CLUSTER>.flympg.net` | the pooler — do not use |
+| `<CLUSTER>.flympg.net` | NXDOMAIN |
+
+**`LISTEN`/`NOTIFY` on the direct endpoint: verified working**, not inferred —
+`LISTEN pqp_cluster; NOTIFY pqp_cluster, '...';` round-tripped through psql.
+
+**`pgcrypto`: no admin step needed.** `fly-user` (`schema_admin`) can
+`CREATE EXTENSION` itself, so `schema.sql` line 1 succeeds on first boot. Doing
+it ahead of time is harmless belt-and-braces, not a prerequisite. (The extension
+is vestigial anyway — `gen_random_uuid()` has been core since Postgres 13 — but
+the line still executes every boot, so it has to be permitted to run.)
+
+**No SSL setting required.** The direct endpoint is on the private 6PN network;
+`DATABASE_SSL` is left unset and the pool connects fine.
+
 ## 4. Migrate the data from Railway
 
 ### 4a. Which order — restore first, then boot. Always.
@@ -200,6 +253,22 @@ So:
 
 - **Restore the dump into an empty database, then boot the app.** The dump carries the full schema and the data; `initDb()` afterwards sees everything already present and every statement becomes a no-op. This is the correct order.
 - **Do not boot first.** `initDb()` would create empty tables, and a `pg_restore` of a normal dump then fails on `CREATE TABLE` for every object — `--data-only` sidesteps that but reintroduces constraint-ordering problems that the plain restore does not have. There is no upside.
+
+### 4a-bis. First, check whether you need this step at all
+
+Count the source database before planning a migration:
+
+```bash
+psql "$RAILWAY_DATABASE_URL" -tAc \
+  "SELECT (SELECT count(*) FROM users), (SELECT count(*) FROM messages);"
+```
+
+On 2026-08-07 that was **3 users and 26 messages** — the team's own testing. At
+that size the dump/restore is pure risk for no benefit: `initDb()` builds the
+schema on first boot (verified: 22 tables), so skipping it removes the
+`pg_dump` version mismatch, the restore ordering and the extension permission
+from the critical path entirely. Migrate only if the row counts represent
+something you would be sad to lose.
 
 ### 4b. Should you attempt zero downtime? No — take a short window.
 
