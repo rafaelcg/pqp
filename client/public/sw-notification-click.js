@@ -1,14 +1,44 @@
 /*
  * Imported into the generated service worker (see `workbox.importScripts` in
- * vite.config.ts).
+ * vite.config.ts). Two jobs, one file:
  *
- * Exists for one reason: Android Chrome refuses `new Notification()` and only
- * raises notifications through a service worker, so `deliverViaServiceWorker`
- * in src/lib/notifications.ts calls `showNotification` — and a notification
- * raised that way delivers its click here, not to the page. Without this the
- * notification appears and tapping it does nothing, which on a phone is most
- * of the feature missing.
+ * 1. `push` — Web Push arriving with no page open anywhere. The payload is
+ *    built by the server (server/src/services/push.ts): a title, a body, an
+ *    app path, and a per-channel tag. It never contains message text. A
+ *    notification is shown for EVERY push, even a malformed one — the
+ *    subscription was created `userVisibleOnly`, and iOS in particular
+ *    penalises a worker that swallows a push silently by revoking the
+ *    subscription.
+ *
+ * 2. `notificationclick` — originally here because Android Chrome refuses
+ *    `new Notification()` and only raises notifications through a service
+ *    worker, so `deliverViaServiceWorker` in src/lib/notifications.ts calls
+ *    `showNotification` and the click lands here, not in the page. Push
+ *    notifications ride the exact same handler: both put the target route in
+ *    `data.path`.
  */
+
+self.addEventListener("push", (event) => {
+  let data = {};
+  try {
+    data = event.data ? event.data.json() : {};
+  } catch {
+    // Not JSON — fall through to the generic notification below.
+  }
+  const title = typeof data.title === "string" ? data.title : "pqp";
+  const options = {
+    body: typeof data.body === "string" ? data.body : "",
+    icon: "/icons/icon-192.png",
+    badge: "/icons/icon-192.png",
+    data: { path: typeof data.path === "string" ? data.path : "/app" },
+  };
+  if (typeof data.tag === "string") {
+    // One live notification per channel — a later push replaces the earlier
+    // one instead of stacking, matching the in-app burst behaviour.
+    options.tag = data.tag;
+  }
+  event.waitUntil(self.registration.showNotification(title, options));
+});
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
