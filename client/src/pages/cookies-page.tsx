@@ -126,12 +126,18 @@ export function CookiesPage() {
 
       <h2>What we do not use</h2>
       <p>
-        No analytics or product-analytics tool, no advertising or retargeting
-        pixel, no session recording, no error-reporting SDK, no device
-        fingerprinting, and no push-notification service. Desktop notifications
-        are raised locally by your own browser and are not routed through anyone
-        else. If we ever add analytics, we will update this notice and ask for
-        consent where consent is required.
+        No advertising or retargeting pixel, no session recording, no
+        error-reporting SDK, no device fingerprinting, and no push-notification
+        service. Desktop notifications are raised locally by your own browser
+        and are not routed through anyone else.
+      </p>
+      <p>
+        We do use <strong>Cloudflare Web Analytics</strong> to count visits and
+        measure page speed. It is listed here rather than above because it sets
+        no cookie and stores nothing on your device at all — which is also why
+        the statement above, that we set no analytics cookies, is still true. It
+        uses no persistent identifier, so it cannot recognise you across visits
+        or across sites. The privacy notice describes exactly what it records.
       </p>
 
       <h2>Managing this</h2>

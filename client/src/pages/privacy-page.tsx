@@ -143,13 +143,36 @@ export function PrivacyPage() {
         enforce rate limits, and is not written to our database or our logs.
       </p>
 
+      <h3>Site analytics</h3>
+      <p>
+        The marketing pages and the app use <strong>Cloudflare Web
+        Analytics</strong> so we can tell whether anyone is arriving and whether
+        the site is fast enough to use. It is cookieless: it stores nothing on
+        your device and uses no persistent identifier, so it cannot recognise
+        you on a later visit or follow you to another site.
+      </p>
+      <p>
+        What it records is the page address, the page that referred you, your
+        country, your browser and device type, and how quickly pages loaded.
+        That is aggregate traffic measurement, not a profile — there is no way
+        for us to look up an individual person in it, and it is never joined to
+        your account.
+      </p>
+      <p>
+        The script is injected by Cloudflare at the edge rather than bundled
+        into the app, so you will not find it in our source code. Blocking it
+        with a browser extension breaks nothing.
+      </p>
+
       <h2>What we do not do</h2>
       <ul>
         <li>
-          <strong>No analytics or tracking.</strong> There is no analytics SDK,
-          no product-analytics tool, no advertising pixel, no session recorder,
-          and no error-reporting service in the app or the marketing site. We do
-          not measure you.
+          <strong>No tracking, and no profile of you.</strong> There is no
+          advertising pixel, no session recorder, and no error-reporting
+          service. Nothing follows you between sites, and nothing we hold builds
+          a picture of you as a person. We do use one privacy-preserving
+          analytics tool, described under &quot;What we collect&quot; above — it
+          counts visits, it does not identify visitors.
         </li>
         <li>
           <strong>No advertising and no selling data.</strong> We do not build
