@@ -45,6 +45,11 @@ targets:
     platform: iOS
     sources:
       - path: pqp/Sources
+      # XcodeGen has no `resources:` key — a path listed here is classified by
+      # type, and .xcassets/.xcstrings become bundle resources. The old
+      # `resources:` block below was silently ignored, which shipped an app
+      # with no icon and none of its localizations.
+      - path: pqp/Resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: gg.pqp.app
@@ -67,13 +72,10 @@ targets:
         Release:
           DEVELOPMENT_TEAM: WXBFUF9WMA
           CODE_SIGNING_REQUIRED: "YES"
-          CODE_SIGN_IDENTITY: "Apple Distribution"
           CODE_SIGN_STYLE: Automatic
           # TestFlight builds talk to production, so they need the live key —
           # it is publishable by design, same one the web bundle ships.
           CLERK_PUBLISHABLE_KEY: pk_live_Y2xlcmsucHFwLmdnJA
-    resources:
-      - path: pqp/Resources
     dependencies:
       # ClerkKit is the client; ClerkKitUI supplies the prebuilt auth flow.
       # The auth UI is used as-shipped rather than rebuilt: it covers email
