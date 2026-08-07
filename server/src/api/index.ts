@@ -59,10 +59,12 @@ import { invalidateUserCache, resolveAuthUser } from "../auth/clerk.js";
 import type { MemberRole } from "../db.js";
 import {
   clampLimit,
+  corsHeaders,
   handleCors,
   HttpError,
   isUuid,
   readJsonBody,
+  SECURITY_HEADERS,
   sendError,
   sendJson,
 } from "../lib/http.js";
@@ -298,8 +300,12 @@ function created(body: unknown): Created {
  * Wrap a handler result to send raw bytes with the given content type
  * instead of the usual JSON envelope every other route answers with — a
  * file download rather than API data. Goes through the same router, the
- * same auth, and the same rate limiting as any other route; only the final
- * `sendJson` is skipped.
+ * same auth, and the same rate limiting as any other route; the client
+ * fetches it with `fetch()` (to attach the Bearer token) and turns the
+ * response into a Blob, so it is a cross-origin request in prod just like
+ * any other `/api/` call and needs the same CORS + security headers —
+ * only the final `sendJson` call is skipped, in favor of a raw
+ * `res.writeHead`/`res.end` that sets those headers itself.
  */
 class RawResponse {
   constructor(
@@ -1955,6 +1961,8 @@ export async function handleApi(
         ...(result.filename
           ? { "content-disposition": `attachment; filename="${result.filename}"` }
           : {}),
+        ...SECURITY_HEADERS,
+        ...corsHeaders(req),
       });
       res.end(result.body);
       return;

@@ -8,7 +8,13 @@ import { WebSocketServer } from "ws";
 import { handleApi } from "./api/index.js";
 import { assertAuthConfig, isDevAuthBypassEnabled } from "./auth/clerk.js";
 import { closePool, getPool, initDb } from "./db.js";
-import { corsHeaders, handleCors, SECURITY_HEADERS, sendError } from "./lib/http.js";
+import {
+  assertCorsConfig,
+  corsHeaders,
+  handleCors,
+  SECURITY_HEADERS,
+  sendError,
+} from "./lib/http.js";
 import { logEvent } from "./lib/log.js";
 import {
   clientAddress,
@@ -137,6 +143,7 @@ const httpServer = createServer((req, res) => {
         res.writeHead(200, {
           "Content-Type": "application/json",
           "Cache-Control": "no-store",
+          ...SECURITY_HEADERS,
         });
         // The deployed commit, so "is the API actually running this code?" has
         // an answer from outside. It did not, and a stalled deploy went
@@ -152,6 +159,7 @@ const httpServer = createServer((req, res) => {
         res.writeHead(503, {
           "Content-Type": "application/json",
           "Cache-Control": "no-store",
+          ...SECURITY_HEADERS,
         });
         res.end(JSON.stringify({ ok: false, error: "database unavailable" }));
       }
@@ -175,6 +183,7 @@ const httpServer = createServer((req, res) => {
           ...corsHeaders(req),
           "Content-Type": "application/json",
           "Cache-Control": "no-store",
+          ...SECURITY_HEADERS,
         });
         res.end(JSON.stringify({ error: "Too many requests" }));
         return;
@@ -188,6 +197,7 @@ const httpServer = createServer((req, res) => {
           // incident, and that is exactly when the origin is least able to
           // absorb it.
           "Cache-Control": "public, max-age=15",
+          ...SECURITY_HEADERS,
         });
         res.end(JSON.stringify(summary));
       } catch {
@@ -197,6 +207,7 @@ const httpServer = createServer((req, res) => {
           ...corsHeaders(req),
           "Content-Type": "application/json",
           "Cache-Control": "no-store",
+          ...SECURITY_HEADERS,
         });
         res.end(JSON.stringify({ error: "status unavailable" }));
       }
@@ -351,6 +362,7 @@ retentionSweep.unref?.();
 
 async function main() {
   assertAuthConfig();
+  assertCorsConfig();
   if (isDevAuthBypassEnabled()) {
     console.warn(
       "[auth] DEV_AUTH_BYPASS is ON — anyone with the token 'dev-local-token' " +

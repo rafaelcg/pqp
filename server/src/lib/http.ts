@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { logEvent } from "./log.js";
 
 /**
  * Cap request bodies so a client can't exhaust memory by streaming an
@@ -53,6 +54,28 @@ export function resolveCorsOrigin(
   return configured.includes(requestOrigin.replace(/\/$/, ""))
     ? requestOrigin
     : null;
+}
+
+/**
+ * `resolveCorsOrigin` intentionally fails *open* to `*` when
+ * CORS_ALLOWED_ORIGINS is unset, so local dev and self-hosting work with zero
+ * config. That default is wrong for a production deploy, but flipping it to
+ * fail-closed here could take a live site down the moment this ships, before
+ * the operator has had a chance to set the env var. So: don't change the
+ * behavior, just make it impossible to miss. Call once from the boot path
+ * (alongside `assertAuthConfig`), not per-request — this must be loud and
+ * singular, not noise the operator learns to ignore.
+ */
+export function assertCorsConfig(): void {
+  if (process.env.NODE_ENV !== "production") {
+    return;
+  }
+  if (!allowedOrigins()) {
+    logEvent("cors.wildcard_in_production", {
+      warning:
+        "CORS_ALLOWED_ORIGINS is unset — the API answers every origin with '*'. Set CORS_ALLOWED_ORIGINS to lock this down.",
+    });
+  }
 }
 
 export function corsHeaders(req: IncomingMessage): Record<string, string> {
