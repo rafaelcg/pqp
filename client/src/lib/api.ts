@@ -28,6 +28,7 @@ import type {
   User,
   UserPreferences,
   UserSearchResponse,
+  UserStatus,
   VoiceBackendType,
   VoiceSessionInfo,
   Webhook,
@@ -554,6 +555,17 @@ export interface ServerMember {
   tag: string | null;
   role: "owner" | "admin" | "member";
   avatarUrl: string | null;
+  /**
+   * Resolved live by the server from its connection registry — never stored, and
+   * never `invisible`: somebody hidden resolves to `offline` here exactly like
+   * somebody who is genuinely away.
+   *
+   * Optional so a client built against this shape still parses a response from
+   * an API that predates status, and read as `offline` when absent rather than
+   * as online, so the older-server case degrades to "nobody is shown as here"
+   * instead of "everybody is".
+   */
+  status?: UserStatus;
 }
 
 export const fetchMembers = (serverId: string) =>

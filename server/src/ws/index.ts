@@ -10,6 +10,10 @@ import {
   setAuthenticatedSocket,
 } from "./sockets.js";
 import {
+  registerStatusSocket,
+  unregisterStatusSocket,
+} from "./status.js";
+import {
   handleVoiceMessage,
   isSocketInVoice,
   removeVoicePeerBySocket,
@@ -26,6 +30,12 @@ export {
   startClusterPresenceRefresh,
 } from "./chat.js";
 export {
+  applyManualStatus,
+  resolveStatus,
+  resolveStatuses,
+  startClusterStatusRefresh,
+} from "./status.js";
+export {
   evictVoiceChannel,
   evictVoiceUser,
   evictVoiceUsersExcept,
@@ -40,6 +50,10 @@ const CHAT_MESSAGE_TYPES = new Set([
   "message-create",
   "reaction-toggle",
   "typing",
+  // Not a chat action, but it is validated by `chatClientMessageSchema` and
+  // handled next to channel presence, which is the other thing in that file that
+  // describes where a connection is rather than what it said.
+  "set-idle",
 ]);
 
 const VOICE_MESSAGE_TYPES = new Set([
@@ -156,6 +170,15 @@ export function handleWsConnection(socket: WebSocket, remoteKey: string) {
       clearTimeout(authTimeout);
       setAuthenticatedSocket(socket, resolved.user);
       logEvent("ws.auth", { connId, userId: resolved.user.id });
+      // Deliberately not awaited: it reads one row to find out whether this
+      // account asked to be invisible or do-not-disturb, and `ready` must not
+      // wait on a preference lookup. Until it resolves the socket is absent from
+      // the status registry, which reads as offline — the safe direction, and
+      // the reason `registerStatusSocket` resolves the manual status *before* it
+      // makes the connection visible rather than after.
+      void registerStatusSocket(socket, resolved.user.id).catch((error) => {
+        console.error("[ws] status registration failed:", error);
+      });
       socket.send(JSON.stringify({ type: "ready" }));
       await sendAllVoiceRosters(socket, resolved.user);
       return;
@@ -212,6 +235,11 @@ export function handleWsConnection(socket: WebSocket, remoteKey: string) {
       wasInVoice: isSocketInVoice(socket),
     });
     removeVoicePeerBySocket(socket);
+    // Before `deleteAuthenticatedSocket`, though it does not depend on it: the
+    // status registry keeps its own socket→user index precisely so that closing
+    // order can never leave a user stuck online because the identity was
+    // forgotten first.
+    unregisterStatusSocket(socket);
     deleteAuthenticatedSocket(socket);
   });
 }

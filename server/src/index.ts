@@ -47,6 +47,7 @@ import {
   getSocketUser,
   handleWsConnection,
   startClusterPresenceRefresh,
+  startClusterStatusRefresh,
 } from "./ws/index.js";
 
 const PORT = Number(process.env.PORT ?? 3001);
@@ -474,7 +475,17 @@ function startClusterBus(): (() => void) | null {
   }
   setBusTransport(createPostgresBusTransport());
   logEvent("bus.enabled", { transport: "postgres", instance: INSTANCE_ID });
-  return startClusterPresenceRefresh();
+  // Two independent re-announce loops, because they answer two different
+  // questions: channel presence is "who is looking at channel X", user status is
+  // "is this person around at all". Both need the same guarantee — an instance
+  // that is SIGKILLed must age out rather than leave ghosts — and both implement
+  // it the same way, but neither can be derived from the other.
+  const stopPresence = startClusterPresenceRefresh();
+  const stopStatus = startClusterStatusRefresh();
+  return () => {
+    stopPresence();
+    stopStatus();
+  };
 }
 
 let stopPresenceRefresh: (() => void) | null = null;

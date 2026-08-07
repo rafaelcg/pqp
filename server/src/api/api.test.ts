@@ -1362,6 +1362,23 @@ describeDb("API authorization", () => {
         (await call(owner, "DELETE", `/api/servers/${serverId}`)).status,
       ).toBe(403);
     });
+
+    it("carries a status for every member, defaulting to offline", async () => {
+      // Status is resolved from the live connection registry, and this suite
+      // opens no WebSockets — so everybody is genuinely offline, which is the
+      // assertion that matters. `offline` must be what an account with no socket
+      // reads as, without a row anywhere saying so.
+      const { serverId } = await makeServer();
+      const res = await call<{
+        members: Array<{ id: string; status?: string }>;
+      }>(owner, "GET", `/api/servers/${serverId}/members`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.members.length).toBeGreaterThan(0);
+      for (const member of res.body.members) {
+        expect(member.status).toBe("offline");
+      }
+    });
   });
 
   describe("preferences", () => {
@@ -1449,6 +1466,30 @@ describeDb("API authorization", () => {
 
       const me = await call<PrefsBody>(owner, "GET", "/api/me");
       expect(me.body.preferences).toEqual({ muteOnJoin: true });
+    });
+
+    it("stores a manual status, and refuses one nobody may set", async () => {
+      // `user_preferences` is the home for the manual half of user status, which
+      // is why the whole feature ships without a migration. This proves the
+      // column really takes it and hands it back on the bootstrap request.
+      const saved = await call<PrefsBody>(owner, "PATCH", "/api/me/preferences", {
+        status: "invisible",
+      });
+      expect(saved.status).toBe(200);
+      expect(saved.body.preferences).toEqual({ status: "invisible" });
+
+      const me = await call<PrefsBody>(owner, "GET", "/api/me");
+      expect(me.body.preferences).toEqual({ status: "invisible" });
+
+      // The derived states are not settable, and that is enforced by the schema
+      // rather than by the UI: `idle` is a measurement and `offline` is the
+      // absence of a connection, so neither is anybody's to assert.
+      for (const status of ["idle", "offline", "away"]) {
+        const res = await call(owner, "PATCH", "/api/me/preferences", { status });
+        expect(res.status).toBe(400);
+      }
+      const unchanged = await call<PrefsBody>(owner, "GET", "/api/me");
+      expect(unchanged.body.preferences).toEqual({ status: "invisible" });
     });
 
     it("rejects unauthenticated writes", async () => {

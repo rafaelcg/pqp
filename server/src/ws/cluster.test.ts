@@ -27,6 +27,20 @@ vi.mock("../services/users.js", () => ({
   canAccessChannel: async () => true,
 }));
 
+/**
+ * The only database access the status registry has. Faked so the two-instance
+ * harness stays Postgres-free, and so a test can decide what a given account has
+ * stored before either instance reads it.
+ */
+const storedStatus = new Map<string, string>();
+
+vi.mock("../services/preferences.js", () => ({
+  getPreferences: async (userId: string) => {
+    const status = storedStatus.get(userId);
+    return status ? { status } : {};
+  },
+}));
+
 // The timeout chokepoint queries Postgres, and this suite deliberately runs
 // without one. Enforcement itself is proved end-to-end against a real database
 // in services/sanctions.test.ts; here it only has to be out of the way.
@@ -67,10 +81,12 @@ vi.mock("../services/reactions.js", () => ({
 
 type ChatModule = typeof import("./chat.js");
 type BusModule = typeof import("../lib/bus.js");
+type StatusModule = typeof import("./status.js");
 
 interface Instance {
   chat: ChatModule;
   bus: BusModule;
+  status: StatusModule;
 }
 
 let hub = createMemoryHub();
@@ -85,10 +101,14 @@ async function bootInstance(connected = true): Promise<Instance> {
   vi.resetModules();
   const bus = (await import("../lib/bus.js")) as BusModule;
   const chat = (await import("./chat.js")) as ChatModule;
+  // Imported explicitly rather than reached through chat.js so a test can drive
+  // the registry directly; the module instance is the same either way, which is
+  // the whole point of the shared graph.
+  const status = (await import("./status.js")) as StatusModule;
   if (connected) {
     bus.setBusTransport(bus.createMemoryTransport(hub));
   }
-  return { bus, chat };
+  return { bus, chat, status };
 }
 
 interface Recorder {
@@ -144,6 +164,7 @@ async function join(
 beforeEach(() => {
   hub = createMemoryHub();
   onTheWire = [];
+  storedStatus.clear();
   hub.listeners.add((frame) => onTheWire.push(frame));
 });
 
@@ -322,6 +343,161 @@ describe("chat across two instances", () => {
 });
 
 /**
+ * User status across two instances.
+ *
+ * The failure this suite exists for is the one a single-instance deployment can
+ * never show you: a person's WebSocket lands on replica B while the member list
+ * asking about them is served by replica A. Without the bus every member list
+ * would report half the userbase offline, and — worse — a manual `invisible`
+ * chosen over HTTP on A would never reach the socket on B.
+ */
+describe("status across two instances", () => {
+  it("reports somebody connected on the other instance as online", async () => {
+    const userId = randomUUID();
+    const a = await bootInstance();
+    const b = await bootInstance();
+    const theirTab = recordingSocket();
+
+    await b.status.registerStatusSocket(theirTab.socket, userId);
+
+    // A holds no socket for them at all and still answers correctly.
+    expect(a.status.resolveStatus(userId)).toBe("online");
+    expect(a.status.resolveStatuses([userId]).get(userId)).toBe("online");
+  });
+
+  it("takes them offline when their last socket elsewhere closes", async () => {
+    const userId = randomUUID();
+    const a = await bootInstance();
+    const b = await bootInstance();
+    const theirTab = recordingSocket();
+    await b.status.registerStatusSocket(theirTab.socket, userId);
+    expect(a.status.resolveStatus(userId)).toBe("online");
+
+    b.status.unregisterStatusSocket(theirTab.socket);
+
+    // Immediately, not at the TTL: a disconnect publishes an explicit removal,
+    // and waiting out the expiry would mean a minute of showing somebody who
+    // closed the tab.
+    expect(a.status.resolveStatus(userId)).toBe("offline");
+  });
+
+  it("carries idle across", async () => {
+    const userId = randomUUID();
+    const a = await bootInstance();
+    const b = await bootInstance();
+    const theirTab = recordingSocket();
+    await b.status.registerStatusSocket(theirTab.socket, userId);
+
+    await b.chat.handleChatMessage(
+      { socket: theirTab.socket, user: asUser(userId) },
+      { type: "set-idle", idle: true },
+    );
+
+    expect(a.status.resolveStatus(userId)).toBe("idle");
+  });
+
+  it("delivers a manual status set on one instance to the socket on the other", async () => {
+    // THE FAILURE THIS EXISTS FOR. An HTTP request lands wherever the load
+    // balancer sends it, which has nothing to do with where the person's socket
+    // is. Without the `manual` frame, going invisible from a browser whose
+    // socket lives on B would be accepted, stored, echoed back as saved — and
+    // have no effect at all until the next reconnect.
+    const userId = randomUUID();
+    const a = await bootInstance();
+    const b = await bootInstance();
+    const theirTab = recordingSocket();
+    await b.status.registerStatusSocket(theirTab.socket, userId);
+
+    // The preferences route runs on A, which holds nothing for this user.
+    a.status.applyManualStatus(userId, "invisible");
+
+    expect(b.status.isInvisible(userId)).toBe(true);
+    expect(b.status.resolveStatus(userId)).toBe("offline");
+    // And A, which never had a socket for them, agrees — via B's own update.
+    expect(a.status.resolveStatus(userId)).toBe("offline");
+  });
+
+  it("hides an invisible viewer from a roster built on the other instance", async () => {
+    const channelId = randomUUID();
+    const hidden = randomUUID();
+    const watcher = randomUUID();
+    storedStatus.set(hidden, "invisible");
+    const a = await bootInstance();
+    const b = await bootInstance();
+    const hiddenTab = recordingSocket();
+    const watcherTab = recordingSocket();
+    await b.status.registerStatusSocket(hiddenTab.socket, hidden);
+    await a.status.registerStatusSocket(watcherTab.socket, watcher);
+
+    await b.chat.handleChatMessage(
+      { socket: hiddenTab.socket, user: asUser(hidden) },
+      { type: "join-channel", channelId },
+    );
+    await a.chat.handleChatMessage(
+      { socket: watcherTab.socket, user: asUser(watcher) },
+      { type: "join-channel", channelId },
+    );
+
+    // B filtered them out of the contribution it published, so A never had the
+    // chance to reveal them — the filter is at the source, not at each sink.
+    const roster = lastFrameOfType<{ users: Array<{ id: string }> }>(
+      watcherTab.received,
+      "presence-update",
+    );
+    expect(roster?.users.map((one) => one.id)).toEqual([watcher]);
+  });
+
+  it("ages out an instance that stops announcing", async () => {
+    // The SIGKILL case, and the one failure a status registry must not have.
+    // A crashed instance publishes no removal, so without the TTL its users
+    // would show as online forever on every surviving replica.
+    vi.useFakeTimers();
+    try {
+      const userId = randomUUID();
+      const a = await bootInstance();
+      const b = await bootInstance();
+      const theirTab = recordingSocket();
+      await b.status.registerStatusSocket(theirTab.socket, userId);
+      const stopA = a.status.startClusterStatusRefresh(1_000);
+      expect(a.status.resolveStatus(userId)).toBe("online");
+
+      // B is killed: no clean shutdown, no final frame, it simply stops
+      // speaking. Dropping its transport is exactly that.
+      await b.bus.closeBus();
+
+      // Under the TTL, A still believes what B last told it. That is correct —
+      // a quiet instance is not a dead one.
+      vi.advanceTimersByTime(30_000);
+      expect(a.status.resolveStatus(userId)).toBe("online");
+
+      // Past it, the contribution is gone and so is the user.
+      vi.advanceTimersByTime(40_000);
+      expect(a.status.resolveStatus(userId)).toBe("offline");
+      stopA();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("answers a booting instance so its first member list is not half offline", async () => {
+    const userId = randomUUID();
+    const a = await bootInstance();
+    const theirTab = recordingSocket();
+    await a.status.registerStatusSocket(theirTab.socket, userId);
+
+    // B comes up with an empty registry and knows nothing about anybody.
+    const b = await bootInstance();
+    expect(b.status.resolveStatus(userId)).toBe("offline");
+
+    // Its opening `hello` snapshot is answered by everyone already running, so
+    // it converges at once rather than at the next twenty-second tick.
+    const stopB = b.status.startClusterStatusRefresh(60_000);
+    expect(b.status.resolveStatus(userId)).toBe("online");
+    stopB();
+  });
+});
+
+/**
  * The same crossing, over the transport production would actually use. The
  * memory hub above is synchronous and lossless; this proves the wiring holds
  * when delivery is a real round trip through Postgres — and that an instance
@@ -341,6 +517,7 @@ describeDb("chat over the postgres bus", () => {
     vi.resetModules();
     const bus = (await import("../lib/bus.js")) as BusModule;
     const chat = (await import("./chat.js")) as ChatModule;
+    const status = (await import("./status.js")) as StatusModule;
     const { createPostgresBusTransport } = await import(
       "../lib/bus-postgres.js"
     );
@@ -348,7 +525,7 @@ describeDb("chat over the postgres bus", () => {
     bus.setBusTransport(transport);
     started.push(transport);
     await transport.whenConnected();
-    return { bus, chat };
+    return { bus, chat, status };
   }
 
   afterAll(async () => {
@@ -381,6 +558,36 @@ describeDb("chat over the postgres bus", () => {
     // bus, and never twice on the publisher despite NOTIFY echoing to it.
     expect(framesOfType(remote.received, "message-deleted")).toHaveLength(1);
     expect(framesOfType(local.received, "message-deleted")).toHaveLength(1);
+  });
+
+  it("resolves a status held by the other instance", async () => {
+    // The memory hub above is synchronous and lossless. This is the same
+    // question asked over a real round trip, which is what a member list
+    // actually depends on when the deployment has more than one replica.
+    const userId = randomUUID();
+    const a = await bootOnPostgres();
+    const b = await bootOnPostgres();
+    const theirTab = recordingSocket();
+
+    await b.status.registerStatusSocket(theirTab.socket, userId);
+
+    const deadline = Date.now() + 5_000;
+    while (a.status.resolveStatus(userId) === "offline") {
+      if (Date.now() > deadline) {
+        throw new Error("status never crossed the postgres bus");
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(a.status.resolveStatus(userId)).toBe("online");
+
+    b.status.applyManualStatus(userId, "invisible");
+    while (a.status.resolveStatus(userId) === "online") {
+      if (Date.now() > deadline) {
+        throw new Error("manual status never crossed the postgres bus");
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(a.status.resolveStatus(userId)).toBe("offline");
   });
 });
 
