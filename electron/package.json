@@ -14,11 +14,16 @@
     "start": "electron .",
     "prepack": "node scripts/ensure-client-dist.js",
     "predist": "node scripts/ensure-client-dist.js",
+    "icons": "node scripts/generate-icons.js",
     "pack": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --dir",
     "dist": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder",
     "dist:mac": "node scripts/ensure-client-dist.js && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac",
     "dist:win": "node scripts/ensure-client-dist.js && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win",
-    "dist:linux": "node scripts/ensure-client-dist.js && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --linux"
+    "dist:linux": "node scripts/ensure-client-dist.js && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --linux",
+    "test": "node --test lib/*.test.mjs"
+  },
+  "dependencies": {
+    "electron-updater": "^6.3.9"
   },
   "devDependencies": {
     "electron": "^34.0.0",
@@ -27,11 +32,11 @@
   "build": {
     "appId": "gg.pqp.app",
     "productName": "pqp",
-    "copyright": "Copyright © pqp contributors",
+    "copyright": "Copyright \u00a9 pqp contributors",
     "extraMetadata": {
       "name": "pqp"
     },
-    "artifactName": "${productName}-${version}.${ext}",
+    "artifactName": "${productName}-${version}-${arch}.${ext}",
     "directories": {
       "output": "release",
       "buildResources": "build"
@@ -40,7 +45,15 @@
       "main.js",
       "preload.js",
       "lib/**/*",
-      "package.json"
+      "package.json",
+      "node_modules/**/*"
+    ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "rafaelcg",
+        "repo": "pqp"
+      }
     ],
     "extraResources": [
       {
@@ -61,13 +74,27 @@
     ],
     "mac": {
       "category": "public.app-category.social-networking",
+      "icon": "build/icon.icns",
       "target": [
-        "dmg",
-        "zip"
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
       ],
-      "identity": null,
-      "hardenedRuntime": false,
+      "hardenedRuntime": true,
       "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
       "extendInfo": {
         "CFBundleURLTypes": [
           {
@@ -82,13 +109,14 @@
       }
     },
     "win": {
+      "icon": "build/icon.ico",
       "target": [
         "nsis",
         "portable"
-      ],
-      "signAndEditExecutable": false
+      ]
     },
     "linux": {
+      "icon": "build/icon.png",
       "target": [
         "AppImage",
         "deb"

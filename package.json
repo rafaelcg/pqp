@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "pnpm run --parallel --filter @pqp/client --filter @pqp/server dev",
     "build": "pnpm run -r --filter=!@pqp/electron build",
-    "test": "pnpm run -r --filter=!@pqp/electron test",
+    "test": "pnpm run -r test",
     "typecheck": "pnpm run -r --filter=!@pqp/electron typecheck",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",

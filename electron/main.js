@@ -7,6 +7,7 @@ const {
   shell,
   ipcMain,
   session,
+  systemPreferences,
 } = require("electron");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -14,9 +15,28 @@ const { loadWindowState, trackWindowState, DEFAULTS } = require("./lib/window-st
 const { loadTheme, saveTheme, BACKGROUNDS } = require("./lib/theme-state");
 const { startStaticServer } = require("./lib/static-server");
 const { waitForUrl, isLocalDevUrl } = require("./lib/wait-for-url");
+const { classifyNavigation } = require("./lib/nav-policy");
+const { initAutoUpdate } = require("./lib/updater");
 
 const PROTOCOL = "pqp";
 const DEFAULT_DEV_URL = "http://localhost:5173/app";
+/**
+ * Where a packaged build points when nothing overrides it.
+ *
+ * This is deliberately the hosted app rather than the client bundled into
+ * `resources/client`. The API enforces a CORS allowlist in production
+ * (`CORS_ALLOWED_ORIGINS`, see `server/src/lib/http.ts`), and the bundled
+ * client is served from `http://127.0.0.1:<ephemeral port>` — an origin that
+ * is different on every launch and therefore cannot be in any allowlist. A
+ * packaged build loading it would render, then fail every single API call.
+ * Loading the hosted origin means the desktop app is CORS-identical to the web
+ * app, and Clerk sees an origin it already trusts.
+ *
+ * The bundled-client path still exists for offline and self-host use, behind
+ * `PQP_LOAD_STATIC=1`; those deployments have to allow the loopback origin (or
+ * leave `CORS_ALLOWED_ORIGINS` unset) themselves.
+ */
+const DEFAULT_PROD_URL = "https://pqp.gg/app";
 const APP_PATH = "/app";
 
 /** @type {BrowserWindow | null} */
@@ -33,20 +53,16 @@ function resolveClientDist() {
   return path.resolve(__dirname, "../client/dist");
 }
 
+/**
+ * Serving the bundled client is opt-in, never the default.
+ *
+ * It used to be what a packaged build did automatically, which produced an
+ * origin of `http://127.0.0.1:<random>` — see DEFAULT_PROD_URL for why that
+ * cannot work against an API with a CORS allowlist.
+ */
 function wantsStaticLoad() {
   const flag = process.env.PQP_LOAD_STATIC;
-  if (flag === "1" || flag === "true") {
-    return true;
-  }
-  if (flag === "0" || flag === "false") {
-    return false;
-  }
-  // Packaged builds prefer bundled client when present and no remote URL set.
-  if (app.isPackaged && !process.env.PQP_APP_URL && !process.env.VITE_APP_URL) {
-    const indexHtml = path.join(resolveClientDist(), "index.html");
-    return fs.existsSync(indexHtml);
-  }
-  return false;
+  return flag === "1" || flag === "true";
 }
 
 /**
@@ -69,7 +85,7 @@ function remoteOrDevUrl() {
   return ensureAppPath(
     process.env.PQP_APP_URL ||
       process.env.VITE_APP_URL ||
-      DEFAULT_DEV_URL,
+      (app.isPackaged ? DEFAULT_PROD_URL : DEFAULT_DEV_URL),
   );
 }
 
@@ -326,33 +342,66 @@ function createAppMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
+const ALLOWED_PERMISSIONS = new Set([
+  "media",
+  "mediaKeySystem",
+  "notifications",
+  "clipboard-sanitized-write",
+  "clipboard-read",
+  "display-capture",
+]);
+
+/**
+ * macOS gates the microphone behind TCC, which is a *system* prompt separate
+ * from the Chromium permission the renderer asked for. Granting the Chromium
+ * one without the system one produces a stream of silence with no error
+ * anywhere — the failure mode is "nobody can hear me", not a denied promise.
+ *
+ * `NSMicrophoneUsageDescription` in the Info.plist (electron-builder
+ * `mac.extendInfo`) is what lets the prompt appear at all; without it macOS
+ * denies silently. `com.apple.security.device.audio-input` in the entitlements
+ * is what lets it appear under the hardened runtime.
+ */
+async function ensureMacMediaAccess(mediaTypes) {
+  if (process.platform !== "darwin") {
+    return;
+  }
+  const wanted = Array.isArray(mediaTypes) && mediaTypes.length > 0
+    ? mediaTypes
+    : ["audio"];
+  for (const type of wanted) {
+    if (type !== "audio" && type !== "video") {
+      continue;
+    }
+    const kind = type === "audio" ? "microphone" : "camera";
+    try {
+      if (systemPreferences.getMediaAccessStatus(kind) === "not-determined") {
+        await systemPreferences.askForMediaAccess(kind);
+      }
+    } catch (err) {
+      console.warn(`[pqp] ${kind} access request failed:`, err?.message ?? err);
+    }
+  }
+}
+
 function configureSessionSecurity(appOrigin) {
   const ses = session.defaultSession;
 
   // Voice / media permissions for Discord-like UX.
-  ses.setPermissionRequestHandler((_wc, permission, callback) => {
-    const allowed = new Set([
-      "media",
-      "mediaKeySystem",
-      "notifications",
-      "clipboard-sanitized-write",
-      "clipboard-read",
-      "display-capture",
-    ]);
-    callback(allowed.has(permission));
+  ses.setPermissionRequestHandler(async (_wc, permission, callback, details) => {
+    if (!ALLOWED_PERMISSIONS.has(permission)) {
+      callback(false);
+      return;
+    }
+    if (permission === "media") {
+      await ensureMacMediaAccess(details?.mediaTypes);
+    }
+    callback(true);
   });
 
-  ses.setPermissionCheckHandler((_wc, permission) => {
-    const allowed = new Set([
-      "media",
-      "mediaKeySystem",
-      "notifications",
-      "clipboard-sanitized-write",
-      "clipboard-read",
-      "display-capture",
-    ]);
-    return allowed.has(permission);
-  });
+  ses.setPermissionCheckHandler((_wc, permission) =>
+    ALLOWED_PERMISSIONS.has(permission),
+  );
 
   // Harden navigation: stay on the app origin; open others externally.
   let allowedOrigin = null;
@@ -427,6 +476,24 @@ function createWindow(appUrl, allowedOrigin) {
   });
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    // An auth popup has to stay inside the app: the session it establishes is
+    // useless in the system browser. Everything else is a link, and a link
+    // belongs in the browser.
+    if (classifyNavigation(url, allowedOrigin) === "allow") {
+      return {
+        action: "allow",
+        overrideBrowserWindowOptions: {
+          width: 480,
+          height: 720,
+          autoHideMenuBar: true,
+          webPreferences: {
+            contextIsolation: true,
+            nodeIntegration: false,
+            sandbox: true,
+          },
+        },
+      };
+    }
     try {
       const parsed = new URL(url);
       if (parsed.protocol === "http:" || parsed.protocol === "https:") {
@@ -439,19 +506,13 @@ function createWindow(appUrl, allowedOrigin) {
   });
 
   mainWindow.webContents.on("will-navigate", (event, url) => {
-    if (!allowedOrigin) {
+    const decision = classifyNavigation(url, allowedOrigin);
+    if (decision === "allow") {
       return;
     }
-    try {
-      const next = new URL(url);
-      if (next.origin !== allowedOrigin) {
-        event.preventDefault();
-        if (next.protocol === "http:" || next.protocol === "https:") {
-          shell.openExternal(url);
-        }
-      }
-    } catch {
-      event.preventDefault();
+    event.preventDefault();
+    if (decision === "external") {
+      shell.openExternal(url);
     }
   });
 
@@ -541,6 +602,7 @@ if (!gotLock) {
     console.log(`[pqp] Loading ${appUrl}`);
     const allowedOrigin = configureSessionSecurity(appUrl);
     createWindow(appUrl, allowedOrigin);
+    initAutoUpdate(() => mainWindow);
 
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) {
