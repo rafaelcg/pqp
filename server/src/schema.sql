@@ -270,16 +270,210 @@ ALTER TABLE messages ADD COLUMN IF NOT EXISTS reply_to_id UUID
 CREATE INDEX IF NOT EXISTS idx_messages_reply_to
   ON messages (reply_to_id) WHERE reply_to_id IS NOT NULL;
 
--- Full-text search vector. GENERATED ... STORED rather than a trigger: the
--- vector cannot drift from the body it describes, edits maintain it for free,
--- and existing rows are backfilled by the one ALTER.
+-- ------------------------------------------------------------------ search
 --
--- 'english' is a deliberate trade: stemming is what makes "deploying" find
--- "deploy", which is most of why search feels like search. A multilingual server
--- pays for it in recall on its non-English messages — the escape hatch is to
--- change the configuration here, which rewrites the column on next boot.
-ALTER TABLE messages ADD COLUMN IF NOT EXISTS search_tsv tsvector
-  GENERATED ALWAYS AS (to_tsvector('english', body)) STORED;
+-- Full-text search. Everything the index and the query have to agree on lives
+-- in this block: the two text search configurations, the expression the stored
+-- column is generated from, and the two functions services/search.ts calls.
+-- The application names no configuration at all — if it could, the query could
+-- be stemmed differently from the index, which does not fail, it just quietly
+-- stops matching.
+--
+-- Portuguese AND English, both accent-folded, indexed side by side. The
+-- audience is Brazilian and the product's own vocabulary is English, and a
+-- single configuration cannot serve both: measured over 30 Portuguese and 15
+-- English word pairs a reader would expect to match each other,
+--
+--   config          pt      en
+--   'english'        2/30   15/15   <- what this used to be
+--   'portuguese'    10/30    2/15   <- merely the inverse mistake
+--   'simple'         0/30    0/15
+--   pt||en          10/30   15/15   <- stemming both ways, still accent-blind
+--   pqp_pt||pqp_en  25/30   15/15   <- this
+--
+-- Half of the Portuguese failures are nothing to do with stemming: Brazilians
+-- type "nao", "voce", "reuniao" and the message says "não", "você", "reunião".
+-- unaccent fixes those and costs a little stemmer accuracy on the words that
+-- keep their accents (the snowball rules read them), which the numbers say is
+-- a trade worth taking.
+--
+-- Cost, measured on 100k chat-length rows: GIN index 2.5 MB -> 3.9 MB, stored
+-- vectors 12 MB -> 18 MB, and ~6 microseconds more per INSERT. Two ORed halves
+-- also make stop words harmless in both directions — a query that is all
+-- Portuguese stop words survives in the English half and vice versa, so
+-- neither list can silently empty a query.
+--
+-- Consequence to know about: `||` shifts the second half's positions past the
+-- first, so ts_rank_cd's proximity is only meaningful within a half, and a word
+-- both stemmers agree on is counted twice. Rank order is approximate anyway.
+
+-- unaccent is a *trusted* extension from PG13 on, so the database owner can
+-- install it without superuser. If a host refuses anyway, warn and carry on
+-- with plain snowball: initDb() throwing is process.exit(1), and search being
+-- accent-sensitive is not worth a boot loop.
+DO $$
+BEGIN
+  CREATE EXTENSION IF NOT EXISTS unaccent;
+EXCEPTION WHEN OTHERS THEN
+  RAISE WARNING 'pqp: unaccent unavailable (%) — search will be accent-sensitive',
+    SQLERRM;
+END $$;
+
+-- pqp_pt / pqp_en. Two configurations rather than one with both stemmers
+-- chained: a snowball dictionary accepts every token it is handed, so anything
+-- after it in a mapping is unreachable.
+--
+-- ALTER MAPPING replaces, so re-running this is a catalog write and nothing
+-- more. It does NOT recompute stored vectors — that is what the fingerprint
+-- below is for.
+DO $$
+DECLARE
+  dicts TEXT;
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_ts_config WHERE cfgname = 'pqp_pt') THEN
+    CREATE TEXT SEARCH CONFIGURATION pqp_pt (COPY = portuguese);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_ts_config WHERE cfgname = 'pqp_en') THEN
+    CREATE TEXT SEARCH CONFIGURATION pqp_en (COPY = english);
+  END IF;
+
+  -- Visible, not merely present: an unaccent installed into a schema outside
+  -- search_path is one the ALTER below could not resolve by bare name.
+  dicts := CASE
+    WHEN EXISTS (
+      SELECT 1 FROM pg_ts_dict d
+      WHERE d.dictname = 'unaccent' AND pg_ts_dict_is_visible(d.oid))
+    THEN 'unaccent, ' ELSE '' END;
+
+  EXECUTE format(
+    'ALTER TEXT SEARCH CONFIGURATION pqp_pt
+       ALTER MAPPING FOR hword, hword_part, word WITH %sportuguese_stem', dicts);
+  EXECUTE format(
+    'ALTER TEXT SEARCH CONFIGURATION pqp_en
+       ALTER MAPPING FOR hword, hword_part, word WITH %senglish_stem', dicts);
+END $$;
+
+-- Two plural classes snowball's Portuguese stemmer does not handle, patched
+-- ahead of it. These are not obscure: "mensagem"/"mensagens" is the first
+-- example anyone reaches for, and this product's own nouns are the -ção family
+-- — "configurações", "notificações", "opções", "sessões". Postgres stems every
+-- one of those to something the singular does not share:
+--
+--   mensagem -> mensag   but  mensagens    -> mensagens
+--   opção    -> opçã     but  opções       -> opçõ
+--
+-- Two word-final rewrites fix both classes, run before unaccent so they see the
+-- accented spelling and before the stemmer so it gets a singular:
+--
+--   -ns  -> -m    mensagens, imagens, homens, ordens, fins, sons
+--   -ões -> -ão   opções, configurações, reuniões, irmãos  (and the unaccented
+--                 -oes/-aos/-aes people actually type)
+--
+-- Two chars of stem are required first, which is what keeps "uns", "aos" and
+-- "nos" out of it. Being deterministic and applied to the query as well as the
+-- body, a wrong rewrite cannot lose a match — "runs" becomes "rum" on both
+-- sides and still finds itself (and the English half stems it properly
+-- regardless). The only cost of a bad rule is two unrelated words colliding.
+--
+-- Not attempted: -l/-is ("canal"/"canais"). Its rules need the accent to
+-- disambiguate — "papéis" is "papel" but "fáceis" is "fácil" — which the
+-- unaccented spellings people type do not carry. Doing it properly needs a
+-- hunspell pt_BR dictionary, and that means dictionary files on the database
+-- host, which managed Postgres does not give us.
+CREATE OR REPLACE FUNCTION pqp_pt_plurals(t TEXT) RETURNS TEXT
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $$
+  SELECT regexp_replace(
+           regexp_replace(t, '(\m\w{2,})(ões|ãos|ães|oes|aos|aes)\M', '\1ao', 'gi'),
+           '(\m\w{2,})ns\M', '\1m', 'gi')
+$$;
+
+-- The query side of the pair. services/search.ts calls these and never names a
+-- configuration itself, so index and query cannot disagree.
+CREATE OR REPLACE FUNCTION pqp_search_query(q TEXT) RETURNS tsquery
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $$
+  SELECT websearch_to_tsquery('pqp_pt', pqp_pt_plurals(q))
+      || websearch_to_tsquery('pqp_en', q)
+$$;
+
+-- ts_headline re-parses the body under one configuration, so a hit found by the
+-- other half would come back with nothing marked up. Try Portuguese, and only
+-- when it highlighted nothing pay for the English pass. `marker` is the
+-- caller's StartSel so the highlight delimiters stay defined in one place
+-- (@pqp/shared) rather than being restated in SQL.
+CREATE OR REPLACE FUNCTION pqp_search_headline(
+  body TEXT, q tsquery, opts TEXT, marker TEXT
+) RETURNS TEXT LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $$
+  SELECT CASE WHEN pt.h LIKE '%' || marker || '%' THEN pt.h
+              ELSE ts_headline('pqp_en', body, q, opts) END
+  FROM (SELECT ts_headline('pqp_pt', body, q, opts) AS h) pt
+$$;
+-- When neither half highlights anything both calls return the same thing —
+-- the opening fragment of the body — so the fallback needs no third branch.
+
+-- The stored vector. GENERATED ... STORED rather than a trigger: it cannot
+-- drift from the body it describes, edits maintain it for free, and existing
+-- rows are backfilled by the ALTER.
+--
+-- Changing the expression means dropping and re-adding the column, which
+-- rewrites the table under ACCESS EXCLUSIVE and rebuilds the GIN index. This
+-- file runs on EVERY boot, so doing that unconditionally would be a rewrite per
+-- restart. The guard is a fingerprint stashed in the column's COMMENT: the
+-- expression text plus the lexemes the whole pipeline actually produces for a
+-- canary string. Comparing the expression alone would not be enough — ALTERing
+-- a configuration, replacing pqp_pt_plurals, or unaccent appearing on a host
+-- that lacked it all change the lexemes without changing one character of the
+-- expression, and Postgres does not recompute stored generated columns when
+-- that happens. Running the canary through the real expression catches every
+-- one of those; the comment lives and dies with the column, so a dropped
+-- column cannot leave a marker claiming it is current.
+--
+-- This is the cheapest moment this migration will ever have: production holds
+-- 26 messages. A version of this against a large table would need a new column
+-- written in batches, CREATE INDEX CONCURRENTLY, and a swap — none of which is
+-- possible inside schema.sql, because the whole file is one implicit
+-- transaction and CONCURRENTLY cannot run in one.
+DO $$
+DECLARE
+  -- One template, filled with `body` to build the column and with the canary to
+  -- fingerprint it — so the fingerprint is the output of this exact expression
+  -- rather than a second description of it that could fall behind.
+  expr CONSTANT TEXT :=
+    'to_tsvector(''pqp_pt'', pqp_pt_plurals(%1$s)) || to_tsvector(''pqp_en'', %1$s)';
+  -- Accents, both plural classes, stemming, and both stop word lists in one
+  -- string. Anything the fingerprint should notice has to be exercised here.
+  canary CONSTANT TEXT :=
+    'não configurações mensagens jogando deploying the de para com';
+  column_expr TEXT;
+  lexemes TEXT;
+  marker TEXT;
+  col_attnum SMALLINT;
+BEGIN
+  column_expr := format(expr, 'body');
+  EXECUTE format('SELECT (%s)::text', format(expr, quote_literal(canary)))
+    INTO lexemes;
+  marker := 'pqp-search ' || md5(column_expr || '|' || lexemes);
+
+  SELECT a.attnum INTO col_attnum FROM pg_attribute a
+  WHERE a.attrelid = 'messages'::regclass AND a.attname = 'search_tsv'
+    AND NOT a.attisdropped;
+
+  IF col_attnum IS NULL THEN
+    EXECUTE format(
+      'ALTER TABLE messages ADD COLUMN search_tsv tsvector
+         GENERATED ALWAYS AS (%s) STORED', column_expr);
+  ELSIF col_description('messages'::regclass, col_attnum) IS DISTINCT FROM marker THEN
+    -- Dropping the column takes idx_messages_search with it; the CREATE INDEX
+    -- below puts it back.
+    ALTER TABLE messages DROP COLUMN search_tsv;
+    EXECUTE format(
+      'ALTER TABLE messages ADD COLUMN search_tsv tsvector
+         GENERATED ALWAYS AS (%s) STORED', column_expr);
+  ELSE
+    RETURN; -- already current: no rewrite, no comment write
+  END IF;
+
+  EXECUTE format('COMMENT ON COLUMN messages.search_tsv IS %L', marker);
+END $$;
 
 CREATE INDEX IF NOT EXISTS idx_messages_search
   ON messages USING GIN (search_tsv);

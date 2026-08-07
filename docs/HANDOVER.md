@@ -187,7 +187,15 @@ Full list in [`PLAN_STATUS.md`](./PLAN_STATUS.md). The parts most likely to surp
 ## Search, notifications, and history navigation (2026-08-01)
 
 - **Message search** — `GET /api/servers/:serverId/search?q=`. Postgres full-text: a
-  `messages.search_tsv` generated column plus a GIN index, both applied on boot. The visibility
+  `messages.search_tsv` generated column plus a GIN index, both applied on boot. **Portuguese and
+  English, both accent-folded, indexed side by side** (2026-08-07 — it was `'english'` alone,
+  which found 2 of 30 Portuguese word pairs). Everything the index and the query must agree on
+  lives in one block in `server/src/schema.sql`: the `pqp_pt` / `pqp_en` configurations, the
+  column expression, and the `pqp_search_query()` / `pqp_search_headline()` functions the service
+  calls — `search.ts` names no configuration, because a query stemmed differently from the index
+  matches nothing and raises nothing. Re-running the schema is a no-op: a fingerprint in the
+  column's `COMMENT` is what decides whether to rewrite the table. See `docs/DECISIONS.md` for the
+  measurements and the known `canal`/`canais` gap. The visibility
   predicate is lifted verbatim into one `VISIBLE_CHANNEL` const in `server/src/services/search.ts`
   so it can never drift from `isChannelMember`. Highlights are delimited with the control characters `U+0002` / `U+0003`,
   which `messageBodySchema` already rejects, so no message body can forge one and the client never
