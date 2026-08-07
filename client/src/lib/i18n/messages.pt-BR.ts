@@ -206,6 +206,19 @@ export const ptBR: PartialMessages = {
   "connection.wsUrlFailed":
     "Falha na conexão em tempo real — verifique a URL do WebSocket",
 
+  // ---------------------------------------------------------------- user status
+  "status.online": "Online",
+  "status.idle": "Ausente",
+  "status.dnd": "Não perturbe",
+  "status.offline": "Offline",
+  "status.invisible": "Invisível",
+  "status.change": "Mudar o seu status",
+  "status.invisibleHint":
+    "Você vai aparecer como offline para todo mundo, e não vai surgir nas listas de quem está no canal nem em “digitando…”. Canais de voz em que você entrar continuam mostrando você — lá as pessoas ouvem você.",
+  "status.dndHint":
+    "Você continua visível; este aparelho para de mostrar notificações.",
+  "status.saveFailed": "Não foi possível mudar o seu status — tente de novo",
+
   // ------------------------------------------------------------------ age gate
   "ageGate.eyebrow": "Antes de começar",
   "ageGate.title": "Confirme a sua data de nascimento",
@@ -365,6 +378,16 @@ export const ptBR: PartialMessages = {
   "voice.bar.person": "{count} pessoa",
   "voice.bar.people": "{count} pessoas",
   "voice.bar.leave": "Sair da call",
+  "voice.tile.live": "Ao vivo",
+  "voice.tile.holdToTalk": "Segura pra falar",
+  "voice.ptt.hold": "Segura pra falar",
+  "voice.ptt.transmitting": "Falando",
+  "voice.ptt.blocked": "Mudo — o push-to-talk está desligado",
+  "voice.ptt.hintKey": "Segura {key} ou o botão acima.",
+  "voice.ptt.hintButton": "Segura o botão acima pra falar.",
+  "voice.ptt.unfocused": "Esta janela não está em foco — a tecla não chega aqui. Clica aqui antes, ou usa o botão.",
+  "voice.bar.pttLive": "Ao vivo",
+  "voice.bar.pttIdle": "PTT",
   "voice.bar.open": "Abrir o canal de voz {name}",
 
   "voice.share.someone": "Alguém",
@@ -394,4 +417,9 @@ export const ptBR: PartialMessages = {
     "Esta call roda num servidor de voz que esta versão do app não usa, então você não entrou. Ninguém na call te ouve.",
   "voice.error.transportUnreachable":
     "Não deu pra falar com o servidor de voz, então você não entrou nesta call. Verifique a sua conexão e tente de novo.",
+
+  "channel.meta.image.error.httpsOnly":
+    "O link da imagem precisa começar com https://.",
+  "channel.meta.image.error.invalid": "Isso não parece um link.",
+  "channel.meta.error.generic": "Não deu pra salvar. Tenta de novo.",
 };

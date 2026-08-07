@@ -27,6 +27,14 @@ interface VoiceStatusBarProps {
    * indistinguishable from no presentation.
    */
   isPresenting?: boolean;
+  /**
+   * Push-to-talk state, for the same reason `isPresenting` is here: this bar is
+   * what you see once you have navigated away from the voice channel, and
+   * without it a closed push-to-talk mic looks identical to an open one. The
+   * mute button beside it answers a different question.
+   */
+  inputMode?: "voice-activity" | "push-to-talk";
+  isTransmitting?: boolean;
   onOpen: () => void;
   onToggleMute: () => void;
   onToggleDeafen: () => void;
@@ -41,6 +49,8 @@ export function VoiceStatusBar({
   isDeafened,
   usingSfu,
   isPresenting = false,
+  inputMode = "voice-activity",
+  isTransmitting = true,
   onOpen,
   onToggleMute,
   onToggleDeafen,
@@ -85,6 +95,19 @@ export function VoiceStatusBar({
           <span className="flex shrink-0 items-center gap-1 rounded bg-signal/20 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-signal">
             <ScreenShare className="h-3 w-3" aria-hidden="true" />
             {t("voice.tile.presenting")}
+          </span>
+        )}
+        {/* i18n: needs `voice.bar.pttLive` / `voice.bar.pttIdle`. */}
+        {connected && inputMode === "push-to-talk" && !isMuted && (
+          <span
+            className={cn(
+              "shrink-0 rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide",
+              isTransmitting
+                ? "bg-accent/20 text-accent"
+                : "bg-ink-3 text-paper-muted",
+            )}
+          >
+            {isTransmitting ? "Live" : "PTT"}
           </span>
         )}
         {usingSfu && (

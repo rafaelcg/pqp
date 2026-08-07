@@ -16,7 +16,12 @@ import {
   translateMessage,
   type MessageKey,
 } from "@/lib/i18n/catalogue";
-import { buildAudioConstraints } from "@/lib/audio-devices";
+import {
+  buildAudioConstraints,
+  defaultMicProcessing,
+  sameMicProcessing,
+  type MicProcessing,
+} from "@/lib/audio-devices";
 import {
   connectLiveKit,
   type LiveKitIdentity,
@@ -74,6 +79,15 @@ const TRANSPORT_FAILURE_KEY: Record<
   unreachable: "voice.error.transportUnreachable",
 };
 
+/**
+ * How the microphone decides whether to transmit.
+ *
+ * - `voice-activity` — open whenever you are not muted. What this app has
+ *   always done, and still the default.
+ * - `push-to-talk` — closed unless a key (or the hold button) is down.
+ */
+export type VoiceInputMode = "voice-activity" | "push-to-talk";
+
 export interface VoiceAudioOptions {
   inputDeviceId?: string;
   inputVolume?: number;
@@ -82,15 +96,28 @@ export interface VoiceAudioOptions {
    * so "mute on join" is muted from the very first sample.
    */
   startMuted?: boolean;
+  inputMode?: VoiceInputMode;
+  processing?: MicProcessing;
 }
 
 export interface VoiceState {
   status: VoiceStatus;
   peerId: string | null;
   remotePeers: RemotePeer[];
+  /** The user's explicit mute. Independent of push-to-talk. */
   isMuted: boolean;
   /** Deafened silences everyone else and forces your own mic off, as in Discord. */
   isDeafened: boolean;
+  inputMode: VoiceInputMode;
+  /**
+   * Whether audio is actually leaving this machine right now — the one thing
+   * a push-to-talk user needs to be able to check at a glance.
+   *
+   * Derived, never set: `!muted && !deafened && (voice-activity || key held)`.
+   * The UI reads this rather than `isMuted` when it wants to say "you are
+   * live", because in push-to-talk those two answer different questions.
+   */
+  isTransmitting: boolean;
   error: string | null;
   voiceChannelId: string | null;
   self: VoiceParticipant | null;
@@ -151,9 +178,10 @@ function sameSpeaking(a: string[], b: string[]): boolean {
 async function createMicPipeline(
   deviceId: string | undefined,
   inputVolume: number,
+  processing: MicProcessing,
 ): Promise<MicPipeline> {
   const rawStream = await navigator.mediaDevices.getUserMedia({
-    audio: buildAudioConstraints(deviceId),
+    audio: buildAudioConstraints(deviceId, processing),
     video: false,
   });
 
@@ -265,16 +293,31 @@ export function createVoiceController(transport: RealtimeTransport) {
   // The room the user means to be in. Kept across a WS drop so we can auto-
   // rejoin on reconnect instead of ejecting them from the call.
   let intendedChannelId: string | null = null;
-  let audioOptions: VoiceAudioOptions = {
+  let audioOptions: Required<
+    Pick<VoiceAudioOptions, "inputDeviceId" | "inputVolume" | "processing">
+  > = {
     inputDeviceId: "",
     inputVolume: 1,
+    processing: defaultMicProcessing,
   };
+  /**
+   * True only while the push-to-talk key or button is physically down.
+   *
+   * Module-private on purpose: nothing outside `setPushToTalkActive` may set
+   * it, and every path that could lose track of the key (mode change, leave,
+   * reconnect) resets it to `false`. A stuck-open mic is the worst outcome this
+   * feature can produce, so the invariant is that this only ever *fails closed*.
+   */
+  let pushToTalkHeld = false;
   let state: VoiceState = {
     status: "idle",
     peerId: null,
     remotePeers: [],
     isMuted: false,
     isDeafened: false,
+    inputMode: "voice-activity",
+    // No mic yet, so nothing is going anywhere. `join` recomputes it.
+    isTransmitting: false,
     error: null,
     voiceChannelId: null,
     self: null,
@@ -338,6 +381,8 @@ export function createVoiceController(transport: RealtimeTransport) {
         stopMicPipeline(pipeline);
         pipeline = null;
         intendedChannelId = null;
+        pushToTalkHeld = false;
+        state.isTransmitting = false;
         void teardownSfu();
         manager?.dispose();
         manager = null;
@@ -377,6 +422,8 @@ export function createVoiceController(transport: RealtimeTransport) {
     stopMicPipeline(pipeline);
     pipeline = null;
     releaseScreenCapture();
+    pushToTalkHeld = false;
+    state.isTransmitting = false;
     state.status = "idle";
     state.peerId = null;
     state.self = null;
@@ -425,21 +472,88 @@ export function createVoiceController(transport: RealtimeTransport) {
     transport.sendVoice({ ...message, from: state.peerId });
   }
 
+  /**
+   * The single answer to "should sound be leaving this machine".
+   *
+   * Everything that could close the mic is folded in here rather than at each
+   * call site, so there is exactly one expression to get right — and so a mode
+   * change, a mute, a deafen and a released key all funnel through the same
+   * recomputation. Mute and deafen outrank push-to-talk deliberately: holding
+   * the key while muted must not transmit, or the mute button would be a lie.
+   */
+  function micShouldBeOpen(): boolean {
+    if (state.isDeafened || state.isMuted) {
+      return false;
+    }
+    return state.inputMode === "voice-activity" || pushToTalkHeld;
+  }
+
   function applyMuteToPipeline() {
+    state.isTransmitting = micShouldBeOpen();
     if (!pipeline) {
       return;
     }
     for (const track of pipeline.processedStream.getAudioTracks()) {
-      track.enabled = !state.isMuted;
+      track.enabled = state.isTransmitting;
     }
     for (const track of pipeline.rawStream.getAudioTracks()) {
-      track.enabled = !state.isMuted;
+      track.enabled = state.isTransmitting;
     }
   }
 
+  /**
+   * Both transports, every time.
+   *
+   * Disabling the track is what stops mesh peers hearing anything — an
+   * `enabled: false` track sends silence over the existing sender, which is why
+   * push-to-talk never renegotiates. LiveKit needs to be told separately: it
+   * has its own publication state, and leaving that unmuted would keep sending
+   * (silent) packets and, worse, keep the SFU's own speaking indicator lit for
+   * everyone else in the room.
+   */
   function applyMute() {
     applyMuteToPipeline();
-    void sfu?.setMuted(state.isMuted);
+    void sfu?.setMuted(!state.isTransmitting);
+  }
+
+  /**
+   * Re-capture the mic on the current settings and swap it into the live call.
+   *
+   * Shared by the device picker and the processing toggles because they are the
+   * same operation: both change what `getUserMedia` must be asked for, and
+   * neither is allowed to interrupt the call to do it. The old pipeline is only
+   * stopped once the new one exists, so a `getUserMedia` that fails (device
+   * unplugged, constraint unsatisfiable) leaves the working mic in place and
+   * reports the error rather than dropping the user into silence.
+   */
+  async function swapPipeline(failureMessage: string) {
+    if (!pipeline || state.status === "idle") {
+      return;
+    }
+    try {
+      const next = await createMicPipeline(
+        audioOptions.inputDeviceId || undefined,
+        audioOptions.inputVolume,
+        audioOptions.processing,
+      );
+      stopMicPipeline(pipeline);
+      pipeline = next;
+      // Carries mute, deafen and the push-to-talk gate onto the new track: a
+      // swap must never be a way to end up transmitting when you were not.
+      applyMuteToPipeline();
+
+      if (manager) {
+        await manager.replaceLocalTrack(pipeline.processedStream);
+      }
+      if (sfu) {
+        await sfu.replaceTrack(pipeline.processedStream);
+        await sfu.setMuted(!state.isTransmitting);
+      }
+      emit();
+    } catch (err) {
+      state.error = err instanceof Error ? err.message : failureMessage;
+      emit();
+    }
   }
 
   function disposeRemoteAnalysers() {
@@ -487,7 +601,11 @@ export function createVoiceController(transport: RealtimeTransport) {
     stopSpeakingLoop();
     const tick = () => {
       const next: string[] = [];
-      if (pipeline && state.peerId && !state.isMuted) {
+      // `isTransmitting`, not `!isMuted`: in push-to-talk between presses the
+      // mic is live and the analyser still reads a level, but nobody can hear
+      // it. Lighting the speaking ring then would be the panel claiming you are
+      // being heard when you are not.
+      if (pipeline && state.peerId && state.isTransmitting) {
         const level = readAnalyserLevel(pipeline.analyser);
         if (speakingTracker.update(state.peerId, level, true)) {
           next.push(state.peerId);
@@ -609,7 +727,9 @@ export function createVoiceController(transport: RealtimeTransport) {
       }
       if (pipeline) {
         await sfu.publish(pipeline.processedStream);
-        await sfu.setMuted(state.isMuted);
+        // The gate, not the mute flag — a push-to-talk user who joins an SFU
+        // room without the key down must be published muted.
+        await sfu.setMuted(!state.isTransmitting);
       }
       // A screen share started before a reconnect rebuilds the session — the
       // capture itself survives the WS drop (it's a browser-level grant, not
@@ -878,12 +998,18 @@ export function createVoiceController(transport: RealtimeTransport) {
       // Applied before the track exists, so "mute on join" is genuinely muted
       // from the first sample rather than a moment later.
       state.isMuted = options?.startMuted ?? state.isMuted;
+      // Never inherit a key held from before the join — there is no keyup owed
+      // to us for a press that happened while we were not in a call.
+      pushToTalkHeld = false;
+      state.inputMode = options?.inputMode ?? state.inputMode;
+      state.isTransmitting = micShouldBeOpen();
       emit();
 
       if (options) {
         audioOptions = {
           inputDeviceId: options.inputDeviceId ?? audioOptions.inputDeviceId,
           inputVolume: options.inputVolume ?? audioOptions.inputVolume,
+          processing: options.processing ?? audioOptions.processing,
         };
       }
 
@@ -895,7 +1021,8 @@ export function createVoiceController(transport: RealtimeTransport) {
         try {
           next = await createMicPipeline(
             audioOptions.inputDeviceId || undefined,
-            audioOptions.inputVolume ?? 1,
+            audioOptions.inputVolume,
+            audioOptions.processing,
           );
         } catch (deviceError) {
           if (!audioOptions.inputDeviceId) {
@@ -903,7 +1030,8 @@ export function createVoiceController(transport: RealtimeTransport) {
           }
           next = await createMicPipeline(
             undefined,
-            audioOptions.inputVolume ?? 1,
+            audioOptions.inputVolume,
+            audioOptions.processing,
           );
         }
 
@@ -946,12 +1074,17 @@ export function createVoiceController(transport: RealtimeTransport) {
       stopMicPipeline(pipeline);
       pipeline = null;
       releaseScreenCapture();
+      pushToTalkHeld = false;
       state = {
         status: "idle",
         peerId: null,
         remotePeers: [],
         isMuted: false,
         isDeafened: false,
+        // The input mode is a user preference, not call state: it survives
+        // leaving, exactly as the device and volume choices do.
+        inputMode: state.inputMode,
+        isTransmitting: false,
         error: null,
         voiceChannelId: null,
         self: null,
@@ -1119,40 +1252,71 @@ export function createVoiceController(transport: RealtimeTransport) {
       }
     },
 
-    async setInputDevice(deviceId: string) {
-      const previousDeviceId = audioOptions.inputDeviceId ?? "";
-      audioOptions.inputDeviceId = deviceId;
-      if (!pipeline || state.status === "idle") {
+    /**
+     * The input mode is a preference, not a renegotiation.
+     *
+     * Switching mid-call touches nothing but `track.enabled` and the SFU's
+     * publication flag, so the call does not so much as flicker: no new
+     * `getUserMedia`, no `replaceTrack`, no SDP. That is the whole reason the
+     * gate lives in `micShouldBeOpen()` rather than in how the track is built.
+     */
+    setInputMode(mode: VoiceInputMode) {
+      if (state.inputMode === mode) {
         return;
       }
+      state.inputMode = mode;
+      // A key held while the mode changes is owed a keyup that may never be
+      // recognised as ours. Drop it and start closed.
+      pushToTalkHeld = false;
+      applyMute();
+      emit();
+    },
+
+    /**
+     * The push-to-talk key (or the hold button) going down or up.
+     *
+     * Idempotent, and a no-op outside push-to-talk mode — a stray release from
+     * a listener that has not been torn down yet must never be able to close a
+     * voice-activity mic, and a stray press must never open one.
+     */
+    setPushToTalkActive(active: boolean) {
+      if (state.inputMode !== "push-to-talk") {
+        pushToTalkHeld = false;
+        return;
+      }
+      if (pushToTalkHeld === active) {
+        return;
+      }
+      pushToTalkHeld = active;
+      applyMute();
+      emit();
+    },
+
+    async setInputDevice(deviceId: string) {
+      const previousDeviceId = audioOptions.inputDeviceId ?? "";
       if (previousDeviceId === deviceId) {
         return;
       }
+      audioOptions.inputDeviceId = deviceId;
+      await swapPipeline("Failed to switch microphone");
+    },
 
-      const wasMuted = state.isMuted;
-      try {
-        const next = await createMicPipeline(
-          deviceId || undefined,
-          audioOptions.inputVolume ?? 1,
-        );
-        stopMicPipeline(pipeline);
-        pipeline = next;
-        state.isMuted = wasMuted;
-        applyMuteToPipeline();
-
-        if (manager) {
-          await manager.replaceLocalTrack(pipeline.processedStream);
-        }
-        if (sfu) {
-          await sfu.replaceTrack(pipeline.processedStream);
-          await sfu.setMuted(state.isMuted);
-        }
-        emit();
-      } catch (err) {
-        state.error =
-          err instanceof Error ? err.message : "Failed to switch microphone";
-        emit();
+    /**
+     * Echo cancellation / noise suppression / auto gain.
+     *
+     * These are `getUserMedia` constraints, so the track has to be captured
+     * again — but the *call* does not have to notice. `replaceTrack` on the
+     * existing senders swaps the media under a live `RTCRtpSender` without
+     * touching the SDP, so there is no renegotiation, no ICE, and no gap where
+     * a peer sees us leave. The same is true of LiveKit's `replaceTrack`.
+     * Applying these by rejoining would have been visible to the whole room.
+     */
+    async setMicProcessing(processing: MicProcessing) {
+      if (sameMicProcessing(audioOptions.processing, processing)) {
+        return;
       }
+      audioOptions.processing = processing;
+      await swapPipeline("Failed to apply microphone processing");
     },
 
     hasMeshWarning() {

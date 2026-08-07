@@ -96,6 +96,24 @@ export type NotificationPreferences = z.infer<
  */
 export const userPreferencesSchema = z.object({
   /**
+   * Voice-activity or push-to-talk. Synced because it is a preference about
+   * how you talk, not about this machine — somebody who uses PTT on a laptop
+   * wants it on the desktop too.
+   *
+   * The KEY BINDING is deliberately NOT here. It is a physical key position
+   * (`KeyboardEvent.code`), so syncing it to a phone with no keyboard, or to a
+   * different physical layout, means carrying a binding that cannot be pressed.
+   * That one stays device-local.
+   */
+  inputMode: z.enum(["voice-activity", "push-to-talk"]).optional(),
+  micProcessing: z
+    .object({
+      echoCancellation: z.boolean(),
+      noiseSuppression: z.boolean(),
+      autoGainControl: z.boolean(),
+    })
+    .optional(),
+  /**
    * The manual half of user status — `dnd` or `invisible`, or `online` meaning
    * "no override". Absent is the same as `online`.
    *

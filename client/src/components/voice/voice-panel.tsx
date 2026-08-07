@@ -13,6 +13,7 @@ import {
   VolumeX,
 } from "lucide-react";
 import { MESH_VOICE_WARNING, type VoiceParticipant } from "@pqp/shared";
+import type { VoiceInputMode } from "@/hooks/use-voice";
 import type { RemotePeer } from "@/lib/peer-connection-manager";
 import { Button } from "@/components/ui/button";
 import {
@@ -48,6 +49,13 @@ interface ParticipantTileProps {
   isMuted?: boolean;
   isDeafened?: boolean;
   isPresenting: boolean;
+  /**
+   * Self tile only: the mic is open right now. In voice activity this is the
+   * same thing as "not muted" and says nothing new, so it is only rendered as
+   * its own badge in push-to-talk, where it is the one thing you need to know.
+   */
+  isTransmitting?: boolean;
+  showTransmitBadge?: boolean;
   avatarSize: VoiceAvatarSize;
   minHeightClass: string;
   connectionState?: RemotePeer["connectionState"];
@@ -65,6 +73,8 @@ function ParticipantTile({
   isMuted = false,
   isDeafened = false,
   isPresenting,
+  isTransmitting = false,
+  showTransmitBadge = false,
   avatarSize,
   minHeightClass,
   connectionState,
@@ -94,7 +104,7 @@ function ParticipantTile({
         minHeightClass,
         failed
           ? "border-danger/50 bg-danger/5"
-          : isSpeaking
+          : isSpeaking || (showTransmitBadge && isTransmitting)
             ? "border-accent/60 bg-ink-2"
             : "border-ink-4 bg-ink",
       )}
@@ -102,7 +112,11 @@ function ParticipantTile({
       <VoiceAvatar
         name={name}
         avatarUrl={avatarUrl}
-        isSpeaking={isSpeaking && !silenced}
+        // The speaking ring doubles as the transmitting indicator rather than
+        // a second visual language: in push-to-talk an open mic *is* the state
+        // worth showing, whether or not you happen to be making noise this
+        // frame. Everywhere else the ring keeps its usual meaning.
+        isSpeaking={(isSpeaking || (showTransmitBadge && isTransmitting)) && !silenced}
         muted={isMuted || silenced}
         size={avatarSize}
       />
@@ -121,8 +135,29 @@ function ParticipantTile({
         isMuted ||
         silenced ||
         settling ||
-        failed) && (
+        failed ||
+        showTransmitBadge) && (
         <div className="flex flex-wrap items-center justify-center gap-1">
+          {/* Push-to-talk only. Two states, always one of them on screen, so
+              the answer to "am I live right now" is never an absence. */}
+          {/* i18n: needs `voice.tile.live` / `voice.tile.holdToTalk`. */}
+          {showTransmitBadge && !isMuted && !isDeafened && (
+            <span
+              className={cn(
+                "flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide",
+                isTransmitting
+                  ? "bg-accent/20 text-accent"
+                  : "bg-ink-3 text-paper-muted",
+              )}
+            >
+              {isTransmitting ? (
+                <Mic className="h-3 w-3" aria-hidden="true" />
+              ) : (
+                <MicOff className="h-3 w-3" aria-hidden="true" />
+              )}
+              {isTransmitting ? "Live" : "Hold to talk"}
+            </span>
+          )}
           {isPresenting && (
             <span className="flex items-center gap-1 rounded bg-signal/20 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-signal">
               <ScreenShare className="h-3 w-3" aria-hidden="true" />
@@ -243,6 +278,23 @@ interface VoicePanelProps {
   speakingPeerIds: string[];
   isMuted: boolean;
   isDeafened: boolean;
+  inputMode?: VoiceInputMode;
+  /** Audio is leaving this machine right now. See `VoiceState.isTransmitting`. */
+  isTransmitting?: boolean;
+  /**
+   * The bound key, already formatted, or null on a device where binding a key
+   * makes no sense (a phone). Null is what switches the hint from "hold ` " to
+   * "hold the button".
+   */
+  pushToTalkKeyLabel?: string | null;
+  /**
+   * Whether this window currently has keyboard focus. False means the key
+   * binding is genuinely not working, and the panel says so — the web has no
+   * global hotkey, and pretending otherwise is how someone ends up pressing a
+   * key at a window that is not listening.
+   */
+  windowFocused?: boolean;
+  onPushToTalk?: (held: boolean) => void;
   /** peerId → 0..2 playback multiplier. Missing entries play at 1. */
   peerVolumes: Record<string, number>;
   error: string | null;
@@ -271,6 +323,11 @@ export function VoicePanel({
   speakingPeerIds,
   isMuted,
   isDeafened,
+  inputMode = "voice-activity",
+  isTransmitting = true,
+  pushToTalkKeyLabel = null,
+  windowFocused = true,
+  onPushToTalk,
   peerVolumes,
   error,
   compactPeers = false,
@@ -298,6 +355,10 @@ export function VoicePanel({
   // mid-session, and this must not be re-evaluated on every keystroke elsewhere.
   const screenShareBlocked = useMemo(() => screenShareUnavailableReason(), []);
   const [hint, setHint] = useState<string | null>(null);
+  const pushToTalk = inputMode === "push-to-talk";
+  // Muted or deafened outranks the key, so the button says so rather than
+  // inviting a press that would do nothing.
+  const pushToTalkBlocked = isMuted || isDeafened;
 
   // The explanation is an answer to a tap, not a persistent state of the call.
   useEffect(() => {
@@ -404,11 +465,16 @@ export function VoicePanel({
                     avatarUrl={self.avatarUrl}
                     isSelf
                     isSpeaking={
-                      !!localPeerId && speaking.has(localPeerId) && !isMuted
+                      !!localPeerId &&
+                      speaking.has(localPeerId) &&
+                      !isMuted &&
+                      isTransmitting
                     }
                     isMuted={isMuted}
                     isDeafened={isDeafened}
                     isPresenting={isSharingScreen}
+                    isTransmitting={isTransmitting}
+                    showTransmitBadge={pushToTalk}
                     avatarSize={avatarSize}
                     minHeightClass={minHeightClass}
                   />
@@ -444,6 +510,84 @@ export function VoicePanel({
           </div>
 
           <div className="shrink-0 border-t border-panel-hover bg-ink px-3 py-2">
+            {/* The hold button is shown on every device, not only touch ones.
+                On a phone it is the *only* way to use push-to-talk — there is
+                no keyboard to bind — and on a desktop it is the affordance that
+                makes the mode discoverable and gives the key a visible twin. */}
+            {pushToTalk && (
+              <div className="mb-2">
+                {/* i18n: needs `voice.ptt.hold`, `voice.ptt.transmitting`,
+                    `voice.ptt.blocked`, `voice.ptt.hintKey`,
+                    `voice.ptt.hintButton`, `voice.ptt.unfocused`. */}
+                <Button
+                  variant={isTransmitting ? "default" : "secondary"}
+                  className={cn(
+                    "w-full select-none",
+                    // Without this a long press on a phone starts a text
+                    // selection or a scroll and the button never gets its
+                    // pointerup — which would be a stuck-open mic.
+                    "touch-none",
+                    isTransmitting && "ring-2 ring-accent",
+                  )}
+                  disabled={pushToTalkBlocked}
+                  aria-pressed={isTransmitting}
+                  onPointerDown={(event) => {
+                    // Capturing means the pointerup is delivered here even if
+                    // the finger slides off the button before lifting.
+                    event.currentTarget.setPointerCapture?.(event.pointerId);
+                    onPushToTalk?.(true);
+                  }}
+                  onPointerUp={() => onPushToTalk?.(false)}
+                  onPointerCancel={() => onPushToTalk?.(false)}
+                  onLostPointerCapture={() => onPushToTalk?.(false)}
+                  // Keyboard users get hold-to-talk on the focused button too;
+                  // a plain click (which is press+release in one) would be a
+                  // transmission of zero length, so Space is handled by hand.
+                  onKeyDown={(event) => {
+                    if (event.key === " " && !event.repeat) {
+                      event.preventDefault();
+                      onPushToTalk?.(true);
+                    }
+                  }}
+                  onKeyUp={(event) => {
+                    if (event.key === " ") {
+                      event.preventDefault();
+                      onPushToTalk?.(false);
+                    }
+                  }}
+                  onBlur={() => onPushToTalk?.(false)}
+                >
+                  {isTransmitting ? (
+                    <Mic className="h-4 w-4" aria-hidden="true" />
+                  ) : (
+                    <MicOff className="h-4 w-4" aria-hidden="true" />
+                  )}
+                  {pushToTalkBlocked
+                    ? "Muted — push-to-talk is off"
+                    : isTransmitting
+                      ? "Transmitting"
+                      : "Hold to talk"}
+                </Button>
+                <p className="mt-1 text-center text-[11px] text-paper-muted">
+                  {pushToTalkKeyLabel
+                    ? `Hold ${pushToTalkKeyLabel} or the button above.`
+                    : "Hold the button above to talk."}
+                </p>
+                {pushToTalkKeyLabel && !windowFocused && (
+                  /* Said out loud rather than hidden: a browser cannot see a
+                     key pressed while another window has focus, so the binding
+                     really is dead right now. Only the desktop shell can
+                     register a global hotkey. */
+                  <p
+                    role="status"
+                    className="mt-1 text-center text-[11px] text-warning"
+                  >
+                    This window isn&apos;t focused — the key won&apos;t reach
+                    it. Click here first, or use the button.
+                  </p>
+                )}
+              </div>
+            )}
             <div className="flex items-center justify-center gap-2">
               <Button
                 variant="secondary"

@@ -23,6 +23,7 @@ import {
   AppBootstrapError,
   AppLoadingShell,
 } from "@/components/layout/app-loading-shell";
+import { ChannelIcon } from "@/components/layout/channel-icon";
 import { ChannelList } from "@/components/layout/channel-list";
 import { ChannelMembersPanel } from "@/components/layout/channel-members-panel";
 import { WebhooksPanel } from "@/components/layout/webhooks-panel";
@@ -50,6 +51,11 @@ import { UserPanel } from "@/components/layout/user-panel";
 import { ScreenShareView } from "@/components/voice/screen-share-view";
 import { VoiceAudioSinks } from "@/components/voice/voice-audio-sinks";
 import { VoicePanel } from "@/components/voice/voice-panel";
+import {
+  formatBinding,
+  supportsKeyBinding,
+} from "@/components/voice/push-to-talk";
+import { usePushToTalk } from "@/components/voice/use-push-to-talk";
 import { VoiceStatusBar } from "@/components/voice/voice-status-bar";
 import { PromptDialog } from "@/components/ui/prompt-dialog";
 import { Seo } from "@/components/marketing/seo";
@@ -114,6 +120,7 @@ import {
   rememberServers,
 } from "@/lib/notifications";
 import { useChannelNotifications } from "@/hooks/use-notifications";
+import { useUserStatus } from "@/hooks/use-status";
 import { createRealtimeTransport, type RealtimeStatus } from "@/lib/realtime";
 import { adoptThemePreference } from "@/lib/theme";
 import { isMeshForced } from "@/lib/voice-backend";
@@ -327,6 +334,24 @@ function MainAppContent({
   const voice = useMemo(() => createVoiceController(transport), [transport]);
   const [voiceState, setVoiceState] = useState(voice.getState());
 
+  /**
+   * User status. The manual half comes back from `/api/me` with the rest of the
+   * preferences, so it survives a reconnect and follows the account to the next
+   * device; the idle half is measured in this tab and reported over the socket.
+   *
+   * `connected` is load-bearing, not decoration: the server scopes idle to the
+   * socket that reported it, so a reconnect has to re-announce it or somebody
+   * who was away when the link flapped comes back reading as online.
+   */
+  const status = useUserStatus({
+    stored: user?.preferences?.status ?? null,
+    sendIdle: useCallback(
+      (idle: boolean) => transport.sendChat({ type: "set-idle", idle }),
+      [transport],
+    ),
+    connected: connection === "online",
+  });
+
   const location = useLocation();
   const navigate = useNavigate();
   // Last path this component applied or emitted — guards the deep-link effect
@@ -400,6 +425,24 @@ function MainAppContent({
   useEffect(() => {
     rememberServers(servers);
   }, [servers]);
+
+  const inPushToTalk =
+    localSettings.inputMode === "push-to-talk" &&
+    voiceState.status === "connected";
+
+  const handlePushToTalk = useCallback(
+    (held: boolean) => voice.setPushToTalkActive(held),
+    [voice],
+  );
+
+  // The key binding lives here rather than in the panel because the panel is
+  // unmounted the moment you navigate to a text channel, and push-to-talk has
+  // to keep working while you read the chat.
+  const { windowFocused } = usePushToTalk({
+    enabled: inPushToTalk,
+    binding: localSettings.pushToTalkKey,
+    onHeldChange: handlePushToTalk,
+  });
 
   // Electron: Cmd/Ctrl+Shift+M → toggle mute when connected to voice.
   useEffect(() => {
@@ -1199,6 +1242,8 @@ function MainAppContent({
       inputDeviceId: localSettings.inputDeviceId,
       inputVolume: localSettings.inputVolume,
       startMuted: localSettings.muteOnJoin,
+      inputMode: localSettings.inputMode,
+      processing: localSettings.micProcessing,
     });
   }
 
@@ -1207,12 +1252,19 @@ function MainAppContent({
     setLocalSettings(next);
     saveLocalSettings(next);
     voice.setInputVolume(next.inputVolume);
+    // Applied whatever the call status: the mode is what a later join starts
+    // in, and switching it mid-call only flips `track.enabled`, so there is no
+    // reason to defer it and no risk of interrupting anything.
+    voice.setInputMode(next.inputMode);
     if (
       next.inputDeviceId !== prevDeviceId &&
       voice.getState().status !== "idle"
     ) {
       void voice.setInputDevice(next.inputDeviceId);
     }
+    // Re-captures the track and swaps it into the live senders. Cheap to call
+    // unconditionally — it returns immediately when nothing changed.
+    void voice.setMicProcessing(next.micProcessing);
   }
 
   const refreshAfterJoin = useCallback(
@@ -1564,6 +1616,8 @@ function MainAppContent({
           peerCount={voiceState.remotePeers.length}
           isMuted={voiceState.isMuted}
           isDeafened={voiceState.isDeafened}
+          inputMode={voiceState.inputMode}
+          isTransmitting={voiceState.isTransmitting}
           usingSfu={voiceState.usingSfu}
           // This widget only exists once you have navigated away from the voice
           // channel, so it is the only thing that can tell you a share is live
@@ -1582,6 +1636,11 @@ function MainAppContent({
         isMuted={voiceState.isMuted}
         inVoice={voiceState.status === "connected"}
         showUserButton={showUserButton}
+        manualStatus={status.manual}
+        effectiveStatus={status.effective}
+        statusSaving={status.saving}
+        statusError={status.error}
+        onSetStatus={status.setManual}
         onToggleMute={() => voice.toggleMute()}
         onOpenSettings={() => setSettingsOpen(true)}
       />
@@ -1646,12 +1705,19 @@ function MainAppContent({
         </button>
         <div className="min-w-0">
           <p className="flex items-center gap-1.5 truncate font-display text-base font-bold">
-            {selectedChannel.isPrivate && (
-              <Lock className="h-3.5 w-3.5 shrink-0 text-warning" />
+            {selectedChannel.imageUrl ? (
+              <ChannelIcon channel={selectedChannel} className="h-4 w-4" />
+            ) : (
+              selectedChannel.isPrivate && (
+                <Lock className="h-3.5 w-3.5 shrink-0 text-warning" />
+              )
             )}
             {/* `#` names a channel inside a server. A conversation's title is a
-                person, and hashing it renames them. */}
-            {selectedChannel.kind === "server" &&
+                person, and hashing it renames them. Skipped once the channel
+                has its own image/emoji — `ChannelIcon` above already carries
+                that identity, and stacking `#` in front of it doubles up. */}
+            {!selectedChannel.imageUrl &&
+            selectedChannel.kind === "server" &&
             selectedChannel.type === "text" &&
             !selectedChannel.isPrivate
               ? "#"
@@ -2039,6 +2105,15 @@ function MainAppContent({
                 speakingPeerIds={voiceState.speakingPeerIds}
                 isMuted={voiceState.isMuted}
                 isDeafened={voiceState.isDeafened}
+                inputMode={voiceState.inputMode}
+                isTransmitting={voiceState.isTransmitting}
+                pushToTalkKeyLabel={
+                  supportsKeyBinding()
+                    ? formatBinding(localSettings.pushToTalkKey)
+                    : null
+                }
+                windowFocused={windowFocused}
+                onPushToTalk={handlePushToTalk}
                 peerVolumes={voiceState.peerVolumes}
                 error={voiceState.error}
                 compactPeers={localSettings.compactPeers}

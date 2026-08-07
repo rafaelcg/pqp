@@ -240,6 +240,25 @@ export const en = {
   "connection.wsUrlFailed":
     "Realtime connection failed — check the WebSocket URL",
 
+  // ---------------------------------------------------------------- user status
+  // Four states everybody can see, plus the one only its owner sees. "Invisible"
+  // and "Offline" are the same pip on purpose — that is the entire point of the
+  // feature — so only the labels tell them apart, and only for the account
+  // itself.
+  "status.online": "Online",
+  "status.idle": "Idle",
+  "status.dnd": "Do not disturb",
+  "status.offline": "Offline",
+  "status.invisible": "Invisible",
+  "status.change": "Change your status",
+  // Says what invisibility does *and* what it does not, because a privacy
+  // control people mis-read is a privacy control that fails. Voice is the one
+  // deliberate exception: a call you joined is a room you can be heard in.
+  "status.invisibleHint":
+    "You'll show as offline to everyone, and you won't appear in channel or typing indicators. Voice channels you join still show you — people can hear you there.",
+  "status.dndHint": "You stay visible; this device stops popping notifications.",
+  "status.saveFailed": "Could not change your status — try again",
+
   // ------------------------------------------------------------------ age gate
   "ageGate.eyebrow": "Before you start",
   "ageGate.title": "Confirm your date of birth",
@@ -406,6 +425,17 @@ export const en = {
   "voice.bar.person": "{count} person",
   "voice.bar.people": "{count} people",
   "voice.bar.leave": "Disconnect from voice",
+  "voice.tile.live": "Live",
+  "voice.tile.holdToTalk": "Hold to talk",
+  "voice.ptt.hold": "Hold to talk",
+  "voice.ptt.transmitting": "Transmitting",
+  "voice.ptt.blocked": "Muted — push-to-talk is off",
+  "voice.ptt.hintKey": "Hold {key} or the button above.",
+  "voice.ptt.hintButton": "Hold the button above to talk.",
+  "voice.ptt.unfocused":
+    "This window isn't focused — the key won't reach it. Click here first, or use the button.",
+  "voice.bar.pttLive": "Live",
+  "voice.bar.pttIdle": "PTT",
   "voice.bar.open": "Open voice channel {name}",
 
   "voice.share.someone": "Someone",
@@ -440,6 +470,15 @@ export const en = {
     "This call runs on a voice server this app build cannot use, so you have not joined it. Nobody in the call can hear you.",
   "voice.error.transportUnreachable":
     "Could not reach the voice server, so you have not joined this call. Check your network and try again.",
+
+  // ------------------------------------------------------------ channel meta
+  // The channel image is a URL, not an upload — rendered to everyone in the
+  // server, so it is restricted to https rather than accepting whatever a
+  // pasted link happens to be.
+  "channel.meta.image.error.httpsOnly":
+    "Image links need to start with https://.",
+  "channel.meta.image.error.invalid": "That doesn't look like a URL.",
+  "channel.meta.error.generic": "Couldn't save that. Try again.",
 } as const;
 
 export type MessageKey = keyof typeof en;

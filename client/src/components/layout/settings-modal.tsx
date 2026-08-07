@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from "react";
 import {
   deleteConfirmationMatches,
   expectedDeleteConfirmation,
@@ -13,11 +19,22 @@ import { Input } from "@/components/ui/input";
 import { AvatarPicker } from "@/components/user/avatar-picker";
 import { useNotificationSettings } from "@/hooks/use-notifications";
 import { useTheme } from "@/hooks/use-theme";
+import { KeyBindingField } from "@/components/voice/key-binding-field";
 import {
+  defaultPushToTalkBinding,
+  formatBinding,
+  parseBinding,
+  supportsKeyBinding,
+  type KeyBinding,
+} from "@/components/voice/push-to-talk";
+import type { VoiceInputMode } from "@/hooks/use-voice";
+import {
+  defaultMicProcessing,
   ensureMediaPermission,
   listAudioDevices,
   supportsAudioOutputSelection,
   type MediaDeviceOption,
+  type MicProcessing,
 } from "@/lib/audio-devices";
 import {
   adoptNotificationPreferences,
@@ -41,6 +58,21 @@ export interface LocalSettings {
   inputVolume: number;
   outputVolume: number;
   showLinkEmbeds: boolean;
+  /**
+   * Voice input mode and its key binding.
+   *
+   * DEVICE-LOCAL FOR NOW, and deliberately absent from `preferencesFromLocal`.
+   * `userPreferencesSchema` in `@pqp/shared` has no key for either yet, and
+   * that schema is not this change's to edit — the exact keys to add are listed
+   * in the handover. Until they exist these live in `localStorage` alongside
+   * the device ids, which is the right home for the *binding* in any case: a
+   * `KeyboardEvent.code` is a physical key on the keyboard in front of you, and
+   * syncing it to a phone or a different layout is meaningless.
+   */
+  inputMode: VoiceInputMode;
+  pushToTalkKey: KeyBinding;
+  /** getUserMedia processing flags. Also pending a shared-schema key. */
+  micProcessing: MicProcessing;
 }
 
 const STORAGE_KEY = "pqp-local-settings";
@@ -53,6 +85,11 @@ export const defaultLocalSettings: LocalSettings = {
   inputVolume: 1,
   outputVolume: 1,
   showLinkEmbeds: true,
+  // Voice activity stays the default: it is what every existing user already
+  // has, and push-to-talk is a choice people make, not one made for them.
+  inputMode: "voice-activity",
+  pushToTalkKey: defaultPushToTalkBinding,
+  micProcessing: defaultMicProcessing,
 };
 
 export function loadLocalSettings(): LocalSettings {
@@ -81,6 +118,18 @@ export function loadLocalSettings(): LocalSettings {
         typeof parsed.outputDeviceId === "string"
           ? parsed.outputDeviceId
           : defaultLocalSettings.outputDeviceId,
+      inputMode:
+        parsed.inputMode === "push-to-talk" ? "push-to-talk" : "voice-activity",
+      // A binding that no longer parses — hand-edited storage, or a key this
+      // build has since started refusing — falls back rather than leaving
+      // push-to-talk bound to nothing and the user apparently mute.
+      pushToTalkKey:
+        parseBinding(parsed.pushToTalkKey) ?? defaultLocalSettings.pushToTalkKey,
+      micProcessing: {
+        echoCancellation: parsed.micProcessing?.echoCancellation !== false,
+        noiseSuppression: parsed.micProcessing?.noiseSuppression !== false,
+        autoGainControl: parsed.micProcessing?.autoGainControl !== false,
+      },
     };
   } catch {
     return defaultLocalSettings;
@@ -279,6 +328,45 @@ function MicLevelMeter({
     </div>
   );
 }
+
+const INPUT_MODES: {
+  value: VoiceInputMode;
+  label: string;
+  description: string;
+}[] = [
+  {
+    value: "voice-activity",
+    label: "Voice activity",
+    description: "Your mic is open whenever you are not muted.",
+  },
+  {
+    value: "push-to-talk",
+    label: "Push to talk",
+    description: "Your mic stays closed until you hold a key or the button.",
+  },
+];
+
+const MIC_PROCESSING_OPTIONS: {
+  key: keyof MicProcessing;
+  label: string;
+  description: string;
+}[] = [
+  {
+    key: "echoCancellation",
+    label: "Echo cancellation",
+    description: "Stops others hearing themselves back through your speakers.",
+  },
+  {
+    key: "noiseSuppression",
+    label: "Noise suppression",
+    description: "Removes fans and keyboards — and some of your consonants.",
+  },
+  {
+    key: "autoGainControl",
+    label: "Automatic gain control",
+    description: "Evens out your level, and raises the room between sentences.",
+  },
+];
 
 const THEME_OPTIONS: { value: ThemePreference; label: string }[] = [
   { value: "light", label: "Light" },
@@ -876,6 +964,9 @@ export function SettingsModal({
   const [username, setUsername] = useState("");
   const [avatarUrl, setAvatarUrl] = useState("");
   const [draftLocal, setDraftLocal] = useState(localSettings);
+  // Mirrors `draftLocal` so `patchLocal` can compose off the latest values
+  // without doing its work inside a render-phase state updater.
+  const draftRef = useRef(draftLocal);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [inputs, setInputs] = useState<MediaDeviceOption[]>([]);
@@ -883,6 +974,10 @@ export function SettingsModal({
   const [devicesError, setDevicesError] = useState<string | null>(null);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const canSelectOutput = supportsAudioOutputSelection();
+  // Probed once: whether this machine has a keyboard worth binding does not
+  // change while the dialog is open, and re-evaluating it per render would run
+  // a media query on every keystroke in the display-name field.
+  const canBindKey = useMemo(() => supportsKeyBinding(), []);
   const settingsRef = useRef(localSettings);
 
   // One dialog at a time rather than two stacked ones: `Dialog` installs a
@@ -914,6 +1009,7 @@ export function SettingsModal({
   useEffect(() => {
     if (open) {
       setDraftLocal(settingsRef.current);
+      draftRef.current = settingsRef.current;
       setError(null);
     }
   }, [open]);
@@ -962,11 +1058,18 @@ export function SettingsModal({
   }, [open]);
 
   function patchLocal(partial: Partial<LocalSettings>) {
-    setDraftLocal((prev) => {
-      const next = { ...prev, ...partial };
-      onAudioSettingsLive?.(next);
-      return next;
-    });
+    // Composed off a ref rather than inside a `setDraftLocal` updater.
+    //
+    // `onAudioSettingsLive` reaches back into the app and sets state there, and
+    // a state updater runs *during render* — React warns about exactly this
+    // ("cannot update a component while rendering a different component"), and
+    // it stopped being merely untidy once the callback grew a `getUserMedia`
+    // on it: an updater that React re-runs would re-open the microphone. The
+    // ref is what lets two patches in one tick still compose.
+    const next = { ...draftRef.current, ...partial };
+    draftRef.current = next;
+    setDraftLocal(next);
+    onAudioSettingsLive?.(next);
     // These already apply and persist locally as they are edited rather than on
     // Save, so the account copy follows the same moment. Device-only changes
     // queue nothing, and a slider drag coalesces into one request.
@@ -1156,6 +1259,95 @@ export function SettingsModal({
               liveAnalyser={voiceAnalyser}
               active={open}
             />
+
+            <fieldset className="space-y-2">
+              <legend className="mb-1 block text-xs uppercase tracking-wide text-paper-muted">
+                Input mode
+              </legend>
+              {INPUT_MODES.map((mode) => (
+                <label
+                  key={mode.value}
+                  className="flex cursor-pointer items-start gap-3"
+                >
+                  <input
+                    type="radio"
+                    name="input-mode"
+                    className="mt-1 h-4 w-4 accent-[var(--color-signal)]"
+                    checked={draftLocal.inputMode === mode.value}
+                    onChange={() => patchLocal({ inputMode: mode.value })}
+                  />
+                  <span className="min-w-0">
+                    <span className="block text-sm">{mode.label}</span>
+                    <span className="block text-xs text-paper-muted">
+                      {mode.description}
+                    </span>
+                  </span>
+                </label>
+              ))}
+            </fieldset>
+
+            {draftLocal.inputMode === "push-to-talk" &&
+              (canBindKey ? (
+                <div className="space-y-1.5">
+                  <KeyBindingField
+                    label="Push-to-talk key"
+                    binding={draftLocal.pushToTalkKey}
+                    onChange={(pushToTalkKey) => patchLocal({ pushToTalkKey })}
+                  />
+                  {/* The honest limit, stated where the binding is set rather
+                      than discovered later by talking to nobody. A web page
+                      cannot receive a key pressed while another window has
+                      focus; there is no global hotkey short of the desktop
+                      shell. */}
+                  <p className="text-xs text-paper-muted">
+                    {formatBinding(draftLocal.pushToTalkKey)} works while this
+                    window is focused and you are not typing. It cannot work
+                    while another app is in front — the voice panel has a
+                    hold-to-talk button for that.
+                  </p>
+                </div>
+              ) : (
+                <p className="text-xs text-paper-muted">
+                  This device has no keyboard to bind, so push-to-talk uses the
+                  hold-to-talk button in the voice panel.
+                </p>
+              ))}
+
+            <fieldset className="space-y-2">
+              <legend className="mb-1 block text-xs uppercase tracking-wide text-paper-muted">
+                Microphone processing
+              </legend>
+              {MIC_PROCESSING_OPTIONS.map((option) => (
+                <label
+                  key={option.key}
+                  className="flex cursor-pointer items-start gap-3"
+                >
+                  <input
+                    type="checkbox"
+                    className="mt-1 h-4 w-4 accent-[var(--color-signal)]"
+                    checked={draftLocal.micProcessing[option.key]}
+                    onChange={(e) =>
+                      patchLocal({
+                        micProcessing: {
+                          ...draftLocal.micProcessing,
+                          [option.key]: e.target.checked,
+                        },
+                      })
+                    }
+                  />
+                  <span className="min-w-0">
+                    <span className="block text-sm">{option.label}</span>
+                    <span className="block text-xs text-paper-muted">
+                      {option.description}
+                    </span>
+                  </span>
+                </label>
+              ))}
+              <p className="text-xs text-paper-muted">
+                Changing these re-opens the microphone. Nobody is dropped from
+                the call.
+              </p>
+            </fieldset>
 
             {canSelectOutput ? (
               <label className="block">
