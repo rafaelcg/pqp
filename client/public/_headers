@@ -15,3 +15,16 @@
 # construction and safe to cache hard.
 /assets/*
   Cache-Control: public, max-age=31536000, immutable
+
+# RFC 9116 security contact must be text/plain, and RFC 9727 wants its media
+# type stated — Pages would otherwise guess from the extension-less filename.
+/.well-known/security.txt
+  Content-Type: text/plain; charset=utf-8
+/.well-known/api-catalog
+  Content-Type: application/linkset+json
+
+# RFC 8288 discovery pointers on the homepage: where the API catalog and the
+# live status live. Cheap, standard, and true — unlike advertising agent
+# registration surfaces this product does not have.
+/
+  Link: </.well-known/api-catalog>; rel="api-catalog", <https://api.pqp.gg/status.json>; rel="status"

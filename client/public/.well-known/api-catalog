@@ -1,0 +1,13 @@
+{
+  "linkset": [
+    {
+      "anchor": "https://api.pqp.gg/",
+      "service-doc": [
+        { "href": "https://github.com/rafaelcg/pqp#api", "type": "text/html" }
+      ],
+      "status": [
+        { "href": "https://api.pqp.gg/status.json", "type": "application/json" }
+      ]
+    }
+  ]
+}

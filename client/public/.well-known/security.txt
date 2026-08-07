@@ -1,0 +1,6 @@
+# Security contact for pqp.gg — RFC 9116
+Contact: mailto:contato@pqp.gg
+Expires: 2027-08-07T00:00:00.000Z
+Preferred-Languages: pt-BR, en
+Canonical: https://pqp.gg/.well-known/security.txt
+Policy: https://pqp.gg/terms
