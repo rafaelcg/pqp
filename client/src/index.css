@@ -403,15 +403,18 @@ h2,
  * ~341px, so a `position: fixed` dialog is suddenly wider than the screen and
  * loses the first characters of its own title off the left edge.
  *
- * A dialog is where this bites: its fields are usually autofocused, so the zoom
- * fires before the user has touched anything. 16px on the control removes the
- * reason for it. Only on the screens that can be zoomed that way — a pointer
- * device or a wide window keeps the tighter type.
+ * A dialog is where this bites hardest — its fields are usually autofocused,
+ * so the zoom fires before the user has touched anything — but the composer,
+ * the search boxes and every other field trigger exactly the same jump the
+ * moment they are tapped, which reads as the whole app lurching. So the rule
+ * is app-wide, not dialog-scoped: 16px on the control removes the reason for
+ * the zoom to exist. Only on the screens that can be zoomed that way — a
+ * pointer device or a wide window keeps the tighter type.
  */
 @media (max-width: 639px), (pointer: coarse) {
-  [data-dialog-panel] input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]),
-  [data-dialog-panel] select,
-  [data-dialog-panel] textarea {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]),
+  select,
+  textarea {
     font-size: 16px;
   }
 }
