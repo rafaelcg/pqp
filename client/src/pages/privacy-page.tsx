@@ -56,6 +56,26 @@ export function PrivacyPage() {
         and delete the data. See the <Link to="/terms">Terms of Service</Link>{" "}
         for the eligibility rule.
       </p>
+      <p>
+        <strong>How we ask, and what we keep.</strong> The first time you use the
+        app after signing in, we ask for your <strong>date of birth</strong> —
+        day, month and year — and you can answer only once. The server works out
+        whether you are 18 yet. <strong>If you are, we do not keep the
+        date</strong>: your account keeps the yes-or-no answer and the moment you
+        gave it, and the date itself is never written to our database. If the
+        answer is that you are under 18, the account is blocked from using pqp.gg
+        and we do keep the date you entered, because it is the record an appeal
+        would have to be decided on. Both the answer and the date, where there is
+        one, live on your account, so deleting your account deletes them.
+      </p>
+      <p>
+        This is a <strong>self-declaration that we enforce</strong>, not age
+        verification. We do not ask for a document and we do not use an
+        age-assurance provider, because that would mean holding far more personal
+        data about you than an 18+ rule needs. An account blocked by this check
+        can still download its data and delete itself: your LGPD art. 18 rights
+        do not depend on being welcome.
+      </p>
 
       <h2>What we collect</h2>
       <p>
@@ -330,6 +350,11 @@ export function PrivacyPage() {
           <strong>Account and profile</strong> — until the account is deleted.
         </li>
         <li>
+          <strong>The 18+ declaration</strong> — the yes-or-no answer and when
+          you gave it, until the account is deleted. The date of birth itself is
+          kept only where the answer was that you are under 18.
+        </li>
+        <li>
           <strong>Messages in a server</strong> — indefinitely by default. Each
           server owner can set a <strong>message retention window</strong> for
           their server, after which a daily job deletes messages older than that
@@ -366,24 +391,62 @@ export function PrivacyPage() {
         </li>
       </ul>
       <p>
-        After a deletion request we may keep the minimum needed to comply with a
-        legal obligation, or to exercise rights in a proceeding (LGPD art. 16).
+        <strong>What survives your account being deleted.</strong> Deleting your
+        account removes your profile, your settings and every message you wrote,
+        anywhere. A few records stay, each because LGPD art. 16 allows us to keep
+        data to comply with a legal obligation or to exercise rights in a
+        proceeding:
+      </p>
+      <ul>
+        <li>
+          <strong>Audit entries for moderation actions you took</strong> in
+          someone else&apos;s server. The entry stays and your user id is removed
+          from it, and the log is still deleted after 90 days like every other
+          entry. It is the only record that a moderator deleted a message or
+          banned a member; if deleting an account erased it, abusing a server
+          would be one click away from being erased too.
+        </li>
+        <li>
+          <strong>Bans you issued against other people</strong>, with your id
+          removed. That record is a fact about the person who was banned and
+          about the server, not about you — removing it would silently readmit
+          everyone you had ever banned.
+        </li>
+        <li>
+          <strong>Reports other people filed about you</strong>, including the
+          copy of the reported content kept as evidence, with your id removed. A
+          report has to outlive what it points at, or deleting your account would
+          be a way to destroy the record of your own conduct. Reports that have
+          been resolved are deleted after 90 days.
+        </li>
+        <li>
+          <strong>Reports you filed about other people</strong>, with your id
+          removed. Those are records of somebody else&apos;s conduct, and an open
+          queue must not empty itself because the person who reported it left.
+        </li>
+      </ul>
+      <p>
+        Beyond those, we may keep the minimum needed to comply with a legal
+        obligation, or to exercise rights in a proceeding (LGPD art. 16).
       </p>
 
       <h2>Your rights, and how to use them</h2>
       <p>
-        LGPD art. 18 gives you the rights below. Some are self-serve in the app
-        today; the rest are handled by a person, because{" "}
-        <strong>self-serve account deletion and personal data export are not
-        built yet</strong>. We would rather tell you that than describe a button
-        that does not exist.
+        LGPD art. 18 gives you the rights below. The two heaviest ones —{" "}
+        <strong>getting a copy of your data, and deleting your account</strong> —
+        are self-serve in the app, in <strong>Settings</strong> under{" "}
+        <strong>&quot;Your data&quot;</strong>. Others are self-serve elsewhere
+        in Settings, and the rest are handled by a person. Where a control does
+        not exist, we say so rather than describe a button we have not built.
       </p>
       <ul>
         <li>
           <strong>Confirmation that we process your data, and access to it (art.
-          18, I and II)</strong> — email{" "}
-          <strong>{"{{PRIVACY_EMAIL}}"}</strong>. We will send you a copy of the
-          account data and messages we hold about you.
+          18, I and II)</strong> — self-serve: <strong>Download my data</strong>{" "}
+          in Settings, under &quot;Your data&quot;, builds a file of the account
+          data, settings and messages we hold about you, including your 18+
+          declaration. For anything that file does not cover, email{" "}
+          <strong>{"{{PRIVACY_EMAIL}}"}</strong>.
         </li>
         <li>
           <strong>Correction of incomplete or out-of-date data (art. 18, III)
@@ -395,21 +458,39 @@ export function PrivacyPage() {
           <strong>Anonymisation, blocking or deletion of unnecessary or
           excessive data (art. 18, IV)</strong> — email us describing what you
           want removed. You can also delete your own messages one by one in the
-          app.
+          app, or delete the whole account yourself — see art. 18, VI below.
         </li>
         <li>
-          <strong>Portability (art. 18, V)</strong> — email us and we will
-          provide your data in a structured, machine-readable file. There is no
-          self-serve export for individuals. (Server <em>owners</em> can export a
-          whole server from Server Settings, but that is an owner tool covering
-          everyone&apos;s messages in that server — it is not a personal data
-          export.)
+          <strong>Portability (art. 18, V)</strong> — self-serve:{" "}
+          <strong>Download my data</strong> gives you one structured,
+          machine-readable JSON file. It holds your profile, your settings, your
+          18+ declaration, the servers you are in and your role in each, every
+          message you wrote with the channel and server it was in and the files
+          attached to it, the conversations you took part in, who you have
+          blocked, reports you filed, and moderation actions you took. Very large
+          accounts are capped, and the file says so when it has been cut short.
+          (Server <em>owners</em> can also export a whole server from Server
+          Settings, but that is an owner tool covering everyone&apos;s messages
+          in that server — it is not a personal data export.)
         </li>
         <li>
           <strong>Deletion of data processed with consent (art. 18, VI)</strong>{" "}
-          — email us. To delete your whole account, email{" "}
-          <strong>{"{{PRIVACY_EMAIL}}"}</strong> from the address on your
-          account; we handle it manually today.
+          — self-serve: <strong>Delete my account</strong> in Settings, under
+          &quot;Your data&quot;. You confirm by typing your own handle. It is
+          permanent, there is no undo and no backup to restore from, and it is
+          real deletion rather than a hidden account: your profile, settings,
+          every message you wrote anywhere, your reactions, mentions, read
+          markers, memberships, conversation participation, invites you created
+          and the files you uploaded all go, and your account at Clerk is deleted
+          too. A few moderation records stay behind — see &quot;What survives
+          your account being deleted&quot; above.{" "}
+          <strong>One thing stops it:</strong> if you still own a server that
+          other people are in, we refuse and name those servers, because taking
+          the server with you would destroy everyone else&apos;s messages in it
+          to serve your request. Transfer the server to another member, or delete
+          it, and then delete your account. A server nobody else is in is not a
+          problem — it goes with the account. For anything this does not cover,
+          email <strong>{"{{PRIVACY_EMAIL}}"}</strong>.
         </li>
         <li>
           <strong>Information about who we share data with (art. 18, VII)</strong>{" "}
@@ -428,6 +509,26 @@ export function PrivacyPage() {
         </li>
       </ul>
       <p>
+        <strong>What your export leaves out, and why.</strong> It contains the
+        messages <em>you</em> wrote. It does not contain messages other people
+        wrote, including the other half of your direct messages. Those words are
+        their personal data rather than yours — art. 18, II is a right of access
+        to data about <em>you</em>, and a message somebody else wrote is that
+        person&apos;s own expression. Leaving it out costs you very little: you
+        can still read every one of those messages in the app, exactly as you
+        always could. What changes is only whether somebody else&apos;s words
+        become a file that can be forwarded, published or handed to a third party
+        in one action. For the same reason, a report you filed lists what you
+        said and who you reported, but not the copy of the content you reported.
+        In place of a transcript, the file lists every conversation you were part
+        of, who else was in it, when it last saw traffic and how many of the
+        messages were yours. If you genuinely need the other side — a court case,
+        a harassment complaint — write to the encarregado at{" "}
+        <strong>{"{{DPO_EMAIL}}"}</strong>, who weighs that request by hand.
+        There is no self-serve route to another person&apos;s messages, and there
+        should not be one.
+      </p>
+      <p>
         <strong>How to make a request.</strong> Email{" "}
         <strong>{"{{PRIVACY_EMAIL}}"}</strong> or the encarregado at{" "}
         <strong>{"{{DPO_EMAIL}}"}</strong>, from the email address on your
@@ -436,11 +537,14 @@ export function PrivacyPage() {
         us up to <strong>15 days</strong> to provide a complete response.
       </p>
       <p>
-        Some things we cannot do. We cannot delete messages you sent out of other
-        people&apos;s conversations without deleting their record of a
-        conversation they took part in, and we cannot remove your messages from
-        copies a server owner has already exported or another member has
-        screenshotted.
+        <strong>What we still cannot do.</strong> Deleting your account{" "}
+        <em>does</em> take the messages you wrote out of other people&apos;s
+        conversations, including their direct messages with you. The honest cost
+        is that their side of those threads is left with gaps where your half of
+        the conversation was, and there is no way to give somebody erasure
+        without that. What we cannot reach is a copy that has already left our
+        systems: your messages will still be in an export a server owner ran
+        before you left, and in anything another member screenshotted.
       </p>
       <p>
         You also have the right to complain to the{" "}
@@ -465,6 +569,10 @@ export function PrivacyPage() {
         </li>
         <li>
           <strong>Deleting your own messages</strong>, and leaving any server.
+        </li>
+        <li>
+          <strong>Downloading your data, and deleting your account</strong> — in
+          Settings, under &quot;Your data&quot;. Both are described above.
         </li>
       </ul>
 

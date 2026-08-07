@@ -7,6 +7,7 @@ import {
 import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { isDevAuthBypassEnabled } from "@/lib/dev-auth";
+import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 interface MarketingNavProps {
@@ -14,6 +15,7 @@ interface MarketingNavProps {
 }
 
 export function MarketingNav({ variant = "solid" }: MarketingNavProps) {
+  const { t, locale } = useTranslation();
   const isHero = variant === "hero";
   const bypass = isDevAuthBypassEnabled();
 
@@ -42,7 +44,7 @@ export function MarketingNav({ variant = "solid" }: MarketingNavProps) {
             isHero ? "text-white/70 opacity-90" : "text-paper-muted hover:text-paper",
           )}
         >
-          How it works
+          {t("nav.howItWorks")}
         </a>
         <a
           href="/#hosting"
@@ -50,8 +52,10 @@ export function MarketingNav({ variant = "solid" }: MarketingNavProps) {
             "text-xs font-medium uppercase tracking-[0.18em] transition-opacity hover:opacity-100",
             isHero ? "text-white/70 opacity-90" : "text-paper-muted hover:text-paper",
           )}
+          // Deliberately still English in Portuguese — see the catalogue.
+          lang={locale === "en" ? undefined : "en"}
         >
-          Self-host
+          {t("nav.selfHost")}
         </a>
       </nav>
 
@@ -64,7 +68,7 @@ export function MarketingNav({ variant = "solid" }: MarketingNavProps) {
               isHero && "bg-white text-ink hover:bg-white/90 shadow-lg shadow-black/20",
             )}
           >
-            <Link to="/app">Open the app</Link>
+            <Link to="/app">{t("nav.openApp")}</Link>
           </Button>
         ) : (
           <>
@@ -79,7 +83,7 @@ export function MarketingNav({ variant = "solid" }: MarketingNavProps) {
                       : "text-paper-muted hover:text-paper",
                   )}
                 >
-                  Sign in
+                  {t("nav.signIn")}
                 </button>
               </SignInButton>
               <SignUpButton mode="modal" forceRedirectUrl="/app">
@@ -90,7 +94,7 @@ export function MarketingNav({ variant = "solid" }: MarketingNavProps) {
                       "bg-white text-ink hover:bg-white/90 shadow-lg shadow-black/20",
                   )}
                 >
-                  Spin up a server
+                  {t("nav.signUp")}
                 </Button>
               </SignUpButton>
             </SignedOut>
@@ -102,7 +106,7 @@ export function MarketingNav({ variant = "solid" }: MarketingNavProps) {
                   isHero && "bg-white text-ink hover:bg-white/90",
                 )}
               >
-                <Link to="/app">Open the app</Link>
+                <Link to="/app">{t("nav.openApp")}</Link>
               </Button>
             </SignedIn>
           </>

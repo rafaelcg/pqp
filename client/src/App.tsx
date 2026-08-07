@@ -78,6 +78,7 @@ import {
   updateMe,
 } from "@/lib/api";
 import { parseAppRoute } from "@/lib/app-route";
+import { translateMessage, useTranslation } from "@/lib/i18n";
 import {
   conversationChannel,
   conversationSubtitle,
@@ -123,6 +124,8 @@ interface AppProps {
 }
 
 export function App({ devBypass = false }: AppProps) {
+  const { t } = useTranslation();
+
   if (devBypass) {
     return (
       <MainAppContent resolveToken={() => Promise.resolve(DEV_AUTH_TOKEN)} />
@@ -132,8 +135,8 @@ export function App({ devBypass = false }: AppProps) {
   return (
     <>
       <Seo
-        title="App — pqp"
-        description="Open pqp — servers, text, and voice."
+        title={t("app.seo.title")}
+        description={t("app.seo.description")}
         path="/app"
         noIndex
       />
@@ -143,10 +146,11 @@ export function App({ devBypass = false }: AppProps) {
 }
 
 function ClerkAppGate() {
+  const { t } = useTranslation();
   const { isLoaded, isSignedIn } = useAuth();
 
   if (!isLoaded) {
-    return <AppLoadingShell label="Signing in…" />;
+    return <AppLoadingShell label={t("app.loading.signingIn")} />;
   }
 
   if (!isSignedIn) {
@@ -161,17 +165,15 @@ function ClerkAppGate() {
             pqp.gg
           </Link>
           <h1 className="font-display text-5xl font-extrabold leading-[0.95] sm:text-6xl">
-            Sign in to talk.
+            {t("signedOut.title")}
           </h1>
-          <p className="mt-4 max-w-sm text-paper-muted">
-            Create an account or sign in to open your servers.
-          </p>
+          <p className="mt-4 max-w-sm text-paper-muted">{t("signedOut.body")}</p>
           <div className="mt-8 flex flex-wrap gap-3">
             <SignUpButton mode="modal" forceRedirectUrl="/app">
-              <Button>Create account</Button>
+              <Button>{t("signedOut.createAccount")}</Button>
             </SignUpButton>
             <SignInButton mode="modal" forceRedirectUrl="/app">
-              <Button variant="secondary">Sign in</Button>
+              <Button variant="secondary">{t("nav.signIn")}</Button>
             </SignInButton>
           </div>
         </div>
@@ -221,6 +223,7 @@ function MainAppContent({
   resolveToken,
   showUserButton = false,
 }: MainAppContentProps) {
+  const { t } = useTranslation();
   const [user, setUser] = useState<User | null>(null);
   const [servers, setServers] = useState<Server[]>([]);
   const [channels, setChannels] = useState<Channel[]>([]);
@@ -825,7 +828,10 @@ function MainAppContent({
         setBootstrapError(
           error instanceof Error
             ? error.message
-            : "Failed to load servers from the API",
+            : // `translateMessage`, not the `t` from render: this effect is
+              // pinned to `bootstrapAttempt` and would otherwise close over the
+              // English `t` from first paint, long before the catalogue lands.
+              translateMessage("bootstrapError.fallback"),
         );
       }
     }
@@ -1445,7 +1451,7 @@ function MainAppContent({
   }
 
   if (!bootstrapReady) {
-    return <AppLoadingShell label="Loading servers…" />;
+    return <AppLoadingShell label={t("app.loading.servers")} />;
   }
 
   const activeConversation =
@@ -1807,8 +1813,8 @@ function MainAppContent({
           >
             <WifiOff className="h-3.5 w-3.5" />
             {connection === "unauthorized"
-              ? "Session expired — reconnecting…"
-              : "Connection lost — reconnecting…"}
+              ? t("connection.unauthorized")
+              : t("connection.reconnecting")}
           </div>
         )}
 
@@ -1820,7 +1826,7 @@ function MainAppContent({
               className="shrink-0 text-xs underline underline-offset-2"
               onClick={() => setAppError(null)}
             >
-              Dismiss
+              {t("connection.dismiss")}
             </button>
           </div>
         )}
@@ -1862,24 +1868,24 @@ function MainAppContent({
             <button
               type="button"
               className="rounded-md p-2 hover:bg-ink-3 md:hidden"
-              aria-label="Open navigation"
+              aria-label={t("empty.openNav")}
               onClick={() => setMobileNavOpen(true)}
             >
               <Menu className="h-6 w-6" />
             </button>
             <p className="font-display text-3xl font-bold">
               {selection.kind === "dm"
-                ? "No conversation open"
+                ? t("empty.noConversation.title")
                 : servers.length === 0
-                  ? "No servers yet"
-                  : "Pick a channel"}
+                  ? t("empty.noServers.title")
+                  : t("empty.pickChannel.title")}
             </p>
             <p className="max-w-sm text-paper-muted">
               {selection.kind === "dm"
-                ? "Pick someone from the list, or message anyone by handle."
+                ? t("empty.noConversation.body")
                 : servers.length === 0
-                  ? "Create a server or join with an invite code."
-                  : "Open the sidebar and choose text or voice."}
+                  ? t("empty.noServers.body")
+                  : t("empty.pickChannel.body")}
             </p>
             {/* Also shown in the DM view when there are no servers at all:
                 that is where a freshly federated account actually lands, and
@@ -1891,18 +1897,20 @@ function MainAppContent({
               />
             )}
             {selection.kind === "dm" ? (
-              <Button onClick={() => setNewDmOpen(true)}>New message</Button>
+              <Button onClick={() => setNewDmOpen(true)}>
+                {t("empty.newMessage")}
+              </Button>
             ) : (
               servers.length === 0 && (
                 <div className="flex gap-2">
                   <Button onClick={() => setShowCreateServer(true)}>
-                    Create server
+                    {t("empty.createServer")}
                   </Button>
                   <Button
                     variant="secondary"
                     onClick={() => setInviteMode("join")}
                   >
-                    Join invite
+                    {t("empty.joinInvite")}
                   </Button>
                 </div>
               )

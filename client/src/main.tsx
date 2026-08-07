@@ -26,7 +26,8 @@ import { DesktopTitleBar } from "./components/layout/desktop-title-bar";
 import { useTheme } from "./hooks/use-theme";
 import { isDesktopApp } from "./lib/desktop";
 import { isDevAuthBypassEnabled } from "./lib/dev-auth";
-import { applyDocumentLocale, detectLocale } from "./lib/locale";
+import { I18nProvider, useTranslation } from "./lib/i18n";
+import type { Locale } from "./lib/locale";
 import { forceTheme } from "./lib/theme";
 import { LandingPage } from "./pages/landing-page";
 import { UpdatePrompt } from "./components/layout/update-prompt";
@@ -63,8 +64,9 @@ function DarkRoutes() {
 }
 
 function AppRoutes({ devBypass = false }: { devBypass?: boolean }) {
+  const { t } = useTranslation();
   return (
-    <Suspense fallback={<AppLoadingShell label="Loading…" />}>
+    <Suspense fallback={<AppLoadingShell label={t("app.loading")} />}>
       <UpdatePrompt />
       <Routes>
         <Route element={<DarkRoutes />}>
@@ -103,15 +105,18 @@ interface ClerkColors {
  * the only surfaces it affects are modals that open on a click, long after the
  * fetch has landed. A failed load is left alone for the same reason: English is
  * a working sign-up form, and a blocked CDN should not become a blocked signup.
+ *
+ * The locale arrives from `I18nProvider` rather than from a second
+ * `detectLocale()` call: Clerk's modals and the app's own copy must never end up
+ * in different languages, which is exactly what two independent detections
+ * eventually produce.
  */
 type ClerkLocalization = ComponentProps<typeof ClerkProvider>["localization"];
 
-function useClerkLocalization(): ClerkLocalization {
+function useClerkLocalization(locale: Locale): ClerkLocalization {
   const [localization, setLocalization] = useState<ClerkLocalization>();
 
   useEffect(() => {
-    const locale = detectLocale();
-    applyDocumentLocale(locale);
     if (locale !== "pt-BR") {
       return;
     }
@@ -129,7 +134,7 @@ function useClerkLocalization(): ClerkLocalization {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [locale]);
 
   return localization;
 }
@@ -141,6 +146,7 @@ function ThemedClerkProvider({
   publishableKey: string;
   children: ReactNode;
 }) {
+  const { locale } = useTranslation();
   const { resolved } = useTheme();
   const [colors, setColors] = useState<ClerkColors | null>(null);
 
@@ -163,7 +169,7 @@ function ThemedClerkProvider({
     }),
     [resolved, colors],
   );
-  const localization = useClerkLocalization();
+  const localization = useClerkLocalization(locale);
 
   return (
     <ClerkProvider
@@ -195,26 +201,35 @@ createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <BrowserRouter>
       <ErrorBoundary>
-        <DesktopShell>
-          <DesktopDeepLinkBridge />
-          {isDevAuthBypassEnabled() ? (
-            <AppRoutes devBypass />
-          ) : publishableKey ? (
-            <ThemedClerkProvider publishableKey={publishableKey}>
-              <AppRoutes />
-            </ThemedClerkProvider>
-          ) : (
-            <div className="flex h-full items-center justify-center p-8 text-center text-muted">
-              <div>
-                <h1 className="mb-2 text-xl font-bold text-foreground">pqp</h1>
-                <p>
-                  Set VITE_CLERK_PUBLISHABLE_KEY or VITE_DEV_AUTH_BYPASS=true in
-                  client/.env
-                </p>
+        {/* Above the auth branches on purpose: the dev-bypass path renders no
+            ClerkProvider, and it used to be the one route where nothing ever
+            called detectLocale() and `<html lang>` stayed wrong. */}
+        <I18nProvider>
+          <DesktopShell>
+            <DesktopDeepLinkBridge />
+            {isDevAuthBypassEnabled() ? (
+              <AppRoutes devBypass />
+            ) : publishableKey ? (
+              <ThemedClerkProvider publishableKey={publishableKey}>
+                <AppRoutes />
+              </ThemedClerkProvider>
+            ) : (
+              <div className="flex h-full items-center justify-center p-8 text-center text-muted">
+                <div>
+                  <h1 className="mb-2 text-xl font-bold text-foreground">
+                    pqp
+                  </h1>
+                  {/* Untranslated on purpose: this only renders on a broken
+                      local build, and the reader is whoever is editing .env. */}
+                  <p>
+                    Set VITE_CLERK_PUBLISHABLE_KEY or VITE_DEV_AUTH_BYPASS=true
+                    in client/.env
+                  </p>
+                </div>
               </div>
-            </div>
-          )}
-        </DesktopShell>
+            )}
+          </DesktopShell>
+        </I18nProvider>
       </ErrorBoundary>
     </BrowserRouter>
   </StrictMode>,

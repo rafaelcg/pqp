@@ -4,6 +4,9 @@ import type {
   VoiceClientMessage,
   VoiceSignalingMessage,
 } from "@pqp/shared";
+// The pure catalogue module, not `lib/i18n` — this file must not pull React
+// into a transport.
+import { translateMessage } from "@/lib/i18n/catalogue";
 import { getWsUrl } from "@/lib/utils";
 
 type MessageHandler = (message: ChatServerMessage | VoiceSignalingMessage) => void;
@@ -197,7 +200,7 @@ export function createRealtimeTransport(): RealtimeTransport {
     if (authFailed) {
       // Still retried below — the token provider refreshes on the next attempt.
       setStatus("unauthorized");
-      errorHandler?.("Realtime authentication failed — sign in again");
+      errorHandler?.(translateMessage("connection.authFailed"));
       scheduleReconnect();
       return;
     }
@@ -206,7 +209,7 @@ export function createRealtimeTransport(): RealtimeTransport {
       closeHandler?.();
     }
     setPendingStatus();
-    errorHandler?.("Connection lost — reconnecting…");
+    errorHandler?.(translateMessage("connection.reconnecting"));
     scheduleReconnect();
   }
 
@@ -239,7 +242,7 @@ export function createRealtimeTransport(): RealtimeTransport {
     } catch {
       // A malformed VITE_WS_URL throws here rather than firing an error event,
       // which would otherwise leave the transport silently idle forever.
-      errorHandler?.("Realtime connection failed — check the WebSocket URL");
+      errorHandler?.(translateMessage("connection.wsUrlFailed"));
       scheduleReconnect();
       return;
     }
