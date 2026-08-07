@@ -24,16 +24,39 @@ import { createPortal } from "react-dom";
  */
 
 /**
- * The palette, as literal hex rather than the oklch theme tokens.
+ * The palette, resolved from the theme tokens at mount rather than frozen as
+ * hex. Feeding raw oklch straight to `ctx.fillStyle` would work in current
+ * browsers but is exactly the "mostly works" bet a decorative animation should
+ * not make — so the tokens are resolved through `getComputedStyle`, which hands
+ * back a browser-parsed rgb string that every canvas accepts. Repainting the theme
+ * mid-confetti is not handled on purpose: the animation lives 2.6 seconds.
  *
- * `ctx.fillStyle` goes through the CSS colour parser, so `oklch()` mostly works
- * — but "mostly" on a decorative animation is not worth a runtime probe and a
- * fallback path. These are the same five colours the tokens resolve to
- * (`--color-accent`, its hover, success, warning, and text), frozen. They read
- * as pqp in both themes because they sit on the modal scrim, which is dark in
- * both by design.
+ * A token that fails to resolve inherits the surrounding text colour, which is
+ * a monochrome shower rather than a crash — an acceptable way for a party
+ * trick to degrade.
  */
-const COLORS = ["#c4e848", "#9fc23c", "#4ec98a", "#e8b04a", "#e8e4d6"];
+const COLOR_TOKENS = [
+  "--color-accent",
+  "--color-accent-hover",
+  "--color-success",
+  "--color-warning",
+  "--color-text",
+];
+
+function resolveColors(): string[] {
+  const probe = document.createElement("span");
+  probe.style.position = "absolute";
+  probe.setAttribute("aria-hidden", "true");
+  document.body.appendChild(probe);
+  try {
+    return COLOR_TOKENS.map((token) => {
+      probe.style.color = `var(${token})`;
+      return getComputedStyle(probe).color;
+    });
+  } finally {
+    probe.remove();
+  }
+}
 
 const PARTICLE_COUNT = 90;
 const DURATION_MS = 2600;
@@ -55,7 +78,7 @@ interface Particle {
   color: string;
 }
 
-function makeParticles(width: number, height: number): Particle[] {
+function makeParticles(width: number, height: number, colors: string[]): Particle[] {
   const particles: Particle[] = [];
   for (let i = 0; i < PARTICLE_COUNT; i++) {
     particles.push({
@@ -70,7 +93,7 @@ function makeParticles(width: number, height: number): Particle[] {
       rotation: Math.random() * Math.PI * 2,
       spin: (Math.random() - 0.5) * 9,
       phase: Math.random() * Math.PI * 2,
-      color: COLORS[i % COLORS.length]!,
+      color: colors[i % colors.length]!,
     });
   }
   return particles;
@@ -114,7 +137,7 @@ export function Confetti() {
     canvas.height = Math.floor(height * ratio);
     ctx.scale(ratio, ratio);
 
-    const particles = makeParticles(width, height);
+    const particles = makeParticles(width, height, resolveColors());
     const start = performance.now();
     let previous = start;
     let frameId = 0;
@@ -170,12 +193,13 @@ export function Confetti() {
         className="mb-3 flex justify-center gap-1.5"
         data-testid="confetti-still"
       >
-        {COLORS.map((color, index) => (
+        {COLOR_TOKENS.map((token, index) => (
           <span
-            key={color}
+            key={token}
             className="block h-2.5 w-2 rounded-[1px]"
             style={{
-              backgroundColor: color,
+              // DOM, not canvas, so the custom property is usable directly.
+              backgroundColor: `var(${token})`,
               // Still, but not in a row like a progress bar.
               transform: `rotate(${(index - 2) * 14}deg)`,
             }}
