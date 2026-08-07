@@ -1,9 +1,7 @@
 import {
   ChevronRight,
   FolderPlus,
-  Hash,
   Lock,
-  Mic,
   Plus,
   Search,
   Settings,
@@ -13,6 +11,7 @@ import {
 import { useEffect, useState, type ReactNode } from "react";
 import type { Channel, Server, VoiceParticipant } from "@pqp/shared";
 import { SearchDialog } from "@/components/search/search-dialog";
+import { ChannelIcon } from "@/components/layout/channel-icon";
 import {
   ContextMenu,
   type ContextMenuItemDef,
@@ -476,32 +475,6 @@ export function ChannelList({
       {footer}
     </aside>
   );
-}
-
-function ChannelIcon({ channel }: { channel: Channel }) {
-  if (channel.imageUrl) {
-    if (channel.imageUrl.startsWith("http") || channel.imageUrl.startsWith("/")) {
-      return (
-        <img
-          src={channel.imageUrl}
-          alt=""
-          className="h-3.5 w-3.5 shrink-0 rounded-sm object-cover"
-        />
-      );
-    }
-    return (
-      <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center text-[11px] leading-none">
-        {channel.imageUrl}
-      </span>
-    );
-  }
-  if (channel.isPrivate) {
-    return <Lock className="h-3.5 w-3.5 shrink-0 text-warning" />;
-  }
-  if (channel.type === "voice") {
-    return <Mic className="h-3.5 w-3.5 shrink-0" />;
-  }
-  return <Hash className="h-3.5 w-3.5 shrink-0" />;
 }
 
 function ChannelSection({
