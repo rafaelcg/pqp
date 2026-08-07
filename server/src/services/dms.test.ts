@@ -39,8 +39,10 @@ const {
   isDmSendBlocked,
   listConversations,
   openConversation,
+  resolveRingableConversation,
   restoreDmParticipants,
 } = await import("./dms.js");
+const { findTimeoutForChannel, issueTimeout } = await import("./sanctions.js");
 const { blockUser } = await import("./blocks.js");
 const { createMessage } = await import("./messages.js");
 const { searchMessages } = await import("./search.js");
@@ -459,5 +461,54 @@ describeDb("conversations", () => {
     const results = await searchMessages(serverId, alice.id, "pineapple", 20);
     expect(results.results).toHaveLength(1);
     expect(results.results[0]?.channelId).toBe(serverChannelId);
+  });
+
+  // --- conversation calls ---------------------------------------------------
+
+  it("resolves the ringable participants of a conversation, and only for its participants", async () => {
+    const { channelId } = await openConversation(alice.id, [bob.id]);
+
+    const participants = await resolveRingableConversation(channelId, alice.id);
+    expect(participants?.sort()).toEqual([alice.id, bob.id].sort());
+
+    // A stranger cannot ring a conversation they are not in…
+    expect(await resolveRingableConversation(channelId, carol.id)).toBeNull();
+    // …and a server channel never rings at all.
+    expect(
+      await resolveRingableConversation(serverChannelId, alice.id),
+    ).toBeNull();
+  });
+
+  it("calling a hidden 1:1 restores it, the way a message would", async () => {
+    const { channelId } = await openConversation(alice.id, [bob.id]);
+    await hideConversation(channelId, bob.id);
+
+    const participants = await resolveRingableConversation(channelId, alice.id);
+    expect(participants).toContain(bob.id);
+    expect(await canAccessChannel(channelId, bob.id)).toBe(true);
+  });
+
+  it("a block stands between a pair's calls exactly as between their messages", async () => {
+    const { channelId } = await openConversation(alice.id, [bob.id]);
+    await blockUser(bob.id, alice.id);
+
+    expect(await resolveRingableConversation(channelId, alice.id)).toBeNull();
+  });
+
+  it("a server-wide timeout has no scope over a conversation, so it cannot block a DM call", async () => {
+    const { channelId } = await openConversation(alice.id, [bob.id]);
+    await issueTimeout({
+      serverId,
+      userId: bob.id,
+      issuedBy: alice.id,
+      minutes: 30,
+    });
+
+    // The sanction is real and bites inside its server…
+    expect(await findTimeoutForChannel(bob.id, serverChannelId)).not.toBeNull();
+    // …and resolves to no scope at all for the conversation's channel id,
+    // which is what the voice-join chokepoint relies on: a server's
+    // moderators do not get to hang up their members' DM calls.
+    expect(await findTimeoutForChannel(bob.id, channelId)).toBeNull();
   });
 });

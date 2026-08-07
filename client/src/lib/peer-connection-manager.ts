@@ -8,6 +8,16 @@ export interface RemotePeer {
   stream: MediaStream | null;
   /** Screen-share video, if this peer is currently presenting. */
   screenStream: MediaStream | null;
+  /**
+   * Camera video, if this peer's camera is on (conversation calls).
+   *
+   * A video track on the wire does not say what it shows; the roster does. An
+   * incoming video stream is filed here when its id matches the
+   * `cameraStreamId` the peer announced over the WS (`set-camera`), and under
+   * `screenStream` otherwise — which is also exactly the pre-camera behaviour
+   * for every peer that never announces one.
+   */
+  cameraStream: MediaStream | null;
   userId?: string;
   displayName?: string;
   avatarUrl?: string | null;
@@ -93,6 +103,21 @@ interface ManagedPeer {
   connectionState: PeerConnectionState;
   stream: MediaStream | null;
   screenStream: MediaStream | null;
+  cameraStream: MediaStream | null;
+  /**
+   * Every video stream this peer is sending, keyed by the *sender-side*
+   * MediaStream id (`a=msid`, preserved across the wire). Classification into
+   * screen vs camera is re-derived from `remoteCameraStreamId` whenever either
+   * side changes, because the roster announcement and the track can arrive in
+   * either order.
+   */
+  videoStreams: Map<string, MediaStream>;
+  /** The camera stream id this peer announced over the WS, or null. */
+  remoteCameraStreamId: string | null;
+  /** Our own outgoing video senders on this connection, one per purpose —
+   *  looked up by role, never by `track.kind`, because both are video. */
+  screenSender: RTCRtpSender | null;
+  cameraSender: RTCRtpSender | null;
   pendingCandidates: RTCIceCandidateInit[];
   userId?: string;
   displayName?: string;
@@ -109,6 +134,13 @@ export interface PeerConnectionManager {
   replaceLocalTrack(stream: MediaStream): Promise<void>;
   /** Publish (stream set) or stop (null) a screen-share video track to every peer. */
   setLocalScreenStream(stream: MediaStream | null): Promise<void>;
+  /** Publish (stream set) or stop (null) a camera video track to every peer. */
+  setLocalCameraStream(stream: MediaStream | null): Promise<void>;
+  /**
+   * Record which of a peer's video streams is their camera (from the roster).
+   * Null means "camera off" — any remaining video is treated as screen share.
+   */
+  setPeerCameraStreamId(remotePeerId: string, streamId: string | null): void;
   setIceServers(servers: RTCIceServer[]): void;
   connectToPeer(remotePeerId: string, identity?: PeerIdentity): void;
   setPeerIdentity(remotePeerId: string, identity: PeerIdentity): void;
@@ -132,6 +164,7 @@ export function createPeerConnectionManager(
   const peers = new Map<string, ManagedPeer>();
   let localStream: MediaStream | null = null;
   let localScreenStream: MediaStream | null = null;
+  let localCameraStream: MediaStream | null = null;
   let stateHandler: PeerStateChangeHandler | null = null;
   let currentIceServers = iceServers;
 
@@ -141,11 +174,33 @@ export function createPeerConnectionManager(
       connectionState: peer.connectionState,
       stream: peer.stream,
       screenStream: peer.screenStream,
+      cameraStream: peer.cameraStream,
       userId: peer.userId,
       displayName: peer.displayName,
       avatarUrl: peer.avatarUrl,
     }));
     stateHandler?.(remotePeers);
+  }
+
+  /**
+   * Re-derive which incoming video is the camera and which the screen.
+   *
+   * The announced id wins; anything else is screen share, which is byte-for-
+   * byte the old behaviour for peers that never turn a camera on. Ran on both
+   * track arrival and roster arrival, because the two race.
+   */
+  function classifyVideo(peer: ManagedPeer) {
+    let camera: MediaStream | null = null;
+    let screen: MediaStream | null = null;
+    for (const [id, stream] of peer.videoStreams) {
+      if (peer.remoteCameraStreamId !== null && id === peer.remoteCameraStreamId) {
+        camera = camera ?? stream;
+      } else {
+        screen = screen ?? stream;
+      }
+    }
+    peer.cameraStream = camera;
+    peer.screenStream = screen;
   }
 
   function applyIdentity(peer: ManagedPeer, identity?: PeerIdentity) {
@@ -264,11 +319,13 @@ export function createPeerConnectionManager(
     pc.ontrack = (event) => {
       const stream = event.streams[0] ?? new MediaStream([event.track]);
       if (event.track.kind === "video") {
-        managed.screenStream = stream;
-        // Fires when the sender stops the track (screen-share ended or the
+        managed.videoStreams.set(stream.id, stream);
+        classifyVideo(managed);
+        // Fires when the sender stops the track (share/camera ended or the
         // sender removed it and renegotiated) — nothing else observes that.
         event.track.onended = () => {
-          managed.screenStream = null;
+          managed.videoStreams.delete(stream.id);
+          classifyVideo(managed);
           emitState();
         };
       } else {
@@ -327,6 +384,11 @@ export function createPeerConnectionManager(
       connectionState: "connecting",
       stream: null,
       screenStream: null,
+      cameraStream: null,
+      videoStreams: new Map(),
+      remoteCameraStreamId: null,
+      screenSender: null,
+      cameraSender: null,
       pendingCandidates: [],
       iceRestartTimer: null,
       politeRestartFallback: null,
@@ -342,7 +404,12 @@ export function createPeerConnectionManager(
     }
     if (localScreenStream) {
       for (const track of localScreenStream.getTracks()) {
-        pc.addTrack(track, localScreenStream);
+        managed.screenSender = pc.addTrack(track, localScreenStream);
+      }
+    }
+    if (localCameraStream) {
+      for (const track of localCameraStream.getTracks()) {
+        managed.cameraSender = pc.addTrack(track, localCameraStream);
       }
     }
 
@@ -462,21 +529,56 @@ export function createPeerConnectionManager(
       localScreenStream = stream;
       const nextTrack = stream?.getVideoTracks()[0] ?? null;
       for (const peer of peers.values()) {
-        const sender = peer.pc
-          .getSenders()
-          .find((s) => s.track?.kind === "video");
         if (nextTrack) {
-          if (sender) {
-            await sender.replaceTrack(nextTrack);
+          if (peer.screenSender) {
+            await peer.screenSender.replaceTrack(nextTrack);
           } else {
-            peer.pc.addTrack(nextTrack, stream!);
+            peer.screenSender = peer.pc.addTrack(nextTrack, stream!);
             await negotiate(peer);
           }
-        } else if (sender) {
-          peer.pc.removeTrack(sender);
+        } else if (peer.screenSender) {
+          peer.pc.removeTrack(peer.screenSender);
+          peer.screenSender = null;
           await negotiate(peer);
         }
       }
+    },
+
+    async setLocalCameraStream(stream: MediaStream | null) {
+      localCameraStream = stream;
+      const nextTrack = stream?.getVideoTracks()[0] ?? null;
+      for (const peer of peers.values()) {
+        if (nextTrack) {
+          if (peer.cameraSender) {
+            await peer.cameraSender.replaceTrack(nextTrack);
+          } else {
+            peer.cameraSender = peer.pc.addTrack(nextTrack, stream!);
+            await negotiate(peer);
+          }
+        } else if (peer.cameraSender) {
+          peer.pc.removeTrack(peer.cameraSender);
+          peer.cameraSender = null;
+          await negotiate(peer);
+        }
+      }
+    },
+
+    setPeerCameraStreamId(remotePeerId: string, streamId: string | null) {
+      const peer = peers.get(remotePeerId);
+      if (!peer || peer.remoteCameraStreamId === streamId) {
+        return;
+      }
+      const previous = peer.remoteCameraStreamId;
+      peer.remoteCameraStreamId = streamId;
+      // Camera turned off: drop its stream outright. The sender's removeTrack
+      // does not reliably end the receiver-side track (spec says it merely
+      // mutes), and without this the dead camera stream would be reclassified
+      // as a screen share and drawn as a frozen frame.
+      if (streamId === null && previous !== null) {
+        peer.videoStreams.delete(previous);
+      }
+      classifyVideo(peer);
+      emitState();
     },
 
     setIceServers(servers: RTCIceServer[]) {
@@ -576,6 +678,7 @@ export function createPeerConnectionManager(
           }
         : undefined;
 
+      const preservedCameraStreamId = previous?.remoteCameraStreamId ?? null;
       if (previous) {
         clearIceRestartTimer(previous);
         previous.pc.close();
@@ -583,6 +686,9 @@ export function createPeerConnectionManager(
       }
 
       const managed = createPeerConnection(remotePeerId, preservedIdentity);
+      // Survives the rebuild: no roster frame accompanies a manual retry, so
+      // without this the re-arriving camera track would classify as a screen.
+      managed.remoteCameraStreamId = preservedCameraStreamId;
       peers.set(remotePeerId, managed);
       emitState();
       await negotiate(managed, true);
