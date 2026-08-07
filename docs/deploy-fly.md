@@ -391,9 +391,56 @@ If `/health` never goes green, the first two suspects are in this order: the dat
 
 ## 7. Cutover
 
+### 7a. DNS — `pqp.gg` is registered at Porkbun
+
+**Recommended: move the nameservers to Cloudflare.** The SPA is already on Cloudflare
+Pages, and a Pages custom domain on the apex validates itself when Cloudflare is also
+the DNS provider. It is free, and it keeps one dashboard for both halves of the site.
+
+In Cloudflare: *Add a site* → `pqp.gg` → Free plan → it prints two nameservers. In
+Porkbun: *Domain Management* → *Authoritative Nameservers* → replace with those two.
+Propagation is usually minutes.
+
+Then, three records:
+
+| Name | Type | Target | Proxy |
+|---|---|---|---|
+| `pqp.gg` | CNAME | the Pages project | **Proxied** (orange) |
+| `www` | CNAME | `pqp.gg` | **Proxied** (orange) |
+| `api` | A + AAAA | `fly ips list --app pqp-api` | **DNS only** (grey) |
+
+Add `pqp.gg` and `www.pqp.gg` as custom domains inside the Pages project itself —
+Cloudflare then writes the apex record for you.
+
+#### `api.pqp.gg` MUST be DNS-only. This is the part that bites.
+
+Leaving the orange cloud on the API subdomain breaks two things at once, and neither
+fails loudly:
+
+1. **It adds a second proxy in front of the app.** `clientAddress()` counts hops in
+   from the right of `X-Forwarded-For`, so with Cloudflare *and* fly-proxy in the
+   chain, `TRUST_PROXY=true` (one hop) reads Cloudflare's address instead of the
+   client's — and every client collapses into a single rate-limit bucket. If you
+   deliberately want Cloudflare in front, you must set `TRUST_PROXY=2`.
+2. **Cloudflare drops idle WebSockets at ~100 seconds.** The app's own heartbeat is
+   30s so it would mostly survive, but this is exactly the shape of CLAUDE.md
+   pitfall #9, and debugging it through two proxies is miserable.
+
+Fly already terminates TLS and serves HTTP/2, so the orange cloud buys nothing here.
+
+Keeping DNS at Porkbun also works — Porkbun supports `ALIAS` on the apex — but then
+the Pages custom domain has to be validated by CNAME and you are managing records in
+two places.
+
+### 7a-bis. Custom domain before migrating — skip it, you have no users yet
+
 ### 7a. Do this first, ideally as a separate change: move to a custom domain
 
 Today `VITE_API_URL` points at `https://api-production-206d.up.railway.app`. That hostname is baked into the SPA bundle at build time, which means **changing platforms requires rebuilding and redeploying the SPA**, and every browser still holding a cached bundle keeps talking to Railway until it reloads.
+
+**This step existed to de-risk a cutover with live traffic. With no users, skip it and
+point `api.pqp.gg` straight at Fly** — one cutover instead of two. Keep reading only if
+you already have people using the Railway deploy.
 
 Putting a custom domain in front while still on Railway turns the migration into a DNS change:
 
