@@ -219,13 +219,101 @@ still succeeds and produces an unsigned build — a fork must not fail CI. It
 emits `::warning::` lines saying exactly what was skipped, so an unsigned
 release is visible in the run summary rather than silent.
 
-### 3.4 Verify a signed build
+### 3.4 What gets notarized, and why the dmg needed its own step
 
-Download the artifact from the run (or the release), unzip, then:
+electron-builder's `mac.notarize` notarizes and staples **the `.app` and
+nothing else**. It does that inside `signApp`, before the dmg and zip targets
+run; the dmg target then wraps the already-stapled bundle and stops. It never
+submits the disk image to Apple. (`dmg-builder` has exactly one signing
+function, `signDmg`, gated on `dmg.sign` which defaults to `false`, and
+`app-builder-lib` contains no call to `stapler` at all.)
+
+That produced run 31183972324: a perfect `.app` inside a `.dmg` that Gatekeeper
+rejects with `source=no usable signature` — and the dmg is the file people
+download. Apple's rule is to notarize the artifact you distribute.
+
+So there are now three pieces, and all three must hold:
+
+| Artifact | Signed | Ticket | By what |
+|---|---|---|---|
+| `pqp.app` | yes | stapled | electron-builder (`mac.notarize`) |
+| `pqp-<v>-<arch>.dmg` | yes (`dmg.sign: true`) | stapled | [`electron/scripts/notarize-dmg.js`](../electron/scripts/notarize-dmg.js) |
+| `pqp-<v>-<arch>.zip` | n/a | **none, correctly** | — |
+
+**The zip does not need a ticket and cannot have one.** `stapler` has nowhere
+to write a ticket into a zip archive. It does not need to:
+
+- Squirrel.Mac — what `electron-updater` drives on macOS — validates the
+  downloaded bundle's **code signature** against the running app's designated
+  requirement. That is a signature check, not a notarization check, and the
+  Developer ID signature on the app satisfies it.
+- `electron-updater` fetches the zip over Node's HTTP stack, so the staged file
+  never gets a `com.apple.quarantine` xattr and Gatekeeper never runs a
+  first-launch assessment on it.
+- If a human downloads the zip from the release page, the browser *does* set
+  quarantine — and the `.app` inside was stapled by electron-builder, so that
+  path validates offline too.
+
+The dmg step costs one extra Apple round trip (~90s). The arm64 and x64 dmgs
+are submitted concurrently, so it is one round trip of wall clock, not two.
+Ordering is load-bearing: **sign → notarize → staple**. `dmg.sign` runs when
+the dmg target builds; the hook runs after every artifact exists. Signing a dmg
+*after* stapling would strip the ticket.
+
+`dmg.writeUpdateInfo` is `false` for the same reason: stapling rewrites the
+dmg, so any sha512 electron-builder computed for it before the hook ran would
+be stale in `latest-mac.yml`. Nothing reads it — `electron-updater`'s
+`MacUpdater` selects the `.zip` and explicitly ignores `dmg`/`pkg` entries —
+but a wrong hash in a published feed is worse than an absent one.
+
+Notarization credentials: on the App Store Connect API key path (`--key`
+`--key-id` `--issuer`) **notarytool needs no team id** — it resolves the team
+from the issuer that owns the key, and this account has exactly one team
+(`WXBFUF9WMA`), so there is nothing to disambiguate. `--team-id` is only
+*required* on the Apple ID path, which is why `APPLE_TEAM_ID` is read there and
+only there, and why nothing hardcodes the team id.
+
+### 3.5 Verify a signed build
+
+CI does this itself, in the **"Verify macOS signing and notarization"** step —
+it fails the job when Gatekeeper rejects an artifact, because a green
+`electron-builder` is not evidence. Run the same commands by hand on the
+downloaded artifact:
+
+```bash
+gh run download <RUN_ID> -R rafaelcg/pqp -n pqp-electron-mac
+```
+
+**The dmg — this is what users download, so check it first.**
+
+```bash
+spctl -a -vvv -t install pqp-0.0.1-arm64.dmg
+```
+
+Must print:
+
+```
+pqp-0.0.1-arm64.dmg: accepted
+source=Notarized Developer ID
+origin=Developer ID Application: Rafael Cammarano Guglielmi (WXBFUF9WMA)
+```
+
+`rejected` with `source=no usable signature` is the exact failure this section
+exists for: the app inside is fine and the disk image is not.
+
+```bash
+xcrun stapler validate pqp-0.0.1-arm64.dmg
+```
+
+Must print `The validate action worked!`. `does not have a ticket stapled to
+it` means Gatekeeper has to phone Apple on first launch and an offline machine
+sees "damaged".
+
+**Then the app inside it.** Mount the dmg (or unzip the `.zip`) and:
 
 ```bash
 # 1. Signed, by whom, with which entitlements
-codesign -dv --verbose=4 /Applications/pqp.app
+codesign -dv --verbose=4 /Volumes/pqp*/pqp.app
 ```
 
 Look for:
@@ -236,8 +324,8 @@ Look for:
   would have been rejected.
 
 ```bash
-# 2. Gatekeeper's own verdict — the one that actually matters
-spctl -a -vvv -t exec /Applications/pqp.app
+# 2. Gatekeeper's own verdict
+spctl -a -vvv -t exec /Volumes/pqp*/pqp.app
 ```
 
 Must print `accepted` and `source=Notarized Developer ID`. If it says
@@ -246,11 +334,15 @@ it will still be quarantined on a machine that has not seen it before.
 
 ```bash
 # 3. Is the notarization ticket stapled into the bundle (works offline)
-xcrun stapler validate /Applications/pqp.app
+xcrun stapler validate /Volumes/pqp*/pqp.app
 
 # 4. Deep verification of every nested binary and framework
-codesign --verify --deep --strict --verbose=2 /Applications/pqp.app
+codesign --verify --deep --strict --verbose=2 /Volumes/pqp*/pqp.app
 ```
+
+> Checking only the `.app` is how a broken release ships. The `.app` passed all
+> four of these in run 31183972324 while the dmg around it was unsigned and
+> unstapled. **Never sign off on a macOS build without the two dmg commands.**
 
 Test on a machine that has **never** seen the app, or simulate the quarantine
 bit the browser sets:
@@ -272,7 +364,7 @@ xcrun notarytool log <submission-id> --key … --key-id … --issuer …
 The log names the exact binary that failed, which is nearly always a missing
 entitlement or an unsigned nested helper.
 
-### 3.5 Entitlements
+### 3.6 Entitlements
 
 `electron/build/entitlements.mac.plist`, applied to the app and inherited by
 the helpers. Notarization requires the hardened runtime, and the hardened
@@ -289,7 +381,7 @@ runtime breaks Electron without the first three:
 | `network.client` / `network.server` | API, WS, WebRTC; loopback static server |
 | `files.user-selected.read-write` | attachment pickers |
 
-### 3.6 Microphone
+### 3.7 Microphone
 
 Three things must all be true or the mic fails, and two of them fail *silently*:
 

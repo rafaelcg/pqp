@@ -41,6 +41,7 @@
       "output": "release",
       "buildResources": "build"
     },
+    "afterAllArtifactBuild": "./scripts/notarize-dmg.js",
     "files": [
       "main.js",
       "preload.js",
@@ -107,6 +108,10 @@
         "NSMicrophoneUsageDescription": "pqp needs microphone access for voice channels.",
         "NSCameraUsageDescription": "pqp needs camera access for video in voice channels."
       }
+    },
+    "dmg": {
+      "sign": true,
+      "writeUpdateInfo": false
     },
     "win": {
       "icon": "build/icon.ico",
