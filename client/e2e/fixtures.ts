@@ -42,6 +42,16 @@ export async function ensureServer(): Promise<void> {
     Authorization: `Bearer ${DEV_TOKEN}`,
   };
   await ensureAgeCheck(headers);
+  // Mark onboarding done for the same reason the age gate is answered here:
+  // on the fresh database CI creates, the account is born after boot, so the
+  // grandfathering backfill never saw it and the wizard would cover the app —
+  // every message spec then times out uniformly in setup. Locally this is a
+  // no-op, since the shared dev account has long since been stamped.
+  await fetch(`${API}/api/me/preferences`, {
+    method: "PATCH",
+    headers,
+    body: JSON.stringify({ onboardedAt: new Date().toISOString() }),
+  });
   const existing = await fetch(`${API}/api/servers`, { headers });
   const { servers } = (await existing.json()) as { servers: unknown[] };
   if (servers.length > 0) {
