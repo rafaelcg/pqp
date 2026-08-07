@@ -89,6 +89,21 @@ export function handleWsConnection(socket: WebSocket, remoteKey: string) {
 
   async function onMessage(data: unknown) {
     if (!socketLimiter.take(remoteKey)) {
+      // Say so rather than dropping the frame on the floor. A silently
+      // discarded message leaves the client waiting on a reply that is never
+      // coming, and when the frame was `auth` it waits the full auth timeout
+      // and is then closed with 4401 — which blames a credential problem for
+      // what is actually backpressure. Closing here hands the client something
+      // its reconnect-with-backoff already knows how to answer.
+      //
+      // Worth knowing why this is reachable at all: the bucket is keyed on the
+      // client address, so behind a proxy without TRUST_PROXY set it is one
+      // bucket shared by *every* client. A launch-day burst of legitimate
+      // joins can empty it — measured at roughly 300 simultaneous joiners,
+      // since each sends both an `auth` and a `join-channel`. That is an
+      // argument for setting TRUST_PROXY, not for failing quietly.
+      logEvent("ws.addressLimit", { connId });
+      socket.close(4429, "Too many messages");
       return;
     }
     if (!connectionLimiter.take("self")) {

@@ -232,6 +232,41 @@ export async function resolveAuthUser(
   return { user: await resolveDbUser(auth) };
 }
 
+/**
+ * The dev bypass token, optionally carrying `:suffix` to name a distinct local
+ * identity.
+ *
+ * One fixed account is enough to click around in, but not to load test with:
+ * the message, typing and reaction limits are all keyed on the user id, so N
+ * simulated clients sharing one account measure the rate limiter rather than
+ * the server. The suffix is held to a short, safe alphabet because it is
+ * concatenated into an identifier — and returns null on anything else, so a
+ * near-miss is a rejected token rather than a surprise account.
+ *
+ * Only ever consulted behind `isDevAuthBypassEnabled()`, which refuses to
+ * return true under NODE_ENV=production and makes the process fail at boot if
+ * the bypass is switched on there.
+ */
+function devBypassIdentity(
+  token: string,
+): { clerkId: string; displayName: string } | null {
+  if (token === DEV_AUTH_TOKEN) {
+    return { clerkId: "dev_local_user", displayName: "Dev User" };
+  }
+  const prefix = `${DEV_AUTH_TOKEN}:`;
+  if (!token.startsWith(prefix)) {
+    return null;
+  }
+  const suffix = token.slice(prefix.length);
+  if (!/^[a-z0-9_-]{1,32}$/.test(suffix)) {
+    return null;
+  }
+  return {
+    clerkId: `dev_local_user_${suffix}`,
+    displayName: `Dev User ${suffix}`,
+  };
+}
+
 export async function verifyAuthHeader(
   authorization: string | undefined,
 ): Promise<AuthUser | null> {
@@ -241,10 +276,11 @@ export async function verifyAuthHeader(
 
   const token = authorization.slice(7);
 
-  if (isDevAuthBypassEnabled() && token === DEV_AUTH_TOKEN) {
+  const devIdentity = isDevAuthBypassEnabled() ? devBypassIdentity(token) : null;
+  if (devIdentity) {
     return {
-      clerkId: "dev_local_user",
-      displayName: "Dev User",
+      clerkId: devIdentity.clerkId,
+      displayName: devIdentity.displayName,
       avatarUrl: null,
       // The bypass proves no email, so it grants no domain by default — a
       // local dev account must not walk into an SSO-gated server for free.
