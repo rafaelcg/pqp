@@ -37,6 +37,20 @@ const fakes = vi.hoisted(() => ({
   channels: new Map<string, { kind: string; type: string }>(),
   createMessageCalls: [] as { channelId: string; authorId: string; body: string }[],
   broadcasts: [] as { channelId: string; message: { type: string } }[],
+  /** Every `pushIncomingCall` the ring handed to the push module. */
+  callPushes: [] as {
+    conversationId: string;
+    kind: string;
+    rungUserIds: readonly string[];
+    callerName: string | null;
+  }[],
+  /** Every `pushChannelActivity` the missed-call record handed over. */
+  activityPushes: [] as {
+    channelId: string;
+    authorId: string;
+    blockerIds: ReadonlySet<string>;
+    mentionedUsernames: readonly string[];
+  }[],
 }));
 
 vi.mock("../voice/backends.js", () => ({
@@ -102,6 +116,19 @@ vi.mock("./chat.js", () => ({
 vi.mock("./status.js", () => ({
   resolveStatus: (userId: string) =>
     fakes.dndUserIds.has(userId) ? "dnd" : "online",
+}));
+
+vi.mock("../services/push.js", () => ({
+  pushIncomingCall: vi.fn(
+    (event: (typeof fakes.callPushes)[number]) => {
+      fakes.callPushes.push(event);
+    },
+  ),
+  pushChannelActivity: vi.fn(
+    (event: (typeof fakes.activityPushes)[number]) => {
+      fakes.activityPushes.push(event);
+    },
+  ),
 }));
 
 vi.mock("../voice/admin.js", () => ({
@@ -209,6 +236,8 @@ beforeEach(() => {
   fakes.dndUserIds = new Set();
   fakes.createMessageCalls = [];
   fakes.broadcasts = [];
+  fakes.callPushes = [];
+  fakes.activityPushes = [];
   fakes.participants = new Map([[CONVERSATION, [CALLER, CALLEE, THIRD]]]);
   fakes.channels = new Map([
     [CONVERSATION, { kind: "dm", type: "text" }],
@@ -452,6 +481,91 @@ describe("answering, declining, missing", () => {
     expect(isConversationRinging(CONVERSATION)).toBe(true);
     expect(fakes.createMessageCalls).toEqual([]);
     expect(frame(callee, "call-ring-cancelled")).toBeUndefined();
+  });
+});
+
+describe("web push at the ring seam", () => {
+  it("hands the ring's own conclusion to push — the rung set, nothing re-derived", async () => {
+    const caller = authedRecorder(CALLER);
+    authedRecorder(CALLEE);
+
+    await startCall(caller);
+
+    // Exactly who was rung over sockets is who the push module is offered
+    // (it narrows to no-live-socket + stored DND itself); the caller is not
+    // in it, and the payload names the caller for the lock screen.
+    expect(fakes.callPushes).toEqual([
+      {
+        conversationId: CONVERSATION,
+        kind: "dm",
+        rungUserIds: [CALLEE, THIRD],
+        callerName: asUser(CALLER).display_name,
+      },
+    ]);
+  });
+
+  it("DND gets neither the ring nor the push", async () => {
+    fakes.dndUserIds.add(CALLEE);
+    const caller = authedRecorder(CALLER);
+    const callee = authedRecorder(CALLEE);
+
+    await startCall(caller);
+
+    expect(frame(callee, "call-incoming")).toBeUndefined();
+    expect(fakes.callPushes.length).toBe(1);
+    expect(fakes.callPushes[0]!.rungUserIds).toEqual([THIRD]);
+  });
+
+  it("someone who blocked the caller is untouched by the push leg too", async () => {
+    fakes.blockersOfCaller = new Set([THIRD]);
+    const caller = authedRecorder(CALLER);
+
+    await startCall(caller);
+
+    expect(fakes.callPushes.length).toBe(1);
+    expect(fakes.callPushes[0]!.rungUserIds).toEqual([CALLEE]);
+  });
+
+  it("a ring nobody was rung for still offers push the absentees", async () => {
+    // Every absent participant may be offline: the socket fan-out reaches
+    // nobody, and the push leg is then the only ring there is.
+    fakes.participants.set(CONVERSATION, [CALLER, CALLEE]);
+    const caller = authedRecorder(CALLER);
+
+    await startCall(caller);
+
+    expect(fakes.callPushes[0]!.rungUserIds).toEqual([CALLEE]);
+  });
+
+  it("the missed-call record rides the ordinary message-push path, blockers excluded", async () => {
+    fakes.blockersOfCaller = new Set([THIRD]);
+    const caller = authedRecorder(CALLER);
+
+    await startCall(caller);
+    await vi.advanceTimersByTimeAsync(CALL_RING_TIMEOUT_MS + 1);
+
+    // One activity push for the missed-call message: caller-authored in the
+    // conversation, never a mention, with the same blockers the socket badge
+    // loop honoured. Its payload (built downstream by `buildPushPayload`)
+    // therefore tags the conversation id — the same tag as the call push, so
+    // the vendor replaces one with the other.
+    expect(fakes.activityPushes.length).toBe(1);
+    const push = fakes.activityPushes[0]!;
+    expect(push.channelId).toBe(CONVERSATION);
+    expect(push.authorId).toBe(CALLER);
+    expect(push.mentionedUsernames).toEqual([]);
+    expect([...push.blockerIds]).toEqual([THIRD]);
+  });
+
+  it("an answered call posts no missed-call record and no missed-call push", async () => {
+    const caller = authedRecorder(CALLER);
+    const callee = authedRecorder(CALLEE);
+
+    await startCall(caller);
+    await join(callee, CALLEE, CONVERSATION);
+    await vi.advanceTimersByTimeAsync(CALL_RING_TIMEOUT_MS + 1);
+
+    expect(fakes.activityPushes).toEqual([]);
   });
 });
 

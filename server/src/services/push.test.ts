@@ -33,7 +33,10 @@ const { upsertUser } = await import("./users.js");
 const { createServer } = await import("./servers.js");
 const { openConversation } = await import("./dms.js");
 const {
+  CALL_PUSH_TTL_SECONDS,
   MAX_PUSH_SUBSCRIPTIONS_PER_USER,
+  PUSH_TTL_SECONDS,
+  buildCallPushPayload,
   buildPushPayload,
   deletePushSubscription,
   isPushEnabled,
@@ -42,6 +45,7 @@ const {
   resolvePushLevel,
   savePushSettings,
   savePushSubscription,
+  sendCallPush,
   sendChannelPush,
   setLiveSocketProbeForTests,
   setPushSenderForTests,
@@ -320,7 +324,12 @@ describeDb("web push fan-out", () => {
   let beaUsername: string;
 
   /** Every payload the stubbed vendor was handed, in order. */
-  let sent: { userId: string; endpoint: string; payload: Record<string, unknown> }[];
+  let sent: {
+    userId: string;
+    endpoint: string;
+    payload: Record<string, unknown>;
+    delivery: { ttlSeconds: number; urgency: string };
+  }[];
   /** Users the stubbed cluster registry claims are connected somewhere. */
   let online: Set<string>;
 
@@ -336,11 +345,12 @@ describeDb("web push fan-out", () => {
     setVapidEnv();
     sent = [];
     online = new Set();
-    setPushSenderForTests(async (subscription, payload) => {
+    setPushSenderForTests(async (subscription, payload, _config, delivery) => {
       sent.push({
         userId: subscription.user_id,
         endpoint: subscription.endpoint,
         payload: JSON.parse(payload) as Record<string, unknown>,
+        delivery,
       });
     });
     setLiveSocketProbeForTests((userId) => online.has(userId));
@@ -537,6 +547,12 @@ describeDb("web push fan-out", () => {
     expect(sent[0]!.payload.body).toBe("New direct message");
     expect(JSON.stringify(sent[0]!.payload)).not.toContain("ana");
     expect(sent[0]!.payload.path).toBe(`/app/dm/${conversation.channelId}`);
+    // A message can be hours late and still worth reading: day-long TTL,
+    // normal urgency. The contrast with the call delivery below is the point.
+    expect(sent[0]!.delivery).toEqual({
+      ttlSeconds: PUSH_TTL_SECONDS,
+      urgency: "normal",
+    });
   });
 
   it("names the sender once dmDetails is opted into", async () => {
@@ -578,6 +594,132 @@ describeDb("web push fan-out", () => {
       mentionedUsernames: [],
       repliedToUserId: null,
       blockerIds: new Set(),
+    });
+
+    expect(sent).toEqual([]);
+  });
+
+  // ---------------------------------------------------------- incoming calls
+
+  it("a call push reaches the offline rung participant and skips the online one", async () => {
+    const conversation = await openConversation(ana.id, [bea.id, caio.id]);
+    await subscribe(bea.id);
+    await subscribe(caio.id);
+    online.add(caio.id);
+
+    await sendCallPush({
+      conversationId: conversation.channelId,
+      kind: "group",
+      rungUserIds: [bea.id, caio.id],
+      callerName: "ana",
+    });
+
+    expect(sent.map((s) => s.userId)).toEqual([bea.id]);
+    expect(sent[0]!.payload.title).toBe("ana");
+    expect(sent[0]!.payload.body).toBe("Incoming group call");
+    expect(sent[0]!.payload.path).toBe(`/app/dm/${conversation.channelId}`);
+  });
+
+  it("travels short and urgent: ring-length TTL, high urgency", async () => {
+    const conversation = await openConversation(ana.id, [bea.id]);
+    await subscribe(bea.id);
+
+    await sendCallPush({
+      conversationId: conversation.channelId,
+      kind: "dm",
+      rungUserIds: [bea.id],
+      callerName: "ana",
+    });
+
+    expect(sent[0]!.payload.body).toBe("Incoming call");
+    expect(sent[0]!.delivery).toEqual({
+      ttlSeconds: CALL_PUSH_TTL_SECONDS,
+      urgency: "high",
+    });
+    // The TTL only makes sense on one side of the ring timeout (45s): a call
+    // push the vendor may hold for longer than the ring lives is a push about
+    // a call that no longer exists.
+    expect(CALL_PUSH_TTL_SECONDS).toBe(50);
+  });
+
+  it("stored DND is caught here: never rung means never pushed, even disconnected", async () => {
+    // The ring excludes DND via the live status registry, but a disconnected
+    // user reads as plain "offline" there whatever their manual status says —
+    // so a stored-DND user CAN arrive in `rungUserIds`, and this filter is
+    // the only thing between them and a buzz they asked not to get.
+    const conversation = await openConversation(ana.id, [bea.id]);
+    await subscribe(bea.id);
+    await getPool().query(
+      `INSERT INTO user_preferences (user_id, settings)
+       VALUES ($1, '{"status":"dnd"}'::jsonb)`,
+      [bea.id],
+    );
+
+    await sendCallPush({
+      conversationId: conversation.channelId,
+      kind: "dm",
+      rungUserIds: [bea.id],
+      callerName: "ana",
+    });
+
+    expect(sent).toEqual([]);
+  });
+
+  it("the call push and the missed-call push share the conversation id as tag", async () => {
+    // Same tag means the vendor REPLACES "Incoming call" with the missed-call
+    // notice instead of stacking the two — asserted against both builders'
+    // real output, not assumed.
+    const conversation = await openConversation(ana.id, [bea.id]);
+    await subscribe(bea.id);
+
+    await sendCallPush({
+      conversationId: conversation.channelId,
+      kind: "dm",
+      rungUserIds: [bea.id],
+      callerName: "ana",
+    });
+    // The missed-call record travels the ordinary DM message path.
+    await sendChannelPush({
+      channelId: conversation.channelId,
+      audience: audienceOf("dm", [ana.id, bea.id]),
+      authorId: ana.id,
+      mentionedUsernames: [],
+      repliedToUserId: null,
+      blockerIds: new Set(),
+    });
+
+    expect(sent.length).toBe(2);
+    expect(sent[0]!.payload.tag).toBe(conversation.channelId);
+    expect(sent[1]!.payload.tag).toBe(conversation.channelId);
+  });
+
+  it("a call names its caller even with dmDetails off, and nothing else", async () => {
+    const payload = buildCallPushPayload({
+      conversationId: "55555555-5555-5555-5555-555555555555",
+      kind: "dm",
+      callerName: "x".repeat(300),
+    });
+    expect(payload.title.length).toBe(64);
+    expect(payload.body).toBe("Incoming call");
+    expect(
+      buildCallPushPayload({
+        conversationId: "55555555-5555-5555-5555-555555555555",
+        kind: "dm",
+        callerName: null,
+      }).title,
+    ).toBe("Someone");
+  });
+
+  it("call pushes are inert without VAPID configuration", async () => {
+    clearVapidEnv();
+    const conversation = await openConversation(ana.id, [bea.id]);
+    await subscribe(bea.id);
+
+    await sendCallPush({
+      conversationId: conversation.channelId,
+      kind: "dm",
+      rungUserIds: [bea.id],
+      callerName: "ana",
     });
 
     expect(sent).toEqual([]);

@@ -223,19 +223,52 @@ async function pruneSubscription(id: string): Promise<void> {
 
 // ------------------------------------------------------------- test seams
 
+/**
+ * How a given push should travel, decided per *event kind* rather than per
+ * subscription: a message and a call have opposite relationships with time.
+ */
+export interface PushDeliveryOptions {
+  /** How long the vendor may hold the push for an unreachable device. */
+  ttlSeconds: number;
+  /** RFC 8030 Urgency — whether a dozing device should wake for this. */
+  urgency: "normal" | "high";
+}
+
 type PushSender = (
   subscription: StoredPushSubscription,
   payload: string,
   config: VapidConfig,
+  delivery: PushDeliveryOptions,
 ) => Promise<void>;
 
 /**
  * A push older than a day is about a conversation that has moved on; better it
  * evaporates at the vendor than lands stale.
  */
-const PUSH_TTL_SECONDS = 24 * 60 * 60;
+export const PUSH_TTL_SECONDS = 24 * 60 * 60;
 
-const realSender: PushSender = async (subscription, payload, config) => {
+/**
+ * A call push, by contrast, is about something that stops existing when the
+ * ring times out (`CALL_RING_TIMEOUT_MS` = 45s): delivered at minute two it is
+ * not late, it is *wrong* — a phone buzzing about a call nobody is placing.
+ * Ring timeout plus a little transit slack, and nothing more. This asymmetry
+ * is the whole reason calls have their own send path instead of riding
+ * `sendChannelPush`.
+ */
+export const CALL_PUSH_TTL_SECONDS = 50;
+
+const MESSAGE_DELIVERY: PushDeliveryOptions = {
+  ttlSeconds: PUSH_TTL_SECONDS,
+  urgency: "normal",
+};
+
+/** High urgency is what asks the vendor to wake a device in doze for the ring. */
+const CALL_DELIVERY: PushDeliveryOptions = {
+  ttlSeconds: CALL_PUSH_TTL_SECONDS,
+  urgency: "high",
+};
+
+const realSender: PushSender = async (subscription, payload, config, delivery) => {
   await webPush.sendNotification(
     {
       endpoint: subscription.endpoint,
@@ -243,7 +276,8 @@ const realSender: PushSender = async (subscription, payload, config) => {
     },
     payload,
     {
-      TTL: PUSH_TTL_SECONDS,
+      TTL: delivery.ttlSeconds,
+      urgency: delivery.urgency,
       // Per call rather than `setVapidDetails` at module scope, so nothing
       // global is mutated and a test can never see another test's keys.
       vapidDetails: {
@@ -612,21 +646,35 @@ export async function sendChannelPush(event: ChannelPushEvent): Promise<void> {
     );
   }
 
+  await deliverToUsers(recipients, (userId) => payloads.get(userId), config, MESSAGE_DELIVERY);
+}
+
+/**
+ * The shared last mile: look up every recipient's subscriptions, hand each to
+ * the sender, prune on the vendor's "gone" signal. Both the message path and
+ * the call path end here — they differ in who and what, never in how.
+ */
+async function deliverToUsers(
+  userIds: readonly string[],
+  payloadFor: (userId: string) => string | undefined,
+  config: VapidConfig,
+  delivery: PushDeliveryOptions,
+): Promise<void> {
   const subscriptions = await getPool().query<StoredPushSubscription>(
     `SELECT id, user_id, endpoint, p256dh, auth
      FROM push_subscriptions
      WHERE user_id = ANY($1::uuid[])`,
-    [recipients],
+    [userIds],
   );
 
   await Promise.all(
     subscriptions.rows.map(async (subscription) => {
-      const payload = payloads.get(subscription.user_id);
+      const payload = payloadFor(subscription.user_id);
       if (!payload) {
         return;
       }
       try {
-        await sender(subscription, payload, config);
+        await sender(subscription, payload, config, delivery);
       } catch (error) {
         const statusCode = (error as { statusCode?: number }).statusCode;
         // 404/410 is the vendor saying this subscription no longer exists —
@@ -644,4 +692,111 @@ export async function sendChannelPush(event: ChannelPushEvent): Promise<void> {
       }
     }),
   );
+}
+
+// ------------------------------------------------------------ incoming calls
+
+/**
+ * A ringing call, as `handleCallRing` in ws/voice.ts concluded it. WHO IS
+ * BEING RUNG IS NOT DECIDED HERE — `rungUserIds` is the ring's own answer
+ * (absent participants, minus people who blocked the caller, minus anyone the
+ * live status registry shows as DND), and this module narrows it only by the
+ * two things the ring cannot see: no live socket anywhere in the cluster, and
+ * a *stored* DND. The second matters because the registry answers "offline"
+ * for a disconnected user whatever their manual status says — a person who
+ * set do-not-disturb and closed the app was never rung, and must not be the
+ * one person whose phone still buzzes.
+ *
+ * Notification levels are deliberately NOT consulted, because the ring does
+ * not consult them either: a muted conversation still rings a live client,
+ * and the push is that same ring reaching a closed one, not a message badge.
+ */
+export interface CallPushEvent {
+  conversationId: string;
+  kind: "dm" | "group";
+  /** The ring's conclusion — see above. */
+  rungUserIds: readonly string[];
+  callerName: string | null;
+}
+
+/**
+ * A CALL PUSH ALWAYS NAMES THE CALLER, `dmDetails` notwithstanding. That
+ * setting keeps message *activity* off a lock screen; a call is different in
+ * kind — the ring surface itself shows who is calling on every live device,
+ * an anonymous "incoming call" is not an answerable question, and the payload
+ * still carries nothing about the conversation beyond who is calling.
+ *
+ * `tag` is the conversation id — the same tag `buildPushPayload` gives the
+ * missed-call message that follows an unanswered ring, so the vendor replaces
+ * "Incoming call" with the missed-call notice instead of stacking the two.
+ * `path` is the conversation route: tapped while the ring is live it lands on
+ * the ringing call, tapped later it lands on the missed-call message.
+ */
+export function buildCallPushPayload(input: {
+  conversationId: string;
+  kind: "dm" | "group";
+  callerName: string | null;
+}): PushPayload {
+  return {
+    title: input.callerName ? truncateLabel(input.callerName) : "Someone",
+    body: input.kind === "group" ? "Incoming group call" : "Incoming call",
+    path: `/app/dm/${input.conversationId}`,
+    tag: input.conversationId,
+  };
+}
+
+/**
+ * Fire-and-forget wrapper, same contract as `pushChannelActivity`: the ring
+ * fan-out must never wait on, or die with, a push vendor (pitfall #9).
+ */
+export function pushIncomingCall(event: CallPushEvent): void {
+  if (!isPushEnabled()) {
+    return;
+  }
+  void sendCallPush(event).catch((error) => {
+    console.error(
+      `[push] call fan-out failed for conversation ${event.conversationId}:`,
+      error,
+    );
+  });
+}
+
+/** The awaitable pipeline, mirroring `sendChannelPush` for tests. */
+export async function sendCallPush(event: CallPushEvent): Promise<void> {
+  const config = readVapidConfig();
+  if (!config) {
+    return;
+  }
+
+  const offline = event.rungUserIds.filter((userId) => !hasLiveSocket(userId));
+  if (offline.length === 0) {
+    return;
+  }
+
+  // Stored DND only — the audience, blocks and live-DND questions were the
+  // ring's to answer and already are answered in `rungUserIds`.
+  const preferenceRows = await getPool().query<PreferenceRow>(
+    `SELECT user_id, settings FROM user_preferences
+     WHERE user_id = ANY($1::uuid[])`,
+    [offline],
+  );
+  const preferences = new Map<string, UserPreferences>(
+    preferenceRows.rows.map((row) => [row.user_id, row.settings]),
+  );
+  const recipients = offline.filter(
+    (userId) => preferences.get(userId)?.status !== "dnd",
+  );
+  if (recipients.length === 0) {
+    return;
+  }
+
+  // One payload for everybody: a call names its caller, never its callee.
+  const payload = JSON.stringify(
+    buildCallPushPayload({
+      conversationId: event.conversationId,
+      kind: event.kind,
+      callerName: event.callerName,
+    }),
+  );
+  await deliverToUsers(recipients, () => payload, config, CALL_DELIVERY);
 }

@@ -17,6 +17,7 @@ import {
   resolveRingableConversation,
 } from "../services/dms.js";
 import { createMessage, mapMessage } from "../services/messages.js";
+import { pushChannelActivity, pushIncomingCall } from "../services/push.js";
 import { findTimeoutForChannel } from "../services/sanctions.js";
 import { getChannel, getChannelAudience } from "../services/servers.js";
 import { canAccessChannel } from "../services/users.js";
@@ -900,6 +901,20 @@ async function handleCallRing(
       avatarUrl: user.avatar_url,
     },
   });
+
+  // The same ring, for phones with the app closed. `rung` is THE decision —
+  // participants minus blockers minus live-DND — and push narrows it only by
+  // what a socket fan-out cannot know: no socket anywhere in the cluster, and
+  // a stored DND the live registry reads as merely "offline". Short-TTL and
+  // high-urgency inside (`CALL_PUSH_TTL_SECONDS`); fire-and-forget so the
+  // ring never waits on, or dies with, a push vendor. Voice is per-instance
+  // (see the module banner), so this cannot double-send across replicas.
+  pushIncomingCall({
+    conversationId,
+    kind: ring.kind,
+    rungUserIds: [...rung],
+    callerName: user.display_name,
+  });
 }
 
 /**
@@ -1056,6 +1071,24 @@ async function postMissedCallMessage(ring: ConversationRing): Promise<void> {
         return;
       }
       socket.send(activity);
+    });
+
+    // The Web Push leg the socket loop above cannot reach: the missed-call
+    // record is created here, not through chat's message handler, so without
+    // this the one person a missed call most concerns — the callee whose
+    // phone is closed — would never hear of it. Same conclusions handed over
+    // as `notifyChannelActivity` hands its own (audience, blockers, never a
+    // mention); push adds its usual narrowing (no socket, DND, level). Its
+    // tag is the conversation id, the same tag as the call push, so at the
+    // vendor "Incoming call" is *replaced* by the missed-call notice rather
+    // than stacking beside it.
+    pushChannelActivity({
+      channelId: ring.conversationId,
+      audience,
+      authorId: ring.caller.id,
+      mentionedUsernames: [],
+      repliedToUserId: null,
+      blockerIds: blockers,
     });
   } catch (error) {
     // A missed missed-call record must never take the voice handler down —
