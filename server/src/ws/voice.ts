@@ -5,6 +5,7 @@ import {
   MESH_VOICE_LIMIT,
   voiceClientMessageSchema,
   type VoiceParticipant,
+  type VoiceRoomTransport,
   type VoiceSignalingMessage,
 } from "@pqp/shared";
 import type { DbUser } from "../db.js";
@@ -75,6 +76,53 @@ interface VoicePeer {
  */
 const peers = new Map<string, VoicePeer>();
 const socketToPeerId = new Map<WebSocket, string>();
+
+/**
+ * A VOICE ROOM HAS ONE TRANSPORT, THIS PROCESS PICKS IT, AND IT DOES NOT CHANGE
+ * WHILE THE ROOM IS OCCUPIED.
+ *
+ * Clients used to resolve mesh-vs-SFU independently, once per join, and tell
+ * nobody. Two people in the same channel could land on different transports and
+ * neither would be told: the mesh side's offers are dropped by an SFU client
+ * that has no peer-connection manager, and the mesh client is not a LiveKit
+ * participant, so it never even appears in the SFU client's peer list. Both
+ * sides see the other in the sidebar, silent, exactly like someone muted.
+ *
+ * So the room owns the decision:
+ *
+ * - It is taken from config when the room's **first** peer joins and pinned
+ *   here for as long as the room has anyone in it. A live call therefore never
+ *   changes transport under the people in it — there is no correct way to move
+ *   an in-progress mesh onto an SFU (or back) without dropping everyone's audio
+ *   mid-sentence, and "it stays as it started" is a rule clients can rely on
+ *   without any migration protocol.
+ * - The pin is dropped when the room empties, so a config change (LiveKit
+ *   added, removed, or repaired) takes effect on the next call in that channel
+ *   rather than needing a restart.
+ * - It is stated in `welcome` and in `voice-roster`, so no client has to guess.
+ *
+ * Scope: this map is per-process, like `peers` above. On a multi-instance
+ * deployment two instances with *different* LiveKit config would pin the same
+ * channel differently and split the call again — which is one more item on the
+ * list of reasons voice wants a single instance (see the note above `peers`).
+ */
+const roomTransports = new Map<string, VoiceRoomTransport>();
+
+function configuredTransport(): VoiceRoomTransport {
+  return getServerVoiceBackend() === "livekit" && isLiveKitConfigured()
+    ? "livekit"
+    : "mesh";
+}
+
+/** The transport a room is running on, or would get if it were opened now. */
+export function getRoomTransport(voiceChannelId: string): VoiceRoomTransport {
+  return roomTransports.get(voiceChannelId) ?? configuredTransport();
+}
+
+/** Test hook: forget every pinned room transport. */
+export function resetVoiceRoomTransports(): void {
+  roomTransports.clear();
+}
 
 /**
  * Joining fans a query plus a broadcast out to a whole server, so the churn is
@@ -150,6 +198,7 @@ function broadcastRoster(voiceChannelId: string): Promise<void> {
           type: "voice-roster",
           voiceChannelId,
           participants: getRoomPeers(voiceChannelId).map(toParticipant),
+          transport: getRoomTransport(voiceChannelId),
         } satisfies VoiceSignalingMessage);
 
         forEachAuthenticatedSocket((socket, user) => {
@@ -187,6 +236,12 @@ function removePeer(peerId: string) {
   peers.delete(peerId);
   if (socketToPeerId.get(peer.socket) === peerId) {
     socketToPeerId.delete(peer.socket);
+  }
+  // Empty room: forget the pin, so the next call in this channel picks up the
+  // current config instead of a decision taken before LiveKit was added,
+  // removed or fixed. Nobody is mid-call, so nobody's audio moves.
+  if (getRoomPeers(voiceChannelId).length === 0) {
+    roomTransports.delete(voiceChannelId);
   }
   logEvent("voice.leave", {
     peerId,
@@ -329,6 +384,7 @@ export async function sendAllVoiceRosters(socket: WebSocket, user: DbUser) {
         type: "voice-roster",
         voiceChannelId,
         participants,
+        transport: getRoomTransport(voiceChannelId),
       });
     }),
   );
@@ -381,14 +437,46 @@ export async function handleVoiceMessage(
       return;
     }
 
+    // Read before any peer is removed or added: for a rejoin by the room's only
+    // occupant, removing them first would empty the room and drop the pin, and
+    // the join would silently re-decide the transport.
+    const transport = getRoomTransport(payload.voiceChannelId);
+
+    // A client that cannot run this room's transport is refused *here*, before
+    // a peer exists. Admitting it and letting it discover the mismatch a round
+    // trip later would put a participant in everyone's roster who cannot be
+    // heard — the exact failure this is here to make impossible.
+    const capabilities: VoiceRoomTransport[] = payload.transports ?? [
+      "mesh",
+      "livekit",
+    ];
+    if (!capabilities.includes(transport)) {
+      // Drop any peer this socket still holds: it is not going to be in the
+      // room, so leaving the previous one behind would leave a ghost.
+      const stale = socketToPeerId.get(socket);
+      if (stale) {
+        removePeer(stale);
+      }
+      logEvent("voice.transportUnsupported", {
+        userId: user.id,
+        voiceChannelId: payload.voiceChannelId,
+        transport,
+        capabilities,
+      });
+      send(socket, {
+        type: "voice-transport-unsupported",
+        voiceChannelId: payload.voiceChannelId,
+        transport,
+      });
+      return;
+    }
+
     // Enforce the mesh ceiling server-side. Above it, each client would carry
     // one Opus uplink per peer and quality collapses — reject instead. The
     // ceiling is a property of the mesh, so it does not apply once media is
     // routed through an SFU.
-    const usingMesh =
-      getServerVoiceBackend() !== "livekit" || !isLiveKitConfigured();
     const roomIsFull =
-      usingMesh &&
+      transport === "mesh" &&
       getRoomPeers(payload.voiceChannelId).filter((p) => p.socket !== socket)
         .length >= MESH_VOICE_LIMIT;
     if (roomIsFull) {
@@ -422,6 +510,9 @@ export async function handleVoiceMessage(
     };
     peers.set(peerId, peer);
     socketToPeerId.set(socket, peerId);
+    // Pinned only now that the room is non-empty, so `removePeer`'s cleanup
+    // above cannot race this write away.
+    roomTransports.set(payload.voiceChannelId, transport);
     logEvent("voice.join", {
       peerId,
       userId: user.id,
@@ -440,6 +531,7 @@ export async function handleVoiceMessage(
       peers: existingPeers,
       voiceChannelId: payload.voiceChannelId,
       self,
+      transport,
     });
 
     broadcastToRoom(
@@ -508,6 +600,19 @@ export async function handleVoiceMessage(
   // member of one room could open a WebRTC connection to a peer in another
   // room/server and pull their microphone audio.
   if (fromPeer.voiceChannelId !== toPeer.voiceChannelId) {
+    return;
+  }
+
+  // Mesh signaling inside an SFU room means the sender built a peer mesh in a
+  // room that is not running one. The target has no peer-connection manager and
+  // drops the frame anyway; refusing it here makes the mistake visible in the
+  // logs instead of leaving a client half-connected to a call it cannot hear.
+  if (getRoomTransport(fromPeer.voiceChannelId) !== "mesh") {
+    logEvent("voice.meshRelayInSfuRoom", {
+      userId: fromPeer.userId,
+      voiceChannelId: fromPeer.voiceChannelId,
+      messageType: payload.type,
+    });
     return;
   }
 

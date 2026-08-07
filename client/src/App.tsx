@@ -10,6 +10,7 @@ import type {
   DmSummary,
   Server,
   User,
+  VoiceRoomTransport,
 } from "@pqp/shared";
 import { MessageComposer } from "@/components/chat/message-composer";
 import { MessageList } from "@/components/chat/message-list";
@@ -625,19 +626,29 @@ function MainAppContent({
           // STUN / VITE_TURN fallbacks still apply
         }
 
-        // Route voice media through the SFU when the server offers one.
-        // Anything else (or a failure here) leaves the mesh path in place.
-        try {
-          const { backend } = isMeshForced()
-            ? { backend: "mesh" as const }
-            : await fetchVoiceBackend();
-          if (!cancelled && backend === "livekit") {
-            voice.setSessionProvider((voiceChannelId, peerId) =>
-              createVoiceSession(voiceChannelId, peerId),
+        // Declare whether this build can run the SFU media path. This is a
+        // capability, not a transport choice: the server states the room's
+        // transport in `welcome` on every join, and the controller obeys it.
+        //
+        // The backend fetch is therefore best-effort — it only supplies the
+        // fallback for a server too old to state the transport. When it failed
+        // this tab used to be pinned to mesh for its whole life, which on an SFU
+        // deployment meant sitting in calls nobody could hear.
+        if (!cancelled && !isMeshForced()) {
+          let legacyTransport: VoiceRoomTransport = "mesh";
+          try {
+            const { backend } = await fetchVoiceBackend();
+            legacyTransport = backend === "livekit" ? "livekit" : "mesh";
+          } catch {
+            // Older server without /api/voice/backend, or a blip.
+          }
+          if (!cancelled) {
+            voice.setSessionProvider(
+              (voiceChannelId, peerId) =>
+                createVoiceSession(voiceChannelId, peerId),
+              legacyTransport,
             );
           }
-        } catch {
-          // Older server without /api/voice/backend — mesh it is.
         }
 
         const { servers: serverList } = await fetchServers();

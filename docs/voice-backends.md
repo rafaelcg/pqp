@@ -6,7 +6,7 @@ pqp abstracts voice transport behind a media-path switch. The channel UX stays i
 
 ## Choosing a backend
 
-The **server** decides, via `GET /api/voice/backend`:
+The **server** decides, from its own env:
 
 | Server env | Backend |
 |---|---|
@@ -14,9 +14,9 @@ The **server** decides, via `GET /api/voice/backend`:
 | `CLOUDFLARE_REALTIME_APP_ID` | `cloudflare-sfu` (stub → mesh) |
 | neither | `mesh` |
 
-No client rebuild is needed to switch. `VITE_VOICE_BACKEND=mesh` is a build-time escape hatch that forces peer-to-peer even when an SFU is available.
+No client rebuild is needed to switch. `VITE_VOICE_BACKEND=mesh` is a build-time escape hatch that makes a build mesh-only — which, on an SFU deployment, now means it is *refused* from voice channels rather than silently split off from them. See [One room, one transport](#one-room-one-transport-fixed).
 
-If the SFU session cannot be established (token error, server unreachable), the client logs a warning and **falls back to mesh** rather than leaving the user with no audio. Read [Per-client fallback splits a call](#per-client-fallback-splits-a-call-verified) before treating that as harmless — it is a per-client decision made silently, and one client falling back while the others stay on the SFU is a call where nobody can hear that person.
+`GET /api/voice/backend` still reports the deployment-wide value, but it is no longer what decides a call: the room's transport arrives with the join.
 
 ## mesh (default)
 
@@ -110,28 +110,46 @@ So: **on LiveKit Cloud one removal is enough. On a self-hosted LiveKit the re-sw
 
 Not covered: closing a group conversation (`DELETE /api/dms/:channelId`) and blocking a user do not evict voice on **either** path today.
 
-## Per-client fallback splits a call (verified)
+## One room, one transport (fixed)
 
-`use-voice.ts` picks its media transport **per client, once per join, and tells nobody**. There is no field in the WS protocol that says which transport a peer is using, and no UI that compares. So two people in the same channel can be on different transports, and then:
+### The bug this replaces
 
-- The mesh client sends `offer` / `ice-candidate` frames to the SFU client. The server relays them faithfully. The SFU client's `manager` is `null`, so `manager?.handleOffer(…)` is a no-op — the offer is dropped without a trace.
-- The SFU client never appears in the mesh client's `remotePeers` as connected; the peer sits in `connecting`, then `failed` (a Retry button appears, and retrying cannot help).
-- The mesh client never appears in the SFU client's `remotePeers` **at all** — `livekit-session.ts` builds that list from LiveKit room participants, and the mesh client is not one. The voice panel lists `remotePeers`, so the person is simply absent from the call; only the channel sidebar's occupancy roster (which comes from `/ws`) still shows them present.
+`use-voice.ts` used to pick its media transport **per client, once per join, and tell nobody**. Nothing in the protocol said which transport a peer was on, so two people in the same channel could be on different ones:
 
-Net effect: one participant is in the call, listed in the sidebar, silent, and indistinguishable from someone who is muted. Nobody is shown an error. The `SFU` badge in the status bar is the only tell, and it is only rendered when you are *not* looking at the voice channel.
+- The mesh client's `offer` / `ice-candidate` frames were relayed faithfully to the SFU client, whose `manager` is `null` — `manager?.handleOffer(…)` dropped them without a trace.
+- The mesh client never appeared in the SFU client's `remotePeers` **at all**, because that list is built from LiveKit participants and it was not one.
 
-Ways this actually fires on a single instance:
+Net effect: one participant in the call, listed in the sidebar, silent, indistinguishable from someone muted. No error on any screen. It fired whenever `GET /api/voice/backend` failed at bootstrap (permanently, for that tab), whenever LiveKit was reachable from the API but not from one user's network, on a one-off 5xx from `POST /api/voice/token`, or in any build carrying `VITE_VOICE_BACKEND=mesh`.
 
-| Trigger | Who ends up on mesh |
+### The rule
+
+**A voice room has one transport. The server picks it, states it, and does not change it while the room is occupied.**
+
+1. **Who decides.** `ws/voice.ts` takes the transport from config when a room's *first* peer joins and pins it in `roomTransports` for as long as the room has anyone in it. It is sent in `welcome.transport` and in every `voice-roster.transport`, so no client has to infer anything. The pin is dropped when the room empties, so adding, removing or repairing LiveKit takes effect on the next call in that channel without a restart.
+
+2. **Clients declare, up front, what they can run.** `join-voice-room` carries `transports: ["mesh"]` or `["mesh", "livekit"]`. A client that cannot run the room's transport is refused *before a peer is created* — it receives `voice-transport-unsupported` and nothing is broadcast, so it never appears in anyone's roster, not even for the round trip it would take to discover the mismatch. An absent `transports` field is read permissively as "both", because the only clients that omit it are builds older than the field.
+
+3. **No silent fallback, ever.** If the SFU session cannot be established at runtime (token 5xx, SFU unreachable from this network), the client **leaves the call and says so**. It does not build a mesh. Building one is what produced the split: the rest of the room is on the SFU and would neither hear that client nor see it drop out. There is no useful degraded state to offer instead — the two transports are disjoint, so "listen only" on the wrong one still receives nothing.
+
+4. **A live room never changes transport.** There is no correct way to move an in-progress call between transports without cutting everyone's audio mid-sentence, and a *partial* move is the original bug. So the room keeps what it started with, and clients can rely on that without any migration protocol. Room-level mesh fallback still exists — it is what a deployment without `LIVEKIT_*` gets, and what a repaired-then-broken deployment gets on the next call — but it is a decision the server makes for the whole room and announces.
+
+5. **Mesh signaling in an SFU room is dropped by the server** and logged as `voice.meshRelayInSfuRoom`. Defence in depth: a client that ignores all of the above cannot half-connect to a call it is not in.
+
+### What the user sees
+
+| Situation | What happens |
 |---|---|
-| `GET /api/voice/backend` fails during bootstrap (blip, deploy) | that tab, for its whole life — the catch in `App.tsx` leaves the mesh path silently |
-| LiveKit reachable from the API but not from one user's network (corporate firewall, blocked UDP+TCP) | that user only |
-| `POST /api/voice/token` 502/503 for one caller | that user, that join |
-| `VITE_VOICE_BACKEND=mesh` in a build | everyone using that build (the local `client/.env` sets this; CI does not) |
+| Mesh-only deployment (no `LIVEKIT_*`) | Exactly as before. Server says `mesh`, everyone builds a mesh, the 8-peer ceiling applies. |
+| SFU deployment, everything works | As before, except the client reports "Connecting…" until media is actually up rather than "Voice connected" the moment `welcome` lands. |
+| SFU deployment, `VITE_VOICE_BACKEND=mesh` build | Refused at join. Voice panel returns to its idle state with: *"This call runs on a voice server this app build cannot use, so you have not joined it. Nobody in the call can hear you."* The people in the call never see them. |
+| SFU deployment, `POST /api/voice/token` fails, or LiveKit unreachable from this user | Joins the WS room, cannot establish media, leaves within ~12 s: *"Could not reach the voice server, so you have not joined this call. Check your network and try again."* Others see a join and a leave, never a permanent silent participant. |
+| SFU deployment, LiveKit host black-holes | Same as above, bounded at 12 s by the join timer instead of LiveKit's own ~15 s, and the UI says "Connecting…" throughout rather than "Voice connected". |
 
-Measured fallback latency: a **refused** connection falls back in ~0.1s; a **black-holed** LiveKit host (the realistic cloud failure) takes **15.1s**, during which the UI says "Voice connected" and no audio flows in either direction.
+`VoiceState.transportFailure` (`{ transport, reason: "unsupported" | "unreachable" }`) carries the outcome separately from `error`, so this is distinguishable from a mic failure or a dropped socket.
 
-Not fixed here. The minimum honest fix is for the client to report its transport on join and for the server to refuse — or at least surface — a mixed room.
+### What can still split a call
+
+Two server instances with **different** LiveKit config pin the same channel differently, because `roomTransports` is per-process like `peers`. That is the same constraint that already makes mesh voice single-instance (see the block comment above `peers` in `server/src/ws/voice.ts`); nothing here fixes it, and nothing here makes it worse.
 
 ## Screen share on the SFU (verified)
 
@@ -181,10 +199,10 @@ Nothing below has been deployed; it is the shape of the decision, priced.
 |---|---|
 | `GET /api/voice/backend` | still answers `livekit` — it checks env, not reachability |
 | `POST /api/voice/token` | **200 in 4ms**. Minting is local; it never talks to LiveKit, so a token is issued for an SFU that is not there |
-| Client join | `connectLiveKit` rejects, the client falls back to mesh. **~0.1s** if the port refuses, **15.1s** if the host black-holes — 15s of "Voice connected" with no audio |
+| Client join | `connectLiveKit` rejects (or hangs). The client **leaves the call and reports it** — it never falls back to mesh. ~0.1s if the port refuses; capped at 12s by the join timer if the host black-holes, with the UI saying "Connecting…" the whole time |
 | Moderation | ban still returns **200 in 16ms**; the eviction logs `[pqp] voice.sfuEvictFailed … stage=listRooms error=fetch failed` and does not block the request |
 
-So it fails *soft*, into mesh — which also means it fails into the per-client split described above, and into the 8-peer mesh cap that the SFU was there to lift. It never hangs the API.
+So the API never hangs, but voice on that deployment is *down*, loudly, rather than silently degraded into a split call. Getting the room back on mesh means unsetting `LIVEKIT_*` — a deployment-level decision, taken by the operator, that then applies to every new room.
 
 ## Verification status
 
@@ -202,12 +220,33 @@ Verified end-to-end on 2026-08-07 against `livekit/livekit-server:latest` (v1.13
 | Ban survives a rejoin on the pre-ban token | **was broken**, now verified fixed via re-sweep (`revokeTokenTs` is Cloud-only) |
 | Banned user cannot mint a fresh token / re-enter over `/ws` | verified (403, no `welcome`) |
 | `MESH_VOICE_LIMIT` does not apply with the SFU active | verified — 12 peers joined and all 12 minted tokens; the same 12 against a mesh-only server were cut off at 8 |
-| Server switched to mesh under a client that expects an SFU | verified — token request answers a clean 503 and the client falls back |
+| Server switched to mesh under a client that expects an SFU | verified — token request answers a clean 503 |
 | LiveKit configured but unreachable | verified — see the table above |
+
+### Transport partition — verified fixed (2026-08-07)
+
+Same rig, plus a second server on a mesh-only config and a third pointed at a black-holing LiveKit address. The browser cases drive the **real `use-voice.ts` and `realtime.ts`** (esbuild bundle of the shipped modules) in headless Chromium with `--use-fake-device-for-media-stream`, against the real server, real Postgres, real `/ws` and the real LiveKit container.
+
+| Claim | Status |
+|---|---|
+| `welcome` and `voice-roster` state the room's transport | verified over a real socket |
+| Mesh-only client refused from an SFU room with `voice-transport-unsupported` | verified — no `welcome`, no peer id |
+| The refused client appears in **nobody's** roster — no `peer-joined`, absent from a fresh socket's snapshot, absent from the other participants' `occupancy` | verified |
+| Refusal is distinguishable (not a disconnect, not `voice-room-full`) | verified — `transportFailure.reason === "unsupported"` in the browser, with copy that says they have not joined |
+| Client whose SFU session fails at runtime leaves rather than building a mesh | verified in-browser — `status: idle`, `reason: "unreachable"`, `remotePeers: []`, and the incumbent's roster is unchanged |
+| Black-holed LiveKit host | verified — "Connecting…" throughout, gives up at ~12s with `unreachable`, never claims a live call |
+| Mesh signaling into an SFU room is dropped by the server | verified |
+| A live room keeps its transport when the config flips under it | verified (unit, via a mocked config flip) |
+| Empty room picks up new config on the next call | verified (unit) |
+| Two SFU browsers still hear each other | verified — both `connected`, media subscribed |
+| Two browsers on a **mesh-only** deployment still build a real peer connection | verified — both `connected`, no transport failure, no SFU |
+| Legacy client with no `transports` field is still admitted | verified over a real socket |
+| Mesh-only deployment: `welcome` says mesh, relay works, token endpoint 503s | verified |
 
 Not verified, and knowingly so:
 
 - **Against LiveKit Cloud.** Everything above is a self-hosted `--dev` server. In particular the `revokeTokenTs` behaviour is expected to differ (that is the point), and the re-sweep has not been observed against Cloud.
-- **Server switched to LiveKit under a client already running on mesh.** Reasoned through, not executed: that client keeps no `sessionProvider`, so it stays on mesh and produces exactly the split documented above.
+- **Multi-instance.** Two instances with different LiveKit config would still pin a channel differently. Reasoned through, not executed — it needs a second process and a shared room registry that does not exist.
 - **Scale.** Two to twelve participants, one room, one machine, all on localhost. No claim is made about a busy channel, cross-NAT paths, or TURN interaction on the SFU path.
 - **Real `getDisplayMedia`.** Headless Chromium cannot open the OS picker, so screen share was driven from a canvas capture. The publish/subscribe path is repo code and is verified; the capture call itself is browser API and is not.
+- **Real network partition.** "LiveKit unreachable from one user only" was simulated by a session provider that throws and by a non-routable `LIVEKIT_URL`, not by a firewall between a real client and a real SFU.

@@ -70,7 +70,7 @@ Browser/Electron → Clerk (auth)
                  → S3/R2 direct (attachment bytes, presigned; never via the API)
 ```
 
-- **Mesh limit:** ~5–8 peers per voice channel. **LiveKit SFU is implemented** — set `LIVEKIT_URL` / `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` and the server advertises it via `GET /api/voice/backend` (no client rebuild). Presence stays on `/ws` in both modes; only media moves. `cloudflare-sfu` is still a stub that falls back to mesh. See [`docs/voice-backends.md`](./docs/voice-backends.md).
+- **Mesh limit:** ~5–8 peers per voice channel. **LiveKit SFU is implemented** — set `LIVEKIT_URL` / `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` and the server advertises it via `GET /api/voice/backend` (no client rebuild). Presence stays on `/ws` in both modes; only media moves. A room's transport is decided by the server, pinned for the room's lifetime and stated in `welcome` — a client that cannot use it is refused rather than silently split off from the call. `cloudflare-sfu` is still a stub that falls back to mesh. See [`docs/voice-backends.md`](./docs/voice-backends.md).
 - **Attachments:** S3-compatible storage (R2 hosted, MinIO local). The API only signs URLs — the browser PUTs and GETs the bytes itself. Off entirely unless `S3_*` is configured. Size is enforced twice: `Content-Length` is signed into the presigned PUT (verified against MinIO, not yet against R2), and the claim `HEAD`s the object — which is also what catches "never uploaded" and a stored type that differs from the signed one. That HEAD runs *before* the claim transaction opens; nothing between `BEGIN` and `COMMIT` may touch the network. See [`docs/ATTACHMENTS.md`](./docs/ATTACHMENTS.md).
 - **Data model:** Server → Channels (`text` \| `voice`) → Messages (+ `message_attachments`); roles `owner` / `admin` / `member`; usernames `name#1234`.
 
@@ -102,5 +102,6 @@ CI workflows: `.github/workflows/ci.yml`, `deploy-web.yml`, `electron.yml`.
 ## Agent norms
 
 - Do not invent secret values in docs or commits.
-- Point humans to `docs/CLERK_SETUP.md` for Clerk CLI setup; `docs/SSO.md` for SAML/enterprise domain joining; `docs/voice-backends.md` for SFU notes; `docs/ATTACHMENTS.md` for R2/MinIO setup; `docs/PWA.md` for the mobile/installable app.
+- Point humans to `docs/CLERK_SETUP.md` for Clerk CLI setup; `docs/SSO.md` for SAML/enterprise domain joining; `docs/voice-backends.md` for SFU notes; `docs/ATTACHMENTS.md` for R2/MinIO setup; `docs/CONTENT_SAFETY.md` for image scanning, what is
+  *not* scanned, and the CSAM reporting runbook; `docs/PWA.md` for the mobile/installable app.
 - Update `docs/HANDOVER.md` + `docs/PLAN_STATUS.md` when phase status changes.

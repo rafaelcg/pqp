@@ -2,6 +2,7 @@ import {
   MESH_VOICE_WARNING,
   type ClientRelayMessage,
   type VoiceParticipant,
+  type VoiceRoomTransport,
   type VoiceSessionInfo,
   type VoiceSignalingMessage,
 } from "@pqp/shared";
@@ -25,6 +26,34 @@ import {
 } from "@/lib/voice-audio";
 
 export type VoiceStatus = "idle" | "joining" | "connected";
+
+/**
+ * Why a join was refused because of the room's transport.
+ *
+ * - `unsupported` — this build cannot run the transport at all (mesh-forced
+ *   build, or no way to obtain an SFU session). The server refused the join
+ *   before creating a peer, so nobody saw us arrive.
+ * - `unreachable` — we can run it in principle but could not establish it:
+ *   token request failed, or the SFU is not reachable from this network.
+ *
+ * Either way the user is **not** in the call and is told so. There is
+ * deliberately no third option where we join on the other transport instead;
+ * that is the partition this type exists to prevent.
+ */
+export interface VoiceTransportFailure {
+  transport: VoiceRoomTransport;
+  reason: "unsupported" | "unreachable";
+}
+
+const TRANSPORT_FAILURE_MESSAGE: Record<
+  VoiceTransportFailure["reason"],
+  string
+> = {
+  unsupported:
+    "This call runs on a voice server this app build cannot use, so you have not joined it. Nobody in the call can hear you.",
+  unreachable:
+    "Could not reach the voice server, so you have not joined this call. Check your network and try again.",
+};
 
 export interface VoiceAudioOptions {
   inputDeviceId?: string;
@@ -53,6 +82,12 @@ export interface VoiceState {
   peerVolumes: Record<string, number>;
   /** True when media is flowing through an SFU rather than a peer mesh. */
   usingSfu: boolean;
+  /**
+   * Set when the last join was refused because this client could not use the
+   * room's transport. Distinct from `error` so the UI (and tests) can tell this
+   * apart from a mic failure or a dropped socket.
+   */
+  transportFailure: VoiceTransportFailure | null;
   /** True when this client is the one presenting. */
   isSharingScreen: boolean;
   /** peerId of whoever is presenting (self or remote), or null if nobody is. */
@@ -159,9 +194,13 @@ function screenShareErrorMessage(err: unknown): string {
 }
 
 /**
- * Supplies an SFU session for a voice channel. When set, the controller routes
- * media through the SFU instead of building a mesh. Presence/roster still come
- * over the app WebSocket either way.
+ * Supplies an SFU session for a voice channel.
+ *
+ * Registering one is a statement of **capability**, not a choice of transport:
+ * whether media actually goes through the SFU is decided per room by the server
+ * and delivered in `welcome.transport`. With a provider registered this client
+ * can run either transport; without one it can only run mesh, and the server
+ * will refuse to admit it to an SFU room rather than let it sit there inaudible.
  */
 export type VoiceSessionProvider = (
   voiceChannelId: string,
@@ -172,6 +211,13 @@ export function createVoiceController(transport: RealtimeTransport) {
   let manager: ReturnType<typeof createPeerConnectionManager> | null = null;
   let sfu: LiveKitSession | null = null;
   let sessionProvider: VoiceSessionProvider | null = null;
+  /**
+   * What to assume when `welcome` carries no `transport` — i.e. the server
+   * predates the field. Set from `GET /api/voice/backend` at bootstrap, which
+   * is the only thing an older server can tell us. Never used when the server
+   * states the room's transport, which it always does from this version on.
+   */
+  let legacyRoomTransport: VoiceRoomTransport = "mesh";
   /** peerId → roster identity, used to label SFU participants. */
   const identities = new Map<string, LiveKitIdentity>();
   let pipeline: MicPipeline | null = null;
@@ -209,6 +255,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     occupancy: {},
     peerVolumes: {},
     usingSfu: false,
+    transportFailure: null,
     isSharingScreen: false,
     screenSharePeerId: null,
     localScreenStream: null,
@@ -222,27 +269,93 @@ export function createVoiceController(transport: RealtimeTransport) {
     }
   }
 
-  /** Returns the generation this attempt owns; older attempts are abandoned. */
-  function armJoinTimeout(): number {
+  /** Which transports this client can actually run — sent with every join. */
+  function transportCapabilities(): [VoiceRoomTransport, ...VoiceRoomTransport[]] {
+    return sessionProvider ? ["mesh", "livekit"] : ["mesh"];
+  }
+
+  function sendJoin(voiceChannelId: string) {
+    transport.sendVoice({
+      type: "join-voice-room",
+      voiceChannelId,
+      transports: transportCapabilities(),
+    });
+  }
+
+  /**
+   * Returns the generation this attempt owns; older attempts are abandoned.
+   *
+   * The same timer covers the WebSocket handshake *and*, on an SFU room, the
+   * media connection: `welcome` does not mean the call is up, and a black-holed
+   * SFU host used to take LiveKit's own 15s to give up while the UI said "Voice
+   * connected". Nothing here reports a live call until media is actually running.
+   */
+  function armJoinTimeout(failure?: VoiceTransportFailure): number {
     clearJoinTimeout();
     const generation = ++joinGeneration;
     joinTimeoutId = setTimeout(() => {
       if (state.status === "joining" && generation === joinGeneration) {
+        // A media transport that never came up is a transport failure, and has
+        // to look like one: a black-holed SFU host hangs rather than refusing,
+        // and that is the *likely* cloud failure, not the exotic one.
+        if (failure) {
+          refuseTransport(failure);
+          return;
+        }
         joinGeneration++;
         // Release the mic so the browser recording indicator clears, and tell
         // the server to drop us if the room ever registered the join.
         stopMicPipeline(pipeline);
         pipeline = null;
         intendedChannelId = null;
+        void teardownSfu();
+        manager?.dispose();
+        manager = null;
         transport.sendVoice({ type: "leave-voice-room" });
         state.error =
           "Voice connection timed out. Is the server running and WebSocket connected?";
         state.status = "idle";
+        state.peerId = null;
+        state.self = null;
+        state.remotePeers = [];
         state.voiceChannelId = null;
         emit();
       }
     }, 12_000);
     return generation;
+  }
+
+  /**
+   * The room runs a transport we cannot run. Leave — do not build the other one.
+   *
+   * Falling back to mesh here is what used to make two people sit in a call
+   * unable to hear each other with no error anywhere. The user is told, and the
+   * `leave-voice-room` keeps them out of everyone else's roster so nobody is
+   * left talking to a participant who was never there.
+   */
+  function refuseTransport(failure: VoiceTransportFailure) {
+    clearJoinTimeout();
+    joinGeneration++;
+    intendedChannelId = null;
+    knownPeerIds.clear();
+    stopSpeakingLoop();
+    disposeRemoteAnalysers();
+    transport.sendVoice({ type: "leave-voice-room" });
+    manager?.dispose();
+    manager = null;
+    void teardownSfu();
+    stopMicPipeline(pipeline);
+    pipeline = null;
+    releaseScreenCapture();
+    state.status = "idle";
+    state.peerId = null;
+    state.self = null;
+    state.remotePeers = [];
+    state.voiceChannelId = null;
+    state.speakingPeerIds = [];
+    state.transportFailure = failure;
+    state.error = TRANSPORT_FAILURE_MESSAGE[failure.reason];
+    emit();
   }
 
   // WS dropped mid-call: the media session is dead. Tear it down but keep the
@@ -419,8 +532,10 @@ export function createVoiceController(transport: RealtimeTransport) {
   }
 
   /**
-   * SFU media path. Falls back to mesh if the session cannot be established,
-   * so a misconfigured SFU degrades instead of leaving the user with no audio.
+   * SFU media path. Returns false if the session could not be established —
+   * the caller then *leaves the call and says so*. It must never build a mesh
+   * instead: the rest of the room is on the SFU and would neither hear this
+   * client nor see it drop out.
    */
   async function startSfuSession(
     voiceChannelId: string,
@@ -477,7 +592,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       emit();
       return true;
     } catch (err) {
-      console.warn("[pqp] SFU session failed — falling back to mesh", err);
+      console.warn("[pqp] SFU session failed — leaving the call", err);
       await teardownSfu();
       return false;
     }
@@ -558,12 +673,11 @@ export function createVoiceController(transport: RealtimeTransport) {
           transport.sendVoice({ type: "leave-voice-room" });
           return;
         }
-        clearJoinTimeout();
         knownPeerIds.clear();
         state.peerId = message.peerId;
-        state.status = "connected";
         state.voiceChannelId = message.voiceChannelId;
         state.self = message.self;
+        state.transportFailure = null;
 
         const welcomePeers = message.peers;
         for (const peer of welcomePeers) {
@@ -571,6 +685,9 @@ export function createVoiceController(transport: RealtimeTransport) {
         }
         const channelId = message.voiceChannelId;
         const peerId = message.peerId;
+        // The server owns this. We never re-derive it, and we never substitute
+        // the other transport when ours fails.
+        const roomTransport = message.transport ?? legacyRoomTransport;
 
         // Rejoin/channel-switch: tear the previous session down before building
         // a new one, or its connections and ICE-restart timers leak.
@@ -578,23 +695,62 @@ export function createVoiceController(transport: RealtimeTransport) {
         manager = null;
         void teardownSfu();
 
-        if (sessionProvider) {
-          void startSfuSession(channelId, peerId, welcomePeers).then((ok) => {
-            // Only build a mesh if the SFU path declined or failed, and the
-            // user is still in the same voice session.
-            if (!ok && state.peerId === peerId && !manager) {
-              startMeshSession(peerId, welcomePeers);
-              emit();
-            }
+        if (roomTransport === "livekit") {
+          if (!sessionProvider) {
+            // Only reachable against a server old enough to omit `transport`;
+            // a current one refuses this join before minting a peer.
+            refuseTransport({ transport: roomTransport, reason: "unsupported" });
+            break;
+          }
+          // Still "joining": on the SFU path the call is not up until media is,
+          // and the timer bounds how long that can be claimed. A black-holed
+          // LiveKit host takes ~15s to reject on its own, which used to be 15s
+          // of "Voice connected" with no audio in either direction.
+          const generation = armJoinTimeout({
+            transport: roomTransport,
+            reason: "unreachable",
           });
-        } else {
-          startMeshSession(peerId, welcomePeers);
+          void startSfuSession(channelId, peerId, welcomePeers).then((ok) => {
+            if (generation !== joinGeneration || state.peerId !== peerId) {
+              return;
+            }
+            clearJoinTimeout();
+            if (!ok) {
+              refuseTransport({
+                transport: roomTransport,
+                reason: "unreachable",
+              });
+              return;
+            }
+            state.status = "connected";
+            startSpeakingLoop();
+            emit();
+          });
+          emit();
+          break;
         }
 
+        clearJoinTimeout();
+        state.status = "connected";
+        startMeshSession(peerId, welcomePeers);
         startSpeakingLoop();
         emit();
         break;
       }
+      case "voice-transport-unsupported":
+        // The server refused before creating a peer: no roster entry of ours
+        // ever existed, so there is nothing for anyone else to clean up.
+        if (
+          state.status === "idle" ||
+          message.voiceChannelId !== state.voiceChannelId
+        ) {
+          return;
+        }
+        refuseTransport({
+          transport: message.transport,
+          reason: "unsupported",
+        });
+        break;
       case "peer-joined":
         knownPeerIds.add(message.peer.peerId);
         identities.set(message.peer.peerId, toIdentity(message.peer));
@@ -649,11 +805,19 @@ export function createVoiceController(transport: RealtimeTransport) {
     handleSignaling,
 
     /**
-     * Enable the SFU media path. Pass `null` to stay on mesh. Takes effect on
-     * the next voice join.
+     * Declare that this client can obtain SFU sessions. Pass `null` for a build
+     * that cannot (mesh-forced), which the server is then told about on join.
+     *
+     * `legacyTransport` is only consulted when the server's `welcome` carries no
+     * `transport` field — i.e. a server older than this protocol, where
+     * `GET /api/voice/backend` is the best information available.
      */
-    setSessionProvider(provider: VoiceSessionProvider | null) {
+    setSessionProvider(
+      provider: VoiceSessionProvider | null,
+      legacyTransport: VoiceRoomTransport = "mesh",
+    ) {
       sessionProvider = provider;
+      legacyRoomTransport = provider ? legacyTransport : "mesh";
     },
 
     setIceServers(servers: IceServerConfig[]) {
@@ -670,6 +834,7 @@ export function createVoiceController(transport: RealtimeTransport) {
 
     async join(voiceChannelId: string, options?: VoiceAudioOptions) {
       state.error = null;
+      state.transportFailure = null;
       state.status = "joining";
       // Known from the moment we start, not only once the server says welcome —
       // otherwise the UI cannot tell which channel is connecting.
@@ -716,7 +881,7 @@ export function createVoiceController(transport: RealtimeTransport) {
 
         pipeline = next;
         applyMuteToPipeline();
-        transport.sendVoice({ type: "join-voice-room", voiceChannelId });
+        sendJoin(voiceChannelId);
       } catch (err) {
         if (generation !== joinGeneration) {
           return;
@@ -759,6 +924,7 @@ export function createVoiceController(transport: RealtimeTransport) {
         occupancy: state.occupancy,
         peerVolumes: state.peerVolumes,
         usingSfu: false,
+        transportFailure: null,
         isSharingScreen: false,
         screenSharePeerId: null,
         localScreenStream: null,
@@ -793,10 +959,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       state.status = "joining";
       emit();
       armJoinTimeout();
-      transport.sendVoice({
-        type: "join-voice-room",
-        voiceChannelId: intendedChannelId,
-      });
+      sendJoin(intendedChannelId);
     },
 
     setMuted(muted: boolean) {

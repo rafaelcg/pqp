@@ -84,13 +84,18 @@ purpose, so its scope reflected the full feature surface rather than guessing at
 
 ## Still open (operational)
 
-1. **Mixed-transport voice calls** — `use-voice.ts` falls back to mesh per client, silently, so one
-   person can end up on mesh while the room is on the SFU: they are listed in the sidebar, absent
-   from the call, and nobody sees an error. No client reports its transport and the server does not
-   check. See [`voice-backends.md`](./voice-backends.md#per-client-fallback-splits-a-call-verified).
-   (LiveKit itself is now verified end-to-end — this is what that verification found.)
-2. **Verify voice in a real browser** — the 2026-07-31 pass could not exercise mic capture; mesh
-   join, deafen, and per-peer volume are untested against real hardware
+1. ~~**Mixed-transport voice calls**~~ — **fixed 2026-08-07.** A voice room now has one transport,
+   the server picks it when the room opens and pins it for the room's life, and it is stated in
+   `welcome` and `voice-roster`. Clients declare which transports they can run on `join-voice-room`;
+   one that cannot run the room's is refused before a peer exists, and a client whose SFU session
+   fails at runtime leaves the call and says so instead of building a mesh nobody else is on.
+   Verified end-to-end in real browsers against a live LiveKit. See
+   [`voice-backends.md`](./voice-backends.md#one-room-one-transport-fixed). Residual: two instances
+   with *different* LiveKit config still pin the same channel differently — one more reason voice
+   wants a single instance.
+2. **Verify voice in a real browser** — mesh and SFU join, real mic capture, and the transport
+   refusal paths are now covered (2026-08-07, headless Chromium with fake devices); deafen and
+   per-peer volume are still untested against real hardware
 3. **`pqp.gg` is unregistered** — canonical/OG tags point at a domain nobody owns
 4. **Electron app icon** — no `electron/build` icons, so packaged apps ship the default Electron icon
 5. **Redis-backed rate limiting and presence** — both are in-process, so the API cannot scale past one instance

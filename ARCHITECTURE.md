@@ -169,7 +169,9 @@ Media transport is selected by the **server** and advertised via `GET /api/voice
 
 Presence (roster, occupancy, join/leave, speaking) always rides `/ws`; the SFU replaces only the audio path, and SFU participant identity is the WS-assigned `peerId` so both paths produce the same `RemotePeer[]`.
 
-Switching needs no client rebuild. `VITE_VOICE_BACKEND=mesh` forces peer-to-peer as an escape hatch. If an SFU session fails to establish, the client falls back to mesh.
+A voice **room** has exactly one transport: the server picks it when the room opens, pins it for as long as the room is occupied, and states it in `welcome` / `voice-roster`. Clients declare what they can run on `join-voice-room`; one that cannot run the room's transport is refused before a peer exists, and one whose SFU session fails at runtime leaves the call and reports it rather than falling back to mesh — a per-client fallback puts a participant in the room whom nobody can hear.
+
+Switching needs no client rebuild. `VITE_VOICE_BACKEND=mesh` makes a build mesh-only, which on an SFU deployment means it is refused from voice channels.
 
 Details: [`docs/voice-backends.md`](./docs/voice-backends.md).
 
