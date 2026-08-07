@@ -56,18 +56,13 @@ the sweeper.
 
 Two things are worth knowing before trusting either:
 
-- **The signed length is verified against MinIO, not against R2.** A round trip against a real
-  MinIO confirms it: an over-sized *and* an under-sized body are both rejected, a chunked request
-  with no `Content-Length` gets `411 MissingContentLength`, and an `aws-chunked` envelope stores
-  only the bytes it actually framed. R2 sits behind Cloudflare's edge, which is exactly the kind
-  of proxy that re-frames request bodies, and nobody has run this against a real R2 bucket yet.
-  The claim-time HEAD is what makes that acceptable: an oversized object can never reach a
-  message on any backend. Only the *unclaimed* row is exposed, for one sweeper grace period.
-- **A same-size overwrite is still possible** until the upload URL expires, 15 minutes after the
-  mint — an S3 PUT is an unconditional overwrite, and that includes after the row has been
-  claimed, where no sweeper predicate ever looks at it again. It is bounded and cannot blow up
-  storage. Closing it would take a conditional PUT (`If-None-Match: *`) or a key rotation at
-  claim time, neither of which is worth its cost here.
+- **The signed length is verified against R2 as well as MinIO** (2026-08-07). The concern was
+  real — R2 sits behind Cloudflare's edge, which is exactly the kind of proxy that re-frames
+  request bodies — so it was tested rather than assumed: a URL minted for one byte, sent 4096,
+  is refused and nothing lands in the bucket. Run it yourself with
+  `S3_TEST_ENDPOINT`/`S3_TEST_BUCKET`/`S3_TEST_ACCESS_KEY_ID`/`S3_TEST_SECRET_ACCESS_KEY`/
+  `S3_TEST_REGION=auto` against `server/src/lib/s3.test.ts`; all 19 pass against a real bucket,
+  including keys with spaces and parentheses.
 
 ## Off by default
 
@@ -186,6 +181,11 @@ useful: `POST /api/channels/:id/attachments` returns 200, the API logs are compl
 that is perfectly valid. Nothing is wrong with the signature.
 
 Dashboard → your bucket → **Settings** → **CORS Policy** → **Add CORS policy**:
+
+(Or from the CLI — note wrangler takes Cloudflare's own shape, **not** the S3-style array the
+dashboard wants, and silently rejects the latter:
+`wrangler r2 bucket cors set <bucket> --file cors.json --force` with
+`{"rules":[{"allowed":{"origins":[…],"methods":["PUT","GET","HEAD"],"headers":["content-type"]},"exposeHeaders":["ETag"],"maxAgeSeconds":3600}]}`.)
 
 ```json
 [

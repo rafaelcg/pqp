@@ -80,7 +80,7 @@ export const ptBR: PartialMessages = {
     "Mostra o jogo, o código ou o bug pra quem tá no canal. Uma pessoa de cada vez.",
   "landing.features.chat.title": "Chat sem firula",
   "landing.features.chat.body":
-    "Markdown, resposta, reação, mensagem fixada e @menção. Colou um link, já vira prévia.",
+    "Markdown, resposta, reação, mensagem fixada e @menção. Colou um link, já vira preview.",
   "landing.features.search.title": "Acha o que foi dito",
   "landing.features.search.body":
     "Busca por palavra no servidor inteiro e cai direto na mensagem, com o que veio antes e depois.",
