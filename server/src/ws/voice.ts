@@ -12,6 +12,7 @@ import type { DbUser } from "../db.js";
 import { logEvent } from "../lib/log.js";
 import { createRateLimiter } from "../lib/rate-limit.js";
 import { isDmSendBlocked } from "../services/dms.js";
+import { findTimeoutForChannel } from "../services/sanctions.js";
 import { getChannel, getChannelAudience } from "../services/servers.js";
 import { canAccessChannel } from "../services/users.js";
 import {
@@ -415,6 +416,23 @@ export async function handleVoiceMessage(
     // this, a blocked person keeps a working phone line to the person who
     // blocked them.
     if (await isDmSendBlocked(payload.voiceChannelId, user.id)) {
+      return;
+    }
+    // THE VOICE CHOKEPOINT for timeouts. `join-voice-room` is the only way into
+    // a room, so refusing it here is the whole enforcement — plus the eviction
+    // the issuing route performs for anybody already inside one.
+    //
+    // WHY REFUSING THE JOIN AND NOT A SERVER-SIDE MUTE. A mute is the more
+    // surgical sanction and it is the one this product cannot actually deliver:
+    // in mesh mode the audio never touches the server at all, so "muted" would
+    // mean asking the sanctioned client to please stop sending — which is a
+    // suggestion, not enforcement, and would be defeated by any modified
+    // client. Refusing the room is enforceable in both mesh and SFU mode, and a
+    // sanction that only works when the sanctioned party cooperates is worse
+    // than an honest blunter one. The same join reaches a conversation's call,
+    // and `findTimeoutForChannel` returns nothing for those — a server's
+    // moderators do not get to hang up their members' DM calls.
+    if (await findTimeoutForChannel(user.id, payload.voiceChannelId)) {
       return;
     }
 
