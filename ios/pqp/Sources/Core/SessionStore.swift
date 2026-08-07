@@ -133,6 +133,16 @@ final class SessionStore {
                 lastError = detail
             } else if error is DeadlineExceeded {
                 lastError = String(localized: "The server did not respond. Is it running?")
+            } else if case APIError.unauthorized = error {
+                // A Clerk session that cannot produce a working token is dead
+                // weight: it blocks the sign-in sheet ("you're already signed
+                // in") while the API refuses it — a deadlock the user cannot
+                // escape. The concrete way this happens: a keychain session
+                // minted against a different Clerk instance (a dev build's
+                // pk_test surviving into a pk_live build). Sign the client out
+                // so the next tap starts clean, and say so without alarm.
+                try? await Clerk.shared.auth.signOut()
+                lastError = String(localized: "Signed out — sign in again to continue.")
             }
             phase = .onboarding
         }
