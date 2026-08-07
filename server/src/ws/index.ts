@@ -63,6 +63,12 @@ const VOICE_MESSAGE_TYPES = new Set([
   "offer",
   "answer",
   "ice-candidate",
+  // --- conversation calls ---
+  "call-ring",
+  "call-decline",
+  "set-camera",
+  // --- voice state ---
+  "set-voice-state",
 ]);
 
 /**

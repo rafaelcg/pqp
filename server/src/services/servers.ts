@@ -175,6 +175,7 @@ export async function listChannels(
      FROM channels c
      JOIN server_members sm ON sm.server_id = c.server_id
      WHERE c.server_id = $1 AND sm.user_id = $2
+       AND c.type <> 'thread'
        AND ${channelVisibleSql("$2")}
      ORDER BY c.position ASC`,
     [serverId, userId],
@@ -245,6 +246,14 @@ export async function moveChannel(
     if (!row) {
       await client.query("ROLLBACK");
       return;
+    }
+
+    // --- threads --- a thread lives on its origin message, not in the
+    // sidebar; "moving" one has no meaning and would corrupt the parent
+    // pointer the visibility predicate reads.
+    if (row.type === "thread") {
+      await client.query("ROLLBACK");
+      throw new InvalidChannelMoveError("A thread cannot be moved");
     }
 
     if (parentId !== null) {
@@ -368,9 +377,37 @@ export async function updateChannel(
 export async function deleteChannel(channelId: string): Promise<boolean> {
   const keys = await channelAttachmentKeys(channelId);
 
+  // --- threads ---
+  // A text channel's threads die with it, explicitly. `parent_id` is ON DELETE
+  // SET NULL (categories need that), so without this the threads would survive
+  // as orphans: invisible to everyone (the visibility predicate fails closed on
+  // a null parent) but still holding messages and attachment rows forever.
+  // Their attachment keys are read here, before anything is deleted, for the
+  // same reason `channelAttachmentKeys` runs first for the channel itself: the
+  // cascade destroys the only rows that name the objects.
+  const threadIds = (
+    await getPool().query<{ id: string }>(
+      `SELECT id FROM channels WHERE parent_id = $1 AND type = 'thread'`,
+      [channelId],
+    )
+  ).rows.map((row) => row.id);
+  const threadKeys = (
+    await Promise.all(threadIds.map((id) => channelAttachmentKeys(id)))
+  ).flat();
+
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");
+
+    // Before the orphan read below: with the threads already gone, the
+    // category-uncategorising logic can never mistake a thread for a channel
+    // that should be renumbered into a top-level sibling group.
+    if (threadIds.length > 0) {
+      await client.query(
+        `DELETE FROM channels WHERE parent_id = $1 AND type = 'thread'`,
+        [channelId],
+      );
+    }
 
     // Deleting a category SETs NULL the parent_id of whatever was inside it,
     // uncategorizing rather than deleting its children — but that only clears
@@ -436,7 +473,11 @@ export async function deleteChannel(channelId: string): Promise<boolean> {
     // some other request is still using, must not have its objects removed.
     if (deleted) {
       invalidateChannelAudience(channelId);
-      deleteObjectsInBackground(keys);
+      // --- threads --- the child threads went in the same transaction.
+      for (const threadId of threadIds) {
+        invalidateChannelAudience(threadId);
+      }
+      deleteObjectsInBackground([...keys, ...threadKeys]);
     }
     return deleted;
   } catch (error) {

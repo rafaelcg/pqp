@@ -11,10 +11,17 @@ import {
 import type { DbUser } from "../db.js";
 import { logEvent } from "../lib/log.js";
 import { createRateLimiter } from "../lib/rate-limit.js";
-import { isDmSendBlocked } from "../services/dms.js";
+import { listBlockersOf } from "../services/blocks.js";
+import {
+  isDmSendBlocked,
+  resolveRingableConversation,
+} from "../services/dms.js";
+import { createMessage, mapMessage } from "../services/messages.js";
 import { findTimeoutForChannel } from "../services/sanctions.js";
 import { getChannel, getChannelAudience } from "../services/servers.js";
 import { canAccessChannel } from "../services/users.js";
+import { broadcastToChannel } from "./chat.js";
+import { resolveStatus } from "./status.js";
 import {
   evictSfuRoom,
   evictSfuUser,
@@ -34,6 +41,15 @@ interface VoicePeer {
   avatarUrl: string | null;
   voiceChannelId: string;
   sharingScreen: boolean;
+  /** Sender-side camera MediaStream id, or null while the camera is off.
+   *  See `voiceParticipantSchema.cameraStreamId` for why the id travels. */
+  cameraStreamId: string | null;
+  // --- voice state ---
+  // Self-reported over `set-voice-state`, carried on every roster so the
+  // channel list can badge occupants for people outside the call. Display
+  // state only: enforcement of anything never hangs off these flags.
+  muted: boolean;
+  deafened: boolean;
 }
 
 /**
@@ -133,8 +149,18 @@ export function resetVoiceRoomTransports(): void {
  */
 const roomLimiter = createRateLimiter({ capacity: 20, refillPerSecond: 2 });
 
+/**
+ * `set-voice-state` fans a roster out to everyone who can see the channel, so
+ * a client toggling mute in a loop would be spending the whole audience's
+ * bandwidth. The budget is far above what a human can click; past it the frame
+ * is dropped, which at worst leaves a stale badge until the next honest toggle
+ * — display state, never enforcement, so stale is safe.
+ */
+const stateLimiter = createRateLimiter({ capacity: 15, refillPerSecond: 3 });
+
 export function resetVoiceRateLimits(): void {
   roomLimiter.reset();
+  stateLimiter.reset();
 }
 
 function getRoomPeers(voiceChannelId: string): VoicePeer[] {
@@ -148,6 +174,9 @@ function toParticipant(peer: VoicePeer): VoiceParticipant {
     displayName: peer.displayName,
     avatarUrl: peer.avatarUrl,
     sharingScreen: peer.sharingScreen,
+    cameraStreamId: peer.cameraStreamId,
+    muted: peer.muted,
+    deafened: peer.deafened,
   };
 }
 
@@ -243,6 +272,10 @@ function removePeer(peerId: string) {
   // removed or fixed. Nobody is mid-call, so nobody's audio moves.
   if (getRoomPeers(voiceChannelId).length === 0) {
     roomTransports.delete(voiceChannelId);
+    // A ring with nobody left in the room is a call that ended unanswered —
+    // after a grace period, because this same path runs mid-rejoin.
+    // See `// --- conversation calls ---` below.
+    noteVoiceRoomEmptied(voiceChannelId);
   }
   logEvent("voice.leave", {
     peerId,
@@ -525,6 +558,12 @@ export async function handleVoiceMessage(
       avatarUrl: user.avatar_url,
       voiceChannelId: payload.voiceChannelId,
       sharingScreen: false,
+      cameraStreamId: null,
+      // Not muted until the client says so: the client re-declares its state
+      // right after `welcome` (including after a rejoin, where this reset
+      // would otherwise erase a standing mute). See use of `set-voice-state`.
+      muted: false,
+      deafened: false,
     };
     peers.set(peerId, peer);
     socketToPeerId.set(socket, peerId);
@@ -557,6 +596,9 @@ export async function handleVoiceMessage(
       { type: "peer-joined", peer: self },
       peerId,
     );
+    // A join into a conversation that is ringing this user IS the answer —
+    // see `// --- conversation calls ---` below.
+    noteConversationCallJoin(payload.voiceChannelId, user.id);
     await broadcastRoster(payload.voiceChannelId);
     return;
   }
@@ -593,6 +635,56 @@ export async function handleVoiceMessage(
     }
     peer.sharingScreen = payload.sharing;
     await broadcastRoster(peer.voiceChannelId);
+    return;
+  }
+
+  // --- voice state ---
+  if (payload.type === "set-voice-state") {
+    if (!existingPeerId) {
+      return;
+    }
+    const peer = peers.get(existingPeerId);
+    if (!peer) {
+      return;
+    }
+    // No change, no fan-out: the client re-declares its state after every
+    // (re)join, and most of those declarations are the defaults the peer
+    // already has.
+    if (peer.muted === payload.muted && peer.deafened === payload.deafened) {
+      return;
+    }
+    if (!stateLimiter.take(user.id)) {
+      return;
+    }
+    peer.muted = payload.muted;
+    peer.deafened = payload.deafened;
+    await broadcastRoster(peer.voiceChannelId);
+    return;
+  }
+
+  // Conversation-call frames — the logic lives in the bannered section below.
+  // `call-decline` is deliberately dispatched before the peer requirement:
+  // a decliner is by definition NOT in the room and holds no voice peer.
+  if (payload.type === "set-camera") {
+    if (!existingPeerId) {
+      return;
+    }
+    const peer = peers.get(existingPeerId);
+    if (!peer) {
+      return;
+    }
+    peer.cameraStreamId = payload.streamId;
+    await broadcastRoster(peer.voiceChannelId);
+    return;
+  }
+
+  if (payload.type === "call-ring") {
+    await handleCallRing(session, payload.conversationId);
+    return;
+  }
+
+  if (payload.type === "call-decline") {
+    handleCallDecline(user, payload.conversationId);
     return;
   }
 
@@ -636,3 +728,450 @@ export async function handleVoiceMessage(
 
   relayToTarget(payload);
 }
+
+// --- conversation calls -----------------------------------------------------
+//
+// A server voice channel is join-when-you-want; a conversation call RINGS.
+// Everything below is the ringing lifecycle for DM / group-DM channels, and
+// nothing in it may ever reach a server surface: every frame goes either to
+// the room's peers or to the conversation's *participants*, resolved through
+// `resolveRingableConversation` / `getChannelAudience`, whose conversation
+// branch is `channel_members` and nothing else (`channelVisibleSql` is the
+// law here — a conversation belongs to nobody, so there is no admin escape
+// hatch and no server roster to leak into).
+//
+// The room mechanics above are untouched: a conversation call *is* a voice
+// room on the conversation's channel id, with the same pinned transport, the
+// same mesh ceiling and the same block/timeout checks at join. Ringing is a
+// layer on top — "tell the absent participants the room went live" — plus the
+// missed-call record when nobody came.
+
+/** How long a call rings before it is recorded as missed. */
+export const CALL_RING_TIMEOUT_MS = 45_000;
+
+/**
+ * How long an empty room keeps its ring alive. A rejoin (the reconnect path
+ * removes the old peer before adding the new one) empties the room for a
+ * moment, and a flappy caller network can empty it for a few seconds; killing
+ * the ring on the first empty read would turn every caller hiccup into a
+ * "missed call" that nobody missed.
+ */
+export const CALL_EMPTY_ROOM_GRACE_MS = 5_000;
+
+/** What the missed-call record says. Stored as a normal message body. */
+export const MISSED_CALL_BODY = "📞 Missed call";
+
+interface ConversationRing {
+  conversationId: string;
+  kind: "dm" | "group";
+  /** Kept whole: the missed-call message is authored by the caller. */
+  caller: DbUser;
+  /** Callees who have neither answered nor declined yet. */
+  pending: Set<string>;
+  /** The subset of `pending` that was actually sent `call-incoming` — DND and
+   *  people who blocked the caller are rung silently (i.e. not at all). */
+  rung: Set<string>;
+  /** True once any callee joined; a call somebody answered is never "missed". */
+  anyoneAnswered: boolean;
+  timer: ReturnType<typeof setTimeout>;
+  emptyRoomTimer: ReturnType<typeof setTimeout> | null;
+}
+
+const conversationRings = new Map<string, ConversationRing>();
+
+/** Ringing fans out to every participant's every socket; keep it rare. */
+const ringLimiter = createRateLimiter({ capacity: 5, refillPerSecond: 0.2 });
+
+/** Test hook: forget every active ring and its timers. */
+export function resetConversationCalls(): void {
+  for (const ring of conversationRings.values()) {
+    clearTimeout(ring.timer);
+    if (ring.emptyRoomTimer) {
+      clearTimeout(ring.emptyRoomTimer);
+    }
+  }
+  conversationRings.clear();
+  ringLimiter.reset();
+}
+
+/** Whether a conversation currently has an unanswered ring (for tests/UI). */
+export function isConversationRinging(conversationId: string): boolean {
+  return conversationRings.has(conversationId);
+}
+
+function sendToUserSockets(userIds: ReadonlySet<string>, frame: VoiceSignalingMessage) {
+  if (userIds.size === 0) {
+    return;
+  }
+  const encoded = JSON.stringify(frame);
+  forEachAuthenticatedSocket((socket, user) => {
+    if (socket.readyState === 1 && userIds.has(user.id)) {
+      socket.send(encoded);
+    }
+  });
+}
+
+async function handleCallRing(
+  session: { socket: WebSocket; user: DbUser },
+  conversationId: string,
+): Promise<void> {
+  const { socket, user } = session;
+  if (!ringLimiter.take(user.id)) {
+    return;
+  }
+  // Only a live peer of exactly this room may ring it. The join is where
+  // access, blocks, timeouts and transport were enforced, so requiring the
+  // peer means a forged `call-ring` cannot reach anybody the sender could not
+  // already sit in a call with.
+  const peerId = socketToPeerId.get(socket);
+  const peer = peerId ? peers.get(peerId) : undefined;
+  if (!peer || peer.voiceChannelId !== conversationId) {
+    return;
+  }
+  // One ring per call. A second `call-ring` while one is live would re-buzz
+  // people who already ignored it.
+  if (conversationRings.has(conversationId)) {
+    return;
+  }
+
+  const channel = await getChannel(conversationId);
+  if (!channel || channel.kind === "server") {
+    return;
+  }
+  const participants = await resolveRingableConversation(conversationId, user.id);
+  if (!participants) {
+    return;
+  }
+
+  // The awaits above: the caller may have hung up or the socket died. A ring
+  // whose room is already empty would be a missed call nobody placed.
+  if (socketToPeerId.get(socket) !== peerId || !peers.has(peerId!)) {
+    return;
+  }
+
+  const present = new Set(getRoomPeers(conversationId).map((p) => p.userId));
+  const absent = participants.filter(
+    (id) => id !== user.id && !present.has(id),
+  );
+  if (absent.length === 0) {
+    return;
+  }
+
+  // Quiet exclusions. DND means "do not interrupt me": no ring, and the missed
+  // call lands as an ordinary quiet message. Somebody who blocked the caller
+  // hears nothing either — in a 1:1 the join was already refused outright, so
+  // this only matters for the soft-block inside a group.
+  const blockers = await listBlockersOf(user.id);
+  const pending = new Set(absent);
+  const rung = new Set(
+    absent.filter(
+      (id) => !blockers.has(id) && resolveStatus(id) !== "dnd",
+    ),
+  );
+
+  const ring: ConversationRing = {
+    conversationId,
+    kind: channel.kind === "group" ? "group" : "dm",
+    caller: user,
+    pending,
+    rung,
+    anyoneAnswered: false,
+    timer: setTimeout(() => {
+      void endConversationRing(conversationId, "timeout");
+    }, CALL_RING_TIMEOUT_MS),
+    emptyRoomTimer: null,
+  };
+  conversationRings.set(conversationId, ring);
+
+  logEvent("voice.callRing", {
+    conversationId,
+    callerId: user.id,
+    pending: pending.size,
+    rung: rung.size,
+  });
+
+  sendToUserSockets(rung, {
+    type: "call-incoming",
+    conversationId,
+    kind: ring.kind,
+    caller: {
+      userId: user.id,
+      displayName: user.display_name,
+      avatarUrl: user.avatar_url,
+    },
+  });
+}
+
+/**
+ * Accepting a call is joining the room — there is no separate accept frame.
+ * Also clears the empty-room grace timer on ANY join (the caller rejoining
+ * after a blip must not let the grace timer kill their own ring).
+ */
+function noteConversationCallJoin(conversationId: string, userId: string) {
+  const ring = conversationRings.get(conversationId);
+  if (!ring) {
+    return;
+  }
+  if (ring.emptyRoomTimer) {
+    clearTimeout(ring.emptyRoomTimer);
+    ring.emptyRoomTimer = null;
+  }
+  if (!ring.pending.delete(userId)) {
+    return;
+  }
+  ring.rung.delete(userId);
+  ring.anyoneAnswered = true;
+  // Their other devices stop ringing; everyone still pending keeps ringing.
+  sendToUserSockets(new Set([userId]), {
+    type: "call-ring-cancelled",
+    conversationId,
+    reason: "answered",
+  });
+  if (ring.pending.size === 0) {
+    clearRing(ring);
+  }
+}
+
+function handleCallDecline(user: DbUser, conversationId: string) {
+  const ring = conversationRings.get(conversationId);
+  if (!ring || !ring.pending.delete(user.id)) {
+    return;
+  }
+  ring.rung.delete(user.id);
+  // Other devices of the decliner stop ringing…
+  sendToUserSockets(new Set([user.id]), {
+    type: "call-ring-cancelled",
+    conversationId,
+    reason: "declined",
+  });
+  // …and the people in the call stop waiting for them.
+  broadcastToRoom(conversationId, {
+    type: "call-declined",
+    conversationId,
+    userId: user.id,
+  });
+  logEvent("voice.callDeclined", { conversationId, userId: user.id });
+  if (ring.pending.size === 0) {
+    if (ring.anyoneAnswered) {
+      clearRing(ring);
+    } else {
+      // Everyone said no: the ring is over and the record is a missed call.
+      void endConversationRing(conversationId, "cancelled");
+    }
+  }
+}
+
+/** The room emptied. After the grace period, an unanswered ring dies with it. */
+function noteVoiceRoomEmptied(voiceChannelId: string) {
+  const ring = conversationRings.get(voiceChannelId);
+  if (!ring || ring.emptyRoomTimer) {
+    return;
+  }
+  ring.emptyRoomTimer = setTimeout(() => {
+    ring.emptyRoomTimer = null;
+    if (getRoomPeers(voiceChannelId).length === 0) {
+      void endConversationRing(voiceChannelId, "cancelled");
+    }
+  }, CALL_EMPTY_ROOM_GRACE_MS);
+}
+
+/** Remove the ring without any missed-call record (it was answered). */
+function clearRing(ring: ConversationRing) {
+  clearTimeout(ring.timer);
+  if (ring.emptyRoomTimer) {
+    clearTimeout(ring.emptyRoomTimer);
+  }
+  conversationRings.delete(ring.conversationId);
+}
+
+async function endConversationRing(
+  conversationId: string,
+  reason: "timeout" | "cancelled",
+): Promise<void> {
+  const ring = conversationRings.get(conversationId);
+  if (!ring) {
+    return;
+  }
+  clearRing(ring);
+  sendToUserSockets(ring.rung, {
+    type: "call-ring-cancelled",
+    conversationId,
+    reason,
+  });
+  logEvent("voice.callEnded", {
+    conversationId,
+    reason,
+    answered: ring.anyoneAnswered,
+  });
+  if (!ring.anyoneAnswered) {
+    await postMissedCallMessage(ring);
+  }
+}
+
+/**
+ * The missed-call record: an ordinary message from the caller, so history,
+ * unread badges, blocks and retention all treat it like anything else said in
+ * the conversation. The activity ping mirrors chat's own fan-out — audience
+ * only, blockers of the caller excluded, never a mention — so a DND callee
+ * gets the quiet badge and nothing louder.
+ */
+async function postMissedCallMessage(ring: ConversationRing): Promise<void> {
+  try {
+    const dbMessage = await createMessage(
+      ring.conversationId,
+      ring.caller,
+      MISSED_CALL_BODY,
+    );
+    if (!dbMessage) {
+      return;
+    }
+    broadcastToChannel(ring.conversationId, {
+      type: "message-broadcast",
+      message: mapMessage(dbMessage),
+    });
+
+    const [audience, blockers] = await Promise.all([
+      getChannelAudience(ring.conversationId),
+      listBlockersOf(ring.caller.id),
+    ]);
+    if (!audience) {
+      return;
+    }
+    const activity = JSON.stringify({
+      type: "channel-activity",
+      // Null by construction — a conversation has no server. Asserted rather
+      // than assumed: a server id here would file this badge into a sidebar.
+      serverId: audience.serverId,
+      kind: audience.kind,
+      channelId: ring.conversationId,
+      mention: false,
+    });
+    forEachAuthenticatedSocket((socket, socketUser) => {
+      if (
+        socket.readyState !== 1 ||
+        socketUser.id === ring.caller.id ||
+        !audience.has(socketUser.id) ||
+        blockers.has(socketUser.id)
+      ) {
+        return;
+      }
+      socket.send(activity);
+    });
+  } catch (error) {
+    // A missed missed-call record must never take the voice handler down —
+    // pitfall #9: an unhandled rejection here is a full-server crash.
+    console.error("[voice] failed to record missed call:", error);
+  }
+}
+
+// --- end conversation calls -------------------------------------------------
+
+// --- voice moderation ---------------------------------------------------------
+//
+// Server-side voice sanctions, called from the bannered voice-moderation routes
+// in api/index.ts. These reuse the eviction machinery above — both halves, mesh
+// and SFU — and add the one thing a route-triggered eviction owes that a
+// kick/ban does not: the target is *told*, before their peer is dropped, in a
+// frame that carries the whole sentence (the sanction-notice principle). A
+// person ejected from voice with no notice has been handed a broken app, not a
+// moderation outcome.
+//
+// Scope caveat, same as the roster: `peers` is per-instance, so these helpers
+// can only see (and notify) targets whose WebSocket lands on this instance.
+// That matches the visibility the moderator acted on — the member panel's
+// voice badges come from the same map — and mesh voice already pins the
+// deployment to one instance (see the note above `peers`).
+
+/**
+ * The server voice channel this user is currently connected to, restricted to
+ * the given channel set (a server's channels). Null when they are not in any —
+ * including when they are only in a DM call, which a server's moderators have
+ * no authority over.
+ */
+export function getVoiceChannelForUser(
+  userId: string,
+  channelIds: ReadonlySet<string>,
+): string | null {
+  for (const peer of peers.values()) {
+    if (peer.userId === userId && channelIds.has(peer.voiceChannelId)) {
+      return peer.voiceChannelId;
+    }
+  }
+  return null;
+}
+
+/**
+ * peer id → user id for this user's peers in one room — what the SFU helpers
+ * need to identify a participant whose token predates the metadata fields.
+ */
+export function getVoicePeerIdentities(
+  userId: string,
+  voiceChannelId: string,
+): Map<string, string> {
+  return identityMapFor(
+    getRoomPeers(voiceChannelId).filter((peer) => peer.userId === userId),
+  );
+}
+
+/**
+ * Deliver a `voice-moderation` frame to every socket this user holds in the
+ * room. Used on its own for the SFU mute (where the peer stays), and by
+ * `disconnectVoiceUser` before the peer is dropped.
+ */
+export function notifyVoiceModeration(
+  userId: string,
+  voiceChannelId: string,
+  notice: {
+    action: "disconnected" | "moved" | "muted" | "unmuted";
+    movedToChannelId?: string;
+    message: string;
+  },
+): void {
+  for (const peer of getRoomPeers(voiceChannelId)) {
+    if (peer.userId !== userId) {
+      continue;
+    }
+    send(peer.socket, {
+      type: "voice-moderation",
+      action: notice.action,
+      voiceChannelId,
+      ...(notice.movedToChannelId
+        ? { movedToChannelId: notice.movedToChannelId }
+        : {}),
+      message: notice.message,
+    });
+  }
+}
+
+/**
+ * Eject one user from one room, with notice — the moderator's "disconnect from
+ * voice" and the eviction half of "move to channel".
+ *
+ * Ordering matters: the notice must leave first, because `removePeer` is what
+ * ends the session, and a frame sent after it would race the socket teardown
+ * on a kicked-from-server target. The SFU half runs unconditionally and
+ * fire-and-forget, exactly like the evictions above — the route has already
+ * committed (and audit-logged) the action, and an SFU outage must not unwind
+ * it.
+ */
+export function disconnectVoiceUser(
+  userId: string,
+  voiceChannelId: string,
+  notice: { movedToChannelId?: string; message: string },
+): void {
+  const knownIdentities = getVoicePeerIdentities(userId, voiceChannelId);
+
+  notifyVoiceModeration(userId, voiceChannelId, {
+    action: notice.movedToChannelId ? "moved" : "disconnected",
+    movedToChannelId: notice.movedToChannelId,
+    message: notice.message,
+  });
+  for (const peer of getRoomPeers(voiceChannelId)) {
+    if (peer.userId === userId) {
+      removePeer(peer.id);
+    }
+  }
+  void evictSfuUser(userId, [voiceChannelId], knownIdentities);
+}
+
+// --- end voice moderation -----------------------------------------------------

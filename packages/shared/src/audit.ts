@@ -52,6 +52,18 @@ export const AUDIT_ACTIONS = [
    * DM-report split exists to prevent.
    */
   "report.resolve",
+  // --- voice moderation ---
+  //
+  // Voice-specific sanctions. `voice_disconnect` and `voice_move` record the
+  // channel in `changes` (old → new; null on a plain disconnect) because the
+  // roster is ephemeral — this row is the only durable record of where the
+  // person was ejected from. `voice_mute` / `voice_unmute` are SFU-only (a
+  // mesh call's audio never touches the server, so there is nothing honest to
+  // log there — the route refuses instead).
+  "member.voice_disconnect",
+  "member.voice_move",
+  "member.voice_mute",
+  "member.voice_unmute",
 ] as const;
 
 export const auditActionSchema = z.enum(AUDIT_ACTIONS);

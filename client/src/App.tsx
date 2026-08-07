@@ -10,11 +10,13 @@ import type {
   DmSummary,
   SanctionNotice,
   Server,
+  ThreadSummary,
   User,
   VoiceRoomTransport,
 } from "@pqp/shared";
 import { MessageComposer } from "@/components/chat/message-composer";
 import { MessageList } from "@/components/chat/message-list";
+import { ThreadPanel } from "@/components/chat/thread-panel";
 import {
   ReportDialog,
   type ReportTarget,
@@ -28,7 +30,10 @@ import { ChannelList } from "@/components/layout/channel-list";
 import { ChannelMembersPanel } from "@/components/layout/channel-members-panel";
 import { WebhooksPanel } from "@/components/layout/webhooks-panel";
 import { ChannelMetaDialog } from "@/components/layout/channel-meta-dialog";
+import { DmCallPanel } from "@/components/dm/dm-call-panel";
+import { IncomingCallOverlay } from "@/components/dm/incoming-call-overlay";
 import { DmList } from "@/components/layout/dm-list";
+import { FriendsView } from "@/components/friends/friends-view";
 import { InvitePanel } from "@/components/layout/invite-panel";
 import { MembersPanel } from "@/components/layout/members-panel";
 import { PinnedMessagesPanel } from "@/components/chat/pinned-messages-panel";
@@ -56,15 +61,21 @@ import {
   supportsKeyBinding,
 } from "@/components/voice/push-to-talk";
 import { usePushToTalk } from "@/components/voice/use-push-to-talk";
+import { useVoiceStateSync } from "@/components/voice/voice-state-sync";
 import { VoiceStatusBar } from "@/components/voice/voice-status-bar";
 import { PromptDialog } from "@/components/ui/prompt-dialog";
 import { Seo } from "@/components/marketing/seo";
-import { createChatController, type ChatMessage } from "@/hooks/use-chat";
+import {
+  createChatController,
+  THREAD_CHANNEL_FRAMES,
+  type ChatMessage,
+} from "@/hooks/use-chat";
 import { createVoiceController } from "@/hooks/use-voice";
 import {
   blockUser,
   createChannel,
   createServer,
+  createThread,
   createVoiceSession,
   deleteChannel,
   fetchBlocks,
@@ -331,8 +342,31 @@ function MainAppContent({
 
   const transport = useMemo(() => createRealtimeTransport(), []);
   const chat = useMemo(() => createChatController(transport), [transport]);
+  // --- threads ---
+  // A second controller on the same socket, bound to the server's secondary
+  // "thread view" slot (`thread-join`), so the panel and the parent channel
+  // are both live at once. Frames fan into both; each keeps only its own
+  // channel's.
+  const threadChat = useMemo(
+    () => createChatController(transport, THREAD_CHANNEL_FRAMES),
+    [transport],
+  );
   const voice = useMemo(() => createVoiceController(transport), [transport]);
   const [voiceState, setVoiceState] = useState(voice.getState());
+  // --- voice state ---
+  // Mirror this client's mute/deafen onto the wire so the roster can badge it
+  // for everyone else. Lives outside the voice controller: it is display
+  // state, and dropping every frame of it would change nothing about the call.
+  useVoiceStateSync(transport, voiceState);
+  /**
+   * channelId → the transport its voice room runs on, read off `voice-roster`
+   * frames as they pass by. The members panel needs it to offer the SFU-only
+   * server mute honestly; the voice controller deliberately does not keep it
+   * per-channel, and this must not touch that file.
+   */
+  const [voiceRoomTransports, setVoiceRoomTransports] = useState<
+    Record<string, VoiceRoomTransport>
+  >({});
 
   /**
    * User status. The manual half comes back from `/api/me` with the rest of the
@@ -414,11 +448,13 @@ function MainAppContent({
 
   useEffect(() => {
     chat.onChange(refresh);
+    threadChat.onChange(refresh);
     voice.onStateChange(setVoiceState);
     return () => {
       chat.dispose();
+      threadChat.dispose();
     };
-  }, [chat, voice, refresh]);
+  }, [chat, threadChat, voice, refresh]);
 
   // A notification frame carries ids only, and it can name any server the user
   // belongs to rather than just the open one, so the whole list is remembered.
@@ -611,6 +647,8 @@ function MainAppContent({
       selectedChannelIdRef.current = channelId;
       // The reply belongs to the conversation you were in, not the next one.
       setReplyTarget(null);
+      // --- threads --- the panel belongs to the channel it was opened from.
+      closeThreadPanelRef.current();
       clearUnread(channelId);
       setMessagesLoading(true);
       chat.joinChannel(channelId);
@@ -634,6 +672,84 @@ function MainAppContent({
     },
     [chat, clearUnread, refresh],
   );
+
+  // ---------------------------------------------------------------- threads
+  //
+  // Panel state. The thread's summary and (when in hand) its origin message;
+  // null means no panel. Refs mirror the pieces the once-installed realtime
+  // handler needs, exactly the way `selectedChannelIdRef` already works.
+  const [openThread, setOpenThread] = useState<{
+    thread: ThreadSummary;
+    origin: ChatMessage | null;
+  } | null>(null);
+  const [threadLoading, setThreadLoading] = useState(false);
+  const openThreadChannelIdRef = useRef<string | null>(null);
+  openThreadChannelIdRef.current = openThread?.thread.channelId ?? null;
+
+  const closeThreadPanel = useCallback(() => {
+    if (!openThreadChannelIdRef.current) {
+      return;
+    }
+    // The read cursor moves on close, not per message: the panel was on
+    // screen, so everything it showed is read, and this is what keeps the
+    // chip's unread dot honest after the next reload.
+    clearUnread(openThreadChannelIdRef.current);
+    threadChat.leaveChannel();
+    setOpenThread(null);
+  }, [clearUnread, threadChat]);
+  // openChannel is declared above this callback and must close the panel on
+  // every channel switch, so it reaches it through a ref.
+  const closeThreadPanelRef = useRef<() => void>(() => {});
+  closeThreadPanelRef.current = closeThreadPanel;
+
+  const openThreadPanel = useCallback(
+    async (thread: ThreadSummary, origin: ChatMessage | null) => {
+      setOpenThread({ thread, origin });
+      setThreadLoading(true);
+      threadChat.joinChannel(thread.channelId);
+      clearUnread(thread.channelId);
+      try {
+        const page = await fetchMessages(thread.channelId);
+        if (openThreadChannelIdRef.current !== thread.channelId) {
+          return;
+        }
+        threadChat.setMessages(page.messages, page.hasMore);
+        refresh();
+      } catch {
+        // The panel opens empty; live traffic and sending still work, and
+        // closing and reopening retries the history read.
+      } finally {
+        if (openThreadChannelIdRef.current === thread.channelId) {
+          setThreadLoading(false);
+        }
+      }
+    },
+    [clearUnread, refresh, threadChat],
+  );
+
+  const handleStartThread = useCallback(
+    async (message: ChatMessage) => {
+      try {
+        const { thread } = await createThread(message.id);
+        // The chip appears on the actor's own copy immediately; everyone
+        // else's arrives on the `thread-update` broadcast.
+        chat.applyThreadUpdate(message.id, thread);
+        await openThreadPanel(thread, message);
+      } catch (error) {
+        setAppError(
+          error instanceof Error
+            ? error.message
+            : translateMessage("thread.error.start"),
+        );
+      }
+    },
+    [chat, openThreadPanel],
+  );
+
+  // The thread controller renders optimistic bubbles for the same account.
+  useEffect(() => {
+    threadChat.setCurrentUser(user);
+  }, [threadChat, user]);
 
   useEffect(() => {
     let cancelled = false;
@@ -798,6 +914,16 @@ function MainAppContent({
                 void loadConversationsRef.current();
               }
             }
+            // --- threads --- activity in the thread the panel is showing is
+            // already on the reader's screen; a badge or a notification would
+            // announce what they are looking at. Any other thread's activity
+            // falls through to the generic path below, which files it under
+            // the thread's own channel id — the sidebar knows no such id, so
+            // the parent channel's badge stays quiet by construction and the
+            // chip's dot reads it from the same map.
+            if (activity.channelId === openThreadChannelIdRef.current) {
+              return;
+            }
             // Fired from the live frame rather than from a diff of `unread`,
             // because that map also fills in bulk from `loadUnread` when a
             // server is first opened — announcing that would buzz once per
@@ -842,6 +968,23 @@ function MainAppContent({
             message.type === "typing-broadcast"
           ) {
             chat.handleServerMessage(message);
+            // --- threads --- both controllers hear every chat frame and each
+            // keeps only its own channel's, so one frame can never render in
+            // both views.
+            threadChat.handleServerMessage(message);
+            return;
+          }
+
+          // --- threads --- the chip refresh: reply count and freshness for
+          // an origin message in whatever channel the main view is showing.
+          if (message.type === "thread-update") {
+            chat.applyThreadUpdate(message.messageId, message.thread);
+            // The open panel's header shows the same numbers.
+            setOpenThread((prev) =>
+              prev && prev.thread.channelId === message.thread.channelId
+                ? { ...prev, thread: message.thread }
+                : prev,
+            );
             return;
           }
 
@@ -851,6 +994,47 @@ function MainAppContent({
           if (message.type === "sanction-notice") {
             setSanctionNotice(message);
             return;
+          }
+
+          // --- voice moderation ---
+          // A moderator acted on THIS client's voice session. Handled here,
+          // not in the voice controller: what follows is app behaviour
+          // (leave, or rejoin somewhere else), and the frame carries the
+          // whole sentence to show. Guarded to the room we are actually in —
+          // a stale or forged frame about some other channel does nothing.
+          if (message.type === "voice-moderation") {
+            const current = voice.getState();
+            if (current.voiceChannelId !== message.voiceChannelId) {
+              return;
+            }
+            setAppError(message.message);
+            if (message.action === "moved" && message.movedToChannelId) {
+              // Follow the move with an ordinary join: the server re-runs
+              // every admission check (access, timeout, transport, room-full),
+              // so this can never take us anywhere we could not have gone
+              // ourselves. Consent is being in this server's voice at all —
+              // see the schema note on `voiceModerationMessageSchema`.
+              void voice.join(message.movedToChannelId);
+            } else if (message.action === "disconnected") {
+              // The server already dropped our peer; this stops the mic and
+              // resets the UI so we do not sit "connected" in an empty room.
+              voice.leave();
+            }
+            // "muted"/"unmuted": informational — the banner above is all.
+            return;
+          }
+
+          // --- voice state ---
+          // Record each room's transport as rosters pass through (the frame
+          // still falls through to the controller). Powers the members
+          // panel's honest SFU-only mute affordance.
+          if (message.type === "voice-roster" && message.transport) {
+            const { voiceChannelId, transport: roomTransport } = message;
+            setVoiceRoomTransports((prev) =>
+              prev[voiceChannelId] === roomTransport
+                ? prev
+                : { ...prev, [voiceChannelId]: roomTransport },
+            );
           }
 
           voice.handleSignaling(message);
@@ -892,6 +1076,9 @@ function MainAppContent({
           // Re-subscribe and re-sync: messages sent while we were offline were
           // never delivered, so the local list is stale.
           chat.resubscribe();
+          // --- threads --- the secondary slot re-announces itself the same
+          // way; the panel's window is refreshed by its next open.
+          threadChat.resubscribe();
           // The server drops a voice peer as soon as its socket closes, so the
           // call has to be re-entered before the UI matches reality again.
           void voice.notifyReconnected();
@@ -1247,6 +1434,46 @@ function MainAppContent({
     });
   }
 
+  // --- conversation calls ---------------------------------------------------
+
+  /**
+   * Enter a conversation's call. `ring: true` is a fresh call (the absent
+   * participants get an incoming-call surface); `ring: false` joins one that
+   * is already live, or answers one that is ringing us — in both of those the
+   * server has nobody new to tell. Always navigates there first so the call
+   * panel is on screen while it connects.
+   */
+  async function handleConversationCall(channelId: string, ring: boolean) {
+    voiceServerIdRef.current = null;
+    void selectConversation(channelId);
+    try {
+      const { iceServers } = await fetchIceServers();
+      if (iceServers.length > 0) {
+        voice.setIceServers(iceServers);
+      }
+    } catch {
+      // Keep previously fetched / default ICE servers
+    }
+    const options = {
+      inputDeviceId: localSettings.inputDeviceId,
+      inputVolume: localSettings.inputVolume,
+      startMuted: localSettings.muteOnJoin,
+      inputMode: localSettings.inputMode,
+      processing: localSettings.micProcessing,
+    };
+    if (ring) {
+      await voice.joinConversationCall(channelId, options);
+    } else {
+      await voice.acceptIncomingCall(channelId, options);
+    }
+  }
+
+  /** The sidebar phone button: join a live call, otherwise start ringing. */
+  function handleStartConversationCall(channelId: string) {
+    const live = (voice.getState().occupancy[channelId] ?? []).length > 0;
+    void handleConversationCall(channelId, !live);
+  }
+
   function handleAudioSettingsLive(next: LocalSettings) {
     const prevDeviceId = localSettings.inputDeviceId;
     setLocalSettings(next);
@@ -1465,6 +1692,17 @@ function MainAppContent({
     [blockedUsers],
   );
 
+  // --- threads ---
+  // Channel ids with unread activity, as a set for the chips. Thread unreads
+  // live in the same `unread` map as everything else, keyed by the thread's
+  // own channel id — an id the sidebar never lists, which is precisely how a
+  // busy thread never inflates its parent channel's badge. A chip checks only
+  // its own thread's id here, so ordinary channel ids riding along are inert.
+  const unreadThreadIds = useMemo(
+    () => new Set(Object.keys(unread)),
+    [unread],
+  );
+
   /**
    * Jump to the channel the current call is in.
    *
@@ -1478,6 +1716,11 @@ function MainAppContent({
     if (!channelId) {
       return;
     }
+    // A conversation call: its home is the DM view, not any server.
+    if (conversationsRef.current.some((one) => one.channelId === channelId)) {
+      await selectConversation(channelId);
+      return;
+    }
     const serverId = voiceServerIdRef.current;
     if (serverId && serverId !== selectedServerId) {
       await applyChannelRoute(serverId, channelId);
@@ -1487,6 +1730,7 @@ function MainAppContent({
   }, [
     applyChannelRoute,
     selectChannel,
+    selectConversation,
     selectedServerId,
     voiceState.voiceChannelId,
   ]);
@@ -1516,6 +1760,23 @@ function MainAppContent({
   useChannelNotifications({ channels: notificationChannels, unread });
 
   const conversationUnread = conversationUnreadTotals(conversations, unread);
+
+  /**
+   * Conversations with somebody in their voice room right now, for the phone
+   * affordance in the DM sidebar. Occupancy frames for a conversation only
+   * ever reach its participants (the server resolves the audience through the
+   * conversation branch of `channelVisibleSql`), so this set can never name a
+   * call the viewer is not entitled to know about.
+   */
+  const activeConversationCallIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const conversation of conversations) {
+      if ((voiceState.occupancy[conversation.channelId]?.length ?? 0) > 0) {
+        ids.add(conversation.channelId);
+      }
+    }
+    return ids;
+  }, [conversations, voiceState.occupancy]);
 
   if (bootstrapError) {
     return (
@@ -1596,9 +1857,19 @@ function MainAppContent({
     voiceState.voiceChannelId
       ? channels.find((c) => c.id === voiceState.voiceChannelId) ?? null
       : null;
+  /** The conversation the active call lives in, when it is a DM call. */
+  const voiceConversation = voiceState.voiceChannelId
+    ? (conversations.find(
+        (one) => one.channelId === voiceState.voiceChannelId,
+      ) ?? null)
+    : null;
+  // A conversation counts as "viewing the call" too: its DmCallPanel already
+  // carries the controls, so the sidebar strip would say the same thing twice.
   const isViewingVoiceChannel =
-    selectedChannel?.type === "voice" &&
-    selectedChannel.id === voiceState.voiceChannelId;
+    (selectedChannel?.type === "voice" &&
+      selectedChannel.id === voiceState.voiceChannelId) ||
+    (activeConversation !== null &&
+      activeConversation.channelId === voiceState.voiceChannelId);
 
   const canDropFiles = isAttachmentsEnabled && selectedChannel?.type === "text";
 
@@ -1611,7 +1882,12 @@ function MainAppContent({
     <>
       {voiceState.status !== "idle" && !isViewingVoiceChannel && (
         <VoiceStatusBar
-          channelName={voiceChannel?.name ?? t("voice.channelFallback")}
+          channelName={
+            voiceChannel?.name ??
+            (voiceConversation
+              ? conversationTitle(voiceConversation.participants)
+              : t("voice.channelFallback"))
+          }
           status={voiceState.status}
           peerCount={voiceState.remotePeers.length}
           isMuted={voiceState.isMuted}
@@ -1760,6 +2036,25 @@ function MainAppContent({
           )}
         </div>
       </header>
+      {/* The conversation's call surface: invisible until a call exists, a
+          join banner while others talk, tiles + controls once we are in. */}
+      {activeConversation && user && (
+        <DmCallPanel
+          conversation={activeConversation}
+          currentUser={{
+            id: user.id,
+            displayName: user.displayName,
+            avatarUrl: user.avatarUrl,
+          }}
+          voiceState={voiceState}
+          onJoinCall={() =>
+            void handleConversationCall(activeConversation.channelId, false)
+          }
+          onLeave={() => voice.leave()}
+          onToggleMute={() => voice.toggleMute()}
+          onToggleCamera={() => void voice.toggleCamera()}
+        />
+      )}
       <MessageList
         messages={chat.getMessages()}
         currentUserId={user?.id ?? null}
@@ -1798,7 +2093,45 @@ function MainAppContent({
         onRetryMessage={(nonce) => chat.retryMessage(nonce)}
         onDiscardMessage={(nonce) => chat.discardMessage(nonce)}
         showLinkEmbeds={localSettings.showLinkEmbeds}
+        // --- threads --- offered only inside a server: a conversation already
+        // is the scoped side-conversation a thread would create.
+        onStartThread={
+          selectedChannel.kind === "server" && selectedChannel.type === "text"
+            ? (message) => void handleStartThread(message)
+            : undefined
+        }
+        onOpenThread={
+          selectedChannel.kind === "server"
+            ? (thread, message) => void openThreadPanel(thread, message)
+            : undefined
+        }
+        unreadThreadIds={unreadThreadIds}
+        activeThreadId={openThread?.thread.channelId ?? null}
       />
+      {/* --- threads --- overlaid on the pane (full width on mobile, a right
+          column on desktop) so the parent stays where it was underneath. */}
+      {openThread && (
+        <ThreadPanel
+          thread={openThread.thread}
+          origin={openThread.origin}
+          controller={threadChat}
+          currentUser={user}
+          serverId={selectedServerId}
+          canModerate={!!canManage}
+          blockedAuthorIds={blockedUserIds}
+          mentionCandidates={mentionCandidates}
+          isLoading={threadLoading}
+          showLinkEmbeds={localSettings.showLinkEmbeds}
+          onClose={closeThreadPanel}
+          onReportMessage={(message) =>
+            setReportTarget({
+              kind: "message",
+              messageId: message.id,
+              subjectName: message.authorName,
+            })
+          }
+        />
+      )}
       {/* Against the composer it explains, not floating in a corner: the frame
           names the channel the refused action happened in, so a notice from
           another room would be answering a question nobody asked here. */}
@@ -1859,6 +2192,20 @@ function MainAppContent({
         outputVolume={localSettings.outputVolume}
       />
 
+      {/* Also at the root: a call rings you wherever you are in the app. */}
+      <IncomingCallOverlay
+        calls={voiceState.incomingCalls}
+        onAccept={(conversationId) =>
+          void handleConversationCall(conversationId, false)
+        }
+        onDecline={(conversationId) =>
+          voice.declineIncomingCall(conversationId)
+        }
+        onDismiss={(conversationId) =>
+          voice.dismissIncomingCall(conversationId)
+        }
+      />
+
       {mobileNavOpen && (
         <button
           type="button"
@@ -1906,9 +2253,15 @@ function MainAppContent({
           onMobileClose={() => setMobileNavOpen(false)}
           onSelectConversation={(id) => void selectConversation(id)}
           onStartConversation={() => setNewDmOpen(true)}
+          // Home-with-nothing-selected IS the Friends view, so "open friends"
+          // is just deselecting the conversation.
+          friendsSelected={!selectedChannelId}
+          onOpenFriends={selectHome}
           onHideConversation={(id) => void handleHideConversation(id)}
           onBlockUser={(person) => void handleBlockUser(person.id)}
           onUnblockUser={(id) => void handleUnblockUser(id)}
+          onStartCall={handleStartConversationCall}
+          activeCallChannelIds={activeConversationCallIds}
           footer={sidebarFooter}
         />
       ) : (
@@ -2010,7 +2363,32 @@ function MainAppContent({
           </div>
         )}
 
-        {!selectedChannel && !channelsLoading && (
+        {/* Home with nothing selected is the Friends view — who is online,
+            and the requests waiting on you. The generic empty state below now
+            only serves the server-side selections. */}
+        {selection.kind === "dm" && !selectedChannel && !channelsLoading && (
+          <FriendsView
+            currentUserId={user?.id ?? null}
+            onOpenNav={() => setMobileNavOpen(true)}
+            onOpenConversation={(conversation) => {
+              setConversations((prev) => upsertConversation(prev, conversation));
+              void selectConversation(conversation.channelId);
+            }}
+            extras={
+              // A freshly federated account lands here with no servers at all;
+              // the SSO suggestions used to live in the old empty state and
+              // must keep meeting that person.
+              servers.length === 0 ? (
+                <SsoServerSuggestions
+                  refreshKey={servers.length}
+                  onJoined={(serverId) => refreshAfterJoin(serverId)}
+                />
+              ) : undefined
+            }
+          />
+        )}
+
+        {selection.kind !== "dm" && !selectedChannel && !channelsLoading && (
           <div className="flex flex-1 flex-col items-start justify-center gap-4 p-8">
             <button
               type="button"
@@ -2021,46 +2399,34 @@ function MainAppContent({
               <Menu className="h-6 w-6" />
             </button>
             <p className="font-display text-3xl font-bold">
-              {selection.kind === "dm"
-                ? t("empty.noConversation.title")
-                : servers.length === 0
-                  ? t("empty.noServers.title")
-                  : t("empty.pickChannel.title")}
+              {servers.length === 0
+                ? t("empty.noServers.title")
+                : t("empty.pickChannel.title")}
             </p>
             <p className="max-w-sm text-paper-muted">
-              {selection.kind === "dm"
-                ? t("empty.noConversation.body")
-                : servers.length === 0
-                  ? t("empty.noServers.body")
-                  : t("empty.pickChannel.body")}
+              {servers.length === 0
+                ? t("empty.noServers.body")
+                : t("empty.pickChannel.body")}
             </p>
-            {/* Also shown in the DM view when there are no servers at all:
-                that is where a freshly federated account actually lands, and
-                it is the one person this panel exists for. */}
-            {(selection.kind !== "dm" || servers.length === 0) && (
-              <SsoServerSuggestions
-                refreshKey={servers.length}
-                onJoined={(serverId) => refreshAfterJoin(serverId)}
-              />
-            )}
-            {selection.kind === "dm" ? (
-              <Button onClick={() => setNewDmOpen(true)}>
-                {t("empty.newMessage")}
-              </Button>
-            ) : (
-              servers.length === 0 && (
-                <div className="flex gap-2">
-                  <Button onClick={() => setShowCreateServer(true)}>
-                    {t("empty.createServer")}
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    onClick={() => setInviteMode("join")}
-                  >
-                    {t("empty.joinInvite")}
-                  </Button>
-                </div>
-              )
+            {/* The DM-view copy of this panel lives inside FriendsView's
+                `extras` now — that is where a freshly federated account with
+                no servers actually lands. */}
+            <SsoServerSuggestions
+              refreshKey={servers.length}
+              onJoined={(serverId) => refreshAfterJoin(serverId)}
+            />
+            {servers.length === 0 && (
+              <div className="flex gap-2">
+                <Button onClick={() => setShowCreateServer(true)}>
+                  {t("empty.createServer")}
+                </Button>
+                <Button
+                  variant="secondary"
+                  onClick={() => setInviteMode("join")}
+                >
+                  {t("empty.joinInvite")}
+                </Button>
+              </div>
             )}
           </div>
         )}
@@ -2118,6 +2484,8 @@ function MainAppContent({
                 error={voiceState.error}
                 compactPeers={localSettings.compactPeers}
                 usingSfu={voiceState.usingSfu}
+                // The room's roster — mute/deafen badges for the other tiles.
+                participants={voiceState.occupancy[selectedChannel.id] ?? []}
                 isSharingScreen={voiceState.isSharingScreen}
                 screenSharePeerId={
                   voiceState.voiceChannelId === selectedChannel.id
@@ -2240,6 +2608,12 @@ function MainAppContent({
             serverId: selectedServerId,
           })
         }
+        // --- voice moderation ---
+        voiceOccupancy={voiceState.occupancy}
+        voiceRoomTransports={voiceRoomTransports}
+        voiceChannels={channels
+          .filter((c) => c.type === "voice")
+          .map((c) => ({ id: c.id, name: c.name }))}
       />
 
       <ReportDialog

@@ -1302,3 +1302,177 @@ CREATE INDEX IF NOT EXISTS idx_channel_reads_user
   ON channel_reads (user_id);
 CREATE INDEX IF NOT EXISTS idx_audit_log_actor
   ON audit_log (actor_id) WHERE actor_id IS NOT NULL;
+
+-- ---------------------------------------------------------------------------
+-- push  — Web Push subscriptions (services/push.ts)
+-- ---------------------------------------------------------------------------
+--
+-- One row per browser push endpoint. The endpoint is UNIQUE across users, not
+-- per user: a browser profile holds exactly one subscription, and if another
+-- account signs in on the same device the endpoint must follow the account —
+-- two rows would push one person's mentions to whoever holds the phone now.
+--
+-- Rows are capped per user (MAX_PUSH_SUBSCRIPTIONS_PER_USER, enforced on
+-- insert) and garbage-collected on the vendor's own signal: a 404/410 from the
+-- push service deletes the row. Nothing else prunes them, because nothing else
+-- knows a subscription is dead.
+--
+-- The p256dh/auth values are the browser-generated *public* encryption
+-- parameters from PushSubscription.getKey() — no message content is ever
+-- stored here, and the VAPID private key lives only in the environment.
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  endpoint TEXT NOT NULL UNIQUE,
+  p256dh TEXT NOT NULL,
+  auth TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- The send-time lookup ("every subscription these offline users hold") and the
+-- account-deletion cascade both start from user_id.
+CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user
+  ON push_subscriptions (user_id);
+
+-- ---------------------------------------------------------------------------
+-- friends
+-- ---------------------------------------------------------------------------
+--
+-- ONE ROW PER UNORDERED PAIR, exactly the `dm_pairs` arrangement and for the
+-- same reason: the primary key on the sorted pair IS the uniqueness guarantee,
+-- so two people who friend-request each other in the same instant race to one
+-- row instead of creating two half-relationships that would each need the
+-- other consulted to answer "are these two friends".
+--
+-- `status` is the whole lifecycle: a request is a `pending` row, a friendship
+-- is an `accepted` one, and a decline / cancel / unfriend is the row's
+-- DELETION. Declined requests are deliberately not tombstoned: keeping them
+-- would make one mis-click of "decline" permanent, and the defence against a
+-- re-request pest is the rate limit and the block below, not a graveyard
+-- every send has to consult.
+--
+-- `requested_by` records direction — who has to accept — and is meaningful in
+-- both states (after acceptance it is "who asked first", which the UI does not
+-- currently show but costs nothing to keep true). It carries NO foreign key on
+-- purpose: the CHECK pins it to one of the pair columns, both of which already
+-- cascade on user deletion, so an FK of its own would only add a third cascade
+-- scan (and the index to serve it) for an integrity the CHECK provides
+-- transitively.
+CREATE TABLE IF NOT EXISTS friendships (
+  low_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  high_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'accepted')),
+  requested_by UUID NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  accepted_at TIMESTAMPTZ,
+  PRIMARY KEY (low_user_id, high_user_id),
+  CHECK (low_user_id < high_user_id),
+  CHECK (requested_by = low_user_id OR requested_by = high_user_id),
+  CHECK ((status = 'accepted') = (accepted_at IS NOT NULL))
+);
+
+-- Every read asks "rows this user is on either side of". The primary key
+-- serves the low side; this serves the high side. Same pair of shapes as
+-- user_blocks and its reverse index.
+CREATE INDEX IF NOT EXISTS idx_friendships_high
+  ON friendships (high_user_id, low_user_id);
+
+-- The outgoing-pending cap in services/friends.ts counts
+-- `WHERE requested_by = ? AND status = 'pending'` on every send. Partial,
+-- because accepted rows can only grow and the cap never reads them.
+CREATE INDEX IF NOT EXISTS idx_friendships_outgoing_pending
+  ON friendships (requested_by) WHERE status = 'pending';
+
+-- A BLOCK ENDS THE FRIENDSHIP AT THE STORAGE LAYER, in every state and both
+-- directions, silently. Enforced here rather than in services/blocks.ts so it
+-- holds for every path that will ever write a block — the API route today,
+-- anything added later — without each one having to remember friendships
+-- exist. The row is DELETED, not suspended: unblocking must not resurrect a
+-- friendship (or worse, a pending request) the block was supposed to have
+-- killed, and a surviving row would also be a way to prove, after an unblock,
+-- that a block had happened. The send path in services/friends.ts carries the
+-- matching no-block predicate inside its INSERT, which closes the race this
+-- trigger cannot see: a request written a moment after the block landed.
+CREATE OR REPLACE FUNCTION friendships_end_on_block() RETURNS TRIGGER AS $$
+BEGIN
+  DELETE FROM friendships
+  WHERE low_user_id = LEAST(NEW.user_id, NEW.blocked_user_id)
+    AND high_user_id = GREATEST(NEW.user_id, NEW.blocked_user_id);
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_friendships_end_on_block ON user_blocks;
+CREATE TRIGGER trg_friendships_end_on_block
+  AFTER INSERT ON user_blocks
+  FOR EACH ROW EXECUTE FUNCTION friendships_end_on_block();
+
+-- threads
+--
+-- A THREAD IS A CHANNEL: `type = 'thread'`, `kind = 'server'` (it lives inside
+-- a server, so `channels_server_kind_check` holds), `parent_id` pointing at
+-- the text channel it was started in, and `thread_root_message_id` pointing at
+-- the message it grew out of. Choosing a channel row over a
+-- `messages.thread_root_id` self-reference is the load-bearing decision:
+-- retention, search, unread cursors, mentions, attachments, timeouts,
+-- reporting and the fan-out audience are all keyed by channel id, so every one
+-- of them covers threads by construction instead of needing its own patch —
+-- and every patch skipped is a leak that cannot happen.
+--
+-- VISIBILITY FOLLOWS THE PARENT. A thread row is never `is_private` itself and
+-- never has `channel_members` of its own; `channelVisibleSql` in
+-- services/users.ts evaluates the privacy disjunction against the *parent* row
+-- when `type = 'thread'`. A thread whose parent is gone (`parent_id` nulled by
+-- the parent's ON DELETE SET NULL) therefore FAILS CLOSED — no parent, no
+-- answer, invisible to everyone — though `deleteChannel` deletes child threads
+-- explicitly so that state is a crash-window artifact, not a steady state.
+--
+-- `parent_id` is the same column categories use, with the same meaning ("the
+-- channel this row sits under"); a thread's parent is a text channel where a
+-- text channel's parent is a category. Threads never nest — the service layer
+-- refuses to start a thread from a message that already lives in one, which
+-- keeps the parent lookup in the visibility predicate one level deep.
+
+DO $$
+BEGIN
+  ALTER TABLE channels DROP CONSTRAINT IF EXISTS channels_type_check;
+  ALTER TABLE channels
+    ADD CONSTRAINT channels_type_check
+    CHECK (type IN ('text', 'voice', 'category', 'thread'));
+EXCEPTION
+  WHEN others THEN NULL;
+END $$;
+
+-- The anchor. ON DELETE SET NULL, matching reply_to_id: deleting the origin
+-- message must not take the conversation that grew out of it. The thread keeps
+-- its name and its messages; only the chip's home is gone.
+ALTER TABLE channels ADD COLUMN IF NOT EXISTS thread_root_message_id UUID
+  REFERENCES messages(id) ON DELETE SET NULL;
+
+-- One thread per message, enforced where the race actually happens: two people
+-- tapping "start thread" on the same message collide on this index and the
+-- loser reads the winner's row (`ON CONFLICT ... DO NOTHING` in
+-- services/threads.ts). Partial, because almost no channel row is a thread.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_channels_thread_root
+  ON channels (thread_root_message_id)
+  WHERE thread_root_message_id IS NOT NULL;
+
+-- Only threads carry an anchor. Deliberately one-directional (not an equality
+-- check): the SET NULL above means a thread legitimately outlives its anchor,
+-- so `type = 'thread' AND thread_root_message_id IS NULL` must stay legal.
+DO $$
+BEGIN
+  ALTER TABLE channels DROP CONSTRAINT IF EXISTS channels_thread_root_check;
+  ALTER TABLE channels
+    ADD CONSTRAINT channels_thread_root_check
+    CHECK (type = 'thread' OR thread_root_message_id IS NULL);
+EXCEPTION
+  WHEN others THEN NULL;
+END $$;
+
+-- There is deliberately NO last_activity_at column and NO archival sweeper.
+-- "Archived" is computed at read time from the thread's newest message (an
+-- index-only lookup on idx_messages_channel_created), so a thread un-archives
+-- itself by receiving a message and nothing can ever be late to flip a flag.
+-- See THREAD_AUTO_ARCHIVE_DAYS in @pqp/shared.

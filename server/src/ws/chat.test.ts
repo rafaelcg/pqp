@@ -59,6 +59,14 @@ vi.mock("../services/reactions.js", () => ({
   toggleReaction: async () => ({ added: true }),
 }));
 
+// --- threads --- "not a thread" keeps the chip-refresh tail of the message
+// path (and the thread-join validation) inert; the thread machinery itself is
+// proved against a real database in services/threads.test.ts and
+// api/threads.test.ts.
+vi.mock("../services/threads.js", () => ({
+  getThreadInfo: async () => null,
+}));
+
 const { broadcastToChannel, handleChatMessage, resetChatRateLimits } =
   await import("./chat.js");
 

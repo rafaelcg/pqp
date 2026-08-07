@@ -25,6 +25,7 @@ import type {
   ReportSummaryPage,
   ResolveReportRequest,
   Server,
+  ThreadSummary,
   User,
   UserPreferences,
   UserSearchResponse,
@@ -545,6 +546,13 @@ export const unpinMessage = (messageId: string) =>
 export const fetchPinnedMessages = (channelId: string) =>
   apiFetch<{ messages: Message[] }>(`/api/channels/${channelId}/pins`);
 
+// ------------------------------------------------------------------ threads
+
+/** Start a thread from a message — or get back the one it already has
+ * (idempotent server-side; two taps race to one row). */
+export const createThread = (messageId: string) =>
+  post<{ thread: ThreadSummary }>(`/api/messages/${messageId}/threads`);
+
 // ------------------------------------------------------------------ members
 
 export interface ServerMember {
@@ -630,6 +638,38 @@ export const timeoutMember = (
 
 export const liftTimeout = (serverId: string, userId: string) =>
   del<{ ok: boolean }>(`/api/servers/${serverId}/timeouts/${userId}`);
+
+// --- voice moderation ---
+//
+// Voice-specific moderator tools. Same rank rules as kick server-side; all
+// three are audit-logged there and the target is notified over their socket.
+
+export const disconnectMemberVoice = (serverId: string, userId: string) =>
+  post<{ ok: boolean }>(
+    `/api/servers/${serverId}/members/${userId}/voice-disconnect`,
+  );
+
+export const moveMemberVoice = (
+  serverId: string,
+  userId: string,
+  channelId: string,
+) =>
+  post<{ ok: boolean }>(`/api/servers/${serverId}/members/${userId}/voice-move`, {
+    channelId,
+  });
+
+/**
+ * SFU rooms only — a mesh call's audio never touches the server, and the API
+ * answers 409 with the honest explanation rather than pretending otherwise.
+ */
+export const setMemberVoiceMuted = (
+  serverId: string,
+  userId: string,
+  muted: boolean,
+) =>
+  post<{ ok: boolean }>(`/api/servers/${serverId}/members/${userId}/voice-mute`, {
+    muted,
+  });
 
 /** `before` is the last-loaded entry's own `id` — a bare, ever-increasing
  * cursor, unlike the message list's timestamp-plus-id pair (see the schema

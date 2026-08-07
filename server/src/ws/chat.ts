@@ -30,7 +30,10 @@ import {
   timeoutMessage,
   type ActiveTimeout,
 } from "../services/sanctions.js";
+import { pushChannelActivity } from "../services/push.js";
 import { getChannelAudience } from "../services/servers.js";
+// --- threads ---
+import { getThreadInfo } from "../services/threads.js";
 import { canAccessChannel } from "../services/users.js";
 import { forEachAuthenticatedSocket } from "./sockets.js";
 import { isInvisible, setSocketIdle } from "./status.js";
@@ -39,6 +42,15 @@ interface ChatConnection {
   socket: WebSocket;
   user: DbUser;
   channelId: string | null;
+  // --- threads ---
+  /**
+   * The one thread this connection is viewing *beside* its primary channel —
+   * the side panel. A second slot rather than a set: the UI can only show one
+   * panel, and a bounded slot cannot be grown into a subscription list by a
+   * misbehaving client. Indexed in `channelPresence` exactly like the primary
+   * slot, so every fan-out treats the two identically.
+   */
+  threadChannelId: string | null;
 }
 
 const connections = new Map<WebSocket, ChatConnection>();
@@ -240,14 +252,56 @@ function leaveChannel(conn: ChatConnection) {
   broadcastPresence(channelId);
 }
 
+// --- threads ---
+//
+// The secondary view slot. Same index, same invariant as `joinChannel` /
+// `leaveChannel`: `conn.threadChannelId` and membership in `channelPresence`
+// move together or fan-out silently skips a viewer. Kept as separate helpers
+// rather than folded into the primary pair so that switching the primary
+// channel can never tear down the thread panel's delivery, and vice versa.
+//
+// One subtlety: primary and thread slot may briefly name the same channel (a
+// client that thread-joins what it is already viewing). `channelPresence` is a
+// Set of connections, so the double registration is one entry, and
+// `leaveThread` only removes the conn from the set when the primary slot does
+// not also claim it.
+function joinThread(conn: ChatConnection, channelId: string): void {
+  const present = channelPresence.get(channelId) ?? new Set<ChatConnection>();
+  present.add(conn);
+  channelPresence.set(channelId, present);
+  conn.threadChannelId = channelId;
+}
+
+function leaveThread(conn: ChatConnection): void {
+  if (!conn.threadChannelId) {
+    return;
+  }
+  const channelId = conn.threadChannelId;
+  conn.threadChannelId = null;
+  if (conn.channelId === channelId) {
+    // The primary slot still owns the presence entry.
+    return;
+  }
+  const presence = channelPresence.get(channelId);
+  presence?.delete(conn);
+  if (presence && presence.size === 0) {
+    channelPresence.delete(channelId);
+  }
+  broadcastPresence(channelId);
+}
+
 function ensureConnection(socket: WebSocket, user: DbUser): ChatConnection {
   let conn = connections.get(socket);
   if (!conn) {
-    conn = { socket, user, channelId: null };
+    conn = { socket, user, channelId: null, threadChannelId: null };
     connections.set(socket, conn);
     socket.on("close", () => {
       const active = connections.get(socket);
       if (active) {
+        // --- threads --- before the primary, so the shared-entry guard in
+        // leaveThread sees the primary slot still set and skips the double
+        // presence broadcast.
+        leaveThread(active);
         leaveChannel(active);
         connections.delete(socket);
       }
@@ -412,13 +466,17 @@ function evictChannelViewersLocally(
 ): void {
   const matches = scopePredicate(scope);
   for (const conn of connections.values()) {
-    if (conn.channelId !== channelId) {
-      continue;
-    }
     if (!matches(conn.user.id)) {
       continue;
     }
-    leaveChannel(conn);
+    // --- threads --- the secondary slot is a live view like any other, and a
+    // revoked viewer must lose it the same instant they lose the primary one.
+    if (conn.threadChannelId === channelId) {
+      leaveThread(conn);
+    }
+    if (conn.channelId === channelId) {
+      leaveChannel(conn);
+    }
   }
 }
 
@@ -442,11 +500,15 @@ function evictUserFromChannelsLocally(
   channelIds: Set<string>,
 ): void {
   for (const conn of connections.values()) {
-    if (
-      conn.user.id === userId &&
-      conn.channelId &&
-      channelIds.has(conn.channelId)
-    ) {
+    if (conn.user.id !== userId) {
+      continue;
+    }
+    // --- threads --- a kick or ban evicts by the server's whole channel-id
+    // set, which includes thread rows, so the panel closes with the channel.
+    if (conn.threadChannelId && channelIds.has(conn.threadChannelId)) {
+      leaveThread(conn);
+    }
+    if (conn.channelId && channelIds.has(conn.channelId)) {
       leaveChannel(conn);
     }
   }
@@ -462,6 +524,16 @@ async function notifyChannelActivity(
   authorId: string,
   mentions: string[],
   repliedToUserId?: string | null,
+  options?: {
+    /**
+     * Whether this call may also fan out Web Push to users with no socket
+     * anywhere. Defaults on, and the cluster-bus handler turns it off: a
+     * pushable user is connected to NO instance, so if every instance pushed,
+     * one message would buzz a phone once per replica. Only the origin
+     * instance — the one that handled the send — pushes.
+     */
+    webPush?: boolean;
+  },
 ): Promise<void> {
   const [audience, blockers] = await Promise.all([
     getChannelAudience(channelId),
@@ -515,6 +587,23 @@ async function notifyChannelActivity(
       }),
     );
   });
+
+  // The Web Push leg of the same decision. It is handed this function's
+  // conclusions — the audience, the blockers, the mentions — rather than
+  // re-deriving any of them, and adds only the narrowing that is push's own:
+  // no live socket anywhere in the cluster, not on DND, level allows it.
+  // Inert unless VAPID keys are configured; fire-and-forget so the socket
+  // fan-out never waits on a push vendor.
+  if (options?.webPush !== false) {
+    pushChannelActivity({
+      channelId,
+      audience,
+      authorId,
+      mentionedUsernames: mentions,
+      repliedToUserId: repliedToUserId ?? null,
+      blockerIds: blockers,
+    });
+  }
 }
 
 /**
@@ -625,6 +714,31 @@ export async function handleChatMessage(
     return;
   }
 
+  // --- threads ---
+  //
+  // The side-panel slot. Access is the same predicate as join-channel — which,
+  // for a thread, is the *parent's* answer by construction — and the target
+  // must actually be a thread: without that check this frame would be a way to
+  // hold live delivery for two arbitrary channels at once, which no UI asks
+  // for and no rate limit prices.
+  if (payload.type === "thread-join") {
+    if (!(await getThreadInfo(payload.channelId))) {
+      return;
+    }
+    if (!(await canAccessChannel(payload.channelId, conn.user.id))) {
+      return;
+    }
+    leaveThread(conn);
+    joinThread(conn, payload.channelId);
+    broadcastPresence(payload.channelId);
+    return;
+  }
+
+  if (payload.type === "thread-leave") {
+    leaveThread(conn);
+    return;
+  }
+
   // Idle is the one derived status the server cannot work out for itself: an
   // abandoned tab answers heartbeats and holds its socket exactly like an
   // attended one, so "no traffic on this socket" is not evidence of "nobody
@@ -641,7 +755,12 @@ export async function handleChatMessage(
   }
 
   if (payload.type === "typing") {
-    if (conn.channelId !== payload.channelId) {
+    // --- threads --- typing in the side panel is as legitimate as typing in
+    // the primary channel; either slot proves the join-time access check ran.
+    if (
+      conn.channelId !== payload.channelId &&
+      conn.threadChannelId !== payload.channelId
+    ) {
       return;
     }
     // The second passive giveaway, and the subtler one. "X is typing…" fires on
@@ -813,6 +932,24 @@ export async function handleChatMessage(
       mentions,
       parent?.author_id ?? null,
     );
+
+    // --- threads ---
+    // A message into a thread owes the PARENT channel's viewers a chip
+    // refresh: reply count and freshness on the origin message, with no
+    // content attached. One indexed lookup per send answers "is this channel a
+    // thread" and, for the overwhelming majority of sends, is the entire cost.
+    // Fanned out through `broadcastToChannel`, so the cluster relay carries it
+    // to viewers held by other instances — `thread-update` is in
+    // CHAT_SERVER_MESSAGE_TYPES for exactly that reason.
+    const threadInfo = await getThreadInfo(payload.channelId);
+    if (threadInfo?.rootMessageId) {
+      broadcastToChannel(threadInfo.parentChannelId, {
+        type: "thread-update",
+        channelId: threadInfo.parentChannelId,
+        messageId: threadInfo.rootMessageId,
+        thread: threadInfo,
+      });
+    }
 
     // Only a genuine cache miss re-fetches — a fresh `failed` row already
     // covers this url for FAILURE_TTL_MS, and re-trying it on every message
@@ -1017,6 +1154,10 @@ subscribeToCluster(ACTIVITY_TOPIC, (data) => {
     authorId,
     mentions,
     asString(frame?.repliedToUserId),
+    // Never push from a bus frame: a pushable user holds a socket on no
+    // instance at all, so the origin instance's own call already covered them
+    // — pushing here too would send one notification per replica.
+    { webPush: false },
   ).catch((error) => {
     console.error("[chat] cluster activity fan-out failed:", error);
   });

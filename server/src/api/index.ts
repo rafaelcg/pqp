@@ -32,6 +32,7 @@ import {
   REPORT_PAGE_MAX,
   REPORT_PAGE_SIZE,
   createReportSchema,
+  createThreadSchema,
   reportStatusSchema,
   resolveReportSchema,
   safeTextSchema,
@@ -68,7 +69,17 @@ import {
   resolveEmbedInBackground,
   resolveStatuses,
 } from "../ws/index.js";
-import { getVoicePeer } from "../ws/voice.js";
+import {
+  // --- voice moderation ---
+  disconnectVoiceUser,
+  getRoomTransport,
+  getVoiceChannelForUser,
+  getVoicePeer,
+  getVoicePeerIdentities,
+  notifyVoiceModeration,
+} from "../ws/voice.js";
+// --- voice moderation ---
+import { setSfuUserMuted } from "../voice/admin.js";
 import { invalidateUserCache, resolveAuthSession } from "../auth/clerk.js";
 import {
   AGE_GATE_BLOCKED_MESSAGE,
@@ -206,6 +217,12 @@ import {
   resolveReport,
 } from "../services/reports.js";
 import { decodeSearchCursor, searchMessages } from "../services/search.js";
+// --- threads ---
+import {
+  createThreadForMessage,
+  listThreadChannelIds,
+  ThreadTargetError,
+} from "../services/threads.js";
 import { mergePreferences } from "../services/preferences.js";
 import {
   blockUser,
@@ -468,7 +485,7 @@ async function requireOutranked(
   serverId: string,
   actorRole: MemberRole,
   targetUserId: string,
-  action: "kick" | "ban" | "timeout",
+  action: "kick" | "ban" | "timeout" | "disconnect" | "move" | "mute",
 ): Promise<MemberRole | null> {
   const targetRole = await getMemberRole(serverId, targetUserId);
   if (targetRole === "owner") {
@@ -1442,6 +1459,12 @@ router.patch("/api/channels/:channelId", async ({ req, user }, { channelId }) =>
     const allowed = new Set(audience?.userIds ?? []);
     evictChannelViewers(channelId!, { exceptUserIds: [...allowed] });
     evictVoiceUsersExcept(channelId!, allowed);
+    // --- threads --- a thread's audience IS the parent's, so going private
+    // narrows every thread under this channel by exactly the same allow-list,
+    // and their live viewers are cut off in the same breath.
+    for (const threadId of await listThreadChannelIds(channelId!)) {
+      evictChannelViewers(threadId, { exceptUserIds: [...allowed] });
+    }
   }
 
   // `channel` (read for the authorization check above) already carries the
@@ -1562,6 +1585,10 @@ router.delete(
     if (channel.is_private) {
       evictChannelViewers(channelId!, { onlyUserIds: [userId!] });
       evictVoiceUser(userId!, new Set([channelId!]));
+      // --- threads --- losing the private parent loses its threads too.
+      for (const threadId of await listThreadChannelIds(channelId!)) {
+        evictChannelViewers(threadId, { onlyUserIds: [userId!] });
+      }
     }
     return { ok: true };
   },
@@ -1872,6 +1899,62 @@ router.get(
   },
 );
 
+// ---------------------------------------------------------------- threads
+//
+// One route, because a thread is a channel: its messages, reads, pins,
+// reactions, attachments and reports all go through the channel routes above,
+// gated by `canAccessChannel`, which answers for a thread with its parent's
+// answer. The only thing threads need of their own is being born.
+
+/**
+ * Start a thread from a message, or return the one it already has — the
+ * server-side of two people tapping "start thread" at once is a single row
+ * either way (see the unique index on `thread_root_message_id`).
+ *
+ * Any member who can read the message may start its thread; that is Discord's
+ * own default, and the thread grants nothing the parent channel did not
+ * already grant. The HTTP timeout gate covers this route by its
+ * `/api/messages/...` shape, so a timed-out member cannot use "start thread"
+ * as a way to keep speaking.
+ */
+router.post(
+  "/api/messages/:messageId/threads",
+  async ({ req, user }, { messageId }) => {
+    const message = await getMessage(messageId!);
+    if (!message) {
+      throw new NotFound("Message not found");
+    }
+    await requireChannelAccess(message.channel_id, user.id);
+
+    const body = createThreadSchema.parse(await readJsonBody(req));
+    let result;
+    try {
+      result = await createThreadForMessage(messageId!, body.name ?? null);
+    } catch (error) {
+      if (error instanceof ThreadTargetError) {
+        throw new HttpError(400, error.message);
+      }
+      throw error;
+    }
+    if (!result) {
+      throw new NotFound("Message not found");
+    }
+
+    if (result.created) {
+      // The chip appears live on everyone's copy of the origin message.
+      broadcastToChannel(result.parentChannelId, {
+        type: "thread-update",
+        channelId: result.parentChannelId,
+        messageId: messageId!,
+        thread: result.thread,
+      });
+    }
+    return result.created
+      ? created({ thread: result.thread })
+      : { thread: result.thread };
+  },
+);
+
 // ----------------------------------------------------------------- search
 
 router.get("/api/servers/:serverId/search", async (ctx, { serverId }) => {
@@ -2123,6 +2206,205 @@ router.delete(
     return { ok: true };
   },
 );
+
+// ------------------------------------------------------- voice moderation
+//
+// Voice-specific tools between "do nothing" and the kick/ban/timeout ladder.
+// Same permission model as kick throughout: `requireManager` to act,
+// `requireOutranked` for who may be acted on — a voice sanction is still a
+// sanction. All three are audit-logged, and the target is told over their own
+// socket (`notifyVoiceModeration` — the sanction-notice principle) before
+// anything is torn down.
+//
+// Scope: like the roster these act on, targeting is per-instance (see the
+// note in ws/voice.ts). The routes 404 when this instance holds no peer for
+// the target, which matches exactly the badges the moderator was looking at.
+
+/** The target's current voice channel in this server, or a 404. */
+async function requireVoiceTarget(
+  serverId: string,
+  targetUserId: string,
+): Promise<string> {
+  const channelIds = await listServerChannelIds(serverId);
+  const voiceChannelId = getVoiceChannelForUser(targetUserId, channelIds);
+  if (!voiceChannelId) {
+    throw new NotFound("That member is not in a voice channel in this server");
+  }
+  return voiceChannelId;
+}
+
+/** Shared preamble: rank rules, no self-targeting, target must be a member. */
+async function requireVoiceModeration(
+  serverId: string,
+  actorId: string,
+  targetUserId: string,
+  action: "disconnect" | "move" | "mute",
+): Promise<void> {
+  const actorRole = await requireManager(serverId, actorId);
+  if (targetUserId === actorId) {
+    throw new HttpError(400, "Use the leave button on yourself");
+  }
+  const targetRole = await requireOutranked(
+    serverId,
+    actorRole,
+    targetUserId,
+    action,
+  );
+  if (!targetRole) {
+    throw new NotFound("Member not found");
+  }
+}
+
+router.post(
+  "/api/servers/:serverId/members/:userId/voice-disconnect",
+  async ({ user }, { serverId, userId }) => {
+    await requireVoiceModeration(serverId!, user.id, userId!, "disconnect");
+    const voiceChannelId = await requireVoiceTarget(serverId!, userId!);
+
+    await logAudit({
+      serverId: serverId!,
+      actorId: user.id,
+      action: "member.voice_disconnect",
+      targetType: "user",
+      targetId: userId!,
+      // The roster is ephemeral; this row is the only durable record of which
+      // room they were ejected from.
+      changes: [{ key: "channelId", old: voiceChannelId, new: null }],
+    });
+
+    disconnectVoiceUser(userId!, voiceChannelId, {
+      message: "A moderator disconnected you from voice.",
+    });
+    return { ok: true };
+  },
+);
+
+const voiceMoveSchema = z.object({ channelId: z.string().uuid() });
+
+/**
+ * "Move to channel" is eject-and-invite, because a server cannot force-join a
+ * client — and must not be able to. The eviction carries a `movedToChannelId`
+ * hint, and the target's client follows it by issuing an ordinary
+ * `join-voice-room`, which re-runs every admission check server-side.
+ *
+ * THE CONSENT MODEL: being connected to this server's voice is the consent —
+ * a moderator can already end that session outright (disconnect above), so
+ * redirecting it within the same server is strictly less power, and the auto-
+ * follow reach is capped to voice channels the target can already see: the
+ * `canAccessChannel(target)` check below refuses the move up front, and the
+ * join the client performs re-checks it (plus timeout, transport, room-full)
+ * even against a forged hint. A client that ignores the hint is merely
+ * disconnected — never worse off than the blunter tool.
+ */
+router.post(
+  "/api/servers/:serverId/members/:userId/voice-move",
+  async ({ req, user }, { serverId, userId }) => {
+    await requireVoiceModeration(serverId!, user.id, userId!, "move");
+    const body = voiceMoveSchema.parse(await readJsonBody(req));
+
+    const destination = await requireServerChannel(body.channelId);
+    if (destination.server_id !== serverId) {
+      throw new NotFound("Channel not found");
+    }
+    if (destination.type !== "voice") {
+      throw new HttpError(400, "Members can only be moved to a voice channel");
+    }
+    // Both directions of visibility: the moderator must be able to see where
+    // they are sending someone (404, like every other invisible channel)…
+    if (!(await canAccessChannel(body.channelId, user.id))) {
+      throw new NotFound("Channel not found");
+    }
+    // …and the target must already have access — a move must never place
+    // somebody in a room they could not have joined themselves.
+    if (!(await canAccessChannel(body.channelId, userId!))) {
+      throw new Forbidden("They don't have access to that channel");
+    }
+
+    const fromChannelId = await requireVoiceTarget(serverId!, userId!);
+    if (fromChannelId === body.channelId) {
+      throw new HttpError(400, "They are already in that channel");
+    }
+
+    await logAudit({
+      serverId: serverId!,
+      actorId: user.id,
+      action: "member.voice_move",
+      targetType: "user",
+      targetId: userId!,
+      changes: [{ key: "channelId", old: fromChannelId, new: body.channelId }],
+    });
+
+    disconnectVoiceUser(userId!, fromChannelId, {
+      movedToChannelId: body.channelId,
+      message: `A moderator moved you to ${destination.name}.`,
+    });
+    return { ok: true };
+  },
+);
+
+const voiceMuteSchema = z.object({ muted: z.boolean() });
+
+/**
+ * Server-side mute — SFU rooms only, and refused honestly everywhere else.
+ *
+ * In a mesh room the audio flows peer-to-peer and never touches this server,
+ * so a "server mute" there could only be a polite request to the target's own
+ * client — enforcement theater that any modified client ignores. The timeouts
+ * work established the rule: do not fake it. On a LiveKit room the mute is
+ * real (the SFU stops forwarding the track), with one honest caveat carried
+ * into the UI copy: LiveKit lets the participant unmute themselves afterwards,
+ * so this is "cut the hot mic now", not a standing sanction — those remain
+ * timeout and disconnect.
+ */
+router.post(
+  "/api/servers/:serverId/members/:userId/voice-mute",
+  async ({ req, user }, { serverId, userId }) => {
+    await requireVoiceModeration(serverId!, user.id, userId!, "mute");
+    const body = voiceMuteSchema.parse(await readJsonBody(req));
+    const voiceChannelId = await requireVoiceTarget(serverId!, userId!);
+
+    if (getRoomTransport(voiceChannelId) !== "livekit") {
+      throw new HttpError(
+        409,
+        "This call runs peer-to-peer — the audio never touches the server, so a server mute cannot be enforced. Disconnect them or use a timeout instead.",
+      );
+    }
+
+    const changed = await setSfuUserMuted(
+      voiceChannelId,
+      userId!,
+      body.muted,
+      getVoicePeerIdentities(userId!, voiceChannelId),
+    );
+    if (!changed) {
+      // Unlike an eviction, the mute IS the action — nothing was committed
+      // yet, so a failure can and must be reported instead of half-happening.
+      throw new HttpError(
+        502,
+        "The voice server did not accept the mute. They may not be publishing audio right now.",
+      );
+    }
+
+    await logAudit({
+      serverId: serverId!,
+      actorId: user.id,
+      action: body.muted ? "member.voice_mute" : "member.voice_unmute",
+      targetType: "user",
+      targetId: userId!,
+      changes: [{ key: "channelId", old: voiceChannelId, new: voiceChannelId }],
+    });
+
+    notifyVoiceModeration(userId!, voiceChannelId, {
+      action: body.muted ? "muted" : "unmuted",
+      message: body.muted
+        ? "A moderator muted your microphone for everyone in the call. You can unmute yourself."
+        : "A moderator unmuted your microphone.",
+    });
+    return { ok: true };
+  },
+);
+
+// ----------------------------------------------------- end voice moderation
 
 router.get("/api/servers/:serverId/bans", async ({ user }, { serverId }) => {
   await requireManager(serverId!, user.id);
@@ -2825,3 +3107,206 @@ export async function handleApi(
     sendError(res, 500, "Internal server error", req);
   }
 }
+
+// ===========================================================================
+// PUSH ROUTES (Web Push) — bannered section, appended after handleApi.
+//
+// Registration order does not matter to the router (routes are matched from
+// an array built at module load, and every registration below runs before the
+// first request), so this section lives at the end of the file where it can
+// be appended and merged without touching anyone else's routes. The import
+// declarations are hoisted like any other.
+//
+// All of the behaviour lives in services/push.ts; these handlers only parse,
+// authorise by the session user, and answer. Like the attachment routes, the
+// whole surface is inert until VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY /
+// VAPID_SUBJECT are configured — `/api/push/config` is how the client finds
+// out, and the write routes refuse rather than store subscriptions nothing
+// will ever send to.
+// ===========================================================================
+
+import {
+  deletePushSubscription,
+  getPushSettings,
+  getVapidPublicKey,
+  isPushEnabled,
+  pushSettingsSchema,
+  pushSubscriptionSchema,
+  savePushSettings,
+  savePushSubscription,
+} from "../services/push.js";
+
+/**
+ * What the client needs before it can offer the toggle: whether this server
+ * can send at all, the public VAPID key to subscribe with, and the account's
+ * DM-detail choice so the settings screen renders the stored truth. The
+ * private key never has a route.
+ */
+router.get("/api/push/config", async ({ user }) => {
+  const enabled = isPushEnabled();
+  return {
+    enabled,
+    publicKey: enabled ? getVapidPublicKey() : null,
+    ...(await getPushSettings(user.id)),
+  };
+});
+
+/**
+ * Register this browser's subscription. Idempotent per endpoint — the client
+ * re-posts on every enable and after a browser rotates the subscription, and
+ * the upsert keeps exactly one row per endpoint, owned by the caller.
+ */
+router.post("/api/push/subscriptions", async ({ req, user }) => {
+  if (!isPushEnabled()) {
+    throw new HttpError(409, "Push notifications are not configured on this server");
+  }
+  const body = pushSubscriptionSchema.parse(await readJsonBody(req));
+  await savePushSubscription(user.id, body);
+  return { ok: true };
+});
+
+/**
+ * Unregister. The endpoint travels as a query parameter because it is a URL —
+ * a path segment would need double-encoding, and the router's `:xId` params
+ * are UUID-gated anyway. Scoped to the caller's own rows in the service.
+ */
+router.delete("/api/push/subscriptions", async ({ url, user }) => {
+  const endpoint = url.searchParams.get("endpoint");
+  if (!endpoint) {
+    throw new HttpError(400, "endpoint query parameter required");
+  }
+  await deletePushSubscription(user.id, endpoint);
+  return { ok: true };
+});
+
+/**
+ * The one push setting: whether a DM push may name the sender. Its own route
+ * rather than a key in `PATCH /api/me/preferences`, because that route's
+ * schema strips keys it does not know — see the note on push settings in
+ * services/push.ts.
+ */
+router.patch("/api/push/settings", async ({ req, user }) => {
+  const body = pushSettingsSchema.parse(await readJsonBody(req));
+  return await savePushSettings(user.id, body);
+});
+
+// ================================================================== friends
+//
+// Appended as a self-contained section, imports included (ESM hoists them; the
+// routes register on the same module-level `router` the rest of the file
+// uses). Semantics — one row per pair, Discord's silent decline, block
+// dominance — are argued in packages/shared/src/friends.ts and on the
+// `friendships` table in schema.sql; enforcement is in services/friends.ts.
+import { friendRequestSchema } from "@pqp/shared";
+import {
+  acceptFriendRequest,
+  FriendRequestFloodError,
+  FriendRequestRefusedError,
+  listFriendships,
+  removeFriendship,
+  sendFriendRequest,
+} from "../services/friends.js";
+
+/**
+ * The volatile half of the abuse budget (the durable half is the
+ * outgoing-pending cap counted in the database — see `sendFriendRequest`).
+ * A friend request is contact with a stranger, so the budget is shaped like
+ * `userSearchLimiter`'s: a burst that covers adding the handful of people you
+ * met tonight, sustained about two a minute — a human adding friends, and a
+ * spam run that would take all day. It also bounds the one loop the durable
+ * cap cannot see: send-cancel-resend to the same person, which never
+ * accumulates pending rows but re-surfaces an entry in their list each time.
+ */
+const friendRequestLimiter = createRateLimiter({
+  capacity: 10,
+  refillPerSecond: 1 / 30,
+});
+
+/**
+ * The whole relationship surface in one read: friends (with status), requests
+ * waiting on the caller, requests the caller has standing.
+ *
+ * Status is stamped here exactly the way the members route stamps it, and only
+ * onto ACCEPTED friends. `resolveStatuses` can only produce `UserStatus`,
+ * which cannot carry `invisible` — an invisible friend reads as `offline`, the
+ * same privacy-first merge every other surface gets. Pending entries carry no
+ * status at all: a stranger must not learn whether you are at your keyboard by
+ * the act of asking.
+ */
+router.get("/api/friends", async ({ user }) => {
+  const { friends, incoming, outgoing } = await listFriendships(user.id);
+  const statuses = resolveStatuses(friends.map((friend) => friend.id));
+  return {
+    friends: friends.map((friend) => ({
+      ...friend,
+      status: statuses.get(friend.id) ?? "offline",
+    })),
+    incoming,
+    outgoing,
+  };
+});
+
+/**
+ * Send a request. 201 when a new request now stands, 200 when the tap changed
+ * nothing (already pending — deliberately without re-notifying) or completed
+ * the handshake (`accepted`: they had already asked, or you already were
+ * friends).
+ *
+ * Every refusal answers with the same message. "You blocked them", "they
+ * blocked you" — telling those apart would make this route an oracle for
+ * whether a specific person has blocked you, the exact probe POST /api/dms
+ * already refuses to be. There is no new discovery here either: the body wants
+ * a user id, which the caller can only have via the existing exact-handle
+ * lookup or prefix search, both budgeted by `requireDiscoveryBudget`.
+ */
+router.post("/api/friends", async ({ req, user }) => {
+  const body = friendRequestSchema.parse(await readJsonBody(req));
+  if (!friendRequestLimiter.take(`user:${user.id}`)) {
+    throw new HttpError(429, "Too many friend requests — slow down");
+  }
+  if (!(await getUserById(body.userId))) {
+    throw new NotFound("User not found");
+  }
+  try {
+    const result = await sendFriendRequest(user.id, body.userId);
+    if (result === "pending") {
+      return created({ state: "pending" });
+    }
+    return {
+      state:
+        result === "accepted" || result === "already-friends"
+          ? "accepted"
+          : "pending",
+    };
+  } catch (error) {
+    if (error instanceof FriendRequestRefusedError) {
+      // One message for every reason — see the route comment.
+      throw new Forbidden("Cannot send a friend request to this user");
+    }
+    if (error instanceof FriendRequestFloodError) {
+      throw new HttpError(429, error.message);
+    }
+    throw error;
+  }
+});
+
+/** Accept a request somebody sent the caller. 404 when none is waiting. */
+router.post("/api/friends/:userId/accept", async ({ user }, { userId }) => {
+  if (!(await acceptFriendRequest(user.id, userId!))) {
+    throw new NotFound("No pending friend request from this user");
+  }
+  return { ok: true };
+});
+
+/**
+ * Decline, cancel, or unfriend — whatever stands between the caller and this
+ * person, silently, in one route. The other side is never notified; their
+ * view simply stops listing it, which is the entire social contract that
+ * makes declining usable.
+ */
+router.delete("/api/friends/:userId", async ({ user }, { userId }) => {
+  if (!(await removeFriendship(user.id, userId!))) {
+    throw new NotFound("No friendship or request with this user");
+  }
+  return { ok: true };
+});

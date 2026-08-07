@@ -1,5 +1,5 @@
 import type { DmSummary, PublicUser } from "@pqp/shared";
-import { Plus, X } from "lucide-react";
+import { Phone, Plus, Users, X } from "lucide-react";
 import type { ReactNode } from "react";
 import {
   formatBadgeCount,
@@ -14,6 +14,7 @@ import {
   notificationLevelItems,
   useChannelNotificationLevel,
 } from "@/hooks/use-notifications";
+import { useTranslation } from "@/lib/i18n";
 import { conversationTitle } from "@/lib/conversations";
 import { cn } from "@/lib/utils";
 
@@ -31,9 +32,17 @@ interface DmListProps {
   blockedUserIds: ReadonlySet<string>;
   onSelectConversation: (channelId: string) => void;
   onStartConversation: () => void;
+  /** The Friends nav entry at the top — highlighted when the view is showing. */
+  friendsSelected?: boolean;
+  onOpenFriends?: () => void;
   onHideConversation: (channelId: string) => void;
   onBlockUser: (user: PublicUser) => void;
   onUnblockUser: (userId: string) => void;
+  // --- conversation calls ---
+  /** Start (or join) a voice call in this conversation. */
+  onStartCall?: (channelId: string) => void;
+  /** Conversations with a live call — their rows show it and offer "join". */
+  activeCallChannelIds?: ReadonlySet<string>;
   footer?: ReactNode;
   mobileOpen?: boolean;
   onMobileClose?: () => void;
@@ -57,13 +66,18 @@ export function DmList({
   blockedUserIds,
   onSelectConversation,
   onStartConversation,
+  friendsSelected = false,
+  onOpenFriends,
   onHideConversation,
   onBlockUser,
   onUnblockUser,
+  onStartCall,
+  activeCallChannelIds,
   footer,
   mobileOpen = false,
   onMobileClose,
 }: DmListProps) {
+  const { t } = useTranslation();
   return (
     <aside
       className={`fixed inset-y-0 left-[72px] z-30 flex w-[min(100%-72px,16rem)] flex-col border-r border-ink-4/60 bg-channel transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] md:static md:z-auto md:w-64 md:translate-x-0 ${
@@ -98,6 +112,28 @@ export function DmList({
       </div>
 
       <div className="flex-1 overflow-y-auto p-2">
+        {/* The home view's one nav entry, above the conversations — the
+            Friends view is where "home with nothing selected" lands, and this
+            is the way back to it once a conversation is open. */}
+        {onOpenFriends && (
+          <button
+            type="button"
+            className={cn(
+              "mb-2 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm",
+              friendsSelected
+                ? "bg-ink-3 text-paper"
+                : "text-paper-muted hover:bg-ink-3/70 hover:text-paper",
+            )}
+            aria-current={friendsSelected ? "page" : undefined}
+            onClick={() => {
+              onOpenFriends();
+              onMobileClose?.();
+            }}
+          >
+            <Users aria-hidden="true" className="h-4 w-4 shrink-0" />
+            <span className="truncate font-medium">{t("friends.title")}</span>
+          </button>
+        )}
         {isLoading ? (
           <ChannelListSkeleton />
         ) : conversations.length === 0 ? (
@@ -128,6 +164,17 @@ export function DmList({
               onHide={() => onHideConversation(conversation.channelId)}
               onBlock={onBlockUser}
               onUnblock={onUnblockUser}
+              hasActiveCall={
+                activeCallChannelIds?.has(conversation.channelId) ?? false
+              }
+              onStartCall={
+                onStartCall
+                  ? () => {
+                      onStartCall(conversation.channelId);
+                      onMobileClose?.();
+                    }
+                  : undefined
+              }
             />
           ))
         )}
@@ -147,6 +194,8 @@ function ConversationRow({
   onHide,
   onBlock,
   onUnblock,
+  hasActiveCall = false,
+  onStartCall,
 }: {
   conversation: DmSummary;
   selected: boolean;
@@ -156,7 +205,10 @@ function ConversationRow({
   onHide: () => void;
   onBlock: (user: PublicUser) => void;
   onUnblock: (userId: string) => void;
+  hasActiveCall?: boolean;
+  onStartCall?: () => void;
 }) {
+  const { t } = useTranslation();
   // The same per-channel levels a server channel gets. Muting a conversation is
   // the same act as muting #general, and giving it its own store would be a
   // second place for "leave me alone" to be recorded and forgotten.
@@ -255,6 +307,30 @@ function ConversationRow({
             )}
           </span>
         </button>
+        {/* The call entry point. Always visible while a call is live in this
+            conversation (green, meaning "join"); otherwise revealed on
+            hover/focus like every quiet row action. Hidden entirely for a
+            blocked 1:1 — the server would refuse the join anyway, and showing
+            a phone that cannot ring is worse than no phone. */}
+        {onStartCall && !blocked && (
+          <button
+            type="button"
+            title={t(hasActiveCall ? "call.panel.join" : "call.startVoice")}
+            aria-label={
+              t(hasActiveCall ? "call.panel.join" : "call.startVoice") +
+              `: ${title}`
+            }
+            className={cn(
+              "shrink-0 rounded-md p-1.5",
+              hasActiveCall
+                ? "text-success"
+                : "text-paper-muted opacity-0 hover:bg-ink-3 hover:text-paper focus-visible:opacity-100 group-hover:opacity-100",
+            )}
+            onClick={onStartCall}
+          >
+            <Phone className="h-3.5 w-3.5" />
+          </button>
+        )}
       </div>
     </ContextMenu>
   );

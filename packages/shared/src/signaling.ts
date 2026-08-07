@@ -28,6 +28,35 @@ export const voiceParticipantSchema = z.object({
   displayName: z.string(),
   avatarUrl: z.string().nullable(),
   sharingScreen: z.boolean().default(false),
+  /**
+   * The sender-side MediaStream id of this participant's camera capture, or
+   * null/absent when their camera is off.
+   *
+   * This exists for the *mesh* receive path: an incoming video track carries
+   * only its stream id (`a=msid`), and a peer may legitimately be sending two
+   * video tracks at once — screen and camera. The id is what lets a receiver
+   * file each one under the right tile instead of guessing from arrival order.
+   * On the SFU path LiveKit already labels tracks with a source, so this field
+   * is informational there. Not sensitive: it names a capture, and only people
+   * already allowed to see the roster receive it.
+   */
+  cameraStreamId: z.string().nullable().optional(),
+  // --- voice state ---
+  //
+  // Self-reported by the participant's client over `set-voice-state` and
+  // carried on every roster, so someone *outside* the call can see who is
+  // muted or deafened before joining. Defaulted for wire compatibility with a
+  // server that predates the fields — absent reads as "not muted", which is
+  // also a participant's initial state on join.
+  //
+  // `speaking` is deliberately NOT here. Mute and deafen change a handful of
+  // times per call; speaking flips several times per *sentence*, and a roster
+  // frame fans out to every member of the server who can see the channel —
+  // the same cost argument that keeps user status pulled rather than pushed.
+  // In-call clients already derive speaking locally from the audio they
+  // receive, which is both free and more accurate than anything relayed.
+  muted: z.boolean().default(false),
+  deafened: z.boolean().default(false),
 });
 
 export const welcomeMessageSchema = z.object({
@@ -108,6 +137,122 @@ export const iceCandidateMessageSchema = z.object({
   candidate: iceCandidateInitSchema.nullable(),
 });
 
+// --- conversation calls ---------------------------------------------------
+//
+// A server voice channel is join-when-you-want; a conversation (DM / group DM)
+// call RINGS. The frames below carry that ringing lifecycle. They are scoped
+// to conversations only — the server refuses `call-ring` for any channel that
+// belongs to a server — and every one of them is delivered to conversation
+// participants alone, never to a server audience.
+
+/** Who is calling, as shown on the incoming-call surface. */
+export const callerSummarySchema = z.object({
+  userId: z.string().uuid(),
+  displayName: z.string(),
+  avatarUrl: z.string().nullable(),
+});
+
+/**
+ * Caller → server: ring the absent participants of a conversation.
+ *
+ * Sent *after* the caller has joined the conversation's voice room (the join
+ * is where access, blocks and transport are enforced) — the server verifies
+ * the sender is a live peer of exactly this room before ringing anyone.
+ */
+export const callRingMessageSchema = z.object({
+  type: z.literal("call-ring"),
+  conversationId: z.string().uuid(),
+});
+
+/** Callee → server: refuse the ring. Accepting is simply `join-voice-room`. */
+export const callDeclineMessageSchema = z.object({
+  type: z.literal("call-decline"),
+  conversationId: z.string().uuid(),
+});
+
+/**
+ * Camera state, declared to the room the way `set-sharing-screen` is.
+ *
+ * `streamId` is the local camera capture's MediaStream id (see
+ * `voiceParticipantSchema.cameraStreamId`); null means the camera turned off.
+ */
+export const setCameraMessageSchema = z.object({
+  type: z.literal("set-camera"),
+  streamId: z.string().nullable(),
+});
+
+/** Server → callee sockets: someone is calling this conversation. */
+export const callIncomingMessageSchema = z.object({
+  type: z.literal("call-incoming"),
+  conversationId: z.string().uuid(),
+  kind: z.enum(["dm", "group"]),
+  caller: callerSummarySchema,
+});
+
+/**
+ * Server → callee sockets: stop ringing.
+ *
+ * - `answered` — this user joined the call (possibly from another device).
+ * - `declined` — this user declined (from another device).
+ * - `cancelled` — the call ended before anyone answered (caller hung up).
+ * - `timeout` — nobody answered before the ring expired.
+ */
+export const callRingCancelledMessageSchema = z.object({
+  type: z.literal("call-ring-cancelled"),
+  conversationId: z.string().uuid(),
+  reason: z.enum(["answered", "declined", "cancelled", "timeout"]),
+});
+
+/** Server → the room: a rung participant declined, so stop expecting them. */
+export const callDeclinedMessageSchema = z.object({
+  type: z.literal("call-declined"),
+  conversationId: z.string().uuid(),
+  userId: z.string().uuid(),
+});
+
+export type CallerSummary = z.infer<typeof callerSummarySchema>;
+export type CallRingMessage = z.infer<typeof callRingMessageSchema>;
+export type CallDeclineMessage = z.infer<typeof callDeclineMessageSchema>;
+export type SetCameraMessage = z.infer<typeof setCameraMessageSchema>;
+export type CallIncomingMessage = z.infer<typeof callIncomingMessageSchema>;
+export type CallRingCancelledMessage = z.infer<
+  typeof callRingCancelledMessageSchema
+>;
+export type CallDeclinedMessage = z.infer<typeof callDeclinedMessageSchema>;
+
+// --- end conversation calls -----------------------------------------------
+
+// --- voice moderation -------------------------------------------------------
+//
+// Server → the sanctioned participant's socket, before their peer is dropped.
+// The sanction-notice principle applies: an eviction the target cannot see is
+// indistinguishable from a network failure, so the frame carries the whole
+// sentence, already written, and a client that renders nothing but `message`
+// is a correct client.
+
+export const voiceModerationMessageSchema = z.object({
+  type: z.literal("voice-moderation"),
+  action: z.enum(["disconnected", "moved", "muted", "unmuted"]),
+  /** The room the action happened in — the one the target was connected to. */
+  voiceChannelId: z.string(),
+  /**
+   * `moved` only: the voice channel the moderator sent the target to. The
+   * client follows it by issuing an ordinary `join-voice-room`, which re-runs
+   * every server-side check (channel access, timeout, transport, room-full) —
+   * so a forged or replayed frame can never place a client somewhere the
+   * server would not have admitted it anyway. The client additionally follows
+   * only when it is currently in `voiceChannelId`; consent to be moved is
+   * consent already given by being in that server's voice.
+   */
+  movedToChannelId: z.string().uuid().optional(),
+  /** The whole sentence, already written — render it verbatim. */
+  message: z.string(),
+});
+
+export type VoiceModerationMessage = z.infer<typeof voiceModerationMessageSchema>;
+
+// --- end voice moderation ---------------------------------------------------
+
 export const voiceSignalingMessageSchema = z.discriminatedUnion("type", [
   welcomeMessageSchema,
   peerJoinedMessageSchema,
@@ -119,6 +264,12 @@ export const voiceSignalingMessageSchema = z.discriminatedUnion("type", [
   offerMessageSchema,
   answerMessageSchema,
   iceCandidateMessageSchema,
+  // --- conversation calls ---
+  callIncomingMessageSchema,
+  callRingCancelledMessageSchema,
+  callDeclinedMessageSchema,
+  // --- voice moderation ---
+  voiceModerationMessageSchema,
 ]);
 
 export type VoiceParticipant = z.infer<typeof voiceParticipantSchema>;
@@ -182,6 +333,20 @@ export const setSharingScreenMessageSchema = z.object({
   sharing: z.boolean(),
 });
 
+// --- voice state ---
+//
+// Client → server: declare mute/deafen so the roster can carry it (see the
+// matching fields on `voiceParticipantSchema`). Both flags travel together —
+// a partial update would make the server merge stale halves after a missed
+// frame, and the client always knows both values anyway.
+export const setVoiceStateMessageSchema = z.object({
+  type: z.literal("set-voice-state"),
+  muted: z.boolean(),
+  deafened: z.boolean(),
+});
+
+export type SetVoiceStateMessage = z.infer<typeof setVoiceStateMessageSchema>;
+
 export const voiceClientMessageSchema = z.discriminatedUnion("type", [
   joinVoiceRoomMessageSchema,
   leaveVoiceRoomMessageSchema,
@@ -189,6 +354,12 @@ export const voiceClientMessageSchema = z.discriminatedUnion("type", [
   offerMessageSchema,
   answerMessageSchema,
   iceCandidateMessageSchema,
+  // --- conversation calls ---
+  callRingMessageSchema,
+  callDeclineMessageSchema,
+  setCameraMessageSchema,
+  // --- voice state ---
+  setVoiceStateMessageSchema,
 ]);
 
 export type VoiceClientMessage = z.infer<typeof voiceClientMessageSchema>;

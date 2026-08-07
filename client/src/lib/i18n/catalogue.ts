@@ -72,7 +72,9 @@ export const en = {
   // Every line below describes something that ships today and is on by default
   // — no env var, no flag, no admin-only path. Attachments are deliberately
   // absent: they are dark unless S3_* is configured, and production is not.
-  // Camera video, custom emoji, threads and slow mode do not exist at all.
+  // Camera video, custom emoji and slow mode do not exist at all. (Threads
+  // ship now, but the landing copy below predates them — update it
+  // deliberately, not from this comment.)
   "landing.features.title": "The basics, done right.",
   "landing.features.body":
     "No roadmap promises. Everything here works today — in the browser, on the desktop, or installed on your phone.",
@@ -471,6 +473,28 @@ export const en = {
   "voice.error.transportUnreachable":
     "Could not reach the voice server, so you have not joined this call. Check your network and try again.",
 
+  // --- conversation calls ---
+  "voice.error.cameraFailed": "Failed to access camera",
+  "voice.error.cameraBlocked":
+    "Camera access was blocked. Allow it in your browser settings and try again.",
+  "call.incoming.title": "Incoming call",
+  "call.incoming.groupTitle": "Incoming group call",
+  "call.incoming.accept": "Accept",
+  "call.incoming.decline": "Decline",
+  "call.incoming.ignore": "Ignore",
+  "call.panel.start": "Start call",
+  "call.panel.join": "Join call",
+  "call.panel.leave": "Leave",
+  "call.panel.inCall": "{count} in call",
+  "call.panel.calling": "Calling…",
+  "call.panel.connecting": "Connecting…",
+  "call.panel.declined": "{name} declined",
+  "call.panel.cameraOn": "Turn camera off",
+  "call.panel.cameraOff": "Turn camera on",
+  "call.panel.mute": "Mute",
+  "call.panel.unmute": "Unmute",
+  "call.startVoice": "Start voice call",
+
   // ------------------------------------------------------------ channel meta
   // The channel image is a URL, not an upload — rendered to everyone in the
   // server, so it is restricted to https rather than accepting whatever a
@@ -479,6 +503,59 @@ export const en = {
     "Image links need to start with https://.",
   "channel.meta.image.error.invalid": "That doesn't look like a URL.",
   "channel.meta.error.generic": "Couldn't save that. Try again.",
+
+  // ----------------------------------------------------------------- friends
+  // The home view when nothing is selected: who is around, and the requests
+  // waiting on you. "Pending" covers both directions; the section headings
+  // inside it tell them apart.
+  "friends.title": "Friends",
+  "friends.tab.online": "Online",
+  "friends.tab.all": "All",
+  "friends.tab.pending": "Pending",
+  "friends.addFriend": "Add friend",
+  "friends.addFriend.hint":
+    "Handles are exact — ask for the name#0000 and type it here.",
+  "friends.addFriend.label": "Add a friend by handle",
+  "friends.requestSent": "Request sent to {name}.",
+  "friends.requestAccepted": "You and {name} are now friends.",
+  "friends.requestFailed": "Couldn't send that request.",
+  "friends.incoming": "Incoming — waiting on you",
+  "friends.outgoing": "Sent — waiting on them",
+  "friends.accept": "Accept",
+  "friends.decline": "Decline",
+  "friends.cancelRequest": "Cancel request",
+  "friends.remove": "Remove friend",
+  "friends.message": "Message",
+  "friends.empty.online": "Nobody's around right now.",
+  "friends.empty.all.title": "No friends here yet",
+  "friends.empty.all.body":
+    "Add someone by their handle and they'll show up here — with a dot that says whether they're around.",
+  "friends.empty.pending": "No pending requests. Quiet is fine.",
+  "friends.loadFailed": "Couldn't load your friends — try again.",
+  "friends.retry": "Try again",
+  "friends.onlineCount": "{count} online",
+  "friends.pendingBadge": "{count} pending",
+
+  // ----------------------------------------------------------------- threads
+  // A reply-chain that becomes its own scoped conversation off a message.
+  // pt-BR keeps the English word "thread" — it is what BR gamers actually say
+  // (see the note at the top of messages.pt-BR.ts about loanwords); "tópico"
+  // reads as a web forum from 2005.
+  "thread.start": "Start thread",
+  "thread.open": "Open thread",
+  "thread.title": "Thread",
+  "thread.close": "Close thread",
+  "thread.archived": "Archived",
+  "thread.archivedHint":
+    "Quiet for {days}+ days — replying wakes it back up.",
+  "thread.replies.one": "{count} reply",
+  "thread.replies.many": "{count} replies",
+  "thread.noReplies": "No replies yet",
+  "thread.chip.aria": "Open thread {name}, {replies}",
+  "thread.originDeleted": "The original message was deleted",
+  "thread.placeholder": "Reply in thread",
+  "thread.loading": "Loading thread…",
+  "thread.error.start": "Couldn't start the thread. Try again.",
 } as const;
 
 export type MessageKey = keyof typeof en;

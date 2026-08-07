@@ -40,6 +40,15 @@ import {
   adoptNotificationPreferences,
   type NotificationLevel,
 } from "@/lib/notifications";
+import {
+  disablePush,
+  enablePush,
+  getCurrentPushSubscription,
+  getPushAvailability,
+  getPushConfig,
+  setPushDmDetails,
+  type PushAvailability,
+} from "@/lib/push";
 import type { ThemePreference } from "@/lib/theme";
 import {
   deleteMyAccount,
@@ -524,6 +533,163 @@ function NotificationsSection() {
         Applies where a server or channel has no setting of its own. Right-click
         a server or channel to change just that one.
       </p>
+
+      <PushNotificationsSection />
+    </div>
+  );
+}
+
+/**
+ * Web Push — notifications that reach this device with the app fully closed.
+ *
+ * Subscribing happens behind the button and nowhere else: it needs the
+ * browser's notification permission, and both Chrome's heuristics and iOS
+ * outright require the request to originate from a user gesture. Nothing here
+ * runs on app start.
+ *
+ * On iOS the API only exists inside an installed home-screen app, so a plain
+ * Safari tab gets the install instruction instead of a button that cannot
+ * work.
+ */
+function PushNotificationsSection() {
+  const [availability, setAvailability] = useState<PushAvailability | null>(null);
+  const [serverEnabled, setServerEnabled] = useState<boolean | null>(null);
+  const [subscribed, setSubscribed] = useState(false);
+  const [dmDetails, setDmDetails] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const availability = getPushAvailability();
+    setAvailability(availability);
+    if (availability !== "available") {
+      return;
+    }
+    void (async () => {
+      try {
+        const [config, subscription] = await Promise.all([
+          getPushConfig(),
+          getCurrentPushSubscription(),
+        ]);
+        if (cancelled) {
+          return;
+        }
+        setServerEnabled(config.enabled);
+        setDmDetails(config.dmDetails);
+        setSubscribed(subscription !== null);
+      } catch {
+        // The section renders nothing rather than a broken toggle.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const toggle = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      if (subscribed) {
+        await disablePush();
+        setSubscribed(false);
+      } else {
+        const result = await enablePush();
+        if (result === "enabled") {
+          setSubscribed(true);
+        } else if (result === "denied") {
+          setError(
+            "Notifications are blocked for this site. Allow them in your browser's settings first.",
+          );
+        } else {
+          setError("Could not subscribe this device. Try again after a reload.");
+        }
+      }
+    } catch {
+      setError("Could not reach the server. Your subscription was not saved.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const toggleDmDetails = async () => {
+    const next = !dmDetails;
+    // Optimistic — it is a checkbox, and the server answer below corrects it.
+    setDmDetails(next);
+    try {
+      const saved = await setPushDmDetails(next);
+      setDmDetails(saved.dmDetails);
+    } catch {
+      setDmDetails(!next);
+    }
+  };
+
+  if (availability === null) {
+    return null;
+  }
+
+  return (
+    <div className="mt-4">
+      <p className="text-xs uppercase tracking-wide text-text-muted">
+        Push — when the app is closed
+      </p>
+
+      {availability === "needs-install" ? (
+        <p className="mt-2 text-xs text-text-muted">
+          On iPhone and iPad, push only works from the installed app: open pqp
+          in Safari, tap Share, then &quot;Add to Home Screen&quot;, and enable
+          push from inside the installed app.
+        </p>
+      ) : availability === "unsupported" ? (
+        <p className="mt-2 text-xs text-text-muted">
+          This browser cannot receive push notifications.
+        </p>
+      ) : serverEnabled === false ? (
+        <p className="mt-2 text-xs text-text-muted">
+          Push is not configured on this server.
+        </p>
+      ) : serverEnabled === null ? null : (
+        <>
+          <div className="mt-2 flex items-center gap-3">
+            <Button
+              variant={subscribed ? "secondary" : "default"}
+              size="sm"
+              disabled={busy}
+              onClick={() => void toggle()}
+            >
+              {subscribed ? "Turn off on this device" : "Enable push on this device"}
+            </Button>
+            <span className="text-xs text-text-muted">
+              {subscribed
+                ? "Mentions, replies and DMs reach this device when the app is closed."
+                : "Only mentions, replies and direct messages — never every message."}
+            </span>
+          </div>
+          {error ? (
+            <p className="mt-1.5 text-xs text-warning" role="status">
+              {error}
+            </p>
+          ) : null}
+          {subscribed ? (
+            <label className="mt-3 flex items-start gap-2 text-sm text-text">
+              <input
+                type="checkbox"
+                checked={dmDetails}
+                onChange={() => void toggleDmDetails()}
+                className="mt-0.5 accent-accent"
+              />
+              <span>
+                Show who sent a direct message
+                <span className="block text-xs text-text-muted">
+                  Off, a DM push says only &quot;New direct message&quot;.
+                  Message text is never included either way.
+                </span>
+              </span>
+            </label>
+          ) : null}
+        </>
+      )}
     </div>
   );
 }

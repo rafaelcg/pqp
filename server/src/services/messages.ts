@@ -8,6 +8,7 @@ import {
   type MessagePinnedBy,
   type MessageReaction,
   type MessageReplyRef,
+  type ThreadSummary,
   type WebhookEmbed,
 } from "@pqp/shared";
 import type { PoolClient } from "pg";
@@ -22,6 +23,8 @@ import {
 import { listBlockedAmong, notBlockedSql } from "./blocks.js";
 import { listEmbedsForMessages } from "./embeds.js";
 import { listReactionsForMessages } from "./reactions.js";
+// --- threads ---
+import { listThreadsForMessages } from "./threads.js";
 
 /**
  * The pool, or one connection checked out of it. Mention rows carry an FK to
@@ -45,6 +48,11 @@ export type HydratedMessage = DbMessage & {
    * live messages from its own block list, which it holds anyway.
    */
   blocked?: boolean;
+  // --- threads ---
+  /** The thread anchored to this message, batched in by `hydrate` the same
+   * way reactions are. Absent (not null) on paths that never carry a chip —
+   * a freshly created message cannot have a thread yet. */
+  thread?: ThreadSummary | null;
 };
 
 /** Parent columns every read path needs to build a quote header. */
@@ -186,7 +194,14 @@ async function hydrate(
   viewerId?: string,
 ): Promise<MessagePage> {
   const messageIds = rows.map((row) => row.id);
-  const [reactionsByMessage, attachmentsByMessage, embedsByMessage, blockedAuthors] =
+  const [
+    reactionsByMessage,
+    attachmentsByMessage,
+    embedsByMessage,
+    blockedAuthors,
+    // --- threads --- one grouped query per page, same shape as reactions.
+    threadsByMessage,
+  ] =
     await Promise.all([
       listReactionsForMessages(messageIds, viewerId),
       listAttachmentsForMessages(messageIds),
@@ -202,6 +217,7 @@ async function hydrate(
             ...new Set(rows.map((row) => row.author_id)),
           ])
         : Promise.resolve(new Set<string>()),
+      listThreadsForMessages(messageIds),
     ]);
   return {
     hasMore,
@@ -212,6 +228,7 @@ async function hydrate(
       attachments: attachmentsByMessage.get(row.id) ?? [],
       embeds: embedsByMessage.get(row.id) ?? [],
       blocked: blockedAuthors.has(row.author_id),
+      thread: threadsByMessage.get(row.id) ?? null,
     })),
   };
 }
@@ -549,17 +566,21 @@ export async function updateMessageBody(
   // message — dropping them here would blank the images out of every open tab
   // until the next history load. Embeds are cache-only here, same as every
   // other read: whether an edited-in link needs a fresh fetch is the caller's
-  // decision, not this function's.
-  const [reactions, attachments, embeds] = await Promise.all([
+  // decision, not this function's. The thread chip rides along for the same
+  // reason the attachments do: the broadcast is a whole message, and a chip
+  // that vanished on every edit would read as the thread being deleted.
+  const [reactions, attachments, embeds, threads] = await Promise.all([
     listReactionsForMessages([messageId]),
     listAttachmentsForMessages([messageId]),
     listEmbedsForMessages([message]),
+    listThreadsForMessages([messageId]),
   ]);
   return {
     ...message,
     reactions: reactions.get(messageId) ?? [],
     attachments: attachments.get(messageId) ?? [],
     embeds: embeds.get(messageId) ?? [],
+    thread: threads.get(messageId) ?? null,
   };
 }
 
@@ -648,6 +669,7 @@ export function mapMessage(
     attachments?: Attachment[];
     embeds?: Embed[];
     blocked?: boolean;
+    thread?: ThreadSummary | null;
   },
 ) {
   return {
@@ -677,6 +699,8 @@ export function mapMessage(
     pinnedBy: mapPinnedBy(m),
     isWebhook: m.author_is_webhook ?? false,
     webhookEmbeds: (m.webhook_embeds as WebhookEmbed[] | null) ?? [],
+    // --- threads ---
+    thread: m.thread ?? null,
   };
 }
 
@@ -690,16 +714,19 @@ export class ChannelPinLimitError extends Error {
 async function hydrateOne(
   message: DbMessage,
 ): Promise<HydratedMessage> {
-  const [reactions, attachments, embeds] = await Promise.all([
+  const [reactions, attachments, embeds, threads] = await Promise.all([
     listReactionsForMessages([message.id]),
     listAttachmentsForMessages([message.id]),
     listEmbedsForMessages([message]),
+    // --- threads --- pin/unpin broadcasts are whole messages too.
+    listThreadsForMessages([message.id]),
   ]);
   return {
     ...message,
     reactions: reactions.get(message.id) ?? [],
     attachments: attachments.get(message.id) ?? [],
     embeds: embeds.get(message.id) ?? [],
+    thread: threads.get(message.id) ?? null,
   };
 }
 

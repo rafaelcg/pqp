@@ -649,13 +649,36 @@ function channelMemberSql(viewer: string): string {
  * for some other member and grants access on their rank.
  */
 export function channelVisibleSql(viewer: string): string {
+  // --- threads ---
+  //
+  // A thread's privacy FOLLOWS ITS PARENT. The privacy disjunction below is
+  // evaluated against `eff` — the row itself for an ordinary channel, the
+  // parent row for a thread — because a thread row is never private and never
+  // has members of its own, so asking the thread row directly would answer
+  // "public" for every thread under a private channel: the exact leak this
+  // predicate exists to make impossible. Threads cannot nest (enforced at
+  // creation in services/threads.ts), so one level of parent is the whole
+  // story, and a thread whose parent is gone (`parent_id` nulled) matches no
+  // `eff` row and FAILS CLOSED.
+  //
+  // Server membership (`sm.user_id IS NOT NULL`) and the role escape hatch are
+  // unchanged: an owner or admin who can read the private parent can read its
+  // threads, a plain member needs the parent's `channel_members` row, and a
+  // conversation still has no role escape hatch at all.
   return `(
          CASE WHEN c.kind = 'server' THEN
            sm.user_id IS NOT NULL
-           AND (
-             c.is_private = FALSE
-             OR sm.role IN ('owner', 'admin')
-             OR ${channelMemberSql(viewer)}
+           AND EXISTS (
+             SELECT 1 FROM channels eff
+             WHERE eff.id = CASE WHEN c.type = 'thread' THEN c.parent_id ELSE c.id END
+               AND (
+                 eff.is_private = FALSE
+                 OR sm.role IN ('owner', 'admin')
+                 OR EXISTS (
+                     SELECT 1 FROM channel_members cm
+                     WHERE cm.channel_id = eff.id AND cm.user_id = ${viewer}
+                   )
+               )
            )
          ELSE ${channelMemberSql(viewer)}
          END

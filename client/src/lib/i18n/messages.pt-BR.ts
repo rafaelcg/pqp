@@ -418,8 +418,81 @@ export const ptBR: PartialMessages = {
   "voice.error.transportUnreachable":
     "Não deu pra falar com o servidor de voz, então você não entrou nesta call. Verifique a sua conexão e tente de novo.",
 
+  // --- conversation calls ---
+  "voice.error.cameraFailed": "Não foi possível acessar a câmera",
+  "voice.error.cameraBlocked":
+    "O acesso à câmera foi bloqueado. Libera nas configurações do navegador e tenta de novo.",
+  "call.incoming.title": "Chamada recebida",
+  "call.incoming.groupTitle": "Chamada de grupo recebida",
+  "call.incoming.accept": "Atender",
+  "call.incoming.decline": "Recusar",
+  "call.incoming.ignore": "Ignorar",
+  "call.panel.start": "Iniciar chamada",
+  "call.panel.join": "Entrar na chamada",
+  "call.panel.leave": "Sair",
+  "call.panel.inCall": "{count} na chamada",
+  "call.panel.calling": "Chamando…",
+  "call.panel.connecting": "Conectando…",
+  "call.panel.declined": "{name} recusou",
+  "call.panel.cameraOn": "Desligar a câmera",
+  "call.panel.cameraOff": "Ligar a câmera",
+  "call.panel.mute": "Silenciar",
+  "call.panel.unmute": "Ativar o som",
+  "call.startVoice": "Iniciar chamada de voz",
+
   "channel.meta.image.error.httpsOnly":
     "O link da imagem precisa começar com https://.",
   "channel.meta.image.error.invalid": "Isso não parece um link.",
   "channel.meta.error.generic": "Não deu pra salvar. Tenta de novo.",
+
+  // ----------------------------------------------------------------- friends
+  // "Amigos", direto. "Solicitação" é como o Discord brasileiro chama o
+  // pedido, então é a palavra que o público espera — mas "pedido" também
+  // aparece onde a frase fica menos burocrática com ele.
+  "friends.title": "Amigos",
+  "friends.tab.online": "Online",
+  "friends.tab.all": "Todos",
+  "friends.tab.pending": "Pendentes",
+  "friends.addFriend": "Adicionar amigo",
+  "friends.addFriend.hint":
+    "O identificador é exato — pede o nome#0000 da pessoa e digita aqui.",
+  "friends.addFriend.label": "Adicionar amigo pelo identificador",
+  "friends.requestSent": "Solicitação enviada pra {name}.",
+  "friends.requestAccepted": "Você e {name} agora são amigos.",
+  "friends.requestFailed": "Não deu pra enviar a solicitação.",
+  "friends.incoming": "Recebidas — esperando você",
+  "friends.outgoing": "Enviadas — esperando a pessoa",
+  "friends.accept": "Aceitar",
+  "friends.decline": "Recusar",
+  "friends.cancelRequest": "Cancelar pedido",
+  "friends.remove": "Remover amigo",
+  "friends.message": "Mensagem",
+  "friends.empty.online": "Ninguém por aqui agora.",
+  "friends.empty.all.title": "Nenhum amigo por enquanto",
+  "friends.empty.all.body":
+    "Adiciona alguém pelo identificador e a pessoa aparece aqui — com uma bolinha dizendo se está online.",
+  "friends.empty.pending": "Nenhuma solicitação pendente. Silêncio também é bom.",
+  "friends.loadFailed": "Não deu pra carregar seus amigos — tenta de novo.",
+  "friends.retry": "Tentar de novo",
+  "friends.onlineCount": "{count} online",
+  "friends.pendingBadge": "{count} pendente(s)",
+  // ----------------------------------------------------------------- threads
+  // "Thread" fica em inglês de propósito — é o que se fala em call e em chat
+  // ("abre uma thread aí"); "tópico" soa fórum de 2005. Gênero feminino,
+  // como o uso corrente: "a thread".
+  "thread.start": "Criar thread",
+  "thread.open": "Abrir thread",
+  "thread.title": "Thread",
+  "thread.close": "Fechar thread",
+  "thread.archived": "Arquivada",
+  "thread.archivedHint":
+    "Parada há mais de {days} dias — responder acorda ela de novo.",
+  "thread.replies.one": "{count} resposta",
+  "thread.replies.many": "{count} respostas",
+  "thread.noReplies": "Sem respostas ainda",
+  "thread.chip.aria": "Abrir thread {name}, {replies}",
+  "thread.originDeleted": "A mensagem original foi apagada",
+  "thread.placeholder": "Responder na thread",
+  "thread.loading": "Carregando a thread…",
+  "thread.error.start": "Não deu pra criar a thread. Tenta de novo.",
 };

@@ -15,6 +15,13 @@ import {
 import { embedSchema } from "./embeds.js";
 import { sanctionNoticeSchema } from "./sanctions.js";
 import { setIdleMessageSchema } from "./status.js";
+// --- threads ---
+import {
+  threadJoinMessageSchema,
+  threadLeaveMessageSchema,
+  threadSummarySchema,
+  threadUpdateBroadcastSchema,
+} from "./threads.js";
 import { webhookEmbedSchema } from "./webhooks.js";
 
 export const joinChannelMessageSchema = z.object({
@@ -118,6 +125,8 @@ const broadcastMessageSchema = z.object({
   embeds: z.array(embedSchema).default([]),
   isWebhook: z.boolean().default(false),
   webhookEmbeds: z.array(webhookEmbedSchema).default([]),
+  // --- threads ---
+  thread: threadSummarySchema.nullable().default(null),
 });
 
 export const messageBroadcastSchema = z.object({
@@ -206,6 +215,8 @@ export const chatServerMessageSchema = z.discriminatedUnion("type", [
   presenceUpdateSchema,
   typingBroadcastSchema,
   channelActivitySchema,
+  // --- threads ---
+  threadUpdateBroadcastSchema,
   // A refusal is a chat outcome: it is sent over the chat socket, in response
   // to a chat action, and it describes what happened to a message somebody
   // tried to send. It belongs in the type the chat socket is declared to carry,
@@ -228,6 +239,9 @@ export const chatClientMessageSchema = z
     messageCreateFrameSchema,
     reactionToggleMessageSchema,
     typingMessageSchema,
+    // --- threads --- the secondary view slot beside the primary channel.
+    threadJoinMessageSchema,
+    threadLeaveMessageSchema,
     // Not chat, but it rides the chat socket because the thing it describes IS
     // the socket: "the person holding this connection stopped touching their
     // keyboard". Sending it over HTTP would need a way to name one connection
@@ -270,6 +284,9 @@ export const CHAT_SERVER_MESSAGE_TYPES = [
   "presence-update",
   "typing-broadcast",
   "channel-activity",
+  // --- threads --- the chip refresh for parent-channel viewers; content-free,
+  // so fanning it out to everyone in the parent channel is correct.
+  "thread-update",
 ] as const;
 
 export function isChatServerMessage(message: {

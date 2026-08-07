@@ -1,10 +1,13 @@
 import {
+  ArrowRightLeft,
   AtSign,
   Ban,
   ChevronDown,
   ChevronRight,
   Clock,
   Flag,
+  MicOff,
+  PhoneOff,
   RotateCcw,
   ShieldMinus,
   ShieldPlus,
@@ -19,6 +22,8 @@ import {
   TIMEOUT_PRESET_MINUTES,
   TIMEOUT_REASON_MAX_LENGTH,
   type MemberTimeout,
+  type VoiceParticipant,
+  type VoiceRoomTransport,
 } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
 import {
@@ -30,11 +35,14 @@ import { StatusDot } from "@/components/user/status-dot";
 import {
   ApiError,
   banMember,
+  disconnectMemberVoice,
   fetchMembers,
   kickMember,
   liftTimeout,
   listBans,
   listTimeouts,
+  moveMemberVoice,
+  setMemberVoiceMuted,
   timeoutMember,
   unbanMember,
   updateMemberRole,
@@ -91,7 +99,43 @@ interface RowAction {
   icon: LucideIcon;
   onSelect: () => void;
   danger?: boolean;
+  /**
+   * Rendered dimmed-but-tappable (the screen-share-button pattern): a tap is
+   * how a mouseless user asks *why* something is unavailable, so `onSelect`
+   * still fires and should explain rather than act.
+   */
+  dim?: boolean;
+  /** Tooltip when it should say more than the label; defaults to the label. */
+  title?: string;
 }
+
+// --- voice moderation ---
+
+/** Where a member currently is in this server's voice, per the live roster. */
+interface MemberVoicePresence {
+  channelId: string;
+  channelName: string;
+  /** Undefined when the roster predates the transport field. */
+  transport: VoiceRoomTransport | undefined;
+  muted: boolean;
+  deafened: boolean;
+}
+
+/** The member a move is being composed for. */
+interface PendingMove {
+  member: ServerMember;
+  fromChannelId: string;
+}
+
+/**
+ * Why a server mute is refused on a mesh room — client-side copy of the same
+ * sentence the API answers with, so the tooltip can be honest without a round
+ * trip. Media in a mesh room flows peer-to-peer; there is no server in the
+ * audio path to do the muting, and faking it client-side would be enforcement
+ * theater.
+ */
+const MESH_MUTE_UNAVAILABLE =
+  "This call runs peer-to-peer — the audio never touches the server, so a server mute cannot be enforced. Disconnect them or use a timeout instead.";
 
 interface PendingRemoval {
   member: ServerMember;
@@ -137,6 +181,13 @@ interface MembersPanelProps {
   onUnblockUser: (userId: string) => void;
   /** Opens the report dialog for this member, in this server's context. */
   onReportUser?: (member: ServerMember) => void;
+  // --- voice moderation ---
+  /** channelId → participants, straight from the live `voice-roster` frames. */
+  voiceOccupancy?: Record<string, VoiceParticipant[]>;
+  /** channelId → the transport that room runs on (gates the SFU-only mute). */
+  voiceRoomTransports?: Record<string, VoiceRoomTransport>;
+  /** This server's voice channels — the "in voice" label and move targets. */
+  voiceChannels?: Array<{ id: string; name: string }>;
 }
 
 function messageOf(error: unknown, fallback: string): string {
@@ -158,6 +209,9 @@ export function MembersPanel({
   onBlockUser,
   onUnblockUser,
   onReportUser,
+  voiceOccupancy = {},
+  voiceRoomTransports = {},
+  voiceChannels = [],
 }: MembersPanelProps) {
   const [members, setMembers] = useState<ServerMember[]>([]);
   const [loading, setLoading] = useState(false);
@@ -173,9 +227,30 @@ export function MembersPanel({
   );
   const [timeouts, setTimeouts] = useState<MemberTimeout[]>([]);
   const [timeoutsError, setTimeoutsError] = useState<string | null>(null);
+  // --- voice moderation ---
+  const [pendingMove, setPendingMove] = useState<PendingMove | null>(null);
+  /** A quiet explanation line ("that needs the SFU"), never an error banner. */
+  const [voiceHint, setVoiceHint] = useState<string | null>(null);
 
   const canManage = role === "owner" || role === "admin";
   const timeoutByUser = new Map(timeouts.map((one) => [one.userId, one]));
+
+  // userId → where they are in *this server's* voice, from the live rosters.
+  // Occupancy also carries other servers' rooms and DM calls this account can
+  // see; restricting to this server's voice channels is what keeps a server's
+  // moderators away from everything that is not theirs.
+  const voiceByUser = new Map<string, MemberVoicePresence>();
+  for (const channel of voiceChannels) {
+    for (const person of voiceOccupancy[channel.id] ?? []) {
+      voiceByUser.set(person.userId, {
+        channelId: channel.id,
+        channelName: channel.name,
+        transport: voiceRoomTransports[channel.id],
+        muted: person.muted,
+        deafened: person.deafened,
+      });
+    }
+  }
 
   useEffect(() => {
     if (!open || !serverId) {
@@ -184,6 +259,8 @@ export function MembersPanel({
     let cancelled = false;
     setPending(null);
     setPendingTimeout(null);
+    setPendingMove(null);
+    setVoiceHint(null);
     setBansOpen(false);
     setBans([]);
     setBansError(null);
@@ -245,7 +322,7 @@ export function MembersPanel({
    * behind a "Ban member?" question is pure noise.
    */
   useEffect(() => {
-    if (!open || !serverId || pending || pendingTimeout) {
+    if (!open || !serverId || pending || pendingTimeout || pendingMove) {
       return;
     }
     let cancelled = false;
@@ -273,7 +350,7 @@ export function MembersPanel({
       cancelled = true;
       clearInterval(timer);
     };
-  }, [open, serverId, pending, pendingTimeout]);
+  }, [open, serverId, pending, pendingTimeout, pendingMove]);
 
   const reloadTimeouts = useCallback(async () => {
     if (!serverId || !canManage) {
@@ -402,6 +479,64 @@ export function MembersPanel({
     }
   }
 
+  // --- voice moderation ---
+
+  async function disconnectVoice(member: ServerMember) {
+    if (!serverId) {
+      return;
+    }
+    setBusyId(member.id);
+    setError(null);
+    setVoiceHint(null);
+    try {
+      await disconnectMemberVoice(serverId, member.id);
+      // No local list surgery: the roster broadcast that follows the eviction
+      // is what removes their voice line, and it is the authority anyway.
+    } catch (err) {
+      setError(messageOf(err, "Failed to disconnect them from voice"));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function confirmMove(channelId: string) {
+    if (!serverId || !pendingMove) {
+      return;
+    }
+    const { member } = pendingMove;
+    setBusyId(member.id);
+    setError(null);
+    try {
+      await moveMemberVoice(serverId, member.id, channelId);
+      setPendingMove(null);
+    } catch (err) {
+      setError(messageOf(err, "Failed to move them"));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function serverMuteVoice(member: ServerMember) {
+    if (!serverId) {
+      return;
+    }
+    setBusyId(member.id);
+    setError(null);
+    setVoiceHint(null);
+    try {
+      await setMemberVoiceMuted(serverId, member.id, true);
+      setVoiceHint(
+        `${member.displayName}'s mic is muted at the voice server. They can unmute themselves — for anything lasting, use a timeout.`,
+      );
+    } catch (err) {
+      // The 409 for a mesh room lands here too, with the server's own honest
+      // sentence — a hint, not an error: nothing is broken, it is a limit.
+      setVoiceHint(messageOf(err, "Failed to mute them"));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   async function unban(userId: string) {
     if (!serverId) {
       return;
@@ -507,6 +642,51 @@ export function MembersPanel({
                 }),
             },
       );
+      // --- voice moderation ---
+      // Only offered while the roster shows them in this server's voice: these
+      // act on a live call, and a button that 404s ("not in voice") teaches a
+      // moderator not to trust the panel. Ordered with timeout, above the red
+      // block — disconnect ends a session, not a membership.
+      const voice = voiceByUser.get(member.id);
+      if (voice) {
+        if (voiceChannels.length > 1) {
+          actions.push({
+            id: "voice-move",
+            label: "Move to a voice channel",
+            icon: ArrowRightLeft,
+            onSelect: () =>
+              setPendingMove({ member, fromChannelId: voice.channelId }),
+          });
+        }
+        // SFU rooms get the real server-side mute; mesh rooms get the honest
+        // refusal — dimmed but tappable, so a tap explains instead of acting
+        // (the screen-share-unavailable pattern). An older server that omits
+        // the transport is treated as SFU-capable and the API stays the judge.
+        const meshRoom = voice.transport === "mesh";
+        actions.push({
+          id: "voice-mute",
+          label: "Server mute mic (SFU)",
+          icon: MicOff,
+          title: meshRoom
+            ? MESH_MUTE_UNAVAILABLE
+            : "Mute their mic at the voice server, for everyone in the call. They can unmute themselves.",
+          dim: meshRoom,
+          onSelect: () => {
+            if (meshRoom) {
+              setVoiceHint(MESH_MUTE_UNAVAILABLE);
+              return;
+            }
+            void serverMuteVoice(member);
+          },
+        });
+        actions.push({
+          id: "voice-disconnect",
+          label: `Disconnect from voice (${voice.channelName})`,
+          icon: PhoneOff,
+          onSelect: () => void disconnectVoice(member),
+          danger: true,
+        });
+      }
       actions.push(
         {
           id: "kick",
@@ -635,6 +815,63 @@ export function MembersPanel({
     );
   }
 
+  // --- voice moderation ---
+  if (pendingMove) {
+    const name = pendingMove.member.displayName;
+    const busy = busyId === pendingMove.member.id;
+    const targets = voiceChannels.filter(
+      (channel) => channel.id !== pendingMove.fromChannelId,
+    );
+    return (
+      <Dialog
+        open
+        title={`Move ${name}?`}
+        eyebrow="Voice"
+        size="lg"
+        closeOnBackdrop={false}
+        onClose={() => setPendingMove(null)}
+        footer={
+          <Button
+            variant="ghost"
+            disabled={busy}
+            onClick={() => setPendingMove(null)}
+          >
+            Cancel
+          </Button>
+        }
+      >
+        <div className="space-y-4 px-5 py-5">
+          {/* Honest about the mechanism: the server cannot teleport a client,
+              it disconnects them with an invitation their app follows. */}
+          <p className="text-sm text-paper">
+            <span className="font-semibold">{name}</span> will be disconnected
+            and their app will rejoin the channel you pick. They can only be
+            moved to a voice channel they already have access to.
+          </p>
+          <div className="flex flex-col gap-1">
+            {targets.map((channel) => (
+              <Button
+                key={channel.id}
+                variant="secondary"
+                disabled={busy}
+                className="justify-start"
+                onClick={() => void confirmMove(channel.id)}
+              >
+                <ArrowRightLeft className="h-4 w-4" aria-hidden="true" />
+                {channel.name}
+              </Button>
+            ))}
+          </div>
+          {error && (
+            <p role="alert" className="text-sm text-danger">
+              {error}
+            </p>
+          )}
+        </div>
+      </Dialog>
+    );
+  }
+
   if (pending) {
     const name = pending.member.displayName;
     return (
@@ -731,10 +968,19 @@ export function MembersPanel({
           </p>
         )}
 
+        {/* Voice-tool explanations ("that needs the SFU"). `status`, not
+            `alert`: a stated limit is information, not an emergency. */}
+        {voiceHint && (
+          <p role="status" className="mb-3 px-2 text-sm text-paper-muted">
+            {voiceHint}
+          </p>
+        )}
+
         {members.map((member) => {
           const actions = actionsFor(member);
           const busy = busyId === member.id;
           const timeout = timeoutByUser.get(member.id);
+          const voice = voiceByUser.get(member.id);
           const items: ContextMenuItemDef[] = [];
           let separated = false;
           for (const action of actions) {
@@ -801,6 +1047,21 @@ export function MembersPanel({
                       {timeout.reason ? ` — ${timeout.reason}` : ""}
                     </p>
                   )}
+                  {/* Same visibility as the channel list's occupant rows —
+                      this line only restates the roster everyone already
+                      receives, so it is not gated on moderator rank. */}
+                  {voice && (
+                    <p className="flex items-center gap-1 truncate text-[11px] text-signal">
+                      In voice — {voice.channelName}
+                      {voice.deafened ? (
+                        <span className="text-danger">(deafened)</span>
+                      ) : (
+                        voice.muted && (
+                          <span className="text-danger">(muted)</span>
+                        )
+                      )}
+                    </p>
+                  )}
                 </div>
                 {timeout && (
                   <span
@@ -830,9 +1091,12 @@ export function MembersPanel({
                         key={action.id}
                         size="icon"
                         variant={action.danger ? "danger" : "ghost"}
-                        className="h-8 w-8"
+                        // `dim` keeps the button tappable (aria-disabled, not
+                        // disabled) so a tap can explain why it does nothing.
+                        className={cn("h-8 w-8", action.dim && "opacity-50")}
                         aria-label={`${action.label}: ${member.displayName}`}
-                        title={action.label}
+                        aria-disabled={action.dim || undefined}
+                        title={action.title ?? action.label}
                         disabled={busy}
                         onClick={action.onSelect}
                       >

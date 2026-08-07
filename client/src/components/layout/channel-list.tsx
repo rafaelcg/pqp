@@ -1,8 +1,11 @@
 import {
   ChevronRight,
   FolderPlus,
+  HeadphoneOff,
   Lock,
+  MicOff,
   Plus,
+  ScreenShare,
   Search,
   Settings,
   Users,
@@ -43,6 +46,51 @@ const SEARCH_SHORTCUT_HINT =
 
 export function formatBadgeCount(value: number): string {
   return value > 99 ? "99+" : String(value);
+}
+
+/**
+ * The per-occupant voice-state badges: mic-off, deafened, sharing screen.
+ *
+ * Rendered from the roster (`VoiceParticipant`), which the server updates on
+ * every `set-voice-state` — so someone *outside* the call sees who is muted
+ * before joining, which is the whole point. Deafened implies muted (the
+ * controller enforces that), so only the deafen icon is shown then: two red
+ * icons would say the same thing twice in a 16px row.
+ *
+ * There is deliberately no speaking badge here beyond the ring the in-call
+ * viewer already gets: speaking is not carried on the roster (see the fan-out
+ * note on `voiceParticipantSchema`), and this row must not pretend otherwise.
+ */
+export function VoiceOccupantBadges({
+  person,
+}: {
+  person: VoiceParticipant;
+}) {
+  if (!person.muted && !person.deafened && !person.sharingScreen) {
+    return null;
+  }
+  return (
+    <span className="ml-auto flex shrink-0 items-center gap-1">
+      {person.sharingScreen && (
+        <ScreenShare
+          aria-label="Sharing their screen"
+          role="img"
+          className="h-3 w-3 text-signal"
+        />
+      )}
+      {person.deafened ? (
+        <HeadphoneOff
+          aria-label="Deafened"
+          role="img"
+          className="h-3 w-3 text-danger"
+        />
+      ) : (
+        person.muted && (
+          <MicOff aria-label="Muted" role="img" className="h-3 w-3 text-danger" />
+        )
+      )}
+    </span>
+  );
 }
 
 /** A channel or category, positioned within the one sibling group it belongs
@@ -270,9 +318,11 @@ export function ChannelList({
                   name={person.displayName}
                   avatarUrl={person.avatarUrl}
                   isSpeaking={speaking.has(person.peerId)}
+                  muted={person.muted || person.deafened}
                   size="sm"
                 />
                 <span className="truncate">{person.displayName}</span>
+                <VoiceOccupantBadges person={person} />
               </li>
             ))}
           </ul>

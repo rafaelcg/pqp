@@ -2,6 +2,8 @@ import { z } from "zod";
 import { attachmentSchema } from "./attachments.js";
 import { embedSchema } from "./embeds.js";
 import { manualStatusSchema } from "./status.js";
+// --- threads ---
+import { threadSummarySchema } from "./threads.js";
 import { webhookEmbedSchema } from "./webhooks.js";
 
 export const channelTypeSchema = z.enum(["text", "voice", "category"]);
@@ -437,6 +439,11 @@ export const messageSchema = z.object({
    * comment on `messages.webhook_embeds`, an entirely different concept
    * from `embeds` above (that is this server's own automatic link unfurl). */
   webhookEmbeds: z.array(webhookEmbedSchema).default([]),
+  // --- threads ---
+  /** The thread anchored to this message, or null. Defaulted so a client
+   * built against this schema still parses a response from an API that
+   * predates threads. */
+  thread: threadSummarySchema.nullable().default(null),
 });
 
 export const MESSAGE_MAX_LENGTH = 4000;
