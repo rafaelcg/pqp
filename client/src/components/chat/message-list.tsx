@@ -100,6 +100,13 @@ interface MessageListProps {
   onReplyTo?: (message: ChatMessage) => void;
   onPinMessage?: (messageId: string) => Promise<void>;
   onUnpinMessage?: (messageId: string) => Promise<void>;
+  /**
+   * Opens the report dialog for this message. Offered on anyone else's message
+   * in any channel, conversations included — where a report goes is the
+   * server's decision, not this component's, so nothing here tries to work out
+   * whether the channel has moderators.
+   */
+  onReportMessage?: (message: ChatMessage) => void;
   /** Client-render-only: the server unfurls and caches regardless, so turning
    * this off only stops this reader's own client from drawing the card. */
   showLinkEmbeds?: boolean;
@@ -161,6 +168,7 @@ export function MessageList({
   onReplyTo,
   onPinMessage,
   onUnpinMessage,
+  onReportMessage,
   showLinkEmbeds = true,
 }: MessageListProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -588,6 +596,11 @@ export function MessageList({
                   ? () => void onUnpinMessage(row.message.id)
                   : undefined
               }
+              onReport={
+                onReportMessage
+                  ? () => onReportMessage(row.message)
+                  : undefined
+              }
               onToggleReaction={onToggleReaction}
               onRetry={() =>
                 row.message.nonce && onRetryMessage?.(row.message.nonce)
@@ -778,6 +791,7 @@ interface MessageRowProps {
   onDelete?: () => void;
   onPin?: () => void;
   onUnpin?: () => void;
+  onReport?: () => void;
   onToggleReaction: (messageId: string, emoji: string) => void;
   onRetry: () => void;
   onDiscard: () => void;
@@ -807,6 +821,7 @@ const MessageRow = memo(function MessageRow({
   onDelete,
   onPin,
   onUnpin,
+  onReport,
   onToggleReaction,
   onRetry,
   onDiscard,
@@ -829,6 +844,7 @@ const MessageRow = memo(function MessageRow({
   // Messages" rather than letting an author pin their own post unilaterally.
   const canPin =
     isReal && (serverId ? canModerate : true) && (onPin || onUnpin);
+  const canReport = isReal && !isMine && !!onReport;
 
   function confirmDelete() {
     if (window.confirm("Delete this message?")) {
@@ -918,6 +934,18 @@ const MessageRow = memo(function MessageRow({
             label: "Delete message",
             danger: true,
             onSelect: confirmDelete,
+          },
+        ]
+      : []),
+    // Reporting your own message is meaningless, and a message that has not
+    // been accepted by the server yet has no id to report.
+    ...(canReport
+      ? [
+          {
+            id: "report",
+            label: "Report message",
+            danger: true,
+            onSelect: onReport,
           },
         ]
       : []),

@@ -227,11 +227,20 @@ export const chatClientMessageSchema = z
     }
   });
 
-/** Server message types the chat controller owns (everything else is voice). */
+/**
+ * Server message types the chat controller owns (everything else is voice).
+ *
+ * Must list every member of `chatServerMessageSchema` — a type missing here is
+ * a frame that anything gating on `isChatServerMessage` silently drops.
+ * `message-deleted` was missing exactly that way; both spellings are live on
+ * the wire (see the two schemas above, and the client's `use-chat.ts`, which
+ * handles them in one case block).
+ */
 export const CHAT_SERVER_MESSAGE_TYPES = [
   "message-broadcast",
   "message-update",
   "message-delete",
+  "message-deleted",
   "reaction-broadcast",
   "presence-update",
   "typing-broadcast",

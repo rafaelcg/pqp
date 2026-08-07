@@ -29,6 +29,45 @@ interface VoicePeer {
   sharingScreen: boolean;
 }
 
+/**
+ * VOICE IS DELIBERATELY NOT ON THE CLUSTER BUS (`lib/bus.ts`), AND MESH VOICE
+ * THEREFORE PINS THE DEPLOYMENT TO ONE INSTANCE.
+ *
+ * Relaying offer/answer/ICE through pub/sub is the obvious idea and it is not
+ * enough, because a mesh room is shared *state*, not a stream of point-to-point
+ * messages. Four things in this file read `peers` as if it were the whole room:
+ *
+ * 1. `relayToTarget` resolves `message.to` in the local map. A target on
+ *    another instance is simply absent, and the frame is dropped.
+ * 2. `welcome` and `broadcastToRoom` build the joiner's peer list from
+ *    `getRoomPeers`, which filters the local map — so two instances would form
+ *    two sub-meshes that each believe they are the room. The client rebuilds
+ *    its signaling allowlist from that roster (`knownPeerIds` in
+ *    client/src/hooks/use-voice.ts), so a partitioned roster is also a
+ *    partitioned trust boundary, not merely a cosmetic one.
+ * 3. `MESH_VOICE_LIMIT` counts local peers. Made global over a bus it would
+ *    still be a read-then-write race between instances: two simultaneous joins
+ *    each see room < limit and both admit, which is exactly the mesh quality
+ *    collapse the ceiling exists to prevent. Enforcing it properly needs an
+ *    atomic counter, not a broadcast.
+ * 4. `peer-left` is the only thing that removes a tile. A bus frame lost to a
+ *    reconnect leaves a ghost participant in a live call — visible, permanent
+ *    until rejoin, and impossible for the user to clear.
+ *
+ * A distributed peer registry solving all four is a real subsystem with its own
+ * failure modes. Until it exists, the constraint is: **mesh voice requires one
+ * instance.** Session affinity is not a workaround — two people who need to
+ * hear each other open their sockets independently and long before they pick a
+ * channel, so no routing rule can promise they land together.
+ *
+ * With LiveKit configured the picture changes: media and its signaling go
+ * straight to the SFU (the client leaves `manager` null and never relays
+ * through here), so a call spans instances fine. What stays per-instance is the
+ * *roster* — `voice-roster` occupancy badges and participant labels — which
+ * degrades to "you only see the people who happen to share your instance".
+ * That is a display bug, not an audio one, and it is the piece to put on the
+ * bus first if multi-instance voice is ever wanted.
+ */
 const peers = new Map<string, VoicePeer>();
 const socketToPeerId = new Map<WebSocket, string>();
 

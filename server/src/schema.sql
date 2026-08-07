@@ -547,3 +547,142 @@ CREATE TABLE IF NOT EXISTS status_samples (
 );
 CREATE INDEX IF NOT EXISTS idx_status_samples_component
   ON status_samples (component, checked_at DESC);
+
+-- Reports: a member telling somebody whose job it is that a message or a person
+-- needs looking at.
+--
+-- THE REPORT MUST OUTLIVE EVERYTHING IT POINTS AT. The first thing a moderator
+-- does with a bad message is delete it, and the first thing the author does
+-- when they see a report coming is the same — so `ON DELETE CASCADE` on
+-- `reported_message_id` would destroy the evidence at exactly the moment it
+-- starts to matter, and would hand anyone a one-click way to erase the record
+-- of their own conduct. Every reference here is therefore `ON DELETE SET NULL`,
+-- and the row carries its own copy of what it is about:
+--
+--   * `content_snapshot`  — the reported message body, verbatim, at report time.
+--     This is the evidence. Copying user content into a second table is a real
+--     privacy cost, which is why it is bounded to the *one* message that was
+--     reported (never the surrounding thread) and why the sweep below exists.
+--   * `subject_label` / `channel_label` — display names at report time, so a
+--     queue still reads sensibly after a rename, a departure, or a delete.
+--
+-- The FKs are kept alongside the snapshots rather than replaced by them: while
+-- the message still exists a moderator wants to jump to it in context, and
+-- `message_id IS NULL AND content_snapshot IS NOT NULL` is precisely the
+-- "reported content has since been deleted" state the queue renders.
+--
+-- WHERE A REPORT GOES IS A FACT ABOUT THE ROW, not a filter a later query has
+-- to remember. `context_kind` is copied from `channels.kind` (or 'none' for a
+-- report filed about a person with no place attached), and the CHECK below
+-- pairs it with `server_id` in both directions, exactly the way
+-- `channels_server_kind_check` pairs kind with server_id. A conversation report
+-- therefore *cannot* carry a server_id, so the server-scoped queue query
+-- (`WHERE server_id = $1`) can never return one however it is written later.
+-- See the `channelVisibleSql` comment in services/users.ts: a conversation has
+-- no role escape hatch, and neither does a report about one.
+CREATE TABLE IF NOT EXISTS reports (
+  id BIGSERIAL PRIMARY KEY,
+  -- SET NULL rather than CASCADE, same reasoning as `audit_log.actor_id`: a
+  -- reporter deleting their account must not wipe an open queue. The report is
+  -- a record about somebody else's conduct, not about the reporter.
+  reporter_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  subject_type TEXT NOT NULL CHECK (subject_type IN ('message', 'user')),
+  context_kind TEXT NOT NULL CHECK (context_kind IN ('server', 'dm', 'group', 'none')),
+
+  reported_message_id UUID REFERENCES messages(id) ON DELETE SET NULL,
+  -- The author of the reported message, or the person a user report is about.
+  -- Always set at write time; null only once that account is gone.
+  reported_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+
+  server_id UUID REFERENCES servers(id) ON DELETE CASCADE,
+  channel_id UUID REFERENCES channels(id) ON DELETE SET NULL,
+
+  content_snapshot TEXT,
+  subject_label TEXT,
+  channel_label TEXT,
+
+  reason TEXT NOT NULL,
+  details TEXT,
+
+  status TEXT NOT NULL DEFAULT 'open'
+    CHECK (status IN ('open', 'actioned', 'dismissed')),
+  resolved_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  resolved_at TIMESTAMPTZ,
+  resolution_note TEXT,
+
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+  -- Exactly one subject, and it agrees with `subject_type`. A message report
+  -- also names the author (in `reported_user_id`) so acting on the person is
+  -- one click away; a user report has no message.
+  CHECK (
+    (subject_type = 'message') = (reported_message_id IS NOT NULL OR content_snapshot IS NOT NULL)
+  ),
+  -- Server context and server id imply each other. This is the constraint the
+  -- DM-report permission rule rests on.
+  CHECK ((context_kind = 'server') = (server_id IS NOT NULL)),
+  -- A resolution is all-or-nothing: an entry that says "actioned" with nobody
+  -- and no time attached is not an audit trail.
+  CHECK (
+    (status = 'open') = (resolved_at IS NULL)
+  )
+);
+
+-- The server queue: open reports first, newest first, keyset-paginated on the
+-- bare `id` — a BIGSERIAL is already a total order matching insertion, so the
+-- cursor is an integer and never a lookup of a row that may have been resolved
+-- since (the same reasoning as `audit_log`).
+CREATE INDEX IF NOT EXISTS idx_reports_server_status
+  ON reports (server_id, status, id DESC) WHERE server_id IS NOT NULL;
+
+-- The instance queue: everything with no server, which is exactly the set no
+-- server moderator may ever see.
+CREATE INDEX IF NOT EXISTS idx_reports_instance_status
+  ON reports (status, id DESC) WHERE server_id IS NULL;
+
+-- "Show me what I reported", and the per-reporter flood cap.
+CREATE INDEX IF NOT EXISTS idx_reports_reporter
+  ON reports (reporter_id, id DESC);
+
+-- Duplicate suppression, declared rather than checked-then-inserted: two taps
+-- on a slow "Report" button are one report, and a script hammering the endpoint
+-- gets a unique violation rather than a thousand rows in the queue.
+--
+-- Scoped to `status = 'open'` on purpose. Once a report is closed the same
+-- person may report the same target again — that is a repeat offence, which is
+-- the single most useful thing a queue can surface, not a duplicate.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_reports_open_message_dedupe
+  ON reports (reporter_id, reported_message_id)
+  WHERE status = 'open' AND reported_message_id IS NOT NULL;
+
+-- The same rule for user reports, with the context folded in so "this person,
+-- in this server" and "this person, in that server" stay distinct. COALESCE is
+-- what makes it work at all: NULLs are distinct to a unique index, so a bare
+-- (reporter, user, server) index would let unlimited duplicates through for the
+-- instance-queue case where server_id is null.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_reports_open_user_dedupe
+  ON reports (
+    reporter_id,
+    reported_user_id,
+    COALESCE(server_id, '00000000-0000-0000-0000-000000000000'::uuid)
+  )
+  WHERE status = 'open' AND subject_type = 'user';
+
+-- Spill space for cluster-bus frames that do not fit in a NOTIFY payload.
+--
+-- Postgres refuses a NOTIFY payload of 8000 bytes or more, and real frames do
+-- exceed that: a 4000-character message body is up to ~16KB of UTF-8 before
+-- JSON escaping, and a webhook message can carry ten embeds. The publisher
+-- writes the frame here and notifies its id in the same statement; every other
+-- instance reads it back by id. See `server/src/lib/bus-postgres.ts`.
+--
+-- Rows live for seconds and are swept on a timer — this is a mailbox, not
+-- storage, and nothing may ever be recovered from it after the fact. Unused
+-- entirely unless CLUSTER_BUS=postgres.
+CREATE TABLE IF NOT EXISTS cluster_bus_payloads (
+  id UUID PRIMARY KEY,
+  payload TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_cluster_bus_payloads_created
+  ON cluster_bus_payloads (created_at);

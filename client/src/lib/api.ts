@@ -15,7 +15,13 @@ import type {
   Invite,
   Message,
   MessageSearchResponse,
+  CreateReportRequest,
   PublicUser,
+  Report,
+  ReportPage,
+  ReportStatus,
+  ReportSummaryPage,
+  ResolveReportRequest,
   Server,
   User,
   UserPreferences,
@@ -608,3 +614,43 @@ export const joinInvite = (code: string) =>
 
 export const previewInvite = (code: string) =>
   apiFetch<{ invite: Invite }>(`/api/invites/${encodeURIComponent(code)}`);
+
+// ------------------------------------------------------------------ reports
+
+/**
+ * File a report. The body says *what* is wrong, never where the report should
+ * go — the server derives that from the reported message or the named server,
+ * so a client cannot aim a complaint at the wrong moderators.
+ */
+export const createReport = (body: CreateReportRequest) =>
+  post<{ report: Report }>("/api/reports", body);
+
+/** Same bare-integer cursor contract as the audit log. */
+function reportQuery(options: { before?: string; status?: ReportStatus }) {
+  const params = new URLSearchParams();
+  if (options.before) params.set("before", options.before);
+  if (options.status) params.set("status", options.status);
+  const query = params.toString();
+  return query ? `?${query}` : "";
+}
+
+export const fetchServerReports = (
+  serverId: string,
+  options: { before?: string; status?: ReportStatus } = {},
+) =>
+  apiFetch<ReportPage>(
+    `/api/servers/${serverId}/reports${reportQuery(options)}`,
+  );
+
+/**
+ * The reporter's own reports, in the narrow shape they may see — no moderator
+ * name and no snapshot of anyone's content.
+ */
+export const fetchMyReports = (
+  options: { before?: string; status?: ReportStatus } = {},
+) => apiFetch<ReportSummaryPage>(`/api/reports/mine${reportQuery(options)}`);
+
+export const resolveReport = (
+  reportId: string,
+  body: ResolveReportRequest,
+) => patch<{ report: Report }>(`/api/reports/${reportId}`, body);

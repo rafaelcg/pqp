@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { ReportsSection } from "@/components/layout/reports-section";
 import {
   ApiError,
   deleteServer,
@@ -37,6 +38,7 @@ const AUDIT_ACTION_LABELS: Record<string, string> = {
   "member.sso_join": "joined via SSO email domain",
   "webhook.create": "created a webhook",
   "webhook.delete": "deleted a webhook",
+  "report.resolve": "closed a report",
 };
 
 /**
@@ -734,6 +736,8 @@ export function ServerSettingsDialog({
             </p>
           )}
         </section>
+
+        {serverId && isManager && <ReportsSection serverId={serverId} />}
 
         {serverId && <AuditLogSection serverId={serverId} />}
       </div>

@@ -1,8 +1,30 @@
 /**
- * In-memory token buckets. Single-process only, which matches the current
- * single-container Railway deploy — if the API is ever scaled horizontally this
- * needs to move behind Redis, because each replica would otherwise grant a full
- * bucket of its own.
+ * In-memory token buckets. Single-process only — every replica grants a full
+ * bucket of its own, and NOTHING HERE IS ON THE CLUSTER BUS (`lib/bus.ts`).
+ * That is a deliberate choice, not an oversight: pub/sub distributes events,
+ * and a token bucket needs an atomic decrement. Doing it properly means a
+ * round trip to shared storage on the hottest paths in the app — every chat
+ * message, every keystroke — which costs more than the limits are worth here.
+ *
+ * What running N instances actually multiplies, precisely:
+ *
+ * - **Per-user WS limits** (message / reaction / typing / voice-join, keyed on
+ *   the user id in ws/chat.ts and ws/voice.ts) multiply by the number of
+ *   instances a single user holds sockets on *at the same time* — one tab is
+ *   one instance and is therefore exact; k tabs spread over N instances give
+ *   min(k, N) buckets. Flooding through this means opening a socket per
+ *   replica, which the connection limits below already bound.
+ * - **`socketLimiter` in ws/index.ts**, keyed on client address, becomes N
+ *   buckets for the same address — so the join-rate ceiling documented in
+ *   docs/LAUNCH.md §T1 rises by N, and the flood backstop weakens by N.
+ * - **HTTP limits taken through `rateLimit()`** multiply by N outright:
+ *   requests are load balanced per request, so one caller's traffic is spread
+ *   across every replica and each grants a full window.
+ *
+ * If a limit ever has to be exact across replicas, the honest implementation is
+ * a shared store (Redis INCR, or a Postgres row with a conditional update) for
+ * that specific limit — not gossip over the bus, which is eventually consistent
+ * and would let a burst through while it converged.
  */
 
 interface Bucket {

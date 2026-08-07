@@ -23,6 +23,11 @@ import {
   MESSAGE_PAGE_SIZE,
   messageSearchQuerySchema,
   removeMemberSchema,
+  REPORT_PAGE_MAX,
+  REPORT_PAGE_SIZE,
+  createReportSchema,
+  reportStatusSchema,
+  resolveReportSchema,
   safeTextSchema,
   ssoEmailDomainSchema,
   SEARCH_PAGE_MAX,
@@ -156,6 +161,17 @@ import {
   trendingGifs,
 } from "../services/gifs.js";
 import { getIceServers } from "../services/ice.js";
+import {
+  createReport,
+  getReportScope,
+  isInstanceModerator,
+  listInstanceReports,
+  listReportsByReporter,
+  listServerReports,
+  ReportFloodError,
+  ReportTargetNotVisibleError,
+  resolveReport,
+} from "../services/reports.js";
 import { decodeSearchCursor, searchMessages } from "../services/search.js";
 import { mergePreferences } from "../services/preferences.js";
 import {
@@ -268,6 +284,14 @@ const webhookExecuteLimiter = createRateLimiter({
   capacity: 20,
   refillPerSecond: 1,
 });
+/**
+ * Filing a report costs a human several seconds of reading a form, so the burst
+ * only has to cover somebody reporting a few messages from one spree. This is
+ * the per-process half of the limit and is not the ceiling that matters —
+ * `REPORTS_PER_HOUR` in services/reports.ts is counted in the database and
+ * survives both a restart and a second replica. See the comment there.
+ */
+const reportLimiter = createRateLimiter({ capacity: 5, refillPerSecond: 0.05 });
 
 export function resetApiRateLimits(): void {
   apiLimiter.reset();
@@ -279,6 +303,7 @@ export function resetApiRateLimits(): void {
   userSearchLimiter.reset();
   exportLimiter.reset();
   webhookExecuteLimiter.reset();
+  reportLimiter.reset();
 }
 
 class Forbidden extends HttpError {
@@ -568,7 +593,7 @@ router.delete("/api/dms/:channelId", async ({ user }, { channelId }) => {
   // somebody who closes a conversation — or leaves a group — keeps receiving
   // its message bodies, reactions and typing frames for the life of the socket.
   // Only the caller's own view goes; the other participants did not leave.
-  evictChannelViewers(channelId!, (viewerId) => viewerId === user.id);
+  evictChannelViewers(channelId!, { onlyUserIds: [user.id] });
   return { ok: true };
 });
 
@@ -1055,7 +1080,7 @@ router.patch("/api/channels/:channelId", async ({ req, user }, { channelId }) =>
   if (updated.is_private && !channel.is_private) {
     const audience = await getChannelAudience(channelId!);
     const allowed = new Set(audience?.userIds ?? []);
-    evictChannelViewers(channelId!, (userId) => !allowed.has(userId));
+    evictChannelViewers(channelId!, { exceptUserIds: [...allowed] });
     evictVoiceUsersExcept(channelId!, allowed);
   }
 
@@ -1175,7 +1200,7 @@ router.delete(
     await requireManager(channel.server_id, user.id);
     await removeChannelMember(channelId!, userId!);
     if (channel.is_private) {
-      evictChannelViewers(channelId!, (viewerId) => viewerId === userId);
+      evictChannelViewers(channelId!, { onlyUserIds: [userId!] });
       evictVoiceUser(userId!, new Set([channelId!]));
     }
     return { ok: true };
@@ -1715,6 +1740,181 @@ router.get(
     );
   },
 );
+
+// ---------------------------------------------------------------- reports
+
+/**
+ * Report ids are BIGSERIAL, not uuids, so they cannot use the router's `:xxxId`
+ * convention — that helper rejects anything that is not a uuid. The parameter
+ * is therefore named `:report` and validated here instead, because an
+ * unvalidated value reaching `$1::bigint` is a 500 rather than a 404.
+ */
+function reportIdParam(value: string | undefined): string {
+  if (!value || !/^[0-9]{1,19}$/.test(value)) {
+    throw new NotFound("Report not found");
+  }
+  return value;
+}
+
+function reportListOptions(url: URL) {
+  const rawStatus = url.searchParams.get("status");
+  return {
+    before: url.searchParams.get("before") ?? undefined,
+    limit: clampLimit(
+      url.searchParams.get("limit"),
+      REPORT_PAGE_SIZE,
+      REPORT_PAGE_MAX,
+    ),
+    // An unrecognised status filters nothing rather than 400s: the queue is a
+    // read, and a client sending a value this build does not know should still
+    // see the reports.
+    status: rawStatus
+      ? (reportStatusSchema.safeParse(rawStatus).data ?? undefined)
+      : undefined,
+  };
+}
+
+/**
+ * File a report.
+ *
+ * The body names *what* is being reported and never where it goes — see the
+ * header of services/reports.ts. Everything this route can refuse is a 404 by
+ * design: "you cannot see that" and "there is no such thing" must be the same
+ * answer, or the endpoint becomes a way to test message ids for existence.
+ */
+router.post("/api/reports", async ({ req, res, user }) => {
+  const key = `user:${user.id}`;
+  if (!reportLimiter.take(key)) {
+    res.setHeader("Retry-After", String(reportLimiter.retryAfter(key)));
+    throw new HttpError(429, "Slow down");
+  }
+
+  const body = createReportSchema.parse(await readJsonBody(req));
+  try {
+    const result = await createReport(
+      body.subjectType === "message"
+        ? {
+            subjectType: "message",
+            reporterId: user.id,
+            messageId: body.messageId,
+            reason: body.reason,
+            details: body.details,
+          }
+        : {
+            subjectType: "user",
+            reporterId: user.id,
+            userId: body.userId,
+            serverId: body.serverId ?? null,
+            reason: body.reason,
+            details: body.details,
+          },
+    );
+    // Re-reporting something already in the queue is not an error and not a new
+    // report, so it answers 200 while the first one answers 201 — the same
+    // contract POST /api/blocks uses.
+    return result.duplicate
+      ? { report: result.report }
+      : created({ report: result.report });
+  } catch (error) {
+    if (error instanceof ReportTargetNotVisibleError) {
+      throw new NotFound("Not found");
+    }
+    if (error instanceof ReportFloodError) {
+      throw new HttpError(429, "You have filed too many reports recently");
+    }
+    throw error;
+  }
+});
+
+/** The reporter's own reports, in the narrow shape they may see. */
+router.get("/api/reports/mine", async ({ url, user }) =>
+  listReportsByReporter(user.id, reportListOptions(url)),
+);
+
+/**
+ * The instance queue — every report with no server behind it, which is exactly
+ * the set of reports about conversations. Gated on `isInstanceModerator`, which
+ * is operator configuration and not any role held inside the app. A server
+ * owner has no more access here than anybody else, which is the point.
+ */
+router.get("/api/reports/instance", async ({ url, user }) => {
+  if (!isInstanceModerator(user)) {
+    // 404, not 403: whether this deployment has an instance queue at all is not
+    // a fact a member needs confirmed.
+    throw new NotFound("Not found");
+  }
+  return listInstanceReports(reportListOptions(url));
+});
+
+/**
+ * One server's queue. `requireManager`, like every other moderation read — and
+ * it can only ever return reports about that server's own channels, because a
+ * report about a conversation has no server id to match (see the `reports`
+ * table CHECK constraint).
+ */
+router.get(
+  "/api/servers/:serverId/reports",
+  async ({ url, user }, { serverId }) => {
+    await requireManager(serverId!, user.id);
+    return listServerReports(serverId!, reportListOptions(url));
+  },
+);
+
+/**
+ * Close a report, actioned or dismissed.
+ *
+ * Who may do so follows the report's own scope and nothing else: a server id
+ * means a manager of that server, no server id means an instance moderator.
+ * The scope is read before anything is returned, so an unauthorized caller
+ * learns nothing about the report — not even that the id exists.
+ */
+router.patch("/api/reports/:report", async ({ req, user }, { report }) => {
+  const reportId = reportIdParam(report);
+  const scope = await getReportScope(reportId);
+  if (!scope) {
+    throw new NotFound("Report not found");
+  }
+  if (scope.serverId) {
+    await requireManager(scope.serverId, user.id);
+  } else if (!isInstanceModerator(user)) {
+    throw new NotFound("Report not found");
+  }
+
+  const body = resolveReportSchema.parse(await readJsonBody(req));
+  const resolved = await resolveReport(
+    reportId,
+    user.id,
+    body.status,
+    body.note,
+  );
+  if (!resolved) {
+    // Someone else closed it between the scope read and the update.
+    throw new HttpError(409, "This report has already been resolved");
+  }
+
+  // Server-scoped resolutions join the same trail as every other moderator
+  // action. A conversation report has no server to file under and is recorded
+  // on the report row alone — see the `report.resolve` comment in shared/audit.
+  if (scope.serverId) {
+    await logAudit({
+      serverId: scope.serverId,
+      actorId: user.id,
+      action: "report.resolve",
+      targetType: "report",
+      // `audit_log.target_id` is a uuid column and a report id is a bigint, so
+      // the id travels in `changes` rather than being coerced into a shape it
+      // does not fit.
+      targetId: null,
+      reason: body.note ?? null,
+      changes: [
+        { key: "report", old: null, new: reportId },
+        { key: "status", old: "open", new: body.status },
+      ],
+    });
+  }
+
+  return { report: resolved };
+});
 
 // ---------------------------------------------------------------- invites
 

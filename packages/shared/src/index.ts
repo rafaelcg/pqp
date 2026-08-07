@@ -6,6 +6,7 @@ export * from "./chat.js";
 export * from "./dm.js";
 export * from "./embeds.js";
 export * from "./gifs.js";
+export * from "./reports.js";
 export * from "./search.js";
 export * from "./signaling.js";
 export * from "./sso.js";

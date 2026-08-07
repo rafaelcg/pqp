@@ -54,6 +54,26 @@ Pick one, today:
 **Do (a) now and (b) before any marketing push.** Write the chosen ceiling into
 `HANDOVER.md` so the next person doesn't scale into an outage.
 
+**(b) is now built, behind a flag that is OFF.** `CLUSTER_BUS=postgres` puts
+chat fan-out — broadcasts, presence, typing, unread badges and evictions — on
+Postgres `LISTEN/NOTIFY` (`server/src/lib/bus.ts`, `bus-postgres.ts`). Unset,
+every path is exactly what it was. Three things to know before turning it on:
+
+- **Voice is not on the bus and cannot be.** A mesh room's peer registry,
+  roster and size ceiling are per-process, and relaying signaling alone would
+  produce two half-rooms that each believe they are whole — see the block
+  comment above `peers` in `server/src/ws/voice.ts`. **Mesh voice pins the
+  deployment to one instance.** Multi-instance requires LiveKit
+  (`LIVEKIT_*`), where media never touches our relay; what still degrades
+  there is the voice *roster*, i.e. occupancy badges show only your own
+  instance's participants.
+- **Rate limits stay per-instance.** Per-user WS limits are exact for a
+  single-socket user and multiply by the number of instances a user holds
+  sockets on; HTTP limits multiply by the replica count outright. The header
+  of `server/src/lib/rate-limit.ts` states each case.
+- **Not yet soaked.** Unit-tested across two simulated instances and against a
+  real Postgres, never run on two real replicas under load.
+
 ### S2. Every message is fanned out by scanning every connection — ✅ DONE
 
 `broadcastToChannel` (`chat.ts:116-129`) loops over *all* connections on the

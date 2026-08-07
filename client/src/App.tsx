@@ -13,6 +13,10 @@ import type {
 import { MessageComposer } from "@/components/chat/message-composer";
 import { MessageList } from "@/components/chat/message-list";
 import {
+  ReportDialog,
+  type ReportTarget,
+} from "@/components/chat/report-dialog";
+import {
   AppBootstrapError,
   AppLoadingShell,
 } from "@/components/layout/app-loading-shell";
@@ -240,6 +244,8 @@ function MainAppContent({
   const [inviteMode, setInviteMode] = useState<"create" | "join" | null>(null);
   const [inviteCodeFromUrl, setInviteCodeFromUrl] = useState<string | null>(null);
   const [membersOpen, setMembersOpen] = useState(false);
+  // One dialog for both subjects — the target says which. Null means closed.
+  const [reportTarget, setReportTarget] = useState<ReportTarget | null>(null);
   const [pinsOpen, setPinsOpen] = useState(false);
   const [channelMembersChannel, setChannelMembersChannel] =
     useState<Channel | null>(null);
@@ -1590,6 +1596,13 @@ function MainAppContent({
         onDeleteMessage={(messageId) => chat.deleteMessage(messageId)}
         onPinMessage={(messageId) => chat.pinMessage(messageId)}
         onUnpinMessage={(messageId) => chat.unpinMessage(messageId)}
+        onReportMessage={(message) =>
+          setReportTarget({
+            kind: "message",
+            messageId: message.id,
+            subjectName: message.authorName,
+          })
+        }
         onRetryMessage={(nonce) => chat.retryMessage(nonce)}
         onDiscardMessage={(nonce) => chat.discardMessage(nonce)}
         showLinkEmbeds={localSettings.showLinkEmbeds}
@@ -2005,6 +2018,21 @@ function MainAppContent({
         }}
         onBlockUser={(userId) => void handleBlockUser(userId)}
         onUnblockUser={(userId) => void handleUnblockUser(userId)}
+        onReportUser={(member) =>
+          setReportTarget({
+            kind: "user",
+            userId: member.id,
+            subjectName: member.displayName,
+            // Reported from inside a server, so that server's moderators are
+            // the ones who see it.
+            serverId: selectedServerId,
+          })
+        }
+      />
+
+      <ReportDialog
+        target={reportTarget}
+        onClose={() => setReportTarget(null)}
       />
 
       <NewDmDialog

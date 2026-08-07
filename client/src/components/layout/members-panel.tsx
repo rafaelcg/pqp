@@ -3,6 +3,7 @@ import {
   Ban,
   ChevronDown,
   ChevronRight,
+  Flag,
   RotateCcw,
   ShieldMinus,
   ShieldPlus,
@@ -59,6 +60,8 @@ interface MembersPanelProps {
   onMention?: (username: string) => void;
   onBlockUser: (userId: string) => void;
   onUnblockUser: (userId: string) => void;
+  /** Opens the report dialog for this member, in this server's context. */
+  onReportUser?: (member: ServerMember) => void;
 }
 
 function messageOf(error: unknown, fallback: string): string {
@@ -79,6 +82,7 @@ export function MembersPanel({
   onMention,
   onBlockUser,
   onUnblockUser,
+  onReportUser,
 }: MembersPanelProps) {
   const [members, setMembers] = useState<ServerMember[]>([]);
   const [loading, setLoading] = useState(false);
@@ -270,6 +274,19 @@ export function MembersPanel({
               danger: true,
             },
       );
+    }
+    // Like blocking, offered for anybody but yourself whatever their rank —
+    // including an admin, since the person a member most needs to be able to
+    // report is sometimes the person with the power. Where the report goes is
+    // the server's decision; this only says who it is about.
+    if (onReportUser && member.id !== currentUserId) {
+      actions.push({
+        id: "report",
+        label: "Report",
+        icon: Flag,
+        onSelect: () => onReportUser(member),
+        danger: true,
+      });
     }
     if (canModerate(member)) {
       actions.push(

@@ -31,6 +31,17 @@ export const AUDIT_ACTIONS = [
   "invite.delete",
   "webhook.create",
   "webhook.delete",
+  /**
+   * A report closed by a moderator, actioned or dismissed alike. Only ever
+   * written for a report whose context is a *server* channel: `audit_log` is
+   * server-scoped by its own schema (`server_id` is NOT NULL), and a report
+   * about a conversation has no server to file it under. Those resolutions are
+   * recorded on the report row itself — `resolved_by` / `resolved_at` /
+   * `resolution_note` — which is deliberately the only trail they leave, since
+   * publishing them into a server's audit log is exactly the leak the whole
+   * DM-report split exists to prevent.
+   */
+  "report.resolve",
 ] as const;
 
 export const auditActionSchema = z.enum(AUDIT_ACTIONS);

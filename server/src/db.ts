@@ -7,23 +7,33 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 let pool: pg.Pool | null = null;
 
+/**
+ * Opt into TLS when the host needs it (most managed Postgres over public
+ * networking). Left off by default so local/dev works without certs.
+ *
+ * Shared rather than inlined because the cluster bus holds a connection
+ * *outside* the pool (LISTEN needs a session of its own), and a bus that
+ * disagreed with the pool about TLS would simply fail to connect on every
+ * managed host.
+ */
+export function pgSslConfig(): { ssl?: { rejectUnauthorized: boolean } } {
+  const useSsl =
+    process.env.DATABASE_SSL === "true" || process.env.PGSSLMODE === "require";
+  return useSsl ? { ssl: { rejectUnauthorized: false } } : {};
+}
+
 export function getPool(): pg.Pool {
   if (!pool) {
     const connectionString = process.env.DATABASE_URL;
     if (!connectionString) {
       throw new Error("DATABASE_URL is required");
     }
-    // Opt into TLS when the host needs it (most managed Postgres over public
-    // networking). Left off by default so local/dev works without certs.
-    const useSsl =
-      process.env.DATABASE_SSL === "true" ||
-      process.env.PGSSLMODE === "require";
     pool = new pg.Pool({
       connectionString,
       max: Number(process.env.PG_POOL_MAX ?? 10),
       idleTimeoutMillis: 30_000,
       connectionTimeoutMillis: 10_000,
-      ...(useSsl ? { ssl: { rejectUnauthorized: false } } : {}),
+      ...pgSslConfig(),
     });
     // Idle-client errors (Postgres restart, network blip) are emitted on the
     // pool; without a listener they crash the process.

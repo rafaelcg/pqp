@@ -23,6 +23,7 @@ export {
   evictChannelViewers,
   evictUserFromChannels,
   resolveEmbedInBackground,
+  startClusterPresenceRefresh,
 } from "./chat.js";
 export {
   evictVoiceChannel,
