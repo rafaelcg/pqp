@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   HeadphoneOff,
@@ -15,133 +15,206 @@ import {
 import { MESH_VOICE_WARNING, type VoiceParticipant } from "@pqp/shared";
 import type { RemotePeer } from "@/lib/peer-connection-manager";
 import { Button } from "@/components/ui/button";
-import { VoiceAvatar } from "@/components/voice/voice-avatar";
+import {
+  screenShareUnavailableMessage,
+  screenShareUnavailableReason,
+} from "@/components/voice/capabilities";
+import {
+  VoiceAvatar,
+  type VoiceAvatarSize,
+} from "@/components/voice/voice-avatar";
 import { cn } from "@/lib/utils";
 
-interface PeerRowProps {
-  peer: RemotePeer;
-  compact: boolean;
+/**
+ * Tiles grow as the call shrinks: one person gets a poster, eight people get a
+ * contact sheet. Sizes are picked from the participant count rather than from a
+ * media query so the same rule holds in the narrow docked column and in the
+ * short mobile pane.
+ */
+function avatarSizeFor(count: number, compact: boolean): VoiceAvatarSize {
+  const size: VoiceAvatarSize = count <= 2 ? "xl" : count <= 4 ? "lg" : "md";
+  if (!compact) {
+    return size;
+  }
+  return size === "xl" ? "lg" : size === "lg" ? "md" : "sm";
+}
+
+interface ParticipantTileProps {
+  name: string;
+  avatarUrl?: string | null;
+  isSelf?: boolean;
   isSpeaking: boolean;
-  isSharingScreen: boolean;
-  volume: number;
-  onSetVolume: (volume: number) => void;
+  isMuted?: boolean;
+  isDeafened?: boolean;
+  isPresenting: boolean;
+  avatarSize: VoiceAvatarSize;
+  minHeightClass: string;
+  connectionState?: RemotePeer["connectionState"];
+  /** 0..1 playback multiplier. Only supplied for remote peers. */
+  volume?: number;
+  onSetVolume?: (volume: number) => void;
   onRetry?: () => void;
 }
 
-function PeerRow({
-  peer,
-  compact,
+function ParticipantTile({
+  name,
+  avatarUrl,
+  isSelf = false,
   isSpeaking,
-  isSharingScreen,
+  isMuted = false,
+  isDeafened = false,
+  isPresenting,
+  avatarSize,
+  minHeightClass,
+  connectionState,
   volume,
   onSetVolume,
   onRetry,
-}: PeerRowProps) {
-  const name = peer.displayName ?? `${peer.peerId.slice(0, compact ? 6 : 8)}…`;
+}: ParticipantTileProps) {
   const silenced = volume === 0;
   // Remembers where the slider was so unmuting restores that level, not 100%.
   const restoreRef = useRef(1);
 
   useEffect(() => {
-    if (volume > 0) {
+    if (volume !== undefined && volume > 0) {
       restoreRef.current = volume;
     }
   }, [volume]);
 
+  const failed = connectionState === "failed";
+  const settling =
+    connectionState !== undefined && connectionState !== "connected" && !failed;
+
   return (
-    <li className="group rounded-md px-1 py-0.5 transition-colors hover:bg-ink-2">
-      <div className="flex items-center gap-2 text-sm">
-        <VoiceAvatar
-          name={peer.displayName ?? "Peer"}
-          avatarUrl={peer.avatarUrl}
-          isSpeaking={isSpeaking && !silenced}
-          muted={silenced}
-          size={compact ? "sm" : "md"}
-        />
-        <span className="min-w-0 flex-1 truncate font-medium">{name}</span>
-        {isSharingScreen && (
-          <span className="flex shrink-0 items-center gap-1 rounded bg-signal/20 px-1.5 py-0.5 text-[10px] uppercase text-signal">
-            <ScreenShare className="h-3 w-3" aria-hidden="true" />
-            Presenting
-          </span>
-        )}
-        {silenced && (
-          <span className="flex shrink-0 items-center text-paper-muted">
-            <VolumeX className="h-3.5 w-3.5" aria-hidden="true" />
-            <span className="sr-only">Silenced</span>
-          </span>
-        )}
-        <span
+    <li
+      className={cn(
+        "group relative flex flex-col items-center justify-center gap-2 rounded-xl border p-3 text-center transition-colors duration-150",
+        minHeightClass,
+        failed
+          ? "border-danger/50 bg-danger/5"
+          : isSpeaking
+            ? "border-accent/60 bg-ink-2"
+            : "border-ink-4 bg-ink",
+      )}
+    >
+      <VoiceAvatar
+        name={name}
+        avatarUrl={avatarUrl}
+        isSpeaking={isSpeaking && !silenced}
+        muted={isMuted || silenced}
+        size={avatarSize}
+      />
+
+      <p className="w-full min-w-0 truncate text-sm font-medium">
+        {name}
+        {isSelf && <span className="ml-1 text-xs text-paper-muted">(you)</span>}
+      </p>
+
+      {(isPresenting ||
+        isDeafened ||
+        isMuted ||
+        silenced ||
+        settling ||
+        failed) && (
+        <div className="flex flex-wrap items-center justify-center gap-1">
+          {isPresenting && (
+            <span className="flex items-center gap-1 rounded bg-signal/20 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-signal">
+              <ScreenShare className="h-3 w-3" aria-hidden="true" />
+              Presenting
+            </span>
+          )}
+          {isDeafened ? (
+            <span
+              className="flex items-center gap-1 rounded bg-ink-3 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-danger"
+              title="Deafened"
+            >
+              <HeadphoneOff className="h-3 w-3" aria-hidden="true" />
+              Deafened
+            </span>
+          ) : (
+            isMuted && (
+              <span
+                className="flex items-center gap-1 rounded bg-ink-3 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-danger"
+                title="Microphone muted"
+              >
+                <MicOff className="h-3 w-3" aria-hidden="true" />
+                Muted
+              </span>
+            )
+          )}
+          {silenced && (
+            <span className="flex items-center gap-1 rounded bg-ink-3 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-paper-muted">
+              <VolumeX className="h-3 w-3" aria-hidden="true" />
+              Silenced
+            </span>
+          )}
+          {/* A settled connection is the normal case and says nothing; only the
+              in-between and broken states are worth a line of the tile. */}
+          {settling && (
+            <span className="flex items-center gap-1 text-[10px] uppercase tracking-wide text-paper-muted">
+              <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
+              {connectionState}
+            </span>
+          )}
+          {failed && (
+            <span className="text-[10px] uppercase tracking-wide text-danger">
+              Disconnected
+            </span>
+          )}
+        </div>
+      )}
+
+      {failed && onRetry && (
+        <Button
+          variant="secondary"
+          size="sm"
+          className="h-6 px-2 text-[10px]"
+          onClick={onRetry}
+        >
+          Retry
+        </Button>
+      )}
+
+      {onSetVolume && volume !== undefined && !failed && (
+        <div
           className={cn(
-            "rounded px-2 py-0.5 text-[10px] uppercase",
-            peer.connectionState === "connected"
-              ? "bg-success/20 text-success"
-              : peer.connectionState === "failed"
-                ? "bg-danger/20 text-danger"
-                : "bg-warning/20 text-warning",
+            "grid w-full transition-[grid-template-rows] duration-150",
+            volume === 1
+              ? "grid-rows-[0fr] group-hover:grid-rows-[1fr] group-focus-within:grid-rows-[1fr]"
+              : "grid-rows-[1fr]",
           )}
         >
-          {peer.connectionState}
-        </span>
-        {peer.connectionState === "failed" && onRetry && (
-          <Button
-            variant="secondary"
-            size="sm"
-            className="h-6 px-2 text-[10px]"
-            onClick={onRetry}
-          >
-            Retry
-          </Button>
-        )}
-      </div>
-
-      <div
-        className={cn(
-          "grid transition-[grid-template-rows] duration-150",
-          volume === 1
-            ? "grid-rows-[0fr] group-hover:grid-rows-[1fr] group-focus-within:grid-rows-[1fr]"
-            : "grid-rows-[1fr]",
-        )}
-      >
-        <div className="overflow-hidden">
-          <div
-            className={cn(
-              "flex items-center gap-2 pb-1 pr-1",
-              compact ? "pl-8" : "pl-11",
-            )}
-          >
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-6 w-6 shrink-0"
-              aria-label={silenced ? `Unmute ${name}` : `Mute ${name}`}
-              aria-pressed={silenced}
-              onClick={() => onSetVolume(silenced ? restoreRef.current : 0)}
-            >
-              {silenced ? (
-                <VolumeX className="h-3.5 w-3.5 text-danger" />
-              ) : (
-                <Volume2 className="h-3.5 w-3.5" />
-              )}
-            </Button>
-            <input
-              type="range"
-              min={0}
-              max={1}
-              step={0.05}
-              value={volume}
-              aria-label={`Volume for ${name}`}
-              aria-valuetext={`${Math.round(volume * 100)} percent`}
-              onChange={(event) => onSetVolume(Number(event.target.value))}
-              className="h-1 min-w-0 flex-1 cursor-pointer accent-signal"
-            />
-            <span className="w-9 shrink-0 text-right font-mono text-[10px] tabular-nums text-paper-muted">
-              {Math.round(volume * 100)}%
-            </span>
+          <div className="overflow-hidden">
+            <div className="flex items-center gap-1 pt-1">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6 shrink-0"
+                aria-label={silenced ? `Unmute ${name}` : `Mute ${name}`}
+                aria-pressed={silenced}
+                onClick={() => onSetVolume(silenced ? restoreRef.current : 0)}
+              >
+                {silenced ? (
+                  <VolumeX className="h-3.5 w-3.5 text-danger" />
+                ) : (
+                  <Volume2 className="h-3.5 w-3.5" />
+                )}
+              </Button>
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.05}
+                value={volume}
+                aria-label={`Volume for ${name}`}
+                aria-valuetext={`${Math.round(volume * 100)} percent`}
+                onChange={(event) => onSetVolume(Number(event.target.value))}
+                className="h-1 min-w-0 flex-1 cursor-pointer accent-signal"
+              />
+            </div>
           </div>
         </div>
-      </div>
-
+      )}
     </li>
   );
 }
@@ -205,63 +278,159 @@ export function VoicePanel({
   const connectedCount =
     (status === "connected" && self ? 1 : 0) + remotePeers.length;
 
+  // Probed once per mount: whether a browser has getDisplayMedia never changes
+  // mid-session, and this must not be re-evaluated on every keystroke elsewhere.
+  const screenShareBlocked = useMemo(() => screenShareUnavailableReason(), []);
+  const [hint, setHint] = useState<string | null>(null);
+
+  // The explanation is an answer to a tap, not a persistent state of the call.
+  useEffect(() => {
+    if (!hint) {
+      return;
+    }
+    const timer = setTimeout(() => setHint(null), 6000);
+    return () => clearTimeout(timer);
+  }, [hint]);
+
+  const avatarSize = avatarSizeFor(connectedCount, compactPeers);
+  // A call of one still deserves a stage rather than a stray card — but only
+  // where there is height to spend. Below `lg` this panel is a short band above
+  // the chat, and a tall tile there would just push the controls out of reach.
+  const minHeightClass =
+    connectedCount <= 1
+      ? compactPeers
+        ? "min-h-[6.5rem] lg:min-h-[11rem]"
+        : "min-h-[8rem] lg:min-h-[14rem]"
+      : compactPeers
+        ? "min-h-[5.5rem]"
+        : "min-h-[7.5rem]";
+  const gridTemplateColumns =
+    connectedCount <= 1
+      ? "1fr"
+      : `repeat(auto-fit, minmax(${compactPeers ? "6.5rem" : "8rem"}, 1fr))`;
+
   return (
     <div className="flex h-full min-h-0 flex-col border-b border-panel-hover lg:border-b-0 lg:border-r">
-      <header className="flex h-12 shrink-0 items-center border-b border-panel-hover px-4 shadow-sm">
-        <Mic className="h-5 w-5 text-muted" aria-hidden="true" />
-        <span className="ml-2 font-semibold">{channelName}</span>
+      {/* h-14 matches the chat header beside it, so the two columns share one
+          horizontal rule instead of two that nearly line up. */}
+      <header className="flex h-14 shrink-0 items-center gap-2 border-b border-panel-hover px-4 shadow-sm">
+        <Mic className="h-5 w-5 shrink-0 text-muted" aria-hidden="true" />
+        <span className="min-w-0 flex-1 truncate font-semibold">
+          {channelName}
+        </span>
         {status === "connected" && (
-          <span className="ml-2 flex items-center gap-1 text-xs text-success">
+          <span className="flex shrink-0 items-center gap-1 text-xs text-success">
             <span className="h-1.5 w-1.5 rounded-full bg-success" />
             Live
+            <span className="text-paper-muted">· {connectedCount}</span>
           </span>
         )}
       </header>
 
-      <div className="flex flex-1 flex-col items-center justify-center gap-3 overflow-y-auto p-4">
-        {error && (
-          <div
-            role="alert"
-            className="flex w-full max-w-sm items-start gap-2 rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger"
+      {error && (
+        <div
+          role="alert"
+          className="flex shrink-0 items-start gap-2 border-b border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger"
+        >
+          <AlertTriangle
+            className="mt-0.5 h-4 w-4 shrink-0"
+            aria-hidden="true"
+          />
+          <p className="min-w-0 flex-1 break-words">{error}</p>
+        </div>
+      )}
+
+      {status === "connected" && showWarning && (
+        <p className="shrink-0 border-b border-warning/30 bg-warning/10 px-3 py-1.5 text-center text-xs text-warning">
+          Mesh limit approaching — configure an SFU for larger calls.
+        </p>
+      )}
+
+      {status === "idle" && (
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
+          <p className="max-w-xs text-sm text-muted">
+            Join voice to talk. Chat stays available beside you.
+          </p>
+          <Button onClick={onJoin}>Join Voice</Button>
+        </div>
+      )}
+
+      {status === "joining" && (
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
+          <p
+            aria-live="polite"
+            className="flex items-center gap-2 text-sm text-muted"
           >
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-            <p className="min-w-0 flex-1 break-words">{error}</p>
+            <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+            Connecting to {channelName}…
+          </p>
+          <Button variant="ghost" size="sm" onClick={onLeave}>
+            Cancel
+          </Button>
+        </div>
+      )}
+
+      {status === "connected" && (
+        <>
+          {/* The participant grid owns the column: it stretches to whatever is
+              left between the header and the control bar, centres itself while
+              the call is small, and scrolls once eight tiles no longer fit. */}
+          <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-3">
+            {/* `my-auto` rather than `justify-center`: auto margins centre a
+                short call without clipping the first row once eight tiles
+                overflow the column. */}
+            <div className="my-auto flex flex-col gap-3">
+              <ul
+                className="grid auto-rows-min gap-2"
+                style={{ gridTemplateColumns }}
+              >
+                {self && (
+                  <ParticipantTile
+                    name={self.displayName}
+                    avatarUrl={self.avatarUrl}
+                    isSelf
+                    isSpeaking={
+                      !!localPeerId && speaking.has(localPeerId) && !isMuted
+                    }
+                    isMuted={isMuted}
+                    isDeafened={isDeafened}
+                    isPresenting={isSharingScreen}
+                    avatarSize={avatarSize}
+                    minHeightClass={minHeightClass}
+                  />
+                )}
+                {remotePeers.map((peer) => {
+                  const key = peer.userId ?? peer.peerId;
+                  return (
+                    <ParticipantTile
+                      key={peer.peerId}
+                      name={peer.displayName ?? `${peer.peerId.slice(0, 8)}…`}
+                      avatarUrl={peer.avatarUrl}
+                      isSpeaking={speaking.has(peer.peerId) && !isDeafened}
+                      isPresenting={peer.peerId === screenSharePeerId}
+                      avatarSize={avatarSize}
+                      minHeightClass={minHeightClass}
+                      connectionState={peer.connectionState}
+                      volume={peerVolumes[key] ?? 1}
+                      onSetVolume={(volume) => onSetPeerVolume(key, volume)}
+                      onRetry={
+                        onRetryPeer ? () => onRetryPeer(peer.peerId) : undefined
+                      }
+                    />
+                  );
+                })}
+              </ul>
+
+              {connectedCount <= 1 && (
+                <p className="text-center text-xs text-paper-muted">
+                  You're the only one here so far.
+                </p>
+              )}
+            </div>
           </div>
-        )}
 
-        {status === "idle" && (
-          <>
-            <p className="max-w-xs text-center text-sm text-muted">
-              Join voice to talk. Chat stays available below / beside.
-            </p>
-            <Button onClick={onJoin}>Join Voice</Button>
-          </>
-        )}
-
-        {status === "joining" && (
-          <>
-            <p
-              aria-live="polite"
-              className="flex items-center gap-2 text-sm text-muted"
-            >
-              <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-              Connecting to {channelName}…
-            </p>
-            <Button variant="ghost" size="sm" onClick={onLeave}>
-              Cancel
-            </Button>
-          </>
-        )}
-
-        {status === "connected" && (
-          <div className="w-full max-w-sm space-y-3">
-            {showWarning && (
-              <p className="rounded bg-warning/20 px-3 py-2 text-center text-xs text-warning">
-                Mesh limit approaching — configure an SFU for larger calls.
-              </p>
-            )}
-
-            <div className="flex justify-center gap-2">
+          <div className="shrink-0 border-t border-panel-hover bg-ink px-3 py-2">
+            <div className="flex items-center justify-center gap-2">
               <Button
                 variant="secondary"
                 size="icon"
@@ -288,103 +457,68 @@ export function VoicePanel({
                   <Headphones className="h-4 w-4" />
                 )}
               </Button>
-              {(onStartScreenShare || onStopScreenShare) && (
-                <Button
-                  variant="secondary"
-                  size="icon"
-                  aria-label={
-                    isSharingScreen
-                      ? "Stop sharing your screen"
-                      : "Share your screen"
-                  }
-                  aria-pressed={isSharingScreen}
-                  disabled={someoneElseSharing}
-                  title={
-                    someoneElseSharing
-                      ? "Someone else is already sharing their screen"
-                      : undefined
-                  }
-                  onClick={
-                    isSharingScreen ? onStopScreenShare : onStartScreenShare
-                  }
-                >
-                  {isSharingScreen ? (
-                    <ScreenShareOff className="h-4 w-4 text-signal" />
-                  ) : (
+              {(onStartScreenShare || onStopScreenShare) &&
+                (screenShareBlocked ? (
+                  /* Not `disabled`: a disabled button cannot be tapped, and on
+                     a phone a tap is the only way to ask why. Kept quiet — the
+                     explanation is muted helper text, never an alert. */
+                  <Button
+                    variant="secondary"
+                    size="icon"
+                    className="opacity-50"
+                    aria-disabled
+                    aria-label="Share your screen (unavailable on this device)"
+                    title={screenShareUnavailableMessage(screenShareBlocked)}
+                    onClick={() =>
+                      setHint(screenShareUnavailableMessage(screenShareBlocked))
+                    }
+                  >
                     <ScreenShare className="h-4 w-4" />
-                  )}
-                </Button>
-              )}
+                  </Button>
+                ) : (
+                  <Button
+                    variant="secondary"
+                    size="icon"
+                    aria-label={
+                      isSharingScreen
+                        ? "Stop sharing your screen"
+                        : "Share your screen"
+                    }
+                    aria-pressed={isSharingScreen}
+                    disabled={someoneElseSharing}
+                    title={
+                      someoneElseSharing
+                        ? "Someone else is already sharing their screen"
+                        : undefined
+                    }
+                    onClick={
+                      isSharingScreen ? onStopScreenShare : onStartScreenShare
+                    }
+                  >
+                    {isSharingScreen ? (
+                      <ScreenShareOff className="h-4 w-4 text-signal" />
+                    ) : (
+                      <ScreenShare className="h-4 w-4" />
+                    )}
+                  </Button>
+                ))}
               <Button variant="danger" size="sm" onClick={onLeave}>
                 <PhoneOff className="h-4 w-4" aria-hidden="true" />
                 Leave
               </Button>
             </div>
 
-            <div className="rounded-lg border border-ink-4 bg-ink p-3">
-              <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-paper-muted">
-                Connected ({connectedCount})
-              </h3>
-              <ul className={compactPeers ? "space-y-1" : "space-y-2"}>
-                {self && (
-                  <li className="flex items-center gap-2 px-1 py-0.5 text-sm">
-                    <VoiceAvatar
-                      name={self.displayName}
-                      avatarUrl={self.avatarUrl}
-                      isSpeaking={
-                        !!localPeerId && speaking.has(localPeerId) && !isMuted
-                      }
-                      muted={isMuted}
-                      size={compactPeers ? "sm" : "md"}
-                    />
-                    <span className="min-w-0 flex-1 truncate font-medium">
-                      {self.displayName}
-                      <span className="ml-1 text-xs text-paper-muted">
-                        (you)
-                      </span>
-                    </span>
-                    {isSharingScreen && (
-                      <span className="flex shrink-0 items-center gap-1 rounded bg-signal/20 px-1.5 py-0.5 text-[10px] uppercase text-signal">
-                        <ScreenShare className="h-3 w-3" aria-hidden="true" />
-                        Presenting
-                      </span>
-                    )}
-                    {isDeafened ? (
-                      <span className="flex items-center gap-1 rounded bg-danger/20 px-2 py-0.5 text-[10px] uppercase text-danger">
-                        <HeadphoneOff className="h-3 w-3" aria-hidden="true" />
-                        Deafened
-                      </span>
-                    ) : (
-                      isMuted && (
-                        <span className="flex items-center gap-1 rounded bg-danger/20 px-2 py-0.5 text-[10px] uppercase text-danger">
-                          <MicOff className="h-3 w-3" aria-hidden="true" />
-                          Muted
-                        </span>
-                      )
-                    )}
-                  </li>
-                )}
-                {remotePeers.map((peer) => (
-                  <PeerRow
-                    key={peer.peerId}
-                    peer={peer}
-                    compact={compactPeers}
-                    isSpeaking={speaking.has(peer.peerId) && !isDeafened}
-                    isSharingScreen={peer.peerId === screenSharePeerId}
-                    volume={peerVolumes[peer.userId ?? peer.peerId] ?? 1}
-                    onSetVolume={(volume) =>
-                      onSetPeerVolume(peer.userId ?? peer.peerId, volume)
-                    }
-                    onRetry={
-                      onRetryPeer ? () => onRetryPeer(peer.peerId) : undefined
-                    }
-                  />
-                ))}
-              </ul>
-            </div>
+            {hint && (
+              <p
+                role="status"
+                className="mt-1.5 text-center text-[11px] text-paper-muted"
+              >
+                {hint}
+              </p>
+            )}
           </div>
-        )}
-      </div>
+        </>
+      )}
     </div>
   );
 }

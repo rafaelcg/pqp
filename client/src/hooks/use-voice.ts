@@ -6,6 +6,10 @@ import {
   type VoiceSessionInfo,
   type VoiceSignalingMessage,
 } from "@pqp/shared";
+import {
+  screenShareUnavailableMessage,
+  supportsScreenShare,
+} from "@/components/voice/capabilities";
 import { buildAudioConstraints } from "@/lib/audio-devices";
 import {
   connectLiveKit,
@@ -26,6 +30,10 @@ import {
 } from "@/lib/voice-audio";
 
 export type VoiceStatus = "idle" | "joining" | "connected";
+
+/** One wording for "this browser cannot capture a screen", shared with the UI. */
+const SCREEN_SHARE_UNSUPPORTED_MESSAGE =
+  screenShareUnavailableMessage("no-api");
 
 /**
  * Why a join was refused because of the room's transport.
@@ -184,6 +192,12 @@ function screenShareErrorMessage(err: unknown): string {
   if (!(err instanceof Error)) {
     return "Failed to start screen share";
   }
+  if (err.name === "NotSupportedError" || err instanceof TypeError) {
+    // A browser without getDisplayMedia throws a TypeError from the call
+    // itself. That is a platform limit, not a fault: say it plainly rather
+    // than surfacing "…is not a function" as an alarm.
+    return SCREEN_SHARE_UNSUPPORTED_MESSAGE;
+  }
   if (err.name === "NotAllowedError") {
     // Also covers the user dismissing the OS/browser picker without choosing
     // a source — that rejects with the same error name, so this isn't really
@@ -270,7 +284,10 @@ export function createVoiceController(transport: RealtimeTransport) {
   }
 
   /** Which transports this client can actually run — sent with every join. */
-  function transportCapabilities(): [VoiceRoomTransport, ...VoiceRoomTransport[]] {
+  function transportCapabilities(): [
+    VoiceRoomTransport,
+    ...VoiceRoomTransport[],
+  ] {
     return sessionProvider ? ["mesh", "livekit"] : ["mesh"];
   }
 
@@ -699,7 +716,10 @@ export function createVoiceController(transport: RealtimeTransport) {
           if (!sessionProvider) {
             // Only reachable against a server old enough to omit `transport`;
             // a current one refuses this join before minting a peer.
-            refuseTransport({ transport: roomTransport, reason: "unsupported" });
+            refuseTransport({
+              transport: roomTransport,
+              reason: "unsupported",
+            });
             break;
           }
           // Still "joining": on the SFU path the call is not up until media is,
@@ -1007,6 +1027,15 @@ export function createVoiceController(transport: RealtimeTransport) {
       // the authoritative check for the rare simultaneous-click race.
       if (state.screenSharePeerId && state.screenSharePeerId !== state.peerId) {
         state.error = "Someone else is already sharing their screen.";
+        emit();
+        return;
+      }
+
+      // Defensive: the UI already hides the affordance where this is missing
+      // (see components/voice/capabilities.ts), so reaching here means a
+      // programmatic call, not a user tapping a button we should not have shown.
+      if (!supportsScreenShare()) {
+        state.error = SCREEN_SHARE_UNSUPPORTED_MESSAGE;
         emit();
         return;
       }
