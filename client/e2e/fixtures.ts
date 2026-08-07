@@ -8,11 +8,40 @@ const DEV_TOKEN = "dev-local-token";
  * of the chat chrome exists. Seed one through the API — faster and far less
  * brittle than driving the create-server form.
  */
+/**
+ * Answer the 18+ gate so the rest of the suite can reach the app at all.
+ *
+ * The gate refuses every route but a handful until the account has declared a
+ * date of birth, so on the fresh database CI creates, *every* spec dies in
+ * `ensureServer` with "Confirm your date of birth" rather than in whatever it
+ * was actually testing. Answering it here rather than in each spec keeps that
+ * one-time setup out of tests that are about something else.
+ *
+ * The declaration is one-shot by design — a second answer is a 409 — so this
+ * treats "already answered" as success rather than an error.
+ */
+async function ensureAgeCheck(headers: Record<string, string>): Promise<void> {
+  const me = await fetch(`${API}/api/me`, { headers });
+  if (me.ok) {
+    const { ageGate } = (await me.json()) as { ageGate?: string };
+    if (ageGate === "passed") {
+      return;
+    }
+  }
+  // Comfortably an adult, and stable so a run is not date-dependent.
+  await fetch(`${API}/api/me/age-check`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ dateOfBirth: "1990-01-01" }),
+  });
+}
+
 export async function ensureServer(): Promise<void> {
   const headers = {
     "Content-Type": "application/json",
     Authorization: `Bearer ${DEV_TOKEN}`,
   };
+  await ensureAgeCheck(headers);
   const existing = await fetch(`${API}/api/servers`, { headers });
   const { servers } = (await existing.json()) as { servers: unknown[] };
   if (servers.length > 0) {
