@@ -1,0 +1,146 @@
+name: Deploy API (Fly)
+
+# The Fly.io counterpart to deploy-api.yml (Railway). Both files exist on
+# purpose: Railway stays deployable for as long as it is the rollback target.
+# See docs/deploy-fly.md.
+#
+# ONLY ONE OF THE TWO MAY BE LIVE AT A TIME. Two APIs on two databases behind
+# two hostnames is not a warm standby, it is two products — messages written to
+# one are invisible in the other. The switch is deliberate and two-sided:
+#
+#   cut over to Fly:   gh variable set DEPLOY_TARGET --body fly
+#                      gh workflow disable "Deploy API"
+#   roll back:         gh workflow enable "Deploy API"
+#                      gh variable set DEPLOY_TARGET --body railway
+#
+# The `vars.DEPLOY_TARGET` gate below means merging this file changes nothing
+# until someone flips it, so this can land before the migration happens.
+#
+# Gating, timeouts and the deployed-commit assertion mirror deploy-api.yml,
+# including its lesson: a green deploy step only proves the platform accepted a
+# build. What we actually care about is whether the running process serves this
+# commit.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+  workflow_dispatch:
+
+concurrency:
+  # Shared with deploy-api.yml on purpose: during the transition the two must
+  # queue behind each other rather than race to point production at two
+  # different backends.
+  group: deploy-api
+  cancel-in-progress: false
+
+env:
+  FLY_APP: pqp-api
+
+jobs:
+  deploy:
+    name: Build & deploy Fly (gru)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Same gate as deploy-api.yml, AND the DEPLOY_TARGET switch: exactly one of
+    # the two deploy workflows may be live at a time.
+    if: ${{ (github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main')) && vars.DEPLOY_TARGET == 'fly' }}
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # workflow_run checks out the default branch by default, which is not
+          # necessarily the commit CI just passed on.
+          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
+
+      - name: Resolve commit
+        id: commit
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Check deploy environment
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          if [ -z "$FLY_API_TOKEN" ]; then
+            echo "::error::Missing secret FLY_API_TOKEN. Create a deploy token scoped to this app (fly tokens create deploy -a ${FLY_APP}) and run: gh secret set FLY_API_TOKEN"
+            exit 1
+          fi
+
+      - name: Install flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      # --ha=false IS LOAD-BEARING, not a cost tweak. Without it Fly happily
+      # brings up a second machine, and this server keeps WebSocket state,
+      # presence, voice rooms and rate-limit buckets in process memory — two
+      # machines are two disjoint chat servers behind one hostname, with no
+      # error anywhere to tell you. See the header of fly.toml.
+      #
+      # --remote-only builds on Fly's builder so the runner does not need to
+      # push a multi-hundred-MB image over the wire.
+      #
+      # -e APP_VERSION stamps the commit into the machine's env for this
+      # release, which is what /health reports and what the assertion below
+      # reads. A manual `fly deploy` without -e drops it back to "dev"; that is
+      # a signal the deploy did not come from CI, not a bug.
+      - name: Deploy
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          flyctl deploy \
+            --config fly.toml \
+            --app "$FLY_APP" \
+            --remote-only \
+            --ha=false \
+            --strategy rolling \
+            --wait-timeout 15m \
+            -e APP_VERSION="${{ steps.commit.outputs.sha }}"
+
+      # The single-machine invariant, asserted rather than assumed. It can be
+      # broken by a stray `fly scale count 2`, by someone dropping --ha, or by a
+      # bluegreen strategy leaving a machine behind — all of which look fine in
+      # the deploy log and present to users as "my friend can't see my
+      # messages". Cheap check, expensive failure.
+      - name: Assert exactly one machine, in gru
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          json=$(flyctl machines list --app "$FLY_APP" --json)
+          live=$(printf '%s' "$json" | jq '[.[] | select(.state != "destroyed")] | length')
+          regions=$(printf '%s' "$json" | jq -r '[.[] | select(.state != "destroyed") | .region] | unique | join(",")')
+          echo "live machines: $live (regions: $regions)"
+          if [ "$live" != "1" ]; then
+            echo "::error::Expected exactly 1 machine, found $live. This server keeps WebSocket/presence/voice state in process memory, so a second machine silently splits the userbase. Fix with: fly scale count 1 --region gru --app $FLY_APP"
+            exit 1
+          fi
+          if [ "$regions" != "gru" ]; then
+            echo "::error::Machine is in '$regions', expected 'gru'. A second region needs a pub/sub layer first — see docs/deploy-fly.md."
+            exit 1
+          fi
+
+      # Same assertion the Railway workflow makes, for the same reason: every
+      # /api/ route answers 401 before it routes, so a stalled deploy is
+      # indistinguishable from an unauthenticated request from the outside.
+      # /health is the only surface that can tell you what code is running.
+      - name: Verify the deployed commit
+        env:
+          API_URL: ${{ secrets.VITE_API_URL }}
+          EXPECTED: ${{ steps.commit.outputs.sha }}
+        run: |
+          if [ -z "$API_URL" ]; then
+            echo "::warning::VITE_API_URL is not set, skipping the deployed-commit check"
+            exit 0
+          fi
+          for attempt in $(seq 1 40); do
+            body=$(curl -fsS --max-time 10 "$API_URL/health" || echo '{}')
+            got=$(printf '%s' "$body" | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')
+            if [ "$got" = "$EXPECTED" ]; then
+              echo "API is serving $got"
+              exit 0
+            fi
+            echo "attempt $attempt: serving '${got:-unknown}', want '$EXPECTED'"
+            sleep 15
+          done
+          echo "::error::API never reported the deployed commit. It is probably still serving the previous build."
+          exit 1

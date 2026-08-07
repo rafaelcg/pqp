@@ -1,0 +1,176 @@
+# Fly.io configuration for the pqp API + WebSocket server.
+#
+# Only the API moves here. The SPA stays on Cloudflare Pages; this app serves
+# `/api/*`, `/health`, `/status.json` and the `/ws` WebSocket upgrade.
+#
+# Runbook: docs/deploy-fly.md. `railway.toml` is deliberately left in place so
+# the old target stays one `railway up` away — see the Rollback section.
+#
+# THE ONE THING TO KNOW BEFORE EDITING THIS FILE
+# ----------------------------------------------
+# This server is single-process BY DESIGN. WebSocket connection state, presence,
+# voice-room membership and rate-limit buckets all live in in-process Maps
+# (server/src/ws/, server/src/lib/rate-limit.ts). There is no pub/sub layer yet.
+# Therefore:
+#   * A SECOND MACHINE SILENTLY SPLITS THE USERBASE. Two machines are two
+#     disjoint chat servers behind one hostname. Nobody gets an error; people
+#     just stop seeing each other's messages and voice peers. Do not raise the
+#     machine count, do not add a region, do not use a deploy strategy that runs
+#     two machines at once (bluegreen, canary).
+#   * AN AUTO-STOPPED MACHINE DROPS EVERY LIVE WEBSOCKET at once, which
+#     client-side looks exactly like the "Realtime connection closed" incident
+#     this codebase already has scar tissue from (CLAUDE.md pitfall #9).
+#
+# Machine count is NOT expressible in fly.toml — Fly controls it with
+# `fly scale count` and the `--ha` flag on `fly deploy`. So the guard rails are:
+#   * first deploy:  fly deploy --ha=false     (plain `fly deploy` creates TWO)
+#   * every deploy:  fly deploy --ha=false     (CI does this; see deploy-api-fly.yml)
+#   * assert:        fly machines list -a pqp-api   -> exactly one, in gru
+# CI fails the job if the count is ever not 1.
+
+app = "pqp-api"
+
+# São Paulo. The userbase is Brazilian and this is a latency-sensitive realtime
+# app; every WS round-trip and every voice signalling hop pays this distance.
+# Keep the database in the same region — a cross-region DB would undo the win.
+primary_region = "gru"
+
+# The server installs SIGTERM/SIGINT handlers that close every socket with
+# code 1001 ("going away") and drain the HTTP server and pg pool before exit
+# (server/src/index.ts). Give it room to finish; the clients reconnect with
+# backoff on 1001 rather than treating it as an error.
+kill_signal = "SIGTERM"
+kill_timeout = 30
+
+[build]
+  # Same multi-stage image Railway builds, unchanged. The runner stage sets
+  # NODE_ENV=production, runs as the `node` user and CMDs
+  # `node server/dist/index.js` — which is exactly railway.toml's startCommand,
+  # so there is no start command to restate here.
+  dockerfile = "Dockerfile"
+
+[env]
+  # Non-secret configuration lives here (in git, reviewable). Everything with a
+  # credential in it goes through `fly secrets set` — see docs/deploy-fly.md.
+  # Do NOT also set these as secrets: a secret of the same name shadows [env]
+  # and you end up debugging a value that is not in the file you are reading.
+
+  # The app reads `Number(process.env.PORT ?? 3001)`. Fly does not inject PORT,
+  # so it would fall back to 3001 anyway — stated explicitly because it MUST
+  # agree with `internal_port` below, and a silent disagreement presents as
+  # "deploy succeeded, health check never passes".
+  PORT = "3001"
+
+  # Exactly one proxy (fly-proxy) sits in front of this process and appends the
+  # real client address to X-Forwarded-For. `clientAddress()` counts in from the
+  # RIGHT of that chain, so the depth has to be right: too low and the rate
+  # limiter keys on an attacker-supplied value, too high and it falls back to
+  # the socket address, which behind the proxy is one shared bucket for
+  # everybody. One hop = "true". Raise this only if you put another proxy
+  # (e.g. Cloudflare proxied DNS) in front of Fly.
+  TRUST_PROXY = "true"
+
+  # pg pool ceiling per process. There is one process, so this is the app's
+  # entire connection footprint against Postgres. Keep it comfortably under the
+  # database's max_connections (and note attachments' sweeper shares this pool).
+  PG_POOL_MAX = "10"
+
+[http_service]
+  internal_port = 3001
+  force_https = true
+
+  # OFF. Not "stop", not "suspend". A stopped machine terminates every live
+  # WebSocket simultaneously; a suspended one is worse, because the socket dies
+  # while the in-process presence/voice-room Maps are restored from a snapshot
+  # that no longer matches any connected client.
+  auto_stop_machines = "off"
+
+  # OFF for symmetry and to keep machine lifecycle entirely manual. Note this
+  # can only ever *restart the one machine you already have* — Fly's proxy never
+  # creates machines, so this is not the second-machine risk; that risk lives in
+  # `fly scale count` / `fly deploy --ha`. If you would rather the proxy be able
+  # to wake a machine that somehow ended up stopped, flipping this to true is
+  # safe. It is false here so that "the machine is down" surfaces as an outage
+  # you investigate rather than a latency spike you never notice.
+  auto_start_machines = false
+
+  # Documentation of intent more than a lever: with auto-stop off nothing is
+  # stopping the machine in the first place.
+  min_machines_running = 1
+
+  processes = ["app"]
+
+  [http_service.concurrency]
+    # `connections`, NOT `requests`. Every signed-in client holds one WebSocket
+    # open for its whole session, so connection count — not request rate — is
+    # what this app is actually bounded by.
+    #
+    # THE DEFAULTS ARE A TRAP FOR A WEBSOCKET APP: soft_limit 20 / hard_limit 25.
+    # hard_limit is the point at which fly-proxy STOPS SENDING TRAFFIC to the
+    # machine, and with a single machine there is nowhere else to send it, so
+    # user number 26 gets a 503 on an app that is completely idle. These numbers
+    # are raised to something a mesh-voice chat server can plausibly hold.
+    #
+    # Ceiling to know about: Fly enforces ~2048 concurrent connections per edge
+    # per app, above the values below. Long before either number matters you
+    # will hit the real limit, which is that mesh voice tops out at ~5-8 peers
+    # per channel and there is only one machine.
+    type = "connections"
+    soft_limit = 400
+    hard_limit = 600
+
+  # Health check. `/health` is the only unauthenticated route (every /api/*
+  # route resolves a Bearer token before routing, so anything else answers 401)
+  # and it does a real `SELECT 1`, so a 200 here means "process up AND database
+  # reachable". That is what gates a deploy: a machine whose check never goes
+  # green fails the release instead of quietly replacing a working one.
+  #
+  # Deliberately slack timings. With one machine, "unhealthy" means the proxy
+  # has nowhere to route — a tight interval turns a two-second Postgres blip
+  # into a user-visible outage. 30s/5s tolerates a blip; a genuinely dead pool
+  # still fails within a minute.
+  [[http_service.checks]]
+    method = "GET"
+    path = "/health"
+    protocol = "http"
+    interval = "30s"
+    timeout = "5s"
+    # initDb() runs the whole of server/src/schema.sql before listen(), and the
+    # first boot against an empty database is the slow one. Do not shrink this
+    # to the point where a cold start looks like a failure.
+    grace_period = "30s"
+
+# On WebSocket idle timeouts, since this is the classic way a WS deploy dies
+# quietly: there is no knob to set. Fly removed proxy-level TCP idle-timeout
+# enforcement in 2023 (it now relies on kernel SO_KEEPALIVE / TCP_USER_TIMEOUT),
+# and `http_options` has no idle_timeout field to configure. So nothing here
+# fights the app's own 30s ping/pong heartbeat in server/src/index.ts, and that
+# heartbeat remains the thing that reaps half-open sockets. If connections start
+# dying on a fixed interval, suspect something you put IN FRONT of Fly
+# (Cloudflare proxied DNS has its own 100s idle timeout), not this file.
+
+[[vm]]
+  # Signalling and chat only — media is peer-to-peer in mesh mode and goes to
+  # LiveKit in SFU mode, so this process never touches audio. Node + a pg pool
+  # + a few hundred sockets fits comfortably; 1GB leaves headroom for the
+  # attachment sweeper and export jobs without paying for a performance CPU.
+  size = "shared-cpu-1x"
+  memory = "1gb"
+
+[deploy]
+  # rolling + max_unavailable = 1 on a single machine means: replace that one
+  # machine in place. It costs a few seconds of downtime per deploy, and the
+  # clients reconnect (client/src/lib/realtime.ts backs off and re-resolves a
+  # Clerk token per attempt).
+  #
+  # DO NOT switch this to "bluegreen" or "canary" to avoid that downtime. Both
+  # run a second machine alongside the first, which is precisely the split-brain
+  # this app cannot survive. Zero-downtime deploys are blocked on the same
+  # pub/sub workstream as multi-region.
+  strategy = "rolling"
+  max_unavailable = 1
+
+  # No release_command. Schema application is initDb() at boot
+  # (server/src/db.ts reads server/src/schema.sql), which is idempotent and runs
+  # before listen(); a release_command would be a second machine talking to the
+  # same database for no benefit.
