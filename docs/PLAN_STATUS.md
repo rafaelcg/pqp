@@ -11,7 +11,7 @@
 | 2 Text chat | Done | WS + markdown + presence |
 | 3 Voice per channel | Done | Mesh + chat on voice channels; cross-NAT FIXED (ExpressTURN / ICE, 2026-07-11) |
 | 4 Self-host / Railway | Done | Docker Compose + docs; hosted Pages + Railway live |
-| 5 SFU | LiveKit done (unverified) | LiveKit token + client adapter + compose profile; Cloudflare Realtime still a stub |
+| 5 SFU | LiveKit **verified against a live server** (2026-08-07) | Two headless Chromium participants joined a real LiveKit room through `livekit-session.ts` and exchanged audio both ways; mute, screen share, ban eviction, the mesh-cap bypass and the mesh-only 503 all checked. Verification found `revokeTokenTs` to be LiveKit-Cloud-only, so a ban could be defeated by reconnecting on the token already held — fixed with a re-sweep. **Not** verified against LiveKit Cloud, at scale, or cross-NAT; the silent per-client mesh fallback is a known open split. Details and exact scope: [`voice-backends.md`](./voice-backends.md#verification-status). Cloudflare Realtime still a stub |
 | 6 Electron + billing | Partial | Electron shell + CI artifacts + deep links wired end-to-end; no app icon, no Stripe UI |
 
 ## Hardening + product pass (2026-07-31)
@@ -84,7 +84,11 @@ purpose, so its scope reflected the full feature surface rather than guessing at
 
 ## Still open (operational)
 
-1. **Verify LiveKit end-to-end** — bring up `docker compose --profile livekit`, join from two clients
+1. **Mixed-transport voice calls** — `use-voice.ts` falls back to mesh per client, silently, so one
+   person can end up on mesh while the room is on the SFU: they are listed in the sidebar, absent
+   from the call, and nobody sees an error. No client reports its transport and the server does not
+   check. See [`voice-backends.md`](./voice-backends.md#per-client-fallback-splits-a-call-verified).
+   (LiveKit itself is now verified end-to-end — this is what that verification found.)
 2. **Verify voice in a real browser** — the 2026-07-31 pass could not exercise mic capture; mesh
    join, deafen, and per-peer volume are untested against real hardware
 3. **`pqp.gg` is unregistered** — canonical/OG tags point at a domain nobody owns

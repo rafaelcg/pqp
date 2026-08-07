@@ -2,6 +2,8 @@ import { RoomServiceClient } from "livekit-server-sdk";
 import { logEvent } from "../lib/log.js";
 import {
   isLiveKitConfigured,
+  mintedAtFromParticipantMetadata,
+  TOKEN_TTL_SECONDS,
   userIdFromParticipantMetadata,
 } from "./backends.js";
 
@@ -37,6 +39,16 @@ import {
  * comment above `peers` in `ws/voice.ts`), and a client whose WebSocket dropped
  * keeps its LiveKit connection. So "no local peer for this user" does not mean
  * "not in the room"; the room itself is the only authority, and we ask it.
+ *
+ * WHY ONE REMOVAL IS NOT ENOUGH (see `scheduleResweep`)
+ * `removeParticipant` disconnects; it does not bar a return. LiveKit's own docs
+ * say the participant "can still re-join", and the token they were handed
+ * seconds earlier is all they need. The `revokeTokenTs` field is supposed to
+ * close that, and it does — on LiveKit Cloud, which is the only place it is
+ * implemented. Against a self-hosted livekit-server (measured on v1.13.5) the
+ * API accepts the field, answers 200, and then admits the removed participant
+ * again on the very next connect. So the removal is repeated for as long as a
+ * pre-eviction token could still be replayed.
  */
 
 interface LiveKitConfig {
@@ -117,6 +129,104 @@ interface ParticipantView {
   identity: string;
   /** Resolved from token metadata, or from the local roster; null if unknown. */
   userId: string | null;
+  /**
+   * When this participant's token was minted, unix seconds. Null for a token
+   * predating the field, which every caller must read as "old", never "new".
+   */
+  mintedAt: number | null;
+}
+
+/**
+ * How long after an eviction a token minted before it could still be replayed,
+ * and therefore how long the room keeps being re-swept. Exactly the token TTL:
+ * one second later every pre-eviction token is expired and LiveKit refuses it
+ * on its own.
+ */
+const RESWEEP_WINDOW_MS = TOKEN_TTL_SECONDS * 1000;
+
+/**
+ * Gap between re-sweeps — the worst case for how long a rejoin with a stale
+ * token is audible before it is ejected again. Five seconds costs at most
+ * ~180 `listParticipants` calls per evicted room over the whole window, on a
+ * connection the deployment already holds open.
+ */
+const RESWEEP_INTERVAL_MS = 5_000;
+
+/** Live re-sweep timers, keyed so repeated evictions of one room coalesce. */
+const resweeps = new Map<string, ReturnType<typeof setInterval>>();
+
+function nowSeconds(): number {
+  return Math.floor(Date.now() / 1000);
+}
+
+/**
+ * Which pass a predicate is running in. The first one runs against the room as
+ * the eviction found it and must not exempt anybody; the repeats run against a
+ * room that may since have refilled with people who are supposed to be there.
+ */
+type SweepPass = "first" | "resweep";
+
+/**
+ * True when this participant is still riding the token they held at eviction
+ * time — the only thing a repeat pass is entitled to remove.
+ *
+ * A token minted *after* the eviction cleared the ban list and the channel
+ * access check on its way out of `POST /api/voice/token`, so its holder was
+ * re-authorised in the meantime (unbanned, re-invited, channel made public
+ * again) and must be left alone. `mintedAt === null` is a token issued before
+ * the field existed, hence older than any eviction that can observe it.
+ *
+ * The comparison is `<=`, not `<`, for the same reason `revokeTokenTs` is sent
+ * as `now + 1`: both stamps have one-second resolution, so a token minted in
+ * the same wall-clock second as the eviction raced it and counts as stale.
+ */
+function staleFor(
+  pass: SweepPass,
+  evictedAt: number,
+  participant: ParticipantView,
+): boolean {
+  if (pass === "first") {
+    return true;
+  }
+  return (participant.mintedAt ?? 0) <= evictedAt;
+}
+
+/**
+ * Re-run `sweep` every `RESWEEP_INTERVAL_MS` until pre-eviction tokens have all
+ * expired.
+ *
+ * The timer is `unref`'d: this is cleanup for an action that has already been
+ * committed and answered, and it must never be the reason a process refuses to
+ * exit. A deploy that lands inside the window drops the remaining sweeps, which
+ * is the same exposure a deployment without this had all the time.
+ *
+ * Keyed by `key` (room + intent) so banning five people in one channel leaves
+ * one timer, not five, and a second ban simply restarts the window.
+ */
+function scheduleResweep(key: string, sweep: () => Promise<void>): void {
+  const existing = resweeps.get(key);
+  if (existing) {
+    clearInterval(existing);
+  }
+  const startedAt = Date.now();
+  const timer = setInterval(() => {
+    if (Date.now() - startedAt >= RESWEEP_WINDOW_MS) {
+      clearInterval(timer);
+      resweeps.delete(key);
+      return;
+    }
+    void sweep();
+  }, RESWEEP_INTERVAL_MS);
+  timer.unref?.();
+  resweeps.set(key, timer);
+}
+
+/** Cancel every pending re-sweep. Tests use this; nothing in the app does. */
+export function stopSfuResweeps(): void {
+  for (const timer of resweeps.values()) {
+    clearInterval(timer);
+  }
+  resweeps.clear();
 }
 
 /**
@@ -154,15 +264,23 @@ async function sweepRoom(
   // `removeParticipant` alone only disconnects: LiveKit's own docs note the
   // participant "can still re-join the room", and their access token — minted
   // before the ban and valid for TOKEN_TTL_SECONDS — is all they need to do it.
-  // `revokeTokenTs` invalidates every token for this room+identity whose `nbf`
-  // predates it, which turns the disconnect into an actual ejection.
+  // `revokeTokenTs` is meant to close that, invalidating every token for this
+  // room+identity whose `nbf` predates it.
+  //
+  // It is sent on every removal, but it is NOT what makes eviction stick:
+  // LiveKit implements the field on Cloud only. Verified against a self-hosted
+  // livekit-server v1.13.5 — the RPC logs `revokeTokenTs` and answers 200, and
+  // the removed participant reconnects with the same token immediately
+  // afterwards, even for a timestamp an hour in the future. `scheduleResweep`
+  // is what actually keeps them out on a self-hosted deployment; this field is
+  // the thing that makes one removal enough on Cloud.
   //
   // +1s because the boundary is strict (`nbf < ts`) and `nbf` has one-second
   // resolution: a token minted in the same wall-clock second as the ban would
   // otherwise survive it. Overshooting is safe — minting a *new* token needs a
   // live WS voice peer (already removed) and a passing channel-access check
   // (already failing), so there is no legitimate token in that window to void.
-  const revokeTokenTs = BigInt(Math.floor(Date.now() / 1000) + 1);
+  const revokeTokenTs = BigInt(nowSeconds() + 1);
 
   await Promise.all(
     participants.map(async (participant) => {
@@ -171,7 +289,8 @@ async function sweepRoom(
         userIdFromParticipantMetadata(participant.metadata) ??
         knownIdentities.get(identity) ??
         null;
-      if (!shouldEvict({ identity, userId })) {
+      const mintedAt = mintedAtFromParticipantMetadata(participant.metadata);
+      if (!shouldEvict({ identity, userId, mintedAt })) {
         return;
       }
       try {
@@ -205,7 +324,12 @@ export function evictSfuRoom(room: string): Promise<void> {
   if (!client) {
     return Promise.resolve();
   }
-  return track(sweepRoom(client, room, "channel", new Map(), () => true));
+  const sweep = () => sweepRoom(client, room, "channel", new Map(), () => true);
+  // No `mintedAt` test: the channel is gone, so `POST /api/voice/token` can
+  // never issue a token for this room again and every participant a repeat
+  // pass can find is by definition replaying a pre-deletion one.
+  scheduleResweep(`room:${room}`, sweep);
+  return track(sweep());
 }
 
 /**
@@ -225,15 +349,19 @@ export function evictSfuUsersExcept(
   if (!client) {
     return Promise.resolve();
   }
-  return track(
+  const evictedAt = nowSeconds();
+  const sweep = (pass: SweepPass) =>
     sweepRoom(
       client,
       room,
       "channel-private",
       knownIdentities,
-      ({ userId }) => userId === null || !allowedUserIds.has(userId),
-    ),
-  );
+      (participant) =>
+        staleFor(pass, evictedAt, participant) &&
+        (participant.userId === null || !allowedUserIds.has(participant.userId)),
+    );
+  scheduleResweep(`private:${room}`, () => sweep("resweep"));
+  return track(sweep("first"));
 }
 
 /**
@@ -265,34 +393,41 @@ export function evictSfuUser(
     return Promise.resolve();
   }
 
-  return track(
-    (async () => {
-      // One listing narrows an arbitrary number of candidate channels down to
-      // the rooms that actually exist, so a 50-channel server costs 1 + (live
-      // voice rooms) calls instead of 50.
-      let active;
-      try {
-        active = await client.listRooms(rooms === null ? undefined : [...rooms]);
-      } catch (error) {
-        logEvent("voice.sfuEvictFailed", {
-          userId,
-          stage: "listRooms",
-          error: describeError(error),
-        });
-        return;
-      }
+  const evictedAt = nowSeconds();
+  const sweep = async (pass: SweepPass) => {
+    // One listing narrows an arbitrary number of candidate channels down to
+    // the rooms that actually exist, so a 50-channel server costs 1 + (live
+    // voice rooms) calls instead of 50.
+    let active;
+    try {
+      active = await client.listRooms(rooms === null ? undefined : [...rooms]);
+    } catch (error) {
+      logEvent("voice.sfuEvictFailed", {
+        userId,
+        stage: "listRooms",
+        error: describeError(error),
+      });
+      return;
+    }
 
-      await Promise.all(
-        active.map((room) =>
-          sweepRoom(
-            client,
-            room.name,
-            "user",
-            knownIdentities,
-            (participant) => participant.userId === userId,
-          ),
+    await Promise.all(
+      active.map((room) =>
+        sweepRoom(
+          client,
+          room.name,
+          "user",
+          knownIdentities,
+          (participant) =>
+            participant.userId === userId &&
+            staleFor(pass, evictedAt, participant),
         ),
-      );
-    })(),
-  );
+      ),
+    );
+  };
+
+  // Keyed on the user rather than a room: the scope is "wherever they are", and
+  // a second ban of the same person should restart one window, not open a
+  // second one beside it.
+  scheduleResweep(`user:${userId}`, () => sweep("resweep"));
+  return track(sweep("first"));
 }

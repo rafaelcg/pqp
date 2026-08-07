@@ -35,13 +35,16 @@ const {
   evictSfuUsersExcept,
   resetSfuAdminClient,
   settleSfuEvictions,
+  stopSfuResweeps,
 } = await import("./admin.js");
-const { participantMetadataFor } = await import("./backends.js");
+const { participantMetadataFor, TOKEN_TTL_SECONDS } = await import(
+  "./backends.js"
+);
 
-function participant(identity: string, userId?: string) {
+function participant(identity: string, userId?: string, mintedAt?: number) {
   return {
     identity,
-    ...(userId ? { metadata: participantMetadataFor(userId) } : {}),
+    ...(userId ? { metadata: participantMetadataFor(userId, mintedAt) } : {}),
   };
 }
 
@@ -79,6 +82,10 @@ describe("SFU eviction", () => {
   });
 
   afterEach(() => {
+    // Before restoring timers: a live interval outlasting its test would fire
+    // into the next one's mocks.
+    stopSfuResweeps();
+    vi.useRealTimers();
     vi.restoreAllMocks();
     unconfigureLiveKit();
   });
@@ -224,6 +231,115 @@ describe("SFU eviction", () => {
         "peer-revoked",
         "peer-unknown",
       ]);
+    });
+
+    /**
+     * `removeParticipant` disconnects but does not bar a return, and the
+     * `revokeTokenTs` that is supposed to bar it is implemented on LiveKit
+     * Cloud only — verified against a self-hosted livekit-server v1.13.5, which
+     * accepts the field, answers 200, and readmits the removed participant on
+     * the next connect. So eviction has to keep removing them until the token
+     * they hold has expired on its own.
+     */
+    describe("re-sweeping (a removal is not a bar on returning)", () => {
+      const INTERVAL_MS = 5_000;
+
+      // Fake timers before the eviction, not after: the interval has to be
+      // created against the clock the test then advances.
+      beforeEach(() => {
+        vi.useFakeTimers();
+        lk.listRooms.mockResolvedValue(rooms("voice-a"));
+      });
+
+      it("removes a banned user again each time they reconnect on the old token", async () => {
+        lk.listParticipants.mockResolvedValue([participant("peer-1", "banned")]);
+
+        await evictSfuUser("banned", ["voice-a"], new Map());
+        await settleSfuEvictions();
+        expect(removedIdentities()).toEqual(["peer-1"]);
+
+        await vi.advanceTimersByTimeAsync(INTERVAL_MS * 3);
+
+        // Once per pass, for as long as they keep coming back.
+        expect(removedIdentities()).toEqual([
+          "peer-1",
+          "peer-1",
+          "peer-1",
+          "peer-1",
+        ]);
+      });
+
+      it("leaves a user who returned on a token minted after the eviction", async () => {
+        lk.listParticipants.mockResolvedValue([participant("peer-1", "banned")]);
+
+        await evictSfuUser("banned", ["voice-a"], new Map());
+        await settleSfuEvictions();
+        lk.removeParticipant.mockClear();
+
+        // Unbanned and back: `POST /api/voice/token` re-checked the ban list
+        // and the channel access, and stamped the new token accordingly.
+        lk.listParticipants.mockResolvedValue([
+          participant("peer-1", "banned", Math.floor(Date.now() / 1000) + 60),
+        ]);
+
+        await vi.advanceTimersByTimeAsync(INTERVAL_MS * 3);
+
+        expect(removedIdentities()).toEqual([]);
+      });
+
+      it("treats a token with no mint stamp as pre-eviction", async () => {
+        lk.listParticipants.mockResolvedValue([participant("legacy-peer")]);
+
+        await evictSfuUser(
+          "banned",
+          ["voice-a"],
+          new Map([["legacy-peer", "banned"]]),
+        );
+        await settleSfuEvictions();
+        lk.removeParticipant.mockClear();
+
+        await vi.advanceTimersByTimeAsync(INTERVAL_MS);
+
+        expect(removedIdentities()).toEqual(["legacy-peer"]);
+      });
+
+      it("stops once every pre-eviction token has expired anyway", async () => {
+        lk.listParticipants.mockResolvedValue([participant("peer-1", "banned")]);
+
+        await evictSfuUser("banned", ["voice-a"], new Map());
+        await settleSfuEvictions();
+
+        await vi.advanceTimersByTimeAsync(
+          TOKEN_TTL_SECONDS * 1000 + INTERVAL_MS,
+        );
+        lk.removeParticipant.mockClear();
+        await vi.advanceTimersByTimeAsync(INTERVAL_MS * 5);
+
+        expect(removedIdentities()).toEqual([]);
+      });
+
+      it("coalesces repeated evictions of one user into a single sweep", async () => {
+        lk.listParticipants.mockResolvedValue([participant("peer-1", "banned")]);
+
+        await evictSfuUser("banned", ["voice-a"], new Map());
+        await evictSfuUser("banned", ["voice-a"], new Map());
+        await settleSfuEvictions();
+        lk.removeParticipant.mockClear();
+
+        await vi.advanceTimersByTimeAsync(INTERVAL_MS);
+
+        expect(removedIdentities()).toEqual(["peer-1"]);
+      });
+
+      it("never starts a timer on a mesh-only deployment", async () => {
+        unconfigureLiveKit();
+
+        await evictSfuUser("banned", ["voice-a"], new Map());
+        await settleSfuEvictions();
+        await vi.advanceTimersByTimeAsync(INTERVAL_MS * 3);
+
+        expect(lk.listRooms).not.toHaveBeenCalled();
+      });
     });
 
     describe("failure isolation", () => {
