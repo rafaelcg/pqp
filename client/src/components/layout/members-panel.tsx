@@ -26,6 +26,7 @@ import {
   type ContextMenuItemDef,
 } from "@/components/ui/context-menu";
 import { Dialog } from "@/components/ui/dialog";
+import { StatusDot } from "@/components/user/status-dot";
 import {
   ApiError,
   banMember,
@@ -96,6 +97,23 @@ interface PendingRemoval {
   member: ServerMember;
   ban: boolean;
 }
+
+/**
+ * How often an open panel re-reads statuses.
+ *
+ * PULLED, NOT PUSHED — and this interval is the whole reason that is affordable.
+ * A pushed status has to reach every member of every server the changing person
+ * shares, so at a thousand concurrent users a few idle transitions a second
+ * become hundreds of frames a second, nearly all of them delivered to clients
+ * with no member list open. Re-reading costs one request per *open panel*, which
+ * is a far smaller number and is exactly zero while nobody is looking.
+ *
+ * Fifteen seconds because status is a soft fact: nobody is harmed by learning
+ * ten seconds late that a colleague stepped away, and the request is a single
+ * indexed query plus an in-memory lookup. It also silently repairs a tab left
+ * open across a reconnect, which a push design has to handle explicitly.
+ */
+const STATUS_REFRESH_MS = 15_000;
 
 /** The member a timeout is being composed for, plus the composed values. */
 interface PendingTimeout {
@@ -211,6 +229,51 @@ export function MembersPanel({
       cancelled = true;
     };
   }, [open, serverId, canManage]);
+
+  /**
+   * Keep statuses fresh without re-rendering the whole roster.
+   *
+   * Only the `status` field is merged back in, and only for members already on
+   * screen. Replacing the list wholesale would fight every optimistic update the
+   * panel makes — a promotion, a kick, a lifted timeout — by reinstating the
+   * server's older answer a few seconds later. A member who joined since the
+   * panel opened is picked up the next time it opens; that is the right trade
+   * for a dialog somebody has open for thirty seconds.
+   *
+   * Deliberately paused while a confirmation dialog is up: those replace the
+   * whole panel, so there is nothing on screen to refresh, and a background poll
+   * behind a "Ban member?" question is pure noise.
+   */
+  useEffect(() => {
+    if (!open || !serverId || pending || pendingTimeout) {
+      return;
+    }
+    let cancelled = false;
+    const timer = setInterval(() => {
+      void fetchMembers(serverId)
+        .then((res) => {
+          if (cancelled) {
+            return;
+          }
+          const statuses = new Map(res.members.map((one) => [one.id, one.status]));
+          setMembers((prev) =>
+            prev.map((member) =>
+              statuses.has(member.id)
+                ? { ...member, status: statuses.get(member.id) }
+                : member,
+            ),
+          );
+        })
+        // A failed refresh leaves the last known statuses on screen. They are
+        // stale, not wrong, and an error banner for a background poll would
+        // teach people to ignore the banner.
+        .catch(() => {});
+    }, STATUS_REFRESH_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [open, serverId, pending, pendingTimeout]);
 
   const reloadTimeouts = useCallback(async () => {
     if (!serverId || !canManage) {
@@ -691,16 +754,31 @@ export function MembersPanel({
           return (
             <ContextMenu key={member.id} items={items}>
               <div className="mb-1 flex items-center gap-3 rounded-md px-2 py-2 hover:bg-ink-3">
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-md bg-ink-3 text-sm font-semibold">
-                  {member.avatarUrl ? (
-                    <img
-                      src={member.avatarUrl}
-                      alt=""
-                      className="h-full w-full object-cover"
-                    />
-                  ) : (
-                    member.displayName.slice(0, 1).toUpperCase()
-                  )}
+                {/* The pip rides the avatar's corner rather than sitting in its
+                    own column: the row already carries a role badge and up to
+                    five action buttons, and one more column would push the
+                    name out of a narrow panel. `ring-ink` punches it out of
+                    whatever is behind it, including the hover surface. */}
+                <div className="relative shrink-0">
+                  <div className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-md bg-ink-3 text-sm font-semibold">
+                    {member.avatarUrl ? (
+                      <img
+                        src={member.avatarUrl}
+                        alt=""
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      member.displayName.slice(0, 1).toUpperCase()
+                    )}
+                  </div>
+                  <StatusDot
+                    // Absent means an API that predates status. Read as
+                    // offline, never as online: showing nobody as present is a
+                    // missing feature, showing everybody as present is a lie.
+                    status={member.status ?? "offline"}
+                    className="absolute -bottom-0.5 -right-0.5"
+                    ringClassName="rounded-full bg-ink ring-2 ring-ink"
+                  />
                 </div>
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-semibold">
