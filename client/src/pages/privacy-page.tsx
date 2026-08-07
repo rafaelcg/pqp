@@ -210,55 +210,64 @@ export function PrivacyPage() {
 
       <h2>Why we process your data, and the legal basis</h2>
       <p>
-        Under LGPD art. 7, every processing activity needs a basis. Ours:
+        Here is what we actually use your data for. LGPD art. 7 says every one
+        of these purposes has to rest on a specific legal basis, so we have
+        named it in parentheses at the end of each one — but the plain
+        sentence in front of it is the part that answers the question you
+        actually have.
       </p>
       <ul>
         <li>
-          <strong>Running the service</strong> — creating your account,
-          delivering messages, storing history, connecting voice calls, keeping
-          your settings.{" "}
-          <em>Basis: execution of a contract with you (art. 7, V).</em>
+          <strong>Running pqp itself.</strong> Creating your account,
+          delivering your messages, keeping your history so it is there when
+          you reload, connecting your voice calls, and remembering your
+          settings — the basic service you signed up for.{" "}
+          <em>(This rests on our contract with you: art. 7, V.)</em>
         </li>
         <li>
-          <strong>Security, anti-abuse and reliability</strong> — rate limiting,
-          blocking attacks, debugging, protecting other users.{" "}
+          <strong>Keeping the service running, and keeping people from
+          abusing it.</strong> Rate limits, blocking attacks, debugging
+          problems, protecting other users from harm.{" "}
           <em>
-            Basis: legitimate interests (art. 7, IX), balanced against your
-            rights and limited to what the purpose needs.
+            (Basis: our legitimate interest, art. 7, IX — weighed against your
+            rights, and limited to what that actually needs.)
           </em>
         </li>
         <li>
-          <strong>Moderation and enforcing our rules</strong> — reviewing
-          reports, keeping ban and audit records so enforcement is reviewable.{" "}
-          <em>Basis: legitimate interests (art. 7, IX).</em>
+          <strong>Enforcing our rules.</strong> Reviewing reports, and keeping
+          ban and audit records so a moderation decision can be checked later
+          instead of just taken on trust.{" "}
+          <em>(Basis: legitimate interest, art. 7, IX.)</em>
         </li>
         <li>
-          <strong>Responding to imminent danger</strong> — acting on credible
-          threats to someone&apos;s life or physical safety, including reports
-          involving minors.{" "}
+          <strong>Acting on a credible threat to someone&apos;s life or
+          physical safety</strong>, including a report involving a minor.{" "}
           <em>
-            Basis: protection of life or physical safety (art. 7, VII), and legal
-            obligation (art. 7, II) where reporting is required.
+            (Basis: protecting life or physical safety, art. 7, VII, and,
+            where the law requires us to report it, legal obligation, art. 7,
+            II.)
           </em>
         </li>
         <li>
-          <strong>Complying with the law and answering the authorities</strong> —
-          responding to lawful orders and record-keeping duties.{" "}
-          <em>Basis: compliance with a legal or regulatory obligation (art. 7,
-          II).</em>
+          <strong>Complying with the law.</strong> Responding to a lawful
+          order, or keeping the records the law makes us keep.{" "}
+          <em>(Basis: legal obligation, art. 7, II.)</em>
         </li>
         <li>
-          <strong>Defending or exercising rights in a dispute</strong>.{" "}
+          <strong>Defending ourselves, or asserting a claim, if there is ever
+          a dispute.</strong>{" "}
           <em>
-            Basis: regular exercise of rights in judicial, administrative or
-            arbitration proceedings (art. 7, VI).
+            (Basis: exercising rights in a judicial, administrative or
+            arbitration proceeding, art. 7, VI.)
           </em>
         </li>
         <li>
-          <strong>Optional extras you switch on</strong> — desktop notifications,
-          for example, which your browser asks you to allow.{" "}
-          <em>Basis: your consent (art. 7, I), which you can withdraw at any
-          time in Settings or in your browser.</em>
+          <strong>Anything optional you switch on</strong>, like desktop
+          notifications, which your browser asks you to allow separately.{" "}
+          <em>
+            (Basis: your consent, art. 7, I — withdraw it any time in
+            Settings or in your browser.)
+          </em>
         </li>
       </ul>
       <p>
