@@ -35,6 +35,7 @@ import {
 import { sweepPendingAccountDeletions } from "./services/account.js";
 import { pruneAuditLog } from "./services/audit.js";
 import { pruneResolvedReports } from "./services/reports.js";
+import { pruneExpiredTimeouts } from "./services/sanctions.js";
 import { sweepMessageRetention } from "./services/retention.js";
 import { sweepChannelAudiences } from "./services/servers.js";
 import {
@@ -372,6 +373,25 @@ const reportPrune = setInterval(() => {
   });
 }, AUDIT_LOG_PRUNE_INTERVAL_MS);
 reportPrune.unref?.();
+
+/**
+ * Expired timeouts.
+ *
+ * The one sweep in this file that NOTHING DEPENDS ON. Every read in
+ * services/sanctions.ts filters on `expires_at > NOW()`, so a timeout ends when
+ * it says it ends whether or not this timer ever fires; deleting this block
+ * would change no behaviour and only leave one dead row per sanction ever
+ * issued. It is here for the same reason the audit prune is — disk — and it is
+ * worth saying out loud, because a sanction whose *correctness* depended on a
+ * cron would be a sanction that quietly outlives its sentence when a deploy
+ * restarts the process before the timer fires.
+ */
+const timeoutPrune = setInterval(() => {
+  void pruneExpiredTimeouts().catch((error) => {
+    console.error("[sanctions] timeout prune failed:", error);
+  });
+}, AUDIT_LOG_PRUNE_INTERVAL_MS);
+timeoutPrune.unref?.();
 
 /** Daily: retention is measured in days, so nothing is lost by checking once
  * a day rather than continuously. */

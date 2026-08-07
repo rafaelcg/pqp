@@ -181,13 +181,101 @@ Every action below maps to code that exists. Do not promise anything else.
 | Delete a single message | `DELETE /api/messages/:messageId` | Author, or owner/admin of that server. **In a DM there are no moderators — only the author can delete.** No bulk delete exists |
 | Kick from a server | `DELETE /api/servers/:id/members/:userId` | Owner/admin, subject to rank |
 | Ban from a server | same route with `ban:true`, or `POST /api/servers/:id/bans` | Can be pre-emptive; the target need not be a member. Stores a free-text reason |
-| Change a role | `PATCH /api/servers/:id/members/:userId` | Owner only |
+| **Time a member out** | `POST /api/servers/:id/timeouts` | **The middle of the ladder.** Owner/admin, subject to the same rank rule as kick. 1 minute to 28 days. Lift early with `DELETE /api/servers/:id/timeouts/:userId`; list the live ones with `GET`. See §3.7 |
+| Change a role | `PATCH /api/servers/:id/members/:userId` | Owner only. A demotion from admin to member also **evicts** them from the private channels they held on rank alone — live view and voice room, not just the next query |
 | Delete a channel or a whole server | server routes | Owner/admin |
-| **Terminate an account** | **still no operator endpoint** | `DELETE /api/me` (§5.4) is a *self-serve* route: it authenticates as the account being deleted and there is no way to aim it at somebody else. Terminating a Tier 0 account is therefore still manual SQL — but `deleteAccount` in `server/src/services/account.ts` is now a tested, correctly-ordered implementation of exactly that sequence (Clerk first, then the row, plus the S3 sweep). Wrapping it in an operator route is a small job; nobody has done it |
-| **Timeout / mute / suspend** | **does not exist** | There is no temporary sanction of any kind. The ladder jumps from "delete the message" to "ban". Do not write a warning-then-timeout policy the product cannot execute |
+| **Terminate an account** | `DELETE /api/admin/users/:userId` | **Built.** Gated on `INSTANCE_MODERATOR_CLERK_IDS` — operator configuration, not a server role, the same predicate the instance report queue uses. Runs `deleteAccount` (Clerk identity first, then the row, then the S3 sweep) and closes the account's live sockets. **Refuses with 409 when the target owns a server other people are in**, naming the servers: `servers.owner_id` cascades, so overriding that would destroy every message every other member of that server ever wrote. Transfer or delete those servers first. Answers 404 to anyone who is not an instance moderator. Not audit-logged — `audit_log` is server-scoped and this action belongs to no server; it goes to stderr instead |
 
 `servers.message_retention_days` (owner-set, daily sweep, pinned messages exempt)
 is a retention feature, not a moderation tool, and never touches DMs.
+
+**Applying a sanction while closing a report.** `PATCH /api/reports/:id` takes an
+optional `timeoutMinutes`. It closes the report *and* times the reported member
+out in one action, using the resolution note as the timeout's reason. Only valid
+on an `actioned` report that has a server behind it — a report about a
+conversation has no server to be timed out in, and the route answers 400 rather
+than closing the report and silently skipping the sanction. Everything that can
+refuse the sanction is checked **before** the report is closed, so a moderator
+never ends up with a cleared queue and nobody sanctioned.
+
+### 3.7 Timeouts — what they are and what they are not
+
+Shipped. This is the sanction to reach for when the honest answer to a report is
+"stop doing that for an hour". Before it existed the ladder went from deleting
+one message straight to banning the account, so every proportionate response was
+either an overreaction or nothing at all.
+
+**Scope: one server, the whole server.** Not per-channel. A timeout is about a
+person's conduct, not a room — somebody told to stop in #general who carries the
+same behaviour into #off-topic has not been stopped. Per-channel would also mean
+guessing where they will go next, and N rows and a channel picker per decision.
+
+**What it blocks.** Sending messages, reactions, typing indicators, editing
+their own messages, joining voice, and every other write into that server.
+
+**What it does not touch.**
+
+- **Reading.** They stay a member, keep their roles and their history, and can
+  read every channel they could read before. That is the entire difference
+  between a timeout and a kick, and it is what makes this usable for a first
+  offence: getting it wrong costs an hour of silence, not an ejection.
+- **Their direct messages.** A server's moderators have no authority there. The
+  lookup reaches a server only through `channels.server_id`, which is NULL for a
+  conversation, so this is structural rather than a check somebody remembered.
+- **Other servers.** A server timeout is not a platform ban and must never
+  quietly become one.
+- **Leaving, marking a channel read, and filing a report.** All stay open.
+  Reporting especially: the person timed out in a fight is sometimes the one
+  with the legitimate complaint, and taking away their escalation route would be
+  the most harmful thing this feature could do.
+
+**Voice is a refused join, not a server mute.** A mute is the more surgical
+sanction and it is the one this product cannot deliver: in mesh mode the audio
+never touches the server, so "muted" would mean asking the sanctioned client to
+please stop sending — a suggestion, not enforcement, defeated by any modified
+client. The join is refused instead, and anybody already in a room is evicted
+when the sanction lands.
+
+**Rank.** Exactly the kick/ban rule: owners may act on anyone below them, admins
+only on plain members. An admin who could silence a peer for 28 days would have
+routed around "an admin cannot kick an admin". Unlike a ban, a timeout cannot be
+pre-emptive — there is nothing to silence about somebody who is not in the
+server.
+
+**Expiry needs nothing to be running.** `member_timeouts.expires_at` is compared
+against Postgres's `NOW()` on every read, so a sentence ends when it says it
+ends whether or not any sweeper, timer or replica is healthy. The daily prune is
+disk hygiene only; deleting it would change nothing about who may speak. The
+alternative — an `active` flag flipped by a cron — fails in the one direction
+that matters, keeping somebody silenced past their time while looking exactly
+like the feature working.
+
+**Where it is enforced.** Two chokepoints and one guard, never per-route:
+
+| Surface | Where | Why there |
+|---|---|---|
+| HTTP | `handleApi`, right after the age gate, write methods only | Same argument as the age gate: 100+ handlers, so a per-route check is a check somebody forgets. It resolves `/api/servers/:id`, `/api/channels/:id` and `/api/messages/:id` from the pathname, so a route nobody has written yet is covered the day it appears |
+| WebSocket | top of `handleChatMessage` | **Not** connection-time auth, where the age gate's socket half lives. A socket authenticates once and lives for hours, so a connection-time check would bind nobody who was already online — which is everybody a moderator is reacting to |
+| Voice | `join-voice-room` | The only way into a room |
+
+**The sanctioned person is told.** The HTTP surface answers 403 with a sentence
+naming the exact end time. The socket sends a `sanction-notice` frame carrying
+the same sentence, because a dropped WebSocket frame renders as a red bubble
+indistinguishable from the network being down. **Known gap:** the web client does
+not render that frame yet — `client/src/App.tsx` routes inbound frames through
+an explicit allowlist of chat types and passes everything else to the voice
+handler, which drops it. Two lines fix it (add `sanction-notice` to that
+allowlist, and a case in `use-chat.ts`); until then a timed-out web user sees
+their message fail without being told why, and learns the reason from the
+members panel, which shows the timeout on their row.
+
+**Visibility.** `GET /api/servers/:id/timeouts` returns every live timeout with
+who issued it, when, why and when it ends, and the members panel renders that on
+the member's row. Issuing, extending and lifting are all in the audit log
+(`member.timeout`, `member.timeout_lift`); expiry is not, because it is not a
+moderator action and noticing it would need the sweeper this design exists
+without. The audit entry carries the duration, which matters because the row
+itself is deleted when the sanction ends.
 
 ### 3.4 Evidence preservation
 
@@ -378,7 +466,10 @@ allows a month. Work to the shorter one — the pages say we do.
    departing user cascade away with them. Keeping the row would protect nothing
    (it is keyed on `users.id`, and a re-registration gets a fresh uuid), and the
    only durable defence — retaining a hash of the Clerk id after erasure — is a
-   new retention decision for counsel, not a code change.
+   new retention decision for counsel, not a code change. **Assessed in full in
+   §6.1**, including the three candidate fixes and what each would cost; the
+   conclusion is that none may be implemented before the privacy policy
+   describes it.
 
    **Ordering and partial failure.** The sequence is: stamp
    `users.deletion_started_at` → delete the Clerk user → delete the local row.
@@ -421,12 +512,58 @@ Ordered by how badly it hurts at launch.
 | **Deletion is not disclosed as final to the other party** | Somebody mid-conversation with a deleted account sees their messages vanish with no explanation. Discord shows "Deleted User"; pqp shows a gap | **Known.** A consequence of deleting rather than anonymising (§5.4), and a UX gap rather than a compliance one |
 | **Age verification** | Deliberately not built, and the Terms must keep saying so. What ships is a **self-declared 18+ gate** (§3.6): a date of birth, entered once, enforced server-side. No document or ID check — that is disproportionate for this product and would mean holding far more personal data than the 18+ rule needs | **Self-declaration is the launch position.** The gate is built; identity verification is not, and is not planned |
 | **In-app reporting** | No report/flag action on messages or users; a user's only self-serve recourse is blocking. Email is the whole reporting surface | **In progress** — another work stream is building it now. Update terms-page.tsx when it lands |
-| **Temporary sanctions (timeout/mute)** | The ladder jumps from message deletion straight to ban. No graduated enforcement is possible | **Not built** |
-| **Platform-level moderation tooling** | No admin console. Every platform-level action is manual SQL or borrowing a server owner's permissions | **Not built** |
+| **Temporary sanctions (timeout/mute)** | The ladder jumped from message deletion straight to ban. No graduated enforcement was possible | **Built** — server-scoped timeouts, §3.7. Enforced at two chokepoints plus the voice join; expiry needs no sweeper. Remaining gap: the web client does not yet render the `sanction-notice` frame (two lines in `App.tsx` and `use-chat.ts`) |
+| **Account deletion is a ban-evasion route** | A banned user deletes their account, signs up again, and walks back in. Bans are keyed on `users.id`, which is regenerated on re-registration, and `server_bans.user_id` is `ON DELETE CASCADE` — so the ban rows are gone before the new account even exists | **Deliberately not closed. Needs a retention decision, not a code change.** See §6.1 |
+| **Platform-level moderation tooling** | No admin console. Platform-level actions are still mostly manual SQL or borrowing a server owner's permissions | **Partly built** — account termination now has an operator route (`DELETE /api/admin/users/:userId`, §3.3), gated on `INSTANCE_MODERATOR_CLERK_IDS`. There is still no UI, no instance-level audit log, and no operator route for anything else |
 | **pt-BR translation of these three pages** | A privacy policy in English for a Brazilian audience is bad practice and arguably defeats informed consent. Only Clerk's sign-in modal is translated (`client/src/lib/locale.ts`); the app's own strings, including these pages, are English-only | **Not built** |
 | **Link-preview cache never purged** | `link_embeds` rows are overwritten on refresh but never deleted. Contains third-party page metadata keyed by URL hash, not tied to a user — low risk, but it is unbounded | **Known** |
 | **DMs have no retention and no moderation** | `message_retention_days` joins through `channels.server_id`, which is NULL for DMs, so DM history is kept forever. In a DM only the author can delete a message | **By design; disclosed in the privacy policy** |
 | **`DELETE /api/dms/:channelId` hides, it does not delete** | Users may reasonably read "remove conversation" as deletion. Disclosed in the privacy policy; consider relabelling the UI | **Known** |
+
+### 6.1 Ban evasion by account deletion — assessed, deliberately not closed
+
+**The hole is real.** Ban → `DELETE /api/me` → sign up again → rejoin by invite.
+`server_bans.user_id` is `ON DELETE CASCADE`, so the ban rows vanish with the
+account; even if they did not, they are keyed on `users.id`, and re-registering
+mints a fresh uuid that matches nothing. Deleting an account is currently the
+cheapest ban-evasion route in the product, and it takes about thirty seconds.
+
+**Every fix requires keeping an identifier after erasure, and that is a
+retention decision the owner has to make — not one a code change may make
+quietly.** The three candidates, and what each would cost:
+
+1. **Retain a hash of the Clerk id on the ban row.** The narrow, standard
+   answer: `server_bans` keeps `sha256(clerk_id)` after the user row goes, and
+   `upsertUser` checks it. It works, and it means **pqp retains a
+   pseudonymous identifier of a person who exercised their art. 18, IV right to
+   erasure**, indefinitely, for the purpose of refusing them service. That is
+   arguable under art. 16, II and under legitimate interest, and it is exactly
+   the kind of argument that needs the encarregado to sign it, a line in the
+   privacy policy describing it, and a retention period attached to it. A hash
+   is not anonymisation: it is reversible by anyone holding the Clerk id, which
+   is us.
+2. **Retain the email hash instead.** Stronger (it survives a new Clerk
+   account), and worse: it retains an identifier of a person across identity
+   providers, and email is the thing they will most reasonably expect to have
+   been erased.
+3. **Do nothing durable; make re-entry slower.** Invite-only servers, invite
+   expiry, and the report queue already catch the common case, because an
+   evader has to be re-invited and their behaviour usually recurs. This is what
+   is in place today and it is the honest description of the product's current
+   defence.
+
+**Decision: not implemented here.** What is written and enforced instead:
+`deleteAccount` states the gap in its own comment rather than hiding it, this
+section says it out loud, and §5.4 lists it among the known limits of self-serve
+deletion. If the owner decides option 1 is acceptable, it is a small change —
+one column, one check in `upsertUser`, one paragraph in the privacy policy — and
+the privacy policy paragraph is the part that must land first.
+
+**Note this cuts the other way too.** The operator termination route in §3.3 has
+the same property from the other side: terminating a Tier 0 account removes it,
+and nothing stops that person signing up again either. For Tier 0 the answer is
+not a hash, it is that re-registration is a new account whose conduct is watched
+by the same report queue.
 
 ### App Store guideline 1.2
 

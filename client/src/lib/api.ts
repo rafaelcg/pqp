@@ -14,6 +14,7 @@ import type {
   DmSummary,
   Gif,
   Invite,
+  MemberTimeout,
   Message,
   MessageSearchResponse,
   CreateReportRequest,
@@ -592,6 +593,31 @@ export interface ServerBan {
 
 export const listBans = (serverId: string) =>
   apiFetch<{ bans: ServerBan[] }>(`/api/servers/${serverId}/bans`);
+
+/**
+ * Timeouts — the temporary sanction between deleting a message and banning the
+ * account. `listTimeouts` returns only the ones still running: expiry is
+ * evaluated by the server on every read, so there is no "expired" state for a
+ * client to filter out or, worse, to get wrong.
+ */
+export const listTimeouts = (serverId: string) =>
+  apiFetch<{ timeouts: MemberTimeout[] }>(
+    `/api/servers/${serverId}/timeouts`,
+  );
+
+export const timeoutMember = (
+  serverId: string,
+  userId: string,
+  minutes: number,
+  reason?: string | null,
+) =>
+  post<{ timeout: { expiresAt: string }; message: string }>(
+    `/api/servers/${serverId}/timeouts`,
+    { userId, minutes, reason: reason ?? null },
+  );
+
+export const liftTimeout = (serverId: string, userId: string) =>
+  del<{ ok: boolean }>(`/api/servers/${serverId}/timeouts/${userId}`);
 
 /** `before` is the last-loaded entry's own `id` — a bare, ever-increasing
  * cursor, unlike the message list's timestamp-plus-id pair (see the schema

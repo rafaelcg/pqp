@@ -25,6 +25,11 @@ import {
 import { getMessageChannelId, toggleReaction } from "../services/reactions.js";
 import { listBlockersOf } from "../services/blocks.js";
 import { isDmSendBlocked, restoreDmParticipants } from "../services/dms.js";
+import {
+  findTimeoutForChannel,
+  timeoutMessage,
+  type ActiveTimeout,
+} from "../services/sanctions.js";
 import { getChannelAudience } from "../services/servers.js";
 import { canAccessChannel } from "../services/users.js";
 import { forEachAuthenticatedSocket } from "./sockets.js";
@@ -493,6 +498,42 @@ async function notifyChannelActivity(
   });
 }
 
+/**
+ * Tell a timed-out sender why their frame went nowhere.
+ *
+ * A WebSocket frame has no status code, so every refusal on this socket is a
+ * silent drop — which the client renders, after its send timer expires, as a
+ * red bubble indistinguishable from a network failure. That is acceptable for a
+ * malformed frame and unacceptable for a sanction: a person who does not know
+ * they have been timed out has been given a broken app, not a consequence.
+ *
+ * `sanction-notice` is not a member of `chatServerMessageSchema` — see the long
+ * note on `sanctionNoticeSchema` in shared for why, and what two lines in the
+ * web client turn it into something visible. It is sent regardless, because a
+ * frame a client drops costs nothing and a frame that was never sent can never
+ * be rendered.
+ */
+function sendSanctionNotice(
+  socket: WebSocket,
+  channelId: string,
+  timeout: ActiveTimeout,
+): void {
+  if (socket.readyState !== 1) {
+    return;
+  }
+  socket.send(
+    JSON.stringify({
+      type: "sanction-notice",
+      sanction: "timeout",
+      serverId: timeout.serverId,
+      channelId,
+      expiresAt: timeout.expiresAt.toISOString(),
+      reason: timeout.reason,
+      message: timeoutMessage(timeout),
+    }),
+  );
+}
+
 export async function handleChatMessage(
   session: { socket: WebSocket; user: DbUser },
   raw: unknown,
@@ -504,6 +545,51 @@ export async function handleChatMessage(
 
   const conn = ensureConnection(session.socket, session.user);
   const payload = message.data;
+
+  // ------------------------------------------------------ the timeout gate
+  //
+  // THE WEBSOCKET CHOKEPOINT. One guard, before any frame is handled, for the
+  // same reason `handleApi` gates the age check before `router.match`: a
+  // per-branch check is a check somebody forgets on the branch where it
+  // matters, and this function grows a branch every time the protocol does.
+  //
+  // Deliberately NOT in `resolveAuthUser`, where the socket half of the age
+  // gate lives. A socket authenticates once and then lives for hours, so a
+  // connection-time check would leave a timeout issued at 14:00 binding nobody
+  // who was already online at 13:59 — which is every person a moderator is
+  // actually reacting to. Here it is re-evaluated per frame, so a sanction
+  // takes hold on the sender's very next keystroke and, equally, *releases*
+  // them the moment it expires with nothing scheduled to make that true.
+  //
+  // `findTimeoutForChannel` reaches a server only through `channels.server_id`,
+  // which is NULL for a conversation — so this guard can be unconditional and
+  // still be structurally incapable of silencing somebody's direct messages.
+  // That is rule 2 in shared/sanctions.ts, enforced by a join rather than by
+  // this comment.
+  //
+  // `typing` is on the list. It costs one indexed lookup per frame on a path
+  // that is already rate-limited, and leaving it off would let a timed-out
+  // member park "X is typing…" in the channel they were just told to stop
+  // posting in — which is the disruption, minus the words.
+  if (
+    payload.type === "message-create" ||
+    payload.type === "reaction-toggle" ||
+    payload.type === "typing"
+  ) {
+    const timeout = await findTimeoutForChannel(
+      conn.user.id,
+      payload.channelId,
+    );
+    if (timeout) {
+      // Not for `typing`: that frame fires per keystroke behind its own
+      // limiter, and answering each one would turn a notice into a flood. The
+      // notice the sender needs comes from the send they are typing towards.
+      if (payload.type !== "typing") {
+        sendSanctionNotice(conn.socket, payload.channelId, timeout);
+      }
+      return;
+    }
+  }
 
   if (payload.type === "join-channel") {
     if (!(await canAccessChannel(payload.channelId, conn.user.id))) {

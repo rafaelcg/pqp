@@ -18,6 +18,14 @@ vi.mock("../services/users.js", () => ({
   canAccessChannel: async () => true,
 }));
 
+// The timeout chokepoint queries Postgres, and this suite deliberately runs
+// without one. Enforcement itself is proved end-to-end against a real database
+// in services/sanctions.test.ts; here it only has to be out of the way.
+vi.mock("../services/sanctions.js", () => ({
+  findTimeoutForChannel: async () => null,
+  timeoutMessage: () => "",
+}));
+
 vi.mock("../services/dms.js", () => ({
   isDmSendBlocked: async () => false,
   restoreDmParticipants: async () => {},

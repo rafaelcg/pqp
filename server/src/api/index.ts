@@ -20,6 +20,7 @@ import {
   executeWebhookSchema,
   expectedDeleteConfirmation,
   formatUserTag,
+  issueTimeoutSchema,
   GIF_PAGE_MAX,
   GIF_PAGE_SIZE,
   GIF_QUERY_MAX_LENGTH,
@@ -136,8 +137,16 @@ import {
   banMember,
   kickMember,
   listBans,
+  listRevokedPrivateChannelIds,
   unbanMember,
 } from "../services/moderation.js";
+import {
+  findTimeoutForRequest,
+  issueTimeout,
+  liftTimeout,
+  listActiveTimeouts,
+  timeoutMessage,
+} from "../services/sanctions.js";
 import {
   addChannelMember,
   createChannel,
@@ -184,6 +193,7 @@ import {
 import { getIceServers } from "../services/ice.js";
 import {
   createReport,
+  getReport,
   getReportScope,
   isInstanceModerator,
   listInstanceReports,
@@ -444,12 +454,19 @@ async function requireOwner(serverId: string, userId: string) {
  * Owners may act on anyone beneath them; admins only on plain members, so an
  * admin can neither depose a peer nor the owner. Returns the target's role, or
  * null when they are not a member at all.
+ *
+ * `timeout` joins `kick` and `ban` on exactly the same rule, and that is the
+ * point of routing it through here rather than writing a second rank check: a
+ * temporary sanction is still a sanction, and an admin who could silence a peer
+ * for 28 days would have found a way around "an admin cannot kick an admin"
+ * that costs the target nearly as much. Self-targeting is refused by the
+ * callers, which is where the "use leave instead" style of message belongs.
  */
 async function requireOutranked(
   serverId: string,
   actorRole: MemberRole,
   targetUserId: string,
-  action: "kick" | "ban",
+  action: "kick" | "ban" | "timeout",
 ): Promise<MemberRole | null> {
   const targetRole = await getMemberRole(serverId, targetUserId);
   if (targetRole === "owner") {
@@ -682,6 +699,99 @@ router.delete("/api/me", async ({ req, res, user }) => {
   // Nothing names these objects any more — the rows that did cascaded away with
   // the account, so the hourly orphan sweeper will never see them.
   deleteObjectsInBackground(result.attachmentKeys);
+
+  return { ok: true };
+});
+
+/**
+ * Terminate somebody else's account. The Tier 0 tool.
+ *
+ * `DELETE /api/me` is self-serve: it authenticates *as* the account being
+ * deleted and there is no way to aim it at anyone else, so terminating an
+ * account for CSAM or a credible threat was manual SQL — the one action the
+ * runbook demands be immediate, done by hand, at 3am, against production.
+ * `deleteAccount` has been a correctly-ordered, tested implementation of that
+ * sequence for a while; this is the route in front of it.
+ *
+ * GATED ON `isInstanceModerator`, AND ON NOTHING ELSE. Deliberately not a server
+ * role: destroying an account reaches every server that account is in and every
+ * conversation it is part of, and no server owner has standing over any of that.
+ * The reasoning is identical to the instance report queue's, which is why it
+ * reuses the same predicate — `INSTANCE_MODERATOR_CLERK_IDS`, operator
+ * configuration, not something any in-app action can grant. With the variable
+ * unset there are no instance moderators and this route does not exist for
+ * anybody, which is the right default for a self-hosted instance.
+ *
+ * 404 rather than 403 for an unauthorized caller, same as the instance queue:
+ * whether this deployment has operators at all is not a fact to confirm.
+ *
+ * WHAT IT DOES NOT DO, and this is the important part: it applies exactly the
+ * same rules as self-serve deletion, including the refusal when the target owns
+ * a server other people are in. That refusal is not a formality — `servers.owner_id`
+ * cascades, so overriding it would destroy every message every other member of
+ * that server ever wrote in order to remove one person. An operator dealing
+ * with a Tier 0 account that owns a populated server has to transfer or delete
+ * that server first, as a separate deliberate act. The 409 names the servers.
+ */
+router.delete("/api/admin/users/:userId", async ({ user, res }, { userId }) => {
+  if (!isInstanceModerator(user)) {
+    throw new NotFound("Not found");
+  }
+  if (userId === user.id) {
+    // Not a safety rule so much as an honesty one: an operator deleting their
+    // own account should go through the confirmation flow that asks them to
+    // type their handle, not through the one built for acting on somebody else.
+    throw new HttpError(400, "Use DELETE /api/me to delete your own account");
+  }
+
+  const key = `user:${user.id}`;
+  if (!accountDeleteLimiter.take(key)) {
+    res.setHeader("Retry-After", String(accountDeleteLimiter.retryAfter(key)));
+    throw new HttpError(429, "Slow down");
+  }
+
+  const target = await getUserById(userId!);
+  if (!target) {
+    throw new NotFound("User not found");
+  }
+
+  let result;
+  try {
+    result = await deleteAccount(target.id, target.clerk_id);
+  } catch (error) {
+    if (error instanceof OwnedServersBlockDeletionError) {
+      throw new HttpErrorWithDetail(409, error.message, {
+        code: "owned_servers",
+        servers: error.servers,
+      });
+    }
+    if (error instanceof IdentityDeletionFailedError) {
+      console.error("[account] operator deletion, Clerk refused:", error.cause);
+      throw new HttpError(
+        502,
+        "Could not reach the sign-in provider. Nothing was deleted — please try again.",
+      );
+    }
+    throw error;
+  }
+
+  // Same eviction and the same process-local caveat as `DELETE /api/me`.
+  evictVoiceUser(target.id);
+  forEachAuthenticatedSocket((socket, connected) => {
+    if (connected.id === target.id) {
+      socket.close(4003, "account deleted");
+    }
+  });
+  deleteObjectsInBackground(result.attachmentKeys);
+
+  // No audit entry, and that is not an oversight: `audit_log` is server-scoped
+  // (`server_id` is NOT NULL) and an account termination belongs to no server.
+  // It is logged to stderr instead, which is where an instance-level action
+  // with no instance-level log has to go until one exists — see the note in
+  // docs/TRUST_AND_SAFETY.md §3.3.
+  console.warn(
+    `[moderation] account ${target.id} terminated by operator ${user.clerk_id}`,
+  );
 
   return { ok: true };
 });
@@ -1800,6 +1910,28 @@ router.patch(
     const body = updateMemberRoleSchema.parse(await readJsonBody(req));
     const previousRole = await getMemberRole(serverId!, userId!);
     await updateMemberRole(serverId!, userId!, body.role);
+
+    // A DEMOTION IS A REVOCATION, AND A REVOCATION HAS TO EVICT.
+    //
+    // `channelVisibleSql` admits admins to a private channel on rank alone, so
+    // `admin` → `member` takes away every private channel they were not
+    // explicitly added to — without touching one membership row. `updateMemberRole`
+    // invalidates the audience cache for exactly this reason, but a cache
+    // invalidation only fixes what the *next* query answers: the socket already
+    // sitting in that channel keeps receiving every message body, and the peer
+    // already in its voice room keeps hearing it, until they happen to navigate
+    // away. Same two `evict*` helpers the kick and ban paths call, for the same
+    // reason and with the same process-local caveat noted on `DELETE /api/me`.
+    if (previousRole === "admin" && body.role === "member") {
+      const revoked = new Set(
+        await listRevokedPrivateChannelIds(serverId!, userId!),
+      );
+      if (revoked.size > 0) {
+        evictUserFromChannels(userId!, revoked);
+        evictVoiceUser(userId!, revoked);
+      }
+    }
+
     await logAudit({
       serverId: serverId!,
       actorId: user.id,
@@ -1807,6 +1939,108 @@ router.patch(
       targetType: "user",
       targetId: userId!,
       changes: [{ key: "role", old: previousRole, new: body.role }],
+    });
+    return { ok: true };
+  },
+);
+
+// ------------------------------------------------------------- timeouts
+//
+// The middle of the enforcement ladder. `requireManager` to see and act, and
+// `requireOutranked` for who may be acted on — the same rank rule as kick and
+// ban, argued there.
+//
+// The *enforcement* of a timeout is nowhere near these routes: it lives in the
+// two chokepoints (`handleApi` above, `handleChatMessage` in ws/chat.ts) plus
+// the voice join. These three only issue, lift and list.
+
+router.get(
+  "/api/servers/:serverId/timeouts",
+  async ({ user }, { serverId }) => {
+    await requireManager(serverId!, user.id);
+    return { timeouts: await listActiveTimeouts(serverId!) };
+  },
+);
+
+router.post(
+  "/api/servers/:serverId/timeouts",
+  async ({ req, user }, { serverId }) => {
+    const actorRole = await requireManager(serverId!, user.id);
+    const body = issueTimeoutSchema.parse(await readJsonBody(req));
+    if (body.userId === user.id) {
+      throw new HttpError(400, "You cannot time yourself out");
+    }
+    // Unlike a ban, a timeout cannot be pre-emptive: it silences somebody
+    // *inside* a server, and there is nothing to silence about a person who is
+    // not there. `requireOutranked` returns null for a non-member.
+    const targetRole = await requireOutranked(
+      serverId!,
+      actorRole,
+      body.userId,
+      "timeout",
+    );
+    if (!targetRole) {
+      throw new NotFound("Member not found");
+    }
+
+    const timeout = await issueTimeout({
+      serverId: serverId!,
+      userId: body.userId,
+      issuedBy: user.id,
+      minutes: body.minutes,
+      reason: body.reason ?? null,
+    });
+
+    await logAudit({
+      serverId: serverId!,
+      actorId: user.id,
+      action: "member.timeout",
+      targetType: "user",
+      targetId: body.userId,
+      reason: body.reason ?? null,
+      changes: [
+        // The row is replaced rather than appended to and is deleted when it
+        // expires, so this entry is the only durable record of how long the
+        // sanction was for. `expiresAt` old→new reads as an extension when the
+        // person was already timed out, and as a fresh sanction when not.
+        {
+          key: "expiresAt",
+          old: timeout.previousExpiresAt?.toISOString() ?? null,
+          new: timeout.expiresAt.toISOString(),
+        },
+        { key: "minutes", old: null, new: body.minutes },
+      ],
+    });
+
+    // A timeout refuses the voice *join*; somebody already in a room joined
+    // before it existed and would otherwise keep talking through the whole
+    // sanction. Scoped to this server's channels so a conversation call the
+    // person is in is untouched — a server's moderators do not get to hang up
+    // their members' DMs. Text needs no equivalent: nothing is pushed *from*
+    // the sanctioned client, and they keep read access by design.
+    const channelIds = await listServerChannelIds(serverId!);
+    evictVoiceUser(body.userId, channelIds);
+
+    return created({ timeout, message: timeoutMessage(timeout) });
+  },
+);
+
+router.delete(
+  "/api/servers/:serverId/timeouts/:userId",
+  async ({ user }, { serverId, userId }) => {
+    await requireManager(serverId!, user.id);
+    // No rank check on the way *out*. Lifting a sanction only ever gives
+    // something back, and an admin who can see the list should be able to undo
+    // a mistake without waiting for the owner.
+    if (!(await liftTimeout(serverId!, userId!))) {
+      throw new NotFound("No active timeout for that member");
+    }
+    await logAudit({
+      serverId: serverId!,
+      actorId: user.id,
+      action: "member.timeout_lift",
+      targetType: "user",
+      targetId: userId!,
     });
     return { ok: true };
   },
@@ -2108,13 +2342,61 @@ router.patch("/api/reports/:report", async ({ req, user }, { report }) => {
   if (!scope) {
     throw new NotFound("Report not found");
   }
+  let actorRole: MemberRole | null = null;
   if (scope.serverId) {
-    await requireManager(scope.serverId, user.id);
+    actorRole = await requireManager(scope.serverId, user.id);
   } else if (!isInstanceModerator(user)) {
     throw new NotFound("Report not found");
   }
 
   const body = resolveReportSchema.parse(await readJsonBody(req));
+
+  // ------------------------------------------- resolve and sanction as one
+  //
+  // Everything that can refuse the sanction is checked BEFORE the report is
+  // closed. The failure this ordering exists to prevent is the one that costs
+  // the moderator most: closing the queue entry, failing the rank check, and
+  // leaving a closed report with nobody sanctioned and no obvious way to tell
+  // that is what happened. Either both happen or neither does.
+  let timeoutTarget: string | null = null;
+  if (body.timeoutMinutes != null) {
+    if (!scope.serverId || !actorRole) {
+      // An instance-queue report is about a conversation, which has no server
+      // and therefore no place to be timed out *in*. Silencing somebody's DMs
+      // is not a sanction this product has, and inventing one here would hand
+      // it to whoever reads that queue. 400 rather than a quiet skip.
+      throw new HttpError(
+        400,
+        "A report with no server behind it cannot carry a timeout",
+      );
+    }
+    if (body.status !== "actioned") {
+      throw new HttpError(400, "Only an actioned report can carry a timeout");
+    }
+    const report = await getReport(reportId);
+    if (!report?.reportedUserId) {
+      // `reported_user_id` is `ON DELETE SET NULL`: the account has gone since
+      // the report was filed, and there is nobody left to sanction.
+      throw new HttpError(400, "The reported account no longer exists");
+    }
+    if (report.reportedUserId === user.id) {
+      throw new HttpError(400, "You cannot time yourself out");
+    }
+    // Same rank rule as the standalone route — resolving a report is not a way
+    // around "an admin cannot sanction an admin".
+    if (
+      !(await requireOutranked(
+        scope.serverId,
+        actorRole,
+        report.reportedUserId,
+        "timeout",
+      ))
+    ) {
+      throw new NotFound("The reported account is not a member of this server");
+    }
+    timeoutTarget = report.reportedUserId;
+  }
+
   const resolved = await resolveReport(
     reportId,
     user.id,
@@ -2124,6 +2406,40 @@ router.patch("/api/reports/:report", async ({ req, user }, { report }) => {
   if (!resolved) {
     // Someone else closed it between the scope read and the update.
     throw new HttpError(409, "This report has already been resolved");
+  }
+
+  if (timeoutTarget && scope.serverId && body.timeoutMinutes != null) {
+    const timeout = await issueTimeout({
+      serverId: scope.serverId,
+      userId: timeoutTarget,
+      issuedBy: user.id,
+      minutes: body.timeoutMinutes,
+      // The note the moderator already typed is the justification. Asking for
+      // it a second time is how the reason field ends up empty.
+      reason: body.note ?? null,
+    });
+    await logAudit({
+      serverId: scope.serverId,
+      actorId: user.id,
+      action: "member.timeout",
+      targetType: "user",
+      targetId: timeoutTarget,
+      reason: body.note ?? null,
+      changes: [
+        {
+          key: "expiresAt",
+          old: timeout.previousExpiresAt?.toISOString() ?? null,
+          new: timeout.expiresAt.toISOString(),
+        },
+        { key: "minutes", old: null, new: body.timeoutMinutes },
+        // Which report produced this sanction. `audit_log.target_id` is a uuid
+        // and a report id is a bigint, so it travels here — the same dodge the
+        // `report.resolve` entry below makes, for the same reason.
+        { key: "report", old: null, new: reportId },
+      ],
+    });
+    const channelIds = await listServerChannelIds(scope.serverId);
+    evictVoiceUser(timeoutTarget, channelIds);
   }
 
   // Server-scoped resolutions join the same trail as every other moderator
@@ -2398,6 +2714,29 @@ export async function handleApi(
       req,
     );
     return;
+  }
+
+  // ----------------------------------------------------- the timeout gate
+  //
+  // Immediately after the age gate, and for the same reason it is here rather
+  // than in the routes: a per-route check is a check somebody forgets on the
+  // route where it matters. Placed before `router.match` so it covers paths
+  // that do not exist yet.
+  //
+  // Narrower than the age gate in two ways, both deliberate. It runs on WRITE
+  // methods only — a timeout takes away speaking, not reading, and gating GETs
+  // would make it a partial ban. And it only asks the database at all when the
+  // pathname names a server, a channel or a message; `/api/me`, `/api/dms`,
+  // `/api/blocks` and `/api/reports` match no scope and cost nothing, which is
+  // also how a timed-out member keeps the ability to report the fight they are
+  // in. `findTimeoutForRequest` owns both rules — see the comment on
+  // `TIMEOUT_EXEMPT_SUFFIXES` for the two writes that stay open.
+  if (WRITE_METHODS.has(method)) {
+    const timeout = await findTimeoutForRequest(user.id, method, pathname);
+    if (timeout) {
+      sendError(res, 403, timeoutMessage(timeout), req);
+      return;
+    }
   }
 
   try {

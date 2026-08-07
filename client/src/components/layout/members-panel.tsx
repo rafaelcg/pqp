@@ -3,16 +3,23 @@ import {
   Ban,
   ChevronDown,
   ChevronRight,
+  Clock,
   Flag,
   RotateCcw,
   ShieldMinus,
   ShieldPlus,
+  TimerReset,
   UserCheck,
   UserMinus,
   UserX,
   type LucideIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+import {
+  TIMEOUT_PRESET_MINUTES,
+  TIMEOUT_REASON_MAX_LENGTH,
+  type MemberTimeout,
+} from "@pqp/shared";
 import { Button } from "@/components/ui/button";
 import {
   ContextMenu,
@@ -24,7 +31,10 @@ import {
   banMember,
   fetchMembers,
   kickMember,
+  liftTimeout,
   listBans,
+  listTimeouts,
+  timeoutMember,
   unbanMember,
   updateMemberRole,
   type ServerBan,
@@ -33,6 +43,46 @@ import {
 import { cn } from "@/lib/utils";
 
 type MemberRole = "owner" | "admin" | "member";
+
+/** "45 minutes", "7 days" — a duration a moderator reads, not 10080. */
+function describeMinutes(minutes: number): string {
+  if (minutes < 60) {
+    return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+  }
+  if (minutes < 60 * 24) {
+    const hours = minutes / 60;
+    return `${hours} hour${hours === 1 ? "" : "s"}`;
+  }
+  const days = minutes / (60 * 24);
+  return `${days} day${days === 1 ? "" : "s"}`;
+}
+
+/**
+ * How long is left, in the coarsest unit that is still honest.
+ *
+ * Computed from the absolute `expiresAt` the server sent rather than from a
+ * duration it counted down, so a tab left open overnight is stale by a render
+ * rather than wrong by twelve hours.
+ */
+function timeRemaining(expiresAt: string): string {
+  const ms = new Date(expiresAt).getTime() - Date.now();
+  if (ms <= 0) {
+    return "expiring now";
+  }
+  const minutes = Math.ceil(ms / 60_000);
+  if (minutes < 60) {
+    return `${minutes}m left`;
+  }
+  const hours = Math.ceil(minutes / 60);
+  if (hours < 48) {
+    return `${hours}h left`;
+  }
+  return `${Math.ceil(hours / 24)}d left`;
+}
+
+function formatMoment(iso: string): string {
+  return new Date(iso).toLocaleString();
+}
 
 interface RowAction {
   id: string;
@@ -45,6 +95,13 @@ interface RowAction {
 interface PendingRemoval {
   member: ServerMember;
   ban: boolean;
+}
+
+/** The member a timeout is being composed for, plus the composed values. */
+interface PendingTimeout {
+  member: ServerMember;
+  minutes: number;
+  reason: string;
 }
 
 interface MembersPanelProps {
@@ -93,8 +150,14 @@ export function MembersPanel({
   const [bans, setBans] = useState<ServerBan[]>([]);
   const [bansLoading, setBansLoading] = useState(false);
   const [bansError, setBansError] = useState<string | null>(null);
+  const [pendingTimeout, setPendingTimeout] = useState<PendingTimeout | null>(
+    null,
+  );
+  const [timeouts, setTimeouts] = useState<MemberTimeout[]>([]);
+  const [timeoutsError, setTimeoutsError] = useState<string | null>(null);
 
   const canManage = role === "owner" || role === "admin";
+  const timeoutByUser = new Map(timeouts.map((one) => [one.userId, one]));
 
   useEffect(() => {
     if (!open || !serverId) {
@@ -102,9 +165,12 @@ export function MembersPanel({
     }
     let cancelled = false;
     setPending(null);
+    setPendingTimeout(null);
     setBansOpen(false);
     setBans([]);
     setBansError(null);
+    setTimeouts([]);
+    setTimeoutsError(null);
     setError(null);
     setLoading(true);
     void fetchMembers(serverId)
@@ -123,10 +189,40 @@ export function MembersPanel({
           setLoading(false);
         }
       });
+    // Loaded alongside the roster rather than behind a disclosure the way bans
+    // are: a timeout is a *live* state of somebody in the list above, and the
+    // row has to be able to say so. A failure here is not fatal to the panel —
+    // the roster still renders, minus the badges — so it gets its own error
+    // line rather than replacing the members error.
+    if (canManage) {
+      void listTimeouts(serverId)
+        .then((res) => {
+          if (!cancelled) {
+            setTimeouts(res.timeouts);
+          }
+        })
+        .catch((err) => {
+          if (!cancelled) {
+            setTimeoutsError(messageOf(err, "Failed to load timeouts"));
+          }
+        });
+    }
     return () => {
       cancelled = true;
     };
-  }, [open, serverId]);
+  }, [open, serverId, canManage]);
+
+  const reloadTimeouts = useCallback(async () => {
+    if (!serverId || !canManage) {
+      return;
+    }
+    try {
+      setTimeouts((await listTimeouts(serverId)).timeouts);
+      setTimeoutsError(null);
+    } catch (err) {
+      setTimeoutsError(messageOf(err, "Failed to load timeouts"));
+    }
+  }, [serverId, canManage]);
 
   const loadBans = useCallback(async () => {
     if (!serverId) {
@@ -204,6 +300,40 @@ export function MembersPanel({
       setError(
         messageOf(err, ban ? "Failed to ban member" : "Failed to remove member"),
       );
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function confirmTimeout() {
+    if (!serverId || !pendingTimeout) {
+      return;
+    }
+    const { member, minutes, reason } = pendingTimeout;
+    setBusyId(member.id);
+    setError(null);
+    try {
+      await timeoutMember(serverId, member.id, minutes, reason.trim() || null);
+      setPendingTimeout(null);
+      await reloadTimeouts();
+    } catch (err) {
+      setError(messageOf(err, "Failed to time out member"));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function endTimeout(userId: string) {
+    if (!serverId) {
+      return;
+    }
+    setBusyId(userId);
+    setTimeoutsError(null);
+    try {
+      await liftTimeout(serverId, userId);
+      setTimeouts((prev) => prev.filter((one) => one.userId !== userId));
+    } catch (err) {
+      setTimeoutsError(messageOf(err, "Failed to lift the timeout"));
     } finally {
       setBusyId(null);
     }
@@ -289,6 +419,31 @@ export function MembersPanel({
       });
     }
     if (canModerate(member)) {
+      // Listed before kick and ban, and not marked `danger`, because the order
+      // and the colour of this menu are the enforcement ladder as a moderator
+      // experiences it. A timeout is the reversible one; putting it in the red
+      // block next to "Ban from server" would teach the opposite.
+      const active = timeoutByUser.get(member.id);
+      actions.push(
+        active
+          ? {
+              id: "untimeout",
+              label: `End timeout (${timeRemaining(active.expiresAt)})`,
+              icon: TimerReset,
+              onSelect: () => void endTimeout(member.id),
+            }
+          : {
+              id: "timeout",
+              label: "Time out",
+              icon: Clock,
+              onSelect: () =>
+                setPendingTimeout({
+                  member,
+                  minutes: TIMEOUT_PRESET_MINUTES[1]!,
+                  reason: "",
+                }),
+            },
+      );
       actions.push(
         {
           id: "kick",
@@ -307,6 +462,114 @@ export function MembersPanel({
       );
     }
     return actions;
+  }
+
+  if (pendingTimeout) {
+    const name = pendingTimeout.member.displayName;
+    const busy = busyId === pendingTimeout.member.id;
+    return (
+      <Dialog
+        open
+        title={`Time out ${name}?`}
+        eyebrow="Confirm"
+        size="lg"
+        closeOnBackdrop={false}
+        onClose={() => setPendingTimeout(null)}
+        footer={
+          <>
+            <Button
+              variant="ghost"
+              disabled={busy}
+              onClick={() => setPendingTimeout(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="danger"
+              disabled={busy}
+              onClick={() => void confirmTimeout()}
+            >
+              {busy
+                ? "Working…"
+                : `Time out for ${describeMinutes(pendingTimeout.minutes)}`}
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-4 px-5 py-5">
+          {/* Says what a timeout is *not*, because that is the part a moderator
+              reaching for the ban button does not know yet. */}
+          <p className="text-sm text-paper">
+            <span className="font-semibold">{name}</span>
+            {pendingTimeout.member.tag && (
+              <span className="font-mono text-paper-muted">
+                {" "}
+                {pendingTimeout.member.tag}
+              </span>
+            )}{" "}
+            stays in{" "}
+            <span className="font-semibold">{serverName ?? "this server"}</span>{" "}
+            and can still read every channel. They cannot post, react or join
+            voice until the timeout ends. It does not touch their direct
+            messages.
+          </p>
+
+          <fieldset>
+            <legend className="mb-2 text-xs font-semibold uppercase tracking-wider text-paper-muted">
+              How long
+            </legend>
+            <div className="flex flex-wrap gap-2">
+              {TIMEOUT_PRESET_MINUTES.map((minutes) => (
+                <Button
+                  key={minutes}
+                  size="sm"
+                  variant={
+                    pendingTimeout.minutes === minutes ? "secondary" : "ghost"
+                  }
+                  aria-pressed={pendingTimeout.minutes === minutes}
+                  disabled={busy}
+                  onClick={() =>
+                    setPendingTimeout((prev) =>
+                      prev ? { ...prev, minutes } : prev,
+                    )
+                  }
+                >
+                  {describeMinutes(minutes)}
+                </Button>
+              ))}
+            </div>
+          </fieldset>
+
+          <div>
+            <label
+              htmlFor="timeout-reason"
+              className="mb-2 block text-xs font-semibold uppercase tracking-wider text-paper-muted"
+            >
+              Why (kept in the audit log)
+            </label>
+            <input
+              id="timeout-reason"
+              type="text"
+              value={pendingTimeout.reason}
+              maxLength={TIMEOUT_REASON_MAX_LENGTH}
+              disabled={busy}
+              placeholder="Optional — but this is what you will read next week"
+              className="w-full rounded-md border border-ink-4 bg-ink-2 px-3 py-2 text-sm text-paper placeholder:text-paper-muted"
+              onChange={(event) => {
+                const reason = event.target.value;
+                setPendingTimeout((prev) => (prev ? { ...prev, reason } : prev));
+              }}
+            />
+          </div>
+
+          {error && (
+            <p role="alert" className="text-sm text-danger">
+              {error}
+            </p>
+          )}
+        </div>
+      </Dialog>
+    );
   }
 
   if (pending) {
@@ -399,9 +662,16 @@ export function MembersPanel({
           </p>
         )}
 
+        {timeoutsError && (
+          <p role="alert" className="mb-3 px-2 text-sm text-danger">
+            {timeoutsError}
+          </p>
+        )}
+
         {members.map((member) => {
           const actions = actionsFor(member);
           const busy = busyId === member.id;
+          const timeout = timeoutByUser.get(member.id);
           const items: ContextMenuItemDef[] = [];
           let separated = false;
           for (const action of actions) {
@@ -441,7 +711,28 @@ export function MembersPanel({
                       {member.tag}
                     </p>
                   )}
+                  {/* Who did it, when, why, and when it ends — on the row, not
+                      three clicks away in the audit log. This is the whole
+                      reason `listTimeouts` returns more than a boolean. */}
+                  {timeout && (
+                    <p className="truncate text-[11px] text-warning">
+                      Timed out until {formatMoment(timeout.expiresAt)} (
+                      {timeRemaining(timeout.expiresAt)}) by{" "}
+                      {timeout.issuedByName ?? "a former moderator"} on{" "}
+                      {formatMoment(timeout.createdAt)}
+                      {timeout.reason ? ` — ${timeout.reason}` : ""}
+                    </p>
+                  )}
                 </div>
+                {timeout && (
+                  <span
+                    className="flex shrink-0 items-center gap-1 rounded bg-warning/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-warning"
+                    title={`Timed out until ${formatMoment(timeout.expiresAt)}`}
+                  >
+                    <Clock className="h-3 w-3" />
+                    {timeRemaining(timeout.expiresAt)}
+                  </span>
+                )}
                 <span
                   className={cn(
                     "rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider",
