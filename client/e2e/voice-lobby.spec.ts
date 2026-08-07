@@ -98,6 +98,10 @@ test.describe("voice lobby", () => {
       page,
       browser,
     }) => {
+      // Eight real browser contexts each running WebRTC is heavy on a two-core
+      // CI runner — the default 30s budget dies during context setup, which
+      // presents as `page.goto: Test ended` rather than a failed assertion.
+      test.setTimeout(120_000);
       await page.setViewportSize({ width: 1440, height: 900 });
       await openApp(page);
       await page.getByRole("button", { name: /lobby/ }).first().click();
