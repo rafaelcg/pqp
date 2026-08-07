@@ -1,5 +1,10 @@
 import { formatUserTag, type ChannelKind } from "@pqp/shared";
 import { getPool, type DbChannel, type DbServer, type MemberRole } from "../db.js";
+import {
+  isBusEnabled,
+  publishToCluster,
+  subscribeToCluster,
+} from "../lib/bus.js";
 import { deleteObject, isStorageConfigured } from "../lib/s3.js";
 import { channelVisibleSql } from "./users.js";
 
@@ -351,6 +356,12 @@ export async function updateChannel(
       updates.imageUrl === "" ? null : (updates.imageUrl ?? null),
     ],
   );
+  // `is_private` is half of `channelVisibleSql`, so a rename and a
+  // public→private flip arrive through the same call and only one of them is
+  // safe to keep a cached audience through. Invalidating unconditionally is
+  // one wasted query on a rename and the difference between correct and not on
+  // the flip.
+  invalidateChannelAudience(channelId);
   return result.rows[0] ?? null;
 }
 
@@ -424,6 +435,7 @@ export async function deleteChannel(channelId: string): Promise<boolean> {
     // Only once the delete landed: a channel that was already gone, or that
     // some other request is still using, must not have its objects removed.
     if (deleted) {
+      invalidateChannelAudience(channelId);
       deleteObjectsInBackground(keys);
     }
     return deleted;
@@ -446,6 +458,9 @@ export async function deleteServer(serverId: string): Promise<boolean> {
   const deleted = (result.rowCount ?? 0) > 0;
 
   if (deleted) {
+    // The channels cascaded away, so every one of their cached audiences is
+    // now an answer about a channel that does not exist.
+    invalidateServerAudience(serverId);
     deleteObjectsInBackground(keys);
   }
   return deleted;
@@ -631,11 +646,14 @@ export async function joinServerBySso(
     );
 
     await client.query("COMMIT");
-    return {
-      ok: true,
-      server,
-      joinedNow: (inserted.rowCount ?? 0) > 0,
-    };
+    const joinedNow = (inserted.rowCount ?? 0) > 0;
+    if (joinedNow) {
+      // Widening, so the cost of missing it is a badge the new member does not
+      // get for a few seconds rather than one they should not have. Done
+      // anyway: "you joined and the server went quiet" is a bad first minute.
+      invalidateServerAudience(serverId);
+    }
+    return { ok: true, server, joinedNow };
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -682,6 +700,10 @@ export async function transferOwnership(
     );
 
     await client.query("COMMIT");
+    // Both roles here are inside `channelVisibleSql`'s privileged set, so this
+    // transfer only ever widens. Invalidated regardless: a future change to
+    // who counts as privileged must not have to remember this call site.
+    invalidateServerAudience(serverId);
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -694,7 +716,20 @@ export interface ChannelAudience {
   /** Null for a conversation, which belongs to no server. */
   serverId: string | null;
   kind: ChannelKind;
-  userIds: string[];
+  /**
+   * May this user see the channel? O(1), and the form every fan-out must use:
+   * the alternative, `new Set(audience.userIds)`, rebuilds a set the size of
+   * the whole server for each message and is what made a 20k-member server
+   * cost 5x the CPU of a 200-member one at the same message rate.
+   */
+  has(userId: string): boolean;
+  /**
+   * The same answer as a list, for the handful of callers that genuinely need
+   * every id (turning a channel private, tests). Materialised on each access
+   * rather than stored, because this object is shared between calls — read it
+   * once into a local if you need it twice.
+   */
+  readonly userIds: readonly string[];
 }
 
 /**
@@ -714,37 +749,355 @@ export interface ChannelAudience {
  * branch from ever being the reason somebody can see a server channel: there,
  * `channel_members` is only meaningful in combination with server membership.
  */
-export async function getChannelAudience(
+async function readChannelAudience(
   channelId: string,
-): Promise<ChannelAudience | null> {
+): Promise<{ audience: ChannelAudience; size: number } | null> {
+  // Aggregated into one row rather than returned as one row per member.
+  //
+  // The predicate and the rows it admits are identical either way — the only
+  // thing that changes is how they cross the wire, and on a 20,201-member
+  // server that is not a detail: measured on this machine, 20k row objects
+  // cost 144ms to fetch and turn into a Set, and the same ids as a single
+  // `uuid[]` cost 65ms. Almost all of the difference is `pg` allocating twenty
+  // thousand row objects. (`string_agg` plus a split measured 39ms and was
+  // deliberately not taken: this is an access-control query, and a text
+  // encoding that a future non-uuid id type could break silently is not worth
+  // 26ms on a path that now runs once every few seconds.)
+  //
+  // GROUP BY yields no row at all for a channel that does not exist, which is
+  // the same "no rows" the caller already treats as "no such channel".
   const result = await getPool().query<{
     server_id: string | null;
     kind: ChannelKind;
-    user_id: string;
+    user_ids: string[];
   }>(
-    `SELECT c.server_id, c.kind, sm.user_id
-     FROM channels c
-     JOIN server_members sm ON sm.server_id = c.server_id
-     WHERE c.id = $1
-       AND ${channelVisibleSql("sm.user_id")}
-     UNION
-     SELECT c.server_id, c.kind, cm.user_id
-     FROM channels c
-     JOIN channel_members cm ON cm.channel_id = c.id
-     WHERE c.id = $1 AND c.kind <> 'server'`,
+    `SELECT server_id, kind, array_agg(user_id) AS user_ids
+     FROM (
+       SELECT c.server_id, c.kind, sm.user_id
+       FROM channels c
+       JOIN server_members sm ON sm.server_id = c.server_id
+       WHERE c.id = $1
+         AND ${channelVisibleSql("sm.user_id")}
+       UNION
+       SELECT c.server_id, c.kind, cm.user_id
+       FROM channels c
+       JOIN channel_members cm ON cm.channel_id = c.id
+       WHERE c.id = $1 AND c.kind <> 'server'
+     ) visible
+     GROUP BY server_id, kind`,
     [channelId],
   );
 
-  const first = result.rows[0];
-  if (!first) {
+  const row = result.rows[0];
+  if (!row) {
     return null;
   }
+  const userIds = new Set(row.user_ids);
   return {
-    serverId: first.server_id,
-    kind: first.kind,
-    userIds: result.rows.map((row) => row.user_id),
+    audience: {
+      serverId: row.server_id,
+      kind: row.kind,
+      has: (userId) => userIds.has(userId),
+      get userIds() {
+        return [...userIds];
+      },
+    },
+    size: userIds.size,
   };
 }
+
+// -------------------------------------------------- channel audience cache
+//
+// THIS IS AN ACCESS-CONTROL CACHE. A STALE ENTRY IS A PRIVACY BUG.
+//
+// What it gates, precisely, is the `channel-activity` fan-out in ws/chat.ts —
+// the unread badge. Message *bodies* travel over `channelPresence`, which is
+// live socket state that `evictChannelViewers` empties synchronously, so
+// nothing here can leak the contents of a message. What a stale entry leaks is
+// that a channel you were just removed from is active, and — via the `mention`
+// flag — that somebody said your name in it. That is small but it is not
+// nothing, and it is the whole reason the invalidation below is explicit
+// rather than TTL-only.
+//
+// The strategy is belt AND braces, and both halves are load-bearing:
+//
+//   * EXPLICIT invalidation at the service function that performs each write,
+//     never at the route. A route is a place a second route can be added
+//     beside without anyone noticing the omission; `removeChannelMember` is
+//     not. The complete set of writes that can change an audience, and where
+//     each one invalidates:
+//
+//       server_members   invites.ts redeemInvite · joinServerBySso ·
+//                        transferOwnership · users.ts updateMemberRole ·
+//                        users.ts deleteMembership (leave + remove) ·
+//                        moderation.ts removeMembership (kick) ·
+//                        moderation.ts banMember (its own copy of the deletes)
+//                          → invalidateServerAudience
+//       channel_members  addChannelMember · removeChannelMember
+//                          → invalidateChannelAudience
+//       channels         updateChannel (is_private) · deleteChannel
+//                          → invalidateChannelAudience
+//       servers          deleteServer (cascades channels + members)
+//                          → invalidateServerAudience
+//
+//     `createServer` and `createChannel` need nothing: an id nobody has asked
+//     about yet cannot have a cached answer. The conversation writes in dms.ts
+//     need nothing either, because conversations are not cached.
+//
+//   * A SHORT TTL underneath it. Explicit-only assumes the list above is
+//     complete, and it provably is not: `deleteAccount` (services/account.ts)
+//     removes memberships by cascading `DELETE FROM users`, and the periodic
+//     `sweepPendingAccountDeletions` does the same on a timer. Neither goes
+//     through any function here. The TTL is what bounds that class of miss —
+//     including the ones nobody has thought of yet — to a few seconds.
+//
+// Conversations (`kind <> 'server'`) are deliberately NOT cached; see
+// `getChannelAudience`.
+//
+// Multi-instance: invalidation is published on its own bus topic, so an
+// instance that caches an audience drops it when a *different* instance
+// processes the ban. See `subscribeToCluster(AUDIENCE_TOPIC, …)` below. With
+// `CLUSTER_BUS` unset the publish is a single boolean read and the TTL is the
+// only backstop there is — which is correct, because with no bus there is only
+// one instance and its own writes all go through the functions above.
+
+/**
+ * How long a cached audience may keep answering.
+ *
+ * Short on purpose. The cache exists because one 20k-member server at 56
+ * messages a second was on course to saturate a whole shared-cpu-1x with this
+ * single query; at 3 seconds that is already 168 queries collapsed into 1, so
+ * buying a longer window would widen the staleness hole for no measurable CPU.
+ * Every extra second here is an extra second a banned user keeps receiving
+ * badges on any path the explicit invalidation misses.
+ */
+const AUDIENCE_TTL_MS = 3_000;
+
+/**
+ * How much of the TTL is given up to jitter, and why there is jitter at all.
+ *
+ * Without it, every channel that went hot at the same moment — which on a busy
+ * server is all of them, because that is what "busy" means — expires at the
+ * same moment and re-reads in one burst. Measured with five hot channels on a
+ * 20k-member server, the synchronised refresh moved message p99 from 98ms to
+ * 291ms while *mean* CPU fell: the work had not grown, it had bunched into one
+ * stall of the event loop every three seconds.
+ *
+ * Jitter is subtracted, never added, so "at most AUDIENCE_TTL_MS stale"
+ * remains literally true and the privacy argument above does not acquire a
+ * footnote.
+ */
+const AUDIENCE_JITTER_MS = 1_000;
+
+/**
+ * Bounds. The auth caches next door leaked precisely by being maps that only
+ * ever grew, so this one is capped on both axes: entries, and total user ids
+ * held across all of them (roughly 80 bytes each, so 250k ids is ~20MB).
+ *
+ * A single server larger than the id cap is still cached rather than refused —
+ * it is one entry, it expires in seconds, and refusing it would make the only
+ * channel that actually needs the cache the one channel that cannot have it.
+ */
+const MAX_CACHED_AUDIENCES = 1_000;
+const MAX_CACHED_AUDIENCE_IDS = 250_000;
+
+interface CachedAudience {
+  audience: ChannelAudience;
+  /** Ids held by this entry, kept so `cachedAudienceIds` can be decremented
+   *  without materialising the list again on the way out. */
+  size: number;
+  expiresAt: number;
+}
+
+const audienceCache = new Map<string, CachedAudience>();
+let cachedAudienceIds = 0;
+
+/**
+ * Bumped by every invalidation, checked by every read before it stores.
+ *
+ * The race it closes: a read starts, Postgres gives it a snapshot, a ban
+ * commits and invalidates, and only then does the read return — with rows from
+ * before the ban. Dropping the entry is not enough, because there was no entry
+ * yet; the write has to be refused. A single global counter is deliberately
+ * over-broad (an unrelated invalidation also discards an in-flight read) and
+ * that is fine: the cost is one cache miss and invalidations are rare.
+ */
+let audienceEpoch = 0;
+
+const AUDIENCE_TOPIC = "audience.invalidate";
+
+function dropCachedAudience(channelId: string): void {
+  const entry = audienceCache.get(channelId);
+  if (!entry) {
+    return;
+  }
+  cachedAudienceIds -= entry.size;
+  audienceCache.delete(channelId);
+}
+
+/**
+ * Forget one channel's audience. Call this from the service function that just
+ * changed who can see the channel — `channel_members`, `is_private`, or the
+ * channel's existence — *after* the write has committed.
+ */
+export function invalidateChannelAudience(channelId: string): void {
+  invalidateChannelAudienceLocally(channelId);
+  if (isBusEnabled()) {
+    publishToCluster(AUDIENCE_TOPIC, { kind: "channel", channelId });
+  }
+}
+
+/**
+ * Forget every channel of one server. Call this whenever `server_members`
+ * changes — a join, a leave, a kick, a ban, a role change, or the server going
+ * away. A role change matters as much as a removal: `channelVisibleSql` lets
+ * owners and admins into private channels without a `channel_members` row, so
+ * a demotion to `member` silently narrows every private channel at once.
+ */
+export function invalidateServerAudience(serverId: string): void {
+  invalidateServerAudienceLocally(serverId);
+  if (isBusEnabled()) {
+    publishToCluster(AUDIENCE_TOPIC, { kind: "server", serverId });
+  }
+}
+
+function invalidateChannelAudienceLocally(channelId: string): void {
+  audienceEpoch++;
+  dropCachedAudience(channelId);
+}
+
+function invalidateServerAudienceLocally(serverId: string): void {
+  audienceEpoch++;
+  for (const [channelId, entry] of audienceCache) {
+    if (entry.audience.serverId === serverId) {
+      dropCachedAudience(channelId);
+    }
+  }
+}
+
+/** Drop expired entries. Called from the same 60s sweep as the auth caches. */
+export function sweepChannelAudiences(now = Date.now()): void {
+  for (const [channelId, entry] of audienceCache) {
+    if (entry.expiresAt <= now) {
+      dropCachedAudience(channelId);
+    }
+  }
+}
+
+/** Test seam, and the only correct answer to a raw `TRUNCATE`. */
+export function clearChannelAudienceCache(): void {
+  audienceEpoch++;
+  audienceCache.clear();
+  cachedAudienceIds = 0;
+}
+
+/** Test helper: what the cache is holding. */
+export function channelAudienceCacheStats(): {
+  entries: number;
+  userIds: number;
+} {
+  return { entries: audienceCache.size, userIds: cachedAudienceIds };
+}
+
+function storeAudience(
+  channelId: string,
+  audience: ChannelAudience,
+  size: number,
+): void {
+  dropCachedAudience(channelId);
+  audienceCache.set(channelId, {
+    audience,
+    size,
+    expiresAt:
+      Date.now() + AUDIENCE_TTL_MS - Math.random() * AUDIENCE_JITTER_MS,
+  });
+  cachedAudienceIds += size;
+
+  if (
+    audienceCache.size <= MAX_CACHED_AUDIENCES &&
+    cachedAudienceIds <= MAX_CACHED_AUDIENCE_IDS
+  ) {
+    return;
+  }
+  sweepChannelAudiences();
+  // Still over: evict in insertion order, which with a uniform TTL is also
+  // expiry order, and skip the entry that was just stored — the caller is
+  // about to use it, and dropping it would leave the cache doing work for
+  // nobody. Ending the loop still over budget is possible only when that one
+  // entry is itself larger than the id cap, which is the documented case above.
+  for (const oldest of audienceCache.keys()) {
+    if (
+      audienceCache.size <= MAX_CACHED_AUDIENCES &&
+      cachedAudienceIds <= MAX_CACHED_AUDIENCE_IDS
+    ) {
+      break;
+    }
+    if (oldest !== channelId) {
+      dropCachedAudience(oldest);
+    }
+  }
+}
+
+/**
+ * Every user who is allowed to see a channel, cached for at most
+ * `AUDIENCE_TTL_MS`.
+ *
+ * CONVERSATIONS ARE NOT CACHED, and that is a correctness decision rather than
+ * an oversight. A conversation's audience is at most `DM_MAX_RECIPIENTS` rows
+ * off an index, so there is nothing to win — and `restoreDmParticipants` runs
+ * on the message path itself, re-adding a participant who had closed the
+ * conversation immediately before `createMessage`. A cache there would be
+ * invalidated as often as it was read, and getting that wrong means the first
+ * message into a reopened DM reaches nobody, which is the exact failure the
+ * comment on `restoreDmParticipants` exists to prevent.
+ *
+ * There is no in-flight coalescing. The point of a TTL cache on a hot channel
+ * is that misses happen once per TTL, so the most a herd can cost is the
+ * handful of messages that arrive inside one query's latency, once every three
+ * seconds.
+ */
+export async function getChannelAudience(
+  channelId: string,
+): Promise<ChannelAudience | null> {
+  const cached = audienceCache.get(channelId);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.audience;
+  }
+
+  const epoch = audienceEpoch;
+  const result = await readChannelAudience(channelId);
+  if (!result) {
+    return null;
+  }
+  if (result.audience.kind === "server" && audienceEpoch === epoch) {
+    storeAudience(channelId, result.audience, result.size);
+  }
+  return result.audience;
+}
+
+/**
+ * Invalidations from other instances. Local half only — publishing from here
+ * would have two instances answering each other forever, and the origin check
+ * in `bus.ts` is the other half of that guard.
+ *
+ * Frames are validated because a rolling deploy puts two builds on one bus. An
+ * unrecognised frame is ignored rather than guessed at: guessing wrong in the
+ * widening direction is a cache that keeps a removed member, which is the one
+ * outcome this whole file exists to avoid.
+ */
+subscribeToCluster(AUDIENCE_TOPIC, (data) => {
+  const frame =
+    typeof data === "object" && data !== null
+      ? (data as Record<string, unknown>)
+      : null;
+  if (frame?.kind === "channel" && typeof frame.channelId === "string") {
+    invalidateChannelAudienceLocally(frame.channelId);
+    return;
+  }
+  if (frame?.kind === "server" && typeof frame.serverId === "string") {
+    invalidateServerAudienceLocally(frame.serverId);
+  }
+});
 
 /** Channel ids belonging to a server — used to evict live WS state on removal. */
 export async function listServerChannelIds(
@@ -775,6 +1128,7 @@ export async function addChannelMember(
      ON CONFLICT DO NOTHING`,
     [channelId, userId],
   );
+  invalidateChannelAudience(channelId);
 }
 
 export async function removeChannelMember(
@@ -785,6 +1139,10 @@ export async function removeChannelMember(
     `DELETE FROM channel_members WHERE channel_id = $1 AND user_id = $2`,
     [channelId, userId],
   );
+  // The narrowing case this cache is most likely to get wrong: on a private
+  // channel this row *is* the access, and the route that calls it only evicts
+  // live viewers, which a person who was never looking is not.
+  invalidateChannelAudience(channelId);
 }
 
 export async function listChannelMembers(channelId: string) {

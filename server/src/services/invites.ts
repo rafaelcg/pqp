@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { getPool, type DbInvite } from "../db.js";
+import { invalidateServerAudience } from "./servers.js";
 
 function generateInviteCode(): string {
   return randomBytes(5).toString("base64url").slice(0, 8);
@@ -114,6 +115,9 @@ export async function redeemInvite(
     }
 
     await client.query("COMMIT");
+    if (joinedNow) {
+      invalidateServerAudience(invite.server_id);
+    }
     return {
       serverId: invite.server_id,
       serverName: invite.server_name ?? "Server",

@@ -10,6 +10,11 @@ import type { AuthUser } from "../auth/clerk.js";
 import { HttpError } from "../lib/http.js";
 import { notBlockedSql } from "./blocks.js";
 import { getPreferences } from "./preferences.js";
+// A cycle: servers.ts imports `channelVisibleSql` from here. Both directions
+// are function calls made from inside function bodies, never at module
+// evaluation time, so the cycle resolves. It exists because the audience cache
+// has to live beside the query it caches, and membership is written here.
+import { invalidateServerAudience } from "./servers.js";
 
 /** Every column of `DbUser`, single-sourced so the reads cannot drift apart. */
 const DB_USER_COLUMNS = `id, clerk_id, display_name, username, discriminator, avatar_url, email_domains`;
@@ -667,6 +672,11 @@ export async function updateMemberRole(
      WHERE server_id = $1 AND user_id = $2 AND role <> 'owner'`,
     [serverId, targetUserId, role],
   );
+  // A demotion narrows access without touching a single membership row:
+  // `channelVisibleSql` admits owners and admins to a private channel with no
+  // `channel_members` row of their own, so `admin` → `member` takes away every
+  // private channel they were not explicitly added to.
+  invalidateServerAudience(serverId);
 }
 
 /** Remove all membership rows for a user in one server. */
@@ -689,6 +699,7 @@ async function deleteMembership(
       [userId, serverId],
     );
     await client.query("COMMIT");
+    invalidateServerAudience(serverId);
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;

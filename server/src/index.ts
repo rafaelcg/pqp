@@ -35,6 +35,7 @@ import { sweepPendingAccountDeletions } from "./services/account.js";
 import { pruneAuditLog } from "./services/audit.js";
 import { pruneResolvedReports } from "./services/reports.js";
 import { sweepMessageRetention } from "./services/retention.js";
+import { sweepChannelAudiences } from "./services/servers.js";
 import {
   getStatusSummary,
   pruneStatusSamples,
@@ -299,8 +300,11 @@ wss.on("close", () => clearInterval(heartbeat));
 // Drop expired rate-limit windows so the map doesn't grow unbounded.
 const rateLimitSweep = setInterval(() => {
   sweepRateLimits();
-  // Same cadence, same reason: both are maps that only shrink if swept.
+  // Same cadence, same reason: all three are maps that only shrink if swept.
+  // The audience cache is capped as well as swept, so this is about returning
+  // memory after a busy server goes quiet, not about bounding it.
   sweepAuthCaches();
+  sweepChannelAudiences();
 }, 60_000);
 rateLimitSweep.unref?.();
 

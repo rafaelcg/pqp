@@ -152,9 +152,8 @@ function broadcastRoster(voiceChannelId: string): Promise<void> {
           participants: getRoomPeers(voiceChannelId).map(toParticipant),
         } satisfies VoiceSignalingMessage);
 
-        const allowed = new Set(audience.userIds);
         forEachAuthenticatedSocket((socket, user) => {
-          if (socket.readyState === 1 && allowed.has(user.id)) {
+          if (socket.readyState === 1 && audience.has(user.id)) {
             socket.send(encoded);
           }
         });

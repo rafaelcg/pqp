@@ -1,5 +1,6 @@
 import { formatUserTag } from "@pqp/shared";
 import { getPool } from "../db.js";
+import { invalidateServerAudience } from "./servers.js";
 
 /** Remove a user's server membership and any private-channel memberships. */
 async function removeMembership(serverId: string, userId: string): Promise<void> {
@@ -14,6 +15,10 @@ async function removeMembership(serverId: string, userId: string): Promise<void>
      )`,
     [userId, serverId],
   );
+  // The kick/ban path, and the one where a stale cached audience is worst: the
+  // person is gone from the server and would otherwise keep receiving activity
+  // badges from every channel in it.
+  invalidateServerAudience(serverId);
 }
 
 export async function kickMember(
@@ -51,6 +56,12 @@ export async function banMember(
       [userId, serverId],
     );
     await client.query("COMMIT");
+    // Not shared with `removeMembership` above: a ban writes the ban row and
+    // the two deletes in one transaction, so it has its own copy of them — and
+    // therefore needs its own copy of this. Adding the invalidation only to
+    // `removeMembership` left a kicked member evicted from the cache and a
+    // *banned* one still in it, which is the wrong way round.
+    invalidateServerAudience(serverId);
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;

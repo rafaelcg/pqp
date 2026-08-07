@@ -452,13 +452,16 @@ async function notifyChannelActivity(
   // body over the bus purely to re-run the same regex on the other side would
   // be both larger and slower.
   const mentioned = new Set(mentions);
-  const allowed = new Set(audience.userIds);
 
   forEachAuthenticatedSocket((socket, user) => {
     if (socket.readyState !== 1 || user.id === authorId) {
       return;
     }
-    if (!allowed.has(user.id)) {
+    // `audience.has`, not a Set built from `audience.userIds`: the audience is
+    // cached and shared between messages, so materialising it here would put
+    // one allocation per *member of the server* back on the path this cache
+    // exists to take it off.
+    if (!audience.has(user.id)) {
       return;
     }
     // Somebody who blocked this author gets no badge from them. The message is
