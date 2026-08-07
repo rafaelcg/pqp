@@ -587,6 +587,85 @@ CREATE INDEX IF NOT EXISTS idx_message_attachments_message
 CREATE INDEX IF NOT EXISTS idx_message_attachments_unclaimed
   ON message_attachments (created_at) WHERE message_id IS NULL;
 
+-- ---------------------------------------------------------------- image safety
+--
+-- The verdict a content scanner reached about this object, kept on the row
+-- rather than in a side table because it is a property OF the attachment and
+-- every path that reads an attachment already has this row in hand.
+--
+-- It exists to be evidence. A takedown, a police request or an appeal all ask
+-- the same question months later — "what did you know, when, and who told you"
+-- — and a boolean `is_safe` cannot answer any of it. Provider, score, labels
+-- and timestamp are recorded together so the answer is reconstructable from the
+-- row alone, without the provider's own logs (which a free tier does not keep).
+--
+-- `unscanned` is the default and is deliberately NOT a synonym for `pass`. It
+-- is the honest state of every row written before scanning existed, and of
+-- every row on a deployment with no scanner configured. Anything that treats
+-- the two as equivalent is claiming a check that never ran.
+--
+--   unscanned  no scanner configured, or the row predates scanning
+--   skipped    scanner configured, but this type is not scannable (video, pdf)
+--   pass       the scanner looked and found nothing over threshold
+--   flagged    over the review threshold: visible, but a report was filed
+--   rejected   over the block threshold: never attached, object quarantined
+--   error      the scanner could not answer (down, timed out, garbage back)
+--
+-- `error` is a terminal recorded state and not a retry queue. Under the default
+-- fail-closed mode an `error` row is dropped from its message exactly like a
+-- failed HEAD, so it is already invisible; the row survives so that "the
+-- scanner was broken between 14:00 and 15:00" is a fact on disk rather than an
+-- inference from missing images.
+ALTER TABLE message_attachments
+  ADD COLUMN IF NOT EXISTS scan_status TEXT NOT NULL DEFAULT 'unscanned';
+
+DO $$
+BEGIN
+  ALTER TABLE message_attachments DROP CONSTRAINT IF EXISTS message_attachments_scan_status_check;
+  ALTER TABLE message_attachments
+    ADD CONSTRAINT message_attachments_scan_status_check
+    CHECK (scan_status IN ('unscanned', 'skipped', 'pass', 'flagged', 'rejected', 'error'));
+EXCEPTION
+  WHEN others THEN NULL;
+END $$;
+
+-- Which scanner said so. Null while `scan_status = 'unscanned'`; a provider name
+-- afterwards, so switching provider does not silently reinterpret old verdicts
+-- against a new one's scale.
+ALTER TABLE message_attachments ADD COLUMN IF NOT EXISTS scan_provider TEXT;
+
+-- The highest category score the provider returned, 0..1. Normalised by the
+-- adapter, because "0.94" means nothing without knowing whose 0.94 it is — which
+-- is what `scan_provider` above is for.
+ALTER TABLE message_attachments ADD COLUMN IF NOT EXISTS scan_score REAL;
+
+-- The categories that crossed the threshold, as a JSON array of strings. The
+-- score says how sure; this says of what, and it is the part a human reading a
+-- report actually needs.
+ALTER TABLE message_attachments ADD COLUMN IF NOT EXISTS scan_labels JSONB;
+
+ALTER TABLE message_attachments ADD COLUMN IF NOT EXISTS scanned_at TIMESTAMPTZ;
+
+-- Set when a scan rejected the object. Two things follow from it, and they are
+-- the whole reason it is a timestamp and not a flag on `scan_status`:
+--
+-- 1. THE SWEEPER MUST NOT TOUCH IT. A rejected attachment is never claimed, so
+--    its `message_id` stays NULL and the orphan sweep would delete row and
+--    object within the hour — destroying the only evidence that the upload ever
+--    happened, at the exact moment a moderator is being asked to look at it.
+-- 2. IT IS NOT KEPT FOREVER EITHER. Holding illegal material indefinitely is
+--    its own problem, and an operator who has not looked at their queue in a
+--    month is not going to. The sweeper collects quarantined rows once
+--    `CONTENT_SCAN_QUARANTINE_DAYS` (default 30) has passed, which is long
+--    enough to answer a request and short enough not to become an archive.
+ALTER TABLE message_attachments ADD COLUMN IF NOT EXISTS quarantined_at TIMESTAMPTZ;
+
+-- The quarantine sweep's whole working set, and tiny — partial so it costs
+-- nothing on a deployment that has never quarantined anything, which is every
+-- deployment with no scanner configured.
+CREATE INDEX IF NOT EXISTS idx_message_attachments_quarantined
+  ON message_attachments (quarantined_at) WHERE quarantined_at IS NOT NULL;
+
 -- Pinned messages surface the ones worth finding again without a search. Kept
 -- on the message row rather than a join table: a message can be pinned in
 -- only one place (its own channel), so a separate table would let two rows

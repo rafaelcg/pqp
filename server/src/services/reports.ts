@@ -457,6 +457,99 @@ async function findOpenDuplicate(
   return row ? toReport(row) : null;
 }
 
+/**
+ * A report nobody filed.
+ *
+ * The image scanner needs to reach a human, and the queue a human already reads
+ * is this one. Building a second queue for machine findings would guarantee the
+ * machine findings are the ones nobody looks at.
+ *
+ * Four things are deliberately different from `createReport`, and each is a
+ * consequence of there being no reporter:
+ *
+ * 1. `reporter_id` IS NULL. `toReport` already renders that as a null
+ *    `reporterName`, and the details string names the scanner instead. There is
+ *    no account to attribute this to and inventing a system user would put a
+ *    row in `users` that can be mentioned, DM'd and reported back.
+ * 2. NO FLOOD CAP AND NO VISIBILITY CHECK. Both exist to constrain what one
+ *    member may do to another; neither has any meaning for a scan of an object
+ *    the uploader themselves put in the bucket.
+ * 3. SUBJECT IS THE USER, NEVER THE MESSAGE. A rejected attachment is never
+ *    attached to anything, so at the moment this fires there is no message id
+ *    to point at — and a `subject_type = 'message'` row without one violates the
+ *    table's own CHECK.
+ * 4. DEDUPED ON (person, place), IN SQL, WITHOUT A UNIQUE INDEX. The existing
+ *    `idx_reports_open_user_dedupe` cannot help: it keys on `reporter_id`, and
+ *    NULLs are distinct to a unique index, so every automated report would be
+ *    unique and a hundred bad uploads would be a hundred queue entries burying
+ *    everything a person filed. One open ticket per uploader per place is the
+ *    right granularity — the per-object evidence lives on
+ *    `message_attachments.scan_*`, which is where a moderator is told to look.
+ *
+ * Returns whether a row was actually written, so the caller can log the
+ * difference between "escalated" and "already escalated" rather than guessing.
+ */
+export async function createAutomatedReport(input: {
+  reportedUserId: string;
+  channelId: string;
+  reason: ReportReason;
+  details: string;
+}): Promise<boolean> {
+  const context = await getPool().query<{
+    channel_kind: ReportContextKind;
+    /** DM and group channels carry no name; `channel_label` is nullable too. */
+    channel_name: string | null;
+    server_id: string | null;
+    display_name: string;
+    username: string | null;
+    discriminator: string | null;
+  }>(
+    `SELECT c.kind AS channel_kind, c.name AS channel_name, c.server_id,
+            u.display_name, u.username, u.discriminator
+     FROM channels c
+     JOIN users u ON u.id = $2
+     WHERE c.id = $1`,
+    [input.channelId, input.reportedUserId],
+  );
+  const row = context.rows[0];
+  if (!row) {
+    return false;
+  }
+
+  // Same derivation as `resolveMessageSubject`, and it must be: the table's
+  // CHECK ties `context_kind = 'server'` and a non-null `server_id` together,
+  // so reading both off one row is what keeps them agreeing.
+  const serverId = row.channel_kind === "server" ? row.server_id : null;
+
+  const inserted = await getPool().query(
+    `INSERT INTO reports (
+       reporter_id, subject_type, context_kind, reported_user_id,
+       server_id, channel_id, subject_label, channel_label, reason, details
+     )
+     SELECT NULL, 'user', $1, $2, $3, $4, $5, $6, $7, $8
+     WHERE NOT EXISTS (
+       SELECT 1 FROM reports
+       WHERE status = 'open'
+         AND reporter_id IS NULL
+         AND subject_type = 'user'
+         AND reported_user_id = $2
+         AND COALESCE(server_id, '00000000-0000-0000-0000-000000000000'::uuid)
+           = COALESCE($3::uuid, '00000000-0000-0000-0000-000000000000'::uuid)
+     )`,
+    [
+      row.channel_kind,
+      input.reportedUserId,
+      serverId,
+      input.channelId,
+      labelFor(row),
+      row.channel_name,
+      input.reason,
+      input.details,
+    ],
+  );
+  return (inserted.rowCount ?? 0) > 0;
+}
+
 export async function getReport(id: string): Promise<Report | null> {
   const result = await getPool().query<ReportRow>(
     `SELECT ${REPORT_COLUMNS} FROM reports r ${REPORT_JOINS} WHERE r.id = $1::bigint`,

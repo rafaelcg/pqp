@@ -16,6 +16,15 @@ import {
   presignGet,
   presignPut,
 } from "../lib/s3.js";
+import {
+  isContentScanConfigured,
+  SCAN_URL_TTL_SECONDS,
+  scanAllowsAttachment,
+  scanImage,
+  quarantineDays,
+  type ScanResult,
+} from "./content-scan.js";
+import { createAutomatedReport } from "./reports.js";
 import { isChannelMember } from "./users.js";
 
 /**
@@ -335,6 +344,133 @@ async function verifyUpload(row: DbAttachment): Promise<number | null> {
   return head.contentLength;
 }
 
+/**
+ * Hand the scanner somewhere to fetch the object, and never the object.
+ *
+ * A stored row gets a presigned GET good for two minutes; a remote row — a
+ * GIF on somebody else's host — is already a public URL and is passed through.
+ * Remote rows are scanned too: the host allowlist proves the bytes came from
+ * GIPHY or Tenor, which says nothing at all about what is in them.
+ *
+ * Returns `unscanned` with no provider when scanning is off, which is the
+ * honest default and the one every existing deployment is in.
+ */
+async function scanAttachment(row: DbAttachment): Promise<ScanResult> {
+  if (!isContentScanConfigured()) {
+    return {
+      status: "unscanned",
+      provider: null,
+      score: null,
+      labels: [],
+      illegal: false,
+    };
+  }
+
+  const imageUrl = row.remote_url
+    ? row.remote_url
+    : presignGet(row.storage_key!, { ttlSeconds: SCAN_URL_TTL_SECONDS });
+
+  return scanImage({ imageUrl, contentType: row.content_type });
+}
+
+/**
+ * Write the verdict onto the row, and quarantine it if it was refused.
+ *
+ * Deliberately a separate statement on the pool rather than something folded
+ * into the claim: the claim runs inside the message's transaction, this runs
+ * before it, and a rejected attachment is never claimed at all — so there is no
+ * transaction it could ride along in.
+ *
+ * `quarantined_at` is what takes a rejected row out of the orphan sweeper's
+ * reach. Without it the row and its object are deleted within the hour, which
+ * destroys the only record that the upload happened at the exact moment the
+ * operator is being told to look at it.
+ */
+async function recordScanResult(
+  row: DbAttachment,
+  result: ScanResult,
+): Promise<void> {
+  if (result.status === "unscanned") {
+    return;
+  }
+
+  await getPool().query(
+    `UPDATE message_attachments
+     SET scan_status = $2, scan_provider = $3, scan_score = $4,
+         scan_labels = $5::jsonb, scanned_at = NOW(),
+         quarantined_at = CASE WHEN $6 THEN NOW() ELSE quarantined_at END
+     WHERE id = $1`,
+    [
+      row.id,
+      result.status,
+      result.provider,
+      result.score,
+      JSON.stringify(result.labels),
+      result.status === "rejected",
+    ],
+  );
+}
+
+/**
+ * Everything that happens because of a verdict, other than dropping the file.
+ *
+ * Fire-and-forget from the caller's point of view — a moderation queue write
+ * must not be able to fail a message send, and must not add its latency to one.
+ * Errors are logged and swallowed for the same reason.
+ */
+async function escalateScanResult(
+  row: DbAttachment,
+  result: ScanResult,
+): Promise<void> {
+  if (result.status !== "rejected" && result.status !== "flagged") {
+    return;
+  }
+
+  // Deliberately shouty, deliberately distinct, and deliberately not a metric.
+  // A hit here is the one event on this platform that has a legal clock running
+  // on it: under OSA 2023 s.66 a UK provider must report detected CSEA content
+  // to the NCA, and the operator cannot do that from a dashboard they never
+  // look at. `docs/CONTENT_SAFETY.md` carries the runbook this line points at.
+  if (result.illegal) {
+    console.error(
+      `[content-safety] ILLEGAL-CONTENT MATCH — attachment ${row.id}, uploader ` +
+        `${row.uploader_id}, provider ${result.provider}, labels ` +
+        `${result.labels.join(",")}. Object retained under quarantine and NOT ` +
+        `deleted. See docs/CONTENT_SAFETY.md before touching it.`,
+    );
+  }
+
+  const reason = result.labels.includes("illegal")
+    ? "illegal_content"
+    : result.labels.includes("csam_suspected") ||
+        result.labels.includes("minor_present")
+      ? "illegal_content"
+      : result.labels.includes("gore")
+        ? "violence"
+        : "other";
+
+  try {
+    await createAutomatedReport({
+      reportedUserId: row.uploader_id,
+      channelId: row.channel_id,
+      reason,
+      details:
+        `Automated image scan (${result.provider}) returned ` +
+        `${result.status} for attachment ${row.id}: ` +
+        `${result.labels.join(", ") || "no labels"} ` +
+        `(score ${result.score ?? "n/a"}). ` +
+        (result.status === "rejected"
+          ? "The file was refused and never posted; it is held in quarantine."
+          : "The file was posted and is visible."),
+    });
+  } catch (error) {
+    console.error(
+      `[content-safety] could not file a report for ${row.id}:`,
+      error,
+    );
+  }
+}
+
 /** A row that exists, belongs to the sender, and has bytes behind it. */
 export interface VerifiedAttachment {
   row: DbAttachment;
@@ -359,6 +495,13 @@ export interface VerifiedAttachment {
  * COMMIT — which was never true anyway, since the presigned PUT stays valid for
  * its own TTL, and which signing `Content-Length` bounds to swapping in a body
  * of identical size.
+ *
+ * This is also where image scanning happens, and for the same three reasons
+ * spelled out in `content-scan.ts`: no transaction is open, the attachment has
+ * never been visible to anybody, and "the check said no" is already a defined
+ * outcome here. An attachment refused by the scanner is dropped exactly like
+ * one whose object was never uploaded — the sender loses the file, not the
+ * message.
  */
 export async function verifyPendingAttachments(
   channelId: string,
@@ -389,11 +532,41 @@ export async function verifyPendingAttachments(
 
   const position = new Map(requested.map((id, index) => [id, index]));
   const verified = await Promise.all(
-    candidates.rows.map(async (row) => ({
-      row,
-      byteSize: await verifyUpload(row),
-      position: position.get(row.id) ?? 0,
-    })),
+    candidates.rows.map(async (row) => {
+      // Concurrently, because they are two independent round trips to two
+      // different places and running them in series would put the scanner's
+      // whole timeout budget behind the bucket's. Neither can settle the
+      // question alone: an object that HEADs perfectly can still be refused,
+      // and a scan says nothing about whether the bytes are the ones we signed.
+      const [byteSize, scan] = await Promise.all([
+        verifyUpload(row),
+        scanAttachment(row),
+      ]);
+
+      // Recorded even when the HEAD already failed, and recorded before
+      // anything decides what to do with it. This is the evidence trail: a
+      // dispute months later asks what was known and when, and a row that only
+      // stores verdicts it acted on cannot answer.
+      await recordScanResult(row, scan).catch((error: unknown) => {
+        console.error(`[content-safety] could not record ${row.id}:`, error);
+      });
+      // Awaited rather than fired and forgotten. It returns immediately for
+      // every clean verdict, so the send path pays nothing in the normal case;
+      // when it does run it is two local queries and no network, and a report
+      // that raced the response would be a report a test cannot observe and an
+      // operator cannot rely on. It never throws — see the function.
+      await escalateScanResult(row, scan);
+
+      return {
+        row,
+        // The scan is the second veto and is independent of the first. An
+        // attachment attaches only if BOTH the bytes are what we signed for and
+        // the scanner did not refuse them — and under the default fail-closed
+        // mode "the scanner could not answer" counts as a refusal.
+        byteSize: scanAllowsAttachment(scan) ? byteSize : null,
+        position: position.get(row.id) ?? 0,
+      };
+    }),
   );
 
   return verified
@@ -573,6 +746,13 @@ export async function getAttachmentForViewer(
  * attachment whose message, channel or server was deleted end up looking
  * identical, so there is one sweeper rather than two.
  *
+ * `quarantined_at IS NULL` is the third state and the reason it is a separate
+ * predicate rather than a third case: a rejected attachment is unclaimed
+ * forever by construction, so without this line the sweeper would delete every
+ * piece of evidence scanning produced, one hour after it produced it.
+ * `sweepQuarantinedAttachments` owns those rows instead, on a much longer
+ * clock.
+ *
  * The object delete is best effort and the row is dropped either way. Keeping
  * the row on a failed delete would only guarantee the same failing delete is
  * retried every run, forever, while the row is never freed — a wedged sweeper
@@ -592,6 +772,7 @@ export async function sweepOrphanedAttachments(): Promise<number> {
     `SELECT id, storage_key
      FROM message_attachments
      WHERE message_id IS NULL
+       AND quarantined_at IS NULL
        AND created_at < NOW() - INTERVAL '${ORPHAN_GRACE}'
      ORDER BY created_at ASC
      LIMIT ${SWEEP_BATCH}`,
@@ -621,6 +802,77 @@ export async function sweepOrphanedAttachments(): Promise<number> {
   const deleted = await getPool().query(
     `DELETE FROM message_attachments WHERE id = ANY($1::uuid[])`,
     [orphans.rows.map((row) => row.id)],
+  );
+  return deleted.rowCount ?? 0;
+}
+
+/**
+ * Expire quarantined attachments the scanner refused.
+ *
+ * A rejected upload is never claimed, so the orphan sweeper would take it
+ * within the hour — which is why `quarantined_at` exists to hold it back. This
+ * is the other half: held is not held forever.
+ *
+ * TWO CLASSES, AND THE DIFFERENCE IS THE WHOLE FUNCTION.
+ *
+ * An ordinary rejection — gore over threshold, a provider's policy call — is
+ * evidence for a moderation decision. `CONTENT_SCAN_QUARANTINE_DAYS` (default
+ * 30) is long enough to answer an appeal and short enough that the bucket does
+ * not become a private archive of everything the scanner ever disliked.
+ *
+ * A rejection the provider marked `illegal` is NEVER swept, at any age, and
+ * that is a deliberate refusal to automate. Under the CPS/NPCC memorandum on
+ * s.46 of the Sexual Offences Act 2003, the expectation of an operator who
+ * comes across this material is to preserve it and the surrounding logs and
+ * report it — to the IWF, and, since OSA 2023 s.66 commenced, to the NCA. A
+ * timer that quietly deleted it thirty days later would destroy evidence in a
+ * live matter and leave nothing to show the report was ever justified. The
+ * operator deletes it, by hand, when they are told to. `docs/CONTENT_SAFETY.md`
+ * is the runbook, and the log line in `escalateScanResult` points at it.
+ *
+ * The consequence is that an unattended deployment accumulates these rows
+ * forever. That is intended: it is the one place in this codebase where a
+ * growing number is the correct alarm.
+ */
+export async function sweepQuarantinedAttachments(): Promise<number> {
+  const expired = await getPool().query<{
+    id: string;
+    storage_key: string | null;
+  }>(
+    `SELECT id, storage_key
+     FROM message_attachments
+     WHERE quarantined_at IS NOT NULL
+       AND quarantined_at < NOW() - ($1 || ' days')::interval
+       AND NOT COALESCE(scan_labels @> '["illegal"]'::jsonb, FALSE)
+       AND NOT COALESCE(scan_labels @> '["csam_suspected"]'::jsonb, FALSE)
+     ORDER BY quarantined_at ASC
+     LIMIT ${SWEEP_BATCH}`,
+    [quarantineDays()],
+  );
+  if (expired.rows.length === 0) {
+    return 0;
+  }
+
+  const stored = isStorageConfigured()
+    ? expired.rows.filter(
+        (row): row is { id: string; storage_key: string } =>
+          row.storage_key !== null,
+      )
+    : [];
+  await Promise.all(
+    stored.map((row) =>
+      deleteObject(row.storage_key).catch((error: unknown) => {
+        console.error(
+          `[content-safety] leaked quarantined object ${row.storage_key}:`,
+          error instanceof Error ? error.message : error,
+        );
+      }),
+    ),
+  );
+
+  const deleted = await getPool().query(
+    `DELETE FROM message_attachments WHERE id = ANY($1::uuid[])`,
+    [expired.rows.map((row) => row.id)],
   );
   return deleted.rowCount ?? 0;
 }

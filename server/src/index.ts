@@ -30,6 +30,7 @@ import {
 import {
   isAttachmentsConfigured,
   sweepOrphanedAttachments,
+  sweepQuarantinedAttachments,
 } from "./services/attachments.js";
 import { sweepPendingAccountDeletions } from "./services/account.js";
 import { pruneAuditLog } from "./services/audit.js";
@@ -321,6 +322,18 @@ rateLimitSweep.unref?.();
 const ATTACHMENT_SWEEP_INTERVAL_MS = 60 * 60_000;
 
 async function sweepAttachments(): Promise<void> {
+  // Quarantine expiry runs whether or not storage is configured, and outside
+  // the guard below on purpose: a quarantined row can be a remote GIF, which
+  // has no bucket anywhere in its life cycle, and a deployment that turned S3
+  // off after scanning had already refused something would otherwise hold those
+  // rows forever. `sweepQuarantinedAttachments` never touches an
+  // illegal-content row at any age — see its comment.
+  try {
+    await sweepQuarantinedAttachments();
+  } catch (error) {
+    console.error("[content-safety] quarantine sweep failed:", error);
+  }
+
   if (!isAttachmentsConfigured()) {
     return;
   }

@@ -1,5 +1,6 @@
 import {
   afterAll,
+  afterEach,
   beforeAll,
   beforeEach,
   describe,
@@ -70,7 +71,9 @@ const {
   getAttachmentForViewer,
   listAttachmentsForMessages,
   sweepOrphanedAttachments,
+  sweepQuarantinedAttachments,
   verifyPendingAttachments,
+  createRemoteAttachment,
   AttachmentTooLargeError,
 } = await import("./attachments.js");
 
@@ -531,6 +534,348 @@ describeDb("attachments", () => {
         `SELECT id FROM message_attachments`,
       );
       expect(remaining.rows).toEqual([]);
+    });
+  });
+
+  /**
+   * Scanning, where it meets the database.
+   *
+   * `content-scan.test.ts` proves what each provider does with a response.
+   * These prove the consequences: what lands on the row, what the sweeper is
+   * and is not allowed to take afterwards, and — the one that matters — that a
+   * scanner which cannot answer means the image does not get posted.
+   *
+   * The real `content-scan.ts` runs here, with `fetch` stubbed, rather than the
+   * module being mocked out. Mocking it would test that this file calls a
+   * function, which is not the question; the question is whether an unreachable
+   * provider ends with a picture in a channel.
+   */
+  describe("scanning", () => {
+    const SCAN_ENV = [
+      "CONTENT_SCAN_PROVIDER",
+      "CONTENT_SCAN_FAIL_MODE",
+      "CONTENT_SCAN_QUARANTINE_DAYS",
+      "OPENAI_API_KEY",
+    ] as const;
+
+    function configureScanner(
+      respond: () => Response | Promise<Response>,
+    ): void {
+      process.env.CONTENT_SCAN_PROVIDER = "openai";
+      process.env.OPENAI_API_KEY = "sk-test";
+      vi.stubGlobal("fetch", vi.fn(async () => respond()));
+    }
+
+    function scores(body: Record<string, number>): () => Response {
+      return () =>
+        new Response(JSON.stringify({ results: [{ category_scores: body }] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+    }
+
+    async function scanRow(attachmentId: string) {
+      const result = await getPool().query<{
+        scan_status: string;
+        scan_provider: string | null;
+        scan_score: number | null;
+        scan_labels: string[] | null;
+        scanned_at: Date | null;
+        quarantined_at: Date | null;
+      }>(
+        `SELECT scan_status, scan_provider, scan_score, scan_labels, scanned_at,
+                quarantined_at
+         FROM message_attachments WHERE id = $1`,
+        [attachmentId],
+      );
+      return result.rows[0]!;
+    }
+
+    async function openReports() {
+      const result = await getPool().query<{
+        reporter_id: string | null;
+        reported_user_id: string;
+        reason: string;
+        details: string;
+      }>(
+        `SELECT reporter_id, reported_user_id, reason, details FROM reports
+         ORDER BY id`,
+      );
+      return result.rows;
+    }
+
+    beforeEach(() => {
+      for (const key of SCAN_ENV) {
+        delete process.env[key];
+      }
+      vi.spyOn(console, "error").mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      for (const key of SCAN_ENV) {
+        delete process.env[key];
+      }
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
+
+    it("attaches and records nothing when no scanner is configured", async () => {
+      const fetchSpy = vi.fn();
+      vi.stubGlobal("fetch", fetchSpy);
+
+      const row = await upload();
+      const message = await postMessage();
+      expect(await claim(message, [row.id])).toHaveLength(1);
+
+      expect(fetchSpy).not.toHaveBeenCalled();
+      const scan = await scanRow(row.id);
+      // Not `pass`. Nobody looked, and the row says so — which is the whole
+      // difference between an honest gap and a claim of safety.
+      expect(scan.scan_status).toBe("unscanned");
+      expect(scan.scan_provider).toBeNull();
+      expect(scan.scanned_at).toBeNull();
+      expect(await openReports()).toEqual([]);
+    });
+
+    it("attaches a clean image and records who said so", async () => {
+      configureScanner(scores({ sexual: 0.01, "violence/graphic": 0.02 }));
+
+      const row = await upload();
+      const message = await postMessage();
+      expect(await claim(message, [row.id])).toHaveLength(1);
+
+      const scan = await scanRow(row.id);
+      expect(scan.scan_status).toBe("pass");
+      expect(scan.scan_provider).toBe("openai");
+      expect(scan.scanned_at).not.toBeNull();
+      expect(scan.quarantined_at).toBeNull();
+      expect(await openReports()).toEqual([]);
+    });
+
+    it("drops an image the scanner could not judge, and says why on the row", async () => {
+      // THE PATH THAT MATTERS. A provider that is down must not be a provider
+      // that agrees with everything.
+      configureScanner(() => {
+        throw new TypeError("fetch failed");
+      });
+
+      const row = await upload();
+      const message = await postMessage();
+      expect(await claim(message, [row.id])).toEqual([]);
+
+      const scan = await scanRow(row.id);
+      expect(scan.scan_status).toBe("error");
+      expect(scan.scan_provider).toBe("openai");
+      expect(scan.scan_labels).toEqual(["scan_error:unreachable"]);
+      // Not quarantined: nothing was found wrong with it, so it is ordinary
+      // unclaimed garbage and the orphan sweeper owns it.
+      expect(scan.quarantined_at).toBeNull();
+    });
+
+    it("drops an image whose scanner answered with garbage", async () => {
+      configureScanner(
+        () =>
+          new Response("<html>maintenance</html>", {
+            status: 200,
+            headers: { "content-type": "text/html" },
+          }),
+      );
+
+      const row = await upload();
+      const message = await postMessage();
+      expect(await claim(message, [row.id])).toEqual([]);
+      expect((await scanRow(row.id)).scan_status).toBe("error");
+    });
+
+    it("posts an unjudgeable image only when the operator chose to fail open", async () => {
+      process.env.CONTENT_SCAN_FAIL_MODE = "open";
+      configureScanner(() => {
+        throw new TypeError("fetch failed");
+      });
+
+      const row = await upload();
+      const message = await postMessage();
+      expect(await claim(message, [row.id])).toHaveLength(1);
+      // The row still records the truth. Failing open changes what happens to
+      // the image, never what the evidence says happened.
+      expect((await scanRow(row.id)).scan_status).toBe("error");
+    });
+
+    it("refuses a rejected image, quarantines it, and files a report", async () => {
+      configureScanner(scores({ sexual: 0.98, "sexual/minors": 0.97 }));
+
+      const row = await upload();
+      const message = await postMessage();
+      expect(await claim(message, [row.id])).toEqual([]);
+
+      const scan = await scanRow(row.id);
+      expect(scan.scan_status).toBe("rejected");
+      expect(scan.scan_labels).toEqual(["csam_suspected"]);
+      expect(scan.scan_score).toBeGreaterThan(0.9);
+      expect(scan.quarantined_at).not.toBeNull();
+
+      const reports = await openReports();
+      expect(reports).toHaveLength(1);
+      // Nobody filed it, so there is no reporter — `toReport` renders that as a
+      // null reporterName and the details name the scanner instead.
+      expect(reports[0]!.reporter_id).toBeNull();
+      expect(reports[0]!.reported_user_id).toBe(uploader.id);
+      expect(reports[0]!.reason).toBe("illegal_content");
+      expect(reports[0]!.details).toContain(row.id);
+      expect(reports[0]!.details).toContain("never posted");
+    });
+
+    it("posts a flagged image and still files a report", async () => {
+      configureScanner(scores({ sexual: 0.02, "violence/graphic": 0.95 }));
+
+      const row = await upload();
+      const message = await postMessage();
+      expect(await claim(message, [row.id])).toHaveLength(1);
+
+      const scan = await scanRow(row.id);
+      expect(scan.scan_status).toBe("flagged");
+      expect(scan.quarantined_at).toBeNull();
+
+      const reports = await openReports();
+      expect(reports).toHaveLength(1);
+      expect(reports[0]!.reason).toBe("violence");
+      expect(reports[0]!.details).toContain("is visible");
+    });
+
+    it("files one open ticket per uploader, not one per bad file", async () => {
+      configureScanner(scores({ sexual: 0.98, "sexual/minors": 0.97 }));
+
+      // Without the dedupe, uploading in a loop is a way to bury every report a
+      // real person ever filed under machine noise.
+      for (let index = 0; index < 3; index += 1) {
+        const row = await upload();
+        const message = await postMessage();
+        await claim(message, [row.id]);
+      }
+
+      expect(await openReports()).toHaveLength(1);
+      // The per-object evidence is on the rows, which is where the queue entry
+      // points a moderator.
+      const quarantined = await getPool().query(
+        `SELECT id FROM message_attachments WHERE quarantined_at IS NOT NULL`,
+      );
+      expect(quarantined.rows).toHaveLength(3);
+    });
+
+    it("keeps a quarantined row out of the orphan sweeper's reach", async () => {
+      configureScanner(scores({ sexual: 0.98, "sexual/minors": 0.97 }));
+
+      const row = await upload();
+      const message = await postMessage();
+      await claim(message, [row.id]);
+      await age(row.id, "2 hours");
+
+      // Unclaimed and older than the grace period — exactly the shape the
+      // orphan sweep exists to collect, and exactly the row it must not.
+      expect(await sweepOrphanedAttachments()).toBe(0);
+      expect(storage.deletedKeys).toEqual([]);
+      expect((await scanRow(row.id)).scan_status).toBe("rejected");
+    });
+
+    it("expires an ordinary quarantine and never an illegal one", async () => {
+      configureScanner(scores({ "violence/graphic": 0.99 }));
+      const gore = await upload();
+      // A gore rejection needs the block threshold lowered; at the shipped
+      // defaults graphic violence only ever flags.
+      await getPool().query(
+        `UPDATE message_attachments
+         SET scan_status = 'rejected', scan_labels = '["gore"]'::jsonb,
+             quarantined_at = NOW() - INTERVAL '60 days'
+         WHERE id = $1`,
+        [gore.id],
+      );
+
+      const illegal = await upload();
+      await getPool().query(
+        `UPDATE message_attachments
+         SET scan_status = 'rejected', scan_labels = '["csam_suspected"]'::jsonb,
+             quarantined_at = NOW() - INTERVAL '3650 days'
+         WHERE id = $1`,
+        [illegal.id],
+      );
+
+      expect(await sweepQuarantinedAttachments()).toBe(1);
+      expect(storage.deletedKeys).toEqual([gore.storage_key]);
+
+      const survivors = await getPool().query<{ id: string }>(
+        `SELECT id FROM message_attachments`,
+      );
+      // Ten years old and still there. Deleting it would destroy evidence in a
+      // matter that has a reporting duty attached to it; the operator removes
+      // it by hand when they are told to.
+      expect(survivors.rows.map((entry) => entry.id)).toEqual([illegal.id]);
+    });
+
+    it("leaves a quarantine alone until its window has passed", async () => {
+      const row = await upload();
+      await getPool().query(
+        `UPDATE message_attachments
+         SET scan_status = 'rejected', scan_labels = '["gore"]'::jsonb,
+             quarantined_at = NOW() - INTERVAL '10 days'
+         WHERE id = $1`,
+        [row.id],
+      );
+
+      expect(await sweepQuarantinedAttachments()).toBe(0);
+
+      process.env.CONTENT_SCAN_QUARANTINE_DAYS = "7";
+      expect(await sweepQuarantinedAttachments()).toBe(1);
+    });
+
+    it("keeps the good attachments in a batch that contained a bad one", async () => {
+      let call = 0;
+      process.env.CONTENT_SCAN_PROVIDER = "openai";
+      process.env.OPENAI_API_KEY = "sk-test";
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => {
+          call += 1;
+          // The first object scanned is refused; whichever it is, the other
+          // must still make it onto the message.
+          return scores(
+            call === 1
+              ? { sexual: 0.98, "sexual/minors": 0.97 }
+              : { sexual: 0.01 },
+          )();
+        }),
+      );
+
+      const first = await upload();
+      const second = await upload();
+      const message = await postMessage();
+      const claimed = await claim(message, [first.id, second.id]);
+
+      expect(claimed).toHaveLength(1);
+      const statuses = await getPool().query<{ scan_status: string }>(
+        `SELECT scan_status FROM message_attachments ORDER BY scan_status`,
+      );
+      expect(statuses.rows.map((entry) => entry.scan_status)).toEqual([
+        "pass",
+        "rejected",
+      ]);
+    });
+
+    it("scans a GIF hosted somewhere else, since the allowlist is about hosts", async () => {
+      configureScanner(scores({ sexual: 0.98, "sexual/minors": 0.97 }));
+
+      const remote = await createRemoteAttachment({
+        channelId,
+        uploaderId: uploader.id,
+        url: "https://media.giphy.com/media/abc/giphy.gif",
+        filename: "abc.gif",
+        contentType: "image/gif",
+      });
+      const message = await postMessage();
+
+      // `isGifMediaUrl` proves the bytes came from GIPHY. It says nothing at
+      // all about what is in them.
+      expect(await claim(message, [remote.id])).toEqual([]);
+      expect((await scanRow(remote.id)).scan_status).toBe("rejected");
     });
   });
 });

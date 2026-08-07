@@ -36,6 +36,14 @@ Background on why R2 and not Postgres large objects: [`DECISIONS.md`](./DECISION
 6. On every read, the server mints a presigned GET per attachment row and embeds it as `url`.
    Presigning is pure HMAC with no network call, so this is cheap enough to do per row per read.
 
+Step 5 is also where **image safety scanning** happens, when it is configured — concurrently
+with that HEAD, for the same reason it is there rather than inside the transaction. An
+attachment the scanner refuses is dropped exactly like one whose object was never uploaded, so
+an unsafe image is never visible for any length of time. It is off by default and every
+attachment then records `scan_status = 'unscanned'`, which is not a pass.
+See [`CONTENT_SAFETY.md`](./CONTENT_SAFETY.md) — including what is *not* scanned, and what the
+operator has to apply for.
+
 Signing is hand-rolled SigV4 in `server/src/lib/s3.ts` using `node:crypto` only. No SDK: the AWS
 S3 client pulls ~50 packages into the Railway image for one operation, in a repo that runs raw
 `node:http` with no framework.
@@ -302,6 +310,12 @@ of the refetch above.
 `message_attachments.message_id` is **`ON DELETE SET NULL`, not `CASCADE`**. That is what lets a
 single sweeper cover two different kinds of garbage:
 
+(A third kind is deliberately out of its reach: a row with `quarantined_at` set was refused by
+the scanner, is unclaimed forever by construction, and would otherwise be deleted an hour after
+it became the only evidence that the upload happened. `sweepQuarantinedAttachments` owns those,
+on a 30-day clock — and never touches an illegal-content match at any age.
+See [`CONTENT_SAFETY.md`](./CONTENT_SAFETY.md).)
+
 - **Never claimed** — a URL was minted and the user never sent the message.
 - **Orphaned** — the message it belonged to was deleted.
 
@@ -351,5 +365,6 @@ redeploys more often than the interval would otherwise never sweep once in its l
 | `SignatureDoesNotMatch` on one PUT that other uploads survive | The body is not the length that was minted — `Content-Length` is signed, and a mid-flight file edit or a re-used URL is the usual cause |
 | PUT 404s on a URL the server just signed | Bucket does not exist — locally, `minio-init` did not run |
 | PUT rejected on content type | Client sent a `Content-Type` other than the one that was signed |
-| Attachment silently missing from a sent message | It failed the HEAD at claim time: never uploaded, stored as a type other than the one signed, or over the cap |
+| Attachment silently missing from a sent message | It failed the HEAD at claim time: never uploaded, stored as a type other than the one signed, or over the cap — or the scanner refused it, or could not run and this deployment fails closed (`SELECT scan_status, scan_labels FROM message_attachments WHERE id = …`) |
+| Every image upload stopped attaching at once, `scan_status` reads `error` | A configured scanner is unreachable or its key was revoked, and `CONTENT_SCAN_FAIL_MODE` is `closed`. That is the intended behaviour; fix the provider, do not flip the mode |
 | Image broke after a tab sat open all day | Presigned GET expired and the refetch path is not wired |
