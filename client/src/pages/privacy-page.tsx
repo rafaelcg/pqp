@@ -88,8 +88,10 @@ export function PrivacyPage() {
           Clerk
         </a>
         , a third-party identity provider. <strong>Clerk holds your email
-        address and login credentials — our database does not.</strong> What we
-        store on our side is: a Clerk user identifier, your display name, your{" "}
+        address and login credentials. We do not copy it into our own
+        database</strong> — though nothing stops you typing it into a field
+        yourself, such as your display name or a message, and if you do, it is
+        stored like any other text you write. What we store on our side is: a Clerk user identifier, your display name, your{" "}
         <code>name#1234</code> handle, an avatar URL, the{" "}
         <em>domains</em> of your verified email addresses (for example{" "}
         <code>empresa.com.br</code>, used for company-domain server joins — never
