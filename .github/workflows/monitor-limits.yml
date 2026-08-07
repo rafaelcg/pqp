@@ -1,0 +1,99 @@
+name: Monitor (limits)
+
+# "Is it about to cost me, or about to hit a wall?" — once a day.
+#
+# Certificates, the domain registration, and every free-tier quota that can be
+# read with a credential that exists. Anything that cannot be read is reported
+# as SKIP with the exact token and permission needed — never as a silent pass.
+# The genuinely unautomatable ones (ExpressTURN bandwidth, Clerk MRU) are
+# printed at the end of every run and listed in docs/MONITORING.md with a
+# manual cadence.
+#
+# Alerts land in the same place and dedupe the same way as monitor-uptime.yml:
+# one GitHub Issue per check, closed automatically on recovery. The nag
+# interval is longer here (72h) because a quota does not get more urgent by
+# being restated every day.
+
+on:
+  schedule:
+    # 11:17 UTC ≈ 08:17 in São Paulo. Deliberately not on the hour: GitHub
+    # queues an enormous number of jobs at :00 and the run drifts.
+    - cron: "17 11 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Report only — do not open, comment on or close issues"
+        type: boolean
+        default: false
+
+concurrency:
+  group: monitor-limits
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    name: Certificates, domain and quotas
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # flyctl for the Postgres volume check; psql to run the one read-only
+      # query through the tunnel it opens. ubuntu-latest already ships a psql
+      # client, so this is a no-op that documents the dependency and fails
+      # loudly if a future runner image drops it.
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - name: Verify psql is available
+        run: psql --version
+
+      - name: Run limit checks
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MONITOR_REPO: ${{ github.repository }}
+          # Comma-separated check keys to silence without disabling the monitor.
+          # `gh variable set MONITOR_MUTED --body "r2-usage"`; empty means nothing muted.
+          MONITOR_MUTED: ${{ vars.MONITOR_MUTED }}
+
+          # Postgres volume. NOTE: this needs an ORG-scoped Fly token. The
+          # deploy token is app-scoped (`fly tokens create deploy -a pqp-api`)
+          # and cannot read an MPG cluster, so FLY_ORG_TOKEN is checked first
+          # and the check reports SKIP with instructions if neither works.
+          FLY_API_TOKEN: ${{ secrets.FLY_ORG_TOKEN || secrets.FLY_API_TOKEN }}
+          MONITOR_MPG_CLUSTER: ${{ vars.MONITOR_MPG_CLUSTER }}
+
+          # R2 usage and Pages build count. The stored token was created for
+          # deploys; if it lacks 'Account Analytics: Read' or
+          # 'Cloudflare Pages: Read' those two checks SKIP and say so.
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          MONITOR_PAGES_PROJECT: ${{ vars.MONITOR_PAGES_PROJECT || 'pqp' }}
+
+          # Optional. Clerk's free plan allows 50,000 monthly retained users,
+          # so this is a formality — the secret lives on Fly, not here, and the
+          # check simply SKIPs without it.
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+        run: |
+          set +e
+          node scripts/monitor/run.mjs limits --alert \
+            ${{ inputs.dry_run && '--dry-run' || '' }} 2>&1 | tee /tmp/monitor.log
+          code=${PIPESTATUS[0]}
+          set -e
+          {
+            echo '### Limits and quotas'
+            echo '```'
+            cat /tmp/monitor.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$code" = "2" ]; then
+            echo "::error::The monitor could not run. Quotas and certificates are not being watched."
+            exit 1
+          fi
+          exit 0

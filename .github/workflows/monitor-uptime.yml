@@ -1,0 +1,100 @@
+name: Monitor (uptime)
+
+# "Is it down?" — every 10 minutes, and it opens a GitHub Issue when it is.
+#
+# WHY THE ALERT IS AN ISSUE AND NOT AN EMAIL OR A WEBHOOK
+#   * a new issue emails the repo owner and pushes to the GitHub mobile app, so
+#     it reaches a phone without anyone watching a dashboard;
+#   * the thread is the incident history, for free, forever;
+#   * github.com is a different failure domain from Fly and Cloudflare, so it
+#     still works during the outage it is reporting.
+# contato@pqp.gg currently BOUNCES (Cloudflare Email Routing has DNS but no
+# verified destination), and pqp's own incoming webhooks are circular — the API
+# being down is the most likely alert and would be the thing delivering it.
+# See docs/MONITORING.md.
+#
+# CADENCE REALITY CHECK: GitHub's cron minimum is 5 minutes, but scheduled runs
+# on public repos are queued at low priority and are routinely late by 5-20
+# minutes. Treat detection as "within 10-30 minutes", and do not shorten the
+# interval hoping for better — it does not help, and it multiplies the runs.
+#
+# GitHub also DISABLES scheduled workflows after 60 days with no repository
+# activity. A repo that goes quiet loses its monitoring silently; docs/MONITORING.md
+# puts a re-enable check on the monthly manual list.
+
+on:
+  schedule:
+    # Offset from :00 so this does not queue behind the top-of-hour rush.
+    - cron: "3,13,23,33,43,53 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Report only — do not open, comment on or close issues"
+        type: boolean
+        default: false
+
+# Never two at once: the reconciler dedupes against the list of open issues, so
+# overlapping runs are the one way it could open a duplicate.
+concurrency:
+  group: monitor-uptime
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    name: Availability probes
+    runs-on: ubuntu-latest
+    # Generous relative to the ~2 minutes this takes, tight enough that a hung
+    # probe cannot sit on the concurrency group until the next run.
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # The scripts are dependency-free Node built-ins on purpose: no
+      # `pnpm install` step means nothing between the checkout and the probe
+      # can fail and turn the monitor into a false alarm about itself.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # Needed only by the machine-count check. Cheap, and skipping it here
+      # would mean the invariant is only asserted at deploy time.
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      # ONE run of the probes. Exit codes carry the meaning:
+      #   0/1 -> the checks ran; whatever they found is now a GitHub issue, and
+      #          the JOB stays green. A failing check must NOT redden the run:
+      #          that would be a second notification for the same incident, and
+      #          a permanently-red Actions tab is how people stop looking.
+      #   2   -> the MONITOR is broken (alerting threw, bad arguments). That
+      #          does fail the job, because GitHub emails the owner about a
+      #          failed scheduled workflow by default — which is the only
+      #          notification path left when the notifier itself is down.
+      - name: Run availability checks
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          MONITOR_REPO: ${{ github.repository }}
+          # Comma-separated check keys to silence without disabling the monitor.
+          # `gh variable set MONITOR_MUTED --body "r2-usage"`; empty means nothing muted.
+          MONITOR_MUTED: ${{ vars.MONITOR_MUTED }}
+        run: |
+          set +e
+          node scripts/monitor/run.mjs availability --alert \
+            ${{ inputs.dry_run && '--dry-run' || '' }} 2>&1 | tee /tmp/monitor.log
+          code=${PIPESTATUS[0]}
+          set -e
+          {
+            echo '### Availability'
+            echo '```'
+            cat /tmp/monitor.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$code" = "2" ]; then
+            echo "::error::The monitor could not run. Nothing is being watched until this is fixed."
+            exit 1
+          fi
+          exit 0
