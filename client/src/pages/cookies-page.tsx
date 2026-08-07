@@ -8,7 +8,7 @@ export function CookiesPage() {
       description="Exactly which cookies, local storage keys and caches pqp.gg puts on your device, and which third parties your browser contacts."
       path="/cookies"
       heading="Cookie notice"
-      updated="{{EFFECTIVE_DATE}}"
+      updated="7 August 2026"
     >
       <p>
         This notice lists everything <strong>pqp.gg</strong> stores on your
@@ -153,7 +153,7 @@ export function CookiesPage() {
       <h2>Contact</h2>
       <p>
         Questions about anything on this page go to{" "}
-        <strong>{"{{CONTACT_EMAIL}}"}</strong> — the single address for pqp.gg,
+        <strong>contato@pqp.gg</strong> — the single address for pqp.gg,
         read by the one person who runs it.
       </p>
     </LegalPage>

@@ -8,12 +8,11 @@ export function TermsPage() {
       description="Terms for using the hosted pqp.gg service: what pqp actually is, eligibility (18+), acceptable use, moderation, reporting and takedowns."
       path="/terms"
       heading="Terms of Service"
-      updated="{{EFFECTIVE_DATE}}"
+      updated="7 August 2026"
     >
       <p>
         These terms cover the hosted service at <strong>pqp.gg</strong>, which is
-        run by <strong>{"{{OPERATOR_NAME}}"}</strong> — one person, not a
-        company. &quot;We&quot; and &quot;us&quot; below mean that one person. By
+        run by <strong>one person, not a company</strong>. &quot;We&quot; and &quot;us&quot; below mean that one person. By
         creating an account or using the app, you agree to these terms.
         Self-hosted copies of the open-source software are governed by the
         project licence and whatever terms you set for your own users — not
@@ -56,7 +55,7 @@ export function TermsPage() {
       </p>
       <p>
         <strong>To report an account you believe belongs to a minor</strong>,
-        write to <strong>{"{{CONTACT_EMAIL}}"}</strong> with the user tag (their{" "}
+        write to <strong>contato@pqp.gg</strong> with the user tag (their{" "}
         <code>name#1234</code> handle), the server or DM where you saw them, and
         what led you to believe they are under 18. Reports about minors are
         handled ahead of everything else. You do not need an account to send
@@ -181,7 +180,7 @@ export function TermsPage() {
       <h2>Reporting abuse</h2>
       <p>
         To report content, a user, or a whole server, email{" "}
-        <strong>{"{{CONTACT_EMAIL}}"}</strong>. Include:
+        <strong>contato@pqp.gg</strong>. Include:
       </p>
       <ul>
         <li>What you are reporting — a message, a user, a server, a DM</li>
@@ -225,7 +224,7 @@ export function TermsPage() {
       <h2>Copyright and other legal notices</h2>
       <p>
         If you believe content on pqp.gg infringes your copyright or other
-        rights, send a notice to <strong>{"{{CONTACT_EMAIL}}"}</strong>{" "}
+        rights, send a notice to <strong>contato@pqp.gg</strong>{" "}
         identifying the work, the exact location of the content, your contact
         details, and a statement that you are the rights holder or authorised to
         act for them. We will review it and remove content where the claim is
@@ -244,7 +243,7 @@ export function TermsPage() {
       <p>
         If we suspend or terminate your account or remove your content and you
         think we got it wrong, reply to the enforcement message or write to{" "}
-        <strong>{"{{CONTACT_EMAIL}}"}</strong> within 30 days. Tell us what was
+        <strong>contato@pqp.gg</strong> within 30 days. Tell us what was
         actioned and why you believe it was a mistake.
       </p>
       <p>
@@ -354,7 +353,7 @@ export function TermsPage() {
       <p>
         One address for all of it — support, abuse and safety reports, underage
         accounts, privacy requests, security disclosures, legal notices and
-        appeals: <strong>{"{{CONTACT_EMAIL}}"}</strong>.
+        appeals: <strong>contato@pqp.gg</strong>.
       </p>
       <p>
         It is one person&apos;s inbox, and that is on purpose. Five more

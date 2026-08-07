@@ -8,7 +8,7 @@ export function PrivacyPage() {
       description="How pqp.gg handles personal data: what we collect, our legal bases, where it is processed, retention, and your rights under the LGPD and UK data protection law."
       path="/privacy"
       heading="Privacy Policy"
-      updated="{{EFFECTIVE_DATE}}"
+      updated="7 August 2026"
     >
       <p>
         This policy explains what personal data <strong>pqp.gg</strong> collects,
@@ -25,13 +25,13 @@ export function PrivacyPage() {
 
       <h2>Who is responsible for your data</h2>
       <p>
-        <strong>{"{{OPERATOR_NAME}}"}</strong> is the controller: one person in
-        the United Kingdom, running pqp.gg as a personal project rather than a
+        <strong>The operator of pqp.gg</strong> is the controller: one person in
+        the United Kingdom, running it as a personal project rather than a
         company. There is no privacy team and no appointed data protection
         officer — appointing one would be theatre for a project this size. The
         same person who wrote the code answers the data-protection questions,
         and there is one address for it:{" "}
-        <strong>{"{{CONTACT_EMAIL}}"}</strong>. Wherever this policy says to
+        <strong>contato@pqp.gg</strong>. Wherever this policy says to
         write to us, that is the address and that is who reads it.
       </p>
 
@@ -56,7 +56,7 @@ export function PrivacyPage() {
         pqp.gg is for people <strong>18 and over</strong>. We do not knowingly
         process the personal data of children or adolescents. If you believe a
         minor is using pqp.gg, tell us at{" "}
-        <strong>{"{{CONTACT_EMAIL}}"}</strong> and we will terminate the account
+        <strong>contato@pqp.gg</strong> and we will terminate the account
         and delete the data. See the <Link to="/terms">Terms of Service</Link>{" "}
         for the eligibility rule.
       </p>
@@ -278,7 +278,7 @@ export function PrivacyPage() {
       </p>
       <p>
         Where we rely on legitimate interests, you can object — write to{" "}
-        <strong>{"{{CONTACT_EMAIL}}"}</strong> and we will look at the specific
+        <strong>contato@pqp.gg</strong> and we will look at the specific
         processing you are objecting to.
       </p>
 
@@ -466,7 +466,7 @@ export function PrivacyPage() {
           in Settings, under &quot;Your data&quot;, builds a file of the account
           data, settings and messages we hold about you, including your 18+
           declaration. For anything that file does not cover, email{" "}
-          <strong>{"{{CONTACT_EMAIL}}"}</strong>.
+          <strong>contato@pqp.gg</strong>.
         </li>
         <li>
           <strong>Correction of incomplete or out-of-date data (art. 18, III)
@@ -510,7 +510,7 @@ export function PrivacyPage() {
           to serve your request. Transfer the server to another member, or delete
           it, and then delete your account. A server nobody else is in is not a
           problem — it goes with the account. For anything this does not cover,
-          email <strong>{"{{CONTACT_EMAIL}}"}</strong>.
+          email <strong>contato@pqp.gg</strong>.
         </li>
         <li>
           <strong>Information about who we share data with (art. 18, VII)</strong>{" "}
@@ -544,13 +544,13 @@ export function PrivacyPage() {
         of, who else was in it, when it last saw traffic and how many of the
         messages were yours. If you genuinely need the other side — a court case,
         a harassment complaint — write to{" "}
-        <strong>{"{{CONTACT_EMAIL}}"}</strong>, and that request is weighed by
+        <strong>contato@pqp.gg</strong>, and that request is weighed by
         hand. There is no self-serve route to another person&apos;s messages, and
         there should not be one.
       </p>
       <p>
         <strong>How to make a request.</strong> Email{" "}
-        <strong>{"{{CONTACT_EMAIL}}"}</strong> from the email address on your
+        <strong>contato@pqp.gg</strong> from the email address on your
         account, saying what you want. We may ask for information to confirm it
         is really you — we will not ask for more than we need. LGPD art. 19 gives
         us up to <strong>15 days</strong> for a complete response and UK law
@@ -607,7 +607,7 @@ export function PrivacyPage() {
         addresses. No system is perfectly secure, and this one is maintained by
         one person with no security team behind them — if you find a
         vulnerability, please tell us at{" "}
-        <strong>{"{{CONTACT_EMAIL}}"}</strong> before you tell anyone else. If a
+        <strong>contato@pqp.gg</strong> before you tell anyone else. If a
         breach creates a real risk to you, we will tell you and the relevant
         regulator, as LGPD art. 48 and UK GDPR arts. 33–34 require.
       </p>
@@ -630,7 +630,7 @@ export function PrivacyPage() {
       <h2>Contact</h2>
       <p>
         Privacy requests, abuse and safety, security reports, and anything else
-        on this page: <strong>{"{{CONTACT_EMAIL}}"}</strong>. One address, read
+        on this page: <strong>contato@pqp.gg</strong>. One address, read
         by the one person who runs pqp.gg.
       </p>
     </LegalPage>
