@@ -242,15 +242,23 @@ rather than while holding something you need to report.
 Providing false information in purported compliance is an offence under s.69,
 up to two years on indictment.
 
-### 2. Write the illegal content risk assessment — legally required, already overdue
+### 2. Write the illegal content risk assessment — legally required, now written
+
+**Done — [`RISK_ASSESSMENT.md`](./RISK_ASSESSMENT.md), v1 dated 2026-08-07.** It
+follows Ofcom's four-step methodology and Table 8 record structure, assesses all
+18 kinds of priority illegal content, and concludes pqp is a **multi-risk
+service** under paragraph 5.6 of the Codes. Read §5 of it: the items only the
+operator can close (NCA registration, IWF Image Intercept, Cloudflare CSAM
+Scanning, and reviewing the assessment himself) are the same list as this
+section, and it records which of them Ofcom's Codes actually require.
 
 Ofcom's illegal harms codes came into force **17 March 2025** and the "suitable
-and sufficient" illegal content risk assessment was due **16 March 2025**. The
-OSA has no size exemption; duties scale by proportionality, not by switching
-off. s.23 requires a written record of the assessment and of the measures taken.
-
-This is the cheapest compliance gap in the list to close and it is currently
-open. Write it, date it honestly, keep it.
+and sufficient" illegal content risk assessment was due **16 March 2025** — for
+services operating then. pqp was not (first commit 2026-07-11), so the
+"already overdue" framing this section previously carried was wrong;
+`RISK_ASSESSMENT.md` §0 sets out the timing honestly. The OSA has no size
+exemption either way; duties scale by proportionality, not by switching off, and
+s.23 requires the written record to be kept and updated.
 
 ### 3. Enable Cloudflare's CSAM Scanning Tool — free, zero approval, do it today
 
