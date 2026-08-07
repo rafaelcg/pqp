@@ -164,7 +164,18 @@ struct OnboardingView: View {
             }
             return
         }
-        showingAuth = true
+        // A keychain session can predate this install (the keychain outlives
+        // an uninstall). Adopt it when it works — no sheet at all — and purge
+        // it when the API refuses it, or the sheet would open straight onto
+        // "you're already signed in" with no way forward.
+        signingIn = true
+        Task {
+            let adopted = await session.adoptExistingSession()
+            signingIn = false
+            if !adopted {
+                showingAuth = true
+            }
+        }
     }
 }
 

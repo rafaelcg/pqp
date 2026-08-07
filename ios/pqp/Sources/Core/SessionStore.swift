@@ -148,6 +148,37 @@ final class SessionStore {
         }
     }
 
+    /// Tries to reuse a keychain Clerk session before the sign-in sheet is
+    /// shown. Returns true when it works and the user has been routed onward.
+    ///
+    /// This must run *before* the sheet because the keychain outlives an app
+    /// uninstall: a fresh install (UserDefaults wiped, so `restore` never gets
+    /// past onboarding) can still hold a session — possibly minted by a
+    /// different Clerk instance — and the sheet refuses to run while one
+    /// exists ("you're already signed in") even though the API refuses its
+    /// tokens. A session the API rejects is purged here so the sheet that
+    /// follows starts clean.
+    func adoptExistingSession() async -> Bool {
+        guard authMode == .clerk, hasClerkSession else { return false }
+        do {
+            let user = try await withDeadline(seconds: 12) {
+                try await self.api.currentUser()
+            }
+            lastError = nil
+            hasOnboarded = true
+            await route(user)
+            return true
+        } catch {
+            if case APIError.unauthorized = error {
+                await purgeClerkSession()
+                // Not surfaced as an error: the sheet is about to offer a
+                // clean sign-in, which is the remedy.
+                lastError = nil
+            }
+            return false
+        }
+    }
+
     /// Called when onboarding completes. Separate from `restore` because it
     /// must surface a failure — here the user *did* just ask to sign in.
     func signIn() async {
@@ -157,6 +188,11 @@ final class SessionStore {
             hasOnboarded = true
             await route(user)
         } catch {
+            if authMode == .clerk, case APIError.unauthorized = error {
+                // Purge rather than strand: a refused session left in the
+                // keychain would block the next sign-in sheet the same way.
+                await purgeClerkSession()
+            }
             lastError = (error as? APIError)?.errorDescription ?? error.localizedDescription
         }
     }
