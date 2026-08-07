@@ -140,6 +140,27 @@ export interface VoiceState {
   screenSharePeerId: string | null;
   /** Our own outgoing capture, for a local preview of what's being shared. */
   localScreenStream: MediaStream | null;
+  // --- conversation calls ---
+  /**
+   * Conversations currently ringing this device, oldest first. Lives on the
+   * voice controller because the frames arrive on the voice signaling path,
+   * and survives joins/leaves of *other* calls — an invitation is not call
+   * state of ours until we accept it.
+   */
+  incomingCalls: IncomingCall[];
+  /** True while our camera capture is live and being sent to the call. */
+  isCameraOn: boolean;
+  /** Our own camera capture, for the self tile. */
+  localCameraStream: MediaStream | null;
+  /** Users who declined the current call's ring (cleared on join/leave). */
+  callDeclinedUserIds: string[];
+}
+
+/** One ringing invitation, as shown on the incoming-call surface. */
+export interface IncomingCall {
+  conversationId: string;
+  kind: "dm" | "group";
+  caller: { userId: string; displayName: string; avatarUrl: string | null };
 }
 
 interface MicPipeline {
@@ -309,6 +330,11 @@ export function createVoiceController(transport: RealtimeTransport) {
    * feature can produce, so the invariant is that this only ever *fails closed*.
    */
   let pushToTalkHeld = false;
+  // --- conversation calls: controller-privates ---
+  /** Ring the room's absent participants as soon as this join is welcomed. */
+  let ringOnWelcomeChannelId: string | null = null;
+  /** Owns the camera capture; mirrored into state.localCameraStream. */
+  let cameraCaptureStream: MediaStream | null = null;
   let state: VoiceState = {
     status: "idle",
     peerId: null,
@@ -329,6 +355,10 @@ export function createVoiceController(transport: RealtimeTransport) {
     isSharingScreen: false,
     screenSharePeerId: null,
     localScreenStream: null,
+    incomingCalls: [],
+    isCameraOn: false,
+    localCameraStream: null,
+    callDeclinedUserIds: [],
   };
   let listener: ((state: VoiceState) => void) | null = null;
 
@@ -381,6 +411,8 @@ export function createVoiceController(transport: RealtimeTransport) {
         stopMicPipeline(pipeline);
         pipeline = null;
         intendedChannelId = null;
+        ringOnWelcomeChannelId = null;
+        releaseCameraCapture();
         pushToTalkHeld = false;
         state.isTransmitting = false;
         void teardownSfu();
@@ -412,6 +444,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     clearJoinTimeout();
     joinGeneration++;
     intendedChannelId = null;
+    ringOnWelcomeChannelId = null;
     knownPeerIds.clear();
     stopSpeakingLoop();
     disposeRemoteAnalysers();
@@ -422,6 +455,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     stopMicPipeline(pipeline);
     pipeline = null;
     releaseScreenCapture();
+    releaseCameraCapture();
     pushToTalkHeld = false;
     state.isTransmitting = false;
     state.status = "idle";
@@ -458,6 +492,8 @@ export function createVoiceController(transport: RealtimeTransport) {
       occupancy: { ...state.occupancy },
       peerVolumes: { ...state.peerVolumes },
       self: state.self ? { ...state.self } : null,
+      incomingCalls: [...state.incomingCalls],
+      callDeclinedUserIds: [...state.callDeclinedUserIds],
     };
   }
 
@@ -679,6 +715,64 @@ export function createVoiceController(transport: RealtimeTransport) {
     }
   }
 
+  // --- conversation calls: camera capture -----------------------------------
+
+  /** Stops the camera tracks only — no network call, no peer teardown. */
+  function releaseCameraCapture() {
+    if (!cameraCaptureStream) {
+      return;
+    }
+    for (const track of cameraCaptureStream.getTracks()) {
+      track.stop();
+    }
+    cameraCaptureStream = null;
+    state.isCameraOn = false;
+    state.localCameraStream = null;
+  }
+
+  /** Full stop while still in-call: releases the capture and tells everyone. */
+  async function stopCameraInternal() {
+    if (!cameraCaptureStream) {
+      return;
+    }
+    releaseCameraCapture();
+    transport.sendVoice({ type: "set-camera", streamId: null });
+    await manager?.setLocalCameraStream(null);
+    if (sfu) {
+      await sfu.unpublishCamera();
+    }
+  }
+
+  /**
+   * Camera stream ids from the roster → the mesh manager, which uses them to
+   * tell an incoming camera track from an incoming screen track. A no-op per
+   * peer when nothing changed, and a no-op entirely on the SFU path (null
+   * manager), where LiveKit labels tracks itself.
+   */
+  function applyCameraStreamIds(participants: VoiceParticipant[]) {
+    if (!manager) {
+      return;
+    }
+    for (const participant of participants) {
+      if (participant.peerId !== state.peerId) {
+        manager.setPeerCameraStreamId(
+          participant.peerId,
+          participant.cameraStreamId ?? null,
+        );
+      }
+    }
+  }
+
+  function removeIncomingCall(conversationId: string) {
+    const before = state.incomingCalls.length;
+    state.incomingCalls = state.incomingCalls.filter(
+      (call) => call.conversationId !== conversationId,
+    );
+    return state.incomingCalls.length !== before;
+  }
+
+  // --- end conversation calls -----------------------------------------------
+
   /**
    * SFU media path. Returns false if the session could not be established —
    * the caller then *leaves the call and says so*. It must never build a mesh
@@ -738,6 +832,14 @@ export function createVoiceController(transport: RealtimeTransport) {
         await sfu.publishScreen(screenCaptureStream);
         transport.sendVoice({ type: "set-sharing-screen", sharing: true });
       }
+      // Same story for the camera in a conversation call.
+      if (cameraCaptureStream) {
+        await sfu.publishCamera(cameraCaptureStream);
+        transport.sendVoice({
+          type: "set-camera",
+          streamId: cameraCaptureStream.id,
+        });
+      }
       state.usingSfu = true;
       emit();
       return true;
@@ -759,6 +861,14 @@ export function createVoiceController(transport: RealtimeTransport) {
       void manager.setLocalScreenStream(screenCaptureStream);
       transport.sendVoice({ type: "set-sharing-screen", sharing: true });
     }
+    // And the camera of a conversation call.
+    if (cameraCaptureStream) {
+      void manager.setLocalCameraStream(cameraCaptureStream);
+      transport.sendVoice({
+        type: "set-camera",
+        streamId: cameraCaptureStream.id,
+      });
+    }
     manager.onPeerStateChange((remote) => {
       state.remotePeers = remote;
       syncRemoteAnalysers(remote);
@@ -766,6 +876,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     });
     for (const peer of peers) {
       manager.connectToPeer(peer.peerId, toIdentity(peer));
+      manager.setPeerCameraStreamId(peer.peerId, peer.cameraStreamId ?? null);
     }
   }
 
@@ -795,6 +906,8 @@ export function createVoiceController(transport: RealtimeTransport) {
           }
           state.screenSharePeerId =
             message.participants.find((p) => p.sharingScreen)?.peerId ?? null;
+          // Mesh camera classification rides the roster — see the banner.
+          applyCameraStreamIds(message.participants);
         }
         emit();
         break;
@@ -878,6 +991,15 @@ export function createVoiceController(transport: RealtimeTransport) {
               return;
             }
             state.status = "connected";
+            // A conversation call rings only once we are genuinely in it —
+            // never for a join that is about to be refused.
+            if (ringOnWelcomeChannelId === channelId) {
+              ringOnWelcomeChannelId = null;
+              transport.sendVoice({
+                type: "call-ring",
+                conversationId: channelId,
+              });
+            }
             startSpeakingLoop();
             emit();
           });
@@ -887,6 +1009,10 @@ export function createVoiceController(transport: RealtimeTransport) {
 
         clearJoinTimeout();
         state.status = "connected";
+        if (ringOnWelcomeChannelId === channelId) {
+          ringOnWelcomeChannelId = null;
+          transport.sendVoice({ type: "call-ring", conversationId: channelId });
+        }
         startMeshSession(peerId, welcomePeers);
         startSpeakingLoop();
         emit();
@@ -910,6 +1036,10 @@ export function createVoiceController(transport: RealtimeTransport) {
         knownPeerIds.add(message.peer.peerId);
         identities.set(message.peer.peerId, toIdentity(message.peer));
         manager?.connectToPeer(message.peer.peerId, toIdentity(message.peer));
+        manager?.setPeerCameraStreamId(
+          message.peer.peerId,
+          message.peer.cameraStreamId ?? null,
+        );
         break;
       case "peer-left":
         knownPeerIds.delete(message.peerId);
@@ -940,6 +1070,49 @@ export function createVoiceController(transport: RealtimeTransport) {
           return;
         }
         void manager?.handleIceCandidate(message.from, message.candidate);
+        break;
+      // --- conversation calls ---
+      case "call-incoming":
+        // Already in (or joining) this call on this device — nothing to answer.
+        if (
+          state.voiceChannelId === message.conversationId &&
+          state.status !== "idle"
+        ) {
+          return;
+        }
+        if (
+          state.incomingCalls.some(
+            (call) => call.conversationId === message.conversationId,
+          )
+        ) {
+          return;
+        }
+        state.incomingCalls = [
+          ...state.incomingCalls,
+          {
+            conversationId: message.conversationId,
+            kind: message.kind,
+            caller: message.caller,
+          },
+        ];
+        emit();
+        break;
+      case "call-ring-cancelled":
+        if (removeIncomingCall(message.conversationId)) {
+          emit();
+        }
+        break;
+      case "call-declined":
+        if (message.conversationId !== state.voiceChannelId) {
+          return;
+        }
+        if (!state.callDeclinedUserIds.includes(message.userId)) {
+          state.callDeclinedUserIds = [
+            ...state.callDeclinedUserIds,
+            message.userId,
+          ];
+          emit();
+        }
         break;
     }
   }
@@ -995,6 +1168,14 @@ export function createVoiceController(transport: RealtimeTransport) {
       // otherwise the UI cannot tell which channel is connecting.
       state.voiceChannelId = voiceChannelId;
       intendedChannelId = voiceChannelId;
+      // Joining a conversation that was ringing us IS the acceptance, so the
+      // invitation surface for it comes down; declines belong to the last call.
+      removeIncomingCall(voiceChannelId);
+      state.callDeclinedUserIds = [];
+      // A ring armed for a previous join must not fire for this one.
+      if (ringOnWelcomeChannelId && ringOnWelcomeChannelId !== voiceChannelId) {
+        ringOnWelcomeChannelId = null;
+      }
       // Applied before the track exists, so "mute on join" is genuinely muted
       // from the first sample rather than a moment later.
       state.isMuted = options?.startMuted ?? state.isMuted;
@@ -1064,6 +1245,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       clearJoinTimeout();
       joinGeneration++;
       intendedChannelId = null;
+      ringOnWelcomeChannelId = null;
       knownPeerIds.clear();
       stopSpeakingLoop();
       disposeRemoteAnalysers();
@@ -1074,6 +1256,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       stopMicPipeline(pipeline);
       pipeline = null;
       releaseScreenCapture();
+      releaseCameraCapture();
       pushToTalkHeld = false;
       state = {
         status: "idle",
@@ -1096,6 +1279,12 @@ export function createVoiceController(transport: RealtimeTransport) {
         isSharingScreen: false,
         screenSharePeerId: null,
         localScreenStream: null,
+        // Invitations from OTHER conversations are not our call state and
+        // survive hanging up, the way a second phone line keeps ringing.
+        incomingCalls: state.incomingCalls,
+        isCameraOn: false,
+        localCameraStream: null,
+        callDeclinedUserIds: [],
       };
       emit();
     },
@@ -1231,6 +1420,121 @@ export function createVoiceController(transport: RealtimeTransport) {
       await stopScreenShareInternal();
       emit();
     },
+
+    // --- conversation calls -----------------------------------------------
+
+    /**
+     * Start a conversation call: join its room and, once the server welcomes
+     * us in, ring the absent participants. Ringing waits for `welcome` because
+     * the join is where access, blocks and the room's transport are enforced —
+     * a refused join must ring nobody.
+     */
+    async joinConversationCall(
+      conversationId: string,
+      options?: VoiceAudioOptions,
+    ) {
+      ringOnWelcomeChannelId = conversationId;
+      await this.join(conversationId, options);
+    },
+
+    /** Accepting an incoming call is joining its room — no extra frame. */
+    async acceptIncomingCall(
+      conversationId: string,
+      options?: VoiceAudioOptions,
+    ) {
+      await this.join(conversationId, options);
+    },
+
+    /** Refuse the ring. The caller is told; our other devices stop ringing. */
+    declineIncomingCall(conversationId: string) {
+      transport.sendVoice({ type: "call-decline", conversationId });
+      if (removeIncomingCall(conversationId)) {
+        emit();
+      }
+    },
+
+    /**
+     * Dismiss the surface on this device only — no frame is sent, the other
+     * participants keep ringing, and the call stays joinable from the panel.
+     */
+    dismissIncomingCall(conversationId: string) {
+      if (removeIncomingCall(conversationId)) {
+        emit();
+      }
+    },
+
+    /**
+     * Camera on/off. Off by default, always; nothing turns it on but this.
+     *
+     * Mesh publishes it as a second video track alongside any screen share
+     * (the roster's `cameraStreamId` is what lets receivers tell them apart);
+     * LiveKit publishes it as a `Camera`-source track. Both are told about
+     * every transition, and the capture is released the moment it stops being
+     * sent — a webcam light with nothing behind it is not acceptable.
+     */
+    async toggleCamera() {
+      if (state.status !== "connected") {
+        return;
+      }
+      if (cameraCaptureStream) {
+        await stopCameraInternal();
+        emit();
+        return;
+      }
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: true,
+          audio: false,
+        });
+      } catch (err) {
+        state.error =
+          err instanceof Error && err.name === "NotAllowedError"
+            ? translateMessage("voice.error.cameraBlocked")
+            : err instanceof Error && err.message
+              ? err.message
+              : translateMessage("voice.error.cameraFailed");
+        emit();
+        return;
+      }
+      const track = stream.getVideoTracks()[0];
+      if (!track) {
+        for (const t of stream.getTracks()) {
+          t.stop();
+        }
+        state.error = translateMessage("voice.error.cameraFailed");
+        emit();
+        return;
+      }
+      // The camera being unplugged (or revoked by the OS) must read as "off",
+      // not as a frozen tile.
+      track.onended = () => {
+        void stopCameraInternal();
+        emit();
+      };
+      cameraCaptureStream = stream;
+      state.isCameraOn = true;
+      state.localCameraStream = stream;
+      emit();
+      // Announced before the track is added so receivers can classify the
+      // incoming video on arrival; the manager re-checks on the roster anyway.
+      transport.sendVoice({ type: "set-camera", streamId: stream.id });
+      try {
+        await manager?.setLocalCameraStream(stream);
+        if (sfu) {
+          await sfu.publishCamera(stream);
+        }
+      } catch (err) {
+        state.error =
+          err instanceof Error && err.message
+            ? err.message
+            : translateMessage("voice.error.cameraFailed");
+        await stopCameraInternal();
+        emit();
+      }
+    },
+
+    // --- end conversation calls ---------------------------------------------
 
     /**
      * Per-peer playback level. Keyed by user id, not peer id: the server mints a

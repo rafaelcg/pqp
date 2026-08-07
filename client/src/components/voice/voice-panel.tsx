@@ -304,6 +304,14 @@ interface VoicePanelProps {
   isSharingScreen?: boolean;
   /** peerId of whoever is presenting (self or remote), or null if nobody is. */
   screenSharePeerId?: string | null;
+  /**
+   * The room's roster (`voice-roster` participants) for this channel. Carries
+   * each peer's self-declared muted/deafened state, which is not part of the
+   * media-level `RemotePeer` — so remote tiles can show the same badges the
+   * channel list does. Optional: without it the tiles simply carry no state
+   * badges, which is what they always did.
+   */
+  participants?: VoiceParticipant[];
   onJoin: () => void;
   onLeave: () => void;
   onToggleMute: () => void;
@@ -334,6 +342,7 @@ export function VoicePanel({
   usingSfu = false,
   isSharingScreen = false,
   screenSharePeerId = null,
+  participants = [],
   onJoin,
   onLeave,
   onToggleMute,
@@ -348,6 +357,9 @@ export function VoicePanel({
   const someoneElseSharing =
     !!screenSharePeerId && screenSharePeerId !== localPeerId;
   const speaking = new Set(speakingPeerIds);
+  // Roster state by peer id — mute/deafen badges for the *other* tiles. Self
+  // renders from local state instead, which is ahead of the roster echo.
+  const rosterByPeerId = new Map(participants.map((p) => [p.peerId, p]));
   const connectedCount =
     (status === "connected" && self ? 1 : 0) + remotePeers.length;
 
@@ -481,12 +493,15 @@ export function VoicePanel({
                 )}
                 {remotePeers.map((peer) => {
                   const key = peer.userId ?? peer.peerId;
+                  const roster = rosterByPeerId.get(peer.peerId);
                   return (
                     <ParticipantTile
                       key={peer.peerId}
                       name={peer.displayName ?? `${peer.peerId.slice(0, 8)}…`}
                       avatarUrl={peer.avatarUrl}
                       isSpeaking={speaking.has(peer.peerId) && !isDeafened}
+                      isMuted={roster?.muted ?? false}
+                      isDeafened={roster?.deafened ?? false}
                       isPresenting={peer.peerId === screenSharePeerId}
                       avatarSize={avatarSize}
                       minHeightClass={minHeightClass}

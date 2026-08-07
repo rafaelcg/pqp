@@ -1,11 +1,13 @@
 import type {
   Attachment,
+  ChatClientMessage,
   ChatServerMessage,
   Message,
   MessageBroadcast,
   MessageReaction,
   PresenceUpdate,
   ReactionBroadcast,
+  ThreadSummary,
 } from "@pqp/shared";
 import { buildReplyExcerpt, MESSAGE_PAGE_SIZE } from "@pqp/shared";
 import {
@@ -180,7 +182,33 @@ function createNonce(): string {
   return `${Date.now().toString(36)}-${nonceCounter}`;
 }
 
-export function createChatController(transport: RealtimeTransport) {
+// --- threads ---
+/**
+ * Which WS frames subscribe and unsubscribe this controller's channel. The
+ * default is the primary view (`join-channel`, which the server treats as
+ * exclusive); the thread panel passes the `thread-join` pair instead, which
+ * targets the server's secondary view slot — so a thread controller can run
+ * beside the main one without stealing its live delivery.
+ */
+export interface ChannelFrames {
+  join: (channelId: string) => ChatClientMessage;
+  leave: () => ChatClientMessage;
+}
+
+const PRIMARY_CHANNEL_FRAMES: ChannelFrames = {
+  join: (channelId) => ({ type: "join-channel", channelId }),
+  leave: () => ({ type: "leave-channel" }),
+};
+
+export const THREAD_CHANNEL_FRAMES: ChannelFrames = {
+  join: (channelId) => ({ type: "thread-join", channelId }),
+  leave: () => ({ type: "thread-leave" }),
+};
+
+export function createChatController(
+  transport: RealtimeTransport,
+  frames: ChannelFrames = PRIMARY_CHANNEL_FRAMES,
+) {
   let messages: ChatMessage[] = [];
   let presence: PresenceUpdate["users"] = [];
   let channelId: string | null = null;
@@ -514,24 +542,24 @@ export function createChatController(transport: RealtimeTransport) {
         return;
       }
       if (channelId) {
-        transport.sendChat({ type: "leave-channel" });
+        transport.sendChat(frames.leave());
       }
       channelId = nextChannelId;
       resetChannelState();
-      transport.sendChat({ type: "join-channel", channelId: nextChannelId });
+      transport.sendChat(frames.join(nextChannelId));
       emit();
     },
 
     /** Re-subscribe after a reconnect without clearing what is on screen. */
     resubscribe() {
       if (channelId) {
-        transport.sendChat({ type: "join-channel", channelId });
+        transport.sendChat(frames.join(channelId));
       }
     },
 
     leaveChannel() {
       if (channelId) {
-        transport.sendChat({ type: "leave-channel" });
+        transport.sendChat(frames.leave());
       }
       channelId = null;
       resetChannelState();
@@ -586,6 +614,8 @@ export function createChatController(transport: RealtimeTransport) {
         // webhook — an optimistic bubble is never one.
         isWebhook: false,
         webhookEmbeds: [],
+        // A message is never born with a thread either.
+        thread: null,
         // Built with the same helper the server uses, so the bubble does not
         // visibly rewrite itself when the broadcast comes back.
         replyTo: replyTo
@@ -714,6 +744,28 @@ export function createChatController(transport: RealtimeTransport) {
         messages = previous;
         emit();
         throw error;
+      }
+    },
+
+    // --- threads ---
+    /**
+     * A `thread-update` frame, or the response to starting a thread: attach
+     * the fresh chip summary to the origin message if it is on screen. The
+     * shell owns routing the frame here because the frame names the parent
+     * channel, and this controller may be showing some other channel — in
+     * which case there is nothing to update and nothing to remember.
+     */
+    applyThreadUpdate(messageId: string, thread: ThreadSummary) {
+      let changed = false;
+      messages = messages.map((message) => {
+        if (message.id !== messageId) {
+          return message;
+        }
+        changed = true;
+        return { ...message, thread };
+      });
+      if (changed) {
+        emit();
       }
     },
 

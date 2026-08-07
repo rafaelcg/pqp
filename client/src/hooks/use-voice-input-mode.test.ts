@@ -35,6 +35,8 @@ vi.mock("@/lib/peer-connection-manager", () => ({
     return {
       setLocalStream: () => {},
       setLocalScreenStream: async () => {},
+      setLocalCameraStream: async () => {},
+      setPeerCameraStreamId: () => {},
       onPeerStateChange: () => {},
       connectToPeer: () => {},
       removePeer: () => {},
@@ -68,6 +70,8 @@ vi.mock("@/lib/livekit-session", () => ({
     },
     publishScreen: async () => {},
     unpublishScreen: async () => {},
+    publishCamera: async () => {},
+    unpublishCamera: async () => {},
     disconnect: async () => {},
   })),
 }));
@@ -172,6 +176,8 @@ function welcome(roomTransport: "mesh" | "livekit"): VoiceSignalingMessage {
     displayName: "Me",
     avatarUrl: null,
     sharingScreen: false,
+    muted: false,
+    deafened: false,
   };
   return {
     type: "welcome",

@@ -76,6 +76,7 @@ function serverMessage(overrides: Partial<Message> = {}): Message {
     embeds: [],
     isWebhook: false,
     webhookEmbeds: [],
+    thread: null,
     ...overrides,
   };
 }

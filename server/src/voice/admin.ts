@@ -1,4 +1,4 @@
-import { RoomServiceClient } from "livekit-server-sdk";
+import { RoomServiceClient, TrackType } from "livekit-server-sdk";
 import { logEvent } from "../lib/log.js";
 import {
   isLiveKitConfigured,
@@ -431,3 +431,94 @@ export function evictSfuUser(
   scheduleResweep(`user:${userId}`, () => sweep("resweep"));
   return track(sweep("first"));
 }
+
+// --- voice moderation ---------------------------------------------------------
+
+/**
+ * Server-side mute of one user's audio in one SFU room — the only place a real
+ * server mute exists in this product. In mesh mode the media never touches any
+ * server, so there is nothing here to mute and the API route refuses before
+ * calling this; do not "fix" that by pretending.
+ *
+ * Deliberately UNLIKE the evictions above in its failure contract: this is not
+ * post-commit cleanup for an action that already happened, it IS the action.
+ * The route awaits it and turns `false` into an honest error, so it reports
+ * failure instead of logging-and-resolving. It still never *rejects*.
+ *
+ * Also honest about what it is: LiveKit's `mutePublishedTrack` mutes the track
+ * at the SFU, and the participant is free to unmute themselves afterwards.
+ * That makes this a "shut off the hot mic" tool, not a sticky sanction — the
+ * sticky ones remain timeout and disconnect. The UI copy says so.
+ *
+ * Returns true when at least one audio track was muted (or unmuted).
+ */
+export async function setSfuUserMuted(
+  room: string,
+  userId: string,
+  muted: boolean,
+  knownIdentities: ReadonlyMap<string, string>,
+): Promise<boolean> {
+  const client = getRoomService();
+  if (!client) {
+    return false;
+  }
+
+  let participants;
+  try {
+    participants = await client.listParticipants(room);
+  } catch (error) {
+    logEvent("voice.sfuMuteFailed", {
+      room,
+      userId,
+      stage: "list",
+      error: describeError(error),
+    });
+    return false;
+  }
+
+  let changed = false;
+  await Promise.all(
+    participants.map(async (participant) => {
+      const identity = participant.identity;
+      const participantUserId =
+        userIdFromParticipantMetadata(participant.metadata) ??
+        knownIdentities.get(identity) ??
+        null;
+      // Fails open, like `evictSfuUser`: this targets an individual, and
+      // muting a participant we cannot identify would silence a bystander.
+      if (participantUserId !== userId) {
+        return;
+      }
+      // Every audio track, not just the microphone source: a moderator muting
+      // somebody means "this account is silent", and screen-share audio is
+      // audio.
+      const audioTracks = (participant.tracks ?? []).filter(
+        (track) => track.type === TrackType.AUDIO,
+      );
+      for (const audioTrack of audioTracks) {
+        try {
+          await client.mutePublishedTrack(room, identity, audioTrack.sid, muted);
+          changed = true;
+          logEvent("voice.sfuMuted", {
+            room,
+            identity,
+            userId,
+            trackSid: audioTrack.sid,
+            muted,
+          });
+        } catch (error) {
+          logEvent("voice.sfuMuteFailed", {
+            room,
+            identity,
+            userId,
+            stage: "mute",
+            error: describeError(error),
+          });
+        }
+      }
+    }),
+  );
+  return changed;
+}
+
+// --- end voice moderation -----------------------------------------------------

@@ -1,0 +1,220 @@
+import { randomUUID } from "node:crypto";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { WebSocket } from "ws";
+import type { DbUser } from "../db.js";
+
+/**
+ * The roster carries per-peer voice state — muted, deafened, sharing — so
+ * someone *outside* the call can see it from the channel list. These tests pin
+ * the wire contract: state rides `voice-roster`, updates on `set-voice-state`,
+ * resets with the peer, and never fans out when nothing changed.
+ *
+ * No database: the service layer under the peer bookkeeping is faked, and the
+ * roster audience is a stub that admits everyone (the audience *scoping* is
+ * `getChannelAudience`'s own tested concern, not this file's).
+ */
+
+vi.mock("../services/users.js", () => ({
+  canAccessChannel: async () => true,
+}));
+
+vi.mock("../services/sanctions.js", () => ({
+  findTimeoutForChannel: async () => null,
+  timeoutMessage: () => "",
+}));
+
+vi.mock("../services/dms.js", () => ({
+  isDmSendBlocked: async () => false,
+  resolveRingableConversation: async () => null,
+}));
+
+vi.mock("../services/servers.js", () => ({
+  getChannel: async () => ({ kind: "server", type: "voice" }),
+  // Everyone on the instance is in the audience: these tests are about what
+  // the roster *says*, not who may hear it.
+  getChannelAudience: async () => ({
+    serverId: null,
+    kind: "server",
+    has: () => true,
+  }),
+}));
+
+vi.mock("../voice/admin.js", () => ({
+  evictSfuRoom: vi.fn(() => Promise.resolve()),
+  evictSfuUser: vi.fn(() => Promise.resolve()),
+  evictSfuUsersExcept: vi.fn(() => Promise.resolve()),
+}));
+
+const { handleVoiceMessage, removeVoicePeerBySocket, resetVoiceRateLimits } =
+  await import("./voice.js");
+const { deleteAuthenticatedSocket, setAuthenticatedSocket } = await import(
+  "./sockets.js"
+);
+
+const VOICE_A = randomUUID();
+
+interface Recorder {
+  socket: WebSocket;
+  received: string[];
+}
+
+function recorder(): Recorder {
+  const received: string[] = [];
+  const socket = {
+    readyState: 1,
+    send: (payload: string) => received.push(payload),
+    on: () => {},
+  } as unknown as WebSocket;
+  return { socket, received };
+}
+
+function asUser(id: string): DbUser {
+  return {
+    id,
+    display_name: `User ${id}`,
+    avatar_url: null,
+  } as unknown as DbUser;
+}
+
+interface RosterFrame {
+  type: string;
+  voiceChannelId?: string;
+  participants?: Array<{
+    userId: string;
+    muted: boolean;
+    deafened: boolean;
+    sharingScreen: boolean;
+  }>;
+}
+
+function rosters(rec: Recorder): RosterFrame[] {
+  return rec.received
+    .map((raw) => JSON.parse(raw) as RosterFrame)
+    .filter((frame) => frame.type === "voice-roster");
+}
+
+function lastRoster(rec: Recorder): RosterFrame {
+  const all = rosters(rec);
+  expect(all.length).toBeGreaterThan(0);
+  return all[all.length - 1]!;
+}
+
+async function join(rec: Recorder, userId: string): Promise<void> {
+  await handleVoiceMessage(
+    { socket: rec.socket, user: asUser(userId) },
+    { type: "join-voice-room", voiceChannelId: VOICE_A },
+  );
+}
+
+describe("voice roster carries mute/deafen state", () => {
+  const sockets: Recorder[] = [];
+  const viewers: Recorder[] = [];
+
+  beforeEach(() => {
+    for (const rec of sockets.splice(0)) {
+      removeVoicePeerBySocket(rec.socket);
+    }
+    for (const rec of viewers.splice(0)) {
+      deleteAuthenticatedSocket(rec.socket);
+    }
+    resetVoiceRateLimits();
+  });
+
+  function track(rec: Recorder): Recorder {
+    sockets.push(rec);
+    return rec;
+  }
+
+  /** A socket that is authenticated (so it receives rosters) but not in voice. */
+  function viewer(userId: string): Recorder {
+    const rec = recorder();
+    setAuthenticatedSocket(rec.socket, asUser(userId));
+    viewers.push(rec);
+    return rec;
+  }
+
+  it("starts every participant unmuted and undeafened", async () => {
+    const outside = viewer("viewer");
+    const caller = track(recorder());
+    await join(caller, "talker");
+
+    const roster = lastRoster(outside);
+    expect(roster.voiceChannelId).toBe(VOICE_A);
+    expect(roster.participants).toEqual([
+      expect.objectContaining({
+        userId: "talker",
+        muted: false,
+        deafened: false,
+        sharingScreen: false,
+      }),
+    ]);
+  });
+
+  it("updates the roster for outside viewers on mute and deafen", async () => {
+    const outside = viewer("viewer");
+    const caller = track(recorder());
+    await join(caller, "talker");
+
+    await handleVoiceMessage(
+      { socket: caller.socket, user: asUser("talker") },
+      { type: "set-voice-state", muted: true, deafened: false },
+    );
+    expect(lastRoster(outside).participants![0]).toMatchObject({
+      muted: true,
+      deafened: false,
+    });
+
+    await handleVoiceMessage(
+      { socket: caller.socket, user: asUser("talker") },
+      { type: "set-voice-state", muted: true, deafened: true },
+    );
+    expect(lastRoster(outside).participants![0]).toMatchObject({
+      muted: true,
+      deafened: true,
+    });
+  });
+
+  it("does not fan out a roster when the declared state did not change", async () => {
+    const outside = viewer("viewer");
+    const caller = track(recorder());
+    await join(caller, "talker");
+    const before = rosters(outside).length;
+
+    // The client re-declares after every welcome, and the defaults match the
+    // fresh peer — a broadcast here would double every join's fan-out.
+    await handleVoiceMessage(
+      { socket: caller.socket, user: asUser("talker") },
+      { type: "set-voice-state", muted: false, deafened: false },
+    );
+
+    expect(rosters(outside).length).toBe(before);
+  });
+
+  it("ignores a declaration from a socket with no voice peer", async () => {
+    const outside = viewer("viewer");
+    const stray = recorder();
+
+    await handleVoiceMessage(
+      { socket: stray.socket, user: asUser("nobody") },
+      { type: "set-voice-state", muted: true, deafened: true },
+    );
+
+    expect(rosters(outside)).toEqual([]);
+  });
+
+  it("resets state with the peer: a rejoin starts unmuted again", async () => {
+    const outside = viewer("viewer");
+    const caller = track(recorder());
+    await join(caller, "talker");
+    await handleVoiceMessage(
+      { socket: caller.socket, user: asUser("talker") },
+      { type: "set-voice-state", muted: true, deafened: false },
+    );
+    expect(lastRoster(outside).participants![0]!.muted).toBe(true);
+
+    // Rejoin (same socket, new peer). The server must not carry the old mute
+    // over — the client owns the state and re-declares it after welcome.
+    await join(caller, "talker");
+    expect(lastRoster(outside).participants![0]!.muted).toBe(false);
+  });
+});

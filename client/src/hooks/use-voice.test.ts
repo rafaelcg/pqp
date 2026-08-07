@@ -28,6 +28,8 @@ vi.mock("@/lib/peer-connection-manager", () => ({
     return {
       setLocalStream: () => {},
       setLocalScreenStream: async () => {},
+      setLocalCameraStream: async () => {},
+      setPeerCameraStreamId: () => {},
       onPeerStateChange: () => {},
       connectToPeer: (peerId: string) => stub.peerIds.push(peerId),
       removePeer: () => {},
@@ -51,6 +53,8 @@ vi.mock("@/lib/livekit-session", () => ({
     setMuted: async () => {},
     publishScreen: async () => {},
     unpublishScreen: async () => {},
+    publishCamera: async () => {},
+    unpublishCamera: async () => {},
     disconnect: async () => {},
   })),
 }));
@@ -139,6 +143,8 @@ function welcome(
     displayName: "Me",
     avatarUrl: null,
     sharingScreen: false,
+    muted: false,
+    deafened: false,
   };
   return {
     type: "welcome",
