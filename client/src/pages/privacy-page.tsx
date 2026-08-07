@@ -112,7 +112,7 @@ export function PrivacyPage() {
         <strong>Files and images.</strong> When file attachments are enabled, we
         store the filename, type, size, and dimensions in our database, and the
         file itself in S3-compatible object storage. Attachments are{" "}
-        <strong>{"{{ATTACHMENTS_STATUS}}"}</strong> on pqp.gg today. GIFs picked
+        <strong>enabled</strong> on pqp.gg today. GIFs picked
         from the GIF search are stored as a link to the GIF provider, not as a
         copy.
       </p>
@@ -195,7 +195,7 @@ export function PrivacyPage() {
           addresses of the people on the call, and the TURN relay carries the
           media — but it is still encrypted between the participants, so the
           relay cannot listen to it. Our STUN/TURN providers today are{" "}
-          <strong>{"{{TURN_PROVIDER}}"}</strong>, plus public STUN servers run by
+          <strong>ExpressTURN</strong>, plus public STUN servers run by
           Google and Cloudflare.
         </li>
         <li>
@@ -284,22 +284,22 @@ export function PrivacyPage() {
           credentials.
         </li>
         <li>
-          <strong>{"{{HOSTING_PROVIDER}}"}</strong> — application servers and the
-          Postgres database, in <strong>{"{{HOSTING_REGION}}"}</strong>.
+          <strong>Fly.io</strong> — application servers and the
+          Postgres database, in <strong>São Paulo, Brazil (Fly region gru)</strong>.
         </li>
         <li>
           <strong>Cloudflare</strong> — serves the web app and the marketing
           site.
         </li>
         <li>
-          <strong>{"{{OBJECT_STORAGE_PROVIDER}}"}</strong> — object storage for
+          <strong>Cloudflare R2</strong> — object storage for
           file attachments, if attachments are enabled. Your browser uploads and
           downloads attachment bytes <em>directly</em> to that storage using
           short-lived signed links, so the storage provider sees your IP address
           while a file transfers.
         </li>
         <li>
-          <strong>{"{{TURN_PROVIDER}}"}</strong>, plus Google and Cloudflare
+          <strong>ExpressTURN</strong>, plus Google and Cloudflare
           public STUN — voice connection setup and relay, as described above.
         </li>
       </ul>
@@ -338,8 +338,8 @@ export function PrivacyPage() {
         yours.</strong> Clerk, Cloudflare, our object-storage and STUN/TURN
         providers, and Google Fonts operate globally and typically process data
         in the United States and Europe. The application servers and database
-        run on <strong>{"{{HOSTING_PROVIDER}}"}</strong> in{" "}
-        <strong>{"{{HOSTING_REGION}}"}</strong>. The person who operates pqp.gg
+        run on <strong>Fly.io</strong> in{" "}
+        <strong>São Paulo, Brazil (Fly region gru)</strong>. The person who operates pqp.gg
         is in the United Kingdom, so anything handled by a human is handled
         there.
       </p>
