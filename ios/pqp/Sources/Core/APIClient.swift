@@ -42,8 +42,8 @@ struct Backend: Sendable, Equatable {
     )
 
     static let hosted = Backend(
-        apiBaseURL: URL(string: "https://api-production-206d.up.railway.app")!,
-        webSocketURL: URL(string: "wss://api-production-206d.up.railway.app/ws")!
+        apiBaseURL: URL(string: "https://api.pqp.gg")!,
+        webSocketURL: URL(string: "wss://api.pqp.gg/ws")!
     )
 
     static var current: Backend {
