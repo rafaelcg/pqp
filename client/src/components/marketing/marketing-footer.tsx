@@ -1,4 +1,5 @@
 import { Link } from "react-router-dom";
+import { RELEASES_PAGE_URL } from "@/lib/downloads";
 import { useTranslation } from "@/lib/i18n";
 
 export function MarketingFooter() {
@@ -31,6 +32,17 @@ export function MarketingFooter() {
               lang={locale === "en" ? undefined : "en"}
             >
               {t("nav.selfHost")}
+            </a>
+            {/* The releases page, not a direct asset: the filenames carry the
+                version, so only GitHub can say what the newest one is called.
+                See `lib/downloads.ts`. */}
+            <a
+              href={RELEASES_PAGE_URL}
+              target="_blank"
+              rel="noopener"
+              className="text-paper hover:text-signal"
+            >
+              {t("footer.desktop")}
             </a>
             <Link to="/status" className="text-paper hover:text-signal">
               {t("footer.status")}

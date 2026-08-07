@@ -113,9 +113,34 @@ export const ptBR: PartialMessages = {
   // lugar, que é onde a piada funciona de novo. A seta é desenhada no JSX.
   "landing.cta.action": "Vai pra pqp",
 
+  // ------------------------------------------------------- desktop downloads
+  // "Baixar", nunca "fazer download". "Build", "app" e os nomes dos formatos
+  // (AppImage, .deb, Apple Silicon, Intel) ficam como estão — é assim que se
+  // diz, e traduzir nome de arquivo confunde na hora de escolher. Por isso
+  // `download.mac.appleSiliconShort`, `download.mac.intelShort`,
+  // `download.linux.appImage` e `download.linux.deb` não aparecem aqui: caem no
+  // inglês do catálogo, que já é o texto certo.
+  "download.mac.appleSilicon": "Baixar pra Mac (Apple Silicon)",
+  "download.mac.intel": "Baixar pra Mac (Intel)",
+  "download.mac.either": "Baixar pra Mac:",
+  "download.mac.whichChip":
+    "Não sabe qual? Menu Apple → Sobre este Mac. Se aparecer Apple M1 ou mais novo, é Apple Silicon.",
+  "download.windows": "Baixar pra Windows",
+  "download.windows.unsigned":
+    "O build de Windows ainda não é assinado, então o SmartScreen avisa na primeira vez que você abrir.",
+  "download.linux": "Baixar pra Linux:",
+  "download.linux.appImage.full": "Baixar pra Linux (AppImage)",
+  "download.linux.deb.full": "Baixar pra Linux (.deb)",
+  "download.linux.unsigned": "Os builds de Linux também não são assinados.",
+  "download.unsigned.help": "Por quê",
+  "download.other": "Baixar pro desktop",
+  "download.mobile":
+    "Não tem app pra instalar aqui. Abre o pqp no navegador e adiciona na tela de início pelo menu.",
+
   "footer.tagline":
     "O chat em grupo é seu. Hospede você mesmo ou use o pqp.gg — a bagunça é a mesma.",
   "footer.product": "Produto",
+  "footer.desktop": "App de desktop",
   "footer.legal": "Jurídico",
   "footer.status": "Status",
   "footer.privacy": "Privacidade",

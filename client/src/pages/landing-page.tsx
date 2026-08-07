@@ -7,6 +7,7 @@ import {
 import { ArrowUpRight } from "lucide-react";
 import { type CSSProperties, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
+import { HeroDownload } from "@/components/marketing/hero-download";
 import { MarketingFooter } from "@/components/marketing/marketing-footer";
 import { MarketingNav } from "@/components/marketing/marketing-nav";
 import { Seo } from "@/components/marketing/seo";
@@ -243,6 +244,10 @@ export function LandingPage() {
               </>
             )}
           </div>
+
+          {/* Under the buttons, not beside them. See `HeroDownload` for why
+              this is a link rather than a second pill. */}
+          <HeroDownload className="animate-rise mt-6" style={stagger(4)} />
         </div>
 
         <div className="absolute inset-x-0 bottom-0 z-10 border-t border-white/10 bg-black/25 px-5 py-4 backdrop-blur-sm sm:px-8">
@@ -251,7 +256,7 @@ export function LandingPage() {
               <li
                 key={key}
                 className="animate-rise text-[11px] font-medium uppercase tracking-[0.22em] text-white/70"
-                style={stagger(4 + i)}
+                style={stagger(5 + i)}
                 // "Self-host" is left in English in Portuguese because that is
                 // the word the audience uses. Saying so in the markup keeps a
                 // screen reader from pronouncing it with Portuguese phonetics.

@@ -122,9 +122,50 @@ export const en = {
   // of the string a translator has to carry.
   "landing.cta.action": "Head to pqp",
 
+  // ------------------------------------------------------- desktop downloads
+  // Secondary to the hero's real call to action on purpose: the web app is the
+  // product and the desktop shell is a convenience, so this reads as a line of
+  // text rather than a second button competing for the same click.
+  //
+  // Only macOS is signed and notarized. Windows and Linux are not, and the
+  // strings below say so at the point of download — a SmartScreen dialog that
+  // arrives unannounced reads as "this app is malware", which is a worse
+  // outcome than one honest sentence. Nothing here mentions an app store,
+  // because there is none, and nothing promises auto-update.
+  "download.mac.appleSilicon": "Download for Mac (Apple Silicon)",
+  "download.mac.intel": "Download for Mac (Intel)",
+  "download.mac.either": "Download for Mac:",
+  "download.mac.appleSiliconShort": "Apple Silicon",
+  "download.mac.intelShort": "Intel",
+  // Shown only when the browser refuses to say which chip this Mac has. The
+  // instruction has to be followable by someone who has never opened About This
+  // Mac, because the alternative is a download that will not run.
+  "download.mac.whichChip":
+    "Not sure which? Apple menu → About This Mac. Anything that says Apple M1 or newer is Apple Silicon.",
+  "download.windows": "Download for Windows",
+  "download.windows.unsigned":
+    "The Windows build isn't signed yet, so SmartScreen warns the first time you open it.",
+  "download.linux": "Download for Linux:",
+  "download.linux.appImage": "AppImage",
+  "download.linux.deb": ".deb",
+  // The `.full` variants are the accessible names for the two links above.
+  // "AppImage" on its own is what a screen reader announces out of context,
+  // and out of context it says nothing about what the link does.
+  "download.linux.appImage.full": "Download for Linux (AppImage)",
+  "download.linux.deb.full": "Download for Linux (.deb)",
+  "download.linux.unsigned": "The Linux builds aren't signed either.",
+  "download.unsigned.help": "Why",
+  "download.other": "Desktop downloads",
+  // A phone gets pointed at the browser, never at a .dmg — and never at a store
+  // listing, which does not exist. It is installable from the browser menu
+  // (docs/PWA.md), which is the honest version of "get the app".
+  "download.mobile":
+    "There's no app to install here — open pqp in your browser and add it to your home screen from the browser menu.",
+
   "footer.tagline":
     "Group chat you own. Self-host or use pqp.gg — same chaos either way.",
   "footer.product": "Product",
+  "footer.desktop": "Desktop app",
   "footer.legal": "Legal",
   "footer.status": "Status",
   "footer.privacy": "Privacy",
