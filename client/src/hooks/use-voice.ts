@@ -10,6 +10,12 @@ import {
   screenShareUnavailableMessage,
   supportsScreenShare,
 } from "@/components/voice/capabilities";
+// The pure catalogue module, not `lib/i18n` — this hook must not depend on a
+// React context to name an error.
+import {
+  translateMessage,
+  type MessageKey,
+} from "@/lib/i18n/catalogue";
 import { buildAudioConstraints } from "@/lib/audio-devices";
 import {
   connectLiveKit,
@@ -31,9 +37,16 @@ import {
 
 export type VoiceStatus = "idle" | "joining" | "connected";
 
-/** One wording for "this browser cannot capture a screen", shared with the UI. */
-const SCREEN_SHARE_UNSUPPORTED_MESSAGE =
-  screenShareUnavailableMessage("no-api");
+/**
+ * One wording for "this browser cannot capture a screen", shared with the UI.
+ *
+ * A function, not a constant: a constant is evaluated when this module is
+ * imported, which is before the non-English catalogue chunk has loaded, and
+ * would pin the sentence to English for the whole session.
+ */
+function screenShareUnsupportedMessage(): string {
+  return screenShareUnavailableMessage("no-api");
+}
 
 /**
  * Why a join was refused because of the room's transport.
@@ -53,14 +66,12 @@ export interface VoiceTransportFailure {
   reason: "unsupported" | "unreachable";
 }
 
-const TRANSPORT_FAILURE_MESSAGE: Record<
+const TRANSPORT_FAILURE_KEY: Record<
   VoiceTransportFailure["reason"],
-  string
+  MessageKey
 > = {
-  unsupported:
-    "This call runs on a voice server this app build cannot use, so you have not joined it. Nobody in the call can hear you.",
-  unreachable:
-    "Could not reach the voice server, so you have not joined this call. Check your network and try again.",
+  unsupported: "voice.error.transportUnsupported",
+  unreachable: "voice.error.transportUnreachable",
 };
 
 export interface VoiceAudioOptions {
@@ -180,29 +191,31 @@ function stopMicPipeline(pipeline: MicPipeline | null) {
 
 function micErrorMessage(err: unknown): string {
   if (!(err instanceof Error)) {
-    return "Failed to access microphone";
+    return translateMessage("voice.error.micFailed");
   }
   if (err.name === "NotAllowedError") {
-    return "Microphone access was blocked. Allow it in your browser settings, then rejoin.";
+    return translateMessage("voice.error.micBlocked");
   }
+  // A browser's own message, in the browser's own language. Better than a
+  // generic sentence that throws away what actually went wrong.
   return err.message;
 }
 
 function screenShareErrorMessage(err: unknown): string {
   if (!(err instanceof Error)) {
-    return "Failed to start screen share";
+    return translateMessage("voice.error.shareFailed");
   }
   if (err.name === "NotSupportedError" || err instanceof TypeError) {
     // A browser without getDisplayMedia throws a TypeError from the call
     // itself. That is a platform limit, not a fault: say it plainly rather
     // than surfacing "…is not a function" as an alarm.
-    return SCREEN_SHARE_UNSUPPORTED_MESSAGE;
+    return screenShareUnsupportedMessage();
   }
   if (err.name === "NotAllowedError") {
     // Also covers the user dismissing the OS/browser picker without choosing
     // a source — that rejects with the same error name, so this isn't really
     // a permissions problem in the usual sense, but the copy still fits.
-    return "Screen share was blocked or cancelled.";
+    return translateMessage("voice.error.shareBlocked");
   }
   return err.message;
 }
@@ -371,7 +384,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     state.voiceChannelId = null;
     state.speakingPeerIds = [];
     state.transportFailure = failure;
-    state.error = TRANSPORT_FAILURE_MESSAGE[failure.reason];
+    state.error = translateMessage(TRANSPORT_FAILURE_KEY[failure.reason]);
     emit();
   }
 
@@ -670,7 +683,7 @@ export function createVoiceController(transport: RealtimeTransport) {
           return;
         }
         void stopScreenShareInternal();
-        state.error = "Someone else is already sharing their screen.";
+        state.error = translateMessage("voice.error.shareTaken");
         emit();
         break;
       case "voice-room-full":
@@ -678,7 +691,9 @@ export function createVoiceController(transport: RealtimeTransport) {
         stopMicPipeline(pipeline);
         pipeline = null;
         intendedChannelId = null;
-        state.error = `This voice channel is full (max ${message.limit}).`;
+        state.error = translateMessage("voice.error.channelFull", {
+          limit: message.limit,
+        });
         state.status = "idle";
         state.voiceChannelId = null;
         emit();
@@ -1026,7 +1041,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       // when we already know it'll be refused; the server call below is still
       // the authoritative check for the rare simultaneous-click race.
       if (state.screenSharePeerId && state.screenSharePeerId !== state.peerId) {
-        state.error = "Someone else is already sharing their screen.";
+        state.error = translateMessage("voice.error.shareTaken");
         emit();
         return;
       }
@@ -1035,7 +1050,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       // (see components/voice/capabilities.ts), so reaching here means a
       // programmatic call, not a user tapping a button we should not have shown.
       if (!supportsScreenShare()) {
-        state.error = SCREEN_SHARE_UNSUPPORTED_MESSAGE;
+        state.error = screenShareUnsupportedMessage();
         emit();
         return;
       }
@@ -1051,7 +1066,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       const track = stream.getVideoTracks()[0];
       if (!track) {
         for (const t of stream.getTracks()) t.stop();
-        state.error = "No video track from screen capture";
+        state.error = translateMessage("voice.error.noVideoTrack");
         emit();
         return;
       }

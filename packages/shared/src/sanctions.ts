@@ -111,18 +111,18 @@ export type MemberTimeoutList = z.infer<typeof memberTimeoutListSchema>;
 /**
  * What a timed-out client is told over the socket when a frame is refused.
  *
- * DELIBERATELY NOT A MEMBER OF `chatServerMessageSchema`, and this is the one
- * surprising thing in this file. `client/src/App.tsx` routes inbound frames
- * with an explicit allowlist of chat types and passes *everything else* to the
- * voice signaling handler; adding a member to the chat union without adding it
- * to that allowlist is a type error in App.tsx, and adding it there is owned by
- * another work stream. `realtime.ts` does no runtime validation, so a client
- * that does not know this frame receives it and drops it harmlessly, and one
- * line in each of those two files lights it up. The server sends it either way,
+ * A member of `chatServerMessageSchema`: it travels on the chat socket, it is
+ * the answer to a chat action, and it describes what became of a message
+ * somebody tried to send. It is **not** a member of
+ * `CHAT_SERVER_MESSAGE_TYPES`, which is a different and narrower thing — the
+ * frames the cluster relay may fan out to a whole channel. This one is
+ * addressed to a single person and is delivered straight to their socket; see
+ * the comment on that list.
+ *
+ * The server sends it whether or not a given client knows what to do with it,
  * because the alternative — a send that silently fails and shows as a red
  * bubble — is exactly the "indistinguishable from a bug" outcome this frame
- * exists to prevent, and because the iOS client parses frames by type rather
- * than by that allowlist.
+ * exists to prevent.
  */
 export const sanctionNoticeSchema = z.object({
   type: z.literal("sanction-notice"),

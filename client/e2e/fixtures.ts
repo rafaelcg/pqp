@@ -62,9 +62,45 @@ export async function ensureServer(): Promise<void> {
  * to reach the server, so wait for real chrome rather than a fixed delay.
  */
 /**
- * Theme is server state now, and the suite shares one dev-bypass account against
- * a persistent database. Without this, a test that stores a theme would decide
- * the outcome of every later test.
+ * Every cross-device preference, at its default.
+ *
+ * `user_preferences` is one JSONB blob merged shallowly (`settings || patch`),
+ * so a key can never be *removed* — only overwritten. That means resetting has
+ * to name every key and its default value rather than sending `{}`, and it is
+ * why this list must grow whenever `userPreferencesSchema` does.
+ *
+ * `onboardedAt` is deliberately absent: clearing it re-arms first-run
+ * onboarding, and every spec would then open into the handle picker instead of
+ * the app. It is the one preference a reset must leave alone.
+ */
+const DEFAULT_PREFERENCES = {
+  theme: "system",
+  muteOnJoin: false,
+  compactPeers: false,
+  inputVolume: 1,
+  outputVolume: 1,
+  showLinkEmbeds: true,
+  // Merged one level deep like everything else, so the whole object goes or the
+  // levels it omits survive.
+  notifications: { desktop: false, default: "all", servers: {}, channels: {} },
+} as const;
+
+/**
+ * Preferences are server state, and the suite shares one dev-bypass account
+ * against a persistent database — so anything a spec stores is still there for
+ * the next one.
+ *
+ * This used to reset the theme alone, which made every other preference a
+ * one-way door: `theme-preferences.spec.ts` sets `compactPeers: true`, that
+ * shrinks every voice tile, and `voice-lobby.spec.ts` then measured a grid
+ * whose height depended on which spec had run first. Resetting the whole set is
+ * what makes the suite order-independent; a spec should never have to know what
+ * ran before it.
+ *
+ * Purely local state (`pqp:collapsed-categories`, `pqp-local-settings`,
+ * `pqp:locale`, the theme's own localStorage key) needs nothing here: Playwright
+ * gives each test a fresh context, so it starts empty every time. The server
+ * copy is the only thing that survives a context.
  */
 export async function resetPreferences(): Promise<void> {
   const headers = {
@@ -76,15 +112,21 @@ export async function resetPreferences(): Promise<void> {
   // fails whichever test happens to run last.
   const current = await fetch(`${API}/api/me`, { headers });
   const me = (await current.json()) as {
-    preferences?: { theme?: string };
+    preferences?: Record<string, unknown>;
   };
-  if ((me.preferences?.theme ?? "system") === "system") {
+  const stored = me.preferences ?? {};
+  const dirty = Object.entries(DEFAULT_PREFERENCES).some(
+    ([key, value]) =>
+      key in stored &&
+      JSON.stringify(stored[key]) !== JSON.stringify(value),
+  );
+  if (!dirty) {
     return;
   }
   await fetch(`${API}/api/me/preferences`, {
     method: "PATCH",
     headers,
-    body: JSON.stringify({ theme: "system" }),
+    body: JSON.stringify(DEFAULT_PREFERENCES),
   });
 }
 

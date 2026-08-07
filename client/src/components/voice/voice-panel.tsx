@@ -23,6 +23,7 @@ import {
   VoiceAvatar,
   type VoiceAvatarSize,
 } from "@/components/voice/voice-avatar";
+import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 /**
@@ -71,6 +72,7 @@ function ParticipantTile({
   onSetVolume,
   onRetry,
 }: ParticipantTileProps) {
+  const { t } = useTranslation();
   const silenced = volume === 0;
   // Remembers where the slider was so unmuting restores that level, not 100%.
   const restoreRef = useRef(1);
@@ -107,7 +109,11 @@ function ParticipantTile({
 
       <p className="w-full min-w-0 truncate text-sm font-medium">
         {name}
-        {isSelf && <span className="ml-1 text-xs text-paper-muted">(you)</span>}
+        {isSelf && (
+          <span className="ml-1 text-xs text-paper-muted">
+            {t("voice.tile.you")}
+          </span>
+        )}
       </p>
 
       {(isPresenting ||
@@ -120,45 +126,48 @@ function ParticipantTile({
           {isPresenting && (
             <span className="flex items-center gap-1 rounded bg-signal/20 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-signal">
               <ScreenShare className="h-3 w-3" aria-hidden="true" />
-              Presenting
+              {t("voice.tile.presenting")}
             </span>
           )}
           {isDeafened ? (
             <span
               className="flex items-center gap-1 rounded bg-ink-3 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-danger"
-              title="Deafened"
+              title={t("voice.tile.deafened")}
             >
               <HeadphoneOff className="h-3 w-3" aria-hidden="true" />
-              Deafened
+              {t("voice.tile.deafened")}
             </span>
           ) : (
             isMuted && (
               <span
                 className="flex items-center gap-1 rounded bg-ink-3 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-danger"
-                title="Microphone muted"
+                title={t("voice.tile.mutedTitle")}
               >
                 <MicOff className="h-3 w-3" aria-hidden="true" />
-                Muted
+                {t("voice.tile.muted")}
               </span>
             )
           )}
           {silenced && (
             <span className="flex items-center gap-1 rounded bg-ink-3 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-paper-muted">
               <VolumeX className="h-3 w-3" aria-hidden="true" />
-              Silenced
+              {t("voice.tile.silenced")}
             </span>
           )}
           {/* A settled connection is the normal case and says nothing; only the
               in-between and broken states are worth a line of the tile. */}
+          {/* `PeerConnectionState` narrows to "connecting" here — "connected"
+              and "failed" are handled above — so this is one word, not the raw
+              enum it used to print. */}
           {settling && (
             <span className="flex items-center gap-1 text-[10px] uppercase tracking-wide text-paper-muted">
               <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
-              {connectionState}
+              {t("voice.tile.connecting")}
             </span>
           )}
           {failed && (
             <span className="text-[10px] uppercase tracking-wide text-danger">
-              Disconnected
+              {t("voice.tile.disconnected")}
             </span>
           )}
         </div>
@@ -171,7 +180,7 @@ function ParticipantTile({
           className="h-6 px-2 text-[10px]"
           onClick={onRetry}
         >
-          Retry
+          {t("voice.tile.retry")}
         </Button>
       )}
 
@@ -190,7 +199,11 @@ function ParticipantTile({
                 variant="ghost"
                 size="icon"
                 className="h-6 w-6 shrink-0"
-                aria-label={silenced ? `Unmute ${name}` : `Mute ${name}`}
+                aria-label={
+                  silenced
+                    ? t("voice.tile.unmutePeer", { name })
+                    : t("voice.tile.mutePeer", { name })
+                }
                 aria-pressed={silenced}
                 onClick={() => onSetVolume(silenced ? restoreRef.current : 0)}
               >
@@ -206,8 +219,10 @@ function ParticipantTile({
                 max={1}
                 step={0.05}
                 value={volume}
-                aria-label={`Volume for ${name}`}
-                aria-valuetext={`${Math.round(volume * 100)} percent`}
+                aria-label={t("voice.tile.volumeFor", { name })}
+                aria-valuetext={t("voice.tile.volumePercent", {
+                  percent: Math.round(volume * 100),
+                })}
                 onChange={(event) => onSetVolume(Number(event.target.value))}
                 className="h-1 min-w-0 flex-1 cursor-pointer accent-signal"
               />
@@ -271,6 +286,7 @@ export function VoicePanel({
   onStartScreenShare,
   onStopScreenShare,
 }: VoicePanelProps) {
+  const { t } = useTranslation();
   const showWarning = !usingSfu && remotePeers.length >= MESH_VOICE_WARNING;
   const someoneElseSharing =
     !!screenSharePeerId && screenSharePeerId !== localPeerId;
@@ -321,7 +337,7 @@ export function VoicePanel({
         {status === "connected" && (
           <span className="flex shrink-0 items-center gap-1 text-xs text-success">
             <span className="h-1.5 w-1.5 rounded-full bg-success" />
-            Live
+            {t("voice.live")}
             <span className="text-paper-muted">· {connectedCount}</span>
           </span>
         )}
@@ -342,16 +358,14 @@ export function VoicePanel({
 
       {status === "connected" && showWarning && (
         <p className="shrink-0 border-b border-warning/30 bg-warning/10 px-3 py-1.5 text-center text-xs text-warning">
-          Mesh limit approaching — configure an SFU for larger calls.
+          {t("voice.meshWarning")}
         </p>
       )}
 
       {status === "idle" && (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
-          <p className="max-w-xs text-sm text-muted">
-            Join voice to talk. Chat stays available beside you.
-          </p>
-          <Button onClick={onJoin}>Join Voice</Button>
+          <p className="max-w-xs text-sm text-muted">{t("voice.idle.body")}</p>
+          <Button onClick={onJoin}>{t("voice.join")}</Button>
         </div>
       )}
 
@@ -362,10 +376,10 @@ export function VoicePanel({
             className="flex items-center gap-2 text-sm text-muted"
           >
             <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-            Connecting to {channelName}…
+            {t("voice.connectingTo", { channel: channelName })}
           </p>
           <Button variant="ghost" size="sm" onClick={onLeave}>
-            Cancel
+            {t("voice.cancel")}
           </Button>
         </div>
       )}
@@ -423,7 +437,7 @@ export function VoicePanel({
 
               {connectedCount <= 1 && (
                 <p className="text-center text-xs text-paper-muted">
-                  You're the only one here so far.
+                  {t("voice.alone")}
                 </p>
               )}
             </div>
@@ -434,7 +448,9 @@ export function VoicePanel({
               <Button
                 variant="secondary"
                 size="icon"
-                aria-label={isMuted ? "Unmute microphone" : "Mute microphone"}
+                aria-label={
+                  isMuted ? t("voice.control.unmute") : t("voice.control.mute")
+                }
                 aria-pressed={isMuted}
                 onClick={onToggleMute}
               >
@@ -447,7 +463,11 @@ export function VoicePanel({
               <Button
                 variant="secondary"
                 size="icon"
-                aria-label={isDeafened ? "Undeafen" : "Deafen"}
+                aria-label={
+                  isDeafened
+                    ? t("voice.control.undeafen")
+                    : t("voice.control.deafen")
+                }
                 aria-pressed={isDeafened}
                 onClick={onToggleDeafen}
               >
@@ -467,7 +487,7 @@ export function VoicePanel({
                     size="icon"
                     className="opacity-50"
                     aria-disabled
-                    aria-label="Share your screen (unavailable on this device)"
+                    aria-label={t("voice.control.shareUnavailable")}
                     title={screenShareUnavailableMessage(screenShareBlocked)}
                     onClick={() =>
                       setHint(screenShareUnavailableMessage(screenShareBlocked))
@@ -481,14 +501,14 @@ export function VoicePanel({
                     size="icon"
                     aria-label={
                       isSharingScreen
-                        ? "Stop sharing your screen"
-                        : "Share your screen"
+                        ? t("voice.control.stopShare")
+                        : t("voice.control.share")
                     }
                     aria-pressed={isSharingScreen}
                     disabled={someoneElseSharing}
                     title={
                       someoneElseSharing
-                        ? "Someone else is already sharing their screen"
+                        ? t("voice.control.shareTaken")
                         : undefined
                     }
                     onClick={
@@ -504,7 +524,7 @@ export function VoicePanel({
                 ))}
               <Button variant="danger" size="sm" onClick={onLeave}>
                 <PhoneOff className="h-4 w-4" aria-hidden="true" />
-                Leave
+                {t("voice.control.leave")}
               </Button>
             </div>
 

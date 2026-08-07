@@ -67,9 +67,12 @@ test.describe("voice lobby", () => {
     const gridBox = (await grid.boundingBox())!;
     const leaveBox = (await leave.boundingBox())!;
     expect(gridBox.y + gridBox.height).toBeLessThan(leaveBox.y);
-    // A call of one gets a stage, not a stray card. The exact height depends on
-    // the account's "compact peers" preference, which the suite shares.
-    expect(gridBox.height).toBeGreaterThanOrEqual(160);
+    // A call of one gets a stage, not a stray card: `min-h-[14rem]` at `lg`.
+    // The loose 160px floor this used to assert was a workaround for
+    // `resetPreferences` only resetting the theme — a spec that turned on
+    // "compact peers" shrank every tile for whatever ran next. The fixture
+    // resets the whole preference set now, so the real number can be pinned.
+    expect(gridBox.height).toBeGreaterThanOrEqual(200);
   });
 
   test("phone: the same layout at 390px", async ({ page }) => {

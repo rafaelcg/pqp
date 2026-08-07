@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { safeTextSchema } from "./api.js";
+import { TIMEOUT_MAX_MINUTES, TIMEOUT_MIN_MINUTES } from "./sanctions.js";
 
 /**
  * User- and message-reporting: the path a member takes when the thing that
@@ -107,6 +108,29 @@ export const resolveReportSchema = z.object({
     .string()
     .max(REPORT_NOTE_MAX_LENGTH)
     .pipe(safeTextSchema)
+    .nullable()
+    .optional(),
+  /**
+   * Time the reported member out, in the same action that closes the report.
+   *
+   * Two things happen to every actionable report: it gets closed, and somebody
+   * gets sanctioned. Making those two separate trips — close the queue entry,
+   * then find the person in the members panel, then remember what the report
+   * said — is how the second one stops happening on a busy day. The note the
+   * moderator already typed becomes the timeout's reason, so the sanction
+   * carries its justification without asking for it twice.
+   *
+   * Only meaningful for a report with a server behind it and a reported user
+   * still on the instance; the route refuses it otherwise rather than closing
+   * the report and silently skipping the sanction. Absent means "just close
+   * it", which stays the default and the only thing a `dismissed` resolution
+   * may do.
+   */
+  timeoutMinutes: z
+    .number()
+    .int()
+    .min(TIMEOUT_MIN_MINUTES)
+    .max(TIMEOUT_MAX_MINUTES)
     .nullable()
     .optional(),
 });

@@ -9,6 +9,11 @@
  * Node test rather than only on a real iPhone.
  */
 
+import {
+  translateMessage,
+  type MessageKey,
+} from "@/lib/i18n/catalogue";
+
 export type ScreenShareUnavailableReason = "no-api" | "insecure-context";
 
 interface ScreenShareProbe {
@@ -62,19 +67,28 @@ export function screenShareUnavailableReason(
   return "no-api";
 }
 
-const SCREEN_SHARE_UNAVAILABLE_MESSAGE: Record<
+const SCREEN_SHARE_UNAVAILABLE_KEY: Record<
   ScreenShareUnavailableReason,
-  string
+  MessageKey
 > = {
-  "no-api": "Screen sharing isn't supported by this browser.",
-  "insecure-context": "Screen sharing needs a secure (HTTPS) connection.",
+  "no-api": "voice.screenShareUnsupported",
+  "insecure-context": "voice.screenShareInsecure",
 };
 
-/** Quiet, non-alarming explanation for a control the platform cannot honour. */
+/**
+ * Quiet, non-alarming explanation for a control the platform cannot honour.
+ *
+ * Resolved through the catalogue on every call rather than captured in a
+ * module-level constant: a constant is evaluated at import time, which is
+ * before the non-English catalogue chunk has finished loading, and would pin
+ * the sentence to English for the rest of the session. `hooks/use-voice.ts`
+ * calls this for the same reason — one key, so the greyed-out control and the
+ * error path cannot drift apart in any language.
+ */
 export function screenShareUnavailableMessage(
   reason: ScreenShareUnavailableReason,
 ): string {
-  return SCREEN_SHARE_UNAVAILABLE_MESSAGE[reason];
+  return translateMessage(SCREEN_SHARE_UNAVAILABLE_KEY[reason]);
 }
 
 /**
@@ -93,14 +107,27 @@ interface FullscreenProbe {
   documentFullscreenEnabled?: boolean;
   /** `element.requestFullscreen` */
   requestFullscreen?: unknown;
-  /** `video.webkitEnterFullscreen` */
+  /**
+   * `element.webkitRequestFullscreen`.
+   *
+   * Safari only shipped the unprefixed Fullscreen API in 16.4. Before that a
+   * Mac has full element fullscreen — under the prefix — and probing for the
+   * standard name alone reports it as absent. That mattered: the fallback below
+   * is the *video-only* iOS path, and `webkitEnterFullscreen` exists on desktop
+   * Safari too, so an older Mac silently took the iOS branch and then threw
+   * `InvalidStateError` on a MediaStream-backed <video> that has no fullscreen
+   * support. The user clicked the button and nothing happened.
+   */
+  webkitRequestFullscreen?: unknown;
+  /** `video.webkitEnterFullscreen` — iOS Safari's only fullscreen. */
   webkitEnterFullscreen?: unknown;
 }
 
 export function detectFullscreenMode(probe: FullscreenProbe): FullscreenMode {
   if (
     probe.documentFullscreenEnabled !== false &&
-    typeof probe.requestFullscreen === "function"
+    (typeof probe.requestFullscreen === "function" ||
+      typeof probe.webkitRequestFullscreen === "function")
   ) {
     return "element";
   }

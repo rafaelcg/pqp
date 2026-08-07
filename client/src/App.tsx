@@ -8,6 +8,7 @@ import type {
   Channel,
   ChannelKind,
   DmSummary,
+  SanctionNotice,
   Server,
   User,
   VoiceRoomTransport,
@@ -43,6 +44,7 @@ import {
   SettingsModal,
   type LocalSettings,
 } from "@/components/layout/settings-modal";
+import { SanctionNoticeBar } from "@/components/layout/sanction-notice-bar";
 import { SsoServerSuggestions } from "@/components/layout/sso-server-suggestions";
 import { UserPanel } from "@/components/layout/user-panel";
 import { ScreenShareView } from "@/components/voice/screen-share-view";
@@ -245,6 +247,15 @@ function MainAppContent({
   const [newServerName, setNewServerName] = useState("");
   const [creatingServer, setCreatingServer] = useState(false);
   const [appError, setAppError] = useState<string | null>(null);
+  /**
+   * The last refusal a timeout produced, shown against the composer it belongs
+   * to. Transient app state rather than anything persisted: a timeout is
+   * already reconstructible from `/api/me` and the members panel, and this only
+   * has to answer "why did that not send".
+   */
+  const [sanctionNotice, setSanctionNotice] = useState<SanctionNotice | null>(
+    null,
+  );
   const [connection, setConnection] = useState<RealtimeStatus>("idle");
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -790,6 +801,15 @@ function MainAppContent({
             chat.handleServerMessage(message);
             return;
           }
+
+          // A refused send. Without this the frame fell through to the voice
+          // handler, which is not where a chat refusal belongs, and the person
+          // was left with a failed message and no reason for it.
+          if (message.type === "sanction-notice") {
+            setSanctionNotice(message);
+            return;
+          }
+
           voice.handleSignaling(message);
         });
 
@@ -1539,12 +1559,16 @@ function MainAppContent({
     <>
       {voiceState.status !== "idle" && !isViewingVoiceChannel && (
         <VoiceStatusBar
-          channelName={voiceChannel?.name ?? "Voice"}
+          channelName={voiceChannel?.name ?? t("voice.channelFallback")}
           status={voiceState.status}
           peerCount={voiceState.remotePeers.length}
           isMuted={voiceState.isMuted}
           isDeafened={voiceState.isDeafened}
           usingSfu={voiceState.usingSfu}
+          // This widget only exists once you have navigated away from the voice
+          // channel, so it is the only thing that can tell you a share is live
+          // while you are somewhere else.
+          isPresenting={voiceState.screenSharePeerId !== null}
           onOpen={() => void openVoiceChannel()}
           onToggleMute={() => voice.toggleMute()}
           onToggleDeafen={() => voice.toggleDeafen()}
@@ -1709,6 +1733,15 @@ function MainAppContent({
         onDiscardMessage={(nonce) => chat.discardMessage(nonce)}
         showLinkEmbeds={localSettings.showLinkEmbeds}
       />
+      {/* Against the composer it explains, not floating in a corner: the frame
+          names the channel the refused action happened in, so a notice from
+          another room would be answering a question nobody asked here. */}
+      {sanctionNotice && sanctionNotice.channelId === selectedChannel.id && (
+        <SanctionNoticeBar
+          notice={sanctionNotice}
+          onDismiss={() => setSanctionNotice(null)}
+        />
+      )}
       <MessageComposer
         // Remount per channel: the draft is component state, so without this a
         // half-typed message follows you into the next channel, one Enter away
@@ -2044,7 +2077,7 @@ function MainAppContent({
                     presenterName={
                       voiceState.remotePeers.find(
                         (p) => p.peerId === voiceState.screenSharePeerId,
-                      )?.displayName ?? "Someone"
+                      )?.displayName ?? t("voice.share.someone")
                     }
                     isSelf={voiceState.screenSharePeerId === voiceState.peerId}
                     onStopSharing={() => void voice.stopScreenShare()}
