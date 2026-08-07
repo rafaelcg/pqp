@@ -10,11 +10,17 @@ concurrency:
   group: electron-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  # electron-builder needs to create/update the draft release it publishes
+  # `latest-mac.yml` / `latest.yml` into. Without those files electron-updater
+  # reads the feed as "no update available" forever.
+  contents: write
+
 jobs:
   build:
     name: Build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -56,11 +62,76 @@ jobs:
           VITE_DEV_AUTH_BYPASS: "false"
         run: pnpm --filter @pqp/client build
 
-      - name: Package Electron (unsigned)
+      # Signing and notarization are OPTIONAL. A fork, or a run before the
+      # secrets exist, produces an unsigned build and still succeeds — an
+      # unsigned build is a broken download, but a red CI on every fork is
+      # worse than a warning here.
+      #
+      # macOS only: CSC_LINK / CSC_KEY_PASSWORD are also read by the Windows
+      # signer, so they are scoped to the mac job and unset elsewhere. Windows
+      # signing, when it happens, uses WIN_CSC_LINK / WIN_CSC_KEY_PASSWORD.
+      - name: Package Electron
         working-directory: electron
+        shell: bash
         env:
-          CSC_IDENTITY_AUTO_DISCOVERY: "false"
-        run: pnpm exec electron-builder --${{ matrix.platform }}
+          PLATFORM: ${{ matrix.platform }}
+          IS_TAG: ${{ startsWith(github.ref, 'refs/tags/v') }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          args=("--${PLATFORM}")
+
+          if [ "$PLATFORM" = "mac" ]; then
+            if [ -n "${CSC_LINK:-}" ]; then
+              echo "::notice::Signing macOS build with CSC_LINK."
+              if [ -n "${APPLE_API_KEY_P8:-}" ] && [ -n "${APPLE_API_KEY_ID:-}" ] && [ -n "${APPLE_API_ISSUER:-}" ]; then
+                # App Store Connect API key: preferred, does not expire when the
+                # Apple ID password changes. @electron/notarize shells out to
+                # `xcrun notarytool` with these.
+                printf '%s' "$APPLE_API_KEY_P8" | base64 --decode > "$RUNNER_TEMP/asc-api-key.p8"
+                export APPLE_API_KEY="$RUNNER_TEMP/asc-api-key.p8"
+                args+=("-c.mac.notarize=true")
+                echo "::notice::Notarizing with an App Store Connect API key."
+              elif [ -n "${APPLE_ID:-}" ] && [ -n "${APPLE_APP_SPECIFIC_PASSWORD:-}" ] && [ -n "${APPLE_TEAM_ID:-}" ]; then
+                args+=("-c.mac.notarize.teamId=${APPLE_TEAM_ID}")
+                echo "::notice::Notarizing with an Apple ID app-specific password."
+              else
+                echo "::warning::Signed but NOT notarized — Gatekeeper will still quarantine this build. Set APPLE_API_KEY_P8/APPLE_API_KEY_ID/APPLE_API_ISSUER, or APPLE_ID/APPLE_APP_SPECIFIC_PASSWORD/APPLE_TEAM_ID."
+              fi
+            else
+              echo "::warning::No CSC_LINK — building macOS UNSIGNED. The .dmg will be quarantined by Gatekeeper and auto-update (Squirrel.Mac) will not work."
+              export CSC_IDENTITY_AUTO_DISCOVERY=false
+            fi
+          else
+            # Never let the macOS cert leak into a Windows/Linux signer.
+            unset CSC_LINK CSC_KEY_PASSWORD
+            if [ "$PLATFORM" = "win" ] && [ -z "${WIN_CSC_LINK:-}" ]; then
+              echo "::warning::No WIN_CSC_LINK — Windows build is unsigned; SmartScreen will warn on download."
+              export CSC_IDENTITY_AUTO_DISCOVERY=false
+            fi
+          fi
+
+          # Publish only from a version tag. Everything else is an artifact you
+          # download from the run, so a push to main cannot rewrite the update
+          # feed that installed apps are polling.
+          if [ "$IS_TAG" = "true" ]; then
+            args+=("--publish" "always")
+          else
+            args+=("--publish" "never")
+          fi
+
+          echo "electron-builder ${args[*]}"
+          pnpm exec electron-builder "${args[@]}"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
