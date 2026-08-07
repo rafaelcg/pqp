@@ -152,7 +152,9 @@ export function CookiesPage() {
 
       <h2>Contact</h2>
       <p>
-        <strong>{"{{PRIVACY_EMAIL}}"}</strong>
+        Questions about anything on this page go to{" "}
+        <strong>{"{{CONTACT_EMAIL}}"}</strong> — the single address for pqp.gg,
+        read by the one person who runs it.
       </p>
     </LegalPage>
   );

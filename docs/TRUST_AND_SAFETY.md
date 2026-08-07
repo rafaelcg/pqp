@@ -6,11 +6,16 @@ Operational companion to the three public legal pages:
 - `client/src/pages/privacy-page.tsx`
 - `client/src/pages/cookies-page.tsx`
 
-> **STATUS: DRAFT. NOT CLEARED FOR LAUNCH.**
-> The pages are written to be factually true about the product as built, but they
-> contain unfilled placeholders and have **not** been reviewed by a Brazilian
-> lawyer. Do not publish them until the checklist below is empty and counsel has
-> signed off. See [What a lawyer must review](#what-a-lawyer-must-review).
+> **STATUS: not reviewed by a lawyer, and at this size probably never will be.**
+> pqp.gg is run by **one person as a personal project** — no company, no counsel,
+> no funding, no revenue. The pages are written to be factually true about the
+> product as built and honest about what a one-person project can and cannot
+> promise. Eight placeholders still need real values before the pages go live;
+> the list is §1. Publish when that list is empty. §7 records what *would* need a
+> lawyer if the project ever grows into something that can afford one — it is a
+> deferred list, not a launch blocker.
+>
+> The pages are English-only. A pt-BR translation is still outstanding (§6).
 
 ---
 
@@ -20,56 +25,62 @@ Every token below appears literally as `{{TOKEN}}` in the page source. Grep to
 find them:
 
 ```bash
-grep -rn "{{" client/src/pages/terms-page.tsx client/src/pages/privacy-page.tsx client/src/pages/cookies-page.tsx
+grep -rno "{{[A-Z_]*}}" client/src/pages/
 ```
 
 There is no build-time substitution — these are literal strings that will render
 to users as `{{LIKE_THIS}}` if shipped. That is deliberate: an unfinished legal
 page should look unfinished.
 
-### Legal entity — **founder / accountant**
+**Eight tokens remain.** The rest were **deleted rather than filled**, because
+filling them would have meant asserting things that are not true:
+`{{LEGAL_ENTITY_NAME}}` / `{{LEGAL_ENTITY_CNPJ}}` / `{{LEGAL_ENTITY_ADDRESS}}`
+(there is no company, a CNPJ cannot be invented, and the only address available
+is a home address that must never appear on a public page for an 18+ service);
+the six separate contact addresses (one person cannot staff six inboxes);
+`{{DPO_NAME}}` / `{{DPO_EMAIL}}` (a solo project appointing a formal
+*encarregado* is theatre — the pages now say the operator handles it
+personally); `{{MARCO_CIVIL_NOTICE_PROCEDURE}}` (it assumed a Brazilian entity);
+`{{TRANSFER_SAFEGUARD}}` (there are no negotiated DPAs — the pages now say so);
+`{{BR_MIGRATION_TARGET}}` (no committed date exists); and the four SLA numbers
+(§2).
+
+### Identity — **founder decides, one edit**
 
 | Token | What it is | Pages |
 |---|---|---|
-| `{{LEGAL_ENTITY_NAME}}` | Registered company name (razão social) operating pqp.gg | terms, privacy |
-| `{{LEGAL_ENTITY_CNPJ}}` | CNPJ | terms, privacy |
-| `{{LEGAL_ENTITY_ADDRESS}}` | Registered address (endereço da sede) | terms, privacy |
+| `{{OPERATOR_NAME}}` | The name of the person who runs pqp.gg. **This is a judgement call, not a compliance box.** UK and EU practice expects a controller to be identifiable, and a name is the normal answer. Against that: naming an individual who single-handedly runs an 18+ chat service is a real personal-safety exposure, and the pqp.gg WHOIS is deliberately redacted. A working middle option is a consistent pseudonym or project handle plus a live contact address, upgraded to a legal name if and when there is an entity to stand behind it. Whatever is chosen, it is one greppable token in two places | terms, privacy |
 
-### Contact addresses — **founder / ops**
+### Contact — **founder / ops. This is the launch blocker.**
+
+| Token | What it is | Pages |
+|---|---|---|
+| `{{CONTACT_EMAIL}}` | **The single address for everything**: support, abuse and safety, underage-account reports, privacy requests, security disclosure, legal notices, appeals. It replaced six separate tokens deliberately — six addresses that bounce are worse than one that works, and until the in-app report flow ships this is the *entire* reporting surface | all three |
+
+> **It must actually receive mail before the pages go live.** `pqp.gg` has no MX
+> record today, so anything sent to it bounces. Set up **Cloudflare Email
+> Routing** on the zone (free, catch-all or single alias, forwards to a real
+> mailbox) and send yourself a test message from an unrelated provider before
+> publishing. Route it somewhere that reaches a phone: the pages promise no
+> response time, but a report about a minor still needs to be seen the same day.
 
 These render as plain text, not `mailto:` links, precisely so an unfilled one
-cannot become a broken link. Turn them into `mailto:` anchors when filled.
+cannot become a broken link. Turn it into a `mailto:` anchor when filled.
 
-| Token | What it is | Pages |
-|---|---|---|
-| `{{SUPPORT_EMAIL}}` | General user support | terms |
-| `{{LEGAL_EMAIL}}` | Legal notices, copyright/IP takedowns, service of process | terms |
-| `{{ABUSE_EMAIL}}` | Abuse, safety, underage-account reports. **The one that matters most** — it is the reporting channel until the in-app report flow ships | terms, privacy |
-| `{{PRIVACY_EMAIL}}` | LGPD data-subject requests, account deletion requests | terms, privacy, cookies |
-| `{{SECURITY_EMAIL}}` | Vulnerability disclosure | privacy |
-| `{{APPEAL_EMAIL}}` | Moderation appeals. May be the same mailbox as `{{ABUSE_EMAIL}}`, but a separate alias makes the queue separable later | terms |
+### Jurisdiction — **resolved, no tokens**
 
-### LGPD roles — **founder + counsel**
-
-| Token | What it is | Pages |
-|---|---|---|
-| `{{DPO_NAME}}` | Name of the *encarregado* (LGPD art. 41). Can be a natural person or a named role at a firm; must be publicly identified | privacy |
-| `{{DPO_EMAIL}}` | Encarregado's contact address. Must be a real, monitored mailbox — the ANPD uses it | privacy |
-
-### Jurisdiction — **Brazilian counsel**
-
-| Token | What it is | Pages |
-|---|---|---|
-| `{{GOVERNING_LAW}}` | Governing law (expected: the laws of the Federative Republic of Brazil — confirm) | terms |
-| `{{FORUM_CITY_STATE}}` | Elected forum (foro de eleição), city and state | terms |
-| `{{MARCO_CIVIL_NOTICE_PROCEDURE}}` | How judicial removal orders and out-of-court notices under Lei nº 12.965/2014 are received and actioned, and the address for service. **Counsel must draft this text — do not write it from the codebase** | terms |
+The operator is in the UK. The terms name **the laws of England and Wales** and
+the courts of England and Wales, with an explicit carve-out that consumers may
+sue where they live and that Brazilian users keep their rights under the CDC
+(Lei nº 8.078/1990) and the LGPD regardless. The privacy policy states that
+**UK GDPR / DPA 2018 and the LGPD both apply**, and that the rights it lists are
+honoured for everyone whichever law grants them — one list, not two.
 
 ### Dates — **founder**
 
 | Token | What it is | Pages |
 |---|---|---|
-| `{{EFFECTIVE_DATE}}` | The "Last updated" date. Set it to the date counsel signs off, not the date the draft was written | all three |
-| `{{BR_MIGRATION_TARGET}}` | Target date/quarter for the São Paulo migration named in the privacy policy. If there is no committed date, rewrite that sentence rather than inventing one | privacy |
+| `{{EFFECTIVE_DATE}}` | The "Last updated" date. Set it to the day the pages actually go live | all three |
 
 ### Infrastructure facts — **ops, verified against live env vars**
 
@@ -84,44 +95,45 @@ live. **Check the actual production environment, not the repo.**
 | `{{OBJECT_STORAGE_PROVIDER}}` | Attachment storage vendor and region | Whatever `S3_ENDPOINT` points at (Cloudflare R2 in the hosted plan) | privacy |
 | `{{ATTACHMENTS_STATUS}}` | Literally "enabled" or "disabled" | Attachments are off entirely unless `S3_*` is set — `docs/ATTACHMENTS.md`. Per `MEMORY`, they were merged but not switched on in production | privacy |
 | `{{TURN_PROVIDER}}` | The STUN/TURN vendor(s) actually configured | `server/src/services/ice.ts` resolves in order: static `TURN_*` → Cloudflare Realtime → Metered/Open Relay. Name the one in use | privacy, cookies |
-| `{{TRANSFER_SAFEGUARD}}` | The LGPD art. 33 basis for international transfers — e.g. ANPD standard contractual clauses, or contractual safeguards in each provider's DPA | Requires actually having the DPAs. **Counsel + founder** | privacy |
 
-### SLAs — **founder, see §2**
-
-| Token | Pages |
-|---|---|
-| `{{URGENT_REPORT_SLA_HOURS}}` | terms |
-| `{{STANDARD_REPORT_SLA_HOURS}}` | terms |
-| `{{TAKEDOWN_SLA_HOURS}}` | terms |
-| `{{APPEAL_SLA_DAYS}}` | terms |
+International transfers no longer carry a token. The privacy policy states the
+truth instead: these are ordinary commercial services used on their published
+terms, and **no bespoke transfer agreement has been negotiated for pqp**,
+because there is no company to sign one and no lawyer to draft it. If an entity
+ever exists, revisit — see §7.
 
 ---
 
-## 2. Proposed SLAs — **PROPOSAL ONLY, NOT YET COMMITTED**
+## 2. Response times — **no SLA is published, deliberately**
 
-> Nothing in this table is a commitment. These are industry-typical numbers
-> offered as a starting point for a one-person-on-call operation. **Pick numbers
-> you can actually hit at 3am on a Sunday**, because the moment they go on the
-> Terms page they are a public promise, and missing them is worse than never
-> having published them. Halving these to look responsive is the classic
-> mistake.
+There are no SLA tokens any more, and the Terms page no longer contains a
+number. A published SLA is a public promise; one person with a day job cannot
+keep a 4-hour urgent target at 3am on a Sunday, and a missed promise is worse
+than an honest absence of one.
 
-| Token | Applies to | Proposed | Reasoning |
-|---|---|---|---|
-| `{{URGENT_REPORT_SLA_HOURS}}` | CSAM, sexualisation of minors, credible threat of violence, non-consensual intimate images, active self-harm | **4 hours** to first action | These cannot wait for business hours. 4h is achievable for a solo operator with phone alerts on the abuse mailbox; 1h implies a rota that does not exist |
-| `{{STANDARD_REPORT_SLA_HOURS}}` | Acknowledgement of any other report | **48 hours** | An acknowledgement is cheap; promise it and keep it |
-| `{{TAKEDOWN_SLA_HOURS}}` | Decision on a standard report (harassment, spam, IP claim) | **72 hours** | Leaves room for a weekend. Note this is a *decision*, which may be "no violation" |
-| `{{APPEAL_SLA_DAYS}}` | Response to a moderation appeal | **10 days** | Appeals are rare and low-urgency; a longer, kept promise beats a short, missed one |
+**What the Terms now say** — keep this wording and this operating posture in
+sync:
 
-LGPD-driven timelines are **statutory, not chosen**:
+| Area | Published position |
+|---|---|
+| Reports generally | One person reads them; acted on as fast as one person reasonably can, *usually within a few days*; no guarantee, and longer when the operator is away |
+| Priority | Reports involving minors, imminent physical danger, or non-consensual intimate images go to the front of the queue |
+| **CSAM / sexualisation of a minor** | **Removed on sight, account terminated, reported to the competent authorities. No queue, no timeline caveat, no appeal.** This is the one commitment with no proportionality argument attached to it |
+| Appeals | Read and answered when possible; no promised turnaround; explicitly *not* reviewed by an independent person, because there is no second person |
+
+"Usually within a few days" is a description, not a target. If it stops being
+true, change the sentence rather than quietly missing it.
+
+Statutory timelines are **not chosen and not negotiable**:
 
 | Obligation | Deadline | Source |
 |---|---|---|
-| Complete response to a data-subject request | 15 days | LGPD art. 19, II |
-| Breach notification to ANPD and affected people | "reasonable time" as set by ANPD | LGPD art. 48 |
+| Complete response to a data-subject request | 15 days (LGPD) / 1 month (UK GDPR) — work to the shorter | LGPD art. 19, II; UK GDPR art. 12(3) |
+| Breach notification to the regulator | LGPD: "reasonable time" as set by ANPD. UK: 72 hours to the ICO | LGPD art. 48; UK GDPR arts. 33–34 |
 
-Route alerts so that a message to `{{ABUSE_EMAIL}}` reaches a phone, not an
-inbox somebody reads on weekdays. Without that, the 4-hour number is fiction.
+Route `{{CONTACT_EMAIL}}` so it reaches a **phone**, not an inbox read on
+weekdays. Nothing above promises a response time, but a report about a minor
+still needs to be seen the day it arrives.
 
 ---
 
@@ -131,7 +143,7 @@ inbox somebody reads on weekdays. Without that, the 4-hour number is fiction.
 
 | Channel | Status |
 |---|---|
-| `{{ABUSE_EMAIL}}` | **The only channel today.** Must be live before launch |
+| `{{CONTACT_EMAIL}}` | **The only channel today.** Must be live before launch — see §1, it has no MX record yet |
 | In-app report button | **In progress** — being built now by a separate work stream. Update the Terms page ("We are building an in-app report button…") when it ships |
 | Server owner / admin escalation | Informal. Owners moderate their own servers with kick/ban/delete; there is no route from a server owner to us except email |
 
@@ -143,10 +155,13 @@ non-consensual intimate imagery; a user who is or appears to be under 18.
 
 1. Preserve evidence **before** deleting anything (see §3.4).
 2. Terminate the account. Ban from the server(s) involved.
-3. For CSAM: preserve and report to the competent authorities. **Get counsel's
-   written instruction on the reporting path in Brazil before you need it** —
-   this is a mandatory-reporting question, not an engineering one, and the wrong
-   handling of the material is itself an offence.
+3. For CSAM: preserve and report to the competent authorities. **Work out the
+   reporting route before you need it and write it down here.** This is the one
+   place where "we're a small project" is not a defence: the operator is in the
+   UK and most users are in Brazil, so the route involves the authorities in
+   both, and mishandling the material is itself an offence. Do not open, copy,
+   forward or store it beyond what preservation requires, and do not sit on it
+   waiting for advice — reporting it is the advice.
 4. No appeal (stated in the Terms).
 
 **Tier 1 — same-day.**
@@ -262,12 +277,12 @@ platform-level decisions or the reasoning behind them.
 
 ## 4. Appeals runbook
 
-1. Appeals arrive at `{{APPEAL_EMAIL}}`, within 30 days of the action.
+1. Appeals arrive at `{{CONTACT_EMAIL}}`, within 30 days of the action.
 2. Confirm the appellant controls the account.
-3. Where practical, route to someone who did not make the original call. With a
-   one-person team this is not possible — say so honestly rather than claiming a
-   separation of duties that does not exist. The Terms already hedge this
-   ("where practical").
+3. There is no independent reviewer, and the Terms now say so outright rather
+   than hedging with "where practical". The same person looks at it again with
+   whatever the appellant has added. If that ever stops being true — a second
+   moderator, a trusted volunteer — change the Terms wording first.
 4. Outcome: uphold, reverse, or reduce. Reversing a server ban is
    `DELETE /api/servers/:id/bans/:userId`.
 5. Child-safety terminations are final — stated in the Terms.
@@ -277,7 +292,7 @@ platform-level decisions or the reasoning behind them.
 
 ---
 
-## 5. LGPD data-subject request runbook
+## 5. Data-subject request runbook (LGPD + UK GDPR)
 
 **Access/portability and deletion are now self-serve.** Both live in Settings →
 *Your data*, and both are the *first* answer to a request that arrives by
@@ -285,8 +300,9 @@ email: point the requester at the buttons rather than running anything by hand.
 Doing it manually in production, under a 15-day clock, is how a wrong `WHERE`
 clause deletes somebody else.
 
-Requests that still arrive at `{{PRIVACY_EMAIL}}` or `{{DPO_EMAIL}}`. Statutory
-deadline: **15 days** for a complete response (art. 19, II).
+Requests that still arrive at `{{CONTACT_EMAIL}}`. Statutory deadline:
+**15 days** for a complete response under LGPD art. 19, II; UK GDPR art. 12(3)
+allows a month. Work to the shorter one — the pages say we do.
 
 1. **Verify identity** from the email address on the Clerk account. Do not
    collect an ID document — that is more personal data to hold, for a request
@@ -311,7 +327,7 @@ deadline: **15 days** for a complete response (art. 19, II).
    exclusion is stated in plain language inside the export file itself
    (`notes`), and the full reasoning is in the `EXPORT_NOTES` comment in
    `services/account.ts`. **If a requester genuinely needs the other side — a
-   court order, a harassment case — that is an encarregado decision, made by
+   court order, a harassment case — that is an operator decision, made by
    hand, per request. There is no self-serve route to it and there should not
    be.** Reported-content snapshots are excluded on the same grounds.
 
@@ -331,7 +347,7 @@ deadline: **15 days** for a complete response (art. 19, II).
    obligations nobody absent has agreed to) and does **not** cascade-delete the
    server (that destroys other members' data to serve one person's right). A
    server the user owns *alone* is not blocking and goes with the account. If a
-   user refuses to do either and complains, that is an encarregado judgement
+   user refuses to do either and complains, that is an operator judgement
    call — there is no code path for it.
 
    **Deleted:** profile, preferences, every message body they wrote, reactions,
@@ -388,8 +404,8 @@ deadline: **15 days** for a complete response (art. 19, II).
    self-serve route writes an audit entry: `audit_log.server_id` is `NOT NULL`
    and these actions belong to no server, and logging that a named person
    exercised a privacy right — in a log that server admins can read — would be
-   its own small disclosure. Retention of the encarregado's own record is a
-   legal-basis question for counsel.
+   its own small disclosure. Keep the record somewhere durable and personal (not
+   in the product), and keep it minimal.
 
 ---
 
@@ -401,7 +417,7 @@ Ordered by how badly it hurts at launch.
 |---|---|---|
 | **Self-serve account deletion** | LGPD art. 18, IV and VI | **Built** — `DELETE /api/me`, §5.4. Confirmed by typing the handle, refuses while the caller owns a server other people are in, deletes the Clerk identity, and self-heals an interrupted deletion. Remaining gaps are named in §5.4: no cross-replica socket eviction, and deletion is a ban-evasion route |
 | **Personal data export** | Art. 18, II and V | **Built** — `GET /api/me/export`, §5.2. Note this is *not* `server/src/services/export.ts`, which is the owner-scoped server tool and exports everyone's messages; the two must stay separate |
-| **The other half of a DM in an export** | A subject who needs the other participant's messages (a court order, a harassment case) has no self-serve route, by design | **Deliberately not built.** Per-request encarregado decision. See §5.2 |
+| **The other half of a DM in an export** | A subject who needs the other participant's messages (a court order, a harassment case) has no self-serve route, by design | **Deliberately not built.** Per-request operator decision. See §5.2 |
 | **Deletion is not disclosed as final to the other party** | Somebody mid-conversation with a deleted account sees their messages vanish with no explanation. Discord shows "Deleted User"; pqp shows a gap | **Known.** A consequence of deleting rather than anonymising (§5.4), and a UX gap rather than a compliance one |
 | **Age verification** | Deliberately not built, and the Terms must keep saying so. What ships is a **self-declared 18+ gate** (§3.6): a date of birth, entered once, enforced server-side. No document or ID check — that is disproportionate for this product and would mean holding far more personal data than the 18+ rule needs | **Self-declaration is the launch position.** The gate is built; identity verification is not, and is not planned |
 | **In-app reporting** | No report/flag action on messages or users; a user's only self-serve recourse is blocking. Email is the whole reporting surface | **In progress** — another work stream is building it now. Update terms-page.tsx when it lands |
@@ -432,53 +448,74 @@ the published contact address is reachable from inside the app too.
 
 ---
 
-## 7. What a lawyer must review
+## 7. Deferred — what would need a lawyer, if this ever gets serious
 
-**A Brazilian lawyer must review all three pages before launch.** These drafts
-are written to be *factually accurate about the product*; they are not written to
-be *legally sufficient*. Specific items to put in front of counsel:
+**Nothing in this section blocks launch.** pqp.gg is one person's project with
+no company, no counsel and no revenue, and hiring a lawyer to review a hobby
+project's terms is not a proportionate use of money that does not exist. The
+pages are written to be *factually accurate about the product* and honest about
+what one person can promise; they are not written to be *legally bulletproof*,
+and they do not claim to be.
 
-1. **Marco Civil da Internet (Lei nº 12.965/2014)** — arts. 18–21 set when a
+The right trigger for this list is a change in what pqp *is*: taking money,
+incorporating, hiring anyone, or growing to a size where a regulator or a
+claimant would plausibly bother. Until then, keep the list; do not act on it.
+
+1. **Where the operator sits.** The terms name England and Wales, which is where
+   the operator lives. If an entity is ever formed — UK or Brazilian — the
+   governing-law clause, the controller identity and `{{OPERATOR_NAME}}` all
+   change together, and `{{LEGAL_ENTITY_*}}` comes back with real values.
+2. **Marco Civil da Internet (Lei nº 12.965/2014)** — arts. 18–21 set when a
    platform is liable for user content, the general rule that removal follows a
    court order, and the narrower notice-based rule for non-consensual intimate
-   content. The Terms carry a factual placeholder
-   (`{{MARCO_CIVIL_NOTICE_PROCEDURE}}`) and deliberately do **not** attempt to
-   restate the statute. Counsel drafts that clause, and confirms the retention of
-   application logs the statute contemplates (art. 15) against the fact that this
-   application currently keeps no access logs and stores no IP addresses — that
-   is a genuine tension worth a considered answer.
-2. **LGPD legal bases** — the art. 7 mapping in the privacy policy is a
-   good-faith engineering reading, not legal advice. Confirm especially the
-   legitimate-interest basis for moderation and anti-abuse (art. 7, IX, which
-   requires a balancing test that has not been documented), and whether a
-   legitimate-interest impact assessment is expected.
-3. **International transfers (art. 33)** — which basis actually applies, and
-   whether the DPAs with Clerk, Cloudflare, the hosting provider and object
-   storage support it. `{{TRANSFER_SAFEGUARD}}` cannot be filled without those
-   agreements in hand.
-4. **The encarregado** — must be appointed and publicly named (art. 41).
-5. **CDC (Lei nº 8.078/1990)** — the limitation-of-liability and indemnity
-   clauses are standard SaaS language and may be partly unenforceable against
-   consumers. The draft carries an explicit carve-out for mandatory law; counsel
-   should confirm it is enough, and check the foro de eleição against consumer
-   rules.
-6. **18+ positioning** — the gate in §3.6 is built and enforced, but the
+   content. The Terms deliberately do **not** restate the statute; they say
+   where to send a notice and that the operator is an individual in the UK.
+   Worth a considered answer eventually: art. 15 contemplates retention of
+   application logs, and this application keeps no access logs and stores no IP
+   addresses at all. That is a real tension, and the current answer is that not
+   collecting is the safer failure.
+3. **Legal bases** — the LGPD art. 7 mapping in the privacy policy (and its UK
+   GDPR art. 6 equivalents) is a good-faith engineering reading, not advice.
+   The weakest link is legitimate interests for moderation and anti-abuse: it
+   requires a balancing test that has not been written down.
+4. **International transfers** — LGPD art. 33 and UK GDPR chapter V. The pages
+   now say plainly that there is no bespoke transfer agreement, only the
+   published terms of Clerk, Cloudflare, the host and object storage. That is
+   the truth; whether it is *sufficient* is the question for counsel, and it
+   cannot be improved without an entity able to sign agreements.
+5. **A formal encarregado (LGPD art. 41)** — deliberately not appointed. The
+   pages say the operator handles data-protection questions personally and give
+   one address. Appointing a titled DPO for a solo project would be theatre; if
+   the project ever has staff or scale, revisit.
+6. **CDC (Lei nº 8.078/1990) and UK consumer law** — the limitation-of-liability
+   and indemnity clauses are standard SaaS language and may be partly
+   unenforceable against consumers in either country. The pages carry an
+   explicit carve-out for mandatory law and an explicit statement that Brazilian
+   users keep their CDC and LGPD rights whatever the governing-law clause says,
+   which is the cheapest defence against the clause simply being struck out.
+7. **18+ positioning** — the gate in §3.6 is built and enforced, but the
    question is unchanged: whether self-declared age is defensible for an
-   adults-only service in Brazil, and what the Estatuto da Criança e do
-   Adolescente requires once a minor is discovered on the platform.
-7. **The published SLAs** — once in the Terms they are enforceable promises.
-   Counsel and the founder should agree the numbers together.
-8. **Deletion and export as built** — self-serve deletion and export now exist
-   (§5.2, §5.4), so the question for counsel is no longer whether to ship
-   without them but whether these two are *sufficient*. Specifically:
-   (a) whether excluding the other participant's DM messages from an export is
-   the right reading of art. 18, II and V, or whether the balancing test lands
-   the other way; (b) whether the art. 16 bases claimed for each retained
-   record — audit entries, bans issued, reports — hold up, since they are an
-   engineering reading and not advice; (c) whether refusing deletion until an
-   owned server is transferred or deleted is defensible against the 15-day
-   clock in art. 19, II when the user simply does not act; and (d) whether
-   deleting message bodies outright (rather than anonymising the author) is
-   required, given that art. 5, III arguably makes anonymisation unavailable
-   for free-text content anyway.
-9. **pt-BR versions** — and which language governs if the two ever diverge.
+   adults-only service, and what the Estatuto da Criança e do Adolescente
+   requires once a minor is discovered on the platform. Note that the UK Online
+   Safety Act's age-assurance duties are aimed at services larger and more
+   commercial than this one, but "aimed at" is not "exempt from" — this is the
+   item most likely to *become* urgent without the project changing at all.
+8. **Deletion and export as built** — self-serve deletion and export exist
+   (§5.2, §5.4), so the question is not whether to ship without them but whether
+   they are *sufficient*. Specifically: (a) whether excluding the other
+   participant's DM messages from an export is the right reading of the access
+   right, or whether the balancing test lands the other way; (b) whether the
+   art. 16 bases claimed for each retained record — audit entries, bans issued,
+   reports — hold up, since they are an engineering reading and not advice;
+   (c) whether refusing deletion until an owned server is transferred or deleted
+   is defensible against the 15-day clock when the user simply does not act; and
+   (d) whether deleting message bodies outright (rather than anonymising the
+   author) is required, given that art. 5, III arguably makes anonymisation
+   unavailable for free-text content anyway.
+9. **pt-BR versions** — still outstanding (§6), and when they exist, which
+   language governs if the two ever diverge.
+
+**Not on this list, on purpose:** an SLA (§2), a DPO, a registered address, six
+contact aliases, and a negotiated DPA. Those were removed rather than deferred,
+because a hobby project cosplaying as a company invites expectations it cannot
+meet, and every unmet promise is a liability the wording itself created.

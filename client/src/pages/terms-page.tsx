@@ -5,20 +5,37 @@ export function TermsPage() {
   return (
     <LegalPage
       title="Terms of Service — pqp"
-      description="Terms for using the hosted pqp.gg service: eligibility (18+), acceptable use, moderation, reporting and takedowns."
+      description="Terms for using the hosted pqp.gg service: what pqp actually is, eligibility (18+), acceptable use, moderation, reporting and takedowns."
       path="/terms"
       heading="Terms of Service"
       updated="{{EFFECTIVE_DATE}}"
     >
       <p>
-        These terms cover the hosted service at <strong>pqp.gg</strong>, operated
-        by <strong>{"{{LEGAL_ENTITY_NAME}}"}</strong> (CNPJ{" "}
-        <strong>{"{{LEGAL_ENTITY_CNPJ}}"}</strong>,{" "}
-        <strong>{"{{LEGAL_ENTITY_ADDRESS}}"}</strong>) — &quot;we,&quot;
-        &quot;us,&quot; pqp. By creating an account or using the app, you agree
-        to them. Self-hosted copies of the open-source software are governed by
-        the project license and whatever terms you set for your own users — not
+        These terms cover the hosted service at <strong>pqp.gg</strong>, which is
+        run by <strong>{"{{OPERATOR_NAME}}"}</strong> — one person, not a
+        company. &quot;We&quot; and &quot;us&quot; below mean that one person. By
+        creating an account or using the app, you agree to these terms.
+        Self-hosted copies of the open-source software are governed by the
+        project licence and whatever terms you set for your own users — not
         these hosted terms.
+      </p>
+
+      <h2>Read this before you move your friends here</h2>
+      <p>
+        pqp is a personal project, built for fun by one person in their spare
+        time. There is no company behind it, no funding, no revenue, and no
+        support team — the person who reads your email is the person who wrote
+        the code. It is provided <strong>as is</strong>: there is no uptime
+        guarantee, no service level of any kind, and no promise that pqp.gg will
+        still be running next year. Features may change or disappear, and the
+        whole thing may stop. We would give notice if we could, but we cannot
+        promise even that.
+      </p>
+      <p>
+        We put this at the top because moving a group of friends onto a chat
+        service is a decision you should make with the real picture in front of
+        you. The rest of this page is written the same way: what is actually
+        true, including the parts that are not finished.
       </p>
 
       <h2>You must be 18 or older</h2>
@@ -39,10 +56,10 @@ export function TermsPage() {
       </p>
       <p>
         <strong>To report an account you believe belongs to a minor</strong>,
-        write to <strong>{"{{ABUSE_EMAIL}}"}</strong> with the user tag (their{" "}
+        write to <strong>{"{{CONTACT_EMAIL}}"}</strong> with the user tag (their{" "}
         <code>name#1234</code> handle), the server or DM where you saw them, and
         what led you to believe they are under 18. Reports about minors are
-        handled ahead of the normal queue. You do not need an account to send
+        handled ahead of everything else. You do not need an account to send
         one.
       </p>
       <p>
@@ -55,9 +72,9 @@ export function TermsPage() {
       <h2>The service</h2>
       <p>
         pqp is a real-time chat and voice product: servers, text and voice
-        channels, direct messages, invites, and related features. We may change,
-        pause, or discontinue features. Hosted billing tiers (if offered) will
-        be described separately when available.
+        channels, direct messages, invites, and related features. It is free,
+        and there are no paid tiers today. We may change, pause, or discontinue
+        any of it.
       </p>
 
       <h2>Accounts</h2>
@@ -67,7 +84,7 @@ export function TermsPage() {
         name, a <code>name#1234</code> handle, an avatar URL, and the domains of
         your verified email addresses. Keep your credentials safe. You are
         responsible for activity under your account. Provide accurate
-        information and do not impersonate other people, brands, or pqp staff.
+        information and do not impersonate other people, brands, or pqp itself.
       </p>
       <p>
         One person, one account. Do not create accounts to evade a ban, and do
@@ -164,7 +181,7 @@ export function TermsPage() {
       <h2>Reporting abuse</h2>
       <p>
         To report content, a user, or a whole server, email{" "}
-        <strong>{"{{ABUSE_EMAIL}}"}</strong>. Include:
+        <strong>{"{{CONTACT_EMAIL}}"}</strong>. Include:
       </p>
       <ul>
         <li>What you are reporting — a message, a user, a server, a DM</li>
@@ -177,59 +194,65 @@ export function TermsPage() {
       </ul>
       <p>
         We are building an in-app report button; until it ships, email is the
-        reporting channel and it is monitored. You can report without having an
-        account.
+        reporting channel. You can report without having an account.
       </p>
       <p>
-        <strong>What happens next.</strong> We acknowledge the report, review
-        the content and the account&apos;s history, and take one of the actions
-        listed above or close the report as no violation. We target an
-        acknowledgement within{" "}
-        <strong>{"{{STANDARD_REPORT_SLA_HOURS}}"}</strong> hours and a decision
-        within <strong>{"{{TAKEDOWN_SLA_HOURS}}"}</strong> hours, and we
-        prioritise reports involving minors, imminent physical danger, or
-        non-consensual intimate images — those target{" "}
-        <strong>{"{{URGENT_REPORT_SLA_HOURS}}"}</strong> hours. We will tell you
-        the outcome where we can do so without exposing another user&apos;s
-        personal data.
+        <strong>What happens next, honestly.</strong> One person reads the
+        reports. There is no moderation team, no rota and no out-of-hours cover,
+        so we are not going to publish response times we cannot keep. What is
+        true is this: reports are read and acted on as fast as one person
+        reasonably can, usually within a few days, and reports involving minors,
+        imminent physical danger, or non-consensual intimate images go to the
+        front of the queue. If we are away or swamped it takes longer. That is
+        not a target we are quietly missing — it is the shape of a one-person
+        project, and you should know it before you rely on us.
+      </p>
+      <p>
+        <strong>One thing has no caveat.</strong> Content that sexualises a
+        minor, and child sexual abuse material, are removed on sight, the
+        account is terminated, and the matter is reported to the competent
+        authorities. No queue, no timeline, no appeal.
+      </p>
+      <p>
+        We will tell you the outcome where we can do so without exposing another
+        user&apos;s personal data.
       </p>
       <p>
         Do not use reporting to harass someone. Repeated bad-faith reports are
         themselves a violation.
       </p>
 
-      <h2>Copyright and other legal takedown requests</h2>
+      <h2>Copyright and other legal notices</h2>
       <p>
         If you believe content on pqp.gg infringes your copyright or other
-        rights, send a notice to <strong>{"{{LEGAL_EMAIL}}"}</strong>{" "}
+        rights, send a notice to <strong>{"{{CONTACT_EMAIL}}"}</strong>{" "}
         identifying the work, the exact location of the content, your contact
         details, and a statement that you are the rights holder or authorised to
         act for them. We will review it and remove content where the claim is
         substantiated.
       </p>
       <p>
-        Brazilian law — in particular the{" "}
-        <strong>Marco Civil da Internet (Lei nº 12.965/2014)</strong> — sets
-        specific rules about when a platform must remove content and when it
-        becomes liable for content posted by its users, including the general
-        rule that removal follows a court order (with narrower rules for
-        non-consensual intimate content). Our procedure for receiving and acting
-        on judicial orders and out-of-court notices, and the address for service
-        of those notices, is{" "}
-        <strong>{"{{MARCO_CIVIL_NOTICE_PROCEDURE}}"}</strong>. This section has
-        not yet been reviewed by Brazilian counsel and does not attempt to
-        restate the statute.
+        Court orders and other formal legal notices go to the same address.
+        There is no registered office to serve papers at, because there is no
+        company — pqp.gg is run by an individual in the United Kingdom. Content
+        removal that the law of your country requires us to perform is something
+        we will do; a notice that simply asserts a right is something we will
+        read and judge.
       </p>
 
       <h2>Appeals</h2>
       <p>
         If we suspend or terminate your account or remove your content and you
         think we got it wrong, reply to the enforcement message or write to{" "}
-        <strong>{"{{APPEAL_EMAIL}}"}</strong> within 30 days. Tell us what was
-        actioned and why you believe it was a mistake. Where practical, someone
-        who was not involved in the original decision reviews the appeal, and we
-        target a response within <strong>{"{{APPEAL_SLA_DAYS}}"}</strong> days.
-        Decisions on accounts terminated for child safety reasons are final.
+        <strong>{"{{CONTACT_EMAIL}}"}</strong> within 30 days. Tell us what was
+        actioned and why you believe it was a mistake.
+      </p>
+      <p>
+        We will not pretend an appeal reaches an independent reviewer: the
+        person who made the first decision is the only person there is, and what
+        they will do is look at it again with what you have told them. There is
+        no promised turnaround. Decisions on accounts terminated for child
+        safety reasons are final.
       </p>
       <p>
         Appeals about actions a <em>server owner</em> took inside their own
@@ -249,17 +272,19 @@ export function TermsPage() {
       <p>
         Voice uses WebRTC. In the configuration pqp.gg runs today, audio travels
         directly between participants and is not routed through, recorded by, or
-        stored on our servers. Quality depends on your network and your peers,
-        and we do not guarantee uninterrupted audio. See the{" "}
+        stored on our servers. That design has a practical ceiling: every person
+        in a channel connects to every other one, so a busy voice channel gets
+        heavy on everybody&apos;s connection. Quality depends on your network
+        and your peers, and we do not guarantee uninterrupted audio. See the{" "}
         <Link to="/privacy">Privacy Policy</Link> for what this means for your
         data.
       </p>
 
       <h2>Termination by you</h2>
       <p>
-        You can stop using pqp.gg at any time. Self-serve account deletion is
-        not built yet; to have your account and personal data deleted, write to{" "}
-        <strong>{"{{PRIVACY_EMAIL}}"}</strong> and we will action it. See the{" "}
+        You can stop using pqp.gg at any time. To delete your account, use{" "}
+        <strong>Delete my account</strong> in Settings, under &quot;Your
+        data&quot;. It is permanent and there is no undo. See the{" "}
         <Link to="/privacy">Privacy Policy</Link> for what we delete and what we
         must keep.
       </p>
@@ -269,24 +294,26 @@ export function TermsPage() {
         The service is provided &quot;as is.&quot; To the fullest extent allowed
         by law, we disclaim warranties of merchantability, fitness for a
         particular purpose, and non-infringement. We do not promise the service
-        will be error-free or always available.
+        will be error-free or always available. Keep your own copies of anything
+        you would be upset to lose.
       </p>
 
       <h2>Limitation of liability</h2>
       <p>
-        To the fullest extent allowed by law, pqp and its operators are not
+        To the fullest extent allowed by law, pqp and its operator are not
         liable for indirect, incidental, special, or consequential damages, or
-        for loss of data, profits, or goodwill arising from use of pqp.gg. Our
-        total liability for any claim related to the hosted service is limited
-        to the greater of (a) amounts you paid us for the service in the 12
-        months before the claim, or (b) zero if the service was free.
+        for loss of data, profits, or goodwill arising from use of pqp.gg. The
+        service is free, so our total liability for any claim related to it is
+        limited to zero, and to whatever you have paid us if that ever changes.
       </p>
       <p>
         <strong>Nothing in these terms removes rights you have under mandatory
-        law</strong> — including the Brazilian Consumer Protection Code (Lei nº
-        8.078/1990) and the Lei Geral de Proteção de Dados (Lei nº 13.709/2018).
-        Where a clause above conflicts with a right you cannot waive, that right
-        wins and the rest of these terms still stand.
+        law.</strong> If you are in Brazil, that includes the Consumer
+        Protection Code (Lei nº 8.078/1990) and the Lei Geral de Proteção de
+        Dados (Lei nº 13.709/2018); if you are in the UK or the EU, it includes
+        your consumer and data-protection rights there. Where a clause above
+        conflicts with a right you cannot waive, that right wins and the rest of
+        these terms still stand.
       </p>
 
       <h2>Indemnity</h2>
@@ -297,11 +324,14 @@ export function TermsPage() {
 
       <h2>Governing law and jurisdiction</h2>
       <p>
-        These terms are governed by{" "}
-        <strong>{"{{GOVERNING_LAW}}"}</strong>, and disputes are subject to the
-        courts of <strong>{"{{FORUM_CITY_STATE}}"}</strong>. If you use pqp.gg
+        pqp.gg is operated from the United Kingdom. These terms are governed by
+        the <strong>laws of England and Wales</strong>, and disputes are subject
+        to the courts of <strong>England and Wales</strong>. If you use pqp.gg
         as a consumer, mandatory rules may let you bring a claim in the courts
-        of your own domicile regardless of that choice.
+        of the country you live in regardless of that choice — and Brazilian
+        users keep their rights under the Consumer Protection Code and the LGPD
+        whichever country the operator sits in. We are not going to argue
+        otherwise.
       </p>
 
       <h2>Privacy</h2>
@@ -316,26 +346,20 @@ export function TermsPage() {
         We may update these terms. Continued use after the &quot;Last
         updated&quot; date means you accept the new terms. For changes that
         materially reduce your rights we will give notice in the app or by email
-        before they take effect. If you disagree, stop using pqp.gg and ask us
-        to delete your account.
+        before they take effect. If you disagree, stop using pqp.gg and delete
+        your account.
       </p>
 
       <h2>Contact</h2>
-      <ul>
-        <li>
-          General and legal: <strong>{"{{LEGAL_EMAIL}}"}</strong>
-        </li>
-        <li>
-          Abuse, safety, and underage accounts:{" "}
-          <strong>{"{{ABUSE_EMAIL}}"}</strong>
-        </li>
-        <li>
-          Privacy and data rights: <strong>{"{{PRIVACY_EMAIL}}"}</strong>
-        </li>
-        <li>
-          Support: <strong>{"{{SUPPORT_EMAIL}}"}</strong>
-        </li>
-      </ul>
+      <p>
+        One address for all of it — support, abuse and safety reports, underage
+        accounts, privacy requests, security disclosures, legal notices and
+        appeals: <strong>{"{{CONTACT_EMAIL}}"}</strong>.
+      </p>
+      <p>
+        It is one person&apos;s inbox, and that is on purpose. Five more
+        addresses would mean five more inboxes nobody reads.
+      </p>
     </LegalPage>
   );
 }

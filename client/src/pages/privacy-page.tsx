@@ -5,46 +5,50 @@ export function PrivacyPage() {
   return (
     <LegalPage
       title="Privacy Policy — pqp"
-      description="How pqp.gg handles personal data under the LGPD: what we collect, our legal bases, international transfers, retention, and your art. 18 rights."
+      description="How pqp.gg handles personal data: what we collect, our legal bases, where it is processed, retention, and your rights under the LGPD and UK data protection law."
       path="/privacy"
       heading="Privacy Policy"
       updated="{{EFFECTIVE_DATE}}"
     >
       <p>
         This policy explains what personal data <strong>pqp.gg</strong> collects,
-        why, and what you can do about it. It is written against the{" "}
-        <strong>Lei Geral de Proteção de Dados (Lei nº 13.709/2018, LGPD)</strong>
-        . We have tried to describe the product as it actually works today,
-        including the parts that are not finished — where a control does not
-        exist yet, we say so instead of describing one we have not built.
+        why, and what you can do about it. We have tried to describe the product
+        as it actually works today, including the parts that are not finished —
+        where a control does not exist yet, we say so instead of describing one
+        we have not built.
       </p>
       <p>
-        If you self-host pqp, you are the <em>controlador</em> for your own
-        instance. This document still describes what the software stores, so you
-        can write your own policy from it.
+        If you self-host pqp, you are the controller for your own instance. This
+        document still describes what the software stores, so you can write your
+        own policy from it.
       </p>
 
       <h2>Who is responsible for your data</h2>
-      <ul>
-        <li>
-          <strong>Controlador (controller):</strong>{" "}
-          <strong>{"{{LEGAL_ENTITY_NAME}}"}</strong>, CNPJ{" "}
-          <strong>{"{{LEGAL_ENTITY_CNPJ}}"}</strong>,{" "}
-          <strong>{"{{LEGAL_ENTITY_ADDRESS}}"}</strong>
-        </li>
-        <li>
-          <strong>Encarregado pelo tratamento de dados pessoais (LGPD art.
-          41):</strong> <strong>{"{{DPO_NAME}}"}</strong> —{" "}
-          <strong>{"{{DPO_EMAIL}}"}</strong>
-        </li>
-        <li>
-          <strong>General privacy contact:</strong>{" "}
-          <strong>{"{{PRIVACY_EMAIL}}"}</strong>
-        </li>
-      </ul>
       <p>
-        The encarregado is the person you write to about your rights, and the
-        point of contact for the ANPD.
+        <strong>{"{{OPERATOR_NAME}}"}</strong> is the controller: one person in
+        the United Kingdom, running pqp.gg as a personal project rather than a
+        company. There is no privacy team and no appointed data protection
+        officer — appointing one would be theatre for a project this size. The
+        same person who wrote the code answers the data-protection questions,
+        and there is one address for it:{" "}
+        <strong>{"{{CONTACT_EMAIL}}"}</strong>. Wherever this policy says to
+        write to us, that is the address and that is who reads it.
+      </p>
+
+      <h2>Which law applies</h2>
+      <p>
+        This policy is written against the{" "}
+        <strong>Lei Geral de Proteção de Dados (Lei nº 13.709/2018, LGPD)</strong>
+        , because that is the law most of the people using pqp.gg are covered
+        by. Because the operator is in the United Kingdom,{" "}
+        <strong>UK data protection law — the UK GDPR and the Data Protection
+        Act 2018 — also applies</strong>.
+      </p>
+      <p>
+        We are not going to maintain two lists that say almost the same thing.
+        The rights described below are honoured for <em>everyone</em>, whichever
+        of the two laws happens to grant them to you, and where one gives you
+        something the other does not, you get it.
       </p>
 
       <h2>Age</h2>
@@ -52,7 +56,7 @@ export function PrivacyPage() {
         pqp.gg is for people <strong>18 and over</strong>. We do not knowingly
         process the personal data of children or adolescents. If you believe a
         minor is using pqp.gg, tell us at{" "}
-        <strong>{"{{ABUSE_EMAIL}}"}</strong> and we will terminate the account
+        <strong>{"{{CONTACT_EMAIL}}"}</strong> and we will terminate the account
         and delete the data. See the <Link to="/terms">Terms of Service</Link>{" "}
         for the eligibility rule.
       </p>
@@ -73,8 +77,8 @@ export function PrivacyPage() {
         verification. We do not ask for a document and we do not use an
         age-assurance provider, because that would mean holding far more personal
         data about you than an 18+ rule needs. An account blocked by this check
-        can still download its data and delete itself: your LGPD art. 18 rights
-        do not depend on being welcome.
+        can still download its data and delete itself: your rights do not depend
+        on being welcome.
       </p>
 
       <h2>What we collect</h2>
@@ -166,8 +170,8 @@ export function PrivacyPage() {
         </li>
         <li>
           <strong>No automated decisions about you.</strong> Nothing here
-          profiles you or decides anything about you automatically, so LGPD art.
-          20 review does not arise. Moderation decisions are made by people.
+          profiles you or decides anything about you automatically. Moderation
+          decisions are made by a person.
         </li>
       </ul>
 
@@ -195,7 +199,9 @@ export function PrivacyPage() {
           Google and Cloudflare.
         </li>
         <li>
-          <strong>Large calls.</strong> The software also supports a media server
+          <strong>Large calls.</strong> Because every participant connects
+          directly to every other one, this design only stretches so far before
+          the connections get heavy. The software also supports a media server
           (SFU) for bigger channels, which <em>would</em> place audio on a
           third-party server. That mode is <strong>not enabled</strong> on
           pqp.gg. If we turn it on, we will update this page before we do.
@@ -237,7 +243,7 @@ export function PrivacyPage() {
         </li>
         <li>
           <strong>Complying with the law and answering the authorities</strong> —
-          responding to lawful orders, tax and accounting duties.{" "}
+          responding to lawful orders and record-keeping duties.{" "}
           <em>Basis: compliance with a legal or regulatory obligation (art. 7,
           II).</em>
         </li>
@@ -256,15 +262,21 @@ export function PrivacyPage() {
         </li>
       </ul>
       <p>
-        Where we rely on legitimate interests, you can object — write to the
-        encarregado and we will look at the specific processing you are objecting
-        to.
+        Under UK law the same seven activities rest on the equivalent bases in
+        UK GDPR art. 6 — contract, legitimate interests, legal obligation, vital
+        interests and consent, in that order. The processing is the same either
+        way; only the article numbers change.
+      </p>
+      <p>
+        Where we rely on legitimate interests, you can object — write to{" "}
+        <strong>{"{{CONTACT_EMAIL}}"}</strong> and we will look at the specific
+        processing you are objecting to.
       </p>
 
       <h2>Who else sees your data</h2>
       <p>
-        We use operators (<em>operadores</em>) to run the service. They process
-        data on our instructions and for no other purpose:
+        We use third-party services to run pqp.gg. They process data on our
+        instructions and for no other purpose:
       </p>
       <ul>
         <li>
@@ -320,28 +332,25 @@ export function PrivacyPage() {
         personal data.
       </p>
 
-      <h2>International transfers</h2>
+      <h2>Where your data is processed</h2>
       <p>
-        <strong>Some of your data is processed outside Brazil.</strong> Clerk,
-        Cloudflare, our object-storage and STUN/TURN providers, and Google Fonts
-        operate globally and typically process data in the United States and
-        Europe. Our application servers and database run on{" "}
-        <strong>{"{{HOSTING_PROVIDER}}"}</strong> in{" "}
-        <strong>{"{{HOSTING_REGION}}"}</strong>; where that region is outside
-        Brazil, your messages and account data are stored abroad.
+        <strong>Your data is processed in several countries, and probably not
+        yours.</strong> Clerk, Cloudflare, our object-storage and STUN/TURN
+        providers, and Google Fonts operate globally and typically process data
+        in the United States and Europe. The application servers and database
+        run on <strong>{"{{HOSTING_PROVIDER}}"}</strong> in{" "}
+        <strong>{"{{HOSTING_REGION}}"}</strong>. The person who operates pqp.gg
+        is in the United Kingdom, so anything handled by a human is handled
+        there.
       </p>
       <p>
-        We are moving the application and database to a{" "}
-        <strong>São Paulo</strong> region — target{" "}
-        <strong>{"{{BR_MIGRATION_TARGET}}"}</strong> — so that message content
-        and account data are stored in Brazil. Third-party services such as Clerk
-        will still be international.
-      </p>
-      <p>
-        International transfers are made on the basis of{" "}
-        <strong>{"{{TRANSFER_SAFEGUARD}}"}</strong> under LGPD art. 33. Write to
-        the encarregado if you want details of the safeguards for a specific
-        provider.
+        The honest basis for those transfers: these are ordinary commercial
+        services, used on the published terms each of them offers, and it is
+        those terms that the transfers rest on. There is no bespoke transfer
+        agreement negotiated for pqp, because there is no company to sign one
+        and no lawyer to draft it. Running the database in a Brazilian region is
+        something we would like to do; there is no committed date, so we are not
+        going to invent one here.
       </p>
 
       <h2>How long we keep things</h2>
@@ -393,9 +402,10 @@ export function PrivacyPage() {
       <p>
         <strong>What survives your account being deleted.</strong> Deleting your
         account removes your profile, your settings and every message you wrote,
-        anywhere. A few records stay, each because LGPD art. 16 allows us to keep
-        data to comply with a legal obligation or to exercise rights in a
-        proceeding:
+        anywhere. A few records stay, each because the law allows data to be kept
+        where it is needed to comply with a legal obligation or to exercise
+        rights in a proceeding (LGPD art. 16; the UK GDPR has the same carve-out
+        in art. 17(3)):
       </p>
       <ul>
         <li>
@@ -427,12 +437,13 @@ export function PrivacyPage() {
       </ul>
       <p>
         Beyond those, we may keep the minimum needed to comply with a legal
-        obligation, or to exercise rights in a proceeding (LGPD art. 16).
+        obligation, or to exercise rights in a proceeding.
       </p>
 
       <h2>Your rights, and how to use them</h2>
       <p>
-        LGPD art. 18 gives you the rights below. The two heaviest ones —{" "}
+        LGPD art. 18 gives you the rights below, and UK GDPR arts. 15–21 give
+        you the same ones under different names. The two heaviest —{" "}
         <strong>getting a copy of your data, and deleting your account</strong> —
         are self-serve in the app, in <strong>Settings</strong> under{" "}
         <strong>&quot;Your data&quot;</strong>. Others are self-serve elsewhere
@@ -446,7 +457,7 @@ export function PrivacyPage() {
           in Settings, under &quot;Your data&quot;, builds a file of the account
           data, settings and messages we hold about you, including your 18+
           declaration. For anything that file does not cover, email{" "}
-          <strong>{"{{PRIVACY_EMAIL}}"}</strong>.
+          <strong>{"{{CONTACT_EMAIL}}"}</strong>.
         </li>
         <li>
           <strong>Correction of incomplete or out-of-date data (art. 18, III)
@@ -490,12 +501,12 @@ export function PrivacyPage() {
           to serve your request. Transfer the server to another member, or delete
           it, and then delete your account. A server nobody else is in is not a
           problem — it goes with the account. For anything this does not cover,
-          email <strong>{"{{PRIVACY_EMAIL}}"}</strong>.
+          email <strong>{"{{CONTACT_EMAIL}}"}</strong>.
         </li>
         <li>
           <strong>Information about who we share data with (art. 18, VII)</strong>{" "}
-          — the list is in &quot;Who else sees your data&quot; above; ask the
-          encarregado for more detail.
+          — the list is in &quot;Who else sees your data&quot; above; write to us
+          for more detail.
         </li>
         <li>
           <strong>Information about refusing consent and the consequences (art.
@@ -512,10 +523,10 @@ export function PrivacyPage() {
         <strong>What your export leaves out, and why.</strong> It contains the
         messages <em>you</em> wrote. It does not contain messages other people
         wrote, including the other half of your direct messages. Those words are
-        their personal data rather than yours — art. 18, II is a right of access
-        to data about <em>you</em>, and a message somebody else wrote is that
-        person&apos;s own expression. Leaving it out costs you very little: you
-        can still read every one of those messages in the app, exactly as you
+        their personal data rather than yours — a right of access is a right of
+        access to data about <em>you</em>, and a message somebody else wrote is
+        that person&apos;s own expression. Leaving it out costs you very little:
+        you can still read every one of those messages in the app, exactly as you
         always could. What changes is only whether somebody else&apos;s words
         become a file that can be forwarded, published or handed to a third party
         in one action. For the same reason, a report you filed lists what you
@@ -523,18 +534,20 @@ export function PrivacyPage() {
         In place of a transcript, the file lists every conversation you were part
         of, who else was in it, when it last saw traffic and how many of the
         messages were yours. If you genuinely need the other side — a court case,
-        a harassment complaint — write to the encarregado at{" "}
-        <strong>{"{{DPO_EMAIL}}"}</strong>, who weighs that request by hand.
-        There is no self-serve route to another person&apos;s messages, and there
-        should not be one.
+        a harassment complaint — write to{" "}
+        <strong>{"{{CONTACT_EMAIL}}"}</strong>, and that request is weighed by
+        hand. There is no self-serve route to another person&apos;s messages, and
+        there should not be one.
       </p>
       <p>
         <strong>How to make a request.</strong> Email{" "}
-        <strong>{"{{PRIVACY_EMAIL}}"}</strong> or the encarregado at{" "}
-        <strong>{"{{DPO_EMAIL}}"}</strong>, from the email address on your
+        <strong>{"{{CONTACT_EMAIL}}"}</strong> from the email address on your
         account, saying what you want. We may ask for information to confirm it
         is really you — we will not ask for more than we need. LGPD art. 19 gives
-        us up to <strong>15 days</strong> to provide a complete response.
+        us up to <strong>15 days</strong> for a complete response and UK law
+        allows a month; we work to the shorter one. These are statutory limits
+        rather than a service level we invented, and they are the only deadlines
+        on this site that we do not get to set.
       </p>
       <p>
         <strong>What we still cannot do.</strong> Deleting your account{" "}
@@ -547,9 +560,10 @@ export function PrivacyPage() {
         before you left, and in anything another member screenshotted.
       </p>
       <p>
-        You also have the right to complain to the{" "}
-        <strong>ANPD (Autoridade Nacional de Proteção de Dados)</strong> if you
-        think we have handled your data wrongly.
+        You also have the right to complain to a regulator if you think we have
+        handled your data wrongly: in Brazil the{" "}
+        <strong>ANPD (Autoridade Nacional de Proteção de Dados)</strong>, in the
+        UK the <strong>Information Commissioner&apos;s Office (ICO)</strong>.
       </p>
 
       <h2>Controls you have in the app right now</h2>
@@ -581,18 +595,20 @@ export function PrivacyPage() {
         Traffic is encrypted in transit. Voice audio is encrypted between
         participants. Attachment links are short-lived and signed rather than
         public. Our server refuses to fetch link previews from internal network
-        addresses. No system is perfectly secure; if you find a vulnerability,
-        please tell us at <strong>{"{{SECURITY_EMAIL}}"}</strong>. If a breach
-        creates a relevant risk to you, we will notify you and the ANPD as LGPD
-        art. 48 requires.
+        addresses. No system is perfectly secure, and this one is maintained by
+        one person with no security team behind them — if you find a
+        vulnerability, please tell us at{" "}
+        <strong>{"{{CONTACT_EMAIL}}"}</strong> before you tell anyone else. If a
+        breach creates a real risk to you, we will tell you and the relevant
+        regulator, as LGPD art. 48 and UK GDPR arts. 33–34 require.
       </p>
 
       <h2>Self-hosted instances</h2>
       <p>
         If you run pqp yourself, you choose the database, the Clerk application,
-        and the hosting, and you are the <em>controlador</em> for your users.
-        pqp.gg does not receive your users&apos; data. Tell your members how you
-        handle their information.
+        and the hosting, and you are the controller for your users. pqp.gg does
+        not receive your users&apos; data. Tell your members how you handle their
+        information.
       </p>
 
       <h2>Changes</h2>
@@ -603,18 +619,11 @@ export function PrivacyPage() {
       </p>
 
       <h2>Contact</h2>
-      <ul>
-        <li>
-          Encarregado / DPO: <strong>{"{{DPO_NAME}}"}</strong> —{" "}
-          <strong>{"{{DPO_EMAIL}}"}</strong>
-        </li>
-        <li>
-          Privacy requests: <strong>{"{{PRIVACY_EMAIL}}"}</strong>
-        </li>
-        <li>
-          Abuse and safety: <strong>{"{{ABUSE_EMAIL}}"}</strong>
-        </li>
-      </ul>
+      <p>
+        Privacy requests, abuse and safety, security reports, and anything else
+        on this page: <strong>{"{{CONTACT_EMAIL}}"}</strong>. One address, read
+        by the one person who runs pqp.gg.
+      </p>
     </LegalPage>
   );
 }
