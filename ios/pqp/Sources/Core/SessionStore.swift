@@ -139,9 +139,9 @@ final class SessionStore {
                 // in") while the API refuses it — a deadlock the user cannot
                 // escape. The concrete way this happens: a keychain session
                 // minted against a different Clerk instance (a dev build's
-                // pk_test surviving into a pk_live build). Sign the client out
-                // so the next tap starts clean, and say so without alarm.
-                try? await Clerk.shared.auth.signOut()
+                // pk_test surviving into a pk_live build). Purge it so the
+                // next tap starts clean, and say so without alarm.
+                await purgeClerkSession()
                 lastError = String(localized: "Signed out — sign in again to continue.")
             }
             phase = .onboarding
@@ -221,13 +221,31 @@ final class SessionStore {
         }
     }
 
+    /// Ends the Clerk session for real, whatever state it is in.
+    ///
+    /// `auth.signOut()` is only a network call against the *current* frontend
+    /// API — a keychain session minted by a different Clerk instance (a dev
+    /// build's pk_test surviving into a pk_live build) makes it 401 and throw,
+    /// leaving the dead session in the keychain and the sign-in sheet still
+    /// insisting "you're already signed in". This shipped as build 3: the
+    /// `try?` swallowed exactly that throw and nothing changed. When the
+    /// session survives the polite path, reconfigure with the same key —
+    /// `Clerk.reconfigure` is the SDK's public "clear local state" operation,
+    /// documented as requiring everyone to sign in again afterwards.
+    private func purgeClerkSession() async {
+        try? await Clerk.shared.auth.signOut()
+        if Clerk.shared.session != nil, let key = AppConfig.clerkPublishableKey {
+            try? await Clerk.reconfigure(publishableKey: key)
+        }
+    }
+
     func signOut() async {
         // Deliberately also forgets onboarding: signing out is the only way
         // back to a first-run state, and on a dev build that is how the intro
         // gets exercised.
         hasOnboarded = false
         if authMode == .clerk {
-            try? await Clerk.shared.auth.signOut()
+            await purgeClerkSession()
         }
         await realtime.stop()
         eventTask?.cancel()
