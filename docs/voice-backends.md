@@ -56,12 +56,32 @@ Restart the server and join a voice channel — the "mesh limit" warning disappe
 
 1. Client joins the voice room over `/ws` and receives `welcome` with its `peerId`.
 2. Client `POST /api/voice/token` `{ voiceChannelId, peerId }`.
-3. Server verifies the peer is live, owned by the caller, and in that channel, then mints a LiveKit JWT (room = channel id, identity = `peerId`, 6h TTL, publish/subscribe — covers mic and screen-share video alike).
+3. Server verifies the peer is live, owned by the caller, and in that channel, then mints a LiveKit JWT (room = channel id, identity = `peerId`, metadata = `{ userId }`, 15 min TTL, publish/subscribe — covers mic and screen-share video alike).
 4. Client connects to LiveKit and publishes the processed mic track; remote audio tracks are mapped back onto the same `RemotePeer[]` the mesh path produces. A screen share publishes a second track tagged `Track.Source.ScreenShare`, subscribed separately into `RemotePeer.screenStream`.
 
 `livekit-client` is loaded via dynamic `import()`, so mesh deployments never download it (it is emitted as a separate ~530 kB chunk).
 
 **Security:** the token endpoint refuses any `peerId` that is not a live voice peer belonging to the requesting user in the requested channel, so a caller cannot mint a token impersonating another participant.
+
+### Moderation must reach the SFU (`server/src/voice/admin.ts`)
+
+Mesh eviction drops a peer from the signaling map, which makes the other clients tear down their connections to it. With an SFU the media never touches the app server, so that alone does **nothing** to the call — a kicked or banned account stays in the LiveKit room and keeps talking. Mesh and SFU must never disagree about who belongs in a call.
+
+Every mesh eviction in `server/src/ws/voice.ts` therefore fires an SFU eviction beside it:
+
+| Trigger | Helper | SFU action |
+|---|---|---|
+| kick / ban, server leave, private-channel member removed | `evictVoiceUser` | remove that user's participants from the scoped rooms |
+| channel deleted, server deleted | `evictVoiceChannel` | remove every participant of the room |
+| channel turned private | `evictVoiceUsersExcept` | remove everyone not still on the access list |
+
+Three properties this depends on:
+
+- **The token carries `{ userId }` in participant metadata.** The LiveKit identity is a per-join `peerId`, so without it a ban could not name a participant whose peer id the acting instance never issued — i.e. anyone connected through another instance.
+- **Removal revokes the token** (`revokeTokenTs`). `removeParticipant` on its own only disconnects; LiveKit's own docs note the participant can re-join, and the token they already hold is all they need. The 15-minute TTL is the backstop for LiveKit servers too old to honour the field.
+- **It is a no-op without LiveKit config, and it never throws.** A mesh-only deployment makes no network call at all, and an unreachable SFU logs `[pqp] voice.sfuEvictFailed` rather than failing the moderation request — the ban is committed before the eviction runs and can never be unwound by it.
+
+Not covered: closing a group conversation (`DELETE /api/dms/:channelId`) and blocking a user do not evict voice on **either** path today.
 
 ## Cloudflare Realtime SFU — still a stub
 

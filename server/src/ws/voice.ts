@@ -14,6 +14,11 @@ import { isDmSendBlocked } from "../services/dms.js";
 import { getChannel, getChannelAudience } from "../services/servers.js";
 import { canAccessChannel } from "../services/users.js";
 import {
+  evictSfuRoom,
+  evictSfuUser,
+  evictSfuUsersExcept,
+} from "../voice/admin.js";
+import {
   getServerVoiceBackend,
   isLiveKitConfigured,
 } from "../voice/backends.js";
@@ -194,11 +199,30 @@ function removePeer(peerId: string) {
   void broadcastRoster(voiceChannelId);
 }
 
+/**
+ * EVERY EVICTION BELOW HAS TWO HALVES, AND BOTH ARE MANDATORY.
+ *
+ * The mesh half drops the peer from `peers`, which makes the other clients tear
+ * down their RTCPeerConnections to it. That is the whole story only while media
+ * is peer-to-peer. With LiveKit configured the audio never passes through this
+ * process, so the mesh half is a no-op on the actual call: the evicted account
+ * stays in the SFU room and keeps talking. `voice/admin.ts` is the other half.
+ *
+ * The SFU half is fired unconditionally — not "if we found local peers". A
+ * LiveKit call legitimately spans instances (see the note above `peers`), and a
+ * client that lost its WebSocket keeps its LiveKit connection, so an empty
+ * local roster is not evidence that the room is empty. It is also
+ * fire-and-forget and cannot reject, because these helpers run *after* the
+ * moderation action has already been committed: an SFU outage must not unwind
+ * a ban. See `voice/admin.ts` for the failure-mode contract.
+ */
+
 /** Drop every peer of a channel — used when a channel is deleted or made private. */
 export function evictVoiceChannel(voiceChannelId: string) {
   for (const peer of getRoomPeers(voiceChannelId)) {
     removePeer(peer.id);
   }
+  void evictSfuRoom(voiceChannelId);
 }
 
 /** Drop everyone from a channel's voice room except the given users. */
@@ -206,15 +230,25 @@ export function evictVoiceUsersExcept(
   voiceChannelId: string,
   allowedUserIds: Set<string>,
 ) {
+  // Snapshotted before any removal: this is what lets the SFU sweep identify a
+  // participant whose token predates `participantMetadataFor` (a session that
+  // survived a rolling deploy), and `removePeer` destroys the mapping.
+  const knownIdentities = identityMapFor(getRoomPeers(voiceChannelId));
+
   for (const peer of getRoomPeers(voiceChannelId)) {
     if (!allowedUserIds.has(peer.userId)) {
       removePeer(peer.id);
     }
   }
+  void evictSfuUsersExcept(voiceChannelId, allowedUserIds, knownIdentities);
 }
 
 /** Drop a specific user from a channel's voice room (kick / access revoked). */
 export function evictVoiceUser(userId: string, serverChannelIds?: Set<string>) {
+  const knownIdentities = identityMapFor(
+    [...peers.values()].filter((peer) => peer.userId === userId),
+  );
+
   for (const peer of [...peers.values()]) {
     if (peer.userId !== userId) {
       continue;
@@ -224,6 +258,20 @@ export function evictVoiceUser(userId: string, serverChannelIds?: Set<string>) {
     }
     removePeer(peer.id);
   }
+
+  // `undefined` scope means "every room they are in", which is what the SFU
+  // side has to be told explicitly — it cannot infer the scope from a local map
+  // that may not contain the participant at all.
+  void evictSfuUser(
+    userId,
+    serverChannelIds ? [...serverChannelIds] : null,
+    knownIdentities,
+  );
+}
+
+/** LiveKit identity (peer id) → user id, for peers this instance can see. */
+function identityMapFor(roster: VoicePeer[]): Map<string, string> {
+  return new Map(roster.map((peer) => [peer.id, peer.userId]));
 }
 
 /**

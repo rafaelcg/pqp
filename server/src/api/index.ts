@@ -630,10 +630,14 @@ router.post("/api/voice/token", async ({ req, user }) => {
   await requireChannelAccess(body.voiceChannelId, user.id);
 
   try {
+    // `peer.userId` — not `user.id` — only because the two were just proved
+    // equal above; keeping the token's identity and its metadata sourced from
+    // the same verified peer record is what stops them drifting apart.
     return await createLiveKitSession(
       body.voiceChannelId,
       body.peerId,
       peer.displayName,
+      peer.userId,
     );
   } catch (error) {
     console.error("[voice] token minting failed:", error);
