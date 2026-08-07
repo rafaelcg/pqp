@@ -69,11 +69,28 @@ function broadcastPresence(channelId: string) {
     })),
   });
 
-  for (const conn of connections.values()) {
-    if (conn.channelId === channelId && conn.socket.readyState === 1) {
+  // The recipients of a channel's presence are exactly the people present in
+  // it, so this walks the same index the payload was built from rather than
+  // every socket on the process.
+  for (const conn of present ?? []) {
+    if (conn.socket.readyState === 1) {
       conn.socket.send(payload);
     }
   }
+}
+
+/**
+ * The only way a connection may start viewing a channel. `conn.channelId` and
+ * the `channelPresence` index have to move together: fan-out reads the index,
+ * so a connection whose `channelId` claims a channel it is not indexed under
+ * would silently receive nothing said in it. Setting the field alone is the
+ * bug this helper exists to make impossible.
+ */
+function joinChannel(conn: ChatConnection, channelId: string): void {
+  const present = channelPresence.get(channelId) ?? new Set<ChatConnection>();
+  present.add(conn);
+  channelPresence.set(channelId, present);
+  conn.channelId = channelId;
 }
 
 function leaveChannel(conn: ChatConnection) {
@@ -112,6 +129,12 @@ function ensureConnection(socket: WebSocket, user: DbUser): ChatConnection {
  * Fan a message out to everyone currently viewing a channel. Exported so HTTP
  * routes (message edit / delete) can publish without duplicating the socket
  * bookkeeping.
+ *
+ * Fan-out goes through the `channelPresence` index rather than a scan of every
+ * connection on the process: a busy channel on a box holding thousands of
+ * sockets was costing one iteration per socket per message, when the work owed
+ * is one per viewer. `joinChannel` / `leaveChannel` are what keep that index
+ * equal to "every connection whose `channelId` is this channel".
  */
 export function broadcastToChannel(
   channelId: string,
@@ -119,13 +142,21 @@ export function broadcastToChannel(
   alsoSocket?: WebSocket,
 ): void {
   const payload = encode(message);
-  for (const conn of connections.values()) {
+  let sentToAlso = false;
+  for (const conn of channelPresence.get(channelId) ?? []) {
     if (conn.socket.readyState !== 1) {
       continue;
     }
-    if (conn.channelId === channelId || conn.socket === alsoSocket) {
-      conn.socket.send(payload);
+    if (conn.socket === alsoSocket) {
+      sentToAlso = true;
     }
+    conn.socket.send(payload);
+  }
+  // The sender hears their own message even when they are not viewing the
+  // channel — but only once, hence the flag: a sender who *is* viewing it was
+  // already served by the loop, and two copies would double-render the bubble.
+  if (alsoSocket && !sentToAlso && alsoSocket.readyState === 1) {
+    alsoSocket.send(payload);
   }
 }
 
@@ -287,10 +318,7 @@ export async function handleChatMessage(
       return;
     }
     leaveChannel(conn);
-    conn.channelId = payload.channelId;
-    const present = channelPresence.get(payload.channelId) ?? new Set();
-    present.add(conn);
-    channelPresence.set(payload.channelId, present);
+    joinChannel(conn, payload.channelId);
     broadcastPresence(payload.channelId);
     return;
   }
@@ -324,12 +352,10 @@ export async function handleChatMessage(
       userId: conn.user.id,
       displayName: conn.user.display_name,
     });
-    for (const other of connections.values()) {
-      if (
-        other !== conn &&
-        other.channelId === payload.channelId &&
-        other.socket.readyState === 1
-      ) {
+    // Same index, same reason as `broadcastToChannel`: this is the app's
+    // hottest fan-out and it must not walk every socket once per keystroke.
+    for (const other of channelPresence.get(payload.channelId) ?? []) {
+      if (other !== conn && other.socket.readyState === 1) {
         other.socket.send(encoded);
       }
     }
@@ -351,8 +377,15 @@ export async function handleChatMessage(
       return;
     }
 
+    // A client that posts without ever sending `join-channel` is still viewing
+    // the channel as far as every fan-out here is concerned, so it must land in
+    // the presence index too — assigning `channelId` alone used to work only
+    // because fan-out re-scanned that field, and would now drop every later
+    // message in this channel for this socket. No `broadcastPresence` on this
+    // path: it stays as quiet as it was, and the next real join or leave
+    // publishes the corrected roster.
     if (!conn.channelId) {
-      conn.channelId = payload.channelId;
+      joinChannel(conn, payload.channelId);
     }
 
     // A 1:1 the recipient had closed comes back when something is said in it.
@@ -461,8 +494,9 @@ export async function handleChatMessage(
       return;
     }
 
+    // Same implicit join as the message path, and index it for the same reason.
     if (!conn.channelId) {
-      conn.channelId = payload.channelId;
+      joinChannel(conn, payload.channelId);
     }
 
     const { added } = await toggleReaction(
