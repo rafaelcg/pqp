@@ -1,204 +1,151 @@
-# pqp — open-source Discord alternative
+<div align="center">
+
+# pqp
+
+**Voice, chat and screen sharing for your people. Make a server, share the link. That's it.**
 
 [![CI](https://github.com/rafaelcg/pqp/actions/workflows/ci.yml/badge.svg)](https://github.com/rafaelcg/pqp/actions/workflows/ci.yml)
-[![Deploy Web](https://github.com/rafaelcg/pqp/actions/workflows/deploy-web.yml/badge.svg)](https://github.com/rafaelcg/pqp/actions/workflows/deploy-web.yml)
+[![Release](https://img.shields.io/github/v/release/rafaelcg/pqp)](https://github.com/rafaelcg/pqp/releases/latest)
 
-> Hosted static site: [pqp-3yr.pages.dev](https://pqp-3yr.pages.dev) (Cloudflare Pages). See [docs/DEPLOY.md](./docs/DEPLOY.md). API/WebSocket are separate (e.g. Railway).
+[**pqp.gg**](https://pqp.gg) · [Download for desktop](https://github.com/rafaelcg/pqp/releases/latest) · [Architecture](./ARCHITECTURE.md) · [Deploy your own](./docs/DEPLOY.md)
 
-Real-time voice + text chat. Full mesh WebRTC per voice channel. Clerk auth. Postgres persistence. Self-host or use [pqp.gg](https://pqp.gg).
+</div>
 
-See [ARCHITECTURE.md](./ARCHITECTURE.md) for system design and [docs/PLAN_STATUS.md](./docs/PLAN_STATUS.md) for what's done vs left.
+---
 
-**Model:** servers (invite codes) → public/private channels → text + mesh voice. Roles: owner / admin / member. Usernames: `name#1234`.
+Open-source, Discord-like, and small enough to actually read. Use the hosted
+service at [pqp.gg](https://pqp.gg) or self-host an independent copy — your own
+URL, your own database, your own rules.
+
+**Model:** servers (invite links) → public/private channels → text + voice.
+Roles owner / admin / member. Handles are `name#1234`.
+
+## What it does
+
+|  |  |
+|---|---|
+| **Voice channels** | Peer-to-peer mesh (5–8 per channel), or a LiveKit SFU for bigger rooms. Push-to-talk, per-peer volume, device pickers. |
+| **Screen sharing** | One presenter per channel, from desktop or iPhone Safari. |
+| **Chat** | Markdown, replies, reactions, pins, edits, typing, unread and mention badges. Link previews, GIF picker. |
+| **Search** | Full-text across the server, stemmed for Portuguese *and* English, accent-insensitive. |
+| **DMs and groups** | Direct messages and group DMs up to 10, found by handle. |
+| **Attachments** | Images inline, video/audio as tap-to-play (nothing downloads until pressed). Direct-to-storage uploads; the API never touches the bytes. |
+| **Presence and status** | Online / idle / do-not-disturb / invisible, with shape-differentiated dots. |
+| **Moderation** | Timeouts, kick, ban (with voice ejection), delete, pin, in-app reporting with an evidence trail, per-server audit log. |
+| **Safety** | 18+ age gate, image scanning hooks, LGPD self-serve export and deletion. |
+| **Two languages** | pt-BR and English through the whole funnel, legal pages included — with drift between them failing CI. |
+| **Installable** | PWA on mobile, signed + notarized desktop app with auto-update. |
 
 ## Quick start (development)
 
-### Prerequisites
-
-- Node 20+
-- pnpm 9+
-- PostgreSQL
-- [Clerk](https://clerk.com) application (publishable + secret keys)
-
-## Local dev without Clerk
-
-For quick testing, enable auth bypass in **both** root `.env` and `client/.env`:
-
-```
-DEV_AUTH_BYPASS=true
-VITE_DEV_AUTH_BYPASS=true
-```
-
-Restart the server after changing `.env`. You'll auto-login as **Dev User** — no Clerk account needed.
-
-> The bypass accepts a fixed, publicly known token. The server refuses to start with it enabled
-> when `NODE_ENV=production`, and CI never builds artifacts with it on.
+Prereqs: Node 20+, pnpm 10, Docker (for Postgres).
 
 ```bash
 pnpm install
 cp .env.example .env
 cp .env.example client/.env
 
-# Clerk (run in your host terminal — see docs/CLERK_SETUP.md)
-pnpm clerk:login
-pnpm clerk:init
-pnpm clerk:env
-
-# Start Postgres (Docker)
 docker compose up -d postgres
-
 pnpm dev
+# client http://localhost:5173 · api http://localhost:3001 · ws /ws
 ```
 
-- **Client:** http://localhost:5173
-- **Server:** http://localhost:3001 (API + WebSocket at `/ws`)
+**No Clerk account?** Set `DEV_AUTH_BYPASS=true` in `.env` and
+`VITE_DEV_AUTH_BYPASS=true` in `client/.env`, restart, and you're signed in as
+a local dev user. The bypass refuses to run when `NODE_ENV=production`.
 
-### First use
+With Clerk: `pnpm clerk:login && pnpm clerk:init && pnpm clerk:env` — see
+[docs/CLERK_SETUP.md](./docs/CLERK_SETUP.md).
 
-1. Sign in (or use dev bypass)
-2. Create a server, or **Join** with an invite link (person icon on the rail)
-3. **Invite** from the channel sidebar to copy a shareable `/app/invite/<code>` link
-4. Chat in `#general` — markdown, `@username` mentions, edit/delete, reactions, typing
-   indicators, unread badges. Shift+Enter adds a line
-5. Voice channels keep chat beside them, and a call survives navigating to another channel
-6. Settings (bottom-left gear): profile, input/output devices, mute-on-join
-7. Server settings (gear beside the server name): rename, transfer ownership, delete;
-   Members gives owners and admins kick/ban
+## Configuration
 
-## Environment variables
+Everything lives in [.env.example](./.env.example), documented inline. The ones
+that matter:
 
-### Server (`.env`)
+| Variable | What it does |
+|---|---|
+| `DATABASE_URL` | Postgres. `initDb()` applies the schema on boot, idempotently. |
+| `CLERK_SECRET_KEY` / `VITE_CLERK_PUBLISHABLE_KEY` | Auth. |
+| `CORS_ALLOWED_ORIGINS` | Required on any public deploy — empty falls open to `*` for local dev. |
+| `TRUST_PROXY` | Set behind Railway/Fly/Cloudflare, or every client shares one rate-limit bucket. |
+| `TURN_URL` / `TURN_USERNAME` / `TURN_CREDENTIAL` | Voice across NATs. Served via `/api/ice-servers`. |
+| `LIVEKIT_URL` / `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` | Turns on the SFU; the server advertises it, no client rebuild. |
+| `S3_*` | R2/MinIO attachments. Off entirely when unset. |
+| `CONTENT_SCAN_PROVIDER` / `OPENAI_API_KEY` | Image safety scanning at claim time. |
+| `CLUSTER_BUS=postgres` | Fans chat out over LISTEN/NOTIFY for multi-instance. Off = exactly today's single-process behaviour. |
 
-| Variable | Required | Description |
+## Voice backends
+
+| Mode | Capacity | Notes |
 |---|---|---|
-| `DATABASE_URL` | Yes | PostgreSQL connection string |
-| `CLERK_SECRET_KEY` | Yes | Clerk secret key (unless `DEV_AUTH_BYPASS`) |
-| `PORT` | No | Default `3001` |
-| `CORS_ALLOWED_ORIGINS` | No | Comma-separated CORS allowlist. Empty = permissive `*`; **set it on any public deploy** |
-| `TRUST_PROXY` | No | Set `true` on Railway/Fly/Cloudflare so rate limiting reads `X-Forwarded-For`; without it every client shares one bucket |
-| `PG_POOL_MAX` | No | Postgres pool size, default `10` |
-| `GIPHY_API_KEY` | No | Enables the composer's GIF picker. Stays server-side — never give it a `VITE_` prefix. Unset: `/api/gifs/*` returns `503` and the client hides the button. Search is forced to `rating=pg-13` |
-| `DEV_AUTH_BYPASS` | No | Local only; rejected when `NODE_ENV=production` |
-
-### Client (`client/.env`)
-
-| Variable | Required | Description |
-|---|---|---|
-| `VITE_CLERK_PUBLISHABLE_KEY` | Yes | Clerk publishable key |
-| `VITE_API_URL` | No | API base (empty = same origin / Vite proxy) |
-| `VITE_WS_URL` | No | WebSocket URL (empty = `ws(s)://host/ws`) |
-| `VITE_TURN_URL` | No | TURN for mesh voice across NATs |
-| `VITE_TURN_USERNAME` | No | TURN username |
-| `VITE_TURN_CREDENTIAL` | No | TURN credential |
-| `VITE_VOICE_BACKEND` | No | `mesh` (default), `cloudflare-sfu`, `livekit` |
+| Mesh (default) | ~5–8 per channel | P2P; media never touches the server. TURN only across strict NATs. |
+| LiveKit SFU | Dozens+ | Implemented and verified end to end. A room's transport is decided by the server and pinned — no silent mesh/SFU splits. |
+| Cloudflare Realtime | — | Still a stub; falls back to mesh. |
 
 ## Self-host
 
-### Docker Compose
-
 ```bash
-cp .env.example .env
-# Set DATABASE_URL, CLERK keys, TURN vars
-docker compose up -d
+cp .env.example .env   # set DATABASE_URL, Clerk keys, TURN
+docker compose up -d   # api + ws + built client on :3001
 ```
 
-App serves API, WebSocket, and built client on port 3001.
+Or deploy the API to [Fly.io](./docs/deploy-fly.md) / [Railway](./docs/deploy-railway.md)
+and the static client to Cloudflare Pages ([docs/DEPLOY.md](./docs/DEPLOY.md)).
+A self-host is an independent copy — own URL, data, and Clerk instance, not
+linked to pqp.gg.
 
-### Railway
+## Desktop and mobile
 
-Use the [Railway template](./railway.toml) — deploy from repo, attach Postgres plugin, set env vars.
-
-You get an **independent copy**: own URL, data, and Clerk instance. Not linked to pqp.gg.
-
-## Voice limits
-
-| Mode | Capacity | Cost |
-|---|---|---|
-| Mesh (default) | ~5–8 per voice channel | Free (P2P + optional TURN) |
-| Cloudflare SFU (hosted, Phase 5) | Dozens+ | $0.05/GB after 1 TB/mo free |
-| LiveKit (self-host, Phase 5) | Dozens+ | OSS + your infra |
+- **Desktop:** [latest release](https://github.com/rafaelcg/pqp/releases/latest) —
+  macOS signed and notarized with auto-update; Windows/Linux build unsigned
+  (SmartScreen will warn). See [docs/DESKTOP.md](./docs/DESKTOP.md).
+- **Mobile:** install the PWA from the browser ([docs/PWA.md](./docs/PWA.md)).
+  A native iOS app lives in [`ios/`](./ios) and is not yet shipped.
 
 ## API
 
-| Method | Path | Description |
-|---|---|---|
-| GET / PATCH | `/api/me` | Current user / update profile |
-| GET / POST | `/api/servers` | List / create servers |
-| PATCH / DELETE | `/api/servers/:id` | Rename, transfer ownership / delete |
-| GET | `/api/servers/:id/unread` | Per-channel unread + mention counts |
-| GET / POST | `/api/servers/:id/channels` | List / create channels |
-| GET / POST | `/api/servers/:id/invites` | List / create invites |
-| DELETE | `/api/servers/:id/invites/:inviteId` | Revoke an invite |
-| GET | `/api/servers/:id/members` | Members |
-| PATCH / DELETE | `/api/servers/:id/members/:userId` | Change role / kick or ban |
-| GET | `/api/servers/:id/bans` | Ban list |
-| DELETE | `/api/servers/:id/bans/:userId` | Unban |
-| PATCH / DELETE | `/api/channels/:id` | Update / delete channel |
-| GET / POST / DELETE | `/api/channels/:id/members` | Private channel access list |
-| GET | `/api/channels/:id/messages` | History (`?limit=`, `?before=`) |
-| POST | `/api/channels/:id/read` | Mark read |
-| PATCH / DELETE | `/api/messages/:id` | Edit / delete a message |
-| GET / POST | `/api/invites/:code` | Preview / redeem an invite |
-| GET | `/api/gifs/config` | Whether GIF search is configured |
-| GET | `/api/gifs/search`, `/api/gifs/trending` | GIF proxy (`?q=`, `?limit=`), `503` without `GIPHY_API_KEY` |
-| GET | `/api/ice-servers` | ICE / TURN config |
-| GET / POST | `/api/voice/backend`, `/api/voice/token` | SFU discovery and session |
-
-All endpoints require `Authorization: Bearer <clerk_session_token>`. Requests are rate
-limited per identity; exceeding it returns `429` with `Retry-After`.
-
-### Realtime (`/ws`)
-
-First message must be `{ type: "auth", token }`. After `{ type: "ready" }` the socket carries
-chat (`join-channel`, `message-create`, `reaction-toggle`, `typing`), voice signalling
-(`join-voice-room`, `offer`, `answer`, `ice-candidate`), and server pushes
-(`message-broadcast`, `message-update`, `message-delete`, `presence-update`,
-`typing-broadcast`, `channel-activity`, `voice-roster`). `{ type: "ping" }` → `{ type: "pong" }`
-keeps proxies from dropping idle connections; the client reconnects with backoff on any drop.
-
-## Electron
-
-```bash
-# Terminal 1
-pnpm dev
-
-# Terminal 2 — waits for Vite on :5173
-pnpm electron:dev
-```
-
-Loads the web client in a desktop shell. See [`electron/README.md`](electron/README.md) for remote URL, static packaging, and deep links (`pqp://`).
-
-## Plus / Pro (future)
-
-Hosted tiers on pqp.gg via Clerk Organizations + Billing. Self-host remains unlimited OSS. Not implemented yet — see ARCHITECTURE.md.
+REST under `/api/*` (Bearer auth, rate-limited per identity) and a WebSocket at
+`/ws` (`{type:"auth",token}` first, then chat, presence and voice signalling).
+The full route list lives in [`server/src/api/index.ts`](./server/src/api/index.ts);
+the wire contracts are the Zod schemas in [`packages/shared/`](./packages/shared/src).
 
 ## Scripts
 
 | Command | Description |
 |---|---|
-| `pnpm dev` | Start client + server |
-| `pnpm build` | Build all packages |
-| `pnpm test` | Run the test suite |
-| `pnpm typecheck` | Typecheck every package |
-| `pnpm lint` | ESLint across the repo |
-| `pnpm start` | Run production server (after build) |
-| `pnpm electron:dev` | Open Electron shell against Vite |
-| `pnpm electron:dist` | Build client + package Electron app |
-
-## Tests
-
-```bash
-docker compose up -d postgres
-createdb pqp_test  # or: docker compose exec postgres psql -U pqp -c 'CREATE DATABASE pqp_test'
-DATABASE_URL=postgresql://pqp:pqp@localhost:5432/pqp_test pnpm test
-```
-
-Unit tests run anywhere. The API authorization tests need a database and **skip** without
-`DATABASE_URL` — CI always provides one, so they always run there.
+| `pnpm dev` | Client + server |
+| `pnpm test` | Every package's suite (DB-backed tests need Postgres) |
+| `pnpm typecheck` / `pnpm lint` | The obvious |
+| `pnpm load:chat` | Chat throughput harness against a built server |
+| `pnpm soak:voice` | Voice connection soak |
+| `pnpm electron:dev` / `electron:dist` | Desktop shell against Vite / packaged build |
 
 ## Known limitations
 
-- Mesh voice ~5–8 users per channel (LiveKit SFU lifts this; Cloudflare Realtime is still a stub)
-- No DMs, no file or image uploads, no message search
-- No mobile app yet
-- Rate limiting and presence are in-process, so the API is single-instance until they move to Redis
+- **Mesh voice tops out at ~5–8 per channel.** Configure `LIVEKIT_*` to lift it;
+  Cloudflare Realtime remains a stub.
+- **Single instance unless you opt in.** Chat can go multi-instance with
+  `CLUSTER_BUS=postgres`, but mesh voice pins the deployment to one instance —
+  multi-instance voice requires the SFU. Rate limits stay per-instance either way.
+- **No camera video** in voice channels yet — screen share only.
+- **No push notifications yet** — an open tab raises desktop notifications, a
+  closed phone hears nothing.
+- **No friend system, threads, or AutoMod** — see
+  [docs/DISCORD_GAPS.md](./docs/DISCORD_GAPS.md) for the honest census.
+
+## Trust & safety
+
+18+ only, self-declared at first use. In-app reporting routes DM reports to
+instance moderators, never server admins. The illegal-content risk assessment,
+content-safety runbook and moderation posture live in
+[docs/RISK_ASSESSMENT.md](./docs/RISK_ASSESSMENT.md) and
+[docs/CONTENT_SAFETY.md](./docs/CONTENT_SAFETY.md). Terms and privacy are
+bilingual at [pqp.gg/terms](https://pqp.gg/terms) and
+[pqp.gg/privacy](https://pqp.gg/privacy).
+
+## License
+
+**No license file yet — which means, despite everything above, this is not
+legally open source until one lands.** Without a license, default copyright
+applies and self-hosting is not actually permitted. Choosing one (MIT for
+maximum adoption, AGPL to keep hosted forks honest) is an open decision.
