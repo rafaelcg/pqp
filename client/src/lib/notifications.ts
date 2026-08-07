@@ -570,6 +570,30 @@ export interface ActivityContext {
 }
 
 /**
+ * Whether the account is currently on Do Not Disturb.
+ *
+ * THIS IS WHAT MAKES DND A BEHAVIOUR RATHER THAN A RED DOT. Everything else
+ * about status is something other people see; this is the half the person who
+ * set it actually feels, and without it "do not disturb" would disturb them
+ * exactly as much as before while telling everybody else it did not.
+ *
+ * A module-level flag rather than a field on `NotificationState`: that state is
+ * persisted to localStorage and synced as a preference from `adoptNotificationPreferences`,
+ * and DND already has its own home in `user_preferences.status`. Two writers for
+ * one value would eventually disagree about which is the truth.
+ *
+ * It suppresses the *interruption*, not the information: unread badges, mention
+ * counts and the title badge are all untouched, so nothing is missed — it is
+ * waiting when you come back, which is the difference between "do not disturb"
+ * and "mute".
+ */
+let doNotDisturb = false;
+
+export function setDoNotDisturb(enabled: boolean): void {
+  doNotDisturb = enabled;
+}
+
+/**
  * Record activity in a channel and interrupt the user if it earns it.
  *
  * The first message in a quiet channel notifies immediately; anything within
@@ -580,6 +604,9 @@ export function notifyChannelActivity(
   activity: ChannelActivity,
   context: ActivityContext,
 ): void {
+  if (doNotDisturb) {
+    return;
+  }
   if (!state.desktop || notificationPermission() !== "granted") {
     return;
   }

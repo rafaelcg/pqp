@@ -36,6 +36,183 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS dm_privacy TEXT NOT NULL
   DEFAULT 'server_members'
   CHECK (dm_privacy IN ('everyone', 'server_members', 'nobody'));
 
+-- The 18+ age gate. The Terms state a hard 18 minimum and that accounts found
+-- to be under it are terminated; these three columns are what makes that claim
+-- true of the product rather than only of the page.
+--
+-- WHAT IS STORED, AND WHY IT IS NOT EVERYONE'S DATE OF BIRTH (LGPD art. 6, III
+-- — necessidade). The purpose here is one yes/no: did this account declare an
+-- age of at least eighteen. Once that is answered, an adult's exact date of
+-- birth adds nothing to the purpose and a great deal to the risk — a full DOB
+-- is a strong identifier and a routine knowledge-based-authentication factor
+-- somewhere else. So a *passing* declaration is reduced on the spot to a
+-- boolean plus the moment of the check, and the date itself is never written.
+-- The boolean and the timestamp are what demonstrate diligence: they say the
+-- check ran, when, and what it concluded, which is the whole of what an
+-- operator or a regulator needs to see for an account that is allowed in.
+--
+-- A *failing* declaration keeps the date, because there it is the evidence for
+-- an irreversible sanction. The appeals path in the Terms is somebody writing
+-- "I typed the wrong year"; with only a boolean there is nothing to review, and
+-- reviewing it is the difference between an appeal and a form letter. It is the
+-- narrower retention of the two — the small set of blocked accounts, not the
+-- whole user table.
+--
+-- All three live on `users` so that deleting the row (LGPD art. 18, VI) takes
+-- them with it. There is deliberately no second table to remember.
+--
+-- EXISTING ACCOUNTS. Every row that predates this migration reads NULL, which
+-- is `pending`, which means prompted on next request. They are NOT
+-- grandfathered: an account created before the gate is exactly an account whose
+-- age was never asked, and the Terms make no exception for when you signed up.
+-- The cost is one dialog for everybody; the alternative is a permanent cohort
+-- the gate does not cover.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS age_checked_at TIMESTAMPTZ;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS age_check_passed BOOLEAN;
+-- Retained only when `age_check_passed` is FALSE — see above.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS age_check_dob DATE;
+
+-- The two answer columns are written together or not at all, and the whole "one
+-- attempt only" rule is expressed as `WHERE age_checked_at IS NULL`. If those
+-- two ever disagreed, a blocked account would read as never-asked and get a
+-- second try — which is the one failure that empties this feature of meaning.
+-- ADD CONSTRAINT is not idempotent, so this uses the same DROP-then-ADD block
+-- the other constraints in this file use.
+DO $$
+BEGIN
+  ALTER TABLE users DROP CONSTRAINT IF EXISTS users_age_check_complete;
+  ALTER TABLE users
+    ADD CONSTRAINT users_age_check_complete
+    CHECK ((age_checked_at IS NULL) = (age_check_passed IS NULL));
+EXCEPTION
+  WHEN others THEN NULL;
+END $$;
+
+-- pqp-email-scrub: take the email addresses back out of the rows that already
+-- have them.
+--
+-- `auth/clerk.ts` used to end its display-name chain at
+-- `?? primaryEmailAddress?.emailAddress`, so every Clerk account with no name
+-- set — which is every account created by "continue with email" — was written
+-- in here as its own address. That address was then rendered as the author of
+-- every message, shown in the voice roster, and slugified into the handle other
+-- people type to mention them (`rafaelcg@gmail.com` -> `rafaelcg_gmail_com`).
+-- The code path is fixed; these are the rows it already wrote, and they stay
+-- public until something rewrites them.
+--
+-- WHAT COUNTS AS AN EMAIL HERE. The whole trimmed value, anchored at both ends,
+-- no whitespace anywhere, a non-empty local part, and a dot plus two or more
+-- letters at the end. That is deliberately narrow, because a false positive
+-- destroys a real person's chosen name: "Dave @ Acme", "@rafa", "M@rio" and
+-- "meet me @ 5.30" all contain an `@` and none of them match. The same rule is
+-- written in TypeScript as `looksLikeEmailAddress` in services/users.ts —
+-- change one and change the other.
+--
+-- WHAT THE ROW BECOMES. Exactly what `placeholderDisplayName` would have
+-- produced for that account: `User` plus the first four hex of sha256 over the
+-- Clerk id. Same input, same output, so a scrubbed row is indistinguishable
+-- from one created after the fix, and nothing about the account leaks — the
+-- suffix is a hash, and it exists only so that nameless accounts stay
+-- distinguishable from each other on screen.
+--
+-- THE USERNAME IS ONLY REWRITTEN WHEN IT IS DEMONSTRABLY DERIVED, i.e. when it
+-- is character-for-character what `slugifyUsername` would have made of that
+-- address, or that slug with the `_xyz` suffix `deriveHandle` adds when a base
+-- is full. A handle the person picked themselves is left alone even on a
+-- contaminated row: it is the name other people already know them by, and this
+-- migration has no business guessing at it. The known gap is a non-ASCII local
+-- part — the TypeScript slug folds accents (NFD) and this SQL does not, so
+-- `joão@…` would fail the equality test and keep its handle. The display name,
+-- which is the disclosure that was actually on screen, is scrubbed regardless.
+--
+-- IDEMPOTENCE. The predicate is self-limiting — after one pass no row matches —
+-- but that is not the reason this is safe to leave in a file that runs on every
+-- boot. The reason is the fingerprint: without it, a user who later sets their
+-- display name to their own address *on purpose* would have it silently
+-- rewritten by the next deploy. The marker in the column comment says the
+-- cleanup has run, and changing any part of the rule above changes the marker
+-- and re-runs it — the same guard shape as the search-vector migration below.
+DO $$
+DECLARE
+  -- The rule as one string. The fingerprint is taken over this, so a change to
+  -- the match, the replacement name, or the handle test all re-arm the pass.
+  email_re CONSTANT TEXT := '^[^[:space:]@]+@[^[:space:]@]+\.[a-z]{2,}$';
+  name_rule CONSTANT TEXT := 'User <sha256(clerk_id)[1..4]>';
+  handle_rule CONSTANT TEXT := 'username = slug(display_name) | left(slug,28)_[a-z0-9]{3}';
+  marker CONSTANT TEXT := 'pqp-email-scrub '
+    || md5(email_re || '|' || name_rule || '|' || handle_rule);
+  col_attnum SMALLINT;
+  row_ users%ROWTYPE;
+  digest TEXT;
+  base TEXT;
+  candidate TEXT;
+  probe INT;
+  scrubbed INT := 0;
+BEGIN
+  SELECT a.attnum INTO col_attnum FROM pg_attribute a
+  WHERE a.attrelid = 'users'::regclass AND a.attname = 'display_name'
+    AND NOT a.attisdropped;
+
+  IF col_description('users'::regclass, col_attnum) IS NOT DISTINCT FROM marker THEN
+    RETURN; -- already scrubbed under this exact rule
+  END IF;
+
+  -- FOR UPDATE so two servers booting at once cannot both rewrite the same row:
+  -- the loser blocks, then re-evaluates the predicate under READ COMMITTED and
+  -- finds the row no longer matches.
+  FOR row_ IN
+    SELECT * FROM users
+    WHERE is_webhook = FALSE
+      -- A webhook's name was typed by whoever created it, not derived from an
+      -- identity provider, so it is not this migration's to rewrite.
+      AND display_name ~* email_re
+    FOR UPDATE
+  LOOP
+    digest := encode(sha256(convert_to(row_.clerk_id, 'UTF8')), 'hex');
+
+    -- `slugifyUsername`, restated: lowercase, every run of anything outside
+    -- [a-z0-9_] to one underscore, cut to 32, then trim the edges.
+    base := regexp_replace(
+              left(regexp_replace(lower(row_.display_name), '[^a-z0-9_]+', '_', 'g'), 32),
+              '^_+|_+$', '', 'g');
+
+    candidate := NULL;
+    IF row_.username IS NOT NULL AND base <> '' AND (
+         row_.username = base
+         OR row_.username ~ ('^' || left(base, 28) || '_[a-z0-9]{3}$')
+       ) THEN
+      -- `user_<digest>`, the handle this account would have been given had it
+      -- signed up after the fix. Widen the digest on the (negligible) chance
+      -- that another scrubbed row already holds this exact name and number.
+      FOR probe IN 4..16 LOOP
+        candidate := 'user_' || left(digest, probe);
+        EXIT WHEN NOT EXISTS (
+          SELECT 1 FROM users u
+          WHERE u.username = candidate
+            AND u.discriminator IS NOT DISTINCT FROM row_.discriminator
+            AND u.id <> row_.id);
+        candidate := NULL;
+      END LOOP;
+      -- Unreachable short of 13 colliding digests; the id cannot collide.
+      IF candidate IS NULL THEN
+        candidate := left('user_' || replace(row_.id::text, '-', ''), 32);
+      END IF;
+    END IF;
+
+    UPDATE users
+    SET display_name = 'User ' || left(digest, 4),
+        username = COALESCE(candidate, username)
+    WHERE id = row_.id;
+    scrubbed := scrubbed + 1;
+  END LOOP;
+
+  IF scrubbed > 0 THEN
+    RAISE NOTICE 'pqp: removed an email address from % user row(s)', scrubbed;
+  END IF;
+
+  EXECUTE format('COMMENT ON COLUMN users.display_name IS %L', marker);
+END $$;
+
 -- Blocking is one-directional (blocker → blocked) and self-serve. It exists
 -- because a DM is a contact channel nobody else moderates: every other sanction
 -- in the product is something a moderator does on a server's behalf, and none
@@ -62,6 +239,74 @@ CREATE TABLE IF NOT EXISTS user_preferences (
   settings   JSONB NOT NULL DEFAULT '{}'::jsonb,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- One-shot data migrations, by name.
+--
+-- Everything else in this file is a *structural* statement that is safe to
+-- replay: CREATE TABLE IF NOT EXISTS, ADD COLUMN IF NOT EXISTS, DROP-then-ADD
+-- for constraints. A backfill is not like that. It writes rows whose meaning
+-- depends on *when* it ran, so replaying it on every boot would keep applying
+-- yesterday's answer to accounts created since. This table is what makes
+-- "already done" a fact the next boot can read.
+CREATE TABLE IF NOT EXISTS data_migrations (
+  name       TEXT PRIMARY KEY,
+  applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Grandfather every account that existed before first-run onboarding shipped.
+--
+-- Onboarding runs for a user whose preferences carry no `onboardedAt`. Without
+-- this block that is every account ever created, so the day it deploys, every
+-- existing user signs in and is handed a wizard about a handle they have been
+-- using for months — which is exactly the surprise the flow exists to prevent.
+--
+-- Marking them instead of dating them: `users.created_at` is right here and it
+-- is tempting to write `WHERE created_at < <deploy time>`, but that constant has
+-- to be guessed at authoring time and is wrong on every self-hosted instance
+-- that deploys later. "Whoever already existed the first time this ran" needs no
+-- constant and is correct on every instance.
+--
+-- Runs exactly once per database. On a fresh one it marks nothing and records
+-- itself, which is also correct: there is nobody to grandfather, and everyone
+-- who signs up afterwards should see the flow.
+--
+-- ONE EXCEPTION, AND IT IS THE POINT. An account whose display name is still
+-- `placeholderDisplayName` — `User` plus four hex — has provably never been
+-- asked what it wants to be called. Either nothing was derivable from its
+-- identity provider, or the `pqp-email-scrub` pass above just took an address
+-- out of that column. Age is the wrong test for those: they are old accounts in
+-- exactly the state onboarding exists to fix, and grandfathering them would
+-- leave a permanent cohort called "User 3f9a" with no prompt to fix it. They are
+-- left unmarked, so they get the flow once — and finishing or skipping it writes
+-- the key, so it is once and not every session. This block runs AFTER the scrub
+-- for that reason: before it, those rows still read as email addresses and would
+-- be grandfathered by mistake. Keep the order.
+--
+-- The pattern is `placeholderDisplayName`'s output restated. Someone who
+-- deliberately names themselves "User 1a2b" gets one dismissible dialog.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM data_migrations WHERE name = 'onboarding_grandfather_2026_08'
+  ) THEN
+    INSERT INTO user_preferences (user_id, settings)
+    SELECT
+      id,
+      jsonb_build_object(
+        'onboardedAt',
+        to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+      )
+    FROM users
+    WHERE display_name !~ '^User [0-9a-f]{4}$'
+    ON CONFLICT (user_id) DO UPDATE
+      -- `||` is a shallow merge with the right side winning, the same rule
+      -- `mergePreferences` relies on: an account that already stored a theme
+      -- keeps it and gains this key.
+      SET settings = user_preferences.settings || EXCLUDED.settings;
+
+    INSERT INTO data_migrations (name) VALUES ('onboarding_grandfather_2026_08');
+  END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS servers (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -218,16 +463,210 @@ ALTER TABLE messages ADD COLUMN IF NOT EXISTS reply_to_id UUID
 CREATE INDEX IF NOT EXISTS idx_messages_reply_to
   ON messages (reply_to_id) WHERE reply_to_id IS NOT NULL;
 
--- Full-text search vector. GENERATED ... STORED rather than a trigger: the
--- vector cannot drift from the body it describes, edits maintain it for free,
--- and existing rows are backfilled by the one ALTER.
+-- ------------------------------------------------------------------ search
 --
--- 'english' is a deliberate trade: stemming is what makes "deploying" find
--- "deploy", which is most of why search feels like search. A multilingual server
--- pays for it in recall on its non-English messages — the escape hatch is to
--- change the configuration here, which rewrites the column on next boot.
-ALTER TABLE messages ADD COLUMN IF NOT EXISTS search_tsv tsvector
-  GENERATED ALWAYS AS (to_tsvector('english', body)) STORED;
+-- Full-text search. Everything the index and the query have to agree on lives
+-- in this block: the two text search configurations, the expression the stored
+-- column is generated from, and the two functions services/search.ts calls.
+-- The application names no configuration at all — if it could, the query could
+-- be stemmed differently from the index, which does not fail, it just quietly
+-- stops matching.
+--
+-- Portuguese AND English, both accent-folded, indexed side by side. The
+-- audience is Brazilian and the product's own vocabulary is English, and a
+-- single configuration cannot serve both: measured over 30 Portuguese and 15
+-- English word pairs a reader would expect to match each other,
+--
+--   config          pt      en
+--   'english'        2/30   15/15   <- what this used to be
+--   'portuguese'    10/30    2/15   <- merely the inverse mistake
+--   'simple'         0/30    0/15
+--   pt||en          10/30   15/15   <- stemming both ways, still accent-blind
+--   pqp_pt||pqp_en  25/30   15/15   <- this
+--
+-- Half of the Portuguese failures are nothing to do with stemming: Brazilians
+-- type "nao", "voce", "reuniao" and the message says "não", "você", "reunião".
+-- unaccent fixes those and costs a little stemmer accuracy on the words that
+-- keep their accents (the snowball rules read them), which the numbers say is
+-- a trade worth taking.
+--
+-- Cost, measured on 100k chat-length rows: GIN index 2.5 MB -> 3.9 MB, stored
+-- vectors 12 MB -> 18 MB, and ~6 microseconds more per INSERT. Two ORed halves
+-- also make stop words harmless in both directions — a query that is all
+-- Portuguese stop words survives in the English half and vice versa, so
+-- neither list can silently empty a query.
+--
+-- Consequence to know about: `||` shifts the second half's positions past the
+-- first, so ts_rank_cd's proximity is only meaningful within a half, and a word
+-- both stemmers agree on is counted twice. Rank order is approximate anyway.
+
+-- unaccent is a *trusted* extension from PG13 on, so the database owner can
+-- install it without superuser. If a host refuses anyway, warn and carry on
+-- with plain snowball: initDb() throwing is process.exit(1), and search being
+-- accent-sensitive is not worth a boot loop.
+DO $$
+BEGIN
+  CREATE EXTENSION IF NOT EXISTS unaccent;
+EXCEPTION WHEN OTHERS THEN
+  RAISE WARNING 'pqp: unaccent unavailable (%) — search will be accent-sensitive',
+    SQLERRM;
+END $$;
+
+-- pqp_pt / pqp_en. Two configurations rather than one with both stemmers
+-- chained: a snowball dictionary accepts every token it is handed, so anything
+-- after it in a mapping is unreachable.
+--
+-- ALTER MAPPING replaces, so re-running this is a catalog write and nothing
+-- more. It does NOT recompute stored vectors — that is what the fingerprint
+-- below is for.
+DO $$
+DECLARE
+  dicts TEXT;
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_ts_config WHERE cfgname = 'pqp_pt') THEN
+    CREATE TEXT SEARCH CONFIGURATION pqp_pt (COPY = portuguese);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_ts_config WHERE cfgname = 'pqp_en') THEN
+    CREATE TEXT SEARCH CONFIGURATION pqp_en (COPY = english);
+  END IF;
+
+  -- Visible, not merely present: an unaccent installed into a schema outside
+  -- search_path is one the ALTER below could not resolve by bare name.
+  dicts := CASE
+    WHEN EXISTS (
+      SELECT 1 FROM pg_ts_dict d
+      WHERE d.dictname = 'unaccent' AND pg_ts_dict_is_visible(d.oid))
+    THEN 'unaccent, ' ELSE '' END;
+
+  EXECUTE format(
+    'ALTER TEXT SEARCH CONFIGURATION pqp_pt
+       ALTER MAPPING FOR hword, hword_part, word WITH %sportuguese_stem', dicts);
+  EXECUTE format(
+    'ALTER TEXT SEARCH CONFIGURATION pqp_en
+       ALTER MAPPING FOR hword, hword_part, word WITH %senglish_stem', dicts);
+END $$;
+
+-- Two plural classes snowball's Portuguese stemmer does not handle, patched
+-- ahead of it. These are not obscure: "mensagem"/"mensagens" is the first
+-- example anyone reaches for, and this product's own nouns are the -ção family
+-- — "configurações", "notificações", "opções", "sessões". Postgres stems every
+-- one of those to something the singular does not share:
+--
+--   mensagem -> mensag   but  mensagens    -> mensagens
+--   opção    -> opçã     but  opções       -> opçõ
+--
+-- Two word-final rewrites fix both classes, run before unaccent so they see the
+-- accented spelling and before the stemmer so it gets a singular:
+--
+--   -ns  -> -m    mensagens, imagens, homens, ordens, fins, sons
+--   -ões -> -ão   opções, configurações, reuniões, irmãos  (and the unaccented
+--                 -oes/-aos/-aes people actually type)
+--
+-- Two chars of stem are required first, which is what keeps "uns", "aos" and
+-- "nos" out of it. Being deterministic and applied to the query as well as the
+-- body, a wrong rewrite cannot lose a match — "runs" becomes "rum" on both
+-- sides and still finds itself (and the English half stems it properly
+-- regardless). The only cost of a bad rule is two unrelated words colliding.
+--
+-- Not attempted: -l/-is ("canal"/"canais"). Its rules need the accent to
+-- disambiguate — "papéis" is "papel" but "fáceis" is "fácil" — which the
+-- unaccented spellings people type do not carry. Doing it properly needs a
+-- hunspell pt_BR dictionary, and that means dictionary files on the database
+-- host, which managed Postgres does not give us.
+CREATE OR REPLACE FUNCTION pqp_pt_plurals(t TEXT) RETURNS TEXT
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $$
+  SELECT regexp_replace(
+           regexp_replace(t, '(\m\w{2,})(ões|ãos|ães|oes|aos|aes)\M', '\1ao', 'gi'),
+           '(\m\w{2,})ns\M', '\1m', 'gi')
+$$;
+
+-- The query side of the pair. services/search.ts calls these and never names a
+-- configuration itself, so index and query cannot disagree.
+CREATE OR REPLACE FUNCTION pqp_search_query(q TEXT) RETURNS tsquery
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $$
+  SELECT websearch_to_tsquery('pqp_pt', pqp_pt_plurals(q))
+      || websearch_to_tsquery('pqp_en', q)
+$$;
+
+-- ts_headline re-parses the body under one configuration, so a hit found by the
+-- other half would come back with nothing marked up. Try Portuguese, and only
+-- when it highlighted nothing pay for the English pass. `marker` is the
+-- caller's StartSel so the highlight delimiters stay defined in one place
+-- (@pqp/shared) rather than being restated in SQL.
+CREATE OR REPLACE FUNCTION pqp_search_headline(
+  body TEXT, q tsquery, opts TEXT, marker TEXT
+) RETURNS TEXT LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $$
+  SELECT CASE WHEN pt.h LIKE '%' || marker || '%' THEN pt.h
+              ELSE ts_headline('pqp_en', body, q, opts) END
+  FROM (SELECT ts_headline('pqp_pt', body, q, opts) AS h) pt
+$$;
+-- When neither half highlights anything both calls return the same thing —
+-- the opening fragment of the body — so the fallback needs no third branch.
+
+-- The stored vector. GENERATED ... STORED rather than a trigger: it cannot
+-- drift from the body it describes, edits maintain it for free, and existing
+-- rows are backfilled by the ALTER.
+--
+-- Changing the expression means dropping and re-adding the column, which
+-- rewrites the table under ACCESS EXCLUSIVE and rebuilds the GIN index. This
+-- file runs on EVERY boot, so doing that unconditionally would be a rewrite per
+-- restart. The guard is a fingerprint stashed in the column's COMMENT: the
+-- expression text plus the lexemes the whole pipeline actually produces for a
+-- canary string. Comparing the expression alone would not be enough — ALTERing
+-- a configuration, replacing pqp_pt_plurals, or unaccent appearing on a host
+-- that lacked it all change the lexemes without changing one character of the
+-- expression, and Postgres does not recompute stored generated columns when
+-- that happens. Running the canary through the real expression catches every
+-- one of those; the comment lives and dies with the column, so a dropped
+-- column cannot leave a marker claiming it is current.
+--
+-- This is the cheapest moment this migration will ever have: production holds
+-- 26 messages. A version of this against a large table would need a new column
+-- written in batches, CREATE INDEX CONCURRENTLY, and a swap — none of which is
+-- possible inside schema.sql, because the whole file is one implicit
+-- transaction and CONCURRENTLY cannot run in one.
+DO $$
+DECLARE
+  -- One template, filled with `body` to build the column and with the canary to
+  -- fingerprint it — so the fingerprint is the output of this exact expression
+  -- rather than a second description of it that could fall behind.
+  expr CONSTANT TEXT :=
+    'to_tsvector(''pqp_pt'', pqp_pt_plurals(%1$s)) || to_tsvector(''pqp_en'', %1$s)';
+  -- Accents, both plural classes, stemming, and both stop word lists in one
+  -- string. Anything the fingerprint should notice has to be exercised here.
+  canary CONSTANT TEXT :=
+    'não configurações mensagens jogando deploying the de para com';
+  column_expr TEXT;
+  lexemes TEXT;
+  marker TEXT;
+  col_attnum SMALLINT;
+BEGIN
+  column_expr := format(expr, 'body');
+  EXECUTE format('SELECT (%s)::text', format(expr, quote_literal(canary)))
+    INTO lexemes;
+  marker := 'pqp-search ' || md5(column_expr || '|' || lexemes);
+
+  SELECT a.attnum INTO col_attnum FROM pg_attribute a
+  WHERE a.attrelid = 'messages'::regclass AND a.attname = 'search_tsv'
+    AND NOT a.attisdropped;
+
+  IF col_attnum IS NULL THEN
+    EXECUTE format(
+      'ALTER TABLE messages ADD COLUMN search_tsv tsvector
+         GENERATED ALWAYS AS (%s) STORED', column_expr);
+  ELSIF col_description('messages'::regclass, col_attnum) IS DISTINCT FROM marker THEN
+    -- Dropping the column takes idx_messages_search with it; the CREATE INDEX
+    -- below puts it back.
+    ALTER TABLE messages DROP COLUMN search_tsv;
+    EXECUTE format(
+      'ALTER TABLE messages ADD COLUMN search_tsv tsvector
+         GENERATED ALWAYS AS (%s) STORED', column_expr);
+  ELSE
+    RETURN; -- already current: no rewrite, no comment write
+  END IF;
+
+  EXECUTE format('COMMENT ON COLUMN messages.search_tsv IS %L', marker);
+END $$;
 
 CREATE INDEX IF NOT EXISTS idx_messages_search
   ON messages USING GIN (search_tsv);
@@ -340,6 +779,85 @@ CREATE INDEX IF NOT EXISTS idx_message_attachments_message
 
 CREATE INDEX IF NOT EXISTS idx_message_attachments_unclaimed
   ON message_attachments (created_at) WHERE message_id IS NULL;
+
+-- ---------------------------------------------------------------- image safety
+--
+-- The verdict a content scanner reached about this object, kept on the row
+-- rather than in a side table because it is a property OF the attachment and
+-- every path that reads an attachment already has this row in hand.
+--
+-- It exists to be evidence. A takedown, a police request or an appeal all ask
+-- the same question months later — "what did you know, when, and who told you"
+-- — and a boolean `is_safe` cannot answer any of it. Provider, score, labels
+-- and timestamp are recorded together so the answer is reconstructable from the
+-- row alone, without the provider's own logs (which a free tier does not keep).
+--
+-- `unscanned` is the default and is deliberately NOT a synonym for `pass`. It
+-- is the honest state of every row written before scanning existed, and of
+-- every row on a deployment with no scanner configured. Anything that treats
+-- the two as equivalent is claiming a check that never ran.
+--
+--   unscanned  no scanner configured, or the row predates scanning
+--   skipped    scanner configured, but this type is not scannable (video, pdf)
+--   pass       the scanner looked and found nothing over threshold
+--   flagged    over the review threshold: visible, but a report was filed
+--   rejected   over the block threshold: never attached, object quarantined
+--   error      the scanner could not answer (down, timed out, garbage back)
+--
+-- `error` is a terminal recorded state and not a retry queue. Under the default
+-- fail-closed mode an `error` row is dropped from its message exactly like a
+-- failed HEAD, so it is already invisible; the row survives so that "the
+-- scanner was broken between 14:00 and 15:00" is a fact on disk rather than an
+-- inference from missing images.
+ALTER TABLE message_attachments
+  ADD COLUMN IF NOT EXISTS scan_status TEXT NOT NULL DEFAULT 'unscanned';
+
+DO $$
+BEGIN
+  ALTER TABLE message_attachments DROP CONSTRAINT IF EXISTS message_attachments_scan_status_check;
+  ALTER TABLE message_attachments
+    ADD CONSTRAINT message_attachments_scan_status_check
+    CHECK (scan_status IN ('unscanned', 'skipped', 'pass', 'flagged', 'rejected', 'error'));
+EXCEPTION
+  WHEN others THEN NULL;
+END $$;
+
+-- Which scanner said so. Null while `scan_status = 'unscanned'`; a provider name
+-- afterwards, so switching provider does not silently reinterpret old verdicts
+-- against a new one's scale.
+ALTER TABLE message_attachments ADD COLUMN IF NOT EXISTS scan_provider TEXT;
+
+-- The highest category score the provider returned, 0..1. Normalised by the
+-- adapter, because "0.94" means nothing without knowing whose 0.94 it is — which
+-- is what `scan_provider` above is for.
+ALTER TABLE message_attachments ADD COLUMN IF NOT EXISTS scan_score REAL;
+
+-- The categories that crossed the threshold, as a JSON array of strings. The
+-- score says how sure; this says of what, and it is the part a human reading a
+-- report actually needs.
+ALTER TABLE message_attachments ADD COLUMN IF NOT EXISTS scan_labels JSONB;
+
+ALTER TABLE message_attachments ADD COLUMN IF NOT EXISTS scanned_at TIMESTAMPTZ;
+
+-- Set when a scan rejected the object. Two things follow from it, and they are
+-- the whole reason it is a timestamp and not a flag on `scan_status`:
+--
+-- 1. THE SWEEPER MUST NOT TOUCH IT. A rejected attachment is never claimed, so
+--    its `message_id` stays NULL and the orphan sweep would delete row and
+--    object within the hour — destroying the only evidence that the upload ever
+--    happened, at the exact moment a moderator is being asked to look at it.
+-- 2. IT IS NOT KEPT FOREVER EITHER. Holding illegal material indefinitely is
+--    its own problem, and an operator who has not looked at their queue in a
+--    month is not going to. The sweeper collects quarantined rows once
+--    `CONTENT_SCAN_QUARANTINE_DAYS` (default 30) has passed, which is long
+--    enough to answer a request and short enough not to become an archive.
+ALTER TABLE message_attachments ADD COLUMN IF NOT EXISTS quarantined_at TIMESTAMPTZ;
+
+-- The quarantine sweep's whole working set, and tiny — partial so it costs
+-- nothing on a deployment that has never quarantined anything, which is every
+-- deployment with no scanner configured.
+CREATE INDEX IF NOT EXISTS idx_message_attachments_quarantined
+  ON message_attachments (quarantined_at) WHERE quarantined_at IS NOT NULL;
 
 -- Pinned messages surface the ones worth finding again without a search. Kept
 -- on the message row rather than a join table: a message can be pinned in
@@ -547,3 +1065,240 @@ CREATE TABLE IF NOT EXISTS status_samples (
 );
 CREATE INDEX IF NOT EXISTS idx_status_samples_component
   ON status_samples (component, checked_at DESC);
+
+-- Reports: a member telling somebody whose job it is that a message or a person
+-- needs looking at.
+--
+-- THE REPORT MUST OUTLIVE EVERYTHING IT POINTS AT. The first thing a moderator
+-- does with a bad message is delete it, and the first thing the author does
+-- when they see a report coming is the same — so `ON DELETE CASCADE` on
+-- `reported_message_id` would destroy the evidence at exactly the moment it
+-- starts to matter, and would hand anyone a one-click way to erase the record
+-- of their own conduct. Every reference here is therefore `ON DELETE SET NULL`,
+-- and the row carries its own copy of what it is about:
+--
+--   * `content_snapshot`  — the reported message body, verbatim, at report time.
+--     This is the evidence. Copying user content into a second table is a real
+--     privacy cost, which is why it is bounded to the *one* message that was
+--     reported (never the surrounding thread) and why the sweep below exists.
+--   * `subject_label` / `channel_label` — display names at report time, so a
+--     queue still reads sensibly after a rename, a departure, or a delete.
+--
+-- The FKs are kept alongside the snapshots rather than replaced by them: while
+-- the message still exists a moderator wants to jump to it in context, and
+-- `message_id IS NULL AND content_snapshot IS NOT NULL` is precisely the
+-- "reported content has since been deleted" state the queue renders.
+--
+-- WHERE A REPORT GOES IS A FACT ABOUT THE ROW, not a filter a later query has
+-- to remember. `context_kind` is copied from `channels.kind` (or 'none' for a
+-- report filed about a person with no place attached), and the CHECK below
+-- pairs it with `server_id` in both directions, exactly the way
+-- `channels_server_kind_check` pairs kind with server_id. A conversation report
+-- therefore *cannot* carry a server_id, so the server-scoped queue query
+-- (`WHERE server_id = $1`) can never return one however it is written later.
+-- See the `channelVisibleSql` comment in services/users.ts: a conversation has
+-- no role escape hatch, and neither does a report about one.
+CREATE TABLE IF NOT EXISTS reports (
+  id BIGSERIAL PRIMARY KEY,
+  -- SET NULL rather than CASCADE, same reasoning as `audit_log.actor_id`: a
+  -- reporter deleting their account must not wipe an open queue. The report is
+  -- a record about somebody else's conduct, not about the reporter.
+  reporter_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  subject_type TEXT NOT NULL CHECK (subject_type IN ('message', 'user')),
+  context_kind TEXT NOT NULL CHECK (context_kind IN ('server', 'dm', 'group', 'none')),
+
+  reported_message_id UUID REFERENCES messages(id) ON DELETE SET NULL,
+  -- The author of the reported message, or the person a user report is about.
+  -- Always set at write time; null only once that account is gone.
+  reported_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+
+  server_id UUID REFERENCES servers(id) ON DELETE CASCADE,
+  channel_id UUID REFERENCES channels(id) ON DELETE SET NULL,
+
+  content_snapshot TEXT,
+  subject_label TEXT,
+  channel_label TEXT,
+
+  reason TEXT NOT NULL,
+  details TEXT,
+
+  status TEXT NOT NULL DEFAULT 'open'
+    CHECK (status IN ('open', 'actioned', 'dismissed')),
+  resolved_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  resolved_at TIMESTAMPTZ,
+  resolution_note TEXT,
+
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+  -- Exactly one subject, and it agrees with `subject_type`. A message report
+  -- also names the author (in `reported_user_id`) so acting on the person is
+  -- one click away; a user report has no message.
+  CHECK (
+    (subject_type = 'message') = (reported_message_id IS NOT NULL OR content_snapshot IS NOT NULL)
+  ),
+  -- Server context and server id imply each other. This is the constraint the
+  -- DM-report permission rule rests on.
+  CHECK ((context_kind = 'server') = (server_id IS NOT NULL)),
+  -- A resolution is all-or-nothing: an entry that says "actioned" with nobody
+  -- and no time attached is not an audit trail.
+  CHECK (
+    (status = 'open') = (resolved_at IS NULL)
+  )
+);
+
+-- The server queue: open reports first, newest first, keyset-paginated on the
+-- bare `id` — a BIGSERIAL is already a total order matching insertion, so the
+-- cursor is an integer and never a lookup of a row that may have been resolved
+-- since (the same reasoning as `audit_log`).
+CREATE INDEX IF NOT EXISTS idx_reports_server_status
+  ON reports (server_id, status, id DESC) WHERE server_id IS NOT NULL;
+
+-- The instance queue: everything with no server, which is exactly the set no
+-- server moderator may ever see.
+CREATE INDEX IF NOT EXISTS idx_reports_instance_status
+  ON reports (status, id DESC) WHERE server_id IS NULL;
+
+-- "Show me what I reported", and the per-reporter flood cap.
+CREATE INDEX IF NOT EXISTS idx_reports_reporter
+  ON reports (reporter_id, id DESC);
+
+-- Duplicate suppression, declared rather than checked-then-inserted: two taps
+-- on a slow "Report" button are one report, and a script hammering the endpoint
+-- gets a unique violation rather than a thousand rows in the queue.
+--
+-- Scoped to `status = 'open'` on purpose. Once a report is closed the same
+-- person may report the same target again — that is a repeat offence, which is
+-- the single most useful thing a queue can surface, not a duplicate.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_reports_open_message_dedupe
+  ON reports (reporter_id, reported_message_id)
+  WHERE status = 'open' AND reported_message_id IS NOT NULL;
+
+-- The same rule for user reports, with the context folded in so "this person,
+-- in this server" and "this person, in that server" stay distinct. COALESCE is
+-- what makes it work at all: NULLs are distinct to a unique index, so a bare
+-- (reporter, user, server) index would let unlimited duplicates through for the
+-- instance-queue case where server_id is null.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_reports_open_user_dedupe
+  ON reports (
+    reporter_id,
+    reported_user_id,
+    COALESCE(server_id, '00000000-0000-0000-0000-000000000000'::uuid)
+  )
+  WHERE status = 'open' AND subject_type = 'user';
+
+-- Spill space for cluster-bus frames that do not fit in a NOTIFY payload.
+--
+-- Postgres refuses a NOTIFY payload of 8000 bytes or more, and real frames do
+-- exceed that: a 4000-character message body is up to ~16KB of UTF-8 before
+-- JSON escaping, and a webhook message can carry ten embeds. The publisher
+-- writes the frame here and notifies its id in the same statement; every other
+-- instance reads it back by id. See `server/src/lib/bus-postgres.ts`.
+--
+-- Rows live for seconds and are swept on a timer — this is a mailbox, not
+-- storage, and nothing may ever be recovered from it after the fact. Unused
+-- entirely unless CLUSTER_BUS=postgres.
+CREATE TABLE IF NOT EXISTS cluster_bus_payloads (
+  id UUID PRIMARY KEY,
+  payload TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_cluster_bus_payloads_created
+  ON cluster_bus_payloads (created_at);
+
+-- ---------------------------------------------------------------------------
+-- Self-serve account deletion (LGPD art. 18, IV / VI)
+-- ---------------------------------------------------------------------------
+
+-- Set the instant a deletion is committed to, and cleared only by the row
+-- ceasing to exist. It is the crash marker that makes `DELETE /api/me`
+-- recoverable rather than a half-deleted account.
+--
+-- THE ORDER IS: stamp this column → delete the Clerk user → delete this row.
+-- Every place that sequence can be interrupted leaves a row that still carries
+-- this stamp, and `sweepPendingAccountDeletions` (services/account.ts) finishes
+-- the job on a timer. Without the column there is nothing to find: a process
+-- that dies between the Clerk call and the local DELETE would leave an account
+-- that can never sign in again and whose data nobody knows to remove.
+--
+-- Nullable, with no default, so it costs an existing table nothing and every
+-- account that has not asked to be deleted reads NULL.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS deletion_started_at TIMESTAMPTZ;
+
+-- Partial, over the handful of rows mid-deletion at any moment — the sweeper is
+-- the only reader and a full index would carry every account for nothing.
+CREATE INDEX IF NOT EXISTS idx_users_deletion_started
+  ON users (deletion_started_at) WHERE deletion_started_at IS NOT NULL;
+
+-- ---------------------------------------------------------------------------
+-- Temporary sanctions — timeouts
+-- ---------------------------------------------------------------------------
+--
+-- The middle of the enforcement ladder. Everything about this table follows
+-- from one requirement: A TIMEOUT MUST BE CORRECT WITHOUT A SWEEPER.
+--
+-- `expires_at` is the whole mechanism. Every read in services/sanctions.ts
+-- carries `AND expires_at > NOW()`, so a timeout ends at the instant it says it
+-- ends whether or not any background job is running, whether or not the process
+-- restarted, and whether or not a replica's timer fired. The alternative — an
+-- `active` boolean flipped by a cron — is wrong in the one direction that
+-- matters: a sweeper that is late keeps somebody silenced past their sentence,
+-- and nobody is watching for that failure because it looks exactly like the
+-- feature working. `pruneExpiredTimeouts` exists, is called on the same daily
+-- timer as the audit prune, and is *only* disk hygiene; deleting it would
+-- change nothing about who may speak.
+--
+-- ONE ROW PER (SERVER, USER), not an append-only log of every sanction ever.
+-- The primary key is the pair, and re-timing somebody out replaces the row.
+-- Two reasons: the enforcement question is "is this person timed out right
+-- now", and a history table forces every read to answer "which of these five
+-- rows is the live one" — a question with a wrong answer. History lives in
+-- `audit_log` (`member.timeout` / `member.timeout_lift`), which is where the
+-- rest of this product's moderation history already lives and which is already
+-- pruned at 90 days.
+--
+-- `issued_by` is `ON DELETE SET NULL` for the same reason `server_bans.banned_by`
+-- is: the row is a fact about the *sanctioned* person and about the server, and
+-- a moderator deleting their account must not silently un-silence everybody
+-- they ever acted on. `user_id` is CASCADE, because a timeout on an account
+-- that no longer exists is not a fact about anything.
+CREATE TABLE IF NOT EXISTS member_timeouts (
+  server_id UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  issued_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  reason TEXT,
+  expires_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (server_id, user_id)
+);
+
+-- The enforcement lookup, which runs on the hot path of every WebSocket send
+-- and every server-scoped HTTP write. Leading with `user_id` rather than
+-- reusing the primary key is deliberate: the channel- and message-scoped
+-- variants of the query join `channels`/`messages` to reach a server id, so
+-- Postgres wants to start from the one column the query always has in hand.
+CREATE INDEX IF NOT EXISTS idx_member_timeouts_user
+  ON member_timeouts (user_id, expires_at);
+
+-- Indexes that exist for the *delete*, not for a read.
+--
+-- `DELETE FROM users WHERE id = $1` fires every ON DELETE CASCADE / SET NULL
+-- referencing this table, and Postgres does not index a referencing column for
+-- you. Un-indexed, each of those is a sequential scan of the whole child table,
+-- so deleting one account reads every message, every reaction and every audit
+-- entry on the instance — inside one transaction. These five cover the children
+-- that actually grow without bound; the rest (bans, invites, webhooks, dm_pairs,
+-- reports) are small enough that a scan is cheaper than the index would be.
+--
+-- The messages one is deliberately `(author_id, created_at, id)` rather than
+-- `(author_id)`: `GET /api/me/export` keyset-paginates one person's messages on
+-- exactly that tuple, so the same index serves both halves of art. 18.
+CREATE INDEX IF NOT EXISTS idx_messages_author_created
+  ON messages (author_id, created_at, id);
+CREATE INDEX IF NOT EXISTS idx_message_reactions_user
+  ON message_reactions (user_id);
+CREATE INDEX IF NOT EXISTS idx_message_attachments_uploader
+  ON message_attachments (uploader_id);
+CREATE INDEX IF NOT EXISTS idx_channel_reads_user
+  ON channel_reads (user_id);
+CREATE INDEX IF NOT EXISTS idx_audit_log_actor
+  ON audit_log (actor_id) WHERE actor_id IS NOT NULL;

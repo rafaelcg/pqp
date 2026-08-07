@@ -100,6 +100,13 @@ interface MessageListProps {
   onReplyTo?: (message: ChatMessage) => void;
   onPinMessage?: (messageId: string) => Promise<void>;
   onUnpinMessage?: (messageId: string) => Promise<void>;
+  /**
+   * Opens the report dialog for this message. Offered on anyone else's message
+   * in any channel, conversations included — where a report goes is the
+   * server's decision, not this component's, so nothing here tries to work out
+   * whether the channel has moderators.
+   */
+  onReportMessage?: (message: ChatMessage) => void;
   /** Client-render-only: the server unfurls and caches regardless, so turning
    * this off only stops this reader's own client from drawing the card. */
   showLinkEmbeds?: boolean;
@@ -161,6 +168,7 @@ export function MessageList({
   onReplyTo,
   onPinMessage,
   onUnpinMessage,
+  onReportMessage,
   showLinkEmbeds = true,
 }: MessageListProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -186,6 +194,11 @@ export function MessageList({
   isPinnedRef.current = isPinned;
   const hasNewerRef = useRef(hasNewer);
   hasNewerRef.current = hasNewer;
+  /** For the arrival announcement below — read without adding `messages`
+   * itself to that effect's deps, which would rerun it on every in-place
+   * edit/reaction update and not just on an actual new arrival. */
+  const latestMessageRef = useRef(messages[messages.length - 1]);
+  latestMessageRef.current = messages[messages.length - 1];
   /** Row elements by message id, so a jump can find its target. */
   const rowNodes = useRef(new Map<string, HTMLElement>());
   const flashTimer = useRef<number | null>(null);
@@ -206,8 +219,137 @@ export function MessageList({
   const appendedRef = useRef(0);
   /** Set while a jump back to the live end is in flight. */
   const pendingTailRef = useRef(false);
+  const prefersReducedMotion = usePrefersReducedMotion();
+
+  /**
+   * The one row in the roving-tabindex group that is actually reachable by
+   * Tab. Everything else on the row (reaction pills, the reply-jump button,
+   * retry/discard) drops out of tab order the same way, so tabbing past a
+   * long history costs one stop instead of one per message — the same reason
+   * a toolbar or a listbox gets exactly one tab stop.
+   *
+   * Null means "no explicit choice yet"; the render below falls back to the
+   * newest message so Tab has somewhere to land on first entry.
+   */
+  const [activeMessageId, setActiveMessageId] = useState<string | null>(null);
+  /**
+   * The row whose context menu is currently open via keyboard, so Escape can
+   * put focus back on it. `ContextMenu`'s own `onCloseAutoFocus` is
+   * suppressed (see context-menu.tsx) to fix its positioning, which also
+   * disabled its default "return focus to the trigger" behaviour — this
+   * ref plus the two effects below rebuild just that part from outside the
+   * file this component does not own.
+   */
+  const openMenuRowIdRef = useRef<string | null>(null);
+  /** A short, one-line heads-up for new arrivals — never the message itself. */
+  const [liveAnnouncement, setLiveAnnouncement] = useState("");
 
   const rows = useMemo(() => buildRows(messages), [messages]);
+  const rowIds = useMemo(() => rows.map((row) => row.message.id), [rows]);
+  const activeIndex = activeMessageId ? rowIds.indexOf(activeMessageId) : -1;
+  const effectiveActiveId =
+    activeIndex >= 0 ? activeMessageId : (rowIds[rowIds.length - 1] ?? null);
+
+  const markMenuRow = useCallback((id: string | null) => {
+    openMenuRowIdRef.current = id;
+  }, []);
+
+  // Escape closes the menu (Radix handles that already); this only decides
+  // where focus goes next. Capture phase on `window` runs before Radix's own
+  // document-level dismiss handling, so it always gets the last word over the
+  // `onCloseAutoFocus` that was intentionally disabled.
+  useEffect(() => {
+    function handleEscapeCapture(event: KeyboardEvent) {
+      if (event.key !== "Escape") {
+        return;
+      }
+      const rowId = openMenuRowIdRef.current;
+      if (!rowId) {
+        return;
+      }
+      openMenuRowIdRef.current = null;
+      requestAnimationFrame(() => {
+        rowNodes.current.get(rowId)?.focus();
+      });
+    }
+    window.addEventListener("keydown", handleEscapeCapture, true);
+    return () =>
+      window.removeEventListener("keydown", handleEscapeCapture, true);
+  }, []);
+
+  // If a keyboard-opened menu is dismissed some other way — clicking outside
+  // it, clicking a different row — focus moves on its own and the tracked row
+  // above goes stale. Left alone, a later, unrelated Escape (cancelling a
+  // reply in the composer, say) would yank focus back to a menu that is long
+  // closed. Clearing on any focus that lands outside both the row and the
+  // menu keeps that Escape-refocus scoped to "the menu really is still open".
+  useEffect(() => {
+    function handleFocusIn(event: FocusEvent) {
+      const rowId = openMenuRowIdRef.current;
+      if (!rowId) {
+        return;
+      }
+      const target = event.target;
+      if (!(target instanceof Node)) {
+        return;
+      }
+      const rowNode = rowNodes.current.get(rowId);
+      if (rowNode?.contains(target)) {
+        return;
+      }
+      if (target instanceof Element && target.closest('[role="menu"]')) {
+        return;
+      }
+      openMenuRowIdRef.current = null;
+    }
+    window.addEventListener("focusin", handleFocusIn, true);
+    return () => window.removeEventListener("focusin", handleFocusIn, true);
+  }, []);
+
+  /** Arrow/Home/End move the roving tab stop; every other key passes through. */
+  const handleRowNavigate = useCallback(
+    (event: React.KeyboardEvent<HTMLElement>, messageId: string) => {
+      // Only when the row itself is focused — a nested control (the edit
+      // textarea, a reaction pill) owns its own arrow-key behaviour.
+      if (event.target !== event.currentTarget) {
+        return;
+      }
+      const index = rowIds.indexOf(messageId);
+      if (index === -1) {
+        return;
+      }
+      let nextIndex: number;
+      switch (event.key) {
+        case "ArrowDown":
+          nextIndex = Math.min(index + 1, rowIds.length - 1);
+          break;
+        case "ArrowUp":
+          nextIndex = Math.max(index - 1, 0);
+          break;
+        case "Home":
+          nextIndex = 0;
+          break;
+        case "End":
+          nextIndex = rowIds.length - 1;
+          break;
+        default:
+          return;
+      }
+      event.preventDefault();
+      const nextId = rowIds[nextIndex];
+      if (nextId === messageId) {
+        return;
+      }
+      setActiveMessageId(nextId);
+      const node = rowNodes.current.get(nextId);
+      node?.focus();
+      node?.scrollIntoView({
+        behavior: prefersReducedMotion ? "auto" : "smooth",
+        block: "nearest",
+      });
+    },
+    [rowIds, prefersReducedMotion],
+  );
 
   const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
     bottomRef.current?.scrollIntoView({ behavior, block: "end" });
@@ -342,6 +484,17 @@ export function MessageList({
     } else {
       setMissedCount((count) => count + arrived);
     }
+
+    // A screen reader gets a one-line heads-up either way — not the message
+    // itself, which on a busy channel would mean a wall of speech nobody
+    // could interrupt. Reading the actual row is one arrow-key press away
+    // once this points them at it.
+    const newest = latestMessageRef.current;
+    setLiveAnnouncement(
+      arrived === 1 && newest
+        ? `New message from ${newest.authorName}`
+        : `${arrived} new messages`,
+    );
   }, [messages.length, scrollToBottom]);
 
   // Media loads after the row is already on screen, and growing it pushes the
@@ -412,6 +565,12 @@ export function MessageList({
     // A reveal belongs to the conversation it was made in. Carrying it across
     // would re-open a blocked message in the next channel by message id alone.
     setRevealedIds(new Set());
+    // The roving tab stop and any open-menu tracking are scoped to a
+    // specific message id, which means nothing once the channel underneath
+    // it has changed.
+    setActiveMessageId(null);
+    openMenuRowIdRef.current = null;
+    setLiveAnnouncement("");
     rowNodes.current.clear();
     lastCountRef.current = messages.length;
     requestAnimationFrame(() => {
@@ -513,6 +672,14 @@ export function MessageList({
       <div
         ref={scrollRef}
         onScroll={handleScroll}
+        role="log"
+        aria-label="Messages"
+        // The container itself never auto-announces: a busy channel mutates
+        // constantly (reactions, edits, pagination), and role="log" implies
+        // aria-live="polite" by default — enough to bury a screen-reader user
+        // in half-finished sentences. The single sr-only status region below
+        // is the only thing that speaks, and only for genuine new arrivals.
+        aria-live="off"
         className="flex-1 overflow-y-auto px-3 py-4 sm:px-5"
       >
         {hasMore && (
@@ -566,8 +733,18 @@ export function MessageList({
               isPickerOpen={pickerMessageId === row.message.id}
               isEditing={editingId === row.message.id}
               onOpenPicker={() => setPickerMessageId(row.message.id)}
-              onClosePicker={() => setPickerMessageId(null)}
-              onStartEdit={() => setEditingId(row.message.id)}
+              onClosePicker={() => {
+                setPickerMessageId(null);
+                // The picker unmounts on close; without this, the focus it
+                // held goes to <body> and the keyboard user is adrift.
+                requestAnimationFrame(() => {
+                  rowNodes.current.get(row.message.id)?.focus();
+                });
+              }}
+              onStartEdit={() => {
+                setEditingId(row.message.id);
+                setActiveMessageId(row.message.id);
+              }}
               onCancelEdit={() => setEditingId(null)}
               onSubmitEdit={async (body) => {
                 await onEditMessage?.(row.message.id, body);
@@ -588,6 +765,11 @@ export function MessageList({
                   ? () => void onUnpinMessage(row.message.id)
                   : undefined
               }
+              onReport={
+                onReportMessage
+                  ? () => onReportMessage(row.message)
+                  : undefined
+              }
               onToggleReaction={onToggleReaction}
               onRetry={() =>
                 row.message.nonce && onRetryMessage?.(row.message.nonce)
@@ -596,6 +778,18 @@ export function MessageList({
                 row.message.nonce && onDiscardMessage?.(row.message.nonce)
               }
               showLinkEmbeds={showLinkEmbeds}
+              isActive={row.message.id === effectiveActiveId}
+              onFocusRow={() => setActiveMessageId(row.message.id)}
+              onNavigate={handleRowNavigate}
+              onMenuOpenRow={() => markMenuRow(row.message.id)}
+              onMenuClose={(refocus) => {
+                markMenuRow(null);
+                if (refocus) {
+                  requestAnimationFrame(() => {
+                    rowNodes.current.get(row.message.id)?.focus();
+                  });
+                }
+              }}
             />
           ))
         )}
@@ -620,6 +814,14 @@ export function MessageList({
         )}
         <div ref={bottomRef} />
       </div>
+
+      {/* Always mounted, text-only, and separate from the log itself — an
+          aria-live region only announces changes to content already present,
+          and a screen-reader user gets one short sentence per arrival instead
+          of the message log announcing its own churn. */}
+      <p role="status" aria-live="polite" className="sr-only">
+        {liveAnnouncement}
+      </p>
 
       <TypingIndicator users={typingUsers} />
 
@@ -754,6 +956,81 @@ const MARKDOWN_COMPONENTS = {
   ),
 };
 
+/**
+ * What a screen reader gets for one message, as a single accessible name on
+ * its row: who, when, whether it answers something else, the content itself,
+ * and anything else a sighted reader would pick up from the layout around it
+ * — attachments, edited, pinned, reactions and whether the reader already
+ * left one. One label read as one sentence, rather than the wall of
+ * undifferentiated text a screen reader gets from walking five sibling
+ * elements with no relationship declared between them.
+ *
+ * The body text is included even though it is also present as ordinary DOM
+ * text: `aria-label` on the row is what gets read the moment the roving tab
+ * stop lands here, and forcing a switch to browse-mode just to hear what the
+ * message says would defeat the point of making it a single tab stop.
+ */
+function buildMessageAriaLabel(
+  message: ChatMessage,
+  isMine: boolean,
+  gifMedia: GifMedia | null,
+): string {
+  const parts: string[] = [];
+  const who = isMine ? "You" : message.authorName;
+  parts.push(
+    `${who}${message.isWebhook ? " via webhook" : ""}, ${formatFullTimestamp(message.createdAt)}`,
+  );
+
+  if (message.replyTo) {
+    parts.push(
+      message.replyTo.deleted
+        ? "Replying to a deleted message"
+        : `Replying to ${message.replyTo.authorName}: ${message.replyTo.excerpt}`,
+    );
+  }
+
+  if (message.pending) {
+    parts.push("Sending");
+  } else if (message.failed) {
+    parts.push("Failed to send");
+  }
+
+  const attachmentCount = message.attachments?.length ?? 0;
+  if (gifMedia) {
+    parts.push(`GIF: ${gifMedia.alt}`);
+  } else if (message.body) {
+    parts.push(message.body);
+  } else if (
+    attachmentCount === 0 &&
+    message.webhookEmbeds.length === 0
+  ) {
+    parts.push("Attachment unavailable");
+  }
+
+  if (attachmentCount > 0) {
+    parts.push(
+      `${attachmentCount} attachment${attachmentCount === 1 ? "" : "s"}`,
+    );
+  }
+
+  if (message.editedAt) {
+    parts.push("edited");
+  }
+  if (message.pinnedAt) {
+    parts.push("Pinned");
+  }
+
+  const reactions = message.reactions ?? [];
+  if (reactions.length > 0) {
+    const summary = reactions
+      .map((r) => `${r.emoji} ${r.count}${r.me ? ", you reacted" : ""}`)
+      .join("; ");
+    parts.push(`Reactions: ${summary}`);
+  }
+
+  return parts.join(". ");
+}
+
 interface MessageRowProps {
   row: Row;
   currentUserId: string | null;
@@ -778,10 +1055,23 @@ interface MessageRowProps {
   onDelete?: () => void;
   onPin?: () => void;
   onUnpin?: () => void;
+  onReport?: () => void;
   onToggleReaction: (messageId: string, emoji: string) => void;
   onRetry: () => void;
   onDiscard: () => void;
   showLinkEmbeds: boolean;
+  /** Whether this row is the one roving tab stop for the whole log. */
+  isActive: boolean;
+  /** Claims the roving tab stop — on click, or on receiving focus any other way. */
+  onFocusRow: () => void;
+  /** Arrow/Home/End at the log level; a no-op for keys it does not own. */
+  onNavigate: (event: React.KeyboardEvent<HTMLElement>, messageId: string) => void;
+  /** The native `contextmenu` event fired — by right-click, long-press, or the
+   * keyboard Menu key / Shift+F10 once the row is focusable. */
+  onMenuOpenRow: () => void;
+  /** The menu closed. `refocus` is false for actions that already send focus
+   * somewhere more useful (reply, edit, add-reaction all move it themselves). */
+  onMenuClose: (refocus: boolean) => void;
 }
 
 const MessageRow = memo(function MessageRow({
@@ -807,10 +1097,16 @@ const MessageRow = memo(function MessageRow({
   onDelete,
   onPin,
   onUnpin,
+  onReport,
   onToggleReaction,
   onRetry,
   onDiscard,
   showLinkEmbeds,
+  isActive,
+  onFocusRow,
+  onNavigate,
+  onMenuOpenRow,
+  onMenuClose,
 }: MessageRowProps) {
   const { message, startsGroup, dayLabel } = row;
   // A body that is nothing but a GIF link is media, not prose — the URL is the
@@ -822,6 +1118,13 @@ const MessageRow = memo(function MessageRow({
   const canDelete = isReal && !!onDelete && (isMine || canModerate);
   const canReply = isReal && !!onReply;
   const isMessagePinned = Boolean(message.pinnedAt);
+  // -1 outside the active row so Tab costs one stop per log, not one per
+  // control on every message — see `isActive` on MessageRowProps.
+  const controlTabIndex = isActive ? 0 : -1;
+  const ariaLabel = useMemo(
+    () => buildMessageAriaLabel(message, isMine, gifMedia),
+    [message, isMine, gifMedia],
+  );
   // Mirrors the server's own gate: a conversation has no moderators, so
   // `serverId` being null means anyone already in it — proven just by being
   // able to see this row — may pin or unpin. A server channel needs the same
@@ -829,11 +1132,26 @@ const MessageRow = memo(function MessageRow({
   // Messages" rather than letting an author pin their own post unilaterally.
   const canPin =
     isReal && (serverId ? canModerate : true) && (onPin || onUnpin);
+  const canReport = isReal && !isMine && !!onReport;
 
   function confirmDelete() {
     if (window.confirm("Delete this message?")) {
       onDelete?.();
     }
+  }
+
+  /**
+   * Wraps a menu item's action so the row also learns the menu just closed.
+   * `refocus` is only for actions with nowhere else for focus to go —
+   * reply, edit, and add-reaction each already move it themselves (into the
+   * composer, the edit textarea, and the emoji panel respectively), so
+   * sending focus back to the row right after would just fight them.
+   */
+  function selectAndClose(action: (() => void) | undefined, refocus: boolean) {
+    return () => {
+      action?.();
+      onMenuClose(refocus);
+    };
   }
 
   if (isBlocked) {
@@ -848,11 +1166,16 @@ const MessageRow = memo(function MessageRow({
           ref={(node) => {
             registerRow(message.id, node);
           }}
-          className="group mt-1 flex items-center gap-2 rounded-md px-1 py-1 text-xs text-paper-muted"
+          tabIndex={isActive ? 0 : -1}
+          aria-label="Blocked message"
+          onFocus={onFocusRow}
+          onKeyDown={(event) => onNavigate(event, message.id)}
+          className="group mt-1 flex items-center gap-2 rounded-md px-1 py-1 text-xs text-paper-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
         >
           <span className="italic">Blocked message</span>
           <button
             type="button"
+            tabIndex={controlTabIndex}
             onClick={onReveal}
             className="underline underline-offset-2 hover:text-paper"
           >
@@ -863,43 +1186,55 @@ const MessageRow = memo(function MessageRow({
     );
   }
 
+  const reactions = message.reactions ?? [];
+
   const items: ContextMenuItemDef[] = [
     ...(canReply
       ? [
-          { id: "reply", label: "Reply", onSelect: onReply },
+          { id: "reply", label: "Reply", onSelect: selectAndClose(onReply, false) },
           { id: "sep-reply", label: "", separator: true },
         ]
       : []),
     {
       id: "copy-text",
       label: "Copy text",
-      onSelect: () => void navigator.clipboard.writeText(message.body),
+      onSelect: selectAndClose(
+        () => void navigator.clipboard.writeText(message.body),
+        true,
+      ),
     },
     {
       id: "copy-id",
       label: "Copy message ID",
-      onSelect: () => void navigator.clipboard.writeText(message.id),
+      onSelect: selectAndClose(
+        () => void navigator.clipboard.writeText(message.id),
+        true,
+      ),
     },
     ...(serverId && isReal
       ? [
           {
             id: "copy-link",
             label: "Copy message link",
-            onSelect: () => {
+            onSelect: selectAndClose(() => {
               const link = `${window.location.origin}${messageRoutePath(
                 serverId,
                 channelId ?? message.channelId,
                 message.id,
               )}`;
               void navigator.clipboard.writeText(link);
-            },
+            }, true),
           },
         ]
       : []),
     ...(isMine && isReal
       ? [
           { id: "sep-edit", label: "", separator: true },
-          { id: "edit", label: "Edit message", onSelect: onStartEdit },
+          {
+            id: "edit",
+            label: "Edit message",
+            onSelect: selectAndClose(onStartEdit, false),
+          },
         ]
       : []),
     ...(canPin
@@ -907,7 +1242,10 @@ const MessageRow = memo(function MessageRow({
           {
             id: "pin",
             label: isMessagePinned ? "Unpin message" : "Pin message",
-            onSelect: isMessagePinned ? onUnpin : onPin,
+            onSelect: selectAndClose(
+              isMessagePinned ? onUnpin : onPin,
+              true,
+            ),
           },
         ]
       : []),
@@ -917,7 +1255,19 @@ const MessageRow = memo(function MessageRow({
             id: "delete",
             label: "Delete message",
             danger: true,
-            onSelect: confirmDelete,
+            onSelect: selectAndClose(confirmDelete, true),
+          },
+        ]
+      : []),
+    // Reporting your own message is meaningless, and a message that has not
+    // been accepted by the server yet has no id to report.
+    ...(canReport
+      ? [
+          {
+            id: "report",
+            label: "Report message",
+            danger: true,
+            onSelect: selectAndClose(onReport, false),
           },
         ]
       : []),
@@ -925,13 +1275,22 @@ const MessageRow = memo(function MessageRow({
     {
       id: "add-reaction",
       label: "Add reaction",
-      onSelect: onOpenPicker,
+      onSelect: selectAndClose(onOpenPicker, false),
     },
-    ...QUICK_REACTIONS.map((emoji) => ({
-      id: `react-${emoji}`,
-      label: emoji,
-      onSelect: () => onToggleReaction(message.id, emoji),
-    })),
+    // The label carries reaction state too: a screen reader reading the menu
+    // item by item has no other way to learn "you already reacted with this
+    // one" short of opening the row and cross-referencing the reaction bar.
+    ...QUICK_REACTIONS.map((emoji) => {
+      const mine = reactions.some((r) => r.emoji === emoji && r.me);
+      return {
+        id: `react-${emoji}`,
+        label: mine ? `${emoji} (remove your reaction)` : emoji,
+        onSelect: selectAndClose(
+          () => onToggleReaction(message.id, emoji),
+          true,
+        ),
+      };
+    }),
   ];
 
   return (
@@ -943,8 +1302,19 @@ const MessageRow = memo(function MessageRow({
           ref={(node) => {
             registerRow(message.id, node);
           }}
+          tabIndex={isActive ? 0 : -1}
+          aria-label={ariaLabel}
+          onFocus={onFocusRow}
+          onKeyDown={(event) => onNavigate(event, message.id)}
+          // Merges with the handler Radix's Trigger already attaches (see
+          // context-menu.tsx): this only records which row a keyboard-opened
+          // menu belongs to, for the Escape-refocus effects above. It does
+          // not open or block anything Radix already does on right-click,
+          // long-press, or the native contextmenu event a focused element
+          // gets from the keyboard Menu key / Shift+F10.
+          onContextMenu={onMenuOpenRow}
           className={cn(
-            "group relative flex gap-3 rounded-md px-1 transition-colors hover:bg-ink-3/40",
+            "group relative flex gap-3 rounded-md px-1 transition-colors hover:bg-ink-3/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60",
             startsGroup ? "mt-3 py-0.5" : "py-px",
             message.pending && "opacity-60",
             isFlashing && "bg-accent/15 ring-1 ring-accent/50",
@@ -978,6 +1348,7 @@ const MessageRow = memo(function MessageRow({
               <ReplyQuote
                 replyTo={message.replyTo}
                 onJump={onJumpToMessage}
+                tabIndex={controlTabIndex}
               />
             )}
             {startsGroup && (
@@ -1089,6 +1460,7 @@ const MessageRow = memo(function MessageRow({
                 Message failed to send.
                 <button
                   type="button"
+                  tabIndex={controlTabIndex}
                   onClick={onRetry}
                   className="underline underline-offset-2 hover:text-paper"
                 >
@@ -1096,6 +1468,7 @@ const MessageRow = memo(function MessageRow({
                 </button>
                 <button
                   type="button"
+                  tabIndex={controlTabIndex}
                   onClick={onDiscard}
                   className="underline underline-offset-2 hover:text-paper"
                 >
@@ -1106,23 +1479,30 @@ const MessageRow = memo(function MessageRow({
 
             {isReal && (
               <ReactionBar
-                reactions={message.reactions ?? []}
+                reactions={reactions}
                 isPickerOpen={isPickerOpen}
                 onToggle={(emoji) => onToggleReaction(message.id, emoji)}
                 onOpenPicker={onOpenPicker}
                 onClosePicker={onClosePicker}
+                tabIndex={controlTabIndex}
               />
             )}
           </div>
 
-          {/* Right-click is not available on touch, so surface the same actions
-              as a visible toolbar on hover / focus. */}
+          {/* Right-click and long-press aren't available on every input, so
+              this repeats the same actions as a visible toolbar on hover.
+              Deliberately out of tab order (tabIndex={-1} throughout): every
+              one of these is also in the context menu the row itself opens,
+              so keyboard reach goes through that single, already-tested
+              path rather than duplicating it four buttons at a time on
+              every row's tab stop. */}
           {isReal && !isEditing && (
             <div className="absolute -top-3 right-2 hidden items-center gap-0.5 rounded-md border border-ink-4 bg-ink-2 p-0.5 shadow-sm group-hover:flex group-focus-within:flex">
               <Button
                 type="button"
                 variant="ghost"
                 size="icon"
+                tabIndex={-1}
                 aria-label="Add reaction"
                 className="h-6 w-6"
                 onClick={onOpenPicker}
@@ -1134,6 +1514,7 @@ const MessageRow = memo(function MessageRow({
                   type="button"
                   variant="ghost"
                   size="icon"
+                  tabIndex={-1}
                   aria-label="Reply"
                   className="h-6 w-6"
                   onClick={onReply}
@@ -1146,6 +1527,7 @@ const MessageRow = memo(function MessageRow({
                   type="button"
                   variant="ghost"
                   size="icon"
+                  tabIndex={-1}
                   aria-label="Edit message"
                   className="h-6 w-6"
                   onClick={onStartEdit}
@@ -1158,6 +1540,7 @@ const MessageRow = memo(function MessageRow({
                   type="button"
                   variant="ghost"
                   size="icon"
+                  tabIndex={-1}
                   aria-label="Delete message"
                   className="h-6 w-6 text-danger hover:text-danger"
                   onClick={confirmDelete}
@@ -1421,9 +1804,12 @@ function WebhookEmbedCard({ embed }: { embed: WebhookEmbed }) {
 function ReplyQuote({
   replyTo,
   onJump,
+  tabIndex,
 }: {
   replyTo: NonNullable<ChatMessage["replyTo"]>;
   onJump: (messageId: string) => void;
+  /** -1 outside the active row — see `controlTabIndex` in MessageRow. */
+  tabIndex: number;
 }) {
   if (replyTo.deleted) {
     return (
@@ -1437,10 +1823,12 @@ function ReplyQuote({
   return (
     <button
       type="button"
+      tabIndex={tabIndex}
       onClick={() => onJump(replyTo.id)}
-      className="mb-0.5 flex w-full min-w-0 items-center gap-1.5 text-left text-xs text-text-muted hover:text-text"
+      aria-label={`Jump to ${replyTo.authorName}'s message: ${replyTo.excerpt}`}
+      className="mb-0.5 flex w-full min-w-0 items-center gap-1.5 text-left text-xs text-text-muted hover:text-text focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
     >
-      <CornerUpLeft className="h-3 w-3 shrink-0" />
+      <CornerUpLeft className="h-3 w-3 shrink-0" aria-hidden />
       <span className="shrink-0 font-medium text-accent">
         {replyTo.authorName}
       </span>
@@ -1502,6 +1890,7 @@ function EditComposer({
       <textarea
         ref={ref}
         value={value}
+        aria-label="Edit message"
         rows={Math.min(8, value.split("\n").length + 1)}
         onChange={(event) => setValue(event.target.value)}
         onKeyDown={(event) => {
@@ -1529,6 +1918,8 @@ interface ReactionBarProps {
   onToggle: (emoji: string) => void;
   onOpenPicker: () => void;
   onClosePicker: () => void;
+  /** -1 outside the active row — see `controlTabIndex` in MessageRow. */
+  tabIndex: number;
 }
 
 function ReactionBar({
@@ -1537,6 +1928,7 @@ function ReactionBar({
   onToggle,
   onOpenPicker,
   onClosePicker,
+  tabIndex,
 }: ReactionBarProps) {
   const hasReactions = reactions.length > 0;
 
@@ -1550,23 +1942,31 @@ function ReactionBar({
         <button
           key={reaction.emoji}
           type="button"
+          tabIndex={tabIndex}
           onClick={() => onToggle(reaction.emoji)}
+          aria-pressed={reaction.me}
+          aria-label={`${reaction.emoji} reaction, ${reaction.count} ${
+            reaction.count === 1 ? "person" : "people"
+          }${reaction.me ? ", you reacted — activate to remove" : " — activate to react"}`}
           className={cn(
-            "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors",
+            "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60",
             reaction.me
               ? "border-signal/50 bg-signal/15 text-signal"
               : "border-ink-4 bg-ink-3/80 text-paper-muted hover:border-ink-4 hover:text-paper",
           )}
         >
-          <span className="text-sm leading-none">{reaction.emoji}</span>
+          <span className="text-sm leading-none" aria-hidden>
+            {reaction.emoji}
+          </span>
           <span className="font-medium tabular-nums">{reaction.count}</span>
         </button>
       ))}
       <button
         type="button"
+        tabIndex={tabIndex}
         aria-label="Add reaction"
         onClick={onOpenPicker}
-        className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-dashed border-ink-4 text-paper-muted hover:border-signal/50 hover:text-signal"
+        className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-dashed border-ink-4 text-paper-muted hover:border-signal/50 hover:text-signal focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
       >
         <SmilePlus className="h-3 w-3" />
       </button>

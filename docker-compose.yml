@@ -56,10 +56,16 @@ services:
     image: livekit/livekit-server:latest
     profiles: ["livekit"]
     command: --dev --bind 0.0.0.0
+    # These are the ports `--dev` actually uses — check the container's startup
+    # line (`"rtc.portTCP": 7881, "rtc.portUDP": {"Start":7882}`) before
+    # changing them. A previous version of this file published 50000-50060/udp,
+    # which LiveKit never binds in dev mode, so the mapping was decoration: media
+    # only worked because Docker Desktop happens to route to the container IP the
+    # SFU advertises. Publishing 7882/udp is what makes that a supported path.
     ports:
       - "7880:7880"      # signaling (ws)
-      - "7881:7881"      # WebRTC over TCP
-      - "50000-50060:50000-50060/udp"  # WebRTC media
+      - "7881:7881"      # WebRTC over TCP (ICE fallback)
+      - "7882:7882/udp"  # WebRTC media (UDP mux)
     environment:
       # `--dev` enables the well-known devkey/secret pair.
       LIVEKIT_KEYS: "devkey: secret"

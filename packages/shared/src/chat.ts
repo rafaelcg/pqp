@@ -13,6 +13,8 @@ import {
   MAX_ATTACHMENTS_PER_MESSAGE,
 } from "./attachments.js";
 import { embedSchema } from "./embeds.js";
+import { sanctionNoticeSchema } from "./sanctions.js";
+import { setIdleMessageSchema } from "./status.js";
 import { webhookEmbedSchema } from "./webhooks.js";
 
 export const joinChannelMessageSchema = z.object({
@@ -204,6 +206,12 @@ export const chatServerMessageSchema = z.discriminatedUnion("type", [
   presenceUpdateSchema,
   typingBroadcastSchema,
   channelActivitySchema,
+  // A refusal is a chat outcome: it is sent over the chat socket, in response
+  // to a chat action, and it describes what happened to a message somebody
+  // tried to send. It belongs in the type the chat socket is declared to carry,
+  // and being in it is what lets `App.tsx` route it by name instead of letting
+  // it fall through to the voice signaling handler.
+  sanctionNoticeSchema,
 ]);
 
 /**
@@ -220,6 +228,12 @@ export const chatClientMessageSchema = z
     messageCreateFrameSchema,
     reactionToggleMessageSchema,
     typingMessageSchema,
+    // Not chat, but it rides the chat socket because the thing it describes IS
+    // the socket: "the person holding this connection stopped touching their
+    // keyboard". Sending it over HTTP would need a way to name one connection
+    // from outside it, which is an identifier this design does not otherwise
+    // need to invent.
+    setIdleMessageSchema,
   ])
   .superRefine((message, ctx) => {
     if (message.type === "message-create") {
@@ -227,11 +241,31 @@ export const chatClientMessageSchema = z
     }
   });
 
-/** Server message types the chat controller owns (everything else is voice). */
+/**
+ * The chat frames that may be **fanned out to a whole channel**.
+ *
+ * Its one caller is the cluster relay in `server/src/ws/chat.ts`, which takes a
+ * frame published by another instance and delivers it to every socket in a
+ * channel. So this is not "every member of `chatServerMessageSchema`" — it is
+ * the subset for which delivering to everyone is the correct thing to do, and
+ * the two lists are allowed to differ in exactly one direction.
+ *
+ * Every *broadcast* type must be listed: a type missing here is a frame the
+ * relay silently drops. `message-deleted` was missing exactly that way; both
+ * spellings are live on the wire (see the two schemas above, and the client's
+ * `use-chat.ts`, which handles them in one case block).
+ *
+ * `sanction-notice` is deliberately absent, and must stay absent. It is
+ * addressed to one person — it names their timeout, its expiry and its reason —
+ * and the server delivers it straight to that socket. Listing it here would
+ * make the relay willing to hand one member's sanction to everyone in the
+ * channel, which is a disclosure this guard is the last thing standing between.
+ */
 export const CHAT_SERVER_MESSAGE_TYPES = [
   "message-broadcast",
   "message-update",
   "message-delete",
+  "message-deleted",
   "reaction-broadcast",
   "presence-update",
   "typing-broadcast",

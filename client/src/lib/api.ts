@@ -1,4 +1,5 @@
 import type {
+  AgeCheckResponse,
   Attachment,
   AttachmentUrlResponse,
   AuditLogPage,
@@ -13,13 +14,21 @@ import type {
   DmSummary,
   Gif,
   Invite,
+  MemberTimeout,
   Message,
   MessageSearchResponse,
+  CreateReportRequest,
   PublicUser,
+  Report,
+  ReportPage,
+  ReportStatus,
+  ReportSummaryPage,
+  ResolveReportRequest,
   Server,
   User,
   UserPreferences,
   UserSearchResponse,
+  UserStatus,
   VoiceBackendType,
   VoiceSessionInfo,
   Webhook,
@@ -180,6 +189,109 @@ export const updateMe = (body: {
 /** Patch of changed keys in, whole merged object out. */
 export const updatePreferences = (body: UserPreferences) =>
   patch<{ preferences: UserPreferences }>("/api/me/preferences", body);
+
+/**
+ * The 18+ declaration. One per account — a second call answers 409, and the
+ * client is not built to recover from that beyond re-reading `/api/me`, which
+ * is the correct behaviour: there is nothing to retry.
+ *
+ * `dateOfBirth` is a bare `YYYY-MM-DD` calendar date. No timezone is sent and
+ * none should be: the server decides the boundary, and a date carrying the
+ * browser's offset is a date the browser could move.
+ */
+export const submitAgeCheck = (dateOfBirth: string) =>
+  post<AgeCheckResponse>("/api/me/age-check", { dateOfBirth });
+
+// ---------------------------------------------------------- your own data
+
+/**
+ * Everything the service holds about you, as a file (LGPD art. 18, II and V).
+ *
+ * A `Blob` rather than parsed JSON, for the same reason `exportServerData`
+ * below is: this is a file the browser is about to save, not data the app
+ * reads. It shares that function's auth-and-retry path and skips only the
+ * "parse it as JSON" step.
+ */
+export async function exportMyData(): Promise<Blob> {
+  const token = await tokenProvider();
+  let response = await request("/api/me/export", {}, token);
+  if (response.status === 401) {
+    const refreshed = await tokenProvider({ forceRefresh: true });
+    if (refreshed) {
+      response = await request("/api/me/export", {}, refreshed);
+    }
+  }
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as { error?: string };
+    throw new ApiError(response.status, body.error ?? "Export failed");
+  }
+  return response.blob();
+}
+
+/** A server the caller owns that somebody else is still in, so deletion is
+ * refused until they transfer it or delete it. */
+export interface BlockingOwnedServer {
+  id: string;
+  name: string;
+  otherMemberCount: number;
+}
+
+/**
+ * The 409 the delete answers when owned servers are in the way. Carries the
+ * list so the UI can name them, rather than telling the user to go and find
+ * out for themselves which server is the problem.
+ */
+export class OwnedServersError extends ApiError {
+  constructor(
+    message: string,
+    readonly servers: BlockingOwnedServer[],
+  ) {
+    super(409, message);
+    this.name = "OwnedServersError";
+  }
+}
+
+/**
+ * Delete your own account (LGPD art. 18, IV and VI). Irreversible.
+ *
+ * `confirm` is the account's own handle, typed by the user — see
+ * `deleteConfirmationMatches` in @pqp/shared, which both this caller's button
+ * state and the server's refusal are built on, so they cannot disagree about
+ * what counts as confirmed.
+ *
+ * Driven through `request()` rather than `apiFetch` because the one refusal the
+ * UI has to *act* on — 409, blocked by owned servers — carries a list of those
+ * servers in the body, and `apiFetch` reduces every error to its `error`
+ * string. Retrying once on a 401 is copied from there rather than shared,
+ * because that is the only part of it this needs.
+ */
+export async function deleteMyAccount(confirm: string): Promise<void> {
+  const body = JSON.stringify({ confirm });
+  const token = await tokenProvider();
+  let response = await request("/api/me", { method: "DELETE", body }, token);
+  if (response.status === 401) {
+    const refreshed = await tokenProvider({ forceRefresh: true });
+    if (refreshed) {
+      response = await request("/api/me", { method: "DELETE", body }, refreshed);
+    }
+  }
+  if (response.ok) {
+    return;
+  }
+
+  const failure = (await response.json().catch(() => ({}))) as {
+    error?: string;
+    code?: string;
+    servers?: BlockingOwnedServer[];
+  };
+  if (response.status === 409 && failure.code === "owned_servers") {
+    throw new OwnedServersError(
+      failure.error ?? "Servers you own are in the way",
+      failure.servers ?? [],
+    );
+  }
+  throw new ApiError(response.status, failure.error ?? "Could not delete account");
+}
 
 // -------------------------------------------------------------------- voice
 
@@ -443,6 +555,17 @@ export interface ServerMember {
   tag: string | null;
   role: "owner" | "admin" | "member";
   avatarUrl: string | null;
+  /**
+   * Resolved live by the server from its connection registry — never stored, and
+   * never `invisible`: somebody hidden resolves to `offline` here exactly like
+   * somebody who is genuinely away.
+   *
+   * Optional so a client built against this shape still parses a response from
+   * an API that predates status, and read as `offline` when absent rather than
+   * as online, so the older-server case degrades to "nobody is shown as here"
+   * instead of "everybody is".
+   */
+  status?: UserStatus;
 }
 
 export const fetchMembers = (serverId: string) =>
@@ -482,6 +605,31 @@ export interface ServerBan {
 
 export const listBans = (serverId: string) =>
   apiFetch<{ bans: ServerBan[] }>(`/api/servers/${serverId}/bans`);
+
+/**
+ * Timeouts — the temporary sanction between deleting a message and banning the
+ * account. `listTimeouts` returns only the ones still running: expiry is
+ * evaluated by the server on every read, so there is no "expired" state for a
+ * client to filter out or, worse, to get wrong.
+ */
+export const listTimeouts = (serverId: string) =>
+  apiFetch<{ timeouts: MemberTimeout[] }>(
+    `/api/servers/${serverId}/timeouts`,
+  );
+
+export const timeoutMember = (
+  serverId: string,
+  userId: string,
+  minutes: number,
+  reason?: string | null,
+) =>
+  post<{ timeout: { expiresAt: string }; message: string }>(
+    `/api/servers/${serverId}/timeouts`,
+    { userId, minutes, reason: reason ?? null },
+  );
+
+export const liftTimeout = (serverId: string, userId: string) =>
+  del<{ ok: boolean }>(`/api/servers/${serverId}/timeouts/${userId}`);
 
 /** `before` is the last-loaded entry's own `id` — a bare, ever-increasing
  * cursor, unlike the message list's timestamp-plus-id pair (see the schema
@@ -608,3 +756,43 @@ export const joinInvite = (code: string) =>
 
 export const previewInvite = (code: string) =>
   apiFetch<{ invite: Invite }>(`/api/invites/${encodeURIComponent(code)}`);
+
+// ------------------------------------------------------------------ reports
+
+/**
+ * File a report. The body says *what* is wrong, never where the report should
+ * go — the server derives that from the reported message or the named server,
+ * so a client cannot aim a complaint at the wrong moderators.
+ */
+export const createReport = (body: CreateReportRequest) =>
+  post<{ report: Report }>("/api/reports", body);
+
+/** Same bare-integer cursor contract as the audit log. */
+function reportQuery(options: { before?: string; status?: ReportStatus }) {
+  const params = new URLSearchParams();
+  if (options.before) params.set("before", options.before);
+  if (options.status) params.set("status", options.status);
+  const query = params.toString();
+  return query ? `?${query}` : "";
+}
+
+export const fetchServerReports = (
+  serverId: string,
+  options: { before?: string; status?: ReportStatus } = {},
+) =>
+  apiFetch<ReportPage>(
+    `/api/servers/${serverId}/reports${reportQuery(options)}`,
+  );
+
+/**
+ * The reporter's own reports, in the narrow shape they may see — no moderator
+ * name and no snapshot of anyone's content.
+ */
+export const fetchMyReports = (
+  options: { before?: string; status?: ReportStatus } = {},
+) => apiFetch<ReportSummaryPage>(`/api/reports/mine${reportQuery(options)}`);
+
+export const resolveReport = (
+  reportId: string,
+  body: ResolveReportRequest,
+) => patch<{ report: Report }>(`/api/reports/${reportId}`, body);

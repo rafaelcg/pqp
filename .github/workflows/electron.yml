@@ -10,11 +10,17 @@ concurrency:
   group: electron-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  # electron-builder needs to create/update the draft release it publishes
+  # `latest-mac.yml` / `latest.yml` into. Without those files electron-updater
+  # reads the feed as "no update available" forever.
+  contents: write
+
 jobs:
   build:
     name: Build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -56,11 +62,153 @@ jobs:
           VITE_DEV_AUTH_BYPASS: "false"
         run: pnpm --filter @pqp/client build
 
-      - name: Package Electron (unsigned)
+      # Signing and notarization are OPTIONAL. A fork, or a run before the
+      # secrets exist, produces an unsigned build and still succeeds — an
+      # unsigned build is a broken download, but a red CI on every fork is
+      # worse than a warning here.
+      #
+      # macOS only: CSC_LINK / CSC_KEY_PASSWORD are also read by the Windows
+      # signer, so they are scoped to the mac job and unset elsewhere. Windows
+      # signing, when it happens, uses WIN_CSC_LINK / WIN_CSC_KEY_PASSWORD.
+      - name: Package Electron
         working-directory: electron
+        shell: bash
         env:
-          CSC_IDENTITY_AUTO_DISCOVERY: "false"
-        run: pnpm exec electron-builder --${{ matrix.platform }}
+          PLATFORM: ${{ matrix.platform }}
+          IS_TAG: ${{ startsWith(github.ref, 'refs/tags/v') }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          args=("--${PLATFORM}")
+
+          if [ "$PLATFORM" = "mac" ]; then
+            if [ -n "${CSC_LINK:-}" ]; then
+              echo "::notice::Signing macOS build with CSC_LINK."
+              echo "MAC_SIGNED=true" >> "$GITHUB_ENV"
+              if [ -n "${APPLE_API_KEY_P8:-}" ] && [ -n "${APPLE_API_KEY_ID:-}" ] && [ -n "${APPLE_API_ISSUER:-}" ]; then
+                # App Store Connect API key: preferred, does not expire when the
+                # Apple ID password changes. @electron/notarize shells out to
+                # `xcrun notarytool` with these, and so does
+                # electron/scripts/notarize-dmg.js, which notarizes and staples
+                # the .dmg itself — electron-builder only does the .app.
+                #
+                # No team id is passed here on purpose, and none is hardcoded:
+                # notarytool resolves the team from the App Store Connect
+                # issuer that owns the API key, and this account has exactly
+                # one team (WXBFUF9WMA) so there is nothing to disambiguate.
+                # A team id is only *required* on the APPLE_ID fallback below,
+                # which is why APPLE_TEAM_ID is read there and only there.
+                printf '%s' "$APPLE_API_KEY_P8" | base64 --decode > "$RUNNER_TEMP/asc-api-key.p8"
+                export APPLE_API_KEY="$RUNNER_TEMP/asc-api-key.p8"
+                args+=("-c.mac.notarize=true")
+                echo "MAC_NOTARIZED=true" >> "$GITHUB_ENV"
+                echo "::notice::Notarizing with an App Store Connect API key."
+              elif [ -n "${APPLE_ID:-}" ] && [ -n "${APPLE_APP_SPECIFIC_PASSWORD:-}" ] && [ -n "${APPLE_TEAM_ID:-}" ]; then
+                args+=("-c.mac.notarize.teamId=${APPLE_TEAM_ID}")
+                echo "MAC_NOTARIZED=true" >> "$GITHUB_ENV"
+                echo "::notice::Notarizing with an Apple ID app-specific password."
+              else
+                echo "::warning::Signed but NOT notarized — Gatekeeper will still quarantine this build. Set APPLE_API_KEY_P8/APPLE_API_KEY_ID/APPLE_API_ISSUER, or APPLE_ID/APPLE_APP_SPECIFIC_PASSWORD/APPLE_TEAM_ID."
+              fi
+            else
+              echo "::warning::No CSC_LINK — building macOS UNSIGNED. The .dmg will be quarantined by Gatekeeper and auto-update (Squirrel.Mac) will not work."
+              export CSC_IDENTITY_AUTO_DISCOVERY=false
+            fi
+          else
+            # Never let the macOS cert leak into a Windows/Linux signer.
+            unset CSC_LINK CSC_KEY_PASSWORD
+            if [ "$PLATFORM" = "win" ] && [ -z "${WIN_CSC_LINK:-}" ]; then
+              echo "::warning::No WIN_CSC_LINK — Windows build is unsigned; SmartScreen will warn on download."
+              export CSC_IDENTITY_AUTO_DISCOVERY=false
+            fi
+          fi
+
+          # Publish only from a version tag. Everything else is an artifact you
+          # download from the run, so a push to main cannot rewrite the update
+          # feed that installed apps are polling.
+          if [ "$IS_TAG" = "true" ]; then
+            args+=("--publish" "always")
+          else
+            args+=("--publish" "never")
+          fi
+
+          echo "electron-builder ${args[*]}"
+          pnpm exec electron-builder "${args[@]}"
+
+      # A green "Package Electron" is NOT evidence that the download works.
+      # Run 31183972324 was green and shipped a .dmg that Gatekeeper rejects
+      # with "source=no usable signature": electron-builder had notarized and
+      # stapled the .app inside, and nothing at all to the disk image around
+      # it. This step asks Gatekeeper about the file a user actually
+      # double-clicks, and fails the job when the answer is wrong.
+      - name: Verify macOS signing and notarization
+        if: matrix.platform == 'mac'
+        working-directory: electron
+        shell: bash
+        run: |
+          set -uo pipefail
+          shopt -s nullglob
+
+          if [ "${MAC_SIGNED:-false}" != "true" ]; then
+            echo "::warning::Unsigned macOS build — skipping Gatekeeper verification."
+            exit 0
+          fi
+
+          status=0
+          check() { # check <label> <command...>
+            local label="$1"; shift
+            echo "--- $label"
+            if "$@" 2>&1; then
+              echo "    OK"
+            else
+              echo "::error::$label FAILED"
+              status=1
+            fi
+          }
+
+          # spctl exits 0 on "accepted" and non-zero on "rejected", so its exit
+          # code is the assertion. -vvv is what prints the `source=` line that
+          # distinguishes "Notarized Developer ID" from plain "Developer ID".
+          for dmg in release/*.dmg; do
+            echo "=== $dmg"
+            check "spctl assess $dmg" spctl -a -vvv -t install "$dmg"
+            check "spctl assess (primary-signature) $dmg" \
+              spctl -a -vvv -t open --context context:primary-signature "$dmg"
+            if [ "${MAC_NOTARIZED:-false}" = "true" ]; then
+              check "stapler validate $dmg" xcrun stapler validate "$dmg"
+            fi
+          done
+
+          for app in release/mac*/*.app; do
+            echo "=== $app"
+            check "codesign verify $app" \
+              codesign --verify --deep --strict --verbose=2 "$app"
+            check "spctl assess $app" spctl -a -vvv -t exec "$app"
+            if [ "${MAC_NOTARIZED:-false}" = "true" ]; then
+              check "stapler validate $app" xcrun stapler validate "$app"
+            fi
+          done
+
+          # The .zip cannot carry a ticket — stapler has nowhere to write one
+          # into a zip archive. Squirrel.Mac checks the downloaded bundle's
+          # code signature against the running app's, not its notarization, and
+          # electron-updater fetches over Node's HTTP stack so the staged file
+          # never gets a com.apple.quarantine xattr. The .app inside the zip is
+          # stapled anyway, which covers a human downloading it from a browser.
+          # So there is nothing to assert about the zip beyond the app checks
+          # above, which ran on the same bundle the zip was made from.
+
+          exit $status
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

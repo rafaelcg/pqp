@@ -1,5 +1,6 @@
 import { formatUserTag } from "@pqp/shared";
 import { getPool } from "../db.js";
+import { invalidateServerAudience } from "./servers.js";
 
 /** Remove a user's server membership and any private-channel memberships. */
 async function removeMembership(serverId: string, userId: string): Promise<void> {
@@ -14,6 +15,10 @@ async function removeMembership(serverId: string, userId: string): Promise<void>
      )`,
     [userId, serverId],
   );
+  // The kick/ban path, and the one where a stale cached audience is worst: the
+  // person is gone from the server and would otherwise keep receiving activity
+  // badges from every channel in it.
+  invalidateServerAudience(serverId);
 }
 
 export async function kickMember(
@@ -51,6 +56,12 @@ export async function banMember(
       [userId, serverId],
     );
     await client.query("COMMIT");
+    // Not shared with `removeMembership` above: a ban writes the ban row and
+    // the two deletes in one transaction, so it has its own copy of them — and
+    // therefore needs its own copy of this. Adding the invalidation only to
+    // `removeMembership` left a kicked member evicted from the cache and a
+    // *banned* one still in it, which is the wrong way round.
+    invalidateServerAudience(serverId);
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -78,6 +89,43 @@ export async function isBanned(
     [serverId, userId],
   );
   return result.rows.length > 0;
+}
+
+/**
+ * The private channels a demoted admin can no longer see.
+ *
+ * `channelVisibleSql` admits owners and admins to a private channel **on rank
+ * alone**, with no `channel_members` row of their own. So `admin` → `member`
+ * silently revokes access to every private channel they were never explicitly
+ * added to — without touching a single membership row, which is exactly why the
+ * kick path's eviction never fired for it and why a cache invalidation alone was
+ * not enough. Invalidating the audience cache fixes what the *next* query
+ * answers; it does nothing about the socket that is already inside the channel,
+ * already receiving every message body, and already in its voice room.
+ *
+ * The `NOT EXISTS` is the whole correctness condition: an admin who was *also*
+ * explicitly added to a private channel keeps it as a plain member, and
+ * evicting them would be a bug in the opposite direction.
+ *
+ * Public channels are absent because a demotion changes nothing about them, and
+ * `kind = 'server'` is implied by `server_id` being non-null
+ * (`channels_server_kind_check`), so a conversation can never appear here.
+ */
+export async function listRevokedPrivateChannelIds(
+  serverId: string,
+  userId: string,
+): Promise<string[]> {
+  const result = await getPool().query<{ id: string }>(
+    `SELECT c.id FROM channels c
+     WHERE c.server_id = $1
+       AND c.is_private = TRUE
+       AND NOT EXISTS (
+         SELECT 1 FROM channel_members cm
+         WHERE cm.channel_id = c.id AND cm.user_id = $2
+       )`,
+    [serverId, userId],
+  );
+  return result.rows.map((row) => row.id);
 }
 
 export async function listBans(serverId: string) {

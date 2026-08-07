@@ -60,6 +60,19 @@ includes the URL bar, so the composer sits below the fold until the bar
 collapses. Applied via `@supports` on top of the existing `100%`, so a browser
 without `dvh` keeps the old behaviour rather than losing its height entirely.
 
+**Dialogs use `visualViewport`, because `dvh` is not enough for them.** `dvh`
+tracks the URL bar and nothing else: neither the on-screen keyboard nor a zoom
+changes it, and both change what the user can see. A `position: fixed` overlay
+sized to the layout viewport is then bigger than the screen — with the keyboard
+up its footer is underneath the keys, and under Safari's focus magnification
+(which fires on any focused field whose text is smaller than 16px) it is wider
+than the display and loses its own left edge off-screen. `client/src/components/
+ui/dialog.tsx` positions the dialog layer from `window.visualViewport` instead,
+falling back to `inset-0` where the API is missing, and the stylesheet holds
+fields inside a dialog at 16px so the magnification has no reason to fire.
+Geometry is asserted in `client/e2e/dialog-mobile-layout.spec.ts` at 320px and
+390px — "the dialog opened" was true throughout the bug that motivated it.
+
 ## Icons
 
 `scripts/generate-icons.py` renders the whole set from one definition — run it

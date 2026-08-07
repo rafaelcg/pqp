@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!--
+    macOS variant of build/icon.svg.
+
+    macOS does not mask app icons, it expects the artwork to sit inside the
+    Big Sur grid: a rounded square 824pt wide on a transparent 1024pt canvas.
+    A full-bleed icon looks oversized next to every system app in the Dock,
+    which is the one place this icon is always seen beside others.
+
+    Identical drawing to build/icon.svg, uniformly scaled to 824/1024 and
+    centred, so the corner radius and the mark scale together.
+
+    Regenerate the binaries with: node electron/scripts/generate-icons.js
+  -->
+  <g transform="translate(100 100) scale(0.8046875)">
+    <rect width="1024" height="1024" rx="225.28" ry="225.28" fill="#090E12"/>
+    <g fill="#BBEC4C">
+      <path d="M346.93 737.12 H473.91 L365.98 887.68 Z"/>
+      <rect x="194.56" y="243.92" width="634.88" height="495.20" rx="148.56" ry="148.56"/>
+    </g>
+    <g fill="#090E12">
+      <circle cx="362.80" cy="476.66" r="52.00"/>
+      <circle cx="512.00" cy="476.66" r="52.00"/>
+      <circle cx="661.20" cy="476.66" r="52.00"/>
+    </g>
+  </g>
+</svg>

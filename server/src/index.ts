@@ -6,9 +6,21 @@ import { dirname, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 import { handleApi } from "./api/index.js";
-import { assertAuthConfig, isDevAuthBypassEnabled } from "./auth/clerk.js";
+import {
+  assertAuthConfig,
+  isDevAuthBypassEnabled,
+  sweepAuthCaches,
+} from "./auth/clerk.js";
 import { closePool, getPool, initDb } from "./db.js";
-import { corsHeaders, handleCors, SECURITY_HEADERS, sendError } from "./lib/http.js";
+import { closeBus, INSTANCE_ID, setBusTransport } from "./lib/bus.js";
+import { createPostgresBusTransport } from "./lib/bus-postgres.js";
+import {
+  assertCorsConfig,
+  corsHeaders,
+  handleCors,
+  SECURITY_HEADERS,
+  sendError,
+} from "./lib/http.js";
 import { logEvent } from "./lib/log.js";
 import {
   clientAddress,
@@ -18,15 +30,25 @@ import {
 import {
   isAttachmentsConfigured,
   sweepOrphanedAttachments,
+  sweepQuarantinedAttachments,
 } from "./services/attachments.js";
+import { sweepPendingAccountDeletions } from "./services/account.js";
 import { pruneAuditLog } from "./services/audit.js";
+import { pruneResolvedReports } from "./services/reports.js";
+import { pruneExpiredTimeouts } from "./services/sanctions.js";
 import { sweepMessageRetention } from "./services/retention.js";
+import { sweepChannelAudiences } from "./services/servers.js";
 import {
   getStatusSummary,
   pruneStatusSamples,
   recordStatusSamples,
 } from "./services/status.js";
-import { getSocketUser, handleWsConnection } from "./ws/index.js";
+import {
+  getSocketUser,
+  handleWsConnection,
+  startClusterPresenceRefresh,
+  startClusterStatusRefresh,
+} from "./ws/index.js";
 
 const PORT = Number(process.env.PORT ?? 3001);
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -137,6 +159,7 @@ const httpServer = createServer((req, res) => {
         res.writeHead(200, {
           "Content-Type": "application/json",
           "Cache-Control": "no-store",
+          ...SECURITY_HEADERS,
         });
         // The deployed commit, so "is the API actually running this code?" has
         // an answer from outside. It did not, and a stalled deploy went
@@ -152,6 +175,7 @@ const httpServer = createServer((req, res) => {
         res.writeHead(503, {
           "Content-Type": "application/json",
           "Cache-Control": "no-store",
+          ...SECURITY_HEADERS,
         });
         res.end(JSON.stringify({ ok: false, error: "database unavailable" }));
       }
@@ -175,6 +199,7 @@ const httpServer = createServer((req, res) => {
           ...corsHeaders(req),
           "Content-Type": "application/json",
           "Cache-Control": "no-store",
+          ...SECURITY_HEADERS,
         });
         res.end(JSON.stringify({ error: "Too many requests" }));
         return;
@@ -188,6 +213,7 @@ const httpServer = createServer((req, res) => {
           // incident, and that is exactly when the origin is least able to
           // absorb it.
           "Cache-Control": "public, max-age=15",
+          ...SECURITY_HEADERS,
         });
         res.end(JSON.stringify(summary));
       } catch {
@@ -197,6 +223,7 @@ const httpServer = createServer((req, res) => {
           ...corsHeaders(req),
           "Content-Type": "application/json",
           "Cache-Control": "no-store",
+          ...SECURITY_HEADERS,
         });
         res.end(JSON.stringify({ error: "status unavailable" }));
       }
@@ -274,7 +301,14 @@ const heartbeat = setInterval(() => {
 wss.on("close", () => clearInterval(heartbeat));
 
 // Drop expired rate-limit windows so the map doesn't grow unbounded.
-const rateLimitSweep = setInterval(() => sweepRateLimits(), 60_000);
+const rateLimitSweep = setInterval(() => {
+  sweepRateLimits();
+  // Same cadence, same reason: all three are maps that only shrink if swept.
+  // The audience cache is capped as well as swept, so this is about returning
+  // memory after a busy server goes quiet, not about bounding it.
+  sweepAuthCaches();
+  sweepChannelAudiences();
+}, 60_000);
 rateLimitSweep.unref?.();
 
 /**
@@ -290,6 +324,18 @@ rateLimitSweep.unref?.();
 const ATTACHMENT_SWEEP_INTERVAL_MS = 60 * 60_000;
 
 async function sweepAttachments(): Promise<void> {
+  // Quarantine expiry runs whether or not storage is configured, and outside
+  // the guard below on purpose: a quarantined row can be a remote GIF, which
+  // has no bucket anywhere in its life cycle, and a deployment that turned S3
+  // off after scanning had already refused something would otherwise hold those
+  // rows forever. `sweepQuarantinedAttachments` never touches an
+  // illegal-content row at any age — see its comment.
+  try {
+    await sweepQuarantinedAttachments();
+  } catch (error) {
+    console.error("[content-safety] quarantine sweep failed:", error);
+  }
+
   if (!isAttachmentsConfigured()) {
     return;
   }
@@ -317,6 +363,36 @@ const auditLogPrune = setInterval(() => {
   });
 }, AUDIT_LOG_PRUNE_INTERVAL_MS);
 auditLogPrune.unref?.();
+
+/** Same cadence and the same failure tolerance as the audit prune, but a
+ * different reason for existing: a resolved report holds a copy of reported
+ * content, so this is a privacy sweep rather than a disk one. Open reports are
+ * never touched — see `pruneResolvedReports`. */
+const reportPrune = setInterval(() => {
+  void pruneResolvedReports().catch((error) => {
+    console.error("[reports] prune failed:", error);
+  });
+}, AUDIT_LOG_PRUNE_INTERVAL_MS);
+reportPrune.unref?.();
+
+/**
+ * Expired timeouts.
+ *
+ * The one sweep in this file that NOTHING DEPENDS ON. Every read in
+ * services/sanctions.ts filters on `expires_at > NOW()`, so a timeout ends when
+ * it says it ends whether or not this timer ever fires; deleting this block
+ * would change no behaviour and only leave one dead row per sanction ever
+ * issued. It is here for the same reason the audit prune is — disk — and it is
+ * worth saying out loud, because a sanction whose *correctness* depended on a
+ * cron would be a sanction that quietly outlives its sentence when a deploy
+ * restarts the process before the timer fires.
+ */
+const timeoutPrune = setInterval(() => {
+  void pruneExpiredTimeouts().catch((error) => {
+    console.error("[sanctions] timeout prune failed:", error);
+  });
+}, AUDIT_LOG_PRUNE_INTERVAL_MS);
+timeoutPrune.unref?.();
 
 /** Daily: retention is measured in days, so nothing is lost by checking once
  * a day rather than continuously. */
@@ -349,8 +425,74 @@ const retentionSweep = setInterval(() => {
 }, RETENTION_SWEEP_INTERVAL_MS);
 retentionSweep.unref?.();
 
+/**
+ * Finish account deletions that were interrupted between the Clerk call and the
+ * local DELETE — see the ordering note on `deleteAccount`.
+ *
+ * Five minutes rather than daily, and unlike every other sweep in this file it
+ * is not about disk: each pending row is an account whose owner has been told
+ * their data is gone and whose sign-in already is. A day of that is a day of
+ * being wrong about a statutory promise.
+ */
+const PENDING_DELETION_SWEEP_INTERVAL_MS = 5 * 60_000;
+
+const pendingDeletionSweep = setInterval(() => {
+  void sweepPendingAccountDeletions()
+    .then((finished) => {
+      if (finished > 0) {
+        console.warn(`[account] finished ${finished} interrupted deletion(s)`);
+      }
+    })
+    .catch((error) => {
+      console.error("[account] pending deletion sweep failed:", error);
+    });
+}, PENDING_DELETION_SWEEP_INTERVAL_MS);
+pendingDeletionSweep.unref?.();
+
+/**
+ * Multi-instance chat, off by default.
+ *
+ * Unset (or `off`) leaves every fan-out purely in-process — exactly what this
+ * server has always done, and the only supported configuration for **mesh
+ * voice**, whose peer registry and per-room ceiling are per-process and are
+ * deliberately *not* on the bus (see `server/src/ws/voice.ts`).
+ *
+ * Turning it on shares chat: broadcasts, presence, typing, unread badges and
+ * evictions. It does not share rate-limit buckets — see the note in
+ * `lib/rate-limit.ts` for what that multiplies.
+ */
+function startClusterBus(): (() => void) | null {
+  const mode = process.env.CLUSTER_BUS ?? "off";
+  if (mode === "off") {
+    return null;
+  }
+  if (mode !== "postgres") {
+    console.warn(
+      `[bus] unknown CLUSTER_BUS=${mode} — staying single-instance. ` +
+        `Supported: "postgres", "off".`,
+    );
+    return null;
+  }
+  setBusTransport(createPostgresBusTransport());
+  logEvent("bus.enabled", { transport: "postgres", instance: INSTANCE_ID });
+  // Two independent re-announce loops, because they answer two different
+  // questions: channel presence is "who is looking at channel X", user status is
+  // "is this person around at all". Both need the same guarantee — an instance
+  // that is SIGKILLed must age out rather than leave ghosts — and both implement
+  // it the same way, but neither can be derived from the other.
+  const stopPresence = startClusterPresenceRefresh();
+  const stopStatus = startClusterStatusRefresh();
+  return () => {
+    stopPresence();
+    stopStatus();
+  };
+}
+
+let stopPresenceRefresh: (() => void) | null = null;
+
 async function main() {
   assertAuthConfig();
+  assertCorsConfig();
   if (isDevAuthBypassEnabled()) {
     console.warn(
       "[auth] DEV_AUTH_BYPASS is ON — anyone with the token 'dev-local-token' " +
@@ -359,6 +501,11 @@ async function main() {
   }
 
   await initDb();
+
+  // After initDb: the bus spills oversize frames into a table that has to
+  // exist, and before listen() so the first connected client is already served
+  // by an instance that can hear the rest of the cluster.
+  stopPresenceRefresh = startClusterBus();
 
   // One sweep per boot, on top of the interval: a process that redeploys or
   // crash-restarts more often than hourly never reaches the first tick, so on
@@ -388,10 +535,16 @@ async function shutdown(signal: string) {
   clearInterval(heartbeat);
   clearInterval(rateLimitSweep);
   clearInterval(attachmentSweep);
+  clearInterval(pendingDeletionSweep);
+  stopPresenceRefresh?.();
   for (const socket of wss.clients) {
     socket.close(1001, "Server shutting down");
   }
   await new Promise<void>((done) => httpServer.close(() => done()));
+  // Last, so the presence withdrawals that closing those sockets produces still
+  // have a bus to travel on. Best-effort — anything that misses the window is
+  // covered by the contribution TTL on the other instances.
+  await closeBus();
   await closePool();
   process.exit(0);
 }

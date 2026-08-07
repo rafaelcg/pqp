@@ -5,14 +5,21 @@ import {
   MESH_VOICE_LIMIT,
   voiceClientMessageSchema,
   type VoiceParticipant,
+  type VoiceRoomTransport,
   type VoiceSignalingMessage,
 } from "@pqp/shared";
 import type { DbUser } from "../db.js";
 import { logEvent } from "../lib/log.js";
 import { createRateLimiter } from "../lib/rate-limit.js";
 import { isDmSendBlocked } from "../services/dms.js";
+import { findTimeoutForChannel } from "../services/sanctions.js";
 import { getChannel, getChannelAudience } from "../services/servers.js";
 import { canAccessChannel } from "../services/users.js";
+import {
+  evictSfuRoom,
+  evictSfuUser,
+  evictSfuUsersExcept,
+} from "../voice/admin.js";
 import {
   getServerVoiceBackend,
   isLiveKitConfigured,
@@ -29,8 +36,94 @@ interface VoicePeer {
   sharingScreen: boolean;
 }
 
+/**
+ * VOICE IS DELIBERATELY NOT ON THE CLUSTER BUS (`lib/bus.ts`), AND MESH VOICE
+ * THEREFORE PINS THE DEPLOYMENT TO ONE INSTANCE.
+ *
+ * Relaying offer/answer/ICE through pub/sub is the obvious idea and it is not
+ * enough, because a mesh room is shared *state*, not a stream of point-to-point
+ * messages. Four things in this file read `peers` as if it were the whole room:
+ *
+ * 1. `relayToTarget` resolves `message.to` in the local map. A target on
+ *    another instance is simply absent, and the frame is dropped.
+ * 2. `welcome` and `broadcastToRoom` build the joiner's peer list from
+ *    `getRoomPeers`, which filters the local map — so two instances would form
+ *    two sub-meshes that each believe they are the room. The client rebuilds
+ *    its signaling allowlist from that roster (`knownPeerIds` in
+ *    client/src/hooks/use-voice.ts), so a partitioned roster is also a
+ *    partitioned trust boundary, not merely a cosmetic one.
+ * 3. `MESH_VOICE_LIMIT` counts local peers. Made global over a bus it would
+ *    still be a read-then-write race between instances: two simultaneous joins
+ *    each see room < limit and both admit, which is exactly the mesh quality
+ *    collapse the ceiling exists to prevent. Enforcing it properly needs an
+ *    atomic counter, not a broadcast.
+ * 4. `peer-left` is the only thing that removes a tile. A bus frame lost to a
+ *    reconnect leaves a ghost participant in a live call — visible, permanent
+ *    until rejoin, and impossible for the user to clear.
+ *
+ * A distributed peer registry solving all four is a real subsystem with its own
+ * failure modes. Until it exists, the constraint is: **mesh voice requires one
+ * instance.** Session affinity is not a workaround — two people who need to
+ * hear each other open their sockets independently and long before they pick a
+ * channel, so no routing rule can promise they land together.
+ *
+ * With LiveKit configured the picture changes: media and its signaling go
+ * straight to the SFU (the client leaves `manager` null and never relays
+ * through here), so a call spans instances fine. What stays per-instance is the
+ * *roster* — `voice-roster` occupancy badges and participant labels — which
+ * degrades to "you only see the people who happen to share your instance".
+ * That is a display bug, not an audio one, and it is the piece to put on the
+ * bus first if multi-instance voice is ever wanted.
+ */
 const peers = new Map<string, VoicePeer>();
 const socketToPeerId = new Map<WebSocket, string>();
+
+/**
+ * A VOICE ROOM HAS ONE TRANSPORT, THIS PROCESS PICKS IT, AND IT DOES NOT CHANGE
+ * WHILE THE ROOM IS OCCUPIED.
+ *
+ * Clients used to resolve mesh-vs-SFU independently, once per join, and tell
+ * nobody. Two people in the same channel could land on different transports and
+ * neither would be told: the mesh side's offers are dropped by an SFU client
+ * that has no peer-connection manager, and the mesh client is not a LiveKit
+ * participant, so it never even appears in the SFU client's peer list. Both
+ * sides see the other in the sidebar, silent, exactly like someone muted.
+ *
+ * So the room owns the decision:
+ *
+ * - It is taken from config when the room's **first** peer joins and pinned
+ *   here for as long as the room has anyone in it. A live call therefore never
+ *   changes transport under the people in it — there is no correct way to move
+ *   an in-progress mesh onto an SFU (or back) without dropping everyone's audio
+ *   mid-sentence, and "it stays as it started" is a rule clients can rely on
+ *   without any migration protocol.
+ * - The pin is dropped when the room empties, so a config change (LiveKit
+ *   added, removed, or repaired) takes effect on the next call in that channel
+ *   rather than needing a restart.
+ * - It is stated in `welcome` and in `voice-roster`, so no client has to guess.
+ *
+ * Scope: this map is per-process, like `peers` above. On a multi-instance
+ * deployment two instances with *different* LiveKit config would pin the same
+ * channel differently and split the call again — which is one more item on the
+ * list of reasons voice wants a single instance (see the note above `peers`).
+ */
+const roomTransports = new Map<string, VoiceRoomTransport>();
+
+function configuredTransport(): VoiceRoomTransport {
+  return getServerVoiceBackend() === "livekit" && isLiveKitConfigured()
+    ? "livekit"
+    : "mesh";
+}
+
+/** The transport a room is running on, or would get if it were opened now. */
+export function getRoomTransport(voiceChannelId: string): VoiceRoomTransport {
+  return roomTransports.get(voiceChannelId) ?? configuredTransport();
+}
+
+/** Test hook: forget every pinned room transport. */
+export function resetVoiceRoomTransports(): void {
+  roomTransports.clear();
+}
 
 /**
  * Joining fans a query plus a broadcast out to a whole server, so the churn is
@@ -106,11 +199,11 @@ function broadcastRoster(voiceChannelId: string): Promise<void> {
           type: "voice-roster",
           voiceChannelId,
           participants: getRoomPeers(voiceChannelId).map(toParticipant),
+          transport: getRoomTransport(voiceChannelId),
         } satisfies VoiceSignalingMessage);
 
-        const allowed = new Set(audience.userIds);
         forEachAuthenticatedSocket((socket, user) => {
-          if (socket.readyState === 1 && allowed.has(user.id)) {
+          if (socket.readyState === 1 && audience.has(user.id)) {
             socket.send(encoded);
           }
         });
@@ -145,6 +238,12 @@ function removePeer(peerId: string) {
   if (socketToPeerId.get(peer.socket) === peerId) {
     socketToPeerId.delete(peer.socket);
   }
+  // Empty room: forget the pin, so the next call in this channel picks up the
+  // current config instead of a decision taken before LiveKit was added,
+  // removed or fixed. Nobody is mid-call, so nobody's audio moves.
+  if (getRoomPeers(voiceChannelId).length === 0) {
+    roomTransports.delete(voiceChannelId);
+  }
   logEvent("voice.leave", {
     peerId,
     userId: peer.userId,
@@ -155,11 +254,30 @@ function removePeer(peerId: string) {
   void broadcastRoster(voiceChannelId);
 }
 
+/**
+ * EVERY EVICTION BELOW HAS TWO HALVES, AND BOTH ARE MANDATORY.
+ *
+ * The mesh half drops the peer from `peers`, which makes the other clients tear
+ * down their RTCPeerConnections to it. That is the whole story only while media
+ * is peer-to-peer. With LiveKit configured the audio never passes through this
+ * process, so the mesh half is a no-op on the actual call: the evicted account
+ * stays in the SFU room and keeps talking. `voice/admin.ts` is the other half.
+ *
+ * The SFU half is fired unconditionally — not "if we found local peers". A
+ * LiveKit call legitimately spans instances (see the note above `peers`), and a
+ * client that lost its WebSocket keeps its LiveKit connection, so an empty
+ * local roster is not evidence that the room is empty. It is also
+ * fire-and-forget and cannot reject, because these helpers run *after* the
+ * moderation action has already been committed: an SFU outage must not unwind
+ * a ban. See `voice/admin.ts` for the failure-mode contract.
+ */
+
 /** Drop every peer of a channel — used when a channel is deleted or made private. */
 export function evictVoiceChannel(voiceChannelId: string) {
   for (const peer of getRoomPeers(voiceChannelId)) {
     removePeer(peer.id);
   }
+  void evictSfuRoom(voiceChannelId);
 }
 
 /** Drop everyone from a channel's voice room except the given users. */
@@ -167,15 +285,25 @@ export function evictVoiceUsersExcept(
   voiceChannelId: string,
   allowedUserIds: Set<string>,
 ) {
+  // Snapshotted before any removal: this is what lets the SFU sweep identify a
+  // participant whose token predates `participantMetadataFor` (a session that
+  // survived a rolling deploy), and `removePeer` destroys the mapping.
+  const knownIdentities = identityMapFor(getRoomPeers(voiceChannelId));
+
   for (const peer of getRoomPeers(voiceChannelId)) {
     if (!allowedUserIds.has(peer.userId)) {
       removePeer(peer.id);
     }
   }
+  void evictSfuUsersExcept(voiceChannelId, allowedUserIds, knownIdentities);
 }
 
 /** Drop a specific user from a channel's voice room (kick / access revoked). */
 export function evictVoiceUser(userId: string, serverChannelIds?: Set<string>) {
+  const knownIdentities = identityMapFor(
+    [...peers.values()].filter((peer) => peer.userId === userId),
+  );
+
   for (const peer of [...peers.values()]) {
     if (peer.userId !== userId) {
       continue;
@@ -185,6 +313,20 @@ export function evictVoiceUser(userId: string, serverChannelIds?: Set<string>) {
     }
     removePeer(peer.id);
   }
+
+  // `undefined` scope means "every room they are in", which is what the SFU
+  // side has to be told explicitly — it cannot infer the scope from a local map
+  // that may not contain the participant at all.
+  void evictSfuUser(
+    userId,
+    serverChannelIds ? [...serverChannelIds] : null,
+    knownIdentities,
+  );
+}
+
+/** LiveKit identity (peer id) → user id, for peers this instance can see. */
+function identityMapFor(roster: VoicePeer[]): Map<string, string> {
+  return new Map(roster.map((peer) => [peer.id, peer.userId]));
 }
 
 /**
@@ -243,6 +385,7 @@ export async function sendAllVoiceRosters(socket: WebSocket, user: DbUser) {
         type: "voice-roster",
         voiceChannelId,
         participants,
+        transport: getRoomTransport(voiceChannelId),
       });
     }),
   );
@@ -275,6 +418,23 @@ export async function handleVoiceMessage(
     if (await isDmSendBlocked(payload.voiceChannelId, user.id)) {
       return;
     }
+    // THE VOICE CHOKEPOINT for timeouts. `join-voice-room` is the only way into
+    // a room, so refusing it here is the whole enforcement — plus the eviction
+    // the issuing route performs for anybody already inside one.
+    //
+    // WHY REFUSING THE JOIN AND NOT A SERVER-SIDE MUTE. A mute is the more
+    // surgical sanction and it is the one this product cannot actually deliver:
+    // in mesh mode the audio never touches the server at all, so "muted" would
+    // mean asking the sanctioned client to please stop sending — which is a
+    // suggestion, not enforcement, and would be defeated by any modified
+    // client. Refusing the room is enforceable in both mesh and SFU mode, and a
+    // sanction that only works when the sanctioned party cooperates is worse
+    // than an honest blunter one. The same join reaches a conversation's call,
+    // and `findTimeoutForChannel` returns nothing for those — a server's
+    // moderators do not get to hang up their members' DM calls.
+    if (await findTimeoutForChannel(user.id, payload.voiceChannelId)) {
+      return;
+    }
 
     // `type` says which kind of *server* channel this is, and a conversation is
     // neither: it has one room that is text and voice at once, the way a DM
@@ -295,14 +455,46 @@ export async function handleVoiceMessage(
       return;
     }
 
+    // Read before any peer is removed or added: for a rejoin by the room's only
+    // occupant, removing them first would empty the room and drop the pin, and
+    // the join would silently re-decide the transport.
+    const transport = getRoomTransport(payload.voiceChannelId);
+
+    // A client that cannot run this room's transport is refused *here*, before
+    // a peer exists. Admitting it and letting it discover the mismatch a round
+    // trip later would put a participant in everyone's roster who cannot be
+    // heard — the exact failure this is here to make impossible.
+    const capabilities: VoiceRoomTransport[] = payload.transports ?? [
+      "mesh",
+      "livekit",
+    ];
+    if (!capabilities.includes(transport)) {
+      // Drop any peer this socket still holds: it is not going to be in the
+      // room, so leaving the previous one behind would leave a ghost.
+      const stale = socketToPeerId.get(socket);
+      if (stale) {
+        removePeer(stale);
+      }
+      logEvent("voice.transportUnsupported", {
+        userId: user.id,
+        voiceChannelId: payload.voiceChannelId,
+        transport,
+        capabilities,
+      });
+      send(socket, {
+        type: "voice-transport-unsupported",
+        voiceChannelId: payload.voiceChannelId,
+        transport,
+      });
+      return;
+    }
+
     // Enforce the mesh ceiling server-side. Above it, each client would carry
     // one Opus uplink per peer and quality collapses — reject instead. The
     // ceiling is a property of the mesh, so it does not apply once media is
     // routed through an SFU.
-    const usingMesh =
-      getServerVoiceBackend() !== "livekit" || !isLiveKitConfigured();
     const roomIsFull =
-      usingMesh &&
+      transport === "mesh" &&
       getRoomPeers(payload.voiceChannelId).filter((p) => p.socket !== socket)
         .length >= MESH_VOICE_LIMIT;
     if (roomIsFull) {
@@ -336,6 +528,9 @@ export async function handleVoiceMessage(
     };
     peers.set(peerId, peer);
     socketToPeerId.set(socket, peerId);
+    // Pinned only now that the room is non-empty, so `removePeer`'s cleanup
+    // above cannot race this write away.
+    roomTransports.set(payload.voiceChannelId, transport);
     logEvent("voice.join", {
       peerId,
       userId: user.id,
@@ -354,6 +549,7 @@ export async function handleVoiceMessage(
       peers: existingPeers,
       voiceChannelId: payload.voiceChannelId,
       self,
+      transport,
     });
 
     broadcastToRoom(
@@ -422,6 +618,19 @@ export async function handleVoiceMessage(
   // member of one room could open a WebRTC connection to a peer in another
   // room/server and pull their microphone audio.
   if (fromPeer.voiceChannelId !== toPeer.voiceChannelId) {
+    return;
+  }
+
+  // Mesh signaling inside an SFU room means the sender built a peer mesh in a
+  // room that is not running one. The target has no peer-connection manager and
+  // drops the frame anyway; refusing it here makes the mistake visible in the
+  // logs instead of leaving a client half-connected to a call it cannot hear.
+  if (getRoomTransport(fromPeer.voiceChannelId) !== "mesh") {
+    logEvent("voice.meshRelayInSfuRoom", {
+      userId: fromPeer.userId,
+      voiceChannelId: fromPeer.voiceChannelId,
+      messageType: payload.type,
+    });
     return;
   }
 

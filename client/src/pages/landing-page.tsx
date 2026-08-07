@@ -5,45 +5,157 @@ import {
   SignedOut,
 } from "@clerk/clerk-react";
 import { ArrowUpRight } from "lucide-react";
-import type { CSSProperties } from "react";
+import { type CSSProperties, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
+import { HeroDownload } from "@/components/marketing/hero-download";
 import { MarketingFooter } from "@/components/marketing/marketing-footer";
 import { MarketingNav } from "@/components/marketing/marketing-nav";
 import { Seo } from "@/components/marketing/seo";
 import { Button } from "@/components/ui/button";
+import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
 import { isDevAuthBypassEnabled } from "@/lib/dev-auth";
+import { useTranslation, type MessageKey } from "@/lib/i18n";
+import { cn } from "@/lib/utils";
 
 function stagger(i: number): CSSProperties {
   return { "--stagger": i } as CSSProperties;
 }
 
-const TRUST_ITEMS = [
-  "Open source",
-  "Self-hostable",
-  "Mesh voice",
-  "Invite codes",
-  "Your keys",
+const TRUST_ITEMS: MessageKey[] = [
+  "landing.trust.openSource",
+  "landing.trust.selfHostable",
+  "landing.trust.meshVoice",
+  "landing.trust.inviteCodes",
+  "landing.trust.yourKeys",
 ];
 
+const HOW_STEPS = [
+  {
+    step: "01",
+    title: "landing.how.step1.title",
+    body: "landing.how.step1.body",
+  },
+  {
+    step: "02",
+    title: "landing.how.step2.title",
+    body: "landing.how.step2.body",
+  },
+  {
+    step: "03",
+    title: "landing.how.step3.title",
+    body: "landing.how.step3.body",
+  },
+] satisfies { step: string; title: MessageKey; body: MessageKey }[];
+
+/**
+ * Only things that ship today and are on by default. Attachments are absent on
+ * purpose — they stay dark unless `S3_*` is configured, so advertising them
+ * would be a claim the hosted site cannot honour. Nothing here is aspirational;
+ * if a row stops being true, delete the row rather than softening the wording.
+ */
+const FEATURES = [
+  { title: "landing.features.voice.title", body: "landing.features.voice.body" },
+  {
+    title: "landing.features.screen.title",
+    body: "landing.features.screen.body",
+  },
+  { title: "landing.features.chat.title", body: "landing.features.chat.body" },
+  {
+    title: "landing.features.search.title",
+    body: "landing.features.search.body",
+  },
+  { title: "landing.features.dms.title", body: "landing.features.dms.body" },
+  {
+    title: "landing.features.structure.title",
+    body: "landing.features.structure.body",
+  },
+  {
+    title: "landing.features.invites.title",
+    body: "landing.features.invites.body",
+  },
+  {
+    title: "landing.features.moderation.title",
+    body: "landing.features.moderation.body",
+  },
+] satisfies { title: MessageKey; body: MessageKey }[];
+
+/**
+ * The closing call to action. The arrow is drawn here rather than typed into
+ * the catalogue: it is decoration, so a translator never has to carry it and a
+ * screen reader announces "Vai pra pqp" instead of "right arrow".
+ */
+function CtaAction({ label }: { label: string }) {
+  return (
+    <>
+      {label}
+      <span aria-hidden className="ml-2">
+        →
+      </span>
+    </>
+  );
+}
+
 export function LandingPage() {
+  const { t, locale } = useTranslation();
   const bypass = isDevAuthBypassEnabled();
+  const reducedMotion = usePrefersReducedMotion();
+  // The still is what paints first and what stays put if the clip never runs —
+  // a blocked autoplay (iOS Low Power Mode) simply leaves this false.
+  const [heroPlaying, setHeroPlaying] = useState(false);
+  const heroVideo = useRef<HTMLVideoElement>(null);
+
+  // `autoplay` alone is not enough: a tab that mounts in the background leaves
+  // the element idle (networkState IDLE, nothing fetched) and Chrome does not
+  // revisit that on its own, so the loop would never start. Ask directly, and
+  // ask again whenever the tab comes forward.
+  useEffect(() => {
+    const el = heroVideo.current;
+    if (!el) return;
+    const start = () => {
+      if (el.readyState === 0) el.load();
+      void el.play().catch(() => {
+        // Autoplay refused (Low Power Mode, strict settings) — the still stands in.
+      });
+    };
+    start();
+    document.addEventListener("visibilitychange", start);
+    return () => document.removeEventListener("visibilitychange", start);
+  }, [reducedMotion]);
 
   return (
     <div className="min-h-full bg-ink text-paper">
       <Seo
-        title="pqp — group chat you own"
-        description="Chaotic group chat with servers, channels, and voice that just works. Open source — self-host or use pqp.gg."
+        title={t("landing.seo.title")}
+        description={t("landing.seo.description")}
         path="/"
       />
 
       <section className="relative flex min-h-[100svh] flex-col overflow-hidden">
-        <img
-          src="/images/hero-background.jpg"
-          alt=""
-          className="hero-parallax absolute inset-0 h-full w-full object-cover object-center"
-          fetchPriority="high"
-          decoding="async"
-        />
+        <div className="hero-parallax absolute inset-0" aria-hidden>
+          <img
+            src="/images/hero-background.jpg"
+            alt=""
+            className="absolute inset-0 h-full w-full object-cover object-center"
+            fetchPriority="high"
+            decoding="async"
+          />
+          {!reducedMotion && (
+            <video
+              ref={heroVideo}
+              src="/images/hero-background.mp4"
+              className={cn(
+                "absolute inset-0 h-full w-full object-cover object-center transition-opacity duration-[1200ms] ease-out",
+                heroPlaying ? "opacity-100" : "opacity-0",
+              )}
+              autoPlay
+              muted
+              loop
+              playsInline
+              preload="auto"
+              onPlaying={() => setHeroPlaying(true)}
+            />
+          )}
+        </div>
         <div
           className="absolute inset-0 bg-gradient-to-b from-black/50 via-black/28 to-black/75"
           aria-hidden
@@ -67,15 +179,13 @@ export function LandingPage() {
             className="animate-rise mt-6 max-w-2xl font-display text-3xl font-bold leading-[1.05] tracking-tight text-white sm:text-4xl md:text-5xl"
             style={stagger(1)}
           >
-            Your friends. Your server. Your mess.
+            {t("landing.hero.title")}
           </h1>
           <p
             className="animate-rise mt-4 max-w-lg text-base text-white/85 sm:text-lg"
             style={stagger(2)}
           >
-            Chaotic group chat you actually own — text that flies, voice that
-            doesn&apos;t flake. Self-host if you want the keys, or just use
-            ours.
+            {t("landing.hero.body")}
           </p>
 
           <div
@@ -88,12 +198,12 @@ export function LandingPage() {
                   asChild
                   className="cta-lift h-11 rounded-full bg-white px-6 text-base font-semibold text-ink shadow-lg shadow-black/25 hover:bg-white/90"
                 >
-                  <Link to="/app">Open the app</Link>
+                  <Link to="/app">{t("nav.openApp")}</Link>
                 </Button>
                 <Link
                   to="/app"
                   className="cta-lift flex h-11 w-11 items-center justify-center rounded-full bg-white/15 text-white ring-1 ring-white/40 backdrop-blur-sm hover:bg-white/25"
-                  aria-label="Open the app"
+                  aria-label={t("nav.openApp")}
                 >
                   <ArrowUpRight className="h-5 w-5" />
                 </Link>
@@ -103,14 +213,14 @@ export function LandingPage() {
                 <SignedOut>
                   <SignUpButton mode="modal" forceRedirectUrl="/app">
                     <Button className="cta-lift h-11 rounded-full bg-white px-6 text-base font-semibold text-ink shadow-lg shadow-black/25 hover:bg-white/90">
-                      Spin up a server
+                      {t("nav.signUp")}
                     </Button>
                   </SignUpButton>
                   <SignInButton mode="modal" forceRedirectUrl="/app">
                     <button
                       type="button"
                       className="cta-lift flex h-11 w-11 items-center justify-center rounded-full bg-white/15 text-white ring-1 ring-white/40 backdrop-blur-sm hover:bg-white/25"
-                      aria-label="Sign in"
+                      aria-label={t("nav.signIn")}
                     >
                       <ArrowUpRight className="h-5 w-5" />
                     </button>
@@ -121,12 +231,12 @@ export function LandingPage() {
                     asChild
                     className="cta-lift h-11 rounded-full bg-white px-6 text-base font-semibold text-ink shadow-lg shadow-black/25 hover:bg-white/90"
                   >
-                    <Link to="/app">Open the app</Link>
+                    <Link to="/app">{t("nav.openApp")}</Link>
                   </Button>
                   <Link
                     to="/app"
                     className="cta-lift flex h-11 w-11 items-center justify-center rounded-full bg-white/15 text-white ring-1 ring-white/40 backdrop-blur-sm hover:bg-white/25"
-                    aria-label="Open the app"
+                    aria-label={t("nav.openApp")}
                   >
                     <ArrowUpRight className="h-5 w-5" />
                   </Link>
@@ -134,17 +244,29 @@ export function LandingPage() {
               </>
             )}
           </div>
+
+          {/* Under the buttons, not beside them. See `HeroDownload` for why
+              this is a link rather than a second pill. */}
+          <HeroDownload className="animate-rise mt-6" style={stagger(4)} />
         </div>
 
         <div className="absolute inset-x-0 bottom-0 z-10 border-t border-white/10 bg-black/25 px-5 py-4 backdrop-blur-sm sm:px-8">
           <ul className="mx-auto flex max-w-4xl flex-wrap items-center justify-center gap-x-8 gap-y-2">
-            {TRUST_ITEMS.map((item, i) => (
+            {TRUST_ITEMS.map((key, i) => (
               <li
-                key={item}
+                key={key}
                 className="animate-rise text-[11px] font-medium uppercase tracking-[0.22em] text-white/70"
-                style={stagger(4 + i)}
+                style={stagger(5 + i)}
+                // "Self-host" is left in English in Portuguese because that is
+                // the word the audience uses. Saying so in the markup keeps a
+                // screen reader from pronouncing it with Portuguese phonetics.
+                lang={
+                  key === "landing.trust.selfHostable" && locale !== "en"
+                    ? "en"
+                    : undefined
+                }
               >
-                {item}
+                {t(key)}
               </li>
             ))}
           </ul>
@@ -154,13 +276,10 @@ export function LandingPage() {
       <section className="border-b border-ink-4/40 px-5 py-20 sm:px-8 sm:py-24">
         <div className="mx-auto max-w-2xl text-center">
           <h2 className="font-display text-3xl font-bold tracking-tight sm:text-4xl">
-            Tired of renting the room?
+            {t("landing.pitch.title")}
           </h2>
           <p className="mt-4 text-lg text-paper-muted">
-            Big chat apps rewrite the house rules, bury your servers, and treat
-            your crew like inventory. pqp is the opposite: make a server, invite
-            people, talk. Keep the keys if you want — or use ours and skip the
-            ops.
+            {t("landing.pitch.body")}
           </p>
         </div>
       </section>
@@ -172,41 +291,49 @@ export function LandingPage() {
         <div className="mx-auto max-w-4xl">
           <div className="mx-auto max-w-xl text-center">
             <h2 className="font-display text-3xl font-bold tracking-tight sm:text-4xl">
-              Three moves. Then you&apos;re loud.
+              {t("landing.how.title")}
             </h2>
-            <p className="mt-3 text-paper-muted">
-              No onboarding maze. Create, invite, cause problems.
-            </p>
+            <p className="mt-3 text-paper-muted">{t("landing.how.body")}</p>
           </div>
           <ol className="mt-14 grid gap-10 sm:grid-cols-3 sm:gap-8">
-            {[
-              {
-                step: "01",
-                title: "Make a server",
-                body: "Name it something stupid. Text and voice channels show up ready.",
-              },
-              {
-                step: "02",
-                title: "Drop an invite",
-                body: "Share a code. Friends pile in — no app-store gatekeeping.",
-              },
-              {
-                step: "03",
-                title: "Talk",
-                body: "Spam the channels. Jump into mesh voice when the group chat isn't enough.",
-              },
-            ].map((item) => (
+            {HOW_STEPS.map((item) => (
               <li key={item.step} className="text-left sm:text-center">
                 <p className="font-display text-sm font-bold text-signal">
                   {item.step}
                 </p>
                 <h3 className="mt-2 font-display text-xl font-bold">
-                  {item.title}
+                  {t(item.title)}
                 </h3>
-                <p className="mt-2 text-sm text-paper-muted">{item.body}</p>
+                <p className="mt-2 text-sm text-paper-muted">{t(item.body)}</p>
               </li>
             ))}
           </ol>
+        </div>
+      </section>
+
+      <section
+        id="features"
+        className="scroll-mt-8 border-b border-ink-4/40 px-5 py-20 sm:px-8 sm:py-24"
+      >
+        <div className="mx-auto max-w-4xl">
+          <div className="mx-auto max-w-xl text-center">
+            <h2 className="font-display text-3xl font-bold tracking-tight sm:text-4xl">
+              {t("landing.features.title")}
+            </h2>
+            <p className="mt-3 text-paper-muted">{t("landing.features.body")}</p>
+          </div>
+          {/* One column on a phone, so each item is a heading and a single
+              line rather than a card to swipe past. */}
+          <ul className="mt-14 grid gap-x-8 gap-y-10 sm:grid-cols-2 lg:grid-cols-3">
+            {FEATURES.map((item) => (
+              <li key={item.title}>
+                <h3 className="font-display text-lg font-bold">
+                  {t(item.title)}
+                </h3>
+                <p className="mt-2 text-sm text-paper-muted">{t(item.body)}</p>
+              </li>
+            ))}
+          </ul>
         </div>
       </section>
 
@@ -217,26 +344,28 @@ export function LandingPage() {
         <div className="mx-auto max-w-4xl">
           <div className="mx-auto max-w-xl text-center">
             <h2 className="font-display text-3xl font-bold tracking-tight sm:text-4xl">
-              Run it yourself — or don&apos;t
+              {t("landing.hosting.title")}
             </h2>
-            <p className="mt-3 text-paper-muted">
-              Same product. You pick who babysits the metal.
-            </p>
+            <p className="mt-3 text-paper-muted">{t("landing.hosting.body")}</p>
           </div>
           <div className="mt-14 grid gap-8 sm:grid-cols-2">
             <div>
-              <h3 className="font-display text-xl font-bold">Self-host</h3>
+              <h3
+                className="font-display text-xl font-bold"
+                lang={locale === "en" ? undefined : "en"}
+              >
+                {t("landing.hosting.selfHost.title")}
+              </h3>
               <p className="mt-3 text-paper-muted">
-                Clone the repo, point it at Postgres, plug in your own Clerk
-                keys. Your data stays on your box. Unlimited for OSS use — you
-                own the stack.
+                {t("landing.hosting.selfHost.body")}
               </p>
             </div>
             <div>
-              <h3 className="font-display text-xl font-bold">Hosted at pqp.gg</h3>
+              <h3 className="font-display text-xl font-bold">
+                {t("landing.hosting.hosted.title")}
+              </h3>
               <p className="mt-3 text-paper-muted">
-                Sign up and go. We run the servers, auth, and storage. Same
-                chaos, zero ops.
+                {t("landing.hosting.hosted.body")}
               </p>
             </div>
           </div>
@@ -245,33 +374,37 @@ export function LandingPage() {
 
       <section className="px-5 py-20 text-center sm:px-8 sm:py-24">
         <h2 className="font-display text-3xl font-bold tracking-tight sm:text-4xl">
-          The room&apos;s empty. Fix that.
+          {t("landing.cta.title")}
         </h2>
         <p className="mx-auto mt-3 max-w-md text-paper-muted">
-          Spin up a server in under a minute. Invite the chaos later.
+          {t("landing.cta.body")}
         </p>
         <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
           {bypass ? (
             <Button asChild className="cta-lift h-11 px-6 text-base">
-              <Link to="/app">Open the app</Link>
+              <Link to="/app">
+                <CtaAction label={t("landing.cta.action")} />
+              </Link>
             </Button>
           ) : (
             <>
               <SignedOut>
                 <SignUpButton mode="modal" forceRedirectUrl="/app">
                   <Button className="cta-lift h-11 px-6 text-base">
-                    Spin up a server
+                    <CtaAction label={t("landing.cta.action")} />
                   </Button>
                 </SignUpButton>
                 <SignInButton mode="modal" forceRedirectUrl="/app">
                   <Button variant="secondary" className="cta-lift h-11 px-6 text-base">
-                    Sign in
+                    {t("nav.signIn")}
                   </Button>
                 </SignInButton>
               </SignedOut>
               <SignedIn>
                 <Button asChild className="cta-lift h-11 px-6 text-base">
-                  <Link to="/app">Open the app</Link>
+                  <Link to="/app">
+                    <CtaAction label={t("landing.cta.action")} />
+                  </Link>
                 </Button>
               </SignedIn>
             </>

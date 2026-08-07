@@ -3,19 +3,27 @@ import { Lock, Menu, WifiOff } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import type {
+  AgeGateStatus,
   BlockedUser,
   Channel,
   ChannelKind,
   DmSummary,
+  SanctionNotice,
   Server,
   User,
+  VoiceRoomTransport,
 } from "@pqp/shared";
 import { MessageComposer } from "@/components/chat/message-composer";
 import { MessageList } from "@/components/chat/message-list";
 import {
+  ReportDialog,
+  type ReportTarget,
+} from "@/components/chat/report-dialog";
+import {
   AppBootstrapError,
   AppLoadingShell,
 } from "@/components/layout/app-loading-shell";
+import { ChannelIcon } from "@/components/layout/channel-icon";
 import { ChannelList } from "@/components/layout/channel-list";
 import { ChannelMembersPanel } from "@/components/layout/channel-members-panel";
 import { WebhooksPanel } from "@/components/layout/webhooks-panel";
@@ -25,6 +33,8 @@ import { InvitePanel } from "@/components/layout/invite-panel";
 import { MembersPanel } from "@/components/layout/members-panel";
 import { PinnedMessagesPanel } from "@/components/chat/pinned-messages-panel";
 import { ServerRail } from "@/components/layout/server-rail";
+import { AgeGateDialog } from "@/components/user/age-gate-dialog";
+import { OnboardingFlow } from "@/components/onboarding/onboarding-flow";
 import { NewDmDialog } from "@/components/user/new-dm-dialog";
 import { ServerSettingsDialog } from "@/components/layout/server-settings-dialog";
 import {
@@ -35,11 +45,17 @@ import {
   SettingsModal,
   type LocalSettings,
 } from "@/components/layout/settings-modal";
+import { SanctionNoticeBar } from "@/components/layout/sanction-notice-bar";
 import { SsoServerSuggestions } from "@/components/layout/sso-server-suggestions";
 import { UserPanel } from "@/components/layout/user-panel";
 import { ScreenShareView } from "@/components/voice/screen-share-view";
 import { VoiceAudioSinks } from "@/components/voice/voice-audio-sinks";
 import { VoicePanel } from "@/components/voice/voice-panel";
+import {
+  formatBinding,
+  supportsKeyBinding,
+} from "@/components/voice/push-to-talk";
+import { usePushToTalk } from "@/components/voice/use-push-to-talk";
 import { VoiceStatusBar } from "@/components/voice/voice-status-bar";
 import { PromptDialog } from "@/components/ui/prompt-dialog";
 import { Seo } from "@/components/marketing/seo";
@@ -72,6 +88,8 @@ import {
   updateMe,
 } from "@/lib/api";
 import { parseAppRoute } from "@/lib/app-route";
+import { shouldRunOnboarding } from "@/lib/onboarding";
+import { translateMessage, useTranslation } from "@/lib/i18n";
 import {
   conversationChannel,
   conversationSubtitle,
@@ -102,6 +120,7 @@ import {
   rememberServers,
 } from "@/lib/notifications";
 import { useChannelNotifications } from "@/hooks/use-notifications";
+import { useUserStatus } from "@/hooks/use-status";
 import { createRealtimeTransport, type RealtimeStatus } from "@/lib/realtime";
 import { adoptThemePreference } from "@/lib/theme";
 import { isMeshForced } from "@/lib/voice-backend";
@@ -117,6 +136,8 @@ interface AppProps {
 }
 
 export function App({ devBypass = false }: AppProps) {
+  const { t } = useTranslation();
+
   if (devBypass) {
     return (
       <MainAppContent resolveToken={() => Promise.resolve(DEV_AUTH_TOKEN)} />
@@ -126,8 +147,8 @@ export function App({ devBypass = false }: AppProps) {
   return (
     <>
       <Seo
-        title="App — pqp"
-        description="Open pqp — servers, text, and voice."
+        title={t("app.seo.title")}
+        description={t("app.seo.description")}
         path="/app"
         noIndex
       />
@@ -137,10 +158,11 @@ export function App({ devBypass = false }: AppProps) {
 }
 
 function ClerkAppGate() {
+  const { t } = useTranslation();
   const { isLoaded, isSignedIn } = useAuth();
 
   if (!isLoaded) {
-    return <AppLoadingShell label="Signing in…" />;
+    return <AppLoadingShell label={t("app.loading.signingIn")} />;
   }
 
   if (!isSignedIn) {
@@ -155,17 +177,15 @@ function ClerkAppGate() {
             pqp.gg
           </Link>
           <h1 className="font-display text-5xl font-extrabold leading-[0.95] sm:text-6xl">
-            Sign in to talk.
+            {t("signedOut.title")}
           </h1>
-          <p className="mt-4 max-w-sm text-paper-muted">
-            Create an account or sign in to open your servers.
-          </p>
+          <p className="mt-4 max-w-sm text-paper-muted">{t("signedOut.body")}</p>
           <div className="mt-8 flex flex-wrap gap-3">
             <SignUpButton mode="modal" forceRedirectUrl="/app">
-              <Button>Create account</Button>
+              <Button>{t("signedOut.createAccount")}</Button>
             </SignUpButton>
             <SignInButton mode="modal" forceRedirectUrl="/app">
-              <Button variant="secondary">Sign in</Button>
+              <Button variant="secondary">{t("nav.signIn")}</Button>
             </SignInButton>
           </div>
         </div>
@@ -215,6 +235,7 @@ function MainAppContent({
   resolveToken,
   showUserButton = false,
 }: MainAppContentProps) {
+  const { t } = useTranslation();
   const [user, setUser] = useState<User | null>(null);
   const [servers, setServers] = useState<Server[]>([]);
   const [channels, setChannels] = useState<Channel[]>([]);
@@ -233,6 +254,15 @@ function MainAppContent({
   const [newServerName, setNewServerName] = useState("");
   const [creatingServer, setCreatingServer] = useState(false);
   const [appError, setAppError] = useState<string | null>(null);
+  /**
+   * The last refusal a timeout produced, shown against the composer it belongs
+   * to. Transient app state rather than anything persisted: a timeout is
+   * already reconstructible from `/api/me` and the members panel, and this only
+   * has to answer "why did that not send".
+   */
+  const [sanctionNotice, setSanctionNotice] = useState<SanctionNotice | null>(
+    null,
+  );
   const [connection, setConnection] = useState<RealtimeStatus>("idle");
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -240,6 +270,8 @@ function MainAppContent({
   const [inviteMode, setInviteMode] = useState<"create" | "join" | null>(null);
   const [inviteCodeFromUrl, setInviteCodeFromUrl] = useState<string | null>(null);
   const [membersOpen, setMembersOpen] = useState(false);
+  // One dialog for both subjects — the target says which. Null means closed.
+  const [reportTarget, setReportTarget] = useState<ReportTarget | null>(null);
   const [pinsOpen, setPinsOpen] = useState(false);
   const [channelMembersChannel, setChannelMembersChannel] =
     useState<Channel | null>(null);
@@ -266,6 +298,25 @@ function MainAppContent({
   const [bootstrapReady, setBootstrapReady] = useState(false);
   const [bootstrapError, setBootstrapError] = useState<string | null>(null);
   const [bootstrapAttempt, setBootstrapAttempt] = useState(0);
+  /**
+   * Non-null while the 18+ gate is standing between this account and the app.
+   *
+   * Held here rather than read off `user` because it is a bootstrap outcome,
+   * not a profile field: the rest of the bootstrap never ran, so there are no
+   * servers, no conversations and no socket behind this screen to fall back to.
+   */
+  const [ageGate, setAgeGate] = useState<Exclude<AgeGateStatus, "passed"> | null>(
+    null,
+  );
+  /**
+   * Whether this account still has to be shown the first-run flow.
+   *
+   * Decided once, from the `/api/me` the bootstrap already makes, and never
+   * re-derived from `user` afterwards — the flow itself writes profile updates
+   * back into `user`, and re-reading the answer from a value the flow is
+   * changing is how a dialog closes itself halfway through.
+   */
+  const [needsOnboarding, setNeedsOnboarding] = useState(false);
   const [channelsLoading, setChannelsLoading] = useState(false);
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [unread, setUnread] = useState<Record<string, UnreadState>>({});
@@ -282,6 +333,24 @@ function MainAppContent({
   const chat = useMemo(() => createChatController(transport), [transport]);
   const voice = useMemo(() => createVoiceController(transport), [transport]);
   const [voiceState, setVoiceState] = useState(voice.getState());
+
+  /**
+   * User status. The manual half comes back from `/api/me` with the rest of the
+   * preferences, so it survives a reconnect and follows the account to the next
+   * device; the idle half is measured in this tab and reported over the socket.
+   *
+   * `connected` is load-bearing, not decoration: the server scopes idle to the
+   * socket that reported it, so a reconnect has to re-announce it or somebody
+   * who was away when the link flapped comes back reading as online.
+   */
+  const status = useUserStatus({
+    stored: user?.preferences?.status ?? null,
+    sendIdle: useCallback(
+      (idle: boolean) => transport.sendChat({ type: "set-idle", idle }),
+      [transport],
+    ),
+    connected: connection === "online",
+  });
 
   const location = useLocation();
   const navigate = useNavigate();
@@ -356,6 +425,24 @@ function MainAppContent({
   useEffect(() => {
     rememberServers(servers);
   }, [servers]);
+
+  const inPushToTalk =
+    localSettings.inputMode === "push-to-talk" &&
+    voiceState.status === "connected";
+
+  const handlePushToTalk = useCallback(
+    (held: boolean) => voice.setPushToTalkActive(held),
+    [voice],
+  );
+
+  // The key binding lives here rather than in the panel because the panel is
+  // unmounted the moment you navigate to a text channel, and push-to-talk has
+  // to keep working while you read the chat.
+  const { windowFocused } = usePushToTalk({
+    enabled: inPushToTalk,
+    binding: localSettings.pushToTalkKey,
+    onHeldChange: handlePushToTalk,
+  });
 
   // Electron: Cmd/Ctrl+Shift+M → toggle mute when connected to voice.
   useEffect(() => {
@@ -563,6 +650,27 @@ function MainAppContent({
         setUser(me);
         chat.setCurrentUser(me);
 
+        // The gate, before anything else this function would do.
+        //
+        // It has to be a hard stop rather than an overlay: the server refuses
+        // every other route for an account that has not passed, so carrying on
+        // would fetch servers, channels and ICE credentials that all answer 403
+        // and then open a WebSocket that is closed on us — a screen of errors
+        // behind a dialog asking a question that explains none of them.
+        //
+        // An API that predates the gate sends no `ageGate` at all, which is
+        // read as "this deployment does not have one" and passes through. Only
+        // an explicit `pending` or `blocked` stops here.
+        if (me.ageGate === "pending" || me.ageGate === "blocked") {
+          setAgeGate(me.ageGate);
+          return;
+        }
+        setAgeGate(null);
+
+        // Only now, and in this order: you cannot ask somebody what they want
+        // to be called while they are one answer away from being refused.
+        setNeedsOnboarding(shouldRunOnboarding(me));
+
         // Settings the account carries win over this device's stored copy —
         // another device may have changed them since this browser last saw
         // them. Nothing is sent back: a tab that has been open for hours would
@@ -587,19 +695,29 @@ function MainAppContent({
           // STUN / VITE_TURN fallbacks still apply
         }
 
-        // Route voice media through the SFU when the server offers one.
-        // Anything else (or a failure here) leaves the mesh path in place.
-        try {
-          const { backend } = isMeshForced()
-            ? { backend: "mesh" as const }
-            : await fetchVoiceBackend();
-          if (!cancelled && backend === "livekit") {
-            voice.setSessionProvider((voiceChannelId, peerId) =>
-              createVoiceSession(voiceChannelId, peerId),
+        // Declare whether this build can run the SFU media path. This is a
+        // capability, not a transport choice: the server states the room's
+        // transport in `welcome` on every join, and the controller obeys it.
+        //
+        // The backend fetch is therefore best-effort — it only supplies the
+        // fallback for a server too old to state the transport. When it failed
+        // this tab used to be pinned to mesh for its whole life, which on an SFU
+        // deployment meant sitting in calls nobody could hear.
+        if (!cancelled && !isMeshForced()) {
+          let legacyTransport: VoiceRoomTransport = "mesh";
+          try {
+            const { backend } = await fetchVoiceBackend();
+            legacyTransport = backend === "livekit" ? "livekit" : "mesh";
+          } catch {
+            // Older server without /api/voice/backend, or a blip.
+          }
+          if (!cancelled) {
+            voice.setSessionProvider(
+              (voiceChannelId, peerId) =>
+                createVoiceSession(voiceChannelId, peerId),
+              legacyTransport,
             );
           }
-        } catch {
-          // Older server without /api/voice/backend — mesh it is.
         }
 
         const { servers: serverList } = await fetchServers();
@@ -726,6 +844,15 @@ function MainAppContent({
             chat.handleServerMessage(message);
             return;
           }
+
+          // A refused send. Without this the frame fell through to the voice
+          // handler, which is not where a chat refusal belongs, and the person
+          // was left with a failed message and no reason for it.
+          if (message.type === "sanction-notice") {
+            setSanctionNotice(message);
+            return;
+          }
+
           voice.handleSignaling(message);
         });
 
@@ -790,7 +917,10 @@ function MainAppContent({
         setBootstrapError(
           error instanceof Error
             ? error.message
-            : "Failed to load servers from the API",
+            : // `translateMessage`, not the `t` from render: this effect is
+              // pinned to `bootstrapAttempt` and would otherwise close over the
+              // English `t` from first paint, long before the catalogue lands.
+              translateMessage("bootstrapError.fallback"),
         );
       }
     }
@@ -1112,6 +1242,8 @@ function MainAppContent({
       inputDeviceId: localSettings.inputDeviceId,
       inputVolume: localSettings.inputVolume,
       startMuted: localSettings.muteOnJoin,
+      inputMode: localSettings.inputMode,
+      processing: localSettings.micProcessing,
     });
   }
 
@@ -1120,12 +1252,19 @@ function MainAppContent({
     setLocalSettings(next);
     saveLocalSettings(next);
     voice.setInputVolume(next.inputVolume);
+    // Applied whatever the call status: the mode is what a later join starts
+    // in, and switching it mid-call only flips `track.enabled`, so there is no
+    // reason to defer it and no risk of interrupting anything.
+    voice.setInputMode(next.inputMode);
     if (
       next.inputDeviceId !== prevDeviceId &&
       voice.getState().status !== "idle"
     ) {
       void voice.setInputDevice(next.inputDeviceId);
     }
+    // Re-captures the track and swaps it into the live senders. Cheap to call
+    // unconditionally — it returns immediately when nothing changed.
+    void voice.setMicProcessing(next.micProcessing);
   }
 
   const refreshAfterJoin = useCallback(
@@ -1390,8 +1529,49 @@ function MainAppContent({
     );
   }
 
+  if (ageGate) {
+    return (
+      <AgeGateDialog
+        status={ageGate}
+        // Passing re-runs the whole bootstrap from the top, which is exactly
+        // what is wanted: everything it would have loaded is still unloaded.
+        onPassed={() => {
+          setAgeGate(null);
+          setBootstrapAttempt((n) => n + 1);
+        }}
+        // Another tab already answered. Re-read rather than guess which way.
+        onStale={() => {
+          setAgeGate(null);
+          setBootstrapAttempt((n) => n + 1);
+        }}
+      />
+    );
+  }
+
   if (!bootstrapReady) {
-    return <AppLoadingShell label="Loading servers…" />;
+    return <AppLoadingShell label={t("app.loading.servers")} />;
+  }
+
+  /**
+   * First run, after the gate and after the bootstrap.
+   *
+   * After the gate because onboarding a person who is about to be refused is
+   * cruel and pointless. After the bootstrap because the last step creates or
+   * joins a server, and `refreshAfterJoin` needs the same loaded state every
+   * other join path in the app needs.
+   */
+  if (needsOnboarding && user) {
+    return (
+      <OnboardingFlow
+        user={user}
+        onUserUpdated={(updated) => {
+          setUser(updated);
+          chat.setCurrentUser(updated);
+        }}
+        onServerReady={(serverId) => refreshAfterJoin(serverId)}
+        onDone={() => setNeedsOnboarding(false)}
+      />
+    );
   }
 
   const activeConversation =
@@ -1431,12 +1611,18 @@ function MainAppContent({
     <>
       {voiceState.status !== "idle" && !isViewingVoiceChannel && (
         <VoiceStatusBar
-          channelName={voiceChannel?.name ?? "Voice"}
+          channelName={voiceChannel?.name ?? t("voice.channelFallback")}
           status={voiceState.status}
           peerCount={voiceState.remotePeers.length}
           isMuted={voiceState.isMuted}
           isDeafened={voiceState.isDeafened}
+          inputMode={voiceState.inputMode}
+          isTransmitting={voiceState.isTransmitting}
           usingSfu={voiceState.usingSfu}
+          // This widget only exists once you have navigated away from the voice
+          // channel, so it is the only thing that can tell you a share is live
+          // while you are somewhere else.
+          isPresenting={voiceState.screenSharePeerId !== null}
           onOpen={() => void openVoiceChannel()}
           onToggleMute={() => voice.toggleMute()}
           onToggleDeafen={() => voice.toggleDeafen()}
@@ -1450,6 +1636,11 @@ function MainAppContent({
         isMuted={voiceState.isMuted}
         inVoice={voiceState.status === "connected"}
         showUserButton={showUserButton}
+        manualStatus={status.manual}
+        effectiveStatus={status.effective}
+        statusSaving={status.saving}
+        statusError={status.error}
+        onSetStatus={status.setManual}
         onToggleMute={() => voice.toggleMute()}
         onOpenSettings={() => setSettingsOpen(true)}
       />
@@ -1514,12 +1705,19 @@ function MainAppContent({
         </button>
         <div className="min-w-0">
           <p className="flex items-center gap-1.5 truncate font-display text-base font-bold">
-            {selectedChannel.isPrivate && (
-              <Lock className="h-3.5 w-3.5 shrink-0 text-warning" />
+            {selectedChannel.imageUrl ? (
+              <ChannelIcon channel={selectedChannel} className="h-4 w-4" />
+            ) : (
+              selectedChannel.isPrivate && (
+                <Lock className="h-3.5 w-3.5 shrink-0 text-warning" />
+              )
             )}
             {/* `#` names a channel inside a server. A conversation's title is a
-                person, and hashing it renames them. */}
-            {selectedChannel.kind === "server" &&
+                person, and hashing it renames them. Skipped once the channel
+                has its own image/emoji — `ChannelIcon` above already carries
+                that identity, and stacking `#` in front of it doubles up. */}
+            {!selectedChannel.imageUrl &&
+            selectedChannel.kind === "server" &&
             selectedChannel.type === "text" &&
             !selectedChannel.isPrivate
               ? "#"
@@ -1590,10 +1788,26 @@ function MainAppContent({
         onDeleteMessage={(messageId) => chat.deleteMessage(messageId)}
         onPinMessage={(messageId) => chat.pinMessage(messageId)}
         onUnpinMessage={(messageId) => chat.unpinMessage(messageId)}
+        onReportMessage={(message) =>
+          setReportTarget({
+            kind: "message",
+            messageId: message.id,
+            subjectName: message.authorName,
+          })
+        }
         onRetryMessage={(nonce) => chat.retryMessage(nonce)}
         onDiscardMessage={(nonce) => chat.discardMessage(nonce)}
         showLinkEmbeds={localSettings.showLinkEmbeds}
       />
+      {/* Against the composer it explains, not floating in a corner: the frame
+          names the channel the refused action happened in, so a notice from
+          another room would be answering a question nobody asked here. */}
+      {sanctionNotice && sanctionNotice.channelId === selectedChannel.id && (
+        <SanctionNoticeBar
+          notice={sanctionNotice}
+          onDismiss={() => setSanctionNotice(null)}
+        />
+      )}
       <MessageComposer
         // Remount per channel: the draft is component state, so without this a
         // half-typed message follows you into the next channel, one Enter away
@@ -1746,8 +1960,8 @@ function MainAppContent({
           >
             <WifiOff className="h-3.5 w-3.5" />
             {connection === "unauthorized"
-              ? "Session expired — reconnecting…"
-              : "Connection lost — reconnecting…"}
+              ? t("connection.unauthorized")
+              : t("connection.reconnecting")}
           </div>
         )}
 
@@ -1759,7 +1973,7 @@ function MainAppContent({
               className="shrink-0 text-xs underline underline-offset-2"
               onClick={() => setAppError(null)}
             >
-              Dismiss
+              {t("connection.dismiss")}
             </button>
           </div>
         )}
@@ -1801,24 +2015,24 @@ function MainAppContent({
             <button
               type="button"
               className="rounded-md p-2 hover:bg-ink-3 md:hidden"
-              aria-label="Open navigation"
+              aria-label={t("empty.openNav")}
               onClick={() => setMobileNavOpen(true)}
             >
               <Menu className="h-6 w-6" />
             </button>
             <p className="font-display text-3xl font-bold">
               {selection.kind === "dm"
-                ? "No conversation open"
+                ? t("empty.noConversation.title")
                 : servers.length === 0
-                  ? "No servers yet"
-                  : "Pick a channel"}
+                  ? t("empty.noServers.title")
+                  : t("empty.pickChannel.title")}
             </p>
             <p className="max-w-sm text-paper-muted">
               {selection.kind === "dm"
-                ? "Pick someone from the list, or message anyone by handle."
+                ? t("empty.noConversation.body")
                 : servers.length === 0
-                  ? "Create a server or join with an invite code."
-                  : "Open the sidebar and choose text or voice."}
+                  ? t("empty.noServers.body")
+                  : t("empty.pickChannel.body")}
             </p>
             {/* Also shown in the DM view when there are no servers at all:
                 that is where a freshly federated account actually lands, and
@@ -1830,18 +2044,20 @@ function MainAppContent({
               />
             )}
             {selection.kind === "dm" ? (
-              <Button onClick={() => setNewDmOpen(true)}>New message</Button>
+              <Button onClick={() => setNewDmOpen(true)}>
+                {t("empty.newMessage")}
+              </Button>
             ) : (
               servers.length === 0 && (
                 <div className="flex gap-2">
                   <Button onClick={() => setShowCreateServer(true)}>
-                    Create server
+                    {t("empty.createServer")}
                   </Button>
                   <Button
                     variant="secondary"
                     onClick={() => setInviteMode("join")}
                   >
-                    Join invite
+                    {t("empty.joinInvite")}
                   </Button>
                 </div>
               )
@@ -1889,6 +2105,15 @@ function MainAppContent({
                 speakingPeerIds={voiceState.speakingPeerIds}
                 isMuted={voiceState.isMuted}
                 isDeafened={voiceState.isDeafened}
+                inputMode={voiceState.inputMode}
+                isTransmitting={voiceState.isTransmitting}
+                pushToTalkKeyLabel={
+                  supportsKeyBinding()
+                    ? formatBinding(localSettings.pushToTalkKey)
+                    : null
+                }
+                windowFocused={windowFocused}
+                onPushToTalk={handlePushToTalk}
                 peerVolumes={voiceState.peerVolumes}
                 error={voiceState.error}
                 compactPeers={localSettings.compactPeers}
@@ -1927,7 +2152,7 @@ function MainAppContent({
                     presenterName={
                       voiceState.remotePeers.find(
                         (p) => p.peerId === voiceState.screenSharePeerId,
-                      )?.displayName ?? "Someone"
+                      )?.displayName ?? t("voice.share.someone")
                     }
                     isSelf={voiceState.screenSharePeerId === voiceState.peerId}
                     onStopSharing={() => void voice.stopScreenShare()}
@@ -2005,6 +2230,21 @@ function MainAppContent({
         }}
         onBlockUser={(userId) => void handleBlockUser(userId)}
         onUnblockUser={(userId) => void handleUnblockUser(userId)}
+        onReportUser={(member) =>
+          setReportTarget({
+            kind: "user",
+            userId: member.id,
+            subjectName: member.displayName,
+            // Reported from inside a server, so that server's moderators are
+            // the ones who see it.
+            serverId: selectedServerId,
+          })
+        }
+      />
+
+      <ReportDialog
+        target={reportTarget}
+        onClose={() => setReportTarget(null)}
       />
 
       <NewDmDialog

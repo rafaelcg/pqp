@@ -158,6 +158,7 @@ secret; they would ship in the public bundle.
 | [`CLERK_SETUP.md`](./CLERK_SETUP.md) | Clerk CLI |
 | [`voice-backends.md`](./voice-backends.md) | SFU notes |
 | [`ATTACHMENTS.md`](./ATTACHMENTS.md) | File uploads: R2 in prod, MinIO locally, limits, sweeper |
+| [`CONTENT_SAFETY.md`](./CONTENT_SAFETY.md) | Image scanning, what is *not* scanned, CSAM runbook, what the operator must apply for |
 | [`billing.md`](./billing.md) | Future Plus/Pro |
 | [`PLAN_STATUS.md`](./PLAN_STATUS.md) | Phase checklist |
 | [`DISCORD_GAPS.md`](./DISCORD_GAPS.md) | Ranked feature gaps vs Discord, with implementation sketches |
@@ -187,7 +188,15 @@ Full list in [`PLAN_STATUS.md`](./PLAN_STATUS.md). The parts most likely to surp
 ## Search, notifications, and history navigation (2026-08-01)
 
 - **Message search** — `GET /api/servers/:serverId/search?q=`. Postgres full-text: a
-  `messages.search_tsv` generated column plus a GIN index, both applied on boot. The visibility
+  `messages.search_tsv` generated column plus a GIN index, both applied on boot. **Portuguese and
+  English, both accent-folded, indexed side by side** (2026-08-07 — it was `'english'` alone,
+  which found 2 of 30 Portuguese word pairs). Everything the index and the query must agree on
+  lives in one block in `server/src/schema.sql`: the `pqp_pt` / `pqp_en` configurations, the
+  column expression, and the `pqp_search_query()` / `pqp_search_headline()` functions the service
+  calls — `search.ts` names no configuration, because a query stemmed differently from the index
+  matches nothing and raises nothing. Re-running the schema is a no-op: a fingerprint in the
+  column's `COMMENT` is what decides whether to rewrite the table. See `docs/DECISIONS.md` for the
+  measurements and the known `canal`/`canais` gap. The visibility
   predicate is lifted verbatim into one `VISIBLE_CHANNEL` const in `server/src/services/search.ts`
   so it can never drift from `isChannelMember`. Highlights are delimited with the control characters `U+0002` / `U+0003`,
   which `messageBodySchema` already rejects, so no message body can forge one and the client never
@@ -354,6 +363,8 @@ reveal affordance.
 | SigV4 signing + presigned round trip, signed `Content-Length` | 19 tests against a real MinIO (`server/src/lib/s3.test.ts`, opt in with `S3_TEST_*`) |
 | **Attachments against R2** | **Not verified** — signing is exercised on MinIO only; the CORS policy and the signed length are unconfirmed on Cloudflare's edge |
 | **Voice (mesh, deafen, per-peer volume)** | **Not verified** — no microphone was available |
+| Image scanning: fail-closed paths | 36 provider tests (unreachable, timeout, 401, HTML body, unparseable scores, missing verdict) + 13 DB tests for quarantine, reports and the sweepers |
+| **Image scanning against a real provider** | **Not verified** — every provider call in the suite is a stubbed `fetch`. No live OpenAI / Sightengine / Worker round trip has been made |
 
 ## Suggested next work (priority)
 
@@ -364,9 +375,17 @@ reveal affordance.
    one that was minted and check it is refused. It holds on MinIO; Cloudflare's edge may re-frame
    the request, and if it does the mint-time size cap is decoration and only the claim-time HEAD
    is real. Ten minutes with a scratch bucket settles it.
-4. **Set `CORS_ALLOWED_ORIGINS` on Railway** to the Pages origin (and pqp.gg when it exists).
-5. **pqp.gg is unregistered** — canonical/OG tags in `client/index.html` and `SITE_URL` in `seo.tsx` point at a domain nobody owns, so shared links render a broken preview. Buy the domain or repoint the metadata.
-6. **Electron app icon** — no `electron/build` icons; packaged apps use the default Electron icon.
-7. Move rate limiting + presence to Redis before running more than one API instance.
-8. Cloudflare Realtime SFU adapter (optional — LiveKit covers the need)
-9. Clerk Billing (Plus/Pro) when ready
+4. **Close the CSAM gap — the highest-consequence item on this list.** Nothing scans uploads
+   today (`CONTENT_SCAN_PROVIDER` is empty). Three of these cost nothing and one is a legal duty
+   that already commenced: register on the **NCA CSEA-IRP** (OSA 2023 s.66, live 7 Apr 2026, no
+   size threshold), write the **illegal content risk assessment** (was due 16 Mar 2025), enable
+   **Cloudflare's CSAM Scanning Tool** (free, email-only onboarding), and apply for **IWF Image
+   Intercept** (free under 1M checks/month — the only one that gives upload-path hash matching).
+   Then set `CONTENT_SCAN_PROVIDER=openai` for the classifier half. Full detail, costs and the
+   runbook: [`CONTENT_SAFETY.md`](./CONTENT_SAFETY.md).
+5. **Set `CORS_ALLOWED_ORIGINS` on Railway** to the Pages origin (and pqp.gg when it exists).
+6. **pqp.gg is unregistered** — canonical/OG tags in `client/index.html` and `SITE_URL` in `seo.tsx` point at a domain nobody owns, so shared links render a broken preview. Buy the domain or repoint the metadata.
+7. **Electron app icon** — no `electron/build` icons; packaged apps use the default Electron icon.
+8. Move rate limiting + presence to Redis before running more than one API instance.
+9. Cloudflare Realtime SFU adapter (optional — LiveKit covers the need)
+10. Clerk Billing (Plus/Pro) when ready

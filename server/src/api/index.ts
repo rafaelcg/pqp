@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   addChannelMemberSchema,
+  ageDeclarationSchema,
   AUDIT_LOG_PAGE_MAX,
   AUDIT_LOG_PAGE_SIZE,
   auditActionSchema,
@@ -14,7 +15,12 @@ import {
   createInviteSchema,
   createServerSchema,
   createWebhookSchema,
+  deleteAccountSchema,
+  deleteConfirmationMatches,
   executeWebhookSchema,
+  expectedDeleteConfirmation,
+  formatUserTag,
+  issueTimeoutSchema,
   GIF_PAGE_MAX,
   GIF_PAGE_SIZE,
   GIF_QUERY_MAX_LENGTH,
@@ -23,6 +29,11 @@ import {
   MESSAGE_PAGE_SIZE,
   messageSearchQuerySchema,
   removeMemberSchema,
+  REPORT_PAGE_MAX,
+  REPORT_PAGE_SIZE,
+  createReportSchema,
+  reportStatusSchema,
+  resolveReportSchema,
   safeTextSchema,
   ssoEmailDomainSchema,
   SEARCH_PAGE_MAX,
@@ -46,28 +57,47 @@ import {
   isLiveKitConfigured,
 } from "../voice/backends.js";
 import {
+  applyManualStatus,
   broadcastToChannel,
   evictChannelViewers,
   evictUserFromChannels,
   evictVoiceChannel,
   evictVoiceUser,
   evictVoiceUsersExcept,
+  forEachAuthenticatedSocket,
   resolveEmbedInBackground,
+  resolveStatuses,
 } from "../ws/index.js";
 import { getVoicePeer } from "../ws/voice.js";
-import { invalidateUserCache, resolveAuthUser } from "../auth/clerk.js";
+import { invalidateUserCache, resolveAuthSession } from "../auth/clerk.js";
+import {
+  AGE_GATE_BLOCKED_MESSAGE,
+  AGE_GATE_PENDING_MESSAGE,
+  isAgeGateExempt,
+  isPlausibleBirthDate,
+  parseCalendarDate,
+  recordAgeDeclaration,
+} from "../services/age-gate.js";
 import type { MemberRole } from "../db.js";
 import {
   clampLimit,
+  corsHeaders,
   handleCors,
   HttpError,
   isUuid,
   readJsonBody,
+  SECURITY_HEADERS,
   sendError,
   sendJson,
 } from "../lib/http.js";
 import { clientAddress, createRateLimiter } from "../lib/rate-limit.js";
 import { createRouter, type RequestContext } from "../lib/router.js";
+import {
+  buildPersonalExport,
+  deleteAccount,
+  IdentityDeletionFailedError,
+  OwnedServersBlockDeletionError,
+} from "../services/account.js";
 import { listAuditLog, logAudit } from "../services/audit.js";
 import { buildServerExport } from "../services/export.js";
 import {
@@ -109,13 +139,22 @@ import {
   banMember,
   kickMember,
   listBans,
+  listRevokedPrivateChannelIds,
   unbanMember,
 } from "../services/moderation.js";
+import {
+  findTimeoutForRequest,
+  issueTimeout,
+  liftTimeout,
+  listActiveTimeouts,
+  timeoutMessage,
+} from "../services/sanctions.js";
 import {
   addChannelMember,
   createChannel,
   createServer,
   deleteChannel,
+  deleteObjectsInBackground,
   deleteServer,
   getChannel,
   getChannelAudience,
@@ -154,6 +193,18 @@ import {
   trendingGifs,
 } from "../services/gifs.js";
 import { getIceServers } from "../services/ice.js";
+import {
+  createReport,
+  getReport,
+  getReportScope,
+  isInstanceModerator,
+  listInstanceReports,
+  listReportsByReporter,
+  listServerReports,
+  ReportFloodError,
+  ReportTargetNotVisibleError,
+  resolveReport,
+} from "../services/reports.js";
 import { decodeSearchCursor, searchMessages } from "../services/search.js";
 import { mergePreferences } from "../services/preferences.js";
 import {
@@ -256,6 +307,32 @@ const userSearchLimiter = createRateLimiter({
  */
 const exportLimiter = createRateLimiter({ capacity: 3, refillPerSecond: 0.02 });
 /**
+ * `GET /api/me/export` walks every message one account ever wrote, across every
+ * server and conversation, and serialises it into one response — the same shape
+ * of expense as the server export and the same reason to bound it. It is also a
+ * good DoS lever precisely because it is a *right*: the endpoint cannot be
+ * gated behind ownership of anything, so every account on the instance can
+ * reach it.
+ *
+ * Two in a burst covers a retry after a dropped download; sustained it is one
+ * every ten minutes, which is far more often than anybody genuinely needs their
+ * own data and far too slow to be worth pointing at the server.
+ */
+const personalExportLimiter = createRateLimiter({
+  capacity: 2,
+  refillPerSecond: 1 / 600,
+});
+/**
+ * Account deletion succeeds at most once, so this bucket exists only to bound
+ * the *failures* — a script guessing at the confirmation string, or hammering
+ * the owned-server pre-flight. Three attempts covers mistyping your own handle;
+ * the refill is slow because a fourth attempt in a minute is not a person.
+ */
+const accountDeleteLimiter = createRateLimiter({
+  capacity: 3,
+  refillPerSecond: 1 / 120,
+});
+/**
  * Keyed by webhook id rather than by caller identity — there is no Clerk
  * session on this path, only the token in the URL, so the webhook itself is
  * the only stable key available. Generous enough for real CI/monitoring
@@ -266,6 +343,14 @@ const webhookExecuteLimiter = createRateLimiter({
   capacity: 20,
   refillPerSecond: 1,
 });
+/**
+ * Filing a report costs a human several seconds of reading a form, so the burst
+ * only has to cover somebody reporting a few messages from one spree. This is
+ * the per-process half of the limit and is not the ceiling that matters —
+ * `REPORTS_PER_HOUR` in services/reports.ts is counted in the database and
+ * survives both a restart and a second replica. See the comment there.
+ */
+const reportLimiter = createRateLimiter({ capacity: 5, refillPerSecond: 0.05 });
 
 export function resetApiRateLimits(): void {
   apiLimiter.reset();
@@ -276,7 +361,10 @@ export function resetApiRateLimits(): void {
   uploadLimiter.reset();
   userSearchLimiter.reset();
   exportLimiter.reset();
+  personalExportLimiter.reset();
+  accountDeleteLimiter.reset();
   webhookExecuteLimiter.reset();
+  reportLimiter.reset();
 }
 
 class Forbidden extends HttpError {
@@ -298,8 +386,12 @@ function created(body: unknown): Created {
  * Wrap a handler result to send raw bytes with the given content type
  * instead of the usual JSON envelope every other route answers with — a
  * file download rather than API data. Goes through the same router, the
- * same auth, and the same rate limiting as any other route; only the final
- * `sendJson` is skipped.
+ * same auth, and the same rate limiting as any other route; the client
+ * fetches it with `fetch()` (to attach the Bearer token) and turns the
+ * response into a Blob, so it is a cross-origin request in prod just like
+ * any other `/api/` call and needs the same CORS + security headers —
+ * only the final `sendJson` call is skipped, in favor of a raw
+ * `res.writeHead`/`res.end` that sets those headers itself.
  */
 class RawResponse {
   constructor(
@@ -312,6 +404,25 @@ class RawResponse {
 class NotFound extends HttpError {
   constructor(message = "Not found") {
     super(404, message);
+  }
+}
+
+/**
+ * An error whose body carries structured fields alongside `error`, for the one
+ * refusal a client has to *act* on rather than merely display: account deletion
+ * blocked by owned servers needs the list of servers, or the user is told to go
+ * fix something without being told which thing.
+ *
+ * `detail` is merged into the error envelope, so `error` stays exactly where
+ * every existing client already looks for it.
+ */
+class HttpErrorWithDetail extends HttpError {
+  constructor(
+    status: number,
+    message: string,
+    readonly detail: Record<string, unknown>,
+  ) {
+    super(status, message);
   }
 }
 
@@ -345,12 +456,19 @@ async function requireOwner(serverId: string, userId: string) {
  * Owners may act on anyone beneath them; admins only on plain members, so an
  * admin can neither depose a peer nor the owner. Returns the target's role, or
  * null when they are not a member at all.
+ *
+ * `timeout` joins `kick` and `ban` on exactly the same rule, and that is the
+ * point of routing it through here rather than writing a second rank check: a
+ * temporary sanction is still a sanction, and an admin who could silence a peer
+ * for 28 days would have found a way around "an admin cannot kick an admin"
+ * that costs the target nearly as much. Self-targeting is refused by the
+ * callers, which is where the "use leave instead" style of message belongs.
  */
 async function requireOutranked(
   serverId: string,
   actorRole: MemberRole,
   targetUserId: string,
-  action: "kick" | "ban",
+  action: "kick" | "ban" | "timeout",
 ): Promise<MemberRole | null> {
   const targetRole = await getMemberRole(serverId, targetUserId);
   if (targetRole === "owner") {
@@ -398,9 +516,44 @@ const router = createRouter();
 
 // ---------------------------------------------------------------- profile
 
-router.get("/api/me", async ({ user }) => toPublicUser(user));
+router.get("/api/me", async ({ user, ageGate }) => ({
+  ...(await toPublicUser(user)),
+  // Reachable while the gate is still pending or blocked — it is how the client
+  // finds out which of the two it is looking at.
+  ageGate,
+}));
 
-router.patch("/api/me", async ({ req, user }) => {
+/**
+ * The 18+ declaration. One per account, ever.
+ *
+ * Answers 200 for *both* outcomes and puts the result in the body, because
+ * recording a failing declaration is a successful request: the account has
+ * answered, the answer is on file, and the client needs to render the outcome
+ * rather than an error. A second attempt is what gets refused, with 409 — and
+ * refusing it here is the whole feature. See `recordAgeDeclaration`.
+ *
+ * A date that is not a real date, or is in the future, is a 400 and does NOT
+ * consume the attempt. That is not a loophole: every *plausible* date is final,
+ * so there is nothing to probe for.
+ */
+router.post("/api/me/age-check", async ({ req, user }) => {
+  const body = ageDeclarationSchema.parse(await readJsonBody(req));
+  const dob = parseCalendarDate(body.dateOfBirth);
+  if (!dob || !isPlausibleBirthDate(dob)) {
+    throw new HttpError(400, "Enter a valid date of birth.");
+  }
+
+  const result = await recordAgeDeclaration(user.id, dob);
+  if (!result.recorded) {
+    throw new HttpError(
+      409,
+      "This account has already answered the age question. It cannot be answered again.",
+    );
+  }
+  return { ageGate: result.status };
+});
+
+router.patch("/api/me", async ({ req, user, ageGate }) => {
   const body = updateProfileSchema.parse(await readJsonBody(req));
   const updated = await updateProfile(user.id, {
     displayName: body.displayName,
@@ -411,7 +564,7 @@ router.patch("/api/me", async ({ req, user }) => {
     dmPrivacy: body.dmPrivacy,
   });
   invalidateUserCache(updated.clerk_id);
-  return toPublicUser(updated);
+  return { ...(await toPublicUser(updated)), ageGate };
 });
 
 /**
@@ -422,7 +575,241 @@ router.patch("/api/me", async ({ req, user }) => {
  */
 router.patch("/api/me/preferences", async ({ req, user }) => {
   const patch = userPreferencesSchema.parse(await readJsonBody(req));
-  return { preferences: await mergePreferences(user.id, patch) };
+  const preferences = await mergePreferences(user.id, patch);
+  // `status` is the one preference the realtime layer holds a copy of, because
+  // resolving somebody's status must not be a database read — it happens once
+  // per member of every member list anyone opens. Adopted only after the write
+  // has committed, so the in-memory view can never claim something Postgres
+  // refused; and adopted from the *merged* result rather than from the patch, so
+  // a request that did not mention `status` cannot silently clear it.
+  //
+  // This is the only leg that matters for a user who is connected elsewhere
+  // right now: their own instance publishes the change onto the cluster bus, and
+  // every other instance picks it up from there.
+  if (patch.status && preferences.status) {
+    applyManualStatus(user.id, preferences.status);
+  }
+  return { preferences };
+});
+
+// --------------------------------------------- LGPD art. 18 (own account)
+
+/**
+ * Everything this service holds about the caller, as a JSON file (art. 18, II
+ * and V).
+ *
+ * NOT `/api/servers/:id/export`. That one is a server owner's tool and contains
+ * every member's messages; this one is scoped to one person and deliberately
+ * excludes other people's content, including the other half of every DM. The
+ * reasoning for that exclusion is written out at length on `EXPORT_NOTES` in
+ * services/account.ts, and restated inside the file itself so the person
+ * reading the export knows what is not in it.
+ *
+ * Scoped by `user.id` from the resolved session and by nothing the caller sends
+ * — there is no `:userId` to get wrong, which is what makes "export somebody
+ * else" unrepresentable rather than merely refused.
+ *
+ * Not audit-logged, unlike the server export. An audit entry is server-scoped
+ * (`audit_log.server_id` is NOT NULL) and this read belongs to no server; more
+ * to the point, logging that a named person exercised a privacy right, in a log
+ * their own server admins can read, would be its own small disclosure.
+ */
+router.get("/api/me/export", async ({ user, res }) => {
+  const key = `user:${user.id}`;
+  if (!personalExportLimiter.take(key)) {
+    res.setHeader("Retry-After", String(personalExportLimiter.retryAfter(key)));
+    throw new HttpError(429, "Slow down");
+  }
+
+  const data = await buildPersonalExport(user.id);
+  if (!data) {
+    throw new NotFound("Account not found");
+  }
+
+  // A display name is fully user-controlled and may sanitize down to nothing —
+  // a filename of `pqp-my-data-server-…` would be nonsense, so the fallback is
+  // named for what this file actually is.
+  const filename = `pqp-my-data-${sanitizeFilenameSegment(
+    data.account.username ?? data.account.displayName,
+    "account",
+  )}-${data.exportedAt.slice(0, 10)}.json`;
+  return new RawResponse(
+    JSON.stringify(data, null, 2),
+    "application/json",
+    filename,
+  );
+});
+
+/**
+ * Delete your own account (art. 18, IV and VI). Irreversible, and real — there
+ * is no soft-delete flag anywhere in this path.
+ *
+ * `confirm` must carry the account's own handle. A destructive, unrecoverable
+ * action must not be one stray `fetch` away, and this is the only action in the
+ * product with no owner, moderator or backup on the other side to undo it.
+ *
+ * Three refusals, each of which the client renders as a distinct screen:
+ *
+ * - **400** — the confirmation does not match. Says what to type.
+ * - **409** — the caller owns servers other people are in, listed by name in
+ *   `servers`. `code` is machine-readable so the client can offer the two
+ *   remedies (transfer, or delete the server) inline rather than printing a
+ *   sentence and leaving the user to find Server Settings. See
+ *   `listBlockingOwnedServers` for why this refuses instead of choosing.
+ * - **502** — Clerk would not delete the identity. Nothing local was touched;
+ *   retrying is safe and is what the client tells the user to do.
+ */
+router.delete("/api/me", async ({ req, res, user }) => {
+  const key = `user:${user.id}`;
+  if (!accountDeleteLimiter.take(key)) {
+    res.setHeader("Retry-After", String(accountDeleteLimiter.retryAfter(key)));
+    throw new HttpError(429, "Slow down");
+  }
+
+  const body = deleteAccountSchema.parse(await readJsonBody(req));
+  const tag = formatUserTag(user.username, user.discriminator);
+  if (!deleteConfirmationMatches(body.confirm, tag)) {
+    throw new HttpError(
+      400,
+      `Type ${expectedDeleteConfirmation(tag)} to confirm.`,
+    );
+  }
+
+  let result;
+  try {
+    result = await deleteAccount(user.id, user.clerk_id);
+  } catch (error) {
+    if (error instanceof OwnedServersBlockDeletionError) {
+      throw new HttpErrorWithDetail(409, error.message, {
+        code: "owned_servers",
+        servers: error.servers,
+      });
+    }
+    if (error instanceof IdentityDeletionFailedError) {
+      console.error("[account] Clerk deletion failed:", error.cause);
+      throw new HttpError(
+        502,
+        "Could not reach the sign-in provider. Nothing was deleted — please try again.",
+      );
+    }
+    throw error;
+  }
+
+  // The account is gone from the database, but its live sockets are not: a
+  // WebSocket authenticates once at connect and never re-checks, so without
+  // this the deleted user keeps receiving message bodies until they happen to
+  // disconnect. `forEachAuthenticatedSocket` and `evictVoiceUser` are the
+  // already-exported handles for this; nothing here reaches into ws/.
+  //
+  // PROCESS-LOCAL. Both helpers walk this instance's own maps, so on a
+  // multi-replica deploy a socket held on *another* replica survives until it
+  // drops. Closing that gap needs a cluster-bus eviction frame, which lives in
+  // ws/chat.ts — see the note in docs/TRUST_AND_SAFETY.md §5.
+  evictVoiceUser(user.id);
+  forEachAuthenticatedSocket((socket, connected) => {
+    if (connected.id === user.id) {
+      socket.close(4003, "account deleted");
+    }
+  });
+
+  // Nothing names these objects any more — the rows that did cascaded away with
+  // the account, so the hourly orphan sweeper will never see them.
+  deleteObjectsInBackground(result.attachmentKeys);
+
+  return { ok: true };
+});
+
+/**
+ * Terminate somebody else's account. The Tier 0 tool.
+ *
+ * `DELETE /api/me` is self-serve: it authenticates *as* the account being
+ * deleted and there is no way to aim it at anyone else, so terminating an
+ * account for CSAM or a credible threat was manual SQL — the one action the
+ * runbook demands be immediate, done by hand, at 3am, against production.
+ * `deleteAccount` has been a correctly-ordered, tested implementation of that
+ * sequence for a while; this is the route in front of it.
+ *
+ * GATED ON `isInstanceModerator`, AND ON NOTHING ELSE. Deliberately not a server
+ * role: destroying an account reaches every server that account is in and every
+ * conversation it is part of, and no server owner has standing over any of that.
+ * The reasoning is identical to the instance report queue's, which is why it
+ * reuses the same predicate — `INSTANCE_MODERATOR_CLERK_IDS`, operator
+ * configuration, not something any in-app action can grant. With the variable
+ * unset there are no instance moderators and this route does not exist for
+ * anybody, which is the right default for a self-hosted instance.
+ *
+ * 404 rather than 403 for an unauthorized caller, same as the instance queue:
+ * whether this deployment has operators at all is not a fact to confirm.
+ *
+ * WHAT IT DOES NOT DO, and this is the important part: it applies exactly the
+ * same rules as self-serve deletion, including the refusal when the target owns
+ * a server other people are in. That refusal is not a formality — `servers.owner_id`
+ * cascades, so overriding it would destroy every message every other member of
+ * that server ever wrote in order to remove one person. An operator dealing
+ * with a Tier 0 account that owns a populated server has to transfer or delete
+ * that server first, as a separate deliberate act. The 409 names the servers.
+ */
+router.delete("/api/admin/users/:userId", async ({ user, res }, { userId }) => {
+  if (!isInstanceModerator(user)) {
+    throw new NotFound("Not found");
+  }
+  if (userId === user.id) {
+    // Not a safety rule so much as an honesty one: an operator deleting their
+    // own account should go through the confirmation flow that asks them to
+    // type their handle, not through the one built for acting on somebody else.
+    throw new HttpError(400, "Use DELETE /api/me to delete your own account");
+  }
+
+  const key = `user:${user.id}`;
+  if (!accountDeleteLimiter.take(key)) {
+    res.setHeader("Retry-After", String(accountDeleteLimiter.retryAfter(key)));
+    throw new HttpError(429, "Slow down");
+  }
+
+  const target = await getUserById(userId!);
+  if (!target) {
+    throw new NotFound("User not found");
+  }
+
+  let result;
+  try {
+    result = await deleteAccount(target.id, target.clerk_id);
+  } catch (error) {
+    if (error instanceof OwnedServersBlockDeletionError) {
+      throw new HttpErrorWithDetail(409, error.message, {
+        code: "owned_servers",
+        servers: error.servers,
+      });
+    }
+    if (error instanceof IdentityDeletionFailedError) {
+      console.error("[account] operator deletion, Clerk refused:", error.cause);
+      throw new HttpError(
+        502,
+        "Could not reach the sign-in provider. Nothing was deleted — please try again.",
+      );
+    }
+    throw error;
+  }
+
+  // Same eviction and the same process-local caveat as `DELETE /api/me`.
+  evictVoiceUser(target.id);
+  forEachAuthenticatedSocket((socket, connected) => {
+    if (connected.id === target.id) {
+      socket.close(4003, "account deleted");
+    }
+  });
+  deleteObjectsInBackground(result.attachmentKeys);
+
+  // No audit entry, and that is not an oversight: `audit_log` is server-scoped
+  // (`server_id` is NOT NULL) and an account termination belongs to no server.
+  // It is logged to stderr instead, which is where an instance-level action
+  // with no instance-level log has to go until one exists — see the note in
+  // docs/TRUST_AND_SAFETY.md §3.3.
+  console.warn(
+    `[moderation] account ${target.id} terminated by operator ${user.clerk_id}`,
+  );
+
+  return { ok: true };
 });
 
 // --------------------------------------------------------- user discovery
@@ -562,7 +949,7 @@ router.delete("/api/dms/:channelId", async ({ user }, { channelId }) => {
   // somebody who closes a conversation — or leaves a group — keeps receiving
   // its message bodies, reactions and typing frames for the life of the socket.
   // Only the caller's own view goes; the other participants did not leave.
-  evictChannelViewers(channelId!, (viewerId) => viewerId === user.id);
+  evictChannelViewers(channelId!, { onlyUserIds: [user.id] });
   return { ok: true };
 });
 
@@ -599,10 +986,14 @@ router.post("/api/voice/token", async ({ req, user }) => {
   await requireChannelAccess(body.voiceChannelId, user.id);
 
   try {
+    // `peer.userId` — not `user.id` — only because the two were just proved
+    // equal above; keeping the token's identity and its metadata sourced from
+    // the same verified peer record is what stops them drifting apart.
     return await createLiveKitSession(
       body.voiceChannelId,
       body.peerId,
       peer.displayName,
+      peer.userId,
     );
   } catch (error) {
     console.error("[voice] token minting failed:", error);
@@ -1049,7 +1440,7 @@ router.patch("/api/channels/:channelId", async ({ req, user }, { channelId }) =>
   if (updated.is_private && !channel.is_private) {
     const audience = await getChannelAudience(channelId!);
     const allowed = new Set(audience?.userIds ?? []);
-    evictChannelViewers(channelId!, (userId) => !allowed.has(userId));
+    evictChannelViewers(channelId!, { exceptUserIds: [...allowed] });
     evictVoiceUsersExcept(channelId!, allowed);
   }
 
@@ -1169,7 +1560,7 @@ router.delete(
     await requireManager(channel.server_id, user.id);
     await removeChannelMember(channelId!, userId!);
     if (channel.is_private) {
-      evictChannelViewers(channelId!, (viewerId) => viewerId === userId);
+      evictChannelViewers(channelId!, { onlyUserIds: [userId!] });
       evictVoiceUser(userId!, new Set([channelId!]));
     }
     return { ok: true };
@@ -1523,9 +1914,33 @@ router.get("/api/servers/:serverId/search", async (ctx, { serverId }) => {
 
 // ---------------------------------------------------------------- members
 
+/**
+ * Status rides on the member list rather than arriving over the socket.
+ *
+ * Nothing is pushed: a push has to reach every member of every server the
+ * changing user shares, so one idle transition at a thousand concurrent users is
+ * a membership query plus a fan-out to hundreds of sockets — almost all of them
+ * belonging to clients with no member list on screen. Resolving it here makes
+ * the cost proportional to the number of people actually looking, and zero when
+ * nobody is. The panel re-reads this while it is open.
+ *
+ * `resolveStatuses` is pure memory: one pass over this instance's connections
+ * plus the contributions the other instances published. It adds no query to a
+ * route that already does one, and it is decorated here rather than inside
+ * `listServerMembers` so that the other caller of that function — the LGPD data
+ * export — does not quietly acquire a live presence field.
+ */
 router.get("/api/servers/:serverId/members", async ({ user }, { serverId }) => {
   await requireServerMember(serverId!, user.id);
-  return { members: await listServerMembers(serverId!) };
+  const members = await listServerMembers(serverId!);
+  const statuses = resolveStatuses(members.map((member) => member.id));
+  return {
+    members: members.map((member) => ({
+      ...member,
+      // `offline` is the floor, and it is what an invisible member resolves to.
+      status: statuses.get(member.id) ?? "offline",
+    })),
+  };
 });
 
 router.patch(
@@ -1535,6 +1950,28 @@ router.patch(
     const body = updateMemberRoleSchema.parse(await readJsonBody(req));
     const previousRole = await getMemberRole(serverId!, userId!);
     await updateMemberRole(serverId!, userId!, body.role);
+
+    // A DEMOTION IS A REVOCATION, AND A REVOCATION HAS TO EVICT.
+    //
+    // `channelVisibleSql` admits admins to a private channel on rank alone, so
+    // `admin` → `member` takes away every private channel they were not
+    // explicitly added to — without touching one membership row. `updateMemberRole`
+    // invalidates the audience cache for exactly this reason, but a cache
+    // invalidation only fixes what the *next* query answers: the socket already
+    // sitting in that channel keeps receiving every message body, and the peer
+    // already in its voice room keeps hearing it, until they happen to navigate
+    // away. Same two `evict*` helpers the kick and ban paths call, for the same
+    // reason and with the same process-local caveat noted on `DELETE /api/me`.
+    if (previousRole === "admin" && body.role === "member") {
+      const revoked = new Set(
+        await listRevokedPrivateChannelIds(serverId!, userId!),
+      );
+      if (revoked.size > 0) {
+        evictUserFromChannels(userId!, revoked);
+        evictVoiceUser(userId!, revoked);
+      }
+    }
+
     await logAudit({
       serverId: serverId!,
       actorId: user.id,
@@ -1542,6 +1979,108 @@ router.patch(
       targetType: "user",
       targetId: userId!,
       changes: [{ key: "role", old: previousRole, new: body.role }],
+    });
+    return { ok: true };
+  },
+);
+
+// ------------------------------------------------------------- timeouts
+//
+// The middle of the enforcement ladder. `requireManager` to see and act, and
+// `requireOutranked` for who may be acted on — the same rank rule as kick and
+// ban, argued there.
+//
+// The *enforcement* of a timeout is nowhere near these routes: it lives in the
+// two chokepoints (`handleApi` above, `handleChatMessage` in ws/chat.ts) plus
+// the voice join. These three only issue, lift and list.
+
+router.get(
+  "/api/servers/:serverId/timeouts",
+  async ({ user }, { serverId }) => {
+    await requireManager(serverId!, user.id);
+    return { timeouts: await listActiveTimeouts(serverId!) };
+  },
+);
+
+router.post(
+  "/api/servers/:serverId/timeouts",
+  async ({ req, user }, { serverId }) => {
+    const actorRole = await requireManager(serverId!, user.id);
+    const body = issueTimeoutSchema.parse(await readJsonBody(req));
+    if (body.userId === user.id) {
+      throw new HttpError(400, "You cannot time yourself out");
+    }
+    // Unlike a ban, a timeout cannot be pre-emptive: it silences somebody
+    // *inside* a server, and there is nothing to silence about a person who is
+    // not there. `requireOutranked` returns null for a non-member.
+    const targetRole = await requireOutranked(
+      serverId!,
+      actorRole,
+      body.userId,
+      "timeout",
+    );
+    if (!targetRole) {
+      throw new NotFound("Member not found");
+    }
+
+    const timeout = await issueTimeout({
+      serverId: serverId!,
+      userId: body.userId,
+      issuedBy: user.id,
+      minutes: body.minutes,
+      reason: body.reason ?? null,
+    });
+
+    await logAudit({
+      serverId: serverId!,
+      actorId: user.id,
+      action: "member.timeout",
+      targetType: "user",
+      targetId: body.userId,
+      reason: body.reason ?? null,
+      changes: [
+        // The row is replaced rather than appended to and is deleted when it
+        // expires, so this entry is the only durable record of how long the
+        // sanction was for. `expiresAt` old→new reads as an extension when the
+        // person was already timed out, and as a fresh sanction when not.
+        {
+          key: "expiresAt",
+          old: timeout.previousExpiresAt?.toISOString() ?? null,
+          new: timeout.expiresAt.toISOString(),
+        },
+        { key: "minutes", old: null, new: body.minutes },
+      ],
+    });
+
+    // A timeout refuses the voice *join*; somebody already in a room joined
+    // before it existed and would otherwise keep talking through the whole
+    // sanction. Scoped to this server's channels so a conversation call the
+    // person is in is untouched — a server's moderators do not get to hang up
+    // their members' DMs. Text needs no equivalent: nothing is pushed *from*
+    // the sanctioned client, and they keep read access by design.
+    const channelIds = await listServerChannelIds(serverId!);
+    evictVoiceUser(body.userId, channelIds);
+
+    return created({ timeout, message: timeoutMessage(timeout) });
+  },
+);
+
+router.delete(
+  "/api/servers/:serverId/timeouts/:userId",
+  async ({ user }, { serverId, userId }) => {
+    await requireManager(serverId!, user.id);
+    // No rank check on the way *out*. Lifting a sanction only ever gives
+    // something back, and an admin who can see the list should be able to undo
+    // a mistake without waiting for the owner.
+    if (!(await liftTimeout(serverId!, userId!))) {
+      throw new NotFound("No active timeout for that member");
+    }
+    await logAudit({
+      serverId: serverId!,
+      actorId: user.id,
+      action: "member.timeout_lift",
+      targetType: "user",
+      targetId: userId!,
     });
     return { ok: true };
   },
@@ -1667,8 +2206,8 @@ router.get(
 /** Strips everything but the characters a filename and a quoted
  * `Content-Disposition` value both tolerate — the server name is fully
  * user-controlled, and the alternative is trusting it inside a header. */
-function sanitizeFilenameSegment(value: string): string {
-  return value.replace(/[^a-zA-Z0-9 _-]/g, "").trim() || "server";
+function sanitizeFilenameSegment(value: string, fallback = "server"): string {
+  return value.replace(/[^a-zA-Z0-9 _-]/g, "").trim() || fallback;
 }
 
 /**
@@ -1709,6 +2248,263 @@ router.get(
     );
   },
 );
+
+// ---------------------------------------------------------------- reports
+
+/**
+ * Report ids are BIGSERIAL, not uuids, so they cannot use the router's `:xxxId`
+ * convention — that helper rejects anything that is not a uuid. The parameter
+ * is therefore named `:report` and validated here instead, because an
+ * unvalidated value reaching `$1::bigint` is a 500 rather than a 404.
+ */
+function reportIdParam(value: string | undefined): string {
+  if (!value || !/^[0-9]{1,19}$/.test(value)) {
+    throw new NotFound("Report not found");
+  }
+  return value;
+}
+
+function reportListOptions(url: URL) {
+  const rawStatus = url.searchParams.get("status");
+  return {
+    before: url.searchParams.get("before") ?? undefined,
+    limit: clampLimit(
+      url.searchParams.get("limit"),
+      REPORT_PAGE_SIZE,
+      REPORT_PAGE_MAX,
+    ),
+    // An unrecognised status filters nothing rather than 400s: the queue is a
+    // read, and a client sending a value this build does not know should still
+    // see the reports.
+    status: rawStatus
+      ? (reportStatusSchema.safeParse(rawStatus).data ?? undefined)
+      : undefined,
+  };
+}
+
+/**
+ * File a report.
+ *
+ * The body names *what* is being reported and never where it goes — see the
+ * header of services/reports.ts. Everything this route can refuse is a 404 by
+ * design: "you cannot see that" and "there is no such thing" must be the same
+ * answer, or the endpoint becomes a way to test message ids for existence.
+ */
+router.post("/api/reports", async ({ req, res, user }) => {
+  const key = `user:${user.id}`;
+  if (!reportLimiter.take(key)) {
+    res.setHeader("Retry-After", String(reportLimiter.retryAfter(key)));
+    throw new HttpError(429, "Slow down");
+  }
+
+  const body = createReportSchema.parse(await readJsonBody(req));
+  try {
+    const result = await createReport(
+      body.subjectType === "message"
+        ? {
+            subjectType: "message",
+            reporterId: user.id,
+            messageId: body.messageId,
+            reason: body.reason,
+            details: body.details,
+          }
+        : {
+            subjectType: "user",
+            reporterId: user.id,
+            userId: body.userId,
+            serverId: body.serverId ?? null,
+            reason: body.reason,
+            details: body.details,
+          },
+    );
+    // Re-reporting something already in the queue is not an error and not a new
+    // report, so it answers 200 while the first one answers 201 — the same
+    // contract POST /api/blocks uses.
+    return result.duplicate
+      ? { report: result.report }
+      : created({ report: result.report });
+  } catch (error) {
+    if (error instanceof ReportTargetNotVisibleError) {
+      throw new NotFound("Not found");
+    }
+    if (error instanceof ReportFloodError) {
+      throw new HttpError(429, "You have filed too many reports recently");
+    }
+    throw error;
+  }
+});
+
+/** The reporter's own reports, in the narrow shape they may see. */
+router.get("/api/reports/mine", async ({ url, user }) =>
+  listReportsByReporter(user.id, reportListOptions(url)),
+);
+
+/**
+ * The instance queue — every report with no server behind it, which is exactly
+ * the set of reports about conversations. Gated on `isInstanceModerator`, which
+ * is operator configuration and not any role held inside the app. A server
+ * owner has no more access here than anybody else, which is the point.
+ */
+router.get("/api/reports/instance", async ({ url, user }) => {
+  if (!isInstanceModerator(user)) {
+    // 404, not 403: whether this deployment has an instance queue at all is not
+    // a fact a member needs confirmed.
+    throw new NotFound("Not found");
+  }
+  return listInstanceReports(reportListOptions(url));
+});
+
+/**
+ * One server's queue. `requireManager`, like every other moderation read — and
+ * it can only ever return reports about that server's own channels, because a
+ * report about a conversation has no server id to match (see the `reports`
+ * table CHECK constraint).
+ */
+router.get(
+  "/api/servers/:serverId/reports",
+  async ({ url, user }, { serverId }) => {
+    await requireManager(serverId!, user.id);
+    return listServerReports(serverId!, reportListOptions(url));
+  },
+);
+
+/**
+ * Close a report, actioned or dismissed.
+ *
+ * Who may do so follows the report's own scope and nothing else: a server id
+ * means a manager of that server, no server id means an instance moderator.
+ * The scope is read before anything is returned, so an unauthorized caller
+ * learns nothing about the report — not even that the id exists.
+ */
+router.patch("/api/reports/:report", async ({ req, user }, { report }) => {
+  const reportId = reportIdParam(report);
+  const scope = await getReportScope(reportId);
+  if (!scope) {
+    throw new NotFound("Report not found");
+  }
+  let actorRole: MemberRole | null = null;
+  if (scope.serverId) {
+    actorRole = await requireManager(scope.serverId, user.id);
+  } else if (!isInstanceModerator(user)) {
+    throw new NotFound("Report not found");
+  }
+
+  const body = resolveReportSchema.parse(await readJsonBody(req));
+
+  // ------------------------------------------- resolve and sanction as one
+  //
+  // Everything that can refuse the sanction is checked BEFORE the report is
+  // closed. The failure this ordering exists to prevent is the one that costs
+  // the moderator most: closing the queue entry, failing the rank check, and
+  // leaving a closed report with nobody sanctioned and no obvious way to tell
+  // that is what happened. Either both happen or neither does.
+  let timeoutTarget: string | null = null;
+  if (body.timeoutMinutes != null) {
+    if (!scope.serverId || !actorRole) {
+      // An instance-queue report is about a conversation, which has no server
+      // and therefore no place to be timed out *in*. Silencing somebody's DMs
+      // is not a sanction this product has, and inventing one here would hand
+      // it to whoever reads that queue. 400 rather than a quiet skip.
+      throw new HttpError(
+        400,
+        "A report with no server behind it cannot carry a timeout",
+      );
+    }
+    if (body.status !== "actioned") {
+      throw new HttpError(400, "Only an actioned report can carry a timeout");
+    }
+    const report = await getReport(reportId);
+    if (!report?.reportedUserId) {
+      // `reported_user_id` is `ON DELETE SET NULL`: the account has gone since
+      // the report was filed, and there is nobody left to sanction.
+      throw new HttpError(400, "The reported account no longer exists");
+    }
+    if (report.reportedUserId === user.id) {
+      throw new HttpError(400, "You cannot time yourself out");
+    }
+    // Same rank rule as the standalone route — resolving a report is not a way
+    // around "an admin cannot sanction an admin".
+    if (
+      !(await requireOutranked(
+        scope.serverId,
+        actorRole,
+        report.reportedUserId,
+        "timeout",
+      ))
+    ) {
+      throw new NotFound("The reported account is not a member of this server");
+    }
+    timeoutTarget = report.reportedUserId;
+  }
+
+  const resolved = await resolveReport(
+    reportId,
+    user.id,
+    body.status,
+    body.note,
+  );
+  if (!resolved) {
+    // Someone else closed it between the scope read and the update.
+    throw new HttpError(409, "This report has already been resolved");
+  }
+
+  if (timeoutTarget && scope.serverId && body.timeoutMinutes != null) {
+    const timeout = await issueTimeout({
+      serverId: scope.serverId,
+      userId: timeoutTarget,
+      issuedBy: user.id,
+      minutes: body.timeoutMinutes,
+      // The note the moderator already typed is the justification. Asking for
+      // it a second time is how the reason field ends up empty.
+      reason: body.note ?? null,
+    });
+    await logAudit({
+      serverId: scope.serverId,
+      actorId: user.id,
+      action: "member.timeout",
+      targetType: "user",
+      targetId: timeoutTarget,
+      reason: body.note ?? null,
+      changes: [
+        {
+          key: "expiresAt",
+          old: timeout.previousExpiresAt?.toISOString() ?? null,
+          new: timeout.expiresAt.toISOString(),
+        },
+        { key: "minutes", old: null, new: body.timeoutMinutes },
+        // Which report produced this sanction. `audit_log.target_id` is a uuid
+        // and a report id is a bigint, so it travels here — the same dodge the
+        // `report.resolve` entry below makes, for the same reason.
+        { key: "report", old: null, new: reportId },
+      ],
+    });
+    const channelIds = await listServerChannelIds(scope.serverId);
+    evictVoiceUser(timeoutTarget, channelIds);
+  }
+
+  // Server-scoped resolutions join the same trail as every other moderator
+  // action. A conversation report has no server to file under and is recorded
+  // on the report row alone — see the `report.resolve` comment in shared/audit.
+  if (scope.serverId) {
+    await logAudit({
+      serverId: scope.serverId,
+      actorId: user.id,
+      action: "report.resolve",
+      targetType: "report",
+      // `audit_log.target_id` is a uuid column and a report id is a bigint, so
+      // the id travels in `changes` rather than being coerced into a shape it
+      // does not fit.
+      targetId: null,
+      reason: body.note ?? null,
+      changes: [
+        { key: "report", old: null, new: reportId },
+        { key: "status", old: "open", new: body.status },
+      ],
+    });
+  }
+
+  return { report: resolved };
+});
 
 // ---------------------------------------------------------------- invites
 
@@ -1904,9 +2700,9 @@ export async function handleApi(
     return;
   }
 
-  let resolved: Awaited<ReturnType<typeof resolveAuthUser>> = null;
+  let resolved: Awaited<ReturnType<typeof resolveAuthSession>> = null;
   try {
-    resolved = await resolveAuthUser(req.headers.authorization);
+    resolved = await resolveAuthSession(req.headers.authorization);
   } catch (error) {
     console.error("[auth] resolve failed:", error);
     sendError(res, 503, "Authentication temporarily unavailable", req);
@@ -1935,6 +2731,54 @@ export async function handleApi(
     return;
   }
 
+  // ------------------------------------------------------------ the age gate
+  //
+  // Here, and not in the routes. This is the same chokepoint argument the
+  // Bearer resolution above rests on (see CLAUDE.md pitfall #8): the router has
+  // over a hundred handlers and grows every week, so a per-route check is a
+  // check somebody will forget on the route where it matters. Placed before
+  // `router.match` so it covers every path — including ones that do not exist
+  // yet, and including 404s and 405s, which a refused account has no business
+  // enumerating either.
+  //
+  // The WebSocket half of the same gate lives in `resolveAuthUser`, which
+  // refuses outright; only this caller can see a path, so only this caller can
+  // grant the exemptions in `isAgeGateExempt`.
+  if (resolved.ageGate !== "passed" && !isAgeGateExempt(method, pathname)) {
+    sendError(
+      res,
+      403,
+      resolved.ageGate === "blocked"
+        ? AGE_GATE_BLOCKED_MESSAGE
+        : AGE_GATE_PENDING_MESSAGE,
+      req,
+    );
+    return;
+  }
+
+  // ----------------------------------------------------- the timeout gate
+  //
+  // Immediately after the age gate, and for the same reason it is here rather
+  // than in the routes: a per-route check is a check somebody forgets on the
+  // route where it matters. Placed before `router.match` so it covers paths
+  // that do not exist yet.
+  //
+  // Narrower than the age gate in two ways, both deliberate. It runs on WRITE
+  // methods only — a timeout takes away speaking, not reading, and gating GETs
+  // would make it a partial ban. And it only asks the database at all when the
+  // pathname names a server, a channel or a message; `/api/me`, `/api/dms`,
+  // `/api/blocks` and `/api/reports` match no scope and cost nothing, which is
+  // also how a timed-out member keeps the ability to report the fight they are
+  // in. `findTimeoutForRequest` owns both rules — see the comment on
+  // `TIMEOUT_EXEMPT_SUFFIXES` for the two writes that stay open.
+  if (WRITE_METHODS.has(method)) {
+    const timeout = await findTimeoutForRequest(user.id, method, pathname);
+    if (timeout) {
+      sendError(res, 403, timeoutMessage(timeout), req);
+      return;
+    }
+  }
+
   try {
     const url = new URL(req.url ?? "/", "http://localhost");
     const matched = router.match(method, pathname);
@@ -1943,7 +2787,7 @@ export async function handleApi(
       return;
     }
 
-    const ctx: RequestContext = { req, res, url, user };
+    const ctx: RequestContext = { req, res, url, user, ageGate: resolved.ageGate };
     const result = await matched.handler(ctx, matched.params);
     if (result instanceof Created) {
       sendJson(res, 201, result.body, req);
@@ -1955,12 +2799,20 @@ export async function handleApi(
         ...(result.filename
           ? { "content-disposition": `attachment; filename="${result.filename}"` }
           : {}),
+        ...SECURITY_HEADERS,
+        ...corsHeaders(req),
       });
       res.end(result.body);
       return;
     }
     sendJson(res, 200, result, req);
   } catch (error) {
+    // Checked before the plain `HttpError` branch it extends, or the extra
+    // fields would be silently dropped by the more general match.
+    if (error instanceof HttpErrorWithDetail) {
+      sendJson(res, error.status, { error: error.message, ...error.detail }, req);
+      return;
+    }
     if (error instanceof HttpError) {
       sendError(res, error.status, error.message, req);
       return;

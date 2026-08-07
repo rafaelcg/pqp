@@ -11,7 +11,7 @@
 | 2 Text chat | Done | WS + markdown + presence |
 | 3 Voice per channel | Done | Mesh + chat on voice channels; cross-NAT FIXED (ExpressTURN / ICE, 2026-07-11) |
 | 4 Self-host / Railway | Done | Docker Compose + docs; hosted Pages + Railway live |
-| 5 SFU | LiveKit done (unverified) | LiveKit token + client adapter + compose profile; Cloudflare Realtime still a stub |
+| 5 SFU | LiveKit **verified against a live server** (2026-08-07) | Two headless Chromium participants joined a real LiveKit room through `livekit-session.ts` and exchanged audio both ways; mute, screen share, ban eviction, the mesh-cap bypass and the mesh-only 503 all checked. Verification found `revokeTokenTs` to be LiveKit-Cloud-only, so a ban could be defeated by reconnecting on the token already held — fixed with a re-sweep. **Not** verified against LiveKit Cloud, at scale, or cross-NAT; the silent per-client mesh fallback is a known open split. Details and exact scope: [`voice-backends.md`](./voice-backends.md#verification-status). Cloudflare Realtime still a stub |
 | 6 Electron + billing | Partial | Electron shell + CI artifacts + deep links wired end-to-end; no app icon, no Stripe UI |
 
 ## Hardening + product pass (2026-07-31)
@@ -84,9 +84,18 @@ purpose, so its scope reflected the full feature surface rather than guessing at
 
 ## Still open (operational)
 
-1. **Verify LiveKit end-to-end** — bring up `docker compose --profile livekit`, join from two clients
-2. **Verify voice in a real browser** — the 2026-07-31 pass could not exercise mic capture; mesh
-   join, deafen, and per-peer volume are untested against real hardware
+1. ~~**Mixed-transport voice calls**~~ — **fixed 2026-08-07.** A voice room now has one transport,
+   the server picks it when the room opens and pins it for the room's life, and it is stated in
+   `welcome` and `voice-roster`. Clients declare which transports they can run on `join-voice-room`;
+   one that cannot run the room's is refused before a peer exists, and a client whose SFU session
+   fails at runtime leaves the call and says so instead of building a mesh nobody else is on.
+   Verified end-to-end in real browsers against a live LiveKit. See
+   [`voice-backends.md`](./voice-backends.md#one-room-one-transport-fixed). Residual: two instances
+   with *different* LiveKit config still pin the same channel differently — one more reason voice
+   wants a single instance.
+2. **Verify voice in a real browser** — mesh and SFU join, real mic capture, and the transport
+   refusal paths are now covered (2026-08-07, headless Chromium with fake devices); deafen and
+   per-peer volume are still untested against real hardware
 3. **`pqp.gg` is unregistered** — canonical/OG tags point at a domain nobody owns
 4. **Electron app icon** — no `electron/build` icons, so packaged apps ship the default Electron icon
 5. **Redis-backed rate limiting and presence** — both are in-process, so the API cannot scale past one instance

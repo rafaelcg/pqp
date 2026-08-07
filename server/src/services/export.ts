@@ -188,7 +188,13 @@ async function exportMessages(
   };
 }
 
-async function exportAttachments(
+/**
+ * Exported so the *personal* export (services/account.ts) reuses one definition
+ * of what an exported attachment is. Both files answer the same question about
+ * the same rows — a second copy would be free to drift into leaking a presigned
+ * URL, which is exactly what the `ExportAttachment` comment above forbids.
+ */
+export async function exportAttachments(
   messageIds: string[],
 ): Promise<Map<string, ExportAttachment[]>> {
   const byMessage = new Map<string, ExportAttachment[]>();

@@ -11,6 +11,9 @@ export default defineConfig({
   },
   test: {
     environment: "node",
-    include: ["src/**/*.test.ts"],
+    // `.tsx` too, so a component whose whole job is rendering one string can be
+    // pinned. These render through `react-dom/server`, which needs no DOM — the
+    // environment stays `node` and the suite keeps costing nothing.
+    include: ["src/**/*.test.{ts,tsx}"],
   },
 });

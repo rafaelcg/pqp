@@ -28,8 +28,14 @@ The main process polls Vite at `http://localhost:5173` until it responds, then l
 | Variable | Purpose |
 |---|---|
 | `VITE_APP_URL` / `PQP_APP_URL` | Remote or local URL to load (takes precedence over static). Root paths (`/`) are rewritten to `/app`. |
-| `PQP_LOAD_STATIC=1` | Force loading a built client from disk via a local loopback server (opens `/app`) |
-| `PQP_LOAD_STATIC=0` | Never use static; always use URL |
+| `PQP_LOAD_STATIC=1` | Serve a built client from disk over a local loopback server (opens `/app`). Opt-in only — see below. |
+| `PQP_DISABLE_AUTO_UPDATE=1` | Turn off the shell's update check in a packaged build |
+
+A **packaged build loads the hosted app** (`DEFAULT_PROD_URL` in `main.js`, currently `https://pqp.gg/app`), not the client bundled into `resources/client`.
+
+That is a hard requirement, not a preference: the loopback static server binds an **ephemeral** port, so its origin changes on every launch, and the production API's CORS allowlist (`CORS_ALLOWED_ORIGINS`) plus Clerk's allowed origins and `azp` check are all origin-shaped. A packaged build serving itself would render and then fail every API call — in production only, because the allowlist falls open to `*` when the env var is unset, which is the local-dev configuration. Full reasoning in [`docs/DESKTOP.md`](../docs/DESKTOP.md).
+
+`PQP_LOAD_STATIC=1` stays for offline / self-host use, where the operator controls the allowlist.
 
 Examples:
 
@@ -61,9 +67,10 @@ On Windows / Linux, the native title bar is kept (minimal).
 - `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`
 - Preload exposes only `window.pqpDesktop` (mute toggle + deep-link helpers)
 - External `window.open` / off-origin navigations open in the system browser
+- Exception: auth hosts (`lib/nav-policy.js`) navigate in-window and may open a popup — a Clerk / OAuth redirect that finished in the system browser would put the session in the wrong place. Adding a social provider in Clerk may mean adding its host to `AUTH_HOST_SUFFIXES`.
 - Local static mode serves on `127.0.0.1` with a restrictive CSP
 - Remote URLs keep the server’s own CSP (Electron does not rewrite it)
-- Media / notification permissions are allowlisted for voice UX
+- Media / notification permissions are allowlisted for voice UX; on macOS the shell also requests the *system* mic/camera permission (`systemPreferences.askForMediaAccess`), which is separate from the Chromium one and fails silently when missing
 
 ### Renderer bridge
 
@@ -107,7 +114,7 @@ The main process sends the mapped path over IPC; the React router navigates ther
 
 ## Packaging
 
-Unsigned builds (no Apple notarization / Windows cert required):
+Local builds are always unsigned — signing happens in CI from secrets. See [`docs/DESKTOP.md`](../docs/DESKTOP.md) for signing, notarization and releases.
 
 ```bash
 # Build the web client into client/dist (copied as extraResources)
@@ -115,18 +122,21 @@ pnpm --filter @pqp/client build
 
 cd electron
 pnpm install
-pnpm dist          # current platform
-pnpm dist:mac      # dmg + zip
-pnpm dist:win      # nsis + portable
-pnpm dist:linux    # AppImage + deb
-pnpm pack          # unpacked dir only (faster smoke test)
+pnpm run dist          # current platform
+pnpm run dist:mac      # dmg + zip, arm64 + x64
+pnpm run dist:win      # nsis + portable
+pnpm run dist:linux    # AppImage + deb
+pnpm run pack          # unpacked dir only (faster smoke test)
+pnpm run icons         # regenerate build/icon.{icns,ico,png} from the SVGs (macOS)
 ```
+
+`pnpm pack` is pnpm's own tarball command — use `pnpm run pack`.
 
 Artifacts land in `electron/release/`.
 
-`CSC_IDENTITY_AUTO_DISCOVERY=false` and `mac.identity: null` skip code signing. macOS users will see an “unidentified developer” prompt (right-click → Open, or `xattr -cr`).
+`CSC_IDENTITY_AUTO_DISCOVERY=false` in every script is what skips code signing locally; macOS will show an "unidentified developer" prompt (right-click → Open, or `xattr -cr`).
 
-Packaged apps load `resources/client` over a loopback HTTP server at **`/app`** when no `PQP_APP_URL` is set. To ship a thin shell that only loads a remote host, set `PQP_APP_URL` at runtime or omit `client/dist` and always pass a URL.
+Packaged apps load the hosted app (see **Environment** above). `resources/client` is still shipped and used when `PQP_LOAD_STATIC=1`.
 
 ## Electron-ready client conventions
 
@@ -139,10 +149,12 @@ Packaged apps load `resources/client` over a loopback HTTP server at **`/app`** 
 
 | Item | Status |
 |---|---|
-| Code signing (Apple / Windows) | Not configured — needs certs + CI secrets |
-| Notarization (macOS) | Not configured — paid Apple Developer account |
-| Auto-update | Not implemented (electron-updater / forge publishers) |
-| App icons | No custom `.icns` / `.ico` yet (`build/` optional) |
+| Code signing (macOS) | Wired in CI; needs `CSC_LINK` / `CSC_KEY_PASSWORD` secrets — [`docs/DESKTOP.md`](../docs/DESKTOP.md) |
+| Notarization (macOS) | Wired in CI; needs the App Store Connect API key (or Apple ID) secrets |
+| Code signing (Windows) | Not configured — SmartScreen warns. Needs an OV/EV cert; `WIN_CSC_LINK` is already read |
+| Auto-update | Implemented (`lib/updater.js`, electron-updater → GitHub Releases). macOS updates need a signed build |
+| App icons | `build/icon.{icns,ico,png}`, generated from `build/*.svg` |
+| Bundled client origin | Loopback static mode cannot satisfy a production CORS allowlist; the fix is a stable `app://` protocol |
 | Tray / push-to-talk | Future |
 | Native notifications deep-link | Future |
 | Deep-link → select server/channel state | Path navigates to `/app/...`; selection state still in-memory |

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { attachmentSchema } from "./attachments.js";
 import { embedSchema } from "./embeds.js";
+import { manualStatusSchema } from "./status.js";
 import { webhookEmbedSchema } from "./webhooks.js";
 
 export const channelTypeSchema = z.enum(["text", "voice", "category"]);
@@ -94,6 +95,47 @@ export type NotificationPreferences = z.infer<
  * this server does not must still get the rest of its patch saved.
  */
 export const userPreferencesSchema = z.object({
+  /**
+   * Voice-activity or push-to-talk. Synced because it is a preference about
+   * how you talk, not about this machine — somebody who uses PTT on a laptop
+   * wants it on the desktop too.
+   *
+   * The KEY BINDING is deliberately NOT here. It is a physical key position
+   * (`KeyboardEvent.code`), so syncing it to a phone with no keyboard, or to a
+   * different physical layout, means carrying a binding that cannot be pressed.
+   * That one stays device-local.
+   */
+  inputMode: z.enum(["voice-activity", "push-to-talk"]).optional(),
+  micProcessing: z
+    .object({
+      echoCancellation: z.boolean(),
+      noiseSuppression: z.boolean(),
+      autoGainControl: z.boolean(),
+    })
+    .optional(),
+  /**
+   * The manual half of user status — `dnd` or `invisible`, or `online` meaning
+   * "no override". Absent is the same as `online`.
+   *
+   * A PREFERENCE AND NOT A `users` COLUMN, for three reasons that all point the
+   * same way. It has to survive a reconnect and follow the person across
+   * devices, which rules out anything socket-scoped or in localStorage. It is
+   * read exactly once per socket and never on the message path, so it does not
+   * want to be on `users` — the table every message, member list and mention
+   * lookup already joins, and the one place a migration is most expensive. And
+   * what it stores is a *choice*: the derived half of status (online, idle,
+   * offline) is deliberately not stored anywhere at all, because a stored
+   * "online" outlives the process that was holding the socket.
+   *
+   * That it lands in an existing JSONB blob is why user status ships with no
+   * database migration whatsoever.
+   *
+   * `invisible` is written here in the clear and is only ever read back to its
+   * own owner — `/api/me` is the account's own view of itself. What third
+   * parties are told goes through `userStatusSchema`, which has no `invisible`
+   * member at all.
+   */
+  status: manualStatusSchema.optional(),
   theme: themePreferenceSchema.optional(),
   muteOnJoin: z.boolean().optional(),
   compactPeers: z.boolean().optional(),
@@ -108,9 +150,71 @@ export const userPreferencesSchema = z.object({
    * received.
    */
   showLinkEmbeds: z.boolean().optional(),
+  /**
+   * When first-run onboarding was finished or skipped, as an ISO instant.
+   *
+   * A preference rather than a `users` column: it is not enforced server-side,
+   * nothing joins on it, and it has to follow the person across devices —
+   * localStorage would replay the whole flow on every new browser, and a column
+   * would be a migration on the hottest table in the schema for a flag read
+   * exactly once per session. It also rides down with `/api/me`, which the
+   * client already awaits before first paint, so the check costs no request.
+   *
+   * Accounts that predate onboarding are backfilled with this key by a one-shot
+   * data migration in `schema.sql` — see `onboarding_grandfather_2026_08`.
+   * Absent therefore means "signed up after onboarding shipped", not "old".
+   *
+   * The value is only ever read for presence; the instant is for support and
+   * for telling a backfilled account from one that really ran the flow.
+   */
+  onboardedAt: z.string().optional(),
 });
 
 export type UserPreferences = z.infer<typeof userPreferencesSchema>;
+
+// ------------------------------------------------------------- age gate (18+)
+
+/**
+ * The minimum age the Terms require. Shared rather than repeated so the
+ * sentence the user reads, the boundary the server computes, and the tests that
+ * pin it are all the same number.
+ */
+export const MINIMUM_AGE_YEARS = 18;
+
+/**
+ * Where an account stands with the 18+ check.
+ *
+ * - `pending` — never answered. Everything except the exempt routes is refused
+ *   until they do; this is also what every account that predates the gate
+ *   reads, so existing users are prompted rather than grandfathered.
+ * - `passed`  — declared a date of birth of at least `MINIMUM_AGE_YEARS`.
+ * - `blocked` — declared a date of birth under it. There is exactly one
+ *   attempt, and no self-serve way out of this state.
+ */
+export const ageGateStatusSchema = z.enum(["pending", "passed", "blocked"]);
+
+export type AgeGateStatus = z.infer<typeof ageGateStatusSchema>;
+
+/**
+ * The one-shot declaration.
+ *
+ * A plain `YYYY-MM-DD` calendar date with no time and no zone, because that is
+ * what a date of birth is — attaching an instant to it is what produces the
+ * classic off-by-one where somebody is refused on their own birthday. The
+ * regex only proves the shape; whether the date exists (and is not in the
+ * future) is decided server-side, since only the server's answer counts.
+ */
+export const ageDeclarationSchema = z.object({
+  dateOfBirth: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Enter a valid date"),
+});
+
+export type AgeDeclarationRequest = z.infer<typeof ageDeclarationSchema>;
+
+export const ageCheckResponseSchema = z.object({
+  ageGate: ageGateStatusSchema,
+});
+
+export type AgeCheckResponse = z.infer<typeof ageCheckResponseSchema>;
 
 export const userSchema = z.object({
   id: z.string().uuid(),
@@ -133,6 +237,16 @@ export const userSchema = z.object({
    * to the same value as the column so the two can never disagree.
    */
   dmPrivacy: dmPrivacySchema.default("server_members"),
+  /**
+   * Where this account stands with the 18+ check. Only ever sent to the
+   * account's own owner — like `clerkId` above, and for the same reason: it is
+   * the one field on this shape that says something about a person rather than
+   * about how they appear to others.
+   *
+   * Optional, and an absent value must be read as "this API predates the gate",
+   * not as "passed" — the client only *skips* the gate on an explicit `passed`.
+   */
+  ageGate: ageGateStatusSchema.optional(),
 });
 
 /**
@@ -455,6 +569,50 @@ export const updateProfileSchema = z.object({
     ),
   dmPrivacy: dmPrivacySchema.optional(),
 });
+
+/**
+ * Deleting your own account (LGPD art. 18, VI).
+ *
+ * `confirm` carries the account's own handle, typed by hand. A bare `DELETE`
+ * with an empty body is one mis-click, one stale tab replaying a request, or
+ * one CSRF-shaped mistake away from destroying an account that cannot be
+ * restored — and unlike every other destructive action in this product there is
+ * no owner, moderator or backup on the other side to undo it. Requiring a
+ * string only the account holder can read off their own profile makes the
+ * request impossible to issue by accident.
+ *
+ * The expected value is `expectedDeleteConfirmation` below, so the client's
+ * "does this match yet" check and the server's refusal can never drift.
+ */
+export const deleteAccountSchema = z.object({
+  confirm: z.string().min(1).max(100),
+});
+
+export type DeleteAccountRequest = z.infer<typeof deleteAccountSchema>;
+
+/**
+ * What the user must type to confirm deletion: their full handle (`name#1234`),
+ * or the literal phrase below for the vanishingly rare account that has no
+ * handle yet. Compared case-insensitively after trimming — the requirement is
+ * deliberate intent, not typing accuracy.
+ */
+export const DELETE_ACCOUNT_FALLBACK_PHRASE = "delete my account";
+
+export function expectedDeleteConfirmation(
+  tag: string | null | undefined,
+): string {
+  return tag ?? DELETE_ACCOUNT_FALLBACK_PHRASE;
+}
+
+export function deleteConfirmationMatches(
+  typed: string,
+  tag: string | null | undefined,
+): boolean {
+  return (
+    typed.trim().toLowerCase() ===
+    expectedDeleteConfirmation(tag).trim().toLowerCase()
+  );
+}
 
 /**
  * User discovery — the only way to reach somebody you share no server with.

@@ -16,6 +16,16 @@ export const AUDIT_ACTIONS = [
   "member.ban",
   "member.unban",
   "member.role_update",
+  /**
+   * A timeout issued, and a timeout lifted early. Both are logged, and the
+   * *expiry* is not: a timeout that simply ran out is not a moderator action
+   * and writing a row for it would need a sweeper to notice, which is the one
+   * thing `member_timeouts` is designed not to require. `member.timeout`
+   * carries the expiry it was issued with in `changes`, so the trail says how
+   * long the sanction was for even after the row itself is gone.
+   */
+  "member.timeout",
+  "member.timeout_lift",
   "channel.create",
   "channel.update",
   "channel.delete",
@@ -31,6 +41,17 @@ export const AUDIT_ACTIONS = [
   "invite.delete",
   "webhook.create",
   "webhook.delete",
+  /**
+   * A report closed by a moderator, actioned or dismissed alike. Only ever
+   * written for a report whose context is a *server* channel: `audit_log` is
+   * server-scoped by its own schema (`server_id` is NOT NULL), and a report
+   * about a conversation has no server to file it under. Those resolutions are
+   * recorded on the report row itself — `resolved_by` / `resolved_at` /
+   * `resolution_note` — which is deliberately the only trail they leave, since
+   * publishing them into a server's audit log is exactly the leak the whole
+   * DM-report split exists to prevent.
+   */
+  "report.resolve",
 ] as const;
 
 export const auditActionSchema = z.enum(AUDIT_ACTIONS);

@@ -1,53 +1,71 @@
 import { Link } from "react-router-dom";
+import { RELEASES_PAGE_URL } from "@/lib/downloads";
+import { useTranslation } from "@/lib/i18n";
 
 export function MarketingFooter() {
+  const { t, locale } = useTranslation();
+
   return (
     <footer className="border-t border-ink-4/40 bg-ink px-5 py-10 sm:px-8">
       <div className="mx-auto flex max-w-5xl flex-col gap-8 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="font-brand text-2xl tracking-tight">pqp</p>
           <p className="mt-2 max-w-xs text-sm text-paper-muted">
-            Group chat you own. Self-host or use pqp.gg — same chaos either way.
+            {t("footer.tagline")}
           </p>
         </div>
 
         <div className="flex flex-wrap gap-x-10 gap-y-6 text-sm">
           <div className="flex flex-col gap-2">
             <p className="text-xs font-medium uppercase tracking-[0.16em] text-paper-muted">
-              Product
+              {t("footer.product")}
             </p>
             <Link to="/app" className="text-paper hover:text-signal">
-              Open the app
+              {t("nav.openApp")}
             </Link>
             <a href="/#how" className="text-paper hover:text-signal">
-              How it works
+              {t("nav.howItWorks")}
             </a>
-            <a href="/#hosting" className="text-paper hover:text-signal">
-              Self-host
+            <a
+              href="/#hosting"
+              className="text-paper hover:text-signal"
+              lang={locale === "en" ? undefined : "en"}
+            >
+              {t("nav.selfHost")}
+            </a>
+            {/* The releases page, not a direct asset: the filenames carry the
+                version, so only GitHub can say what the newest one is called.
+                See `lib/downloads.ts`. */}
+            <a
+              href={RELEASES_PAGE_URL}
+              target="_blank"
+              rel="noopener"
+              className="text-paper hover:text-signal"
+            >
+              {t("footer.desktop")}
             </a>
             <Link to="/status" className="text-paper hover:text-signal">
-              Status
+              {t("footer.status")}
             </Link>
           </div>
           <div className="flex flex-col gap-2">
             <p className="text-xs font-medium uppercase tracking-[0.16em] text-paper-muted">
-              Legal
+              {t("footer.legal")}
             </p>
             <Link to="/privacy" className="text-paper hover:text-signal">
-              Privacy
+              {t("footer.privacy")}
             </Link>
             <Link to="/terms" className="text-paper hover:text-signal">
-              Terms
+              {t("footer.terms")}
             </Link>
             <Link to="/cookies" className="text-paper hover:text-signal">
-              Cookies
+              {t("footer.cookies")}
             </Link>
           </div>
         </div>
       </div>
       <p className="mx-auto mt-10 max-w-5xl text-xs text-paper-muted">
-        © {new Date().getFullYear()} pqp. Open source. Built for the group that
-        won&apos;t shut up.
+        {t("footer.copyright", { year: new Date().getFullYear() })}
       </p>
     </footer>
   );

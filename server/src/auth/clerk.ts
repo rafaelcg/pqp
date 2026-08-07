@@ -4,7 +4,12 @@ import {
   emailDomainOf,
   normalizeEmailDomain,
 } from "@pqp/shared";
-import { upsertUser } from "../services/users.js";
+import {
+  looksLikeEmailAddress,
+  placeholderDisplayName,
+  upsertUser,
+} from "../services/users.js";
+import { getAgeGateStatus, type AgeGateStatus } from "../services/age-gate.js";
 import type { DbUser } from "../db.js";
 
 const clerk = createClerkClient({
@@ -97,6 +102,38 @@ export function clearAuthCaches(): void {
   userInflight.clear();
 }
 
+/**
+ * Drop expired entries from both caches.
+ *
+ * Neither map ever shrank on its own: an expired entry is read through and
+ * overwritten on the owner's next request, and deleted only on a profile edit —
+ * so an account that signs in once and never returns stays resident forever.
+ * Measured at roughly 730 bytes per account, which is ~73MB per 100k distinct
+ * users, held for the life of a process that `fly.toml` deliberately never
+ * restarts (`auto_stop_machines = "off"`). That is a slow leak whose size is
+ * the total number of people who ever signed in, not the number online.
+ *
+ * Called from the existing 60s sweep timer rather than on a timer of its own,
+ * and iterating both maps is cheap next to the request that populated them.
+ */
+export function sweepAuthCaches(now = Date.now()): void {
+  for (const [key, entry] of profileCache) {
+    if (entry.expiresAt <= now) {
+      profileCache.delete(key);
+    }
+  }
+  for (const [key, entry] of userCache) {
+    if (entry.expiresAt <= now) {
+      userCache.delete(key);
+    }
+  }
+}
+
+/** Test helper: how many entries each cache is holding. */
+export function authCacheSizes(): { profiles: number; users: number } {
+  return { profiles: profileCache.size, users: userCache.size };
+}
+
 /** Domains the dev-bypass account should present as verified. Dev only. */
 function devEmailDomains(): string[] {
   const raw = process.env.DEV_AUTH_EMAIL_DOMAINS;
@@ -137,6 +174,42 @@ function verifiedEmailDomains(
   return [...domains].sort();
 }
 
+/**
+ * The public name for a Clerk profile. AN EMAIL ADDRESS IS NEVER ONE.
+ *
+ * This chain used to end `?? user.primaryEmailAddress?.emailAddress ?? "User"`,
+ * and a Clerk account with no name set — which is every account created by
+ * "continue with email", so the common case — fell straight through to the
+ * address. It was then rendered as the author of every message and as the label
+ * in the voice roster, written into `users.display_name`, and slugified into the
+ * handle other people type to mention them. One missing field published the
+ * address to everyone who could see the channel.
+ *
+ * So the email is not the last resort, it is not a resort at all: it is off the
+ * chain entirely, and `looksLikeEmailAddress` additionally screens the two
+ * candidates that remain. Screening those matters more than it looks —
+ * `fullName` is whatever the identity provider put in `firstName`/`lastName`,
+ * and a SAML connection that maps the address into one of them would reintroduce
+ * exactly this bug through a field nobody was watching.
+ *
+ * `emailDomains` still carries the *domain* of each verified address, which is
+ * what SSO joining runs on and what the privacy policy describes. That is the
+ * line: the domain is a group the account belongs to, the local part is who
+ * they are.
+ */
+function publicDisplayName(
+  clerkId: string,
+  candidates: readonly (string | null | undefined)[],
+): string {
+  for (const candidate of candidates) {
+    const trimmed = candidate?.trim();
+    if (trimmed && !looksLikeEmailAddress(trimmed)) {
+      return trimmed;
+    }
+  }
+  return placeholderDisplayName(clerkId);
+}
+
 async function loadProfile(clerkId: string): Promise<AuthUser | null> {
   const cached = profileCache.get(clerkId);
   if (cached && cached.expiresAt > Date.now()) {
@@ -153,11 +226,7 @@ async function loadProfile(clerkId: string): Promise<AuthUser | null> {
       const user = await clerk.users.getUser(clerkId);
       const profile: AuthUser = {
         clerkId,
-        displayName:
-          user.fullName ??
-          user.username ??
-          user.primaryEmailAddress?.emailAddress ??
-          "User",
+        displayName: publicDisplayName(clerkId, [user.fullName, user.username]),
         avatarUrl: user.imageUrl ?? null,
         emailDomains: verifiedEmailDomains(user.emailAddresses),
       };
@@ -171,7 +240,7 @@ async function loadProfile(clerkId: string): Promise<AuthUser | null> {
       // The token verified, so the identity is real — keep an existing session
       // alive through a Clerk blip. But never invent a profile for someone we
       // have never seen: upsertUser would create their account permanently
-      // named "User", with a username derived from it.
+      // carrying the placeholder name, with a username derived from it.
       return cached?.user ?? null;
     } finally {
       profileInflight.delete(clerkId);
@@ -193,6 +262,71 @@ const userInflight = new Map<string, Promise<DbUser>>();
 /** Called after a profile write so the next request sees fresh data. */
 export function invalidateUserCache(clerkId: string): void {
   userCache.delete(clerkId);
+}
+
+/**
+ * Drop *every* cached trace of an identity — the DB row and the Clerk profile.
+ *
+ * `invalidateUserCache` is not enough for a deleted account: `profileCache`
+ * holds a display name and avatar for up to five minutes, and `loadProfile`
+ * deliberately falls back to that cached copy when a Clerk lookup fails. A
+ * deleted Clerk user *is* a failing lookup, so without this the account keeps
+ * authenticating from cache for the rest of the TTL — and `resolveDbUser` would
+ * then call `upsertUser` and recreate the row we just deleted.
+ */
+export function forgetAuthUser(clerkId: string): void {
+  profileCache.delete(clerkId);
+  profileInflight.delete(clerkId);
+  userCache.delete(clerkId);
+  userInflight.delete(clerkId);
+}
+
+/** A Clerk user id that no longer exists there — see `deleteClerkUser`. */
+export class ClerkUserGoneError extends Error {}
+
+/**
+ * Delete the identity at Clerk. This is the half of account deletion that
+ * cannot be rolled back and cannot be done from SQL.
+ *
+ * Treated as *success* when Clerk answers 404: the only way to reach that state
+ * is that the user is already gone (a retry, the sweeper, or the person
+ * deleting themselves from Clerk's own account portal first), and the caller's
+ * job is to make the account absent, not to have been the one who removed it.
+ * Making a retry fail here is what would strand a half-deleted account forever.
+ *
+ * A dev-bypass identity has no Clerk user at all and is skipped, so local
+ * development can exercise the whole flow without a Clerk secret key.
+ */
+export async function deleteClerkUser(clerkId: string): Promise<void> {
+  if (isDevAuthBypassEnabled() && clerkId.startsWith("dev_local_user")) {
+    forgetAuthUser(clerkId);
+    return;
+  }
+  try {
+    await clerk.users.deleteUser(clerkId);
+  } catch (error) {
+    if (isClerkNotFound(error)) {
+      forgetAuthUser(clerkId);
+      return;
+    }
+    throw error;
+  }
+  forgetAuthUser(clerkId);
+}
+
+/**
+ * Clerk's SDK throws its own error shape rather than an HTTP status, and the
+ * shape has changed across major versions — so this reads defensively and
+ * treats anything it cannot recognise as "not a 404", which fails closed: an
+ * unrecognised error aborts the deletion instead of silently pretending the
+ * Clerk user was already gone.
+ */
+function isClerkNotFound(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+  const status = (error as { status?: unknown }).status;
+  return status === 404;
 }
 
 async function resolveDbUser(auth: AuthUser): Promise<DbUser> {
@@ -222,14 +356,88 @@ async function resolveDbUser(auth: AuthUser): Promise<DbUser> {
   return request;
 }
 
-export async function resolveAuthUser(
+/** An authenticated identity, plus where it stands with the 18+ age gate. */
+export interface AuthSession {
+  user: DbUser;
+  ageGate: AgeGateStatus;
+}
+
+/**
+ * Identity WITHOUT the age gate applied.
+ *
+ * Only `handleApi` may use this, and only because it is the one caller that can
+ * see the request path and therefore make the exemption decision — a pending
+ * account still has to be able to read `/api/me`, submit its date of birth, and
+ * exercise its LGPD rights (see `isAgeGateExempt`). Every other caller wants
+ * `resolveAuthUser` below, which refuses.
+ */
+export async function resolveAuthSession(
   authorization: string | undefined,
-): Promise<{ user: DbUser } | null> {
+): Promise<AuthSession | null> {
   const auth = await verifyAuthHeader(authorization);
   if (!auth) {
     return null;
   }
-  return { user: await resolveDbUser(auth) };
+  const user = await resolveDbUser(auth);
+  return { user, ageGate: await getAgeGateStatus(user.id) };
+}
+
+/**
+ * An identity that has cleared every gate — the only thing most of the server
+ * should ever ask for.
+ *
+ * This is the age gate's chokepoint for everything that is not the HTTP router,
+ * which today means the WebSocket handshake in `ws/index.ts`. It refuses by
+ * returning null, so the socket takes the path it already had for a bad token
+ * and closes 4401: no new branch to add there, and nothing for a future
+ * connection type to forget. Failing closed is the point — an account that has
+ * not answered the age question is not a session, and the WebSocket carries
+ * chat, presence and voice, every one of which puts the account in front of
+ * other people.
+ */
+export async function resolveAuthUser(
+  authorization: string | undefined,
+): Promise<{ user: DbUser } | null> {
+  const session = await resolveAuthSession(authorization);
+  if (!session || session.ageGate !== "passed") {
+    return null;
+  }
+  return { user: session.user };
+}
+
+/**
+ * The dev bypass token, optionally carrying `:suffix` to name a distinct local
+ * identity.
+ *
+ * One fixed account is enough to click around in, but not to load test with:
+ * the message, typing and reaction limits are all keyed on the user id, so N
+ * simulated clients sharing one account measure the rate limiter rather than
+ * the server. The suffix is held to a short, safe alphabet because it is
+ * concatenated into an identifier — and returns null on anything else, so a
+ * near-miss is a rejected token rather than a surprise account.
+ *
+ * Only ever consulted behind `isDevAuthBypassEnabled()`, which refuses to
+ * return true under NODE_ENV=production and makes the process fail at boot if
+ * the bypass is switched on there.
+ */
+function devBypassIdentity(
+  token: string,
+): { clerkId: string; displayName: string } | null {
+  if (token === DEV_AUTH_TOKEN) {
+    return { clerkId: "dev_local_user", displayName: "Dev User" };
+  }
+  const prefix = `${DEV_AUTH_TOKEN}:`;
+  if (!token.startsWith(prefix)) {
+    return null;
+  }
+  const suffix = token.slice(prefix.length);
+  if (!/^[a-z0-9_-]{1,32}$/.test(suffix)) {
+    return null;
+  }
+  return {
+    clerkId: `dev_local_user_${suffix}`,
+    displayName: `Dev User ${suffix}`,
+  };
 }
 
 export async function verifyAuthHeader(
@@ -241,10 +449,11 @@ export async function verifyAuthHeader(
 
   const token = authorization.slice(7);
 
-  if (isDevAuthBypassEnabled() && token === DEV_AUTH_TOKEN) {
+  const devIdentity = isDevAuthBypassEnabled() ? devBypassIdentity(token) : null;
+  if (devIdentity) {
     return {
-      clerkId: "dev_local_user",
-      displayName: "Dev User",
+      clerkId: devIdentity.clerkId,
+      displayName: devIdentity.displayName,
       avatarUrl: null,
       // The bypass proves no email, so it grants no domain by default — a
       // local dev account must not walk into an SSO-gated server for free.

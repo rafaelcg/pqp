@@ -2,10 +2,26 @@ import {
   MESH_VOICE_WARNING,
   type ClientRelayMessage,
   type VoiceParticipant,
+  type VoiceRoomTransport,
   type VoiceSessionInfo,
   type VoiceSignalingMessage,
 } from "@pqp/shared";
-import { buildAudioConstraints } from "@/lib/audio-devices";
+import {
+  screenShareUnavailableMessage,
+  supportsScreenShare,
+} from "@/components/voice/capabilities";
+// The pure catalogue module, not `lib/i18n` — this hook must not depend on a
+// React context to name an error.
+import {
+  translateMessage,
+  type MessageKey,
+} from "@/lib/i18n/catalogue";
+import {
+  buildAudioConstraints,
+  defaultMicProcessing,
+  sameMicProcessing,
+  type MicProcessing,
+} from "@/lib/audio-devices";
 import {
   connectLiveKit,
   type LiveKitIdentity,
@@ -26,6 +42,52 @@ import {
 
 export type VoiceStatus = "idle" | "joining" | "connected";
 
+/**
+ * One wording for "this browser cannot capture a screen", shared with the UI.
+ *
+ * A function, not a constant: a constant is evaluated when this module is
+ * imported, which is before the non-English catalogue chunk has loaded, and
+ * would pin the sentence to English for the whole session.
+ */
+function screenShareUnsupportedMessage(): string {
+  return screenShareUnavailableMessage("no-api");
+}
+
+/**
+ * Why a join was refused because of the room's transport.
+ *
+ * - `unsupported` — this build cannot run the transport at all (mesh-forced
+ *   build, or no way to obtain an SFU session). The server refused the join
+ *   before creating a peer, so nobody saw us arrive.
+ * - `unreachable` — we can run it in principle but could not establish it:
+ *   token request failed, or the SFU is not reachable from this network.
+ *
+ * Either way the user is **not** in the call and is told so. There is
+ * deliberately no third option where we join on the other transport instead;
+ * that is the partition this type exists to prevent.
+ */
+export interface VoiceTransportFailure {
+  transport: VoiceRoomTransport;
+  reason: "unsupported" | "unreachable";
+}
+
+const TRANSPORT_FAILURE_KEY: Record<
+  VoiceTransportFailure["reason"],
+  MessageKey
+> = {
+  unsupported: "voice.error.transportUnsupported",
+  unreachable: "voice.error.transportUnreachable",
+};
+
+/**
+ * How the microphone decides whether to transmit.
+ *
+ * - `voice-activity` — open whenever you are not muted. What this app has
+ *   always done, and still the default.
+ * - `push-to-talk` — closed unless a key (or the hold button) is down.
+ */
+export type VoiceInputMode = "voice-activity" | "push-to-talk";
+
 export interface VoiceAudioOptions {
   inputDeviceId?: string;
   inputVolume?: number;
@@ -34,15 +96,28 @@ export interface VoiceAudioOptions {
    * so "mute on join" is muted from the very first sample.
    */
   startMuted?: boolean;
+  inputMode?: VoiceInputMode;
+  processing?: MicProcessing;
 }
 
 export interface VoiceState {
   status: VoiceStatus;
   peerId: string | null;
   remotePeers: RemotePeer[];
+  /** The user's explicit mute. Independent of push-to-talk. */
   isMuted: boolean;
   /** Deafened silences everyone else and forces your own mic off, as in Discord. */
   isDeafened: boolean;
+  inputMode: VoiceInputMode;
+  /**
+   * Whether audio is actually leaving this machine right now — the one thing
+   * a push-to-talk user needs to be able to check at a glance.
+   *
+   * Derived, never set: `!muted && !deafened && (voice-activity || key held)`.
+   * The UI reads this rather than `isMuted` when it wants to say "you are
+   * live", because in push-to-talk those two answer different questions.
+   */
+  isTransmitting: boolean;
   error: string | null;
   voiceChannelId: string | null;
   self: VoiceParticipant | null;
@@ -53,6 +128,12 @@ export interface VoiceState {
   peerVolumes: Record<string, number>;
   /** True when media is flowing through an SFU rather than a peer mesh. */
   usingSfu: boolean;
+  /**
+   * Set when the last join was refused because this client could not use the
+   * room's transport. Distinct from `error` so the UI (and tests) can tell this
+   * apart from a mic failure or a dropped socket.
+   */
+  transportFailure: VoiceTransportFailure | null;
   /** True when this client is the one presenting. */
   isSharingScreen: boolean;
   /** peerId of whoever is presenting (self or remote), or null if nobody is. */
@@ -97,9 +178,10 @@ function sameSpeaking(a: string[], b: string[]): boolean {
 async function createMicPipeline(
   deviceId: string | undefined,
   inputVolume: number,
+  processing: MicProcessing,
 ): Promise<MicPipeline> {
   const rawStream = await navigator.mediaDevices.getUserMedia({
-    audio: buildAudioConstraints(deviceId),
+    audio: buildAudioConstraints(deviceId, processing),
     video: false,
   });
 
@@ -137,31 +219,43 @@ function stopMicPipeline(pipeline: MicPipeline | null) {
 
 function micErrorMessage(err: unknown): string {
   if (!(err instanceof Error)) {
-    return "Failed to access microphone";
+    return translateMessage("voice.error.micFailed");
   }
   if (err.name === "NotAllowedError") {
-    return "Microphone access was blocked. Allow it in your browser settings, then rejoin.";
+    return translateMessage("voice.error.micBlocked");
   }
+  // A browser's own message, in the browser's own language. Better than a
+  // generic sentence that throws away what actually went wrong.
   return err.message;
 }
 
 function screenShareErrorMessage(err: unknown): string {
   if (!(err instanceof Error)) {
-    return "Failed to start screen share";
+    return translateMessage("voice.error.shareFailed");
+  }
+  if (err.name === "NotSupportedError" || err instanceof TypeError) {
+    // A browser without getDisplayMedia throws a TypeError from the call
+    // itself. That is a platform limit, not a fault: say it plainly rather
+    // than surfacing "…is not a function" as an alarm.
+    return screenShareUnsupportedMessage();
   }
   if (err.name === "NotAllowedError") {
     // Also covers the user dismissing the OS/browser picker without choosing
     // a source — that rejects with the same error name, so this isn't really
     // a permissions problem in the usual sense, but the copy still fits.
-    return "Screen share was blocked or cancelled.";
+    return translateMessage("voice.error.shareBlocked");
   }
   return err.message;
 }
 
 /**
- * Supplies an SFU session for a voice channel. When set, the controller routes
- * media through the SFU instead of building a mesh. Presence/roster still come
- * over the app WebSocket either way.
+ * Supplies an SFU session for a voice channel.
+ *
+ * Registering one is a statement of **capability**, not a choice of transport:
+ * whether media actually goes through the SFU is decided per room by the server
+ * and delivered in `welcome.transport`. With a provider registered this client
+ * can run either transport; without one it can only run mesh, and the server
+ * will refuse to admit it to an SFU room rather than let it sit there inaudible.
  */
 export type VoiceSessionProvider = (
   voiceChannelId: string,
@@ -172,6 +266,13 @@ export function createVoiceController(transport: RealtimeTransport) {
   let manager: ReturnType<typeof createPeerConnectionManager> | null = null;
   let sfu: LiveKitSession | null = null;
   let sessionProvider: VoiceSessionProvider | null = null;
+  /**
+   * What to assume when `welcome` carries no `transport` — i.e. the server
+   * predates the field. Set from `GET /api/voice/backend` at bootstrap, which
+   * is the only thing an older server can tell us. Never used when the server
+   * states the room's transport, which it always does from this version on.
+   */
+  let legacyRoomTransport: VoiceRoomTransport = "mesh";
   /** peerId → roster identity, used to label SFU participants. */
   const identities = new Map<string, LiveKitIdentity>();
   let pipeline: MicPipeline | null = null;
@@ -192,16 +293,31 @@ export function createVoiceController(transport: RealtimeTransport) {
   // The room the user means to be in. Kept across a WS drop so we can auto-
   // rejoin on reconnect instead of ejecting them from the call.
   let intendedChannelId: string | null = null;
-  let audioOptions: VoiceAudioOptions = {
+  let audioOptions: Required<
+    Pick<VoiceAudioOptions, "inputDeviceId" | "inputVolume" | "processing">
+  > = {
     inputDeviceId: "",
     inputVolume: 1,
+    processing: defaultMicProcessing,
   };
+  /**
+   * True only while the push-to-talk key or button is physically down.
+   *
+   * Module-private on purpose: nothing outside `setPushToTalkActive` may set
+   * it, and every path that could lose track of the key (mode change, leave,
+   * reconnect) resets it to `false`. A stuck-open mic is the worst outcome this
+   * feature can produce, so the invariant is that this only ever *fails closed*.
+   */
+  let pushToTalkHeld = false;
   let state: VoiceState = {
     status: "idle",
     peerId: null,
     remotePeers: [],
     isMuted: false,
     isDeafened: false,
+    inputMode: "voice-activity",
+    // No mic yet, so nothing is going anywhere. `join` recomputes it.
+    isTransmitting: false,
     error: null,
     voiceChannelId: null,
     self: null,
@@ -209,6 +325,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     occupancy: {},
     peerVolumes: {},
     usingSfu: false,
+    transportFailure: null,
     isSharingScreen: false,
     screenSharePeerId: null,
     localScreenStream: null,
@@ -222,27 +339,100 @@ export function createVoiceController(transport: RealtimeTransport) {
     }
   }
 
-  /** Returns the generation this attempt owns; older attempts are abandoned. */
-  function armJoinTimeout(): number {
+  /** Which transports this client can actually run — sent with every join. */
+  function transportCapabilities(): [
+    VoiceRoomTransport,
+    ...VoiceRoomTransport[],
+  ] {
+    return sessionProvider ? ["mesh", "livekit"] : ["mesh"];
+  }
+
+  function sendJoin(voiceChannelId: string) {
+    transport.sendVoice({
+      type: "join-voice-room",
+      voiceChannelId,
+      transports: transportCapabilities(),
+    });
+  }
+
+  /**
+   * Returns the generation this attempt owns; older attempts are abandoned.
+   *
+   * The same timer covers the WebSocket handshake *and*, on an SFU room, the
+   * media connection: `welcome` does not mean the call is up, and a black-holed
+   * SFU host used to take LiveKit's own 15s to give up while the UI said "Voice
+   * connected". Nothing here reports a live call until media is actually running.
+   */
+  function armJoinTimeout(failure?: VoiceTransportFailure): number {
     clearJoinTimeout();
     const generation = ++joinGeneration;
     joinTimeoutId = setTimeout(() => {
       if (state.status === "joining" && generation === joinGeneration) {
+        // A media transport that never came up is a transport failure, and has
+        // to look like one: a black-holed SFU host hangs rather than refusing,
+        // and that is the *likely* cloud failure, not the exotic one.
+        if (failure) {
+          refuseTransport(failure);
+          return;
+        }
         joinGeneration++;
         // Release the mic so the browser recording indicator clears, and tell
         // the server to drop us if the room ever registered the join.
         stopMicPipeline(pipeline);
         pipeline = null;
         intendedChannelId = null;
+        pushToTalkHeld = false;
+        state.isTransmitting = false;
+        void teardownSfu();
+        manager?.dispose();
+        manager = null;
         transport.sendVoice({ type: "leave-voice-room" });
         state.error =
           "Voice connection timed out. Is the server running and WebSocket connected?";
         state.status = "idle";
+        state.peerId = null;
+        state.self = null;
+        state.remotePeers = [];
         state.voiceChannelId = null;
         emit();
       }
     }, 12_000);
     return generation;
+  }
+
+  /**
+   * The room runs a transport we cannot run. Leave — do not build the other one.
+   *
+   * Falling back to mesh here is what used to make two people sit in a call
+   * unable to hear each other with no error anywhere. The user is told, and the
+   * `leave-voice-room` keeps them out of everyone else's roster so nobody is
+   * left talking to a participant who was never there.
+   */
+  function refuseTransport(failure: VoiceTransportFailure) {
+    clearJoinTimeout();
+    joinGeneration++;
+    intendedChannelId = null;
+    knownPeerIds.clear();
+    stopSpeakingLoop();
+    disposeRemoteAnalysers();
+    transport.sendVoice({ type: "leave-voice-room" });
+    manager?.dispose();
+    manager = null;
+    void teardownSfu();
+    stopMicPipeline(pipeline);
+    pipeline = null;
+    releaseScreenCapture();
+    pushToTalkHeld = false;
+    state.isTransmitting = false;
+    state.status = "idle";
+    state.peerId = null;
+    state.self = null;
+    state.remotePeers = [];
+    state.voiceChannelId = null;
+    state.speakingPeerIds = [];
+    state.transportFailure = failure;
+    state.error = translateMessage(TRANSPORT_FAILURE_KEY[failure.reason]);
+    emit();
   }
 
   // WS dropped mid-call: the media session is dead. Tear it down but keep the
@@ -282,21 +472,88 @@ export function createVoiceController(transport: RealtimeTransport) {
     transport.sendVoice({ ...message, from: state.peerId });
   }
 
+  /**
+   * The single answer to "should sound be leaving this machine".
+   *
+   * Everything that could close the mic is folded in here rather than at each
+   * call site, so there is exactly one expression to get right — and so a mode
+   * change, a mute, a deafen and a released key all funnel through the same
+   * recomputation. Mute and deafen outrank push-to-talk deliberately: holding
+   * the key while muted must not transmit, or the mute button would be a lie.
+   */
+  function micShouldBeOpen(): boolean {
+    if (state.isDeafened || state.isMuted) {
+      return false;
+    }
+    return state.inputMode === "voice-activity" || pushToTalkHeld;
+  }
+
   function applyMuteToPipeline() {
+    state.isTransmitting = micShouldBeOpen();
     if (!pipeline) {
       return;
     }
     for (const track of pipeline.processedStream.getAudioTracks()) {
-      track.enabled = !state.isMuted;
+      track.enabled = state.isTransmitting;
     }
     for (const track of pipeline.rawStream.getAudioTracks()) {
-      track.enabled = !state.isMuted;
+      track.enabled = state.isTransmitting;
     }
   }
 
+  /**
+   * Both transports, every time.
+   *
+   * Disabling the track is what stops mesh peers hearing anything — an
+   * `enabled: false` track sends silence over the existing sender, which is why
+   * push-to-talk never renegotiates. LiveKit needs to be told separately: it
+   * has its own publication state, and leaving that unmuted would keep sending
+   * (silent) packets and, worse, keep the SFU's own speaking indicator lit for
+   * everyone else in the room.
+   */
   function applyMute() {
     applyMuteToPipeline();
-    void sfu?.setMuted(state.isMuted);
+    void sfu?.setMuted(!state.isTransmitting);
+  }
+
+  /**
+   * Re-capture the mic on the current settings and swap it into the live call.
+   *
+   * Shared by the device picker and the processing toggles because they are the
+   * same operation: both change what `getUserMedia` must be asked for, and
+   * neither is allowed to interrupt the call to do it. The old pipeline is only
+   * stopped once the new one exists, so a `getUserMedia` that fails (device
+   * unplugged, constraint unsatisfiable) leaves the working mic in place and
+   * reports the error rather than dropping the user into silence.
+   */
+  async function swapPipeline(failureMessage: string) {
+    if (!pipeline || state.status === "idle") {
+      return;
+    }
+    try {
+      const next = await createMicPipeline(
+        audioOptions.inputDeviceId || undefined,
+        audioOptions.inputVolume,
+        audioOptions.processing,
+      );
+      stopMicPipeline(pipeline);
+      pipeline = next;
+      // Carries mute, deafen and the push-to-talk gate onto the new track: a
+      // swap must never be a way to end up transmitting when you were not.
+      applyMuteToPipeline();
+
+      if (manager) {
+        await manager.replaceLocalTrack(pipeline.processedStream);
+      }
+      if (sfu) {
+        await sfu.replaceTrack(pipeline.processedStream);
+        await sfu.setMuted(!state.isTransmitting);
+      }
+      emit();
+    } catch (err) {
+      state.error = err instanceof Error ? err.message : failureMessage;
+      emit();
+    }
   }
 
   function disposeRemoteAnalysers() {
@@ -344,7 +601,11 @@ export function createVoiceController(transport: RealtimeTransport) {
     stopSpeakingLoop();
     const tick = () => {
       const next: string[] = [];
-      if (pipeline && state.peerId && !state.isMuted) {
+      // `isTransmitting`, not `!isMuted`: in push-to-talk between presses the
+      // mic is live and the analyser still reads a level, but nobody can hear
+      // it. Lighting the speaking ring then would be the panel claiming you are
+      // being heard when you are not.
+      if (pipeline && state.peerId && state.isTransmitting) {
         const level = readAnalyserLevel(pipeline.analyser);
         if (speakingTracker.update(state.peerId, level, true)) {
           next.push(state.peerId);
@@ -419,8 +680,10 @@ export function createVoiceController(transport: RealtimeTransport) {
   }
 
   /**
-   * SFU media path. Falls back to mesh if the session cannot be established,
-   * so a misconfigured SFU degrades instead of leaving the user with no audio.
+   * SFU media path. Returns false if the session could not be established —
+   * the caller then *leaves the call and says so*. It must never build a mesh
+   * instead: the rest of the room is on the SFU and would neither hear this
+   * client nor see it drop out.
    */
   async function startSfuSession(
     voiceChannelId: string,
@@ -464,7 +727,9 @@ export function createVoiceController(transport: RealtimeTransport) {
       }
       if (pipeline) {
         await sfu.publish(pipeline.processedStream);
-        await sfu.setMuted(state.isMuted);
+        // The gate, not the mute flag — a push-to-talk user who joins an SFU
+        // room without the key down must be published muted.
+        await sfu.setMuted(!state.isTransmitting);
       }
       // A screen share started before a reconnect rebuilds the session — the
       // capture itself survives the WS drop (it's a browser-level grant, not
@@ -477,7 +742,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       emit();
       return true;
     } catch (err) {
-      console.warn("[pqp] SFU session failed — falling back to mesh", err);
+      console.warn("[pqp] SFU session failed — leaving the call", err);
       await teardownSfu();
       return false;
     }
@@ -538,7 +803,7 @@ export function createVoiceController(transport: RealtimeTransport) {
           return;
         }
         void stopScreenShareInternal();
-        state.error = "Someone else is already sharing their screen.";
+        state.error = translateMessage("voice.error.shareTaken");
         emit();
         break;
       case "voice-room-full":
@@ -546,7 +811,9 @@ export function createVoiceController(transport: RealtimeTransport) {
         stopMicPipeline(pipeline);
         pipeline = null;
         intendedChannelId = null;
-        state.error = `This voice channel is full (max ${message.limit}).`;
+        state.error = translateMessage("voice.error.channelFull", {
+          limit: message.limit,
+        });
         state.status = "idle";
         state.voiceChannelId = null;
         emit();
@@ -558,12 +825,11 @@ export function createVoiceController(transport: RealtimeTransport) {
           transport.sendVoice({ type: "leave-voice-room" });
           return;
         }
-        clearJoinTimeout();
         knownPeerIds.clear();
         state.peerId = message.peerId;
-        state.status = "connected";
         state.voiceChannelId = message.voiceChannelId;
         state.self = message.self;
+        state.transportFailure = null;
 
         const welcomePeers = message.peers;
         for (const peer of welcomePeers) {
@@ -571,6 +837,9 @@ export function createVoiceController(transport: RealtimeTransport) {
         }
         const channelId = message.voiceChannelId;
         const peerId = message.peerId;
+        // The server owns this. We never re-derive it, and we never substitute
+        // the other transport when ours fails.
+        const roomTransport = message.transport ?? legacyRoomTransport;
 
         // Rejoin/channel-switch: tear the previous session down before building
         // a new one, or its connections and ICE-restart timers leak.
@@ -578,23 +847,65 @@ export function createVoiceController(transport: RealtimeTransport) {
         manager = null;
         void teardownSfu();
 
-        if (sessionProvider) {
-          void startSfuSession(channelId, peerId, welcomePeers).then((ok) => {
-            // Only build a mesh if the SFU path declined or failed, and the
-            // user is still in the same voice session.
-            if (!ok && state.peerId === peerId && !manager) {
-              startMeshSession(peerId, welcomePeers);
-              emit();
-            }
+        if (roomTransport === "livekit") {
+          if (!sessionProvider) {
+            // Only reachable against a server old enough to omit `transport`;
+            // a current one refuses this join before minting a peer.
+            refuseTransport({
+              transport: roomTransport,
+              reason: "unsupported",
+            });
+            break;
+          }
+          // Still "joining": on the SFU path the call is not up until media is,
+          // and the timer bounds how long that can be claimed. A black-holed
+          // LiveKit host takes ~15s to reject on its own, which used to be 15s
+          // of "Voice connected" with no audio in either direction.
+          const generation = armJoinTimeout({
+            transport: roomTransport,
+            reason: "unreachable",
           });
-        } else {
-          startMeshSession(peerId, welcomePeers);
+          void startSfuSession(channelId, peerId, welcomePeers).then((ok) => {
+            if (generation !== joinGeneration || state.peerId !== peerId) {
+              return;
+            }
+            clearJoinTimeout();
+            if (!ok) {
+              refuseTransport({
+                transport: roomTransport,
+                reason: "unreachable",
+              });
+              return;
+            }
+            state.status = "connected";
+            startSpeakingLoop();
+            emit();
+          });
+          emit();
+          break;
         }
 
+        clearJoinTimeout();
+        state.status = "connected";
+        startMeshSession(peerId, welcomePeers);
         startSpeakingLoop();
         emit();
         break;
       }
+      case "voice-transport-unsupported":
+        // The server refused before creating a peer: no roster entry of ours
+        // ever existed, so there is nothing for anyone else to clean up.
+        if (
+          state.status === "idle" ||
+          message.voiceChannelId !== state.voiceChannelId
+        ) {
+          return;
+        }
+        refuseTransport({
+          transport: message.transport,
+          reason: "unsupported",
+        });
+        break;
       case "peer-joined":
         knownPeerIds.add(message.peer.peerId);
         identities.set(message.peer.peerId, toIdentity(message.peer));
@@ -649,11 +960,19 @@ export function createVoiceController(transport: RealtimeTransport) {
     handleSignaling,
 
     /**
-     * Enable the SFU media path. Pass `null` to stay on mesh. Takes effect on
-     * the next voice join.
+     * Declare that this client can obtain SFU sessions. Pass `null` for a build
+     * that cannot (mesh-forced), which the server is then told about on join.
+     *
+     * `legacyTransport` is only consulted when the server's `welcome` carries no
+     * `transport` field — i.e. a server older than this protocol, where
+     * `GET /api/voice/backend` is the best information available.
      */
-    setSessionProvider(provider: VoiceSessionProvider | null) {
+    setSessionProvider(
+      provider: VoiceSessionProvider | null,
+      legacyTransport: VoiceRoomTransport = "mesh",
+    ) {
       sessionProvider = provider;
+      legacyRoomTransport = provider ? legacyTransport : "mesh";
     },
 
     setIceServers(servers: IceServerConfig[]) {
@@ -670,6 +989,7 @@ export function createVoiceController(transport: RealtimeTransport) {
 
     async join(voiceChannelId: string, options?: VoiceAudioOptions) {
       state.error = null;
+      state.transportFailure = null;
       state.status = "joining";
       // Known from the moment we start, not only once the server says welcome —
       // otherwise the UI cannot tell which channel is connecting.
@@ -678,12 +998,18 @@ export function createVoiceController(transport: RealtimeTransport) {
       // Applied before the track exists, so "mute on join" is genuinely muted
       // from the first sample rather than a moment later.
       state.isMuted = options?.startMuted ?? state.isMuted;
+      // Never inherit a key held from before the join — there is no keyup owed
+      // to us for a press that happened while we were not in a call.
+      pushToTalkHeld = false;
+      state.inputMode = options?.inputMode ?? state.inputMode;
+      state.isTransmitting = micShouldBeOpen();
       emit();
 
       if (options) {
         audioOptions = {
           inputDeviceId: options.inputDeviceId ?? audioOptions.inputDeviceId,
           inputVolume: options.inputVolume ?? audioOptions.inputVolume,
+          processing: options.processing ?? audioOptions.processing,
         };
       }
 
@@ -695,7 +1021,8 @@ export function createVoiceController(transport: RealtimeTransport) {
         try {
           next = await createMicPipeline(
             audioOptions.inputDeviceId || undefined,
-            audioOptions.inputVolume ?? 1,
+            audioOptions.inputVolume,
+            audioOptions.processing,
           );
         } catch (deviceError) {
           if (!audioOptions.inputDeviceId) {
@@ -703,7 +1030,8 @@ export function createVoiceController(transport: RealtimeTransport) {
           }
           next = await createMicPipeline(
             undefined,
-            audioOptions.inputVolume ?? 1,
+            audioOptions.inputVolume,
+            audioOptions.processing,
           );
         }
 
@@ -716,7 +1044,7 @@ export function createVoiceController(transport: RealtimeTransport) {
 
         pipeline = next;
         applyMuteToPipeline();
-        transport.sendVoice({ type: "join-voice-room", voiceChannelId });
+        sendJoin(voiceChannelId);
       } catch (err) {
         if (generation !== joinGeneration) {
           return;
@@ -746,12 +1074,17 @@ export function createVoiceController(transport: RealtimeTransport) {
       stopMicPipeline(pipeline);
       pipeline = null;
       releaseScreenCapture();
+      pushToTalkHeld = false;
       state = {
         status: "idle",
         peerId: null,
         remotePeers: [],
         isMuted: false,
         isDeafened: false,
+        // The input mode is a user preference, not call state: it survives
+        // leaving, exactly as the device and volume choices do.
+        inputMode: state.inputMode,
+        isTransmitting: false,
         error: null,
         voiceChannelId: null,
         self: null,
@@ -759,6 +1092,7 @@ export function createVoiceController(transport: RealtimeTransport) {
         occupancy: state.occupancy,
         peerVolumes: state.peerVolumes,
         usingSfu: false,
+        transportFailure: null,
         isSharingScreen: false,
         screenSharePeerId: null,
         localScreenStream: null,
@@ -793,10 +1127,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       state.status = "joining";
       emit();
       armJoinTimeout();
-      transport.sendVoice({
-        type: "join-voice-room",
-        voiceChannelId: intendedChannelId,
-      });
+      sendJoin(intendedChannelId);
     },
 
     setMuted(muted: boolean) {
@@ -843,7 +1174,16 @@ export function createVoiceController(transport: RealtimeTransport) {
       // when we already know it'll be refused; the server call below is still
       // the authoritative check for the rare simultaneous-click race.
       if (state.screenSharePeerId && state.screenSharePeerId !== state.peerId) {
-        state.error = "Someone else is already sharing their screen.";
+        state.error = translateMessage("voice.error.shareTaken");
+        emit();
+        return;
+      }
+
+      // Defensive: the UI already hides the affordance where this is missing
+      // (see components/voice/capabilities.ts), so reaching here means a
+      // programmatic call, not a user tapping a button we should not have shown.
+      if (!supportsScreenShare()) {
+        state.error = screenShareUnsupportedMessage();
         emit();
         return;
       }
@@ -859,7 +1199,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       const track = stream.getVideoTracks()[0];
       if (!track) {
         for (const t of stream.getTracks()) t.stop();
-        state.error = "No video track from screen capture";
+        state.error = translateMessage("voice.error.noVideoTrack");
         emit();
         return;
       }
@@ -912,40 +1252,71 @@ export function createVoiceController(transport: RealtimeTransport) {
       }
     },
 
-    async setInputDevice(deviceId: string) {
-      const previousDeviceId = audioOptions.inputDeviceId ?? "";
-      audioOptions.inputDeviceId = deviceId;
-      if (!pipeline || state.status === "idle") {
+    /**
+     * The input mode is a preference, not a renegotiation.
+     *
+     * Switching mid-call touches nothing but `track.enabled` and the SFU's
+     * publication flag, so the call does not so much as flicker: no new
+     * `getUserMedia`, no `replaceTrack`, no SDP. That is the whole reason the
+     * gate lives in `micShouldBeOpen()` rather than in how the track is built.
+     */
+    setInputMode(mode: VoiceInputMode) {
+      if (state.inputMode === mode) {
         return;
       }
+      state.inputMode = mode;
+      // A key held while the mode changes is owed a keyup that may never be
+      // recognised as ours. Drop it and start closed.
+      pushToTalkHeld = false;
+      applyMute();
+      emit();
+    },
+
+    /**
+     * The push-to-talk key (or the hold button) going down or up.
+     *
+     * Idempotent, and a no-op outside push-to-talk mode — a stray release from
+     * a listener that has not been torn down yet must never be able to close a
+     * voice-activity mic, and a stray press must never open one.
+     */
+    setPushToTalkActive(active: boolean) {
+      if (state.inputMode !== "push-to-talk") {
+        pushToTalkHeld = false;
+        return;
+      }
+      if (pushToTalkHeld === active) {
+        return;
+      }
+      pushToTalkHeld = active;
+      applyMute();
+      emit();
+    },
+
+    async setInputDevice(deviceId: string) {
+      const previousDeviceId = audioOptions.inputDeviceId ?? "";
       if (previousDeviceId === deviceId) {
         return;
       }
+      audioOptions.inputDeviceId = deviceId;
+      await swapPipeline("Failed to switch microphone");
+    },
 
-      const wasMuted = state.isMuted;
-      try {
-        const next = await createMicPipeline(
-          deviceId || undefined,
-          audioOptions.inputVolume ?? 1,
-        );
-        stopMicPipeline(pipeline);
-        pipeline = next;
-        state.isMuted = wasMuted;
-        applyMuteToPipeline();
-
-        if (manager) {
-          await manager.replaceLocalTrack(pipeline.processedStream);
-        }
-        if (sfu) {
-          await sfu.replaceTrack(pipeline.processedStream);
-          await sfu.setMuted(state.isMuted);
-        }
-        emit();
-      } catch (err) {
-        state.error =
-          err instanceof Error ? err.message : "Failed to switch microphone";
-        emit();
+    /**
+     * Echo cancellation / noise suppression / auto gain.
+     *
+     * These are `getUserMedia` constraints, so the track has to be captured
+     * again — but the *call* does not have to notice. `replaceTrack` on the
+     * existing senders swaps the media under a live `RTCRtpSender` without
+     * touching the SDP, so there is no renegotiation, no ICE, and no gap where
+     * a peer sees us leave. The same is true of LiveKit's `replaceTrack`.
+     * Applying these by rejoining would have been visible to the whole room.
+     */
+    async setMicProcessing(processing: MicProcessing) {
+      if (sameMicProcessing(audioOptions.processing, processing)) {
+        return;
       }
+      audioOptions.processing = processing;
+      await swapPipeline("Failed to apply microphone processing");
     },
 
     hasMeshWarning() {

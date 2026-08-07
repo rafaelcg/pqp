@@ -11,11 +11,16 @@ import { channelVisibleSql } from "./users.js";
 /**
  * Message search over Postgres full-text, with no second engine to operate.
  *
- * The text search configuration has to match the one the generated column in
- * schema.sql is built with, or the query would be stemmed differently from the
- * index and quietly stop matching.
+ * Nothing here names a text search configuration, and that is the point. The
+ * query has to be stemmed exactly the way `messages.search_tsv` was, or it
+ * matches nothing and the GIN index goes unused — a failure with no error to
+ * notice. So the pair is defined once, in schema.sql, next to the generated
+ * column: `pqp_search_query` builds the tsquery and `pqp_search_headline`
+ * renders the snippet. Both sides move together or not at all.
+ *
+ * Today that pair is Portuguese and English, both accent-folded, ORed — see the
+ * search block in schema.sql for why and what it costs.
  */
-const SEARCH_CONFIG = "english";
 
 /**
  * Snippet shape. Two fragments so a match late in a long message still arrives
@@ -108,6 +113,10 @@ export async function searchMessages(
     query,
     limit + 1,
     HEADLINE_OPTIONS,
+    // $6 — the StartSel `pqp_search_headline` looks for to decide whether the
+    // Portuguese pass highlighted anything. Passed rather than restated in SQL
+    // so the delimiters have one definition.
+    SEARCH_HIGHLIGHT_OPEN,
   ];
 
   let cursorClause = "";
@@ -115,14 +124,14 @@ export async function searchMessages(
     // Row comparison against the same expression the ordering uses: comparing
     // rank alone would drop every equally-ranked message after the first page.
     cursorClause = `AND (ts_rank_cd(m.search_tsv, q.query), m.created_at, m.id)
-        < ($6::real, $7::timestamptz, $8::uuid)`;
+        < ($7::real, $8::timestamptz, $9::uuid)`;
     params.push(cursor.rank, cursor.createdAt, cursor.id);
   }
 
   // `hits` is limited before the outer select runs, so ts_headline — which
   // re-parses the whole body — is only paid for the rows actually returned.
   const result = await getPool().query<SearchRow>(
-    `WITH q AS (SELECT websearch_to_tsquery('${SEARCH_CONFIG}', $3) AS query),
+    `WITH q AS (SELECT pqp_search_query($3) AS query),
      hits AS (
        SELECT m.id, m.channel_id, m.author_id, m.body, m.created_at,
               c.name AS channel_name,
@@ -146,7 +155,7 @@ export async function searchMessages(
      SELECT h.id, h.channel_id, h.channel_name, h.author_id, h.author_name,
             h.author_username, h.author_discriminator, h.author_avatar_url,
             h.created_at, h.rank,
-            ts_headline('${SEARCH_CONFIG}', h.body, q.query, $5) AS snippet
+            pqp_search_headline(h.body, q.query, $5, $6) AS snippet
      FROM hits h
      CROSS JOIN q
      ORDER BY h.rank DESC, h.created_at DESC, h.id DESC`,

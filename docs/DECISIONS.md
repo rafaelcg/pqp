@@ -46,3 +46,50 @@ once is more work now and less work in total.
 - Needs user search by handle first (gap #17) — there is currently no way to find someone you do
   not already share a server with.
 - Blocking and DM privacy controls (gap #19) stop being optional the moment DMs exist.
+
+## Search: Portuguese and English side by side, accent-folded (2026-08-07)
+
+`messages.search_tsv` holds two tsvectors concatenated —
+`to_tsvector('pqp_pt', pqp_pt_plurals(body)) || to_tsvector('pqp_en', body)` — and the query is
+the matching OR. `pqp_pt` / `pqp_en` are `portuguese` / `english` with `unaccent` in front of the
+stemmer. All of it lives in one block in `server/src/schema.sql`; the service calls
+`pqp_search_query()` and `pqp_search_headline()` and names no configuration.
+
+**Why.** The audience is Brazilian and the product's own vocabulary is English, and one
+configuration cannot serve both. Measured over 30 Portuguese and 15 English word pairs a reader
+would expect to match each other:
+
+| configuration | pt | en |
+|---|---|---|
+| `english` (what it was) | 2/30 | 15/15 |
+| `portuguese` | 10/30 | 2/15 |
+| `simple` | 0/30 | 0/15 |
+| `portuguese \|\| english` | 10/30 | 15/15 |
+| `pqp_pt \|\| pqp_en` | 25/30 | 15/15 |
+
+Switching to `portuguese` would have been the same mistake facing the other way. Half of the
+Portuguese failures are not stemming at all: people type `nao`, `voce`, `reuniao` and the message
+says `não`, `você`, `reunião`. Per-server configuration (the fourth option) is unreachable
+anyway — a generated column cannot depend on another table.
+
+**Cost, measured on 100k chat-length rows.** GIN index 2.5 MB → 3.9 MB, stored vectors 12 MB →
+18 MB, ~6 µs more per INSERT. Rank is slightly distorted: `||` shifts the second half's positions,
+so `ts_rank_cd` proximity only means anything within a half, and a word both stemmers agree on is
+counted twice.
+
+**Implications.**
+- Changing a configuration, or `pqp_pt_plurals`, silently invalidates every stored vector —
+  Postgres does not recompute generated columns when a text search configuration changes. The
+  fingerprint in the column's `COMMENT` is what forces the rebuild; it is derived by running a
+  canary string through the real expression, so it cannot fall behind by being forgotten.
+- The rebuild drops and re-adds the column, which rewrites the table under `ACCESS EXCLUSIVE`.
+  Fine at today's size. A large-table version needs a shadow column filled in batches,
+  `CREATE INDEX CONCURRENTLY`, then a swap — none of which fits in `schema.sql`, because the file
+  is applied as one implicit transaction and `CONCURRENTLY` cannot run inside one.
+- `unaccent` is a trusted extension from PG13 on, so the database owner installs it without
+  superuser. If a host refuses, the block warns and search stays accent-sensitive rather than
+  putting the server in a boot loop.
+- Known gap: the `-l`/`-is` plural (`canal`/`canais`). Its rules need the accent to disambiguate
+  — `papéis` is `papel` but `fáceis` is `fácil` — which the spellings people actually type do not
+  carry. Doing it properly needs a hunspell pt_BR dictionary, i.e. dictionary files on the
+  database host, which managed Postgres does not offer.

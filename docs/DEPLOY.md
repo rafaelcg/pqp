@@ -73,7 +73,10 @@ These live on the API, never in the client build. Names only — see [`../.env.e
 | Group | Names | Required |
 |---|---|---|
 | Core | `DATABASE_URL`, `CLERK_SECRET_KEY`, `PORT` | Yes |
-| Hardening | `CLERK_AUTHORIZED_PARTIES`, `CORS_ALLOWED_ORIGINS`, `TRUST_PROXY`, `PG_POOL_MAX`, `DATABASE_SSL` | Recommended |
+| Core | `CORS_ALLOWED_ORIGINS` | Yes — unset means wildcard CORS: the API answers every origin with `*` |
+| Core | `CLERK_AUTHORIZED_PARTIES` | Yes — unset means no `azp` check, so a token issued for a different app is accepted |
+| Core | `TRUST_PROXY` | Yes — unset behind Railway's edge means every client shares one rate-limit bucket, so a single abusive caller exhausts the pre-auth budget for everybody |
+| Hardening | `PG_POOL_MAX`, `DATABASE_SSL` | Recommended |
 | ICE / TURN | one of the options in [`deploy-railway.md`](./deploy-railway.md) | For cross-NAT voice |
 | SFU | `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` | Only past the mesh limit |
 | GIF search | `GIPHY_API_KEY` | Optional feature |

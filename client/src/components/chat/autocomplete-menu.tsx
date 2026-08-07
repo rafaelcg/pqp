@@ -25,15 +25,22 @@ interface AutocompleteMenuProps {
    * the composer sits at the bottom of the window, where a menu opening
    * downwards would open off-screen; a search field at the top of a dialog is
    * the mirror image of that and needs `"below"`.
+   *
+   * `"inline"` takes the menu out of the overlay business entirely and lets it
+   * occupy real space under the field. Floating over an ancestor that scrolls
+   * or clips — a dialog body, say — does not work: the menu is drawn *inside*
+   * that clip, so it is cut off at the container's edge and reads as rendering
+   * behind the panel rather than in it.
    */
-  placement?: "above" | "below";
+  placement?: "above" | "below" | "inline";
   onSelect: (index: number) => void;
   onHover: (index: number) => void;
 }
 
 const PLACEMENT_CLASS = {
-  above: "bottom-full mb-2",
-  below: "top-full mt-2",
+  above: "absolute left-0 right-0 z-20 bottom-full mb-2",
+  below: "absolute left-0 right-0 z-20 top-full mt-2",
+  inline: "relative z-20 mt-2",
 } as const;
 
 /**
@@ -56,7 +63,7 @@ export function AutocompleteMenu({
       <div
         id={id}
         className={cn(
-          "animate-rise absolute left-0 right-0 z-20 overflow-hidden rounded-lg border border-border bg-surface-1 p-3 shadow-[var(--shadow-popover)]",
+          "animate-rise overflow-hidden rounded-lg border border-border bg-surface-1 p-3 shadow-[var(--shadow-popover)]",
           PLACEMENT_CLASS[placement],
         )}
       >
@@ -69,7 +76,7 @@ export function AutocompleteMenu({
     <div
       id={id}
       className={cn(
-        "animate-rise absolute left-0 right-0 z-20 max-h-64 overflow-y-auto rounded-lg border border-border bg-surface-1 p-1 shadow-[var(--shadow-popover)]",
+        "animate-rise max-h-64 overflow-y-auto overscroll-contain rounded-lg border border-border bg-surface-1 p-1 shadow-[var(--shadow-popover)]",
         PLACEMENT_CLASS[placement],
       )}
       role="listbox"

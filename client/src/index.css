@@ -395,6 +395,30 @@ h2,
   padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
 }
 
+/*
+ * iOS Safari magnifies the whole page when focus lands on a field whose text is
+ * smaller than 16px, and the viewport meta deliberately allows scaling (taking
+ * pinch-zoom away from people who need it is not a fix). The magnification
+ * leaves the layout viewport at 390px while the visual viewport shrinks to
+ * ~341px, so a `position: fixed` dialog is suddenly wider than the screen and
+ * loses the first characters of its own title off the left edge.
+ *
+ * A dialog is where this bites hardest — its fields are usually autofocused,
+ * so the zoom fires before the user has touched anything — but the composer,
+ * the search boxes and every other field trigger exactly the same jump the
+ * moment they are tapped, which reads as the whole app lurching. So the rule
+ * is app-wide, not dialog-scoped: 16px on the control removes the reason for
+ * the zoom to exist. Only on the screens that can be zoomed that way — a
+ * pointer device or a wide window keeps the tighter type.
+ */
+@media (max-width: 639px), (pointer: coarse) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]),
+  select,
+  textarea {
+    font-size: 16px;
+  }
+}
+
 .legal-prose h2 {
   font-family: var(--font-display);
   font-size: 1.25rem;
