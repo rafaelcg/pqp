@@ -5,13 +5,15 @@ import {
   SignedOut,
 } from "@clerk/clerk-react";
 import { ArrowUpRight } from "lucide-react";
-import type { CSSProperties } from "react";
+import { type CSSProperties, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { MarketingFooter } from "@/components/marketing/marketing-footer";
 import { MarketingNav } from "@/components/marketing/marketing-nav";
 import { Seo } from "@/components/marketing/seo";
 import { Button } from "@/components/ui/button";
+import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
 import { isDevAuthBypassEnabled } from "@/lib/dev-auth";
+import { cn } from "@/lib/utils";
 
 function stagger(i: number): CSSProperties {
   return { "--stagger": i } as CSSProperties;
@@ -27,6 +29,29 @@ const TRUST_ITEMS = [
 
 export function LandingPage() {
   const bypass = isDevAuthBypassEnabled();
+  const reducedMotion = usePrefersReducedMotion();
+  // The still is what paints first and what stays put if the clip never runs —
+  // a blocked autoplay (iOS Low Power Mode) simply leaves this false.
+  const [heroPlaying, setHeroPlaying] = useState(false);
+  const heroVideo = useRef<HTMLVideoElement>(null);
+
+  // `autoplay` alone is not enough: a tab that mounts in the background leaves
+  // the element idle (networkState IDLE, nothing fetched) and Chrome does not
+  // revisit that on its own, so the loop would never start. Ask directly, and
+  // ask again whenever the tab comes forward.
+  useEffect(() => {
+    const el = heroVideo.current;
+    if (!el) return;
+    const start = () => {
+      if (el.readyState === 0) el.load();
+      void el.play().catch(() => {
+        // Autoplay refused (Low Power Mode, strict settings) — the still stands in.
+      });
+    };
+    start();
+    document.addEventListener("visibilitychange", start);
+    return () => document.removeEventListener("visibilitychange", start);
+  }, [reducedMotion]);
 
   return (
     <div className="min-h-full bg-ink text-paper">
@@ -37,13 +62,31 @@ export function LandingPage() {
       />
 
       <section className="relative flex min-h-[100svh] flex-col overflow-hidden">
-        <img
-          src="/images/hero-background.jpg"
-          alt=""
-          className="hero-parallax absolute inset-0 h-full w-full object-cover object-center"
-          fetchPriority="high"
-          decoding="async"
-        />
+        <div className="hero-parallax absolute inset-0" aria-hidden>
+          <img
+            src="/images/hero-background.jpg"
+            alt=""
+            className="absolute inset-0 h-full w-full object-cover object-center"
+            fetchPriority="high"
+            decoding="async"
+          />
+          {!reducedMotion && (
+            <video
+              ref={heroVideo}
+              src="/images/hero-background.mp4"
+              className={cn(
+                "absolute inset-0 h-full w-full object-cover object-center transition-opacity duration-[1200ms] ease-out",
+                heroPlaying ? "opacity-100" : "opacity-0",
+              )}
+              autoPlay
+              muted
+              loop
+              playsInline
+              preload="auto"
+              onPlaying={() => setHeroPlaying(true)}
+            />
+          )}
+        </div>
         <div
           className="absolute inset-0 bg-gradient-to-b from-black/50 via-black/28 to-black/75"
           aria-hidden
