@@ -33,6 +33,8 @@ settings:
     # annotations.
     SWIFT_STRICT_CONCURRENCY: complete
     ENABLE_USER_SCRIPT_SANDBOXING: YES
+    # Simulator/CI builds stay unsigned; Release overrides below sign for
+    # device + TestFlight with automatic signing against the real team.
     DEVELOPMENT_TEAM: ""
     CODE_SIGNING_REQUIRED: NO
     CODE_SIGN_IDENTITY: ""
@@ -61,6 +63,15 @@ targets:
         # The app is a dark, high-contrast surface by design; letting iOS
         # light-mode it produces an unreadable half-theme.
         UIUserInterfaceStyle: Dark
+      configs:
+        Release:
+          DEVELOPMENT_TEAM: WXBFUF9WMA
+          CODE_SIGNING_REQUIRED: "YES"
+          CODE_SIGN_IDENTITY: "Apple Distribution"
+          CODE_SIGN_STYLE: Automatic
+          # TestFlight builds talk to production, so they need the live key —
+          # it is publishable by design, same one the web bundle ships.
+          CLERK_PUBLISHABLE_KEY: pk_live_Y2xlcmsucHFwLmdnJA
     resources:
       - path: pqp/Resources
     dependencies:
