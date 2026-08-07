@@ -141,7 +141,23 @@ export function ScreenShareView({
       setIsFullscreen(currentFullscreenElement() === containerRef.current);
     };
     const onBegin = () => setIsFullscreen(true);
-    const onEnd = () => setIsFullscreen(false);
+    const onEnd = () => {
+      setIsFullscreen(false);
+      // iOS's native player detaches a MediaStream on the way out, leaving the
+      // inline element rendering nothing — the reported "blank video after
+      // coming back from fullscreen". Reattaching the same stream and playing
+      // again is the documented recovery, and both calls are no-ops anywhere
+      // the detach did not happen, so this is safe to run unconditionally.
+      const video = videoRef.current;
+      if (video && video.srcObject) {
+        const current = video.srcObject;
+        video.srcObject = null;
+        video.srcObject = current;
+        void video.play().catch(() => {
+          // The user can tap the frame; the stream itself is intact.
+        });
+      }
+    };
 
     document.addEventListener("fullscreenchange", onFullscreenChange);
     // Safari before 16.4 fires only the prefixed event. Without this the
