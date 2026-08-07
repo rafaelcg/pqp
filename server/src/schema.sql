@@ -88,6 +88,131 @@ EXCEPTION
   WHEN others THEN NULL;
 END $$;
 
+-- pqp-email-scrub: take the email addresses back out of the rows that already
+-- have them.
+--
+-- `auth/clerk.ts` used to end its display-name chain at
+-- `?? primaryEmailAddress?.emailAddress`, so every Clerk account with no name
+-- set — which is every account created by "continue with email" — was written
+-- in here as its own address. That address was then rendered as the author of
+-- every message, shown in the voice roster, and slugified into the handle other
+-- people type to mention them (`rafaelcg@gmail.com` -> `rafaelcg_gmail_com`).
+-- The code path is fixed; these are the rows it already wrote, and they stay
+-- public until something rewrites them.
+--
+-- WHAT COUNTS AS AN EMAIL HERE. The whole trimmed value, anchored at both ends,
+-- no whitespace anywhere, a non-empty local part, and a dot plus two or more
+-- letters at the end. That is deliberately narrow, because a false positive
+-- destroys a real person's chosen name: "Dave @ Acme", "@rafa", "M@rio" and
+-- "meet me @ 5.30" all contain an `@` and none of them match. The same rule is
+-- written in TypeScript as `looksLikeEmailAddress` in services/users.ts —
+-- change one and change the other.
+--
+-- WHAT THE ROW BECOMES. Exactly what `placeholderDisplayName` would have
+-- produced for that account: `User` plus the first four hex of sha256 over the
+-- Clerk id. Same input, same output, so a scrubbed row is indistinguishable
+-- from one created after the fix, and nothing about the account leaks — the
+-- suffix is a hash, and it exists only so that nameless accounts stay
+-- distinguishable from each other on screen.
+--
+-- THE USERNAME IS ONLY REWRITTEN WHEN IT IS DEMONSTRABLY DERIVED, i.e. when it
+-- is character-for-character what `slugifyUsername` would have made of that
+-- address, or that slug with the `_xyz` suffix `deriveHandle` adds when a base
+-- is full. A handle the person picked themselves is left alone even on a
+-- contaminated row: it is the name other people already know them by, and this
+-- migration has no business guessing at it. The known gap is a non-ASCII local
+-- part — the TypeScript slug folds accents (NFD) and this SQL does not, so
+-- `joão@…` would fail the equality test and keep its handle. The display name,
+-- which is the disclosure that was actually on screen, is scrubbed regardless.
+--
+-- IDEMPOTENCE. The predicate is self-limiting — after one pass no row matches —
+-- but that is not the reason this is safe to leave in a file that runs on every
+-- boot. The reason is the fingerprint: without it, a user who later sets their
+-- display name to their own address *on purpose* would have it silently
+-- rewritten by the next deploy. The marker in the column comment says the
+-- cleanup has run, and changing any part of the rule above changes the marker
+-- and re-runs it — the same guard shape as the search-vector migration below.
+DO $$
+DECLARE
+  -- The rule as one string. The fingerprint is taken over this, so a change to
+  -- the match, the replacement name, or the handle test all re-arm the pass.
+  email_re CONSTANT TEXT := '^[^[:space:]@]+@[^[:space:]@]+\.[a-z]{2,}$';
+  name_rule CONSTANT TEXT := 'User <sha256(clerk_id)[1..4]>';
+  handle_rule CONSTANT TEXT := 'username = slug(display_name) | left(slug,28)_[a-z0-9]{3}';
+  marker CONSTANT TEXT := 'pqp-email-scrub '
+    || md5(email_re || '|' || name_rule || '|' || handle_rule);
+  col_attnum SMALLINT;
+  row_ users%ROWTYPE;
+  digest TEXT;
+  base TEXT;
+  candidate TEXT;
+  probe INT;
+  scrubbed INT := 0;
+BEGIN
+  SELECT a.attnum INTO col_attnum FROM pg_attribute a
+  WHERE a.attrelid = 'users'::regclass AND a.attname = 'display_name'
+    AND NOT a.attisdropped;
+
+  IF col_description('users'::regclass, col_attnum) IS NOT DISTINCT FROM marker THEN
+    RETURN; -- already scrubbed under this exact rule
+  END IF;
+
+  -- FOR UPDATE so two servers booting at once cannot both rewrite the same row:
+  -- the loser blocks, then re-evaluates the predicate under READ COMMITTED and
+  -- finds the row no longer matches.
+  FOR row_ IN
+    SELECT * FROM users
+    WHERE is_webhook = FALSE
+      -- A webhook's name was typed by whoever created it, not derived from an
+      -- identity provider, so it is not this migration's to rewrite.
+      AND display_name ~* email_re
+    FOR UPDATE
+  LOOP
+    digest := encode(sha256(convert_to(row_.clerk_id, 'UTF8')), 'hex');
+
+    -- `slugifyUsername`, restated: lowercase, every run of anything outside
+    -- [a-z0-9_] to one underscore, cut to 32, then trim the edges.
+    base := regexp_replace(
+              left(regexp_replace(lower(row_.display_name), '[^a-z0-9_]+', '_', 'g'), 32),
+              '^_+|_+$', '', 'g');
+
+    candidate := NULL;
+    IF row_.username IS NOT NULL AND base <> '' AND (
+         row_.username = base
+         OR row_.username ~ ('^' || left(base, 28) || '_[a-z0-9]{3}$')
+       ) THEN
+      -- `user_<digest>`, the handle this account would have been given had it
+      -- signed up after the fix. Widen the digest on the (negligible) chance
+      -- that another scrubbed row already holds this exact name and number.
+      FOR probe IN 4..16 LOOP
+        candidate := 'user_' || left(digest, probe);
+        EXIT WHEN NOT EXISTS (
+          SELECT 1 FROM users u
+          WHERE u.username = candidate
+            AND u.discriminator IS NOT DISTINCT FROM row_.discriminator
+            AND u.id <> row_.id);
+        candidate := NULL;
+      END LOOP;
+      -- Unreachable short of 13 colliding digests; the id cannot collide.
+      IF candidate IS NULL THEN
+        candidate := left('user_' || replace(row_.id::text, '-', ''), 32);
+      END IF;
+    END IF;
+
+    UPDATE users
+    SET display_name = 'User ' || left(digest, 4),
+        username = COALESCE(candidate, username)
+    WHERE id = row_.id;
+    scrubbed := scrubbed + 1;
+  END LOOP;
+
+  IF scrubbed > 0 THEN
+    RAISE NOTICE 'pqp: removed an email address from % user row(s)', scrubbed;
+  END IF;
+
+  EXECUTE format('COMMENT ON COLUMN users.display_name IS %L', marker);
+END $$;
+
 -- Blocking is one-directional (blocker → blocked) and self-serve. It exists
 -- because a DM is a contact channel nobody else moderates: every other sanction
 -- in the product is something a moderator does on a server's behalf, and none
@@ -114,6 +239,74 @@ CREATE TABLE IF NOT EXISTS user_preferences (
   settings   JSONB NOT NULL DEFAULT '{}'::jsonb,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- One-shot data migrations, by name.
+--
+-- Everything else in this file is a *structural* statement that is safe to
+-- replay: CREATE TABLE IF NOT EXISTS, ADD COLUMN IF NOT EXISTS, DROP-then-ADD
+-- for constraints. A backfill is not like that. It writes rows whose meaning
+-- depends on *when* it ran, so replaying it on every boot would keep applying
+-- yesterday's answer to accounts created since. This table is what makes
+-- "already done" a fact the next boot can read.
+CREATE TABLE IF NOT EXISTS data_migrations (
+  name       TEXT PRIMARY KEY,
+  applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Grandfather every account that existed before first-run onboarding shipped.
+--
+-- Onboarding runs for a user whose preferences carry no `onboardedAt`. Without
+-- this block that is every account ever created, so the day it deploys, every
+-- existing user signs in and is handed a wizard about a handle they have been
+-- using for months — which is exactly the surprise the flow exists to prevent.
+--
+-- Marking them instead of dating them: `users.created_at` is right here and it
+-- is tempting to write `WHERE created_at < <deploy time>`, but that constant has
+-- to be guessed at authoring time and is wrong on every self-hosted instance
+-- that deploys later. "Whoever already existed the first time this ran" needs no
+-- constant and is correct on every instance.
+--
+-- Runs exactly once per database. On a fresh one it marks nothing and records
+-- itself, which is also correct: there is nobody to grandfather, and everyone
+-- who signs up afterwards should see the flow.
+--
+-- ONE EXCEPTION, AND IT IS THE POINT. An account whose display name is still
+-- `placeholderDisplayName` — `User` plus four hex — has provably never been
+-- asked what it wants to be called. Either nothing was derivable from its
+-- identity provider, or the `pqp-email-scrub` pass above just took an address
+-- out of that column. Age is the wrong test for those: they are old accounts in
+-- exactly the state onboarding exists to fix, and grandfathering them would
+-- leave a permanent cohort called "User 3f9a" with no prompt to fix it. They are
+-- left unmarked, so they get the flow once — and finishing or skipping it writes
+-- the key, so it is once and not every session. This block runs AFTER the scrub
+-- for that reason: before it, those rows still read as email addresses and would
+-- be grandfathered by mistake. Keep the order.
+--
+-- The pattern is `placeholderDisplayName`'s output restated. Someone who
+-- deliberately names themselves "User 1a2b" gets one dismissible dialog.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM data_migrations WHERE name = 'onboarding_grandfather_2026_08'
+  ) THEN
+    INSERT INTO user_preferences (user_id, settings)
+    SELECT
+      id,
+      jsonb_build_object(
+        'onboardedAt',
+        to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+      )
+    FROM users
+    WHERE display_name !~ '^User [0-9a-f]{4}$'
+    ON CONFLICT (user_id) DO UPDATE
+      -- `||` is a shallow merge with the right side winning, the same rule
+      -- `mergePreferences` relies on: an account that already stored a theme
+      -- keeps it and gains this key.
+      SET settings = user_preferences.settings || EXCLUDED.settings;
+
+    INSERT INTO data_migrations (name) VALUES ('onboarding_grandfather_2026_08');
+  END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS servers (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1035,6 +1228,56 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS deletion_started_at TIMESTAMPTZ;
 -- the only reader and a full index would carry every account for nothing.
 CREATE INDEX IF NOT EXISTS idx_users_deletion_started
   ON users (deletion_started_at) WHERE deletion_started_at IS NOT NULL;
+
+-- ---------------------------------------------------------------------------
+-- Temporary sanctions — timeouts
+-- ---------------------------------------------------------------------------
+--
+-- The middle of the enforcement ladder. Everything about this table follows
+-- from one requirement: A TIMEOUT MUST BE CORRECT WITHOUT A SWEEPER.
+--
+-- `expires_at` is the whole mechanism. Every read in services/sanctions.ts
+-- carries `AND expires_at > NOW()`, so a timeout ends at the instant it says it
+-- ends whether or not any background job is running, whether or not the process
+-- restarted, and whether or not a replica's timer fired. The alternative — an
+-- `active` boolean flipped by a cron — is wrong in the one direction that
+-- matters: a sweeper that is late keeps somebody silenced past their sentence,
+-- and nobody is watching for that failure because it looks exactly like the
+-- feature working. `pruneExpiredTimeouts` exists, is called on the same daily
+-- timer as the audit prune, and is *only* disk hygiene; deleting it would
+-- change nothing about who may speak.
+--
+-- ONE ROW PER (SERVER, USER), not an append-only log of every sanction ever.
+-- The primary key is the pair, and re-timing somebody out replaces the row.
+-- Two reasons: the enforcement question is "is this person timed out right
+-- now", and a history table forces every read to answer "which of these five
+-- rows is the live one" — a question with a wrong answer. History lives in
+-- `audit_log` (`member.timeout` / `member.timeout_lift`), which is where the
+-- rest of this product's moderation history already lives and which is already
+-- pruned at 90 days.
+--
+-- `issued_by` is `ON DELETE SET NULL` for the same reason `server_bans.banned_by`
+-- is: the row is a fact about the *sanctioned* person and about the server, and
+-- a moderator deleting their account must not silently un-silence everybody
+-- they ever acted on. `user_id` is CASCADE, because a timeout on an account
+-- that no longer exists is not a fact about anything.
+CREATE TABLE IF NOT EXISTS member_timeouts (
+  server_id UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  issued_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  reason TEXT,
+  expires_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (server_id, user_id)
+);
+
+-- The enforcement lookup, which runs on the hot path of every WebSocket send
+-- and every server-scoped HTTP write. Leading with `user_id` rather than
+-- reusing the primary key is deliberate: the channel- and message-scoped
+-- variants of the query join `channels`/`messages` to reach a server id, so
+-- Postgres wants to start from the one column the query always has in hand.
+CREATE INDEX IF NOT EXISTS idx_member_timeouts_user
+  ON member_timeouts (user_id, expires_at);
 
 -- Indexes that exist for the *delete*, not for a read.
 --

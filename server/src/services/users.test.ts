@@ -20,7 +20,62 @@ if (DATABASE_URL) {
 }
 
 const { getPool, initDb, closePool } = await import("../db.js");
-const { slugifyUsername, upsertUser, updateProfile } = await import("./users.js");
+const {
+  slugifyUsername,
+  looksLikeEmailAddress,
+  placeholderDisplayName,
+  upsertUser,
+  updateProfile,
+} = await import("./users.js");
+
+/**
+ * The privacy bug, in one place.
+ *
+ * The display-name chain in auth/clerk.ts used to fall through to the account's
+ * primary email address, so a Clerk account with no name set was published as
+ * `rafaelcg@gmail.com` — as the author of every message, in the voice roster,
+ * and, slugified, as the handle other people type to mention them. Everything
+ * below is a regression test for one of the three ways that address escaped.
+ */
+describe("looksLikeEmailAddress", () => {
+  it("recognises a bare address", () => {
+    expect(looksLikeEmailAddress("rafaelcg@gmail.com")).toBe(true);
+    expect(looksLikeEmailAddress("  rafaelcg@gmail.com  ")).toBe(true);
+    expect(looksLikeEmailAddress("a.b+tag@mail.co.uk")).toBe(true);
+    expect(looksLikeEmailAddress("RAFAELCG@GMAIL.COM")).toBe(true);
+  });
+
+  /**
+   * The expensive direction. A false positive here throws away a name somebody
+   * chose, so every shape that merely *contains* an `@` has to survive.
+   */
+  it("leaves a legitimate name that merely contains an @ alone", () => {
+    expect(looksLikeEmailAddress("Dave @ Acme")).toBe(false);
+    expect(looksLikeEmailAddress("@rafa")).toBe(false);
+    expect(looksLikeEmailAddress("M@rio")).toBe(false);
+    expect(looksLikeEmailAddress("meet me @ 5.30")).toBe(false);
+    expect(looksLikeEmailAddress("Ana Paula")).toBe(false);
+    expect(looksLikeEmailAddress("@")).toBe(false);
+    expect(looksLikeEmailAddress("")).toBe(false);
+  });
+});
+
+describe("placeholderDisplayName", () => {
+  it("discloses nothing and is stable for one account", () => {
+    const name = placeholderDisplayName("user_3Hawgga");
+    expect(name).toMatch(/^User [0-9a-f]{4}$/);
+    expect(placeholderDisplayName("user_3Hawgga")).toBe(name);
+    // Not a slice of the Clerk id — a hash of it.
+    expect(name).not.toContain("Hawgga");
+  });
+
+  it("does not collapse every nameless account into one string", () => {
+    const names = new Set(
+      Array.from({ length: 50 }, (_, i) => placeholderDisplayName(`user_${i}`)),
+    );
+    expect(names.size).toBeGreaterThan(45);
+  });
+});
 
 describe("slugifyUsername", () => {
   /**
@@ -54,6 +109,22 @@ describe("slugifyUsername", () => {
     expect(slug.startsWith("_")).toBe(false);
     expect(slug.endsWith("_")).toBe(false);
     expect(slug.length).toBeLessThanOrEqual(32);
+  });
+
+  /**
+   * `rafaelcg@gmail.com` used to slug to `rafaelcg_gmail_com` — the address with
+   * two characters changed, handed out as the handle people type to mention
+   * them. There is nothing safe to keep from an address, so nothing is kept.
+   */
+  it("refuses to build a handle out of an email address", () => {
+    const slug = slugifyUsername("rafaelcg@gmail.com");
+    expect(slug).toMatch(/^user_[a-z0-9]+$/);
+    expect(slug).not.toContain("rafaelcg");
+    expect(slug).not.toContain("gmail");
+  });
+
+  it("still slugs a name that only contains an @", () => {
+    expect(slugifyUsername("Dave @ Acme")).toBe("dave_acme");
   });
 
   it("falls back rather than returning something unusable", () => {
@@ -213,5 +284,167 @@ describeDb("account creation", () => {
 
     expect(moved.username).toBe("shared_name");
     expect(moved.discriminator).not.toBe(second.discriminator);
+  });
+});
+
+/**
+ * The `pqp-email-scrub` block in schema.sql — the half of the fix that reaches
+ * rows already written. Fixing the code path stops new addresses being stored;
+ * it does nothing for the ones already rendered as somebody's name.
+ */
+describeDb("the email scrub migration", () => {
+  /** Re-arm the migration by dropping the fingerprint, then run schema.sql. */
+  async function runMigration(): Promise<void> {
+    await getPool().query(`COMMENT ON COLUMN users.display_name IS NULL`);
+    await initDb();
+  }
+
+  async function seed(row: {
+    clerkId: string;
+    displayName: string;
+    username: string | null;
+    discriminator?: string;
+  }): Promise<void> {
+    await getPool().query(
+      `INSERT INTO users (clerk_id, display_name, username, discriminator)
+       VALUES ($1, $2, $3, $4)`,
+      [row.clerkId, row.displayName, row.username, row.discriminator ?? "0001"],
+    );
+  }
+
+  async function read(clerkId: string) {
+    const result = await getPool().query<{
+      display_name: string;
+      username: string | null;
+      discriminator: string | null;
+    }>(
+      `SELECT display_name, username, discriminator FROM users WHERE clerk_id = $1`,
+      [clerkId],
+    );
+    return result.rows[0]!;
+  }
+
+  beforeAll(async () => {
+    await initDb();
+  });
+
+  beforeEach(async () => {
+    await getPool().query(`TRUNCATE users RESTART IDENTITY CASCADE`);
+  });
+
+  afterAll(async () => {
+    // Leave the fingerprint in place so the next suite's initDb() is a no-op.
+    await initDb();
+    await closePool();
+  });
+
+  it("rewrites the contaminated row exactly as the code path would have", async () => {
+    await seed({
+      clerkId: "user_3Hawgga",
+      displayName: "rafaelcguk@gmail.com",
+      username: "rafaelcguk_gmail_com",
+      discriminator: "9031",
+    });
+
+    await runMigration();
+
+    const row = await read("user_3Hawgga");
+    // Identical to what a signup after the fix produces for this account, so a
+    // scrubbed row is indistinguishable from a fresh one.
+    expect(row.display_name).toBe(placeholderDisplayName("user_3Hawgga"));
+    expect(row.username).toBe(slugifyUsername(row.display_name));
+    // The whole point: no fragment of the address survives in either field.
+    expect(`${row.display_name} ${row.username}`).not.toMatch(/rafaelcguk|gmail/);
+    // The number is half a handle people have already shared; it is not re-rolled.
+    expect(row.discriminator).toBe("9031");
+  });
+
+  it("leaves a legitimate name that contains an @ untouched", async () => {
+    await seed({
+      clerkId: "user_atsign",
+      displayName: "Dave @ Acme",
+      username: "dave_acme",
+      discriminator: "0042",
+    });
+
+    await runMigration();
+
+    const row = await read("user_atsign");
+    expect(row.display_name).toBe("Dave @ Acme");
+    expect(row.username).toBe("dave_acme");
+  });
+
+  /**
+   * A handle the person chose is the name others already know them by, so a
+   * contaminated display name is not licence to rewrite it. Only a handle that
+   * is character-for-character what `slugifyUsername` would have made of that
+   * address is treated as derived.
+   */
+  it("keeps a hand-picked handle even on a contaminated row", async () => {
+    await seed({
+      clerkId: "user_picked",
+      displayName: "someone@example.com",
+      username: "starfall",
+      discriminator: "0007",
+    });
+
+    await runMigration();
+
+    const row = await read("user_picked");
+    expect(row.display_name).toBe(placeholderDisplayName("user_picked"));
+    expect(row.username).toBe("starfall");
+  });
+
+  it("keeps two scrubbed accounts on distinct handles", async () => {
+    await seed({
+      clerkId: "user_one",
+      displayName: "one@example.com",
+      username: "one_example_com",
+      discriminator: "0001",
+    });
+    await seed({
+      clerkId: "user_two",
+      displayName: "two@example.com",
+      username: "two_example_com",
+      discriminator: "0002",
+    });
+
+    await runMigration();
+
+    const a = await read("user_one");
+    const b = await read("user_two");
+    expect(`${a.username}#${a.discriminator}`).not.toBe(
+      `${b.username}#${b.discriminator}`,
+    );
+  });
+
+  /**
+   * schema.sql runs on EVERY boot, so "the predicate matches nothing the second
+   * time" is not enough on its own. Somebody who deliberately sets their own
+   * address as their display name must not have it silently rewritten by the
+   * next deploy — which is what the fingerprint, not the predicate, prevents.
+   */
+  it("does not run again once the fingerprint is in place", async () => {
+    await seed({
+      clerkId: "user_again",
+      displayName: "first@example.com",
+      username: "first_example_com",
+      discriminator: "0003",
+    });
+
+    await runMigration();
+    expect((await read("user_again")).display_name).toBe(
+      placeholderDisplayName("user_again"),
+    );
+
+    // Put an address back by hand — as a user editing their own profile would —
+    // and boot again without re-arming.
+    await getPool().query(
+      `UPDATE users SET display_name = $2 WHERE clerk_id = $1`,
+      ["user_again", "chosen@example.com"],
+    );
+    await initDb();
+
+    expect((await read("user_again")).display_name).toBe("chosen@example.com");
   });
 });

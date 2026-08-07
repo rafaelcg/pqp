@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   formatUserTag,
   USER_SEARCH_PAGE_SIZE,
@@ -28,7 +29,65 @@ function formatDiscriminator(value: number): string {
 }
 
 /**
+ * Does this string look like an email address, taken whole?
+ *
+ * DELIBERATELY NARROW. This decides whether a name gets thrown away and
+ * replaced, so a false positive costs a real person their name — and the far
+ * more common shape is a name that merely *contains* an `@`: "Dave @ Acme",
+ * "@rafa", "M@rio", "meet me @ 5.30". None of those match, because the pattern
+ * is anchored at both ends, forbids whitespace anywhere, requires a non-empty
+ * local part, and requires a dot followed by at least two letters on the right.
+ * What it does match is the thing that actually leaked: a bare
+ * `rafaelcg@gmail.com` sitting alone in the field.
+ *
+ * The accepted cost is the other direction: `Rafael <rafaelcg@gmail.com>` is
+ * not matched. That form can only get here if a human typed it into the profile
+ * form, which is a disclosure they chose; the bug being fixed is the address
+ * arriving in the field without anybody deciding it should.
+ *
+ * THE SAME RULE IS RESTATED IN SQL in `schema.sql` (the `pqp-email-scrub`
+ * block), which cleans the rows written before this existed. Change one and the
+ * other has to change with it.
+ */
+const EMAIL_SHAPED = /^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i;
+
+export function looksLikeEmailAddress(value: string): boolean {
+  return EMAIL_SHAPED.test(value.trim());
+}
+
+/**
+ * The name an account gets when nothing safe can be derived for it.
+ *
+ * Two requirements pull against each other here. It must disclose nothing — so
+ * no part of an address, and no part of the Clerk id either, which is why the
+ * suffix is a hash and not a slice. And it must not collapse everyone into one
+ * string: a shared `"User"` would make every nameless account slug to `user`,
+ * pile them all onto one 9,999-wide discriminator space, and render a channel
+ * full of people who are indistinguishable on screen.
+ *
+ * Derived from the Clerk id rather than randomly so it is stable: the profile
+ * cache expires every five minutes and two requests can create the same account
+ * concurrently, and a random name would mean the handle depends on which call
+ * happened to win.
+ *
+ * It reads as a placeholder on purpose. There is no onboarding step that asks
+ * for a name, so this is what the person sees until they open settings — the
+ * honest version of that is something that visibly wants replacing, not a
+ * generated pseudonym they might mistake for a real identity.
+ */
+export function placeholderDisplayName(clerkId: string): string {
+  const digest = createHash("sha256").update(clerkId).digest("hex").slice(0, 4);
+  return `User ${digest}`;
+}
+
+/**
  * Derive the slug half of a handle from a display name.
+ *
+ * An email address is refused outright rather than slugified. Slugifying one is
+ * not a partial disclosure but a complete one — `rafaelcg@gmail.com` became
+ * `rafaelcg_gmail_com`, which is the address with two characters changed, and
+ * it is the string other people type to mention them. There is nothing safe to
+ * keep from it, so nothing is kept and the generated fallback below takes over.
  *
  * Accents are folded to their base letter *before* the character filter runs,
  * because after it every one of them is already an underscore. NFD splits `ã`
@@ -42,7 +101,8 @@ function formatDiscriminator(value: number): string {
  * trailing underscore behind.
  */
 export function slugifyUsername(input: string): string {
-  const slug = input
+  const source = looksLikeEmailAddress(input) ? "" : input;
+  const slug = source
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
