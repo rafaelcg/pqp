@@ -101,16 +101,21 @@ class CalleeSocket {
 }
 
 async function seedConversation(): Promise<string> {
-  // Materialise the callee account (a GET is enough to mint it)…
-  const me = await fetch(`${API}/api/me`, { headers: calleeHeaders });
-  const callee = (await me.json()) as { id: string; ageGate?: string };
-  if (callee.ageGate && callee.ageGate !== "passed") {
-    await fetch(`${API}/api/me/age-check`, {
-      method: "POST",
-      headers: calleeHeaders,
-      body: JSON.stringify({ dateOfBirth: "1990-01-01" }),
-    });
+  // Both accounts must be past the age gate — on a fresh database neither is,
+  // and the caller cannot lean on `openApp` because seeding runs first.
+  for (const headers of [callerHeaders, calleeHeaders]) {
+    const who = await fetch(`${API}/api/me`, { headers });
+    const body = (await who.json()) as { ageGate?: string };
+    if (body.ageGate && body.ageGate !== "passed") {
+      await fetch(`${API}/api/me/age-check`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ dateOfBirth: "1990-01-01" }),
+      });
+    }
   }
+  const me = await fetch(`${API}/api/me`, { headers: calleeHeaders });
+  const callee = (await me.json()) as { id: string };
   // The two accounts share no server, and the default privacy refuses
   // strangers — open the door for this pair.
   await fetch(`${API}/api/me`, {
