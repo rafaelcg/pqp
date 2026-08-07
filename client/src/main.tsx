@@ -3,10 +3,12 @@ import { dark } from "@clerk/themes";
 import {
   lazy,
   StrictMode,
+  useEffect,
   Suspense,
   useLayoutEffect,
   useMemo,
   useState,
+  type ComponentProps,
   type ReactNode,
 } from "react";
 import { createRoot } from "react-dom/client";
@@ -24,6 +26,7 @@ import { DesktopTitleBar } from "./components/layout/desktop-title-bar";
 import { useTheme } from "./hooks/use-theme";
 import { isDesktopApp } from "./lib/desktop";
 import { isDevAuthBypassEnabled } from "./lib/dev-auth";
+import { applyDocumentLocale, detectLocale } from "./lib/locale";
 import { forceTheme } from "./lib/theme";
 import { LandingPage } from "./pages/landing-page";
 import { UpdatePrompt } from "./components/layout/update-prompt";
@@ -91,6 +94,46 @@ interface ClerkColors {
  * Clerk renders in its own default light theme otherwise, which reads as a
  * broken modal inside a dark shell.
  */
+/**
+ * Clerk's own strings in the user's language.
+ *
+ * Loaded on demand rather than imported: the pt-BR catalogue is ~66KB, and
+ * bundling it into the initial download would make every English visitor pay
+ * for it. Nothing waits on this — Clerk renders English until it resolves, and
+ * the only surfaces it affects are modals that open on a click, long after the
+ * fetch has landed. A failed load is left alone for the same reason: English is
+ * a working sign-up form, and a blocked CDN should not become a blocked signup.
+ */
+type ClerkLocalization = ComponentProps<typeof ClerkProvider>["localization"];
+
+function useClerkLocalization(): ClerkLocalization {
+  const [localization, setLocalization] = useState<ClerkLocalization>();
+
+  useEffect(() => {
+    const locale = detectLocale();
+    applyDocumentLocale(locale);
+    if (locale !== "pt-BR") {
+      return;
+    }
+    let cancelled = false;
+    void import("@clerk/localizations/pt-BR").then(
+      (module) => {
+        if (!cancelled) {
+          setLocalization(module.ptBR);
+        }
+      },
+      () => {
+        // Keep English.
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return localization;
+}
+
 function ThemedClerkProvider({
   publishableKey,
   children,
@@ -120,6 +163,7 @@ function ThemedClerkProvider({
     }),
     [resolved, colors],
   );
+  const localization = useClerkLocalization();
 
   return (
     <ClerkProvider
@@ -128,6 +172,7 @@ function ThemedClerkProvider({
       signInFallbackRedirectUrl="/app"
       signUpFallbackRedirectUrl="/app"
       appearance={appearance}
+      localization={localization}
     >
       {children}
     </ClerkProvider>
