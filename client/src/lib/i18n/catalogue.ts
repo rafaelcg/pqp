@@ -162,6 +162,19 @@ export const en = {
   "download.mobile":
     "There's no app to install here — open pqp in your browser and add it to your home screen from the browser menu.",
 
+  // ------------------------------------------------------------ legal pages
+  // The prose of /terms, /privacy and /cookies is NOT here — it lives as whole
+  // documents per language under `pages/legal/`, because a policy is edited and
+  // reviewed as a document and because a Portuguese chat user should not
+  // download three policies to open /app. See `pages/legal/document.tsx`.
+  //
+  // These two are the chrome the document does not own: the eyebrow and the
+  // date line are printed by `components/marketing/legal-page.tsx`, which is
+  // still hardcoded English. They are defined here so wiring them up is a
+  // two-line change in that file rather than a translation job.
+  "legal.eyebrow": "Legal",
+  "legal.updated": "Last updated: {date}",
+
   "footer.tagline":
     "Group chat you own. Self-host or use pqp.gg — same chaos either way.",
   "footer.product": "Product",
@@ -342,6 +355,91 @@ export const en = {
   "onboarding.skip": "I'll do this later",
   "onboarding.continue": "Continue",
   "onboarding.saving": "Saving…",
+
+  // ------------------------------------------------------------------- voice
+  // Labels and states, so the bar is clarity rather than voice. Three different
+  // things are deliberately three different words and must stay that way in
+  // every language: `tile.muted` is *your own* microphone off, `tile.deafened`
+  // is *all* incoming audio off, and `tile.silenced` is one peer turned down to
+  // zero for you alone. Collapsing any two of them into one word makes a tile
+  // that cannot be read.
+  "voice.channelFallback": "Voice",
+  "voice.live": "Live",
+  // The mesh ceiling is a fact, not a suggestion — the landing page states the
+  // same limit (5 to 8 per channel) and the two must agree. A translation that
+  // turns this into advice is wrong.
+  "voice.meshWarning":
+    "Mesh limit approaching — configure an SFU for larger calls.",
+  "voice.idle.body": "Join voice to talk. Chat stays available beside you.",
+  "voice.join": "Join Voice",
+  "voice.connectingTo": "Connecting to {channel}…",
+  "voice.cancel": "Cancel",
+  "voice.alone": "You're the only one here so far.",
+
+  "voice.tile.you": "(you)",
+  "voice.tile.presenting": "Presenting",
+  "voice.tile.deafened": "Deafened",
+  "voice.tile.muted": "Muted",
+  "voice.tile.mutedTitle": "Microphone muted",
+  "voice.tile.silenced": "Silenced",
+  "voice.tile.connecting": "Connecting",
+  "voice.tile.disconnected": "Disconnected",
+  "voice.tile.retry": "Retry",
+  "voice.tile.mutePeer": "Mute {name}",
+  "voice.tile.unmutePeer": "Unmute {name}",
+  "voice.tile.volumeFor": "Volume for {name}",
+  "voice.tile.volumePercent": "{percent} percent",
+
+  "voice.control.mute": "Mute microphone",
+  "voice.control.unmute": "Unmute microphone",
+  "voice.control.deafen": "Deafen",
+  "voice.control.undeafen": "Undeafen",
+  "voice.control.share": "Share your screen",
+  "voice.control.stopShare": "Stop sharing your screen",
+  "voice.control.shareUnavailable":
+    "Share your screen (unavailable on this device)",
+  "voice.control.shareTaken": "Someone else is already sharing their screen",
+  "voice.control.leave": "Leave",
+
+  "voice.bar.connected": "Voice connected",
+  "voice.bar.connecting": "Connecting…",
+  "voice.bar.person": "{count} person",
+  "voice.bar.people": "{count} people",
+  "voice.bar.leave": "Disconnect from voice",
+  "voice.bar.open": "Open voice channel {name}",
+
+  "voice.share.someone": "Someone",
+  "voice.share.youPresenting": "You are presenting",
+  "voice.share.peerPresenting": "{name} is presenting",
+  "voice.share.stop": "Stop sharing",
+  "voice.share.fullscreen": "View fullscreen",
+  "voice.share.exitFullscreen": "Exit fullscreen",
+  "voice.share.waiting": "Connecting to presenter's screen…",
+  // A refused fullscreen used to be swallowed, which is how "I clicked it and
+  // nothing happened" became a bug report nobody could act on. Quiet helper
+  // text, not an alert — the call is still fine, only the frame did not grow.
+  "voice.share.fullscreenBlocked": "The browser wouldn't open fullscreen.",
+
+  // One wording for "this browser cannot capture a screen", read by the control
+  // that greys itself out (`components/voice/capabilities.ts`) and by the error
+  // path in `hooks/use-voice.ts`. One key is what stops the two from drifting.
+  "voice.screenShareUnsupported":
+    "Screen sharing isn't supported by this browser.",
+  "voice.screenShareInsecure":
+    "Screen sharing needs a secure (HTTPS) connection.",
+
+  "voice.error.shareTaken": "Someone else is already sharing their screen.",
+  "voice.error.channelFull": "This voice channel is full (max {limit}).",
+  "voice.error.micFailed": "Failed to access microphone",
+  "voice.error.micBlocked":
+    "Microphone access was blocked. Allow it in your browser settings, then rejoin.",
+  "voice.error.shareFailed": "Failed to start screen share",
+  "voice.error.shareBlocked": "Screen share was blocked or cancelled.",
+  "voice.error.noVideoTrack": "No video track from screen capture",
+  "voice.error.transportUnsupported":
+    "This call runs on a voice server this app build cannot use, so you have not joined it. Nobody in the call can hear you.",
+  "voice.error.transportUnreachable":
+    "Could not reach the voice server, so you have not joined this call. Check your network and try again.",
 } as const;
 
 export type MessageKey = keyof typeof en;

@@ -137,6 +137,12 @@ export const ptBR: PartialMessages = {
   "download.mobile":
     "Não tem app pra instalar aqui. Abre o pqp no navegador e adiciona na tela de início pelo menu.",
 
+  // ------------------------------------------------------------ legal pages
+  // O texto das páginas legais está em `pages/legal/*.pt-BR.tsx`, não aqui.
+  // Estas duas linhas são só a moldura que o documento não controla.
+  "legal.eyebrow": "Jurídico",
+  "legal.updated": "Última atualização: {date}",
+
   "footer.tagline":
     "O chat em grupo é seu. Hospede você mesmo ou use o pqp.gg — a bagunça é a mesma.",
   "footer.product": "Produto",
@@ -306,4 +312,86 @@ export const ptBR: PartialMessages = {
   "onboarding.skip": "Depois eu faço",
   "onboarding.continue": "Continuar",
   "onboarding.saving": "Salvando…",
+
+  // ------------------------------------------------------------------- voice
+  // "Call" é o que se fala no Brasil — "cair na call", "tá na call" — e já
+  // aparece assim na landing. "Mesh", "SFU" e "Live" ficam em inglês: são
+  // rótulos técnicos e traduzir vira jargão que ninguém usa.
+  //
+  // Três estados parecidos, três palavras diferentes, de propósito: "Mudo" é o
+  // seu microfone desligado, "Sem áudio" é você sem ouvir ninguém, e "Mutado" é
+  // uma pessoa que só você abaixou pra zero. Juntar dois deles numa palavra só
+  // faz o tile ficar ilegível.
+  "voice.channelFallback": "Voz",
+  // Fica em inglês: é o mesmo rótulo que todo mundo já lê em live/stream.
+  "voice.live": "Live",
+  // O limite do mesh é fato, não sugestão — a landing diz o mesmo (de 5 a 8 por
+  // canal) e as duas frases têm que combinar.
+  "voice.meshWarning":
+    "Chegando no limite do mesh — configure um SFU pra chamadas maiores.",
+  "voice.idle.body": "Entra na call pra falar. O chat continua aqui do lado.",
+  "voice.join": "Entrar na call",
+  "voice.connectingTo": "Conectando em {channel}…",
+  "voice.cancel": "Cancelar",
+  "voice.alone": "Por enquanto só você aqui.",
+
+  "voice.tile.you": "(você)",
+  "voice.tile.presenting": "Compartilhando",
+  "voice.tile.deafened": "Sem áudio",
+  "voice.tile.muted": "Mudo",
+  "voice.tile.mutedTitle": "Microfone desligado",
+  "voice.tile.silenced": "Mutado",
+  "voice.tile.connecting": "Conectando",
+  "voice.tile.disconnected": "Caiu",
+  "voice.tile.retry": "Tentar de novo",
+  "voice.tile.mutePeer": "Mutar {name}",
+  "voice.tile.unmutePeer": "Desmutar {name}",
+  "voice.tile.volumeFor": "Volume de {name}",
+  "voice.tile.volumePercent": "{percent} por cento",
+
+  "voice.control.mute": "Desligar o microfone",
+  "voice.control.unmute": "Ligar o microfone",
+  "voice.control.deafen": "Desligar o áudio",
+  "voice.control.undeafen": "Ligar o áudio",
+  "voice.control.share": "Compartilhar a tela",
+  "voice.control.stopShare": "Parar de compartilhar a tela",
+  "voice.control.shareUnavailable":
+    "Compartilhar a tela (indisponível neste aparelho)",
+  "voice.control.shareTaken": "Já tem alguém compartilhando a tela",
+  "voice.control.leave": "Sair",
+
+  "voice.bar.connected": "Na call",
+  "voice.bar.connecting": "Conectando…",
+  "voice.bar.person": "{count} pessoa",
+  "voice.bar.people": "{count} pessoas",
+  "voice.bar.leave": "Sair da call",
+  "voice.bar.open": "Abrir o canal de voz {name}",
+
+  "voice.share.someone": "Alguém",
+  "voice.share.youPresenting": "Você está compartilhando",
+  "voice.share.peerPresenting": "{name} está compartilhando",
+  "voice.share.stop": "Parar de compartilhar",
+  "voice.share.fullscreen": "Tela cheia",
+  "voice.share.exitFullscreen": "Sair da tela cheia",
+  "voice.share.waiting": "Conectando na tela de quem está compartilhando…",
+  "voice.share.fullscreenBlocked": "O navegador não abriu a tela cheia.",
+
+  "voice.screenShareUnsupported":
+    "Este navegador não faz compartilhamento de tela.",
+  "voice.screenShareInsecure":
+    "Compartilhar a tela precisa de conexão segura (HTTPS).",
+
+  "voice.error.shareTaken": "Já tem alguém compartilhando a tela.",
+  "voice.error.channelFull": "Este canal de voz está cheio (máximo {limit}).",
+  "voice.error.micFailed": "Não foi possível acessar o microfone",
+  "voice.error.micBlocked":
+    "O acesso ao microfone foi bloqueado. Libera nas configurações do navegador e entra de novo.",
+  "voice.error.shareFailed": "Não foi possível compartilhar a tela",
+  "voice.error.shareBlocked":
+    "O compartilhamento de tela foi bloqueado ou cancelado.",
+  "voice.error.noVideoTrack": "A captura de tela não trouxe vídeo",
+  "voice.error.transportUnsupported":
+    "Esta call roda num servidor de voz que esta versão do app não usa, então você não entrou. Ninguém na call te ouve.",
+  "voice.error.transportUnreachable":
+    "Não deu pra falar com o servidor de voz, então você não entrou nesta call. Verifique a sua conexão e tente de novo.",
 };
