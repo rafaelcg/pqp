@@ -113,16 +113,12 @@ describe("clientAddress", () => {
     }
   });
 
-  it("uses the first forwarded hop when the proxy is trusted", () => {
+  /** Run `body` with TRUST_PROXY set, then put the environment back. */
+  function withTrustProxy(value: string, body: () => void) {
     const previous = process.env.TRUST_PROXY;
-    process.env.TRUST_PROXY = "true";
+    process.env.TRUST_PROXY = value;
     try {
-      expect(
-        clientAddress({
-          headers: { "x-forwarded-for": "1.2.3.4, 5.6.7.8" },
-          socket,
-        }),
-      ).toBe("1.2.3.4");
+      body();
     } finally {
       if (previous === undefined) {
         delete process.env.TRUST_PROXY;
@@ -130,5 +126,72 @@ describe("clientAddress", () => {
         process.env.TRUST_PROXY = previous;
       }
     }
+  }
+
+  /**
+   * The entry our own edge appended, not the one the caller typed.
+   *
+   * This test previously asserted the opposite — that the *first* hop wins —
+   * which reads naturally and is exactly backwards. Proxies append, so the left
+   * end of the chain is attacker-supplied: anyone could send a made-up
+   * `X-Forwarded-For` and be handed a fresh rate-limit bucket per request.
+   */
+  it("uses the hop our own proxy appended, not the caller's claim", () => {
+    withTrustProxy("true", () => {
+      expect(
+        clientAddress({
+          headers: { "x-forwarded-for": "1.2.3.4, 5.6.7.8" },
+          socket,
+        }),
+      ).toBe("5.6.7.8");
+    });
+  });
+
+  it("cannot be moved by a forged leading entry", () => {
+    withTrustProxy("true", () => {
+      const forged = clientAddress({
+        headers: { "x-forwarded-for": "9.9.9.9, 5.6.7.8" },
+        socket,
+      });
+      const plain = clientAddress({
+        headers: { "x-forwarded-for": "5.6.7.8" },
+        socket,
+      });
+      // Same real client, so the same bucket, whatever they prepend.
+      expect(forged).toBe(plain);
+    });
+  });
+
+  it("counts in from the right when more than one proxy is trusted", () => {
+    withTrustProxy("2", () => {
+      expect(
+        clientAddress({
+          headers: { "x-forwarded-for": "1.2.3.4, 5.6.7.8, 10.0.0.9" },
+          socket,
+        }),
+      ).toBe("5.6.7.8");
+    });
+  });
+
+  it("reads a repeated header as one ordered chain", () => {
+    withTrustProxy("true", () => {
+      expect(
+        clientAddress({
+          headers: { "x-forwarded-for": ["1.2.3.4", "5.6.7.8"] },
+          socket,
+        }),
+      ).toBe("5.6.7.8");
+    });
+  });
+
+  it("falls back to the socket when the chain is shorter than the trusted depth", () => {
+    withTrustProxy("3", () => {
+      expect(
+        clientAddress({
+          headers: { "x-forwarded-for": "1.2.3.4" },
+          socket,
+        }),
+      ).toBe("10.0.0.1");
+    });
   });
 });

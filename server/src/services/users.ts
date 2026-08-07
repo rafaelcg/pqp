@@ -7,18 +7,92 @@ import {
 import type { DbUser } from "../db.js";
 import { getPool } from "../db.js";
 import type { AuthUser } from "../auth/clerk.js";
+import { HttpError } from "../lib/http.js";
 import { notBlockedSql } from "./blocks.js";
 import { getPreferences } from "./preferences.js";
 
-function slugifyUsername(input: string): string {
+/** Every column of `DbUser`, single-sourced so the reads cannot drift apart. */
+const DB_USER_COLUMNS = `id, clerk_id, display_name, username, discriminator, avatar_url, email_domains`;
+
+const DISCRIMINATOR_MAX = 9999;
+/** Random probes tried before falling back to a sweep that cannot miss. */
+const DISCRIMINATOR_PROBES = 24;
+
+function formatDiscriminator(value: number): string {
+  return String(value).padStart(4, "0");
+}
+
+/**
+ * Derive the slug half of a handle from a display name.
+ *
+ * Accents are folded to their base letter *before* the character filter runs,
+ * because after it every one of them is already an underscore. NFD splits `ã`
+ * into `a` plus a combining tilde and every combining mark lives in
+ * U+0300–U+036F, so dropping that range transliterates rather than mangles:
+ * `João` becomes `joao`, not `jo_o`, and `Gonçalves` becomes `goncalves`, not
+ * `gon_alves`. This is the handle a brand-new account is assigned without ever
+ * being shown it, so getting it wrong is not cosmetic.
+ *
+ * The trim runs after the truncation — trimming first lets a cut at 32 leave a
+ * trailing underscore behind.
+ */
+export function slugifyUsername(input: string): string {
   const slug = input
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
     .replace(/[^a-z0-9_]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .slice(0, 32);
+    .slice(0, 32)
+    .replace(/^_+|_+$/g, "");
   return slug.length >= 2 ? slug : `user_${Math.random().toString(36).slice(2, 6)}`;
 }
 
+/**
+ * A free number for `username`, or null when all 9,999 are genuinely taken.
+ *
+ * The previous version probed at random 40 times and then threw. That is fine
+ * while a name is rare and quietly fatal once it is popular: with ~9,900 of
+ * 9,999 slots used, 40 random probes come up empty about two thirds of the
+ * time — so account creation would fail for precisely the names the most people
+ * have. Reading the taken set once costs a single query instead of up to forty
+ * and lets the fallback be a sweep, which finds a slot whenever one exists.
+ *
+ * The random probe is kept for the common case: allocating sequentially would
+ * make handles guessable and leak signup order.
+ */
+async function allocateDiscriminator(username: string): Promise<string | null> {
+  const result = await getPool().query<{ discriminator: string }>(
+    `SELECT discriminator FROM users
+     WHERE username = $1 AND discriminator IS NOT NULL`,
+    [username],
+  );
+  const taken = new Set(result.rows.map((row) => row.discriminator));
+  if (taken.size >= DISCRIMINATOR_MAX) {
+    return null;
+  }
+
+  for (let probe = 0; probe < DISCRIMINATOR_PROBES; probe++) {
+    const candidate = formatDiscriminator(
+      Math.floor(Math.random() * DISCRIMINATOR_MAX) + 1,
+    );
+    if (!taken.has(candidate)) {
+      return candidate;
+    }
+  }
+
+  for (let value = 1; value <= DISCRIMINATOR_MAX; value++) {
+    const candidate = formatDiscriminator(value);
+    if (!taken.has(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+/**
+ * Is this exact `name#number` pair already somebody else's? Used only to decide
+ * whether a rename can keep the number it already has.
+ */
 async function isTagTaken(
   username: string,
   discriminator: string,
@@ -32,18 +106,44 @@ async function isTagTaken(
   return result.rows.length > 0;
 }
 
-async function allocateDiscriminator(username: string): Promise<string> {
-  for (let attempt = 0; attempt < 40; attempt++) {
-    const discrim = String(Math.floor(Math.random() * 9999) + 1).padStart(4, "0");
-    const existing = await getPool().query(
-      `SELECT 1 FROM users WHERE username = $1 AND discriminator = $2`,
-      [username, discrim],
-    );
-    if (existing.rows.length === 0) {
-      return discrim;
+/**
+ * A unique violation on the handle index specifically, as opposed to any other
+ * constraint on the table. Retrying is only ever the right answer for this one —
+ * a clash on `clerk_id` means something entirely different and must not be
+ * swallowed here.
+ */
+function isTagConflict(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) {
+    return false;
+  }
+  const { code, constraint } = error as { code?: string; constraint?: string };
+  return code === "23505" && (constraint ?? "").includes("username_discrim");
+}
+
+/**
+ * A complete handle for a brand-new account.
+ *
+ * Auto-assignment has nowhere to fall back to — the user is never asked what
+ * they want to be called — so this has to produce something. When a base slug is
+ * genuinely exhausted, widen it with a suffix instead of failing the signup; a
+ * `joao_k2f#0417` the user can change later beats an error page they cannot get
+ * past.
+ */
+async function deriveHandle(
+  displayName: string,
+): Promise<{ username: string; discriminator: string }> {
+  const base = slugifyUsername(displayName);
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const username =
+      attempt === 0
+        ? base
+        : `${base.slice(0, 28)}_${Math.random().toString(36).slice(2, 5)}`;
+    const discriminator = await allocateDiscriminator(username);
+    if (discriminator) {
+      return { username, discriminator };
     }
   }
-  throw new Error("Could not allocate username discriminator");
+  throw new Error("Could not allocate a username");
 }
 
 /**
@@ -189,35 +289,93 @@ export async function upsertUser(auth: AuthUser): Promise<DbUser> {
     return user;
   }
 
-  const username = slugifyUsername(auth.displayName);
-  const discriminator = await allocateDiscriminator(username);
-
-  const result = await getPool().query<DbUser>(
-    `INSERT INTO users (clerk_id, display_name, username, discriminator, avatar_url, email_domains)
-     VALUES ($1, $2, $3, $4, $5, $6)
-     RETURNING id, clerk_id, display_name, username, discriminator, avatar_url, email_domains`,
-    [
-      auth.clerkId,
-      auth.displayName,
-      username,
-      discriminator,
-      auth.avatarUrl,
-      auth.emailDomains ?? [],
-    ],
-  );
-  return result.rows[0]!;
+  return insertNewUser(auth);
 }
 
+/**
+ * The first time an account is ever seen.
+ *
+ * `ON CONFLICT (clerk_id) DO NOTHING` rather than a bare INSERT because the
+ * client authenticates over HTTP and opens its WebSocket at nearly the same
+ * moment, so a brand-new account reaches this function twice concurrently.
+ * Both callers found no row, both insert, and without this the loser's request —
+ * the very first thing the account ever does — fails with a 500. A retry then
+ * succeeds, which is exactly why this survives manual testing and only shows up
+ * once real signups overlap. Losing the race is not an error here: the winner's
+ * row is the row both callers wanted, so read it back.
+ *
+ * The surrounding retry is for the *other* unique index. Two display names that
+ * slug alike can be handed the same number in the window between reading the
+ * taken set and inserting; the answer to that is a fresh number, not an error.
+ */
+async function insertNewUser(auth: AuthUser): Promise<DbUser> {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const { username, discriminator } = await deriveHandle(auth.displayName);
+    try {
+      const result = await getPool().query<DbUser>(
+        `INSERT INTO users (clerk_id, display_name, username, discriminator, avatar_url, email_domains)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT (clerk_id) DO NOTHING
+         RETURNING ${DB_USER_COLUMNS}`,
+        [
+          auth.clerkId,
+          auth.displayName,
+          username,
+          discriminator,
+          auth.avatarUrl,
+          auth.emailDomains ?? [],
+        ],
+      );
+      const inserted = result.rows[0];
+      if (inserted) {
+        return inserted;
+      }
+
+      // DO NOTHING returns no row, so the conflict was on `clerk_id`: somebody
+      // else created this account between our SELECT and our INSERT.
+      const winner = await getPool().query<DbUser>(
+        `SELECT ${DB_USER_COLUMNS} FROM users WHERE clerk_id = $1`,
+        [auth.clerkId],
+      );
+      const row = winner.rows[0];
+      if (row) {
+        return row.username && row.discriminator ? row : ensureUsername(row);
+      }
+      // The row was deleted again in between. Vanishingly unlikely; fall
+      // through and try the whole thing once more rather than return nothing.
+    } catch (error) {
+      if (!isTagConflict(error)) {
+        throw error;
+      }
+    }
+  }
+  throw new Error("Could not create the account after repeated handle collisions");
+}
+
+/**
+ * Backfill a handle for a row that somehow has none. Same conflict retry as
+ * `insertNewUser` and for the same reason: the number is chosen from a set read
+ * a moment earlier, so a concurrent allocation of the same pair is possible and
+ * is not worth failing a request over.
+ */
 async function ensureUsername(user: DbUser): Promise<DbUser> {
-  const username = slugifyUsername(user.display_name);
-  const discriminator = await allocateDiscriminator(username);
-  const result = await getPool().query<DbUser>(
-    `UPDATE users SET username = $2, discriminator = $3
-     WHERE id = $1
-     RETURNING id, clerk_id, display_name, username, discriminator, avatar_url`,
-    [user.id, username, discriminator],
-  );
-  return result.rows[0]!;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const { username, discriminator } = await deriveHandle(user.display_name);
+    try {
+      const result = await getPool().query<DbUser>(
+        `UPDATE users SET username = $2, discriminator = $3
+         WHERE id = $1
+         RETURNING ${DB_USER_COLUMNS}`,
+        [user.id, username, discriminator],
+      );
+      return result.rows[0]!;
+    } catch (error) {
+      if (!isTagConflict(error)) {
+        throw error;
+      }
+    }
+  }
+  throw new Error("Could not allocate a username after repeated collisions");
 }
 
 export async function getUserById(userId: string): Promise<DbUser | null> {
@@ -256,6 +414,16 @@ export async function updateProfile(
       !(await isTagTaken(updates.username, discriminator, userId));
     if (!keepsCurrent) {
       discriminator = await allocateDiscriminator(updates.username);
+      // Unlike a brand-new account, a rename *does* have somewhere to fall back
+      // to: the person is looking at a form. Say the name is full and let them
+      // choose another, rather than silently handing them a suffixed variant of
+      // the name they explicitly asked for.
+      if (!discriminator) {
+        throw new HttpError(
+          409,
+          "That username has no numbers left. Please pick a different one.",
+        );
+      }
     }
   }
 
@@ -266,6 +434,43 @@ export async function updateProfile(
         : updates.avatarUrl
       : current.avatar_url;
 
+  // The pair was free a moment ago, but "a moment ago" is the whole problem:
+  // another rename can claim it before this write lands. That is a lost race,
+  // not a bad request, so take the next free number and try again instead of
+  // handing the user an error for something they did nothing wrong in.
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      return await writeProfile(userId, updates, username, discriminator, avatarUrl);
+    } catch (error) {
+      if (!isTagConflict(error) || !username) {
+        throw error;
+      }
+      const next = await allocateDiscriminator(username);
+      if (!next) {
+        throw new HttpError(
+          409,
+          "That username has no numbers left. Please pick a different one.",
+        );
+      }
+      discriminator = next;
+    }
+  }
+  throw new HttpError(
+    409,
+    "That username is being claimed by too many people right now. Try again.",
+  );
+}
+
+async function writeProfile(
+  userId: string,
+  updates: {
+    displayName?: string;
+    dmPrivacy?: DmPrivacy;
+  },
+  username: string | null,
+  discriminator: string | null,
+  avatarUrl: string | null,
+): Promise<DbUser> {
   const result = await getPool().query<DbUser>(
     `UPDATE users SET
        display_name = COALESCE($2, display_name),
@@ -274,7 +479,7 @@ export async function updateProfile(
        avatar_url = $5,
        dm_privacy = COALESCE($6, dm_privacy)
      WHERE id = $1
-     RETURNING id, clerk_id, display_name, username, discriminator, avatar_url`,
+     RETURNING ${DB_USER_COLUMNS}`,
     [
       userId,
       updates.displayName ?? null,

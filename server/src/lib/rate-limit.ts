@@ -161,20 +161,54 @@ export function resetRateLimits(): void {
 }
 
 /**
+ * How many proxies stand in front of this process. `TRUST_PROXY=true` means the
+ * one platform edge (Railway, Fly); a number states the depth explicitly for a
+ * deployment that stacks another proxy of its own in front of that.
+ */
+function trustedProxyHops(): number {
+  const raw = process.env.TRUST_PROXY;
+  if (!raw || raw === "false") {
+    return 0;
+  }
+  if (raw === "true") {
+    return 1;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : 0;
+}
+
+/**
  * Reads a client address for pre-auth rate limiting. Only trusts
  * `x-forwarded-for` when TRUST_PROXY is on, since it is caller-controlled on a
  * directly exposed server (Railway and Fly both front the app with a proxy).
+ *
+ * WHICH ENTRY IS READ IS THE WHOLE SECURITY PROPERTY. Each proxy *appends* the
+ * address it received the request from, so the rightmost entry is the one our
+ * own edge wrote and the leftmost is whatever the caller typed into the header
+ * themselves. Counting in from the right is therefore the only way to get an
+ * address the client cannot choose — reading the left end lets anyone send
+ * `X-Forwarded-For: <random>` and get a fresh, empty rate-limit bucket on every
+ * single request, which silently turns every IP-keyed limit into no limit.
+ *
+ * A chain shorter than the configured depth means the header is not what we
+ * assumed, so fall through to the socket address rather than guess.
  */
 export function clientAddress(req: {
   headers: Record<string, string | string[] | undefined>;
   socket: { remoteAddress?: string | undefined };
 }): string {
-  if (process.env.TRUST_PROXY === "true") {
+  const hops = trustedProxyHops();
+  if (hops > 0) {
     const forwarded = req.headers["x-forwarded-for"];
-    const value = Array.isArray(forwarded) ? forwarded[0] : forwarded;
-    const first = value?.split(",")[0]?.trim();
-    if (first) {
-      return first;
+    // A header sent more than once arrives as an array, and the hops run in
+    // order across the whole list — so join it rather than picking one element.
+    const chain = (Array.isArray(forwarded) ? forwarded.join(",") : (forwarded ?? ""))
+      .split(",")
+      .map((part) => part.trim())
+      .filter(Boolean);
+    const candidate = chain[chain.length - hops];
+    if (candidate) {
+      return candidate;
     }
   }
   return req.socket.remoteAddress ?? "unknown";
