@@ -108,6 +108,24 @@ export const userPreferencesSchema = z.object({
    * received.
    */
   showLinkEmbeds: z.boolean().optional(),
+  /**
+   * When first-run onboarding was finished or skipped, as an ISO instant.
+   *
+   * A preference rather than a `users` column: it is not enforced server-side,
+   * nothing joins on it, and it has to follow the person across devices —
+   * localStorage would replay the whole flow on every new browser, and a column
+   * would be a migration on the hottest table in the schema for a flag read
+   * exactly once per session. It also rides down with `/api/me`, which the
+   * client already awaits before first paint, so the check costs no request.
+   *
+   * Accounts that predate onboarding are backfilled with this key by a one-shot
+   * data migration in `schema.sql` — see `onboarding_grandfather_2026_08`.
+   * Absent therefore means "signed up after onboarding shipped", not "old".
+   *
+   * The value is only ever read for presence; the instant is for support and
+   * for telling a backfilled account from one that really ran the flow.
+   */
+  onboardedAt: z.string().optional(),
 });
 
 export type UserPreferences = z.infer<typeof userPreferencesSchema>;

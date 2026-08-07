@@ -10,6 +10,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { AvatarPicker } from "@/components/user/avatar-picker";
 import { useNotificationSettings } from "@/hooks/use-notifications";
 import { useTheme } from "@/hooks/use-theme";
 import {
@@ -43,17 +44,6 @@ export interface LocalSettings {
 }
 
 const STORAGE_KEY = "pqp-local-settings";
-
-const AVATAR_PRESETS = [
-  "https://api.dicebear.com/9.x/shapes/svg?seed=signal",
-  "https://api.dicebear.com/9.x/shapes/svg?seed=phosphor",
-  "https://api.dicebear.com/9.x/shapes/svg?seed=desk",
-  "https://api.dicebear.com/9.x/shapes/svg?seed=mesh",
-  "https://api.dicebear.com/9.x/shapes/svg?seed=lobby",
-  "https://api.dicebear.com/9.x/shapes/svg?seed=relay",
-  "https://api.dicebear.com/9.x/bottts-neutral/svg?seed=pqp1",
-  "https://api.dicebear.com/9.x/bottts-neutral/svg?seed=pqp2",
-];
 
 export const defaultLocalSettings: LocalSettings = {
   muteOnJoin: false,
@@ -1035,50 +1025,17 @@ export function SettingsModal({
             <span className="mb-2 block text-xs uppercase tracking-wide text-paper-muted">
               Avatar
             </span>
-            <div className="mb-2 flex items-center gap-3">
-              {avatarUrl ? (
-                <img
-                  src={avatarUrl}
-                  alt=""
-                  className="h-12 w-12 rounded-md object-cover ring-1 ring-ink-4"
-                />
-              ) : (
-                <div className="flex h-12 w-12 items-center justify-center rounded-md bg-signal font-display text-lg font-bold text-ink">
-                  {(displayName || "?").slice(0, 1).toUpperCase()}
-                </div>
-              )}
-              <Input
-                value={avatarUrl}
-                onChange={(e) => setAvatarUrl(e.target.value)}
-                placeholder="https://… image URL"
-                aria-label="Avatar image URL"
-              />
-            </div>
-            <div className="flex flex-wrap gap-1.5">
-              {AVATAR_PRESETS.map((url) => (
-                <button
-                  key={url}
-                  type="button"
-                  aria-label="Use preset avatar"
-                  aria-pressed={avatarUrl === url}
-                  className={`h-9 w-9 overflow-hidden rounded-md border ${
-                    avatarUrl === url
-                      ? "border-signal ring-1 ring-signal"
-                      : "border-ink-4 hover:border-signal/50"
-                  }`}
-                  onClick={() => setAvatarUrl(url)}
-                >
-                  <img src={url} alt="" className="h-full w-full object-cover" />
-                </button>
-              ))}
-              <button
-                type="button"
-                className="rounded-md border border-ink-4 px-2 text-xs text-paper-muted hover:border-signal/50"
-                onClick={() => setAvatarUrl("")}
-              >
-                Clear
-              </button>
-            </div>
+            <AvatarPicker
+              value={avatarUrl}
+              onChange={setAvatarUrl}
+              fallbackName={displayName}
+              labels={{
+                urlPlaceholder: "https://… image URL",
+                urlLabel: "Avatar image URL",
+                presetLabel: "Use preset avatar",
+                clear: "Clear",
+              }}
+            />
           </div>
 
           <label className="mb-3 block">

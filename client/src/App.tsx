@@ -32,6 +32,7 @@ import { MembersPanel } from "@/components/layout/members-panel";
 import { PinnedMessagesPanel } from "@/components/chat/pinned-messages-panel";
 import { ServerRail } from "@/components/layout/server-rail";
 import { AgeGateDialog } from "@/components/user/age-gate-dialog";
+import { OnboardingFlow } from "@/components/onboarding/onboarding-flow";
 import { NewDmDialog } from "@/components/user/new-dm-dialog";
 import { ServerSettingsDialog } from "@/components/layout/server-settings-dialog";
 import {
@@ -79,6 +80,7 @@ import {
   updateMe,
 } from "@/lib/api";
 import { parseAppRoute } from "@/lib/app-route";
+import { shouldRunOnboarding } from "@/lib/onboarding";
 import { translateMessage, useTranslation } from "@/lib/i18n";
 import {
   conversationChannel,
@@ -288,6 +290,15 @@ function MainAppContent({
   const [ageGate, setAgeGate] = useState<Exclude<AgeGateStatus, "passed"> | null>(
     null,
   );
+  /**
+   * Whether this account still has to be shown the first-run flow.
+   *
+   * Decided once, from the `/api/me` the bootstrap already makes, and never
+   * re-derived from `user` afterwards — the flow itself writes profile updates
+   * back into `user`, and re-reading the answer from a value the flow is
+   * changing is how a dialog closes itself halfway through.
+   */
+  const [needsOnboarding, setNeedsOnboarding] = useState(false);
   const [channelsLoading, setChannelsLoading] = useState(false);
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [unread, setUnread] = useState<Record<string, UnreadState>>({});
@@ -601,6 +612,10 @@ function MainAppContent({
           return;
         }
         setAgeGate(null);
+
+        // Only now, and in this order: you cannot ask somebody what they want
+        // to be called while they are one answer away from being refused.
+        setNeedsOnboarding(shouldRunOnboarding(me));
 
         // Settings the account carries win over this device's stored copy —
         // another device may have changed them since this browser last saw
@@ -1463,6 +1478,28 @@ function MainAppContent({
 
   if (!bootstrapReady) {
     return <AppLoadingShell label={t("app.loading.servers")} />;
+  }
+
+  /**
+   * First run, after the gate and after the bootstrap.
+   *
+   * After the gate because onboarding a person who is about to be refused is
+   * cruel and pointless. After the bootstrap because the last step creates or
+   * joins a server, and `refreshAfterJoin` needs the same loaded state every
+   * other join path in the app needs.
+   */
+  if (needsOnboarding && user) {
+    return (
+      <OnboardingFlow
+        user={user}
+        onUserUpdated={(updated) => {
+          setUser(updated);
+          chat.setCurrentUser(updated);
+        }}
+        onServerReady={(serverId) => refreshAfterJoin(serverId)}
+        onDone={() => setNeedsOnboarding(false)}
+      />
+    );
   }
 
   const activeConversation =

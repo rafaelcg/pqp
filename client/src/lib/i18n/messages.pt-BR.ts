@@ -247,4 +247,63 @@ export const ptBR: PartialMessages = {
   "ageGate.blocked.wait":
     "Por favor, não abra outra conta enquanto isso — preferimos resolver esta aqui.",
   "ageGate.blocked.back": "Voltar para o pqp.gg",
+
+  // ------------------------------------------------------ first-run onboarding
+  // Registro: o mesmo da landing — informal, frases curtas, sem ponto de
+  // exclamação. O age gate acima fala "você, confira" porque é uma declaração
+  // com consequência; aqui não é, então volta pro "cria, bota, cola" do resto
+  // do produto. Nada de "passo 1 de 3" nem "tudo pronto".
+  //
+  // "Handle" não tem tradução que cole. No Brasil é "o seu @", e é assim que
+  // aparece — a palavra "handle" traduzida ao pé da letra é o que faz o texto
+  // parecer saída de máquina.
+  // A tela do confete. O confete comemora; o texto fica seco de propósito —
+  // "Agora a burocracia" em cima de papel picado cai muito melhor do que
+  // qualquer "eba, você chegou", e é um campo só, o que é a piada.
+  "onboarding.handle.eyebrow": "Tá dentro",
+  "onboarding.handle.title": "Agora a burocracia",
+  "onboarding.handle.description":
+    "Um campo. Esse é o nome que a galera digita pra te achar — a gente tirou da sua conta, e o número é seu.",
+  "onboarding.handle.label": "Nome de usuário",
+  "onboarding.handle.hint":
+    "Só minúscula, número e _. O número no fim vem de brinde.",
+  "onboarding.handle.confirm": "Tá certo",
+  "onboarding.handle.reassigned": "Esse já tinha dono. Você ficou com {tag}.",
+  "onboarding.handle.error.taken":
+    "Esse nome lotou — não sobrou número nenhum. Escolhe outro.",
+  "onboarding.handle.error.invalid":
+    "Só minúscula, número e _, de 2 a 32 caracteres.",
+  "onboarding.handle.error.generic": "Não deu pra salvar. Tenta de novo.",
+
+  "onboarding.profile.eyebrow": "Sua cara",
+  "onboarding.profile.title": "Agora a parte que aparece",
+  "onboarding.profile.description":
+    "O @ é pra te acharem. Isso aqui é como te veem.",
+  "onboarding.profile.displayName": "Nome de exibição",
+  "onboarding.profile.displayNamePlaceholder": "Como te chamam",
+  "onboarding.profile.avatar": "Avatar",
+  "onboarding.profile.avatarUrl": "URL da imagem do avatar",
+  "onboarding.profile.avatarUrlPlaceholder": "https://… URL da imagem",
+  "onboarding.profile.avatarPreset": "Usar este avatar",
+  "onboarding.profile.avatarClear": "Limpar",
+  "onboarding.profile.error": "Não deu pra salvar. Tenta de novo.",
+
+  "onboarding.landing.eyebrow": "Última coisa",
+  "onboarding.landing.title": "Ainda não tem ninguém aqui",
+  "onboarding.landing.description":
+    "Cria um servidor e manda o link, ou cola o link que te mandaram.",
+  "onboarding.landing.createLabel": "Cria um servidor",
+  "onboarding.landing.createPlaceholder": "Bota um nome ridículo",
+  "onboarding.landing.createAction": "Criar",
+  "onboarding.landing.createHint":
+    "Os canais de texto e de voz já vêm prontos. Chama a galera quando quiser.",
+  "onboarding.landing.joinLabel": "Ou usa um convite",
+  "onboarding.landing.joinPlaceholder": "Código ou link do convite",
+  "onboarding.landing.joinAction": "Entrar",
+  "onboarding.landing.createError": "Não deu pra criar. Tenta de novo.",
+  "onboarding.landing.joinError": "Esse convite não funciona. Pede outro.",
+
+  "onboarding.skip": "Depois eu faço",
+  "onboarding.continue": "Continuar",
+  "onboarding.saving": "Salvando…",
 };

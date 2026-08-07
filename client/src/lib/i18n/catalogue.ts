@@ -276,6 +276,72 @@ export const en = {
   "ageGate.blocked.wait":
     "Please do not open another account in the meantime — we would rather settle this one.",
   "ageGate.blocked.back": "Back to pqp.gg",
+
+  // ------------------------------------------------------ first-run onboarding
+  // Register: the same voice as the landing page — short sentences, confident,
+  // no exclamation marks, no emoji. This is a conversation, not a setup wizard,
+  // so nothing here says "step 1 of 3", "welcome aboard" or "you're all set".
+  //
+  // English is the source of truth and has to read like someone wrote it, not
+  // like a translation of the Portuguese. Where the pun does not survive (the
+  // handle is "seu @" in Brazil and has no snappy English equivalent) English
+  // carries the meaning rather than the joke.
+  // The confetti screen. The confetti does the celebrating; the words stay
+  // deadpan, because understatement next to a screenful of falling paper is
+  // funnier than enthusiasm next to it — and because this product does not
+  // shout. "One field" is the joke: it is genuinely one field, and calling it
+  // paperwork is the only exaggeration on the screen.
+  "onboarding.handle.eyebrow": "You're in",
+  "onboarding.handle.title": "Now the paperwork",
+  "onboarding.handle.description":
+    "One field. This is the name people type to find you — we took it off your account, and the number is yours.",
+  "onboarding.handle.label": "Handle",
+  "onboarding.handle.hint":
+    "Lowercase, numbers and _ only. The number after it comes free.",
+  "onboarding.handle.confirm": "Looks right",
+  "onboarding.handle.reassigned":
+    "Somebody already had that one. You got {tag}.",
+  // Not "try again" — all 9,999 numbers behind that name are gone and repeating
+  // the request cannot work. The only way out is a different name, so say so.
+  "onboarding.handle.error.taken":
+    "That name is full — every number behind it is taken. Pick another one.",
+  "onboarding.handle.error.invalid":
+    "Lowercase, numbers and _ only, between 2 and 32 characters.",
+  "onboarding.handle.error.generic": "Couldn't save that. Try again.",
+
+  "onboarding.profile.eyebrow": "Your face",
+  "onboarding.profile.title": "Now the part people see",
+  "onboarding.profile.description":
+    "The handle is how they find you. This is how they see you.",
+  "onboarding.profile.displayName": "Display name",
+  "onboarding.profile.displayNamePlaceholder": "Whatever you go by",
+  "onboarding.profile.avatar": "Avatar",
+  "onboarding.profile.avatarUrl": "Avatar image URL",
+  "onboarding.profile.avatarUrlPlaceholder": "https://… image URL",
+  "onboarding.profile.avatarPreset": "Use this avatar",
+  "onboarding.profile.avatarClear": "Clear",
+  "onboarding.profile.error": "Couldn't save that. Try again.",
+
+  "onboarding.landing.eyebrow": "Last thing",
+  "onboarding.landing.title": "Nobody's here yet",
+  "onboarding.landing.description":
+    "Make a server and send the link, or paste one somebody sent you.",
+  "onboarding.landing.createLabel": "Make a server",
+  "onboarding.landing.createPlaceholder": "Name it something stupid",
+  "onboarding.landing.createAction": "Create",
+  "onboarding.landing.createHint":
+    "Text and voice channels show up ready. Invite people whenever.",
+  "onboarding.landing.joinLabel": "Or use an invite",
+  "onboarding.landing.joinPlaceholder": "Invite code or link",
+  "onboarding.landing.joinAction": "Go in",
+  "onboarding.landing.createError": "Couldn't create that. Try again.",
+  "onboarding.landing.joinError": "That invite doesn't work. Ask for another.",
+
+  // One label for both skippable steps. "Skip" reads like abandoning something;
+  // this is a choice to do it later, and both of these really can be.
+  "onboarding.skip": "I'll do this later",
+  "onboarding.continue": "Continue",
+  "onboarding.saving": "Saving…",
 } as const;
 
 export type MessageKey = keyof typeof en;
