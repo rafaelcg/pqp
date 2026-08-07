@@ -439,6 +439,13 @@ export const ptBR: PartialMessages = {
   "call.panel.mute": "Silenciar",
   "call.panel.unmute": "Ativar o som",
   "call.startVoice": "Iniciar chamada de voz",
+  "call.startVideo": "Iniciar chamada de vídeo",
+  // "Call" é como a galera fala; "entrar na chamada · 2" leria como tradução.
+  "call.header.joinCount": "Entrar na call · {count}",
+  "call.stage.collapse": "Recolher a call",
+  "call.stage.expand": "Expandir a call",
+  "call.stage.duration": "Duração da call",
+  "call.stage.selfPreview": "Prévia da sua câmera",
 
   "channel.meta.image.error.httpsOnly":
     "O link da imagem precisa começar com https://.",

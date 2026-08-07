@@ -1,5 +1,5 @@
 import { SignInButton, SignUpButton, useAuth } from "@clerk/clerk-react";
-import { Lock, Menu, WifiOff } from "lucide-react";
+import { Lock, Menu, Phone, Video, WifiOff } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import type {
@@ -30,7 +30,7 @@ import { ChannelList } from "@/components/layout/channel-list";
 import { ChannelMembersPanel } from "@/components/layout/channel-members-panel";
 import { WebhooksPanel } from "@/components/layout/webhooks-panel";
 import { ChannelMetaDialog } from "@/components/layout/channel-meta-dialog";
-import { DmCallPanel } from "@/components/dm/dm-call-panel";
+import { DmCallStage } from "@/components/dm/dm-call-stage";
 import { IncomingCallOverlay } from "@/components/dm/incoming-call-overlay";
 import { DmList } from "@/components/layout/dm-list";
 import { FriendsView } from "@/components/friends/friends-view";
@@ -123,7 +123,7 @@ import {
   loadAttachmentConfig,
 } from "@/lib/attachments";
 import type { MentionCandidate } from "@/lib/mention-autocomplete";
-import { DEV_AUTH_TOKEN, getAuthToken, isDevAuthBypassEnabled } from "@/lib/dev-auth";
+import { devAuthToken, getAuthToken, isDevAuthBypassEnabled } from "@/lib/dev-auth";
 import { getDesktop } from "@/lib/desktop";
 import {
   describeActivity,
@@ -151,7 +151,7 @@ export function App({ devBypass = false }: AppProps) {
 
   if (devBypass) {
     return (
-      <MainAppContent resolveToken={() => Promise.resolve(DEV_AUTH_TOKEN)} />
+      <MainAppContent resolveToken={() => Promise.resolve(devAuthToken())} />
     );
   }
 
@@ -407,6 +407,37 @@ function MainAppContent({
   const selectedServerId = selectionServerId(selection);
   /** Which server owns the active call — `channels` only holds the selected one. */
   const voiceServerIdRef = useRef<string | null>(null);
+  /**
+   * A conversation whose call was started "with video": the camera should come
+   * on as soon as that join is connected. A ref plus an effect rather than an
+   * option on `use-voice`'s join, so the controller keeps a single camera
+   * on-switch (`toggleCamera`) and nothing else can ever open the lens.
+   */
+  const pendingVideoCallRef = useRef<string | null>(null);
+  useEffect(() => {
+    const pending = pendingVideoCallRef.current;
+    if (!pending) {
+      return;
+    }
+    if (voiceState.status === "idle") {
+      // The join failed or was abandoned — a camera nobody asked to keep must
+      // not survive to the next call.
+      pendingVideoCallRef.current = null;
+      return;
+    }
+    if (voiceState.status !== "connected") {
+      return;
+    }
+    pendingVideoCallRef.current = null;
+    if (voiceState.voiceChannelId === pending && !voiceState.isCameraOn) {
+      void voice.toggleCamera();
+    }
+  }, [
+    voiceState.status,
+    voiceState.voiceChannelId,
+    voiceState.isCameraOn,
+    voice,
+  ]);
 
   const refresh = useCallback(() => setTick((t) => t + 1), []);
   // Stable: the message list schedules the jump in a frame, and a fresh
@@ -1441,10 +1472,21 @@ function MainAppContent({
    * participants get an incoming-call surface); `ring: false` joins one that
    * is already live, or answers one that is ringing us — in both of those the
    * server has nobody new to tell. Always navigates there first so the call
-   * panel is on screen while it connects.
+   * stage is on screen while it connects.
+   *
+   * `withVideo` arms the camera for this join: the voice controller only
+   * captures video through its own `toggleCamera`, and only once connected, so
+   * "start a video call" is recorded here and the effect below flips the
+   * camera on the moment the join reports connected. Deliberately not a change
+   * to `use-voice` — the camera still has exactly one on-switch.
    */
-  async function handleConversationCall(channelId: string, ring: boolean) {
+  async function handleConversationCall(
+    channelId: string,
+    ring: boolean,
+    withVideo = false,
+  ) {
     voiceServerIdRef.current = null;
+    pendingVideoCallRef.current = withVideo ? channelId : null;
     void selectConversation(channelId);
     try {
       const { iceServers } = await fetchIceServers();
@@ -2008,7 +2050,64 @@ function MainAppContent({
                 : `${selectedChannel.isPrivate ? "Private · " : ""}${chat.getPresence().length} here`}
           </p>
         </div>
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex items-center gap-1 sm:gap-2">
+          {/* The call entry points live here, always visible — the sidebar's
+              hover affordance does not exist on touch, and a call you cannot
+              start from your phone is a call that does not happen. */}
+          {activeConversation &&
+            user &&
+            (() => {
+              const callChannelId = activeConversation.channelId;
+              const inThisCall =
+                voiceState.voiceChannelId === callChannelId &&
+                voiceState.status !== "idle";
+              if (inThisCall) {
+                // The stage below the header already carries every control.
+                return null;
+              }
+              const liveCount =
+                voiceState.occupancy[callChannelId]?.length ?? 0;
+              if (liveCount > 0) {
+                return (
+                  <button
+                    type="button"
+                    className="flex shrink-0 items-center gap-1.5 rounded-md bg-success/90 px-2.5 py-1.5 text-xs font-semibold text-ink hover:bg-success"
+                    onClick={() =>
+                      void handleConversationCall(callChannelId, false)
+                    }
+                  >
+                    <Phone className="h-3.5 w-3.5" />
+                    {t("call.header.joinCount", { count: liveCount })}
+                  </button>
+                );
+              }
+              return (
+                <>
+                  <button
+                    type="button"
+                    title={t("call.startVoice")}
+                    aria-label={t("call.startVoice")}
+                    className="shrink-0 rounded-md p-2 text-paper-muted hover:bg-ink-3 hover:text-paper"
+                    onClick={() =>
+                      void handleConversationCall(callChannelId, true)
+                    }
+                  >
+                    <Phone className="h-4 w-4" />
+                  </button>
+                  <button
+                    type="button"
+                    title={t("call.startVideo")}
+                    aria-label={t("call.startVideo")}
+                    className="shrink-0 rounded-md p-2 text-paper-muted hover:bg-ink-3 hover:text-paper"
+                    onClick={() =>
+                      void handleConversationCall(callChannelId, true, true)
+                    }
+                  >
+                    <Video className="h-4 w-4" />
+                  </button>
+                </>
+              );
+            })()}
           <button
             type="button"
             className="rounded-md px-2 py-1 text-xs text-signal hover:bg-ink-3"
@@ -2037,9 +2136,9 @@ function MainAppContent({
         </div>
       </header>
       {/* The conversation's call surface: invisible until a call exists, a
-          join banner while others talk, tiles + controls once we are in. */}
+          join banner while others talk, the full stage once we are in. */}
       {activeConversation && user && (
-        <DmCallPanel
+        <DmCallStage
           conversation={activeConversation}
           currentUser={{
             id: user.id,
@@ -2053,6 +2152,8 @@ function MainAppContent({
           onLeave={() => voice.leave()}
           onToggleMute={() => voice.toggleMute()}
           onToggleCamera={() => void voice.toggleCamera()}
+          onStartScreenShare={() => void voice.startScreenShare()}
+          onStopScreenShare={() => void voice.stopScreenShare()}
         />
       )}
       <MessageList

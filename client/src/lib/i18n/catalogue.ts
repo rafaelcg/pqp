@@ -494,6 +494,13 @@ export const en = {
   "call.panel.mute": "Mute",
   "call.panel.unmute": "Unmute",
   "call.startVoice": "Start voice call",
+  "call.startVideo": "Start video call",
+  // The header's join affordance while a call is already live here.
+  "call.header.joinCount": "Join call · {count}",
+  "call.stage.collapse": "Collapse call",
+  "call.stage.expand": "Expand call",
+  "call.stage.duration": "Call duration",
+  "call.stage.selfPreview": "Your camera preview",
 
   // ------------------------------------------------------------ channel meta
   // The channel image is a URL, not an upload — rendered to everyone in the
