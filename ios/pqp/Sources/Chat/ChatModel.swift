@@ -15,6 +15,10 @@ final class ChatModel {
 
     /// The message being replied to, shown above the composer until cleared.
     var replyingTo: Message?
+    /// A timeout notice addressed to us, shown above the composer for this
+    /// channel. The server's `message` field is the whole sentence — rendering
+    /// it verbatim is the contract.
+    var sanction: SanctionNotice?
     /// The message being edited. Mutually exclusive with `replyingTo` — the
     /// composer can only be doing one job at a time.
     var editing: Message?
@@ -43,9 +47,9 @@ final class ChatModel {
         let names = typingNames.keys.sorted()
         switch names.count {
         case 0: return ""
-        case 1: return "\(names[0]) is typing"
-        case 2: return "\(names[0]) and \(names[1]) are typing"
-        default: return "Several people are typing"
+        case 1: return String(localized: "\(names[0]) is typing")
+        case 2: return String(localized: "\(names[0]) and \(names[1]) are typing")
+        default: return String(localized: "Several people are typing")
         }
     }
 
@@ -343,12 +347,44 @@ final class ChatModel {
             guard typingChannelId == channelId else { return }
             typingNames[displayName] = Date()
 
+        case .sanctionNotice(let notice):
+            // Attached to the composer the person is actually looking at; a
+            // notice for some other channel would read as a non sequitur.
+            guard notice.channelId == channelId else { return }
+            sanction = notice
+            // The optimistic rows this notice answers will never be confirmed.
+            messages.removeAll { $0.isPending }
+
+        case .ready:
+            // The socket came back after a gap. Whatever was said while it was
+            // down was never delivered here, so the visible page is refetched
+            // rather than trusted.
+            Task { await reloadAfterReconnect() }
+
         // Voice frames arrive on the same socket and are none of this
         // model's business.
-        case .ready, .presence, .activity, .other,
+        case .presence, .activity, .other,
              .voiceWelcome, .voicePeerJoined, .voicePeerLeft, .voiceRoster,
-             .voiceRoomFull, .voiceOffer, .voiceAnswer, .voiceCandidate:
+             .voiceRoomFull, .voiceTransportUnsupported,
+             .voiceOffer, .voiceAnswer, .voiceCandidate:
             break
+        }
+    }
+
+    private func reloadAfterReconnect() async {
+        guard let session, let channelId else { return }
+        guard let page = try? await session.api.messages(channelId: channelId) else { return }
+        // There is no offline send queue: a frame sent into a dead socket was
+        // dropped. A very recent optimistic row may still get its echo (the
+        // send may have raced the drop), but anything older is gone and keeping
+        // it dimmed forever would claim otherwise.
+        let cutoff = Date().addingTimeInterval(-10)
+        let pending = messages.filter { $0.isPending && $0.createdAt > cutoff }
+        let lost = messages.contains { $0.isPending && $0.createdAt <= cutoff }
+        messages = page.messages + pending
+        hasMore = page.hasMore
+        if lost {
+            error = String(localized: "The connection dropped and some messages were not sent.")
         }
     }
 

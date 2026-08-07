@@ -27,6 +27,7 @@ struct ChannelListView: View {
     @State private var webhooksFor: Channel?
     @State private var memberPickerFor: Channel?
     @State private var current: Server
+    @State private var handlerKey = UUID().uuidString
 
     private var categories: [Channel] {
         channels.filter(\.isCategory).sorted { $0.position < $1.position }
@@ -55,7 +56,7 @@ struct ChannelListView: View {
                 EmptyState(
                     icon: "exclamationmark.triangle",
                     title: "Could not load channels",
-                    message: error,
+                    message: LocalizedStringKey(error),
                     actionTitle: "Try again",
                     action: { Task { await load() } }
                 )
@@ -63,7 +64,7 @@ struct ChannelListView: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 8) {
                         if !textChannels.isEmpty {
-                            SectionLabel(text: "Text")
+                            SectionLabel(text: String(localized: "Text"))
                                 .padding(.horizontal, 4)
                                 .padding(.top, 4)
                             ForEach(textChannels) { channel in
@@ -102,7 +103,7 @@ struct ChannelListView: View {
                         }
 
                         if !voiceChannels.isEmpty {
-                            SectionLabel(text: "Voice")
+                            SectionLabel(text: String(localized: "Voice"))
                                 .padding(.horizontal, 4)
                                 .padding(.top, 12)
                             ForEach(voiceChannels) { channel in
@@ -199,7 +200,33 @@ struct ChannelListView: View {
         } message: {
             Text("You'll need a new invite to get back in.")
         }
-        .task { await load() }
+        .task {
+            await load()
+            // Live badge updates. `channel-activity` is broadcast to every
+            // member; without this the badge only moves on pull-to-refresh,
+            // which makes unread counts look broken next to the web client.
+            session.eventHandlers[handlerKey] = { event in
+                guard case .activity(let channelId, let serverId, let mention) = event,
+                      serverId == server.id else { return }
+                let existing = unread[channelId]
+                unread[channelId] = UnreadEntry(
+                    channelId: channelId,
+                    count: (existing?.count ?? 0) + 1,
+                    mentions: (existing?.mentions ?? 0) + (mention ? 1 : 0)
+                )
+            }
+        }
+        .onDisappear { session.eventHandlers.removeValue(forKey: handlerKey) }
+        // Coming back from a chat re-reads the counts: the chat marked itself
+        // read on the server, and this is what clears its badge locally.
+        .onAppear { Task { await refreshUnread() } }
+    }
+
+    private func refreshUnread() async {
+        guard !channels.isEmpty else { return }
+        if let entries = try? await session.api.unread(serverId: server.id) {
+            unread = Dictionary(uniqueKeysWithValues: entries.map { ($0.channelId, $0) })
+        }
     }
 
     private var isManager: Bool { server.role == "owner" || server.role == "admin" }

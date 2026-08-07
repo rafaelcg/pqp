@@ -59,6 +59,7 @@ private struct ClerkEnvironment: ViewModifier {
 /// exactly one view owns it.
 struct RootView: View {
     @Environment(SessionStore.self) private var session
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         ZStack {
@@ -74,6 +75,12 @@ struct RootView: View {
                         insertion: .opacity,
                         removal: .opacity.combined(with: .scale(scale: 1.04))
                     ))
+            case .ageGate:
+                AgeGateView()
+                    .transition(.opacity)
+            case .blocked:
+                AgeBlockedView()
+                    .transition(.opacity)
             case .ready:
                 HomeView()
                     .transition(.asymmetric(
@@ -84,6 +91,11 @@ struct RootView: View {
         }
         .animation(Motion.gentle, value: session.phase)
         .task { await session.restore() }
+        // Idle is reported on transitions only, exactly as `set-idle` is
+        // specified. Backgrounding is the phone's version of walking away.
+        .onChange(of: scenePhase) { _, phase in
+            session.reportIdle(phase == .background)
+        }
     }
 }
 

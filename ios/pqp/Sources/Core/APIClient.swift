@@ -11,12 +11,12 @@ enum APIError: LocalizedError, Sendable {
     var errorDescription: String? {
         switch self {
         case .unauthorized:
-            "Your session expired. Sign in again."
+            String(localized: "Your session expired. Sign in again.")
         case .notFound(let what):
             what
         case .rateLimited(let retryAfter):
-            retryAfter.map { "Too many requests. Try again in \($0)s." }
-                ?? "Too many requests. Try again shortly."
+            retryAfter.map { String(localized: "Too many requests. Try again in \($0)s.") }
+                ?? String(localized: "Too many requests. Try again shortly.")
         case .server(_, let message):
             message
         case .transport(let message):
@@ -25,7 +25,7 @@ enum APIError: LocalizedError, Sendable {
             // Surfaced rather than swallowed: a decode failure means the client
             // and server disagree about a shape, and a silent empty list makes
             // that look like "no data" for weeks.
-            "Could not read the server's response. \(detail)"
+            String(localized: "Could not read the server's response. \(detail)")
         }
     }
 }
@@ -335,6 +335,14 @@ extension APIClient {
         return response.preferences
     }
 
+    /// Manual status. A top-level key of the same preferences blob, so a
+    /// one-key patch is safe — the merge keeps everything else.
+    func setStatus(_ status: String) async throws -> UserPreferences {
+        struct Body: Encodable { let status: String }
+        let response: PreferencesResponse = try await patch("/api/me/preferences", body: Body(status: status))
+        return response.preferences
+    }
+
     func auditLog(serverId: String) async throws -> [AuditEntry] {
         let response: AuditResponse = try await get("/api/servers/\(serverId)/audit-log")
         return response.entries
@@ -505,6 +513,64 @@ extension APIClient {
         let _: EmptyResponse = try await send(
             path: "/api/servers/\(serverId)/bans/\(userId)",
             method: "DELETE", query: [], body: nil
+        )
+    }
+
+    // MARK: Timeouts
+
+    /// Issue a timeout. Minutes, not an expiry instant — the server anchors
+    /// the end time to its own clock, the one every read compares against.
+    func issueTimeout(serverId: String, userId: String, minutes: Int, reason: String?) async throws {
+        struct Body: Encodable {
+            let userId: String
+            let minutes: Int
+            let reason: String?
+        }
+        let _: EmptyResponse = try await post(
+            "/api/servers/\(serverId)/timeouts",
+            body: Body(userId: userId, minutes: minutes, reason: reason)
+        )
+    }
+
+    func activeTimeouts(serverId: String) async throws -> [MemberTimeout] {
+        struct Response: Decodable { let timeouts: [MemberTimeout] }
+        let response: Response = try await get("/api/servers/\(serverId)/timeouts")
+        return response.timeouts
+    }
+
+    func liftTimeout(serverId: String, userId: String) async throws {
+        let _: EmptyResponse = try await send(
+            path: "/api/servers/\(serverId)/timeouts/\(userId)",
+            method: "DELETE", query: [], body: nil
+        )
+    }
+
+    // MARK: Reports
+
+    /// Report a message. 201 first time, 200 for a duplicate — both succeed.
+    func reportMessage(messageId: String, reason: String, details: String?) async throws {
+        struct Body: Encodable {
+            let subjectType = "message"
+            let messageId: String
+            let reason: String
+            let details: String?
+        }
+        let _: EmptyResponse = try await post(
+            "/api/reports", body: Body(messageId: messageId, reason: reason, details: details)
+        )
+    }
+
+    func reportUser(userId: String, serverId: String?, reason: String, details: String?) async throws {
+        struct Body: Encodable {
+            let subjectType = "user"
+            let userId: String
+            let serverId: String?
+            let reason: String
+            let details: String?
+        }
+        let _: EmptyResponse = try await post(
+            "/api/reports",
+            body: Body(userId: userId, serverId: serverId, reason: reason, details: details)
         )
     }
 

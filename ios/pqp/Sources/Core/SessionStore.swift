@@ -5,6 +5,12 @@ import ClerkKit
 enum SessionPhase: Equatable, Sendable {
     case loading
     case onboarding
+    /// Signed in, but the server refuses every route until a date of birth is
+    /// declared (`GET /api/me` → `ageGate: "pending"`). The realtime socket is
+    /// not even opened in this phase — the server would close it with 4401.
+    case ageGate
+    /// Declared under 18. Terminal: one attempt, no self-serve way out.
+    case blocked
     case ready
 }
 
@@ -113,9 +119,7 @@ final class SessionStore {
             let user = try await withDeadline(seconds: 12) {
                 try await self.api.currentUser()
             }
-            currentUser = user
-            await startRealtime()
-            phase = .ready
+            await route(user)
         } catch {
             // "No session" is the expected state on a first launch, so this is
             // not surfaced as a failure — but a *connection* problem is worth
@@ -128,7 +132,7 @@ final class SessionStore {
                 // not connect to the server."
                 lastError = detail
             } else if error is DeadlineExceeded {
-                lastError = "The server did not respond. Is it running?"
+                lastError = String(localized: "The server did not respond. Is it running?")
             }
             phase = .onboarding
         }
@@ -139,13 +143,63 @@ final class SessionStore {
     func signIn() async {
         do {
             let user = try await api.currentUser()
-            currentUser = user
             lastError = nil
             hasOnboarded = true
-            await startRealtime()
-            phase = .ready
+            await route(user)
         } catch {
             lastError = (error as? APIError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    /// Where a freshly identified account lands. The age gate outranks
+    /// everything: until it says `passed` (or the server predates it and says
+    /// nothing) every other route answers 403 and the socket answers 4401, so
+    /// proceeding to the app would produce a screen of errors.
+    private func route(_ user: CurrentUser) async {
+        currentUser = user
+        switch user.ageGate {
+        case "pending":
+            phase = .ageGate
+        case "blocked":
+            phase = .blocked
+        default:
+            await startRealtime()
+            phase = .ready
+        }
+    }
+
+    /// The one-shot declaration. `POST /api/me/age-check` answers **200 for
+    /// both outcomes** — refusal is a routing decision, not an HTTP error.
+    /// Returns an error sentence to show inline, or nil when routed onward.
+    func submitAgeDeclaration(dateOfBirth: String) async -> String? {
+        struct Body: Encodable { let dateOfBirth: String }
+        struct Response: Decodable { let ageGate: String }
+        do {
+            let response: Response = try await api.post(
+                "/api/me/age-check", body: Body(dateOfBirth: dateOfBirth)
+            )
+            if response.ageGate == "passed" {
+                await refreshCurrentUser()
+                await startRealtime()
+                phase = .ready
+            } else {
+                phase = .blocked
+            }
+            return nil
+        } catch let apiError as APIError {
+            if case .server(let status, _) = apiError, status == 409 {
+                // Already answered — this screen is stale (another device got
+                // there first). The server's record wins; re-read and route.
+                if let user = try? await api.currentUser() {
+                    await route(user)
+                    return nil
+                }
+            }
+            // A 400 is "that date does not exist" and does not consume the
+            // attempt; the server's own sentence is the clearest thing to show.
+            return apiError.errorDescription
+        } catch {
+            return error.localizedDescription
         }
     }
 
@@ -172,6 +226,19 @@ final class SessionStore {
         phase = .onboarding
     }
 
+    /// Whether this device has told the server it is idle. Kept here because
+    /// the flag is socket-scoped server-side: a reconnect wipes it and it has
+    /// to be re-asserted, or a phone in a pocket reads as freshly active.
+    private var reportedIdle = false
+
+    /// Called from scene-phase changes. On a phone "nobody is touching this"
+    /// is the app leaving the foreground — there is no cursor to watch.
+    func reportIdle(_ idle: Bool) {
+        guard phase == .ready, reportedIdle != idle else { return }
+        reportedIdle = idle
+        Task { await realtime.sendIdle(idle) }
+    }
+
     private func startRealtime() async {
         guard eventTask == nil else { return }
         let stream = await realtime.events()
@@ -181,6 +248,10 @@ final class SessionStore {
         eventTask = Task { [weak self] in
             for await event in stream {
                 guard let self else { return }
+                if case .ready = event, self.reportedIdle {
+                    // The new socket does not know what the old one was told.
+                    Task { await self.realtime.sendIdle(true) }
+                }
                 for handler in self.eventHandlers.values {
                     handler(event)
                 }

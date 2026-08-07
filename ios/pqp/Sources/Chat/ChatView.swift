@@ -11,6 +11,7 @@ struct ChatView: View {
     @State private var showingPins = false
     @State private var showingGifs = false
     @State private var emojiTarget: Message?
+    @State private var reportTarget: ReportTarget?
     @State private var pickerItem: PhotosPickerItem?
     @FocusState private var composerFocused: Bool
 
@@ -21,6 +22,7 @@ struct ChatView: View {
             VStack(spacing: 0) {
                 messageList
                 typingRow
+                sanctionRow
                 composerContext
                 attachmentStrip
                 Composer(
@@ -56,6 +58,9 @@ struct ChatView: View {
             EmojiPicker { emoji in
                 Task { await model.toggleReaction(emoji, on: target) }
             }
+        }
+        .sheet(item: $reportTarget) { target in
+            ReportSheet(target: target)
         }
         .photosPicker(isPresented: $showingPicker, selection: $pickerItem, matching: .images)
         .onChange(of: pickerItem) { _, item in
@@ -172,6 +177,15 @@ struct ChatView: View {
             )
         }
 
+        // Reporting your own message makes no sense; everyone else's can be.
+        if !model.isMine(message) && !message.isWebhook {
+            Button(role: .destructive) {
+                reportTarget = .message(id: message.id, authorName: message.authorName)
+            } label: {
+                Label("Report", systemImage: "flag")
+            }
+        }
+
         // Edit and delete are only ever offered on your own messages; the
         // server would refuse anyway, and offering an action that always fails
         // is worse than not offering it.
@@ -232,7 +246,9 @@ struct ChatView: View {
                 Image(systemName: isEdit ? "pencil" : "arrowshape.turn.up.left.fill")
                     .font(.system(size: 11))
                     .foregroundStyle(Palette.signal)
-                Text(isEdit ? "Editing message" : "Replying to \(target.authorName)")
+                Text(isEdit
+                     ? String(localized: "Editing message")
+                     : String(localized: "Replying to \(target.authorName)"))
                     .font(Typography.caption)
                     .foregroundStyle(Palette.paperMuted)
                     .lineLimit(1)
@@ -248,6 +264,37 @@ struct ChatView: View {
             .padding(.horizontal, Metrics.hPadding)
             .padding(.vertical, 8)
             .background(Palette.surface)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
+    }
+
+    /// The timeout notice, rendered verbatim — the server writes the whole
+    /// sentence precisely so clients cannot drift into their own explanations.
+    /// Dismissible, because it re-arrives on the next refused attempt anyway.
+    @ViewBuilder
+    private var sanctionRow: some View {
+        if let sanction = model.sanction {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "hand.raised.fill")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Palette.warning)
+                    .padding(.top, 2)
+                Text(sanction.message)
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.paper)
+                Spacer()
+                Button {
+                    model.sanction = nil
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(Palette.paperMuted)
+                }
+                .accessibilityLabel("Dismiss")
+            }
+            .padding(.horizontal, Metrics.hPadding)
+            .padding(.vertical, 8)
+            .background(Palette.warning.opacity(0.12))
             .transition(.move(edge: .bottom).combined(with: .opacity))
         }
     }
@@ -361,7 +408,8 @@ struct MessageRow: View {
                 // Keeps the text column aligned without repeating the avatar.
                 Color.clear.frame(width: 36, height: 1)
             } else {
-                Avatar(name: message.authorName, seed: message.authorId, size: 36)
+                Avatar(name: message.authorName, seed: message.authorId, size: 36,
+                       url: message.authorAvatarUrl)
             }
 
             VStack(alignment: .leading, spacing: 3) {
@@ -395,7 +443,7 @@ struct MessageRow: View {
                         .italic()
                         .foregroundStyle(Palette.paperMuted)
                 } else if !message.body.isEmpty {
-                    Text(message.body)
+                    MessageBodyText(body: message.body)
                         .font(Typography.body)
                         .foregroundStyle(Palette.paper)
                         .textSelection(.enabled)
@@ -430,6 +478,36 @@ struct MessageRow: View {
     }
 }
 
+/// Message bodies are markdown on the web client, so the same text has to
+/// render the same way here — `**bold**` shown literally reads as a bug to
+/// anyone who typed it on the other platform.
+///
+/// `inlineOnlyPreservingWhitespace` is deliberate: it covers bold, italics,
+/// strikethrough, inline code and links while keeping the author's line breaks,
+/// and it cannot produce block elements (headings, quote bars) that would need
+/// bespoke layout. Parsing failure falls back to the raw text — a message must
+/// never be dropped because its punctuation confused a parser.
+struct MessageBodyText: View {
+    let raw: String
+
+    init(body: String) { raw = body }
+
+    private var attributed: AttributedString {
+        guard var parsed = try? AttributedString(
+            markdown: raw,
+            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        ) else { return AttributedString(raw) }
+        // Links get the accent so they are visibly tappable on the dark ground.
+        for run in parsed.runs where run.link != nil {
+            parsed[run.range].foregroundColor = Palette.signal
+            parsed[run.range].underlineStyle = .single
+        }
+        return parsed
+    }
+
+    var body: some View { Text(attributed) }
+}
+
 struct ReplyChip: View {
     let reply: MessageReplyRef
 
@@ -437,7 +515,9 @@ struct ReplyChip: View {
         HStack(spacing: 5) {
             Image(systemName: "arrowshape.turn.up.left.fill")
                 .font(.system(size: 9))
-            Text(reply.deleted ? "Deleted message" : "\(reply.authorName ?? "Someone"): \(reply.excerpt)")
+            Text(reply.deleted
+                 ? String(localized: "Deleted message")
+                 : "\(reply.authorName ?? String(localized: "Someone")): \(reply.excerpt)")
                 .lineLimit(1)
         }
         .font(Typography.caption)
@@ -452,34 +532,63 @@ struct ReplyChip: View {
 
 struct AttachmentChip: View {
     let attachment: Attachment
+    @Environment(SessionStore.self) private var session
+    @State private var playing = false
+    /// Set when the original presigned URL failed and a fresh one was fetched.
+    @State private var refreshedUrl: URL?
+    @State private var refetched = false
 
     var body: some View {
         // Images are shown, not described. A filename chip for a photo is the
         // one case where the chip is strictly worse than the thing itself.
-        if attachment.isImage, let url = URL(string: attachment.url) {
+        if attachment.isImage, let url = refreshedUrl ?? URL(string: attachment.url) {
             AsyncImage(url: url) { phase in
                 switch phase {
                 case .success(let image):
                     image.resizable().scaledToFit()
                 case .failure:
-                    fileChip
+                    // Presigned URLs expire; ask for a new one exactly once —
+                    // the server route exists for precisely this — then admit
+                    // defeat as a chip rather than a permanently broken frame.
+                    if refetched {
+                        fileChip
+                    } else {
+                        placeholder.task {
+                            refetched = true
+                            if let fresh = try? await session.api.attachmentUrl(id: attachment.id) {
+                                refreshedUrl = URL(string: fresh)
+                            }
+                        }
+                    }
                 default:
-                    RoundedRectangle(cornerRadius: Metrics.cornerRadiusSmall, style: .continuous)
-                        .fill(Palette.surface)
-                        .frame(height: 140)
-                        .overlay(ProgressView().tint(Palette.paperMuted))
+                    placeholder
                 }
             }
             .frame(maxWidth: 260, maxHeight: 260)
             .clipShape(RoundedRectangle(cornerRadius: Metrics.cornerRadiusSmall, style: .continuous))
+        } else if attachment.isPlayable {
+            // Tap-to-play rather than autoplay, matching the web client: a
+            // chat log that starts making noise on scroll is hostile.
+            Button { playing = true } label: { fileChip }
+                .buttonStyle(.plain)
+                .fullScreenCover(isPresented: $playing) {
+                    MediaPlayerView(attachment: attachment)
+                }
         } else {
             fileChip
         }
     }
 
+    private var placeholder: some View {
+        RoundedRectangle(cornerRadius: Metrics.cornerRadiusSmall, style: .continuous)
+            .fill(Palette.surface)
+            .frame(height: 140)
+            .overlay(ProgressView().tint(Palette.paperMuted))
+    }
+
     private var fileChip: some View {
         HStack(spacing: 8) {
-            Image(systemName: attachment.isImage ? "photo" : "doc")
+            Image(systemName: chipIcon)
                 .foregroundStyle(Palette.signal)
             VStack(alignment: .leading, spacing: 1) {
                 Text(attachment.filename)
@@ -490,9 +599,21 @@ struct AttachmentChip: View {
                     .font(.system(size: 10))
                     .foregroundStyle(Palette.paperMuted)
             }
+            if attachment.isPlayable {
+                Image(systemName: "play.circle.fill")
+                    .font(.system(size: 20))
+                    .foregroundStyle(Palette.signal)
+            }
         }
         .padding(10)
         .pqpSurface(cornerRadius: Metrics.cornerRadiusSmall)
+    }
+
+    private var chipIcon: String {
+        if attachment.isImage { return "photo" }
+        if attachment.isVideo { return "film" }
+        if attachment.isAudio { return "waveform" }
+        return "doc"
     }
 }
 

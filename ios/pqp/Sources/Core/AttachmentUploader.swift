@@ -96,6 +96,14 @@ extension APIClient {
     func attachmentConfig() async throws -> AttachmentConfig {
         try await get("/api/attachments/config")
     }
+
+    /// A freshly signed URL for an attachment whose presigned link has expired.
+    /// The server answers 404 both for "gone" and "not yours to see".
+    func attachmentUrl(id: String) async throws -> String {
+        struct Response: Decodable { let url: String }
+        let response: Response = try await get("/api/attachments/\(id)/url")
+        return response.url
+    }
 }
 
 extension PendingAttachment {

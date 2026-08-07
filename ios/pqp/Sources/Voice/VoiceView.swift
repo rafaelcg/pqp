@@ -56,12 +56,12 @@ struct VoiceView: View {
 
     private var statusText: String {
         switch model.status {
-        case .idle: "Not connected"
-        case .joining: "Connecting…"
+        case .idle: String(localized: "Not connected")
+        case .joining: String(localized: "Connecting…")
         case .connected:
             model.peers.isEmpty
-                ? "You're the only one here"
-                : "\(model.participantCount) in this channel"
+                ? String(localized: "You're the only one here")
+                : String(localized: "\(model.participantCount) in this channel")
         case .failed(let message): message
         }
     }

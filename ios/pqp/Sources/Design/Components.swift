@@ -63,6 +63,10 @@ struct Avatar: View {
     let seed: String
     var size: CGFloat = 40
     var isSpeaking: Bool = false
+    /// A real avatar when the account has one; the monogram is the fallback,
+    /// not the feature. Passed as the raw string the API sent — a nil or junk
+    /// URL just means the monogram shows, never a broken frame.
+    var url: String? = nil
 
     private var initials: String {
         let parts = name.split(separator: " ").prefix(2)
@@ -79,7 +83,35 @@ struct Avatar: View {
         return Double(hash % 360) / 360
     }
 
+    private var imageUrl: URL? {
+        guard let url, let parsed = URL(string: url),
+              parsed.scheme == "https" || parsed.scheme == "http" else { return nil }
+        return parsed
+    }
+
     var body: some View {
+        ZStack {
+            monogram
+            if let imageUrl {
+                AsyncImage(url: imageUrl) { image in
+                    image.resizable().scaledToFill()
+                } placeholder: {
+                    // The monogram underneath is the placeholder.
+                    Color.clear
+                }
+                .frame(width: size, height: size)
+                .clipShape(Circle())
+            }
+        }
+        .overlay(
+            Circle()
+                .strokeBorder(Palette.signal, lineWidth: isSpeaking ? 2.5 : 0)
+                .padding(-3)
+        )
+        .animation(Motion.standard, value: isSpeaking)
+    }
+
+    private var monogram: some View {
         Text(initials)
             .font(.system(size: size * 0.38, weight: .bold, design: .rounded))
             .foregroundStyle(Palette.inkDeep)
@@ -89,12 +121,6 @@ struct Avatar: View {
                     Color(hue: hue, saturation: 0.55, brightness: 0.82)
                 )
             )
-            .overlay(
-                Circle()
-                    .strokeBorder(Palette.signal, lineWidth: isSpeaking ? 2.5 : 0)
-                    .padding(-3)
-            )
-            .animation(Motion.standard, value: isSpeaking)
     }
 }
 
@@ -115,9 +141,11 @@ struct SectionLabel: View {
 /// difference between "broken" and "ready".
 struct EmptyState: View {
     let icon: String
-    let title: String
-    let message: String
-    var actionTitle: String?
+    /// Keys, not strings — the literals at call sites are what the string
+    /// catalog translates, and a `String` parameter silently opts out of that.
+    let title: LocalizedStringKey
+    let message: LocalizedStringKey
+    var actionTitle: LocalizedStringKey?
     var action: (() -> Void)?
 
     var body: some View {

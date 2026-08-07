@@ -18,16 +18,16 @@ struct OnboardingView: View {
 
     private let beats: [(title: String, body: String)] = [
         (
-            "Your friends.\nYour server.\nYour mess.",
-            "Group chat you actually own. Text that flies, voice that doesn't flake."
+            String(localized: "Your friends.\nYour server.\nYour mess."),
+            String(localized: "Group chat you actually own. Text that flies, voice that doesn't flake.")
         ),
         (
-            "Rooms for\neverything.",
-            "Servers, channels, DMs. Voice you can drop into without scheduling it first."
+            String(localized: "Rooms for\neverything."),
+            String(localized: "Servers, channels, DMs. Voice you can drop into without scheduling it first.")
         ),
         (
-            "Yours to keep.",
-            "Open source. Self-host it, or use the hosted one. Same product either way."
+            String(localized: "Yours to keep."),
+            String(localized: "Open source. Self-host it, or use the hosted one. Same product either way.")
         ),
     ]
 

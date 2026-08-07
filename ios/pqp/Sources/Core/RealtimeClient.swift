@@ -14,18 +14,37 @@ enum RealtimeEvent: Sendable {
     case typing(channelId: String, userId: String, displayName: String)
     case presence(channelId: String, users: [PresenceUser])
     case activity(channelId: String, serverId: String?, mention: Bool)
+    /// The one WS refusal that explains itself. Every other refused frame is a
+    /// silent drop; this one is unicast to the person who tried, so the client
+    /// can say why the send vanished instead of showing a bug-shaped nothing.
+    case sanctionNotice(SanctionNotice)
 
     // Voice signalling. The server is a pure relay for offer/answer/candidate;
     // everything else here is room membership.
-    case voiceWelcome(peerId: String, voiceChannelId: String, peers: [VoiceParticipant], selfPeer: VoiceParticipant)
+    case voiceWelcome(peerId: String, voiceChannelId: String, peers: [VoiceParticipant],
+                      selfPeer: VoiceParticipant, transport: String?)
     case voicePeerJoined(VoiceParticipant)
     case voicePeerLeft(peerId: String)
     case voiceRoster(voiceChannelId: String, participants: [VoiceParticipant])
     case voiceRoomFull(limit: Int)
+    /// The server refused the join because this room is pinned to a transport
+    /// we declared we cannot do. Nobody ever saw us in the roster.
+    case voiceTransportUnsupported(voiceChannelId: String, transport: String)
     case voiceOffer(from: String, sdp: String)
     case voiceAnswer(from: String, sdp: String)
     case voiceCandidate(from: String, candidate: IceCandidatePayload?)
     case other
+}
+
+/// `sanctionNoticeSchema` — currently always a timeout. `message` is the whole
+/// sentence, pre-written by the server; rendering it verbatim is correct.
+struct SanctionNotice: Codable, Hashable, Sendable {
+    let sanction: String
+    let serverId: String
+    let channelId: String
+    let expiresAt: Date
+    let reason: String?
+    let message: String
 }
 
 struct VoiceParticipant: Codable, Identifiable, Hashable, Sendable {
@@ -91,6 +110,15 @@ actor RealtimeClient {
     private var reconnectAttempt = 0
     private var joinedChannelId: String?
     private var isStopped = false
+    private var pingTask: Task<Void, Never>?
+    private var missedPongs = 0
+
+    /// Matches the web client (`PING_INTERVAL_MS` / `MAX_MISSED_PONGS`). The
+    /// server answers `{"type":"ping"}` with `{"type":"pong"}`; two misses in a
+    /// row means the link is dead even though the OS still thinks it is open —
+    /// which is exactly the state a phone leaving Wi-Fi produces.
+    private static let pingInterval: Duration = .seconds(20)
+    private static let maxMissedPongs = 2
 
     init(backend: Backend = .current, tokenProvider: any TokenProviding) {
         self.backend = backend
@@ -121,6 +149,8 @@ actor RealtimeClient {
 
     func stop() {
         isStopped = true
+        pingTask?.cancel()
+        pingTask = nil
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
         joinedChannelId = nil
@@ -150,6 +180,32 @@ actor RealtimeClient {
         if let joinedChannelId {
             await send(raw: ["type": "join-channel", "channelId": joinedChannelId])
         }
+
+        startHeartbeat()
+    }
+
+    private func startHeartbeat() {
+        pingTask?.cancel()
+        missedPongs = 0
+        pingTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: RealtimeClient.pingInterval)
+                guard !Task.isCancelled, let self else { return }
+                await self.beat()
+            }
+        }
+    }
+
+    private func beat() async {
+        guard !isStopped, let socket = task else { return }
+        if missedPongs >= Self.maxMissedPongs {
+            // Killing the socket makes the pending receive fail, which is the
+            // one path that already knows how to reconnect — no second one.
+            socket.cancel(with: .abnormalClosure, reason: nil)
+            return
+        }
+        missedPongs += 1
+        await send(raw: ["type": "ping"])
     }
 
     private func listen() {
@@ -164,7 +220,7 @@ actor RealtimeClient {
         switch result {
         case .success(let message):
             if case .string(let text) = message, let data = text.data(using: .utf8) {
-                decode(data)
+                ingest(data)
             }
             listen()
         case .failure:
@@ -224,7 +280,16 @@ actor RealtimeClient {
     // MARK: - Voice
 
     func joinVoice(channelId: String) async {
-        await send(raw: ["type": "join-voice-room", "voiceChannelId": channelId])
+        // `transports` is a capability declaration, not a preference. This
+        // client only speaks mesh; saying so lets the server refuse a
+        // LiveKit-pinned room *before* a peer exists, instead of us appearing
+        // in the roster and then hearing nobody. Omitting it means "assume
+        // everything", which is a lie here.
+        await send(raw: [
+            "type": "join-voice-room",
+            "voiceChannelId": channelId,
+            "transports": ["mesh"],
+        ])
     }
 
     func leaveVoice() async {
@@ -262,6 +327,12 @@ actor RealtimeClient {
         await send(raw: ["type": "typing", "channelId": channelId])
     }
 
+    /// Idle is socket-scoped and dies with the connection, so the caller must
+    /// re-send it after a reconnect if the device is still asleep.
+    func sendIdle(_ idle: Bool) async {
+        await send(raw: ["type": "set-idle", "idle": idle])
+    }
+
     func toggleReaction(channelId: String, messageId: String, emoji: String) async {
         await send(raw: [
             "type": "reaction-toggle",
@@ -297,18 +368,58 @@ actor RealtimeClient {
         let from: String?
         let candidate: IceCandidatePayload?
         let limit: Int?
+        let transport: String?
 
         enum CodingKeys: String, CodingKey {
             case type, nonce, message, channelId, messageId, emoji, userId
             case displayName, added, users, serverId, mention
             case peerId, voiceChannelId, peers, participants, peer, sdp, from
-            case candidate, limit
+            case candidate, limit, transport
             // `self` is a Swift keyword, so the wire key is remapped.
             case selfPeer = "self"
         }
     }
 
-    private func decode(_ data: Data) {
+    /// `sanction-notice` reuses the key `message` for a *string* where every
+    /// chat frame uses it for an object, so it cannot share the envelope — the
+    /// shared decode would fail on exactly the frame that explains a refusal.
+    private struct SanctionFrame: Decodable {
+        let sanction: String
+        let serverId: String
+        let channelId: String
+        let expiresAt: Date
+        let reason: String?
+        let message: String
+    }
+
+    private struct TypeProbe: Decodable { let type: String }
+
+    /// Internal rather than private so tests can feed frames straight in —
+    /// the decode rules ARE the wire contract, and they are exactly the kind
+    /// of thing that silently drifts.
+    func ingest(_ data: Data) {
+        guard let probe = try? Coding.decoder.decode(TypeProbe.self, from: data) else {
+            return
+        }
+
+        if probe.type == "pong" {
+            missedPongs = 0
+            return
+        }
+
+        if probe.type == "sanction-notice" {
+            guard let frame = try? Coding.decoder.decode(SanctionFrame.self, from: data) else { return }
+            continuation?.yield(.sanctionNotice(SanctionNotice(
+                sanction: frame.sanction,
+                serverId: frame.serverId,
+                channelId: frame.channelId,
+                expiresAt: frame.expiresAt,
+                reason: frame.reason,
+                message: frame.message
+            )))
+            return
+        }
+
         guard let envelope = try? Coding.decoder.decode(Envelope.self, from: data) else {
             return
         }
@@ -317,6 +428,7 @@ actor RealtimeClient {
         switch envelope.type {
         case "ready":
             reconnectAttempt = 0
+            missedPongs = 0
             statusHandler?(.online)
             event = .ready
         case "message-broadcast":
@@ -353,7 +465,8 @@ actor RealtimeClient {
                   let voiceChannelId = envelope.voiceChannelId,
                   let selfPeer = envelope.selfPeer else { return }
             event = .voiceWelcome(peerId: peerId, voiceChannelId: voiceChannelId,
-                                  peers: envelope.peers ?? [], selfPeer: selfPeer)
+                                  peers: envelope.peers ?? [], selfPeer: selfPeer,
+                                  transport: envelope.transport)
         case "peer-joined":
             guard let peer = envelope.peer else { return }
             event = .voicePeerJoined(peer)
@@ -366,6 +479,10 @@ actor RealtimeClient {
                                  participants: envelope.participants ?? [])
         case "voice-room-full":
             event = .voiceRoomFull(limit: envelope.limit ?? 0)
+        case "voice-transport-unsupported":
+            guard let voiceChannelId = envelope.voiceChannelId,
+                  let transport = envelope.transport else { return }
+            event = .voiceTransportUnsupported(voiceChannelId: voiceChannelId, transport: transport)
         case "offer":
             guard let from = envelope.from, let sdp = envelope.sdp else { return }
             event = .voiceOffer(from: from, sdp: sdp)

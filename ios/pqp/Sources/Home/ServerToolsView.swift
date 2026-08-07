@@ -28,7 +28,7 @@ struct InviteView: View {
                         EmptyState(
                             icon: "exclamationmark.triangle",
                             title: "Can't manage invites",
-                            message: error
+                            message: LocalizedStringKey(error)
                         )
                     } else if invites.isEmpty {
                         EmptyState(

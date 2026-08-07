@@ -40,9 +40,40 @@ final class HomeModel {
     var error: String?
 
     private var session: SessionStore?
+    private let handlerKey = "home-" + UUID().uuidString
 
     func load(session: SessionStore) async {
         self.session = session
+        // Keeps the Messages tab honest while it is not on screen: activity in
+        // a DM (serverId is nil on those frames) bumps the row immediately
+        // instead of waiting for a pull-to-refresh.
+        session.eventHandlers[handlerKey] = { [weak self] event in
+            guard let self,
+                  case .activity(let channelId, let serverId, let mention) = event,
+                  serverId == nil else { return }
+            guard let index = self.conversations.firstIndex(where: { $0.channelId == channelId })
+            else {
+                // A conversation this list has never seen — someone opened a
+                // brand-new DM to us. Only the server knows who is in it.
+                Task { await self.refresh() }
+                return
+            }
+            let old = self.conversations[index]
+            self.conversations[index] = DmSummary(
+                channelId: old.channelId,
+                kind: old.kind,
+                participants: old.participants,
+                lastMessageAt: Date(),
+                unread: DmUnread(
+                    count: old.unread.count + 1,
+                    mentions: old.unread.mentions + (mention ? 1 : 0)
+                )
+            )
+            // Freshest first, the way the server orders the list.
+            self.conversations.sort {
+                ($0.lastMessageAt ?? .distantPast) > ($1.lastMessageAt ?? .distantPast)
+            }
+        }
         await refresh()
     }
 
@@ -210,6 +241,9 @@ struct ConversationListView: View {
                 .refreshable { await model.refresh() }
             }
         }
+        // Coming back from a thread re-reads the list — the thread marked
+        // itself read server-side and this clears its badge here.
+        .onAppear { Task { await model.refresh() } }
         .navigationTitle("Messages")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -240,7 +274,8 @@ struct ConversationRow: View {
             Avatar(
                 name: conversation.participants.first?.displayName ?? "?",
                 seed: conversation.channelId,
-                size: 46
+                size: 46,
+                url: conversation.kind == "dm" ? conversation.participants.first?.avatarUrl : nil
             )
 
             VStack(alignment: .leading, spacing: 3) {
@@ -286,6 +321,15 @@ struct UnreadBadge: View {
 struct ProfileView: View {
     @Environment(SessionStore.self) private var session
     @State private var showingSettings = false
+    @State private var manualStatus = "online"
+
+    /// Only the two assertable states plus the default. `idle` is absent on
+    /// purpose — it is a fact the device reports, not an opinion to pick.
+    private let statusChoices: [(value: String, label: LocalizedStringKey, dot: String)] = [
+        ("online", "Online", "online"),
+        ("dnd", "Do not disturb", "dnd"),
+        ("invisible", "Invisible", "offline"),
+    ]
 
     var body: some View {
         ZStack {
@@ -293,7 +337,7 @@ struct ProfileView: View {
 
             VStack(spacing: 20) {
                 if let user = session.currentUser {
-                    Avatar(name: user.displayName, seed: user.id, size: 84)
+                    Avatar(name: user.displayName, seed: user.id, size: 84, url: user.avatarUrl)
                         .padding(.top, 24)
 
                     VStack(spacing: 4) {
@@ -307,7 +351,10 @@ struct ProfileView: View {
                         }
                     }
 
-                    ConnectionPill(status: session.realtimeStatus)
+                    HStack(spacing: 10) {
+                        statusMenu
+                        ConnectionPill(status: session.realtimeStatus)
+                    }
                 }
 
                 Spacer()
@@ -326,6 +373,44 @@ struct ProfileView: View {
         }
         .navigationTitle("You")
         .sheet(isPresented: $showingSettings) { AccountSettingsView() }
+        .task {
+            manualStatus = (try? await session.api.preferences())?.status ?? "online"
+        }
+    }
+
+    private var statusMenu: some View {
+        Menu {
+            ForEach(statusChoices, id: \.value) { choice in
+                Button {
+                    let previous = manualStatus
+                    manualStatus = choice.value
+                    Task {
+                        do {
+                            _ = try await session.api.setStatus(choice.value)
+                        } catch {
+                            // The server is the record; a failed set must not
+                            // leave the menu claiming a status nobody else sees.
+                            manualStatus = previous
+                        }
+                    }
+                } label: {
+                    Label(choice.label, systemImage: manualStatus == choice.value ? "checkmark" : "circle")
+                }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                StatusDot(status: statusChoices.first { $0.value == manualStatus }?.dot)
+                Text(statusChoices.first { $0.value == manualStatus }?.label ?? "Online")
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.paperMuted)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 9))
+                    .foregroundStyle(Palette.paperMuted)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Capsule().fill(Palette.surface))
+        }
     }
 }
 
@@ -336,11 +421,11 @@ struct ConnectionPill: View {
 
     private var label: String {
         switch status {
-        case .online: "Connected"
-        case .connecting: "Connecting…"
-        case .reconnecting: "Reconnecting…"
-        case .unauthorized: "Signed out"
-        case .idle: "Offline"
+        case .online: String(localized: "Connected")
+        case .connecting: String(localized: "Connecting…")
+        case .reconnecting: String(localized: "Reconnecting…")
+        case .unauthorized: String(localized: "Signed out")
+        case .idle: String(localized: "Offline")
         }
     }
 

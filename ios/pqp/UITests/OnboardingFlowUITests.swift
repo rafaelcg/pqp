@@ -9,6 +9,11 @@ import XCTest
 final class OnboardingFlowUITests: XCTestCase {
     override func setUp() {
         continueAfterFailure = false
+        // The 18+ gate outranks every route. A reset database leaves the dev
+        // user pending, at which point the app (correctly) shows the age gate
+        // instead of the server list — so the answer is put on file before
+        // any launch, exactly as a real signed-in user would have done.
+        TestSeed.passAgeGate(self)
     }
 
     private func launchFresh() -> XCUIApplication {
@@ -151,6 +156,7 @@ final class LaunchResilienceUITests: XCTestCase {
 /// wire calls as much as the UI: a reaction goes out over the WebSocket, an
 /// edit over HTTP, and both come back as broadcasts.
 final class MessageActionUITests: XCTestCase {
+    // `createServer` passes the age gate itself, so no extra setup here.
     private var seeded: TestSeed.SeededServer?
     private var serverName: String { seeded?.name ?? "" }
 

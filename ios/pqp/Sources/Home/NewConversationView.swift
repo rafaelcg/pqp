@@ -46,8 +46,8 @@ struct NewConversationView: View {
                         ProgressView().tint(Palette.signal).padding(.top, 20)
                     } else if results.isEmpty && !query.isEmpty {
                         Text(looksLikeTag
-                             ? "No one with that tag."
-                             : "No matches. Try their full handle, like name#1234.")
+                             ? String(localized: "No one with that tag.")
+                             : String(localized: "No matches. Try their full handle, like name#1234."))
                             .font(Typography.callout)
                             .foregroundStyle(Palette.paperMuted)
                             .multilineTextAlignment(.center)
@@ -155,8 +155,8 @@ struct NewConversationView: View {
 
     private var startLabel: String {
         selected.count == 1
-            ? "Message \(selected[0].displayName)"
-            : "Start group with \(selected.count)"
+            ? String(localized: "Message \(selected[0].displayName)")
+            : String(localized: "Start group with \(selected.count)")
     }
 
     private func toggle(_ user: PublicUser) {
@@ -165,7 +165,7 @@ struct NewConversationView: View {
         } else if selected.count < 9 {
             selected.append(user)
         } else {
-            error = "A group conversation tops out at nine people."
+            error = String(localized: "A group conversation tops out at nine people.")
         }
     }
 
@@ -194,7 +194,7 @@ private struct UserRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Avatar(name: user.displayName, seed: user.id, size: 40)
+            Avatar(name: user.displayName, seed: user.id, size: 40, url: user.avatarUrl)
             VStack(alignment: .leading, spacing: 2) {
                 Text(user.displayName)
                     .font(Typography.bodyMedium)

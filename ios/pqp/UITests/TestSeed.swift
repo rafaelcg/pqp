@@ -17,12 +17,34 @@ enum TestSeed {
         let name: String
     }
 
+    /// Answers the 18+ gate for the dev-bypass user.
+    ///
+    /// The gate outranks every other route — a freshly reset database leaves
+    /// the dev user `pending` and every seed call (and the app itself) answers
+    /// 403 until a date of birth is on file. Idempotent by design: a 200 means
+    /// it just passed, a 409 means it was already answered; both are fine and
+    /// anything else will surface as the seed failure it causes.
+    static func passAgeGate(_ test: XCTestCase) {
+        var request = URLRequest(url: URL(string: "\(apiBase)/api/me/age-check")!)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer dev-local-token", forHTTPHeaderField: "Authorization")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["dateOfBirth": "1990-01-01"])
+
+        let done = XCTestExpectation(description: "pass age gate")
+        URLSession.shared.dataTask(with: request) { _, _, _ in done.fulfill() }.resume()
+        test.wait(for: [done], timeout: 15)
+    }
+
     /// Creates a server and returns it. Unique per call so concurrent tests
     /// cannot collide — and **must be deleted again** in `tearDown`, or the
     /// server list grows every run and this whole problem simply moves up a
     /// level. It did: seeding without cleanup put 24 servers in the list and
     /// reintroduced the timeouts that seeding was meant to fix.
     static func createServer(_ test: XCTestCase, prefix: String = "UITest") -> SeededServer {
+        // Every seed path needs the gate passed first; doing it here means no
+        // test can forget.
+        passAgeGate(test)
         let name = "\(prefix) \(Int.random(in: 100_000...999_999))"
 
         var request = URLRequest(url: URL(string: "\(apiBase)/api/servers")!)

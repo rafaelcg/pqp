@@ -4,6 +4,11 @@
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>en</string>
+		<string>pt-BR</string>
+	</array>
 	<key>CFBundleDisplayName</key>
 	<string>pqp</string>
 	<key>CFBundleExecutable</key>
@@ -26,6 +31,10 @@
 	<string>$(CLERK_PUBLISHABLE_KEY)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<!-- Standard HTTPS/WSS only — the exempt category. Declaring it here means
+	     TestFlight uploads skip the export-compliance question every build. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>UILaunchScreen</key>
 	<dict>
 		<key>UIColorName</key>

@@ -58,7 +58,7 @@ final class VoiceModel {
         // speak in, then discovering the mic is refused, is a worse first
         // experience than being asked plainly up front.
         guard await requestMicrophone() else {
-            status = .failed("Microphone access is off. Enable it in Settings to talk.")
+            status = .failed(String(localized: "Microphone access is off. Enable it in Settings to talk."))
             return
         }
 
@@ -148,8 +148,26 @@ final class VoiceModel {
                 await session?.realtime.joinVoice(channelId: intendedChannel.id)
             }
 
-        case .voiceWelcome(let peerId, let voiceChannelId, let existing, _):
+        case .voiceWelcome(let peerId, let voiceChannelId, let existing, _, let transport):
             guard voiceChannelId == channelId else { return }
+            // The room's transport is pinned by the server and binding. A
+            // client that cannot speak it must refuse — joining anyway puts us
+            // in the roster looking permanently muted to everyone else, which
+            // is worse than an honest no. Absent means a pre-SFU server, which
+            // is mesh by definition. We declare `transports: ["mesh"]` on join,
+            // so a current server refuses us before this point; this branch is
+            // the belt to that suspender.
+            if let transport, transport != "mesh" {
+                Task {
+                    await session?.realtime.leaveVoice()
+                    await voice.disconnectAll()
+                }
+                status = .failed(String(
+                    localized: "This voice channel runs on \(transport), which the iOS app cannot join yet."
+                ))
+                intendedChannel = nil
+                return
+            }
             selfPeerId = peerId
             status = .connected
             Task {
@@ -175,7 +193,15 @@ final class VoiceModel {
             Task { await voice.remove(peerId: peerId) }
 
         case .voiceRoomFull(let limit):
-            status = .failed("This voice channel is full (max \(limit)).")
+            status = .failed(String(localized: "This voice channel is full (max \(limit))."))
+
+        case .voiceTransportUnsupported(let voiceChannelId, let transport):
+            guard voiceChannelId == channelId else { return }
+            // Refused before a peer ever existed — nobody saw us appear.
+            intendedChannel = nil
+            status = .failed(String(
+                localized: "This voice channel runs on \(transport), which the iOS app cannot join yet."
+            ))
 
         case .voiceOffer(let from, let sdp):
             Task { await voice.handleOffer(from: from, sdp: sdp) }

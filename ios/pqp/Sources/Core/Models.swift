@@ -15,6 +15,11 @@ struct CurrentUser: Codable, Identifiable, Hashable, Sendable {
     let tag: String?
     let avatarUrl: String?
     var dmPrivacy: String?
+    /// `"pending" | "passed" | "blocked"`. Only ever sent to the account's own
+    /// owner. Absent means the API predates the gate — which reads as *passed*,
+    /// matching the web client; a gate the server does not enforce must not be
+    /// invented client-side, because its `POST /api/me/age-check` would 404.
+    var ageGate: String?
 }
 
 struct PublicUser: Codable, Identifiable, Hashable, Sendable {
@@ -78,6 +83,10 @@ struct Attachment: Codable, Identifiable, Hashable, Sendable {
     let url: String
 
     var isImage: Bool { contentType.hasPrefix("image/") }
+    var isVideo: Bool { contentType.hasPrefix("video/") }
+    var isAudio: Bool { contentType.hasPrefix("audio/") }
+    /// Playable in place rather than shown or listed.
+    var isPlayable: Bool { isVideo || isAudio }
 }
 
 struct Embed: Codable, Hashable, Sendable {
@@ -216,7 +225,7 @@ struct DmSummary: Codable, Identifiable, Hashable, Sendable {
 
     /// Group conversations have no name of their own; the participants are it.
     var title: String {
-        if participants.isEmpty { return "Empty conversation" }
+        if participants.isEmpty { return String(localized: "Empty conversation") }
         return participants.map(\.displayName).joined(separator: ", ")
     }
 }
@@ -229,6 +238,10 @@ struct ServerMember: Codable, Identifiable, Hashable, Sendable {
     let tag: String?
     let avatarUrl: String?
     let role: String
+    /// `"online" | "idle" | "dnd" | "offline"`, resolved live by the server.
+    /// `invisible` never appears here — it is reported as `offline`, and that
+    /// privacy rule is the server's to enforce, not ours to reconstruct.
+    var status: String?
 }
 
 // MARK: - Response envelopes
@@ -314,6 +327,48 @@ struct ServerBan: Codable, Identifiable, Hashable, Sendable {
 
 struct BansResponse: Codable, Sendable { let bans: [ServerBan] }
 
+/// `memberTimeoutSchema` — an active timeout as a moderator sees it.
+struct MemberTimeout: Codable, Identifiable, Hashable, Sendable {
+    let userId: String
+    let displayName: String
+    let tag: String?
+    let issuedById: String?
+    let issuedByName: String?
+    let reason: String?
+    let createdAt: Date
+    let expiresAt: Date
+
+    var id: String { userId }
+}
+
+/// The report reasons, exactly as `REPORT_REASONS` orders them. The raw value
+/// is the wire string; the label is what a person reads.
+enum ReportReason: String, CaseIterable, Identifiable, Sendable {
+    case spam
+    case harassment
+    case hateSpeech = "hate_speech"
+    case violence
+    case sexualContent = "sexual_content"
+    case selfHarm = "self_harm"
+    case illegalContent = "illegal_content"
+    case other
+
+    var id: String { rawValue }
+
+    var label: LocalizedStringResource {
+        switch self {
+        case .spam: "Spam"
+        case .harassment: "Harassment"
+        case .hateSpeech: "Hate speech"
+        case .violence: "Violence or threats"
+        case .sexualContent: "Sexual content"
+        case .selfHarm: "Self-harm"
+        case .illegalContent: "Illegal content"
+        case .other: "Something else"
+        }
+    }
+}
+
 struct Gif: Codable, Identifiable, Hashable, Sendable {
     let id: String
     let url: String
@@ -369,6 +424,8 @@ struct UserPreferences: Codable, Hashable, Sendable {
     var outputVolume: Double?
     var notifications: NotificationPreferences?
     var showLinkEmbeds: Bool?
+    /// Manual status: `"online" | "dnd" | "invisible"`. Absent means online.
+    var status: String?
 }
 
 struct PreferencesResponse: Codable, Sendable { let preferences: UserPreferences }

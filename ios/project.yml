@@ -10,6 +10,9 @@ options:
     iOS: "17.0"
   createIntermediateGroups: true
   groupSortPosition: top
+  # The audience is Brazilian; pt-BR ships alongside English.
+  knownRegions: [en, pt-BR]
+  developmentLanguage: en
 
 packages:
   Clerk:

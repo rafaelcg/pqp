@@ -13,10 +13,20 @@ final class AttachmentUploadTests: XCTestCase {
     private var api: APIClient!
     private var uploader: AttachmentUploader!
 
-    override func setUp() {
-        super.setUp()
+    override func setUp() async throws {
         api = APIClient(backend: .local, tokenProvider: DevTokenProvider())
         uploader = AttachmentUploader(api: api, backend: .local)
+        // The 18+ gate refuses every route until answered, and a freshly reset
+        // database resets the answer. Idempotent: a 409 means it is already on
+        // file, which is the state this wants.
+        struct Body: Encodable { let dateOfBirth: String }
+        struct Response: Decodable { let ageGate: String }
+        do {
+            let _: Response = try await api.post("/api/me/age-check", body: Body(dateOfBirth: "1990-01-01"))
+        } catch {
+            // Already answered (409) — fine. Anything else will fail the test
+            // properly on its first real call.
+        }
     }
 
     /// A tiny valid PNG, built rather than bundled so the test carries no
