@@ -172,7 +172,11 @@ export function UserSearch({
           id={listboxId}
           label={label}
           heading="People"
-          placement="below"
+          // In flow, not floating: this field lives inside a dialog whose body
+          // scrolls and whose panel clips, so an absolutely positioned menu is
+          // drawn inside that clip and gets cut off at the panel's edge. Taking
+          // real space makes the results part of what the dialog scrolls.
+          placement="inline"
           emptyLabel={
             failed
               ? "Search is unavailable right now."
