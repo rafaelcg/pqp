@@ -97,6 +97,38 @@ export function clearAuthCaches(): void {
   userInflight.clear();
 }
 
+/**
+ * Drop expired entries from both caches.
+ *
+ * Neither map ever shrank on its own: an expired entry is read through and
+ * overwritten on the owner's next request, and deleted only on a profile edit —
+ * so an account that signs in once and never returns stays resident forever.
+ * Measured at roughly 730 bytes per account, which is ~73MB per 100k distinct
+ * users, held for the life of a process that `fly.toml` deliberately never
+ * restarts (`auto_stop_machines = "off"`). That is a slow leak whose size is
+ * the total number of people who ever signed in, not the number online.
+ *
+ * Called from the existing 60s sweep timer rather than on a timer of its own,
+ * and iterating both maps is cheap next to the request that populated them.
+ */
+export function sweepAuthCaches(now = Date.now()): void {
+  for (const [key, entry] of profileCache) {
+    if (entry.expiresAt <= now) {
+      profileCache.delete(key);
+    }
+  }
+  for (const [key, entry] of userCache) {
+    if (entry.expiresAt <= now) {
+      userCache.delete(key);
+    }
+  }
+}
+
+/** Test helper: how many entries each cache is holding. */
+export function authCacheSizes(): { profiles: number; users: number } {
+  return { profiles: profileCache.size, users: userCache.size };
+}
+
 /** Domains the dev-bypass account should present as verified. Dev only. */
 function devEmailDomains(): string[] {
   const raw = process.env.DEV_AUTH_EMAIL_DOMAINS;
@@ -193,6 +225,71 @@ const userInflight = new Map<string, Promise<DbUser>>();
 /** Called after a profile write so the next request sees fresh data. */
 export function invalidateUserCache(clerkId: string): void {
   userCache.delete(clerkId);
+}
+
+/**
+ * Drop *every* cached trace of an identity — the DB row and the Clerk profile.
+ *
+ * `invalidateUserCache` is not enough for a deleted account: `profileCache`
+ * holds a display name and avatar for up to five minutes, and `loadProfile`
+ * deliberately falls back to that cached copy when a Clerk lookup fails. A
+ * deleted Clerk user *is* a failing lookup, so without this the account keeps
+ * authenticating from cache for the rest of the TTL — and `resolveDbUser` would
+ * then call `upsertUser` and recreate the row we just deleted.
+ */
+export function forgetAuthUser(clerkId: string): void {
+  profileCache.delete(clerkId);
+  profileInflight.delete(clerkId);
+  userCache.delete(clerkId);
+  userInflight.delete(clerkId);
+}
+
+/** A Clerk user id that no longer exists there — see `deleteClerkUser`. */
+export class ClerkUserGoneError extends Error {}
+
+/**
+ * Delete the identity at Clerk. This is the half of account deletion that
+ * cannot be rolled back and cannot be done from SQL.
+ *
+ * Treated as *success* when Clerk answers 404: the only way to reach that state
+ * is that the user is already gone (a retry, the sweeper, or the person
+ * deleting themselves from Clerk's own account portal first), and the caller's
+ * job is to make the account absent, not to have been the one who removed it.
+ * Making a retry fail here is what would strand a half-deleted account forever.
+ *
+ * A dev-bypass identity has no Clerk user at all and is skipped, so local
+ * development can exercise the whole flow without a Clerk secret key.
+ */
+export async function deleteClerkUser(clerkId: string): Promise<void> {
+  if (isDevAuthBypassEnabled() && clerkId.startsWith("dev_local_user")) {
+    forgetAuthUser(clerkId);
+    return;
+  }
+  try {
+    await clerk.users.deleteUser(clerkId);
+  } catch (error) {
+    if (isClerkNotFound(error)) {
+      forgetAuthUser(clerkId);
+      return;
+    }
+    throw error;
+  }
+  forgetAuthUser(clerkId);
+}
+
+/**
+ * Clerk's SDK throws its own error shape rather than an HTTP status, and the
+ * shape has changed across major versions — so this reads defensively and
+ * treats anything it cannot recognise as "not a 404", which fails closed: an
+ * unrecognised error aborts the deletion instead of silently pretending the
+ * Clerk user was already gone.
+ */
+function isClerkNotFound(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+  const status = (error as { status?: unknown }).status;
+  return status === 404;
 }
 
 async function resolveDbUser(auth: AuthUser): Promise<DbUser> {

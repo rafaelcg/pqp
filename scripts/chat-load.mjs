@@ -137,7 +137,11 @@ function connect(index, token, channelId) {
         // The sender timestamped the body; anything that round-trips back to
         // its own author is excluded so the number is fan-out, not echo.
         const stamp = Number(String(m.message?.body ?? "").split("|")[1]);
-        if (Number.isFinite(stamp) && m.message?.authorId !== st.userId) {
+        // `st.userId` was never assigned, so this comparison was always true and
+        // the sender's own echo landed in the latency samples alongside the
+        // fan-out it was meant to measure. Senders are the first SENDERS
+        // clients, so exclude by index instead of by an id we never learn.
+        if (Number.isFinite(stamp) && index >= SENDERS) {
           latencies.push(Date.now() - stamp);
         }
       } else if (m.type === "error") {

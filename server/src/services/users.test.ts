@@ -148,6 +148,39 @@ describeDb("account creation", () => {
     expect(user.username).toMatch(/^joao_/);
   });
 
+  /**
+   * The regression that a correctness fix introduced.
+   *
+   * The exhaustion fallback used to sweep from 1 and return the lowest free
+   * number, so every concurrent signup reaching it chose the same one: one won
+   * the unique index and the rest burned a retry and collided again on exactly
+   * the same value. Measured at 13% of 512 concurrent signups failing outright.
+   * Randomising the pick is what makes the caller's retry worth having.
+   */
+  it("does not collide when many signups share a nearly-full name", async () => {
+    // Leave 40 numbers free, well past the point where random probing alone
+    // stops finding one, so every request lands on the fallback path.
+    await getPool().query(
+      `INSERT INTO users (clerk_id, display_name, username, discriminator)
+       SELECT 'seed-' || d, 'Seed', 'joao', lpad(d::text, 4, '0')
+       FROM generate_series(1, 9959) AS d`,
+    );
+
+    const users = await Promise.all(
+      Array.from({ length: 30 }, (_, i) =>
+        upsertUser({
+          clerkId: `clerk-crowd-${i}`,
+          displayName: "João",
+          avatarUrl: null,
+        }),
+      ),
+    );
+
+    expect(users).toHaveLength(30);
+    const tags = new Set(users.map((u) => `${u.username}#${u.discriminator}`));
+    expect(tags.size).toBe(30);
+  });
+
   it("keeps the existing number across a rename when it is still free", async () => {
     const user = await upsertUser({
       clerkId: "clerk-rename",

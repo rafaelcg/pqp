@@ -6,7 +6,11 @@ import { dirname, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 import { handleApi } from "./api/index.js";
-import { assertAuthConfig, isDevAuthBypassEnabled } from "./auth/clerk.js";
+import {
+  assertAuthConfig,
+  isDevAuthBypassEnabled,
+  sweepAuthCaches,
+} from "./auth/clerk.js";
 import { closePool, getPool, initDb } from "./db.js";
 import { closeBus, INSTANCE_ID, setBusTransport } from "./lib/bus.js";
 import { createPostgresBusTransport } from "./lib/bus-postgres.js";
@@ -292,7 +296,11 @@ const heartbeat = setInterval(() => {
 wss.on("close", () => clearInterval(heartbeat));
 
 // Drop expired rate-limit windows so the map doesn't grow unbounded.
-const rateLimitSweep = setInterval(() => sweepRateLimits(), 60_000);
+const rateLimitSweep = setInterval(() => {
+  sweepRateLimits();
+  // Same cadence, same reason: both are maps that only shrink if swept.
+  sweepAuthCaches();
+}, 60_000);
 rateLimitSweep.unref?.();
 
 /**
