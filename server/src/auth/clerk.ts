@@ -480,9 +480,14 @@ export async function verifyAuthHeader(
 
     return await loadProfile(clerkId);
   } catch (error) {
-    if (process.env.NODE_ENV !== "production") {
-      console.error("[auth] Token verification failed:", error);
-    }
+    // One line in production too. A rejected token that logs nothing turns a
+    // config problem — an azp missing from CLERK_AUTHORIZED_PARTIES, a clock
+    // skew, a key mismatch — into "session expired" on somebody's phone with
+    // no trail on either end. The reason string carries no token material.
+    console.error(
+      "[auth] token rejected:",
+      error instanceof Error ? error.message : String(error),
+    );
     return null;
   }
 }
