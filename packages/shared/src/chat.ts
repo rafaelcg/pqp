@@ -14,6 +14,7 @@ import {
 } from "./attachments.js";
 import { embedSchema } from "./embeds.js";
 import { sanctionNoticeSchema } from "./sanctions.js";
+import { setIdleMessageSchema } from "./status.js";
 import { webhookEmbedSchema } from "./webhooks.js";
 
 export const joinChannelMessageSchema = z.object({
@@ -227,6 +228,12 @@ export const chatClientMessageSchema = z
     messageCreateFrameSchema,
     reactionToggleMessageSchema,
     typingMessageSchema,
+    // Not chat, but it rides the chat socket because the thing it describes IS
+    // the socket: "the person holding this connection stopped touching their
+    // keyboard". Sending it over HTTP would need a way to name one connection
+    // from outside it, which is an identifier this design does not otherwise
+    // need to invent.
+    setIdleMessageSchema,
   ])
   .superRefine((message, ctx) => {
     if (message.type === "message-create") {

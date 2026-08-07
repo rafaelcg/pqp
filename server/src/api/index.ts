@@ -57,6 +57,7 @@ import {
   isLiveKitConfigured,
 } from "../voice/backends.js";
 import {
+  applyManualStatus,
   broadcastToChannel,
   evictChannelViewers,
   evictUserFromChannels,
@@ -65,6 +66,7 @@ import {
   evictVoiceUsersExcept,
   forEachAuthenticatedSocket,
   resolveEmbedInBackground,
+  resolveStatuses,
 } from "../ws/index.js";
 import { getVoicePeer } from "../ws/voice.js";
 import { invalidateUserCache, resolveAuthSession } from "../auth/clerk.js";
@@ -573,7 +575,21 @@ router.patch("/api/me", async ({ req, user, ageGate }) => {
  */
 router.patch("/api/me/preferences", async ({ req, user }) => {
   const patch = userPreferencesSchema.parse(await readJsonBody(req));
-  return { preferences: await mergePreferences(user.id, patch) };
+  const preferences = await mergePreferences(user.id, patch);
+  // `status` is the one preference the realtime layer holds a copy of, because
+  // resolving somebody's status must not be a database read — it happens once
+  // per member of every member list anyone opens. Adopted only after the write
+  // has committed, so the in-memory view can never claim something Postgres
+  // refused; and adopted from the *merged* result rather than from the patch, so
+  // a request that did not mention `status` cannot silently clear it.
+  //
+  // This is the only leg that matters for a user who is connected elsewhere
+  // right now: their own instance publishes the change onto the cluster bus, and
+  // every other instance picks it up from there.
+  if (patch.status && preferences.status) {
+    applyManualStatus(user.id, preferences.status);
+  }
+  return { preferences };
 });
 
 // --------------------------------------------- LGPD art. 18 (own account)
@@ -1898,9 +1914,33 @@ router.get("/api/servers/:serverId/search", async (ctx, { serverId }) => {
 
 // ---------------------------------------------------------------- members
 
+/**
+ * Status rides on the member list rather than arriving over the socket.
+ *
+ * Nothing is pushed: a push has to reach every member of every server the
+ * changing user shares, so one idle transition at a thousand concurrent users is
+ * a membership query plus a fan-out to hundreds of sockets — almost all of them
+ * belonging to clients with no member list on screen. Resolving it here makes
+ * the cost proportional to the number of people actually looking, and zero when
+ * nobody is. The panel re-reads this while it is open.
+ *
+ * `resolveStatuses` is pure memory: one pass over this instance's connections
+ * plus the contributions the other instances published. It adds no query to a
+ * route that already does one, and it is decorated here rather than inside
+ * `listServerMembers` so that the other caller of that function — the LGPD data
+ * export — does not quietly acquire a live presence field.
+ */
 router.get("/api/servers/:serverId/members", async ({ user }, { serverId }) => {
   await requireServerMember(serverId!, user.id);
-  return { members: await listServerMembers(serverId!) };
+  const members = await listServerMembers(serverId!);
+  const statuses = resolveStatuses(members.map((member) => member.id));
+  return {
+    members: members.map((member) => ({
+      ...member,
+      // `offline` is the floor, and it is what an invisible member resolves to.
+      status: statuses.get(member.id) ?? "offline",
+    })),
+  };
 });
 
 router.patch(

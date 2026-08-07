@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { attachmentSchema } from "./attachments.js";
 import { embedSchema } from "./embeds.js";
+import { manualStatusSchema } from "./status.js";
 import { webhookEmbedSchema } from "./webhooks.js";
 
 export const channelTypeSchema = z.enum(["text", "voice", "category"]);
@@ -94,6 +95,29 @@ export type NotificationPreferences = z.infer<
  * this server does not must still get the rest of its patch saved.
  */
 export const userPreferencesSchema = z.object({
+  /**
+   * The manual half of user status — `dnd` or `invisible`, or `online` meaning
+   * "no override". Absent is the same as `online`.
+   *
+   * A PREFERENCE AND NOT A `users` COLUMN, for three reasons that all point the
+   * same way. It has to survive a reconnect and follow the person across
+   * devices, which rules out anything socket-scoped or in localStorage. It is
+   * read exactly once per socket and never on the message path, so it does not
+   * want to be on `users` — the table every message, member list and mention
+   * lookup already joins, and the one place a migration is most expensive. And
+   * what it stores is a *choice*: the derived half of status (online, idle,
+   * offline) is deliberately not stored anywhere at all, because a stored
+   * "online" outlives the process that was holding the socket.
+   *
+   * That it lands in an existing JSONB blob is why user status ships with no
+   * database migration whatsoever.
+   *
+   * `invisible` is written here in the clear and is only ever read back to its
+   * own owner — `/api/me` is the account's own view of itself. What third
+   * parties are told goes through `userStatusSchema`, which has no `invisible`
+   * member at all.
+   */
+  status: manualStatusSchema.optional(),
   theme: themePreferenceSchema.optional(),
   muteOnJoin: z.boolean().optional(),
   compactPeers: z.boolean().optional(),

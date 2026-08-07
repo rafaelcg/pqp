@@ -11,5 +11,6 @@ export * from "./sanctions.js";
 export * from "./search.js";
 export * from "./signaling.js";
 export * from "./sso.js";
+export * from "./status.js";
 export * from "./voice-backend.js";
 export * from "./webhooks.js";

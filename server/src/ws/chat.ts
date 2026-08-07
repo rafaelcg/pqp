@@ -33,6 +33,7 @@ import {
 import { getChannelAudience } from "../services/servers.js";
 import { canAccessChannel } from "../services/users.js";
 import { forEachAuthenticatedSocket } from "./sockets.js";
+import { isInvisible, setSocketIdle } from "./status.js";
 
 interface ChatConnection {
   socket: WebSocket;
@@ -112,9 +113,29 @@ function encode(message: ChatServerMessage): string {
   return JSON.stringify(message);
 }
 
+/**
+ * INVISIBILITY IS ENFORCED HERE, AT THE SOURCE.
+ *
+ * Channel presence is the loudest *passive* giveaway in the app: it says where
+ * you are, and it says it because you opened a channel, not because you did
+ * anything. Somebody hidden who is still listed as "in #general" has not been
+ * hidden at all.
+ *
+ * Filtering where the roster is *built*, rather than at each of the two places
+ * it is sent, is what makes it hold across the cluster too: every instance
+ * publishes an already-filtered contribution, so the merge in `sendPresence` can
+ * never reintroduce somebody another instance chose to hide, and a hidden person
+ * costs the remote instances no lookup at all.
+ *
+ * They still *receive* presence for the channel they are in. Invisibility takes
+ * away what others see, never what you can.
+ */
 function localPresenceUsers(channelId: string): PresenceUser[] {
   const byUser = new Map<string, PresenceUser>();
   for (const conn of channelPresence.get(channelId) ?? []) {
+    if (isInvisible(conn.user.id)) {
+      continue;
+    }
     byUser.set(conn.user.id, {
       id: conn.user.id,
       name: conn.user.display_name,
@@ -135,14 +156,12 @@ function sendPresence(channelId: string): void {
     return;
   }
 
-  const byUser = new Map<string, PresenceUser>();
-  for (const conn of present) {
-    byUser.set(conn.user.id, {
-      id: conn.user.id,
-      name: conn.user.display_name,
-      avatarUrl: conn.user.avatar_url,
-    });
-  }
+  // The same list `publishPresence` hands the other instances, filtered the same
+  // way, because it is the same function — so the roster this instance renders
+  // and the roster it publishes cannot disagree about who is hidden.
+  const byUser = new Map<string, PresenceUser>(
+    localPresenceUsers(channelId).map((user) => [user.id, user]),
+  );
   if (isBusEnabled()) {
     const cutoff = Date.now() - PRESENCE_TTL_MS;
     for (const contribution of remotePresence.get(channelId)?.values() ?? []) {
@@ -606,8 +625,36 @@ export async function handleChatMessage(
     return;
   }
 
+  // Idle is the one derived status the server cannot work out for itself: an
+  // abandoned tab answers heartbeats and holds its socket exactly like an
+  // attended one, so "no traffic on this socket" is not evidence of "nobody
+  // there". The client watches for real input and reports the transition; this
+  // is where that lands.
+  //
+  // No rate limiter of its own. The frame is only sent on a change of state
+  // behind a ten-minute threshold, `setSocketIdle` drops a value that is already
+  // set, and the per-socket limiter in ws/index.ts bounds a client that lies
+  // about all three. Nothing on this path touches the database.
+  if (payload.type === "set-idle") {
+    setSocketIdle(conn.socket, payload.idle);
+    return;
+  }
+
   if (payload.type === "typing") {
     if (conn.channelId !== payload.channelId) {
+      return;
+    }
+    // The second passive giveaway, and the subtler one. "X is typing…" fires on
+    // a keystroke in a box, so it announces somebody who may never send
+    // anything — you can be given away by a message you thought better of. A
+    // person who asked to be hidden and then surfaces in a live indicator has
+    // been un-hidden by the app rather than by a choice they made.
+    //
+    // What they give up is the courtesy of the indicator, not the ability to
+    // talk: sending still works, and the message that arrives carries their
+    // name, because saying something is a deliberate act. Checked before the
+    // limiter so a hidden client costs a map lookup rather than a token.
+    if (isInvisible(conn.user.id)) {
       return;
     }
     if (!typingLimiter.take(conn.user.id)) {
