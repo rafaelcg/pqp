@@ -46,6 +46,54 @@ const HOW_STEPS = [
   },
 ] satisfies { step: string; title: MessageKey; body: MessageKey }[];
 
+/**
+ * Only things that ship today and are on by default. Attachments are absent on
+ * purpose — they stay dark unless `S3_*` is configured, so advertising them
+ * would be a claim the hosted site cannot honour. Nothing here is aspirational;
+ * if a row stops being true, delete the row rather than softening the wording.
+ */
+const FEATURES = [
+  { title: "landing.features.voice.title", body: "landing.features.voice.body" },
+  {
+    title: "landing.features.screen.title",
+    body: "landing.features.screen.body",
+  },
+  { title: "landing.features.chat.title", body: "landing.features.chat.body" },
+  {
+    title: "landing.features.search.title",
+    body: "landing.features.search.body",
+  },
+  { title: "landing.features.dms.title", body: "landing.features.dms.body" },
+  {
+    title: "landing.features.structure.title",
+    body: "landing.features.structure.body",
+  },
+  {
+    title: "landing.features.invites.title",
+    body: "landing.features.invites.body",
+  },
+  {
+    title: "landing.features.moderation.title",
+    body: "landing.features.moderation.body",
+  },
+] satisfies { title: MessageKey; body: MessageKey }[];
+
+/**
+ * The closing call to action. The arrow is drawn here rather than typed into
+ * the catalogue: it is decoration, so a translator never has to carry it and a
+ * screen reader announces "Vai pra pqp" instead of "right arrow".
+ */
+function CtaAction({ label }: { label: string }) {
+  return (
+    <>
+      {label}
+      <span aria-hidden className="ml-2">
+        →
+      </span>
+    </>
+  );
+}
+
 export function LandingPage() {
   const { t, locale } = useTranslation();
   const bypass = isDevAuthBypassEnabled();
@@ -259,6 +307,32 @@ export function LandingPage() {
       </section>
 
       <section
+        id="features"
+        className="scroll-mt-8 border-b border-ink-4/40 px-5 py-20 sm:px-8 sm:py-24"
+      >
+        <div className="mx-auto max-w-4xl">
+          <div className="mx-auto max-w-xl text-center">
+            <h2 className="font-display text-3xl font-bold tracking-tight sm:text-4xl">
+              {t("landing.features.title")}
+            </h2>
+            <p className="mt-3 text-paper-muted">{t("landing.features.body")}</p>
+          </div>
+          {/* One column on a phone, so each item is a heading and a single
+              line rather than a card to swipe past. */}
+          <ul className="mt-14 grid gap-x-8 gap-y-10 sm:grid-cols-2 lg:grid-cols-3">
+            {FEATURES.map((item) => (
+              <li key={item.title}>
+                <h3 className="font-display text-lg font-bold">
+                  {t(item.title)}
+                </h3>
+                <p className="mt-2 text-sm text-paper-muted">{t(item.body)}</p>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </section>
+
+      <section
         id="hosting"
         className="scroll-mt-8 border-b border-ink-4/40 px-5 py-20 sm:px-8 sm:py-24"
       >
@@ -303,14 +377,16 @@ export function LandingPage() {
         <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
           {bypass ? (
             <Button asChild className="cta-lift h-11 px-6 text-base">
-              <Link to="/app">{t("nav.openApp")}</Link>
+              <Link to="/app">
+                <CtaAction label={t("landing.cta.action")} />
+              </Link>
             </Button>
           ) : (
             <>
               <SignedOut>
                 <SignUpButton mode="modal" forceRedirectUrl="/app">
                   <Button className="cta-lift h-11 px-6 text-base">
-                    {t("nav.signUp")}
+                    <CtaAction label={t("landing.cta.action")} />
                   </Button>
                 </SignUpButton>
                 <SignInButton mode="modal" forceRedirectUrl="/app">
@@ -321,7 +397,9 @@ export function LandingPage() {
               </SignedOut>
               <SignedIn>
                 <Button asChild className="cta-lift h-11 px-6 text-base">
-                  <Link to="/app">{t("nav.openApp")}</Link>
+                  <Link to="/app">
+                    <CtaAction label={t("landing.cta.action")} />
+                  </Link>
                 </Button>
               </SignedIn>
             </>

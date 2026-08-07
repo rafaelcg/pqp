@@ -33,9 +33,11 @@ export const ptBR: PartialMessages = {
   "landing.seo.title": "pqp — o chat em grupo é seu",
   "landing.seo.description":
     "Chat em grupo com servidores, canais e voz que simplesmente funciona. Código aberto — hospede você mesmo ou use o pqp.gg.",
-  "landing.hero.title": "Sua turma. Seu servidor. Sua bagunça.",
+  // A piada do nome, feita uma vez e só aqui. O convite mais abaixo aponta pro
+  // outro lado ("vai pra pqp") de propósito — não unifique os dois.
+  "landing.hero.title": "Vem pra pqp.",
   "landing.hero.body":
-    "Chat em grupo que é seu de verdade — mensagem que voa, voz que não cai. Rode no seu próprio servidor se quiser as chaves, ou use o nosso e não pense nisso.",
+    "Voz, chat e tela compartilhada pra sua galera. Cria o servidor, manda o link. Só isso.",
 
   "landing.trust.openSource": "Código aberto",
   "landing.trust.selfHostable": "Self-host",
@@ -61,6 +63,40 @@ export const ptBR: PartialMessages = {
   "landing.how.step3.body":
     "Enche os canais. Cai na call quando o chat não dá conta.",
 
+  // Nomes de recurso escritos como um dev brasileiro fala, não traduzidos ao pé
+  // da letra. "Markdown", "chat", "app", "kick" e "ban" ficam em inglês porque
+  // é assim que se diz — e ficam no meio da frase sem lang="en", igual ao resto
+  // do catálogo, que só marca rótulos soltos.
+  "landing.features.title": "O básico, bem feito.",
+  "landing.features.body":
+    "Nada de promessa. Tudo aqui já funciona — no navegador, no desktop ou instalado no celular.",
+
+  "landing.features.voice.title": "Canais de voz",
+  // O limite de 5 a 8 é o teto real do mesh, dito como fato e não como desculpa.
+  "landing.features.voice.body":
+    "Entra e fala. O áudio vai direto entre vocês — de 5 a 8 pessoas por canal.",
+  "landing.features.screen.title": "Tela compartilhada",
+  "landing.features.screen.body":
+    "Mostra o jogo, o código ou o bug pra quem tá no canal. Uma pessoa de cada vez.",
+  "landing.features.chat.title": "Chat sem firula",
+  "landing.features.chat.body":
+    "Markdown, resposta, reação, mensagem fixada e @menção. Colou um link, já vira prévia.",
+  "landing.features.search.title": "Acha o que foi dito",
+  "landing.features.search.body":
+    "Busca por palavra no servidor inteiro e cai direto na mensagem, com o que veio antes e depois.",
+  "landing.features.dms.title": "DM e grupo",
+  "landing.features.dms.body":
+    "Chama alguém no privado ou monta um grupo com até 10 pessoas.",
+  "landing.features.structure.title": "Servidor do seu jeito",
+  "landing.features.structure.body":
+    "Categorias pra organizar, canais privados e três cargos: dono, admin e membro.",
+  "landing.features.invites.title": "Convite é só um link",
+  "landing.features.invites.body":
+    "Manda e a pessoa entra. Dá pra limitar quantos usos tem e por quanto tempo vale.",
+  "landing.features.moderation.title": "Moderação de verdade",
+  "landing.features.moderation.body":
+    "Expulsa, bane, apaga mensagem e recebe denúncia dentro do app — tudo registrado.",
+
   "landing.hosting.title": "Rode você mesmo — ou não",
   "landing.hosting.body": "Mesmo produto. Você escolhe quem cuida do servidor.",
   "landing.hosting.selfHost.title": "Self-host",
@@ -73,6 +109,9 @@ export const ptBR: PartialMessages = {
   "landing.cta.title": "A sala tá vazia. Resolve isso.",
   "landing.cta.body":
     "Cria um servidor em menos de um minuto. A bagunça você chama depois.",
+  // O contraponto do "vem" lá de cima: aqui a ação é mandar alguém pra algum
+  // lugar, que é onde a piada funciona de novo. A seta é desenhada no JSX.
+  "landing.cta.action": "Vai pra pqp",
 
   "footer.tagline":
     "O chat em grupo é seu. Hospede você mesmo ou use o pqp.gg — a bagunça é a mesma.",

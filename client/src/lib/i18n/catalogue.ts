@@ -39,9 +39,13 @@ export const en = {
   "landing.seo.title": "pqp — group chat you own",
   "landing.seo.description":
     "Chaotic group chat with servers, channels, and voice that just works. Open source — self-host or use pqp.gg.",
-  "landing.hero.title": "Your friends. Your server. Your mess.",
+  // The Portuguese hero is a pun ("vem pra pqp") that does not survive
+  // translation, so English carries the intent — an invitation — rather than
+  // the joke. Both name the same three things the product actually has: voice,
+  // text, screen share. There is no camera video; do not add one here.
+  "landing.hero.title": "Come hang out at pqp.",
   "landing.hero.body":
-    "Chaotic group chat you actually own — text that flies, voice that doesn't flake. Self-host if you want the keys, or just use ours.",
+    "Voice, chat and screen sharing for your people. Make a server, share the link. That's it.",
 
   "landing.trust.openSource": "Open source",
   "landing.trust.selfHostable": "Self-hostable",
@@ -65,6 +69,41 @@ export const en = {
   "landing.how.step3.body":
     "Spam the channels. Jump into mesh voice when the group chat isn't enough.",
 
+  // Every line below describes something that ships today and is on by default
+  // — no env var, no flag, no admin-only path. Attachments are deliberately
+  // absent: they are dark unless S3_* is configured, and production is not.
+  // Camera video, custom emoji, threads and slow mode do not exist at all.
+  "landing.features.title": "The basics, done right.",
+  "landing.features.body":
+    "No roadmap promises. Everything here works today — in the browser, on the desktop, or installed on your phone.",
+
+  "landing.features.voice.title": "Voice channels",
+  // The 5–8 figure is the real mesh ceiling (MESH_VOICE_LIMIT), stated as a
+  // fact. Hiding it is how the first full channel becomes a broken promise.
+  "landing.features.voice.body":
+    "Jump in and talk. Audio goes straight between you — 5 to 8 people per channel.",
+  "landing.features.screen.title": "Screen sharing",
+  "landing.features.screen.body":
+    "Show the game, the code or the bug to everyone in the channel. One person at a time.",
+  "landing.features.chat.title": "Chat with no fuss",
+  "landing.features.chat.body":
+    "Markdown, replies, reactions, pinned messages and @mentions. Paste a link and it unfurls.",
+  "landing.features.search.title": "Find what was said",
+  "landing.features.search.body":
+    "Search a whole server by word and land on the message, with what came before and after.",
+  "landing.features.dms.title": "DMs and group chats",
+  "landing.features.dms.body":
+    "Message someone privately, or put up to 10 people in the same group.",
+  "landing.features.structure.title": "Your server, your rules",
+  "landing.features.structure.body":
+    "Categories to keep it tidy, private channels, and three roles: owner, admin, member.",
+  "landing.features.invites.title": "An invite is just a link",
+  "landing.features.invites.body":
+    "Send it and they're in. Cap how many times it works and how long it lasts.",
+  "landing.features.moderation.title": "Moderation that holds",
+  "landing.features.moderation.body":
+    "Kick, ban, delete and take reports from inside the app — all of it logged.",
+
   "landing.hosting.title": "Run it yourself — or don't",
   "landing.hosting.body": "Same product. You pick who babysits the metal.",
   "landing.hosting.selfHost.title": "Self-host",
@@ -77,6 +116,11 @@ export const en = {
   "landing.cta.title": "The room's empty. Fix that.",
   "landing.cta.body":
     "Spin up a server in under a minute. Invite the chaos later.",
+  // The closing CTA and the share/invite copy point outward — "go to pqp" —
+  // where the hero pointed inward ("come to pqp"). The contrast is deliberate.
+  // The arrow is drawn in JSX and hidden from assistive tech, so it stays out
+  // of the string a translator has to carry.
+  "landing.cta.action": "Head to pqp",
 
   "footer.tagline":
     "Group chat you own. Self-host or use pqp.gg — same chaos either way.",
