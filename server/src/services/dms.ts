@@ -7,6 +7,7 @@ import {
 } from "@pqp/shared";
 import { getPool } from "../db.js";
 import { noBlockBetweenSql, notBlockedSql } from "./blocks.js";
+import { areFriendsSql } from "./friends.js";
 import { toPublicUserSummary } from "./users.js";
 
 /**
@@ -59,6 +60,7 @@ interface ReachabilityRow {
   dm_privacy: DmPrivacy;
   no_block: boolean;
   shares_server: boolean;
+  is_friend: boolean;
 }
 
 /**
@@ -90,7 +92,8 @@ async function assertReachable(
               JOIN server_members theirs
                 ON theirs.server_id = mine.server_id AND theirs.user_id = u.id
               WHERE mine.user_id = $1
-            ) AS shares_server
+            ) AS shares_server,
+            ${areFriendsSql("u.id", "$1")} AS is_friend
      FROM users u
      WHERE u.id = ANY($2::uuid[])`,
     [actorId, userIds],
@@ -105,11 +108,16 @@ async function assertReachable(
       throw new DmRefusedError("blocked");
     }
     // 'server_members' is "we already share a server", which is the only
-    // relationship this product models. It is deliberately not a friend graph:
-    // a self-hosted community's server *is* the relationship.
+    // relationship this product models — and, since the friend system landed,
+    // an accepted friendship is the other one: friends can DM past the
+    // server-members default, because that is half of what "friend" means.
+    // `nobody` stays absolute: an explicit "no DMs at all" is not voided by a
+    // handshake made under different rules.
     if (
       row.dm_privacy === "nobody" ||
-      (row.dm_privacy === "server_members" && !row.shares_server)
+      (row.dm_privacy === "server_members" &&
+        !row.shares_server &&
+        !row.is_friend)
     ) {
       throw new DmRefusedError("privacy");
     }
@@ -446,6 +454,52 @@ async function listParticipants(
   }
   return byChannel;
 }
+
+// --- conversation calls ----------------------------------------------------
+
+/**
+ * May `callerId` ring this conversation — and if so, whom?
+ *
+ * Returns the participant user ids (the caller included) of a conversation the
+ * caller is allowed to call, or null when the call must not happen at all:
+ * the channel is a server channel (server channels do not ring), the caller is
+ * not a participant, or a block stands between the two people of a 1:1.
+ *
+ * Ringing is the loudest thing one account can do to another, so the block
+ * check is `isDmSendBlocked` — the exact predicate the message path uses,
+ * including its two-people-alone reading of a shrunken group. The voice join
+ * already enforces the same rule; re-checking here means a `call-ring` frame
+ * forged without a join still rings nobody.
+ *
+ * A 1:1 the callee had closed is restored first, exactly as a message would
+ * restore it: a call that cannot reach somebody because they tidied their
+ * sidebar is a phone that rings nowhere. Groups have no `dm_pairs` row, so for
+ * them this is a no-op and someone who left a group is *not* rung — leaving is
+ * leaving.
+ */
+export async function resolveRingableConversation(
+  channelId: string,
+  callerId: string,
+): Promise<string[] | null> {
+  if (await isDmSendBlocked(channelId, callerId)) {
+    return null;
+  }
+  await restoreDmParticipants(channelId);
+  const result = await getPool().query<{ user_id: string }>(
+    `SELECT cm.user_id
+     FROM channels c
+     JOIN channel_members cm ON cm.channel_id = c.id
+     WHERE c.id = $1 AND c.kind <> 'server'`,
+    [channelId],
+  );
+  const participants = result.rows.map((row) => row.user_id);
+  if (!participants.includes(callerId)) {
+    return null;
+  }
+  return participants;
+}
+
+// --- end conversation calls -------------------------------------------------
 
 /** One conversation as the viewer sees it, or null when they are not in it. */
 export async function getConversation(
