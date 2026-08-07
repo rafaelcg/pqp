@@ -1,4 +1,9 @@
-import { isImageContentType, type Attachment } from "@pqp/shared";
+import {
+  isAudioContentType,
+  isImageContentType,
+  isVideoContentType,
+  type Attachment,
+} from "@pqp/shared";
 import {
   Download,
   File as FileIcon,
@@ -51,6 +56,10 @@ export function AttachmentGrid({ attachments }: AttachmentGridProps) {
               attachment={attachment}
               onOpen={(src) => setLightbox({ attachment, src })}
             />
+          ) : isVideoContentType(attachment.contentType) ? (
+            <VideoTile key={attachment.id} attachment={attachment} />
+          ) : isAudioContentType(attachment.contentType) ? (
+            <AudioTile key={attachment.id} attachment={attachment} />
           ) : (
             <DownloadChip key={attachment.id} attachment={attachment} />
           ),
@@ -169,6 +178,98 @@ function ImageTile({
         )}
       />
     </button>
+  );
+}
+
+/**
+ * A video renders as a player that has fetched NOTHING. `preload="none"` is
+ * the whole feature: a channel full of clips costs its readers zero bytes
+ * until one of them presses play, which is also the owner's asked-for
+ * "download, then play" behaviour — the browser streams on demand rather than
+ * pulling every asset on scroll. `playsInline` keeps iOS from hijacking
+ * playback into its own fullscreen, and `controls` delegates play/pause/seek
+ * to the platform rather than reinventing them.
+ *
+ * The presigned URL can expire before anyone presses play (default TTL is
+ * hours, but a message can sit unread for days), so the first media error
+ * refetches a fresh URL once — the same contract as ImageTile, for the same
+ * reason, with the same single-retry bound.
+ */
+function VideoTile({ attachment }: { attachment: Attachment }) {
+  const [src, setSrc] = useState(attachment.url);
+  const hasRetried = useRef(false);
+
+  useEffect(() => {
+    hasRetried.current = false;
+    setSrc(attachment.url);
+  }, [attachment.url]);
+
+  function handleError() {
+    if (hasRetried.current) {
+      return;
+    }
+    hasRetried.current = true;
+    void fetchAttachmentUrl(attachment.id)
+      .then((fresh) => setSrc(fresh.url))
+      .catch(() => {
+        // The chip below the player still offers the plain download.
+      });
+  }
+
+  return (
+    <div className="max-w-full overflow-hidden rounded-md border border-ink-4 bg-ink-3/40">
+      <video
+        src={src}
+        controls
+        preload="none"
+        playsInline
+        onError={handleError}
+        style={{ maxHeight: `${MAX_TILE_HEIGHT_PX}px` }}
+        className="block w-auto max-w-full"
+      />
+      <div className="truncate px-2 py-1 text-xs text-text-muted">
+        {attachment.filename}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Audio needs no click gate: the native controls are already compact, and
+ * `preload="none"` means rendering them fetches nothing.
+ */
+function AudioTile({ attachment }: { attachment: Attachment }) {
+  const [src, setSrc] = useState(attachment.url);
+  const hasRetried = useRef(false);
+
+  useEffect(() => {
+    hasRetried.current = false;
+    setSrc(attachment.url);
+  }, [attachment.url]);
+
+  function handleError() {
+    if (hasRetried.current) {
+      return;
+    }
+    hasRetried.current = true;
+    void fetchAttachmentUrl(attachment.id)
+      .then((fresh) => setSrc(fresh.url))
+      .catch(() => {});
+  }
+
+  return (
+    <div className="w-72 max-w-full rounded-md border border-ink-4 bg-ink-3/40 p-2">
+      <audio
+        src={src}
+        controls
+        preload="none"
+        onError={handleError}
+        className="block w-full"
+      />
+      <div className="truncate pt-1 text-xs text-text-muted">
+        {attachment.filename}
+      </div>
+    </div>
   );
 }
 

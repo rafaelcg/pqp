@@ -177,6 +177,21 @@ const INLINE_IMAGE_CONTENT_TYPES: readonly string[] = [
 ];
 
 /** True when an attachment renders inline; false means a download chip. */
+/**
+ * Media that renders as an inline player rather than a download chip. Split
+ * from images because the render contract differs: an image is fetched on
+ * sight, while video and audio render a player with `preload="none"` and cost
+ * nothing until somebody presses play — on purpose, so a channel full of
+ * clips does not download every clip to every reader.
+ */
+export function isVideoContentType(contentType: string): boolean {
+  return contentType.trim().toLowerCase().startsWith("video/");
+}
+
+export function isAudioContentType(contentType: string): boolean {
+  return contentType.trim().toLowerCase().startsWith("audio/");
+}
+
 export function isImageContentType(contentType: string): boolean {
   return INLINE_IMAGE_CONTENT_TYPES.includes(contentType.trim().toLowerCase());
 }
