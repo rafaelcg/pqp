@@ -36,6 +36,58 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS dm_privacy TEXT NOT NULL
   DEFAULT 'server_members'
   CHECK (dm_privacy IN ('everyone', 'server_members', 'nobody'));
 
+-- The 18+ age gate. The Terms state a hard 18 minimum and that accounts found
+-- to be under it are terminated; these three columns are what makes that claim
+-- true of the product rather than only of the page.
+--
+-- WHAT IS STORED, AND WHY IT IS NOT EVERYONE'S DATE OF BIRTH (LGPD art. 6, III
+-- — necessidade). The purpose here is one yes/no: did this account declare an
+-- age of at least eighteen. Once that is answered, an adult's exact date of
+-- birth adds nothing to the purpose and a great deal to the risk — a full DOB
+-- is a strong identifier and a routine knowledge-based-authentication factor
+-- somewhere else. So a *passing* declaration is reduced on the spot to a
+-- boolean plus the moment of the check, and the date itself is never written.
+-- The boolean and the timestamp are what demonstrate diligence: they say the
+-- check ran, when, and what it concluded, which is the whole of what an
+-- operator or a regulator needs to see for an account that is allowed in.
+--
+-- A *failing* declaration keeps the date, because there it is the evidence for
+-- an irreversible sanction. The appeals path in the Terms is somebody writing
+-- "I typed the wrong year"; with only a boolean there is nothing to review, and
+-- reviewing it is the difference between an appeal and a form letter. It is the
+-- narrower retention of the two — the small set of blocked accounts, not the
+-- whole user table.
+--
+-- All three live on `users` so that deleting the row (LGPD art. 18, VI) takes
+-- them with it. There is deliberately no second table to remember.
+--
+-- EXISTING ACCOUNTS. Every row that predates this migration reads NULL, which
+-- is `pending`, which means prompted on next request. They are NOT
+-- grandfathered: an account created before the gate is exactly an account whose
+-- age was never asked, and the Terms make no exception for when you signed up.
+-- The cost is one dialog for everybody; the alternative is a permanent cohort
+-- the gate does not cover.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS age_checked_at TIMESTAMPTZ;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS age_check_passed BOOLEAN;
+-- Retained only when `age_check_passed` is FALSE — see above.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS age_check_dob DATE;
+
+-- The two answer columns are written together or not at all, and the whole "one
+-- attempt only" rule is expressed as `WHERE age_checked_at IS NULL`. If those
+-- two ever disagreed, a blocked account would read as never-asked and get a
+-- second try — which is the one failure that empties this feature of meaning.
+-- ADD CONSTRAINT is not idempotent, so this uses the same DROP-then-ADD block
+-- the other constraints in this file use.
+DO $$
+BEGIN
+  ALTER TABLE users DROP CONSTRAINT IF EXISTS users_age_check_complete;
+  ALTER TABLE users
+    ADD CONSTRAINT users_age_check_complete
+    CHECK ((age_checked_at IS NULL) = (age_check_passed IS NULL));
+EXCEPTION
+  WHEN others THEN NULL;
+END $$;
+
 -- Blocking is one-directional (blocker → blocked) and self-serve. It exists
 -- because a DM is a contact channel nobody else moderates: every other sanction
 -- in the product is something a moderator does on a server's behalf, and none
@@ -686,3 +738,51 @@ CREATE TABLE IF NOT EXISTS cluster_bus_payloads (
 );
 CREATE INDEX IF NOT EXISTS idx_cluster_bus_payloads_created
   ON cluster_bus_payloads (created_at);
+
+-- ---------------------------------------------------------------------------
+-- Self-serve account deletion (LGPD art. 18, IV / VI)
+-- ---------------------------------------------------------------------------
+
+-- Set the instant a deletion is committed to, and cleared only by the row
+-- ceasing to exist. It is the crash marker that makes `DELETE /api/me`
+-- recoverable rather than a half-deleted account.
+--
+-- THE ORDER IS: stamp this column → delete the Clerk user → delete this row.
+-- Every place that sequence can be interrupted leaves a row that still carries
+-- this stamp, and `sweepPendingAccountDeletions` (services/account.ts) finishes
+-- the job on a timer. Without the column there is nothing to find: a process
+-- that dies between the Clerk call and the local DELETE would leave an account
+-- that can never sign in again and whose data nobody knows to remove.
+--
+-- Nullable, with no default, so it costs an existing table nothing and every
+-- account that has not asked to be deleted reads NULL.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS deletion_started_at TIMESTAMPTZ;
+
+-- Partial, over the handful of rows mid-deletion at any moment — the sweeper is
+-- the only reader and a full index would carry every account for nothing.
+CREATE INDEX IF NOT EXISTS idx_users_deletion_started
+  ON users (deletion_started_at) WHERE deletion_started_at IS NOT NULL;
+
+-- Indexes that exist for the *delete*, not for a read.
+--
+-- `DELETE FROM users WHERE id = $1` fires every ON DELETE CASCADE / SET NULL
+-- referencing this table, and Postgres does not index a referencing column for
+-- you. Un-indexed, each of those is a sequential scan of the whole child table,
+-- so deleting one account reads every message, every reaction and every audit
+-- entry on the instance — inside one transaction. These five cover the children
+-- that actually grow without bound; the rest (bans, invites, webhooks, dm_pairs,
+-- reports) are small enough that a scan is cheaper than the index would be.
+--
+-- The messages one is deliberately `(author_id, created_at, id)` rather than
+-- `(author_id)`: `GET /api/me/export` keyset-paginates one person's messages on
+-- exactly that tuple, so the same index serves both halves of art. 18.
+CREATE INDEX IF NOT EXISTS idx_messages_author_created
+  ON messages (author_id, created_at, id);
+CREATE INDEX IF NOT EXISTS idx_message_reactions_user
+  ON message_reactions (user_id);
+CREATE INDEX IF NOT EXISTS idx_message_attachments_uploader
+  ON message_attachments (uploader_id);
+CREATE INDEX IF NOT EXISTS idx_channel_reads_user
+  ON channel_reads (user_id);
+CREATE INDEX IF NOT EXISTS idx_audit_log_actor
+  ON audit_log (actor_id) WHERE actor_id IS NOT NULL;

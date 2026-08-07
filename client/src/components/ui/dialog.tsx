@@ -24,6 +24,14 @@ interface DialogProps {
   onClose: () => void;
   /** Set false for destructive flows that should not close on a stray click. */
   closeOnBackdrop?: boolean;
+  /**
+   * Set false for a dialog the user genuinely cannot leave — a blocking step,
+   * not a form they might abandon. It removes the close affordance entirely
+   * (button, Escape and backdrop) rather than leaving an X that does nothing,
+   * which is worse than no X at all: it reads as a bug and invites the user to
+   * keep clicking it.
+   */
+  dismissible?: boolean;
 }
 
 /**
@@ -41,6 +49,7 @@ export function Dialog({
   size = "md",
   onClose,
   closeOnBackdrop = true,
+  dismissible = true,
 }: DialogProps) {
   const panelRef = useRef<HTMLDivElement>(null);
   const previouslyFocused = useRef<HTMLElement | null>(null);
@@ -52,6 +61,10 @@ export function Dialog({
   // and re-running — which would yank focus back to the first field mid-typing.
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
+  // Same reason as `onCloseRef`: read through a ref so flipping it cannot tear
+  // down the focus trap mid-interaction.
+  const dismissibleRef = useRef(dismissible);
+  dismissibleRef.current = dismissible;
 
   const focusables = useCallback(() => {
     const panel = panelRef.current;
@@ -85,7 +98,9 @@ export function Dialog({
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         event.stopPropagation();
-        onCloseRef.current();
+        if (dismissibleRef.current) {
+          onCloseRef.current();
+        }
         return;
       }
       if (event.key !== "Tab") {
@@ -132,7 +147,7 @@ export function Dialog({
     <div
       className="fixed inset-0 z-[60] flex items-end justify-center bg-ink/80 p-0 backdrop-blur-[2px] sm:items-center sm:p-4"
       onMouseDown={(event) => {
-        if (closeOnBackdrop && event.target === event.currentTarget) {
+        if (dismissible && closeOnBackdrop && event.target === event.currentTarget) {
           onClose();
         }
       }}
@@ -165,14 +180,16 @@ export function Dialog({
               </p>
             )}
           </div>
-          <button
-            type="button"
-            aria-label="Close dialog"
-            className="shrink-0 rounded-md p-1.5 text-paper-muted transition-colors hover:bg-ink-3 hover:text-paper"
-            onClick={onClose}
-          >
-            <X className="h-4 w-4" />
-          </button>
+          {dismissible && (
+            <button
+              type="button"
+              aria-label="Close dialog"
+              className="shrink-0 rounded-md p-1.5 text-paper-muted transition-colors hover:bg-ink-3 hover:text-paper"
+              onClick={onClose}
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto">{children}</div>

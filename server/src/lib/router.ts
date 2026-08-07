@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { AgeGateStatus } from "@pqp/shared";
 import type { DbUser } from "../db.js";
 import { HttpError, isUuid } from "./http.js";
 
@@ -7,6 +8,16 @@ export interface RequestContext {
   res: ServerResponse;
   url: URL;
   user: DbUser;
+  /**
+   * Where the caller stands with the 18+ gate, already resolved by `handleApi`.
+   *
+   * Carried on the context rather than re-read per route because dispatch has
+   * just asked the question to decide whether the request may run at all — the
+   * two routes that report or change it would otherwise ask the database the
+   * same thing twice in one request, and could answer with a different value
+   * than the one enforcement used.
+   */
+  ageGate: AgeGateStatus;
 }
 
 export type RouteHandler = (

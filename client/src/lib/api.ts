@@ -1,4 +1,5 @@
 import type {
+  AgeCheckResponse,
   Attachment,
   AttachmentUrlResponse,
   AuditLogPage,
@@ -186,6 +187,109 @@ export const updateMe = (body: {
 /** Patch of changed keys in, whole merged object out. */
 export const updatePreferences = (body: UserPreferences) =>
   patch<{ preferences: UserPreferences }>("/api/me/preferences", body);
+
+/**
+ * The 18+ declaration. One per account — a second call answers 409, and the
+ * client is not built to recover from that beyond re-reading `/api/me`, which
+ * is the correct behaviour: there is nothing to retry.
+ *
+ * `dateOfBirth` is a bare `YYYY-MM-DD` calendar date. No timezone is sent and
+ * none should be: the server decides the boundary, and a date carrying the
+ * browser's offset is a date the browser could move.
+ */
+export const submitAgeCheck = (dateOfBirth: string) =>
+  post<AgeCheckResponse>("/api/me/age-check", { dateOfBirth });
+
+// ---------------------------------------------------------- your own data
+
+/**
+ * Everything the service holds about you, as a file (LGPD art. 18, II and V).
+ *
+ * A `Blob` rather than parsed JSON, for the same reason `exportServerData`
+ * below is: this is a file the browser is about to save, not data the app
+ * reads. It shares that function's auth-and-retry path and skips only the
+ * "parse it as JSON" step.
+ */
+export async function exportMyData(): Promise<Blob> {
+  const token = await tokenProvider();
+  let response = await request("/api/me/export", {}, token);
+  if (response.status === 401) {
+    const refreshed = await tokenProvider({ forceRefresh: true });
+    if (refreshed) {
+      response = await request("/api/me/export", {}, refreshed);
+    }
+  }
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as { error?: string };
+    throw new ApiError(response.status, body.error ?? "Export failed");
+  }
+  return response.blob();
+}
+
+/** A server the caller owns that somebody else is still in, so deletion is
+ * refused until they transfer it or delete it. */
+export interface BlockingOwnedServer {
+  id: string;
+  name: string;
+  otherMemberCount: number;
+}
+
+/**
+ * The 409 the delete answers when owned servers are in the way. Carries the
+ * list so the UI can name them, rather than telling the user to go and find
+ * out for themselves which server is the problem.
+ */
+export class OwnedServersError extends ApiError {
+  constructor(
+    message: string,
+    readonly servers: BlockingOwnedServer[],
+  ) {
+    super(409, message);
+    this.name = "OwnedServersError";
+  }
+}
+
+/**
+ * Delete your own account (LGPD art. 18, IV and VI). Irreversible.
+ *
+ * `confirm` is the account's own handle, typed by the user — see
+ * `deleteConfirmationMatches` in @pqp/shared, which both this caller's button
+ * state and the server's refusal are built on, so they cannot disagree about
+ * what counts as confirmed.
+ *
+ * Driven through `request()` rather than `apiFetch` because the one refusal the
+ * UI has to *act* on — 409, blocked by owned servers — carries a list of those
+ * servers in the body, and `apiFetch` reduces every error to its `error`
+ * string. Retrying once on a 401 is copied from there rather than shared,
+ * because that is the only part of it this needs.
+ */
+export async function deleteMyAccount(confirm: string): Promise<void> {
+  const body = JSON.stringify({ confirm });
+  const token = await tokenProvider();
+  let response = await request("/api/me", { method: "DELETE", body }, token);
+  if (response.status === 401) {
+    const refreshed = await tokenProvider({ forceRefresh: true });
+    if (refreshed) {
+      response = await request("/api/me", { method: "DELETE", body }, refreshed);
+    }
+  }
+  if (response.ok) {
+    return;
+  }
+
+  const failure = (await response.json().catch(() => ({}))) as {
+    error?: string;
+    code?: string;
+    servers?: BlockingOwnedServer[];
+  };
+  if (response.status === 409 && failure.code === "owned_servers") {
+    throw new OwnedServersError(
+      failure.error ?? "Servers you own are in the way",
+      failure.servers ?? [],
+    );
+  }
+  throw new ApiError(response.status, failure.error ?? "Could not delete account");
+}
 
 // -------------------------------------------------------------------- voice
 

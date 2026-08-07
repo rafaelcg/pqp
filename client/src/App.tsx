@@ -3,6 +3,7 @@ import { Lock, Menu, WifiOff } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import type {
+  AgeGateStatus,
   BlockedUser,
   Channel,
   ChannelKind,
@@ -29,6 +30,7 @@ import { InvitePanel } from "@/components/layout/invite-panel";
 import { MembersPanel } from "@/components/layout/members-panel";
 import { PinnedMessagesPanel } from "@/components/chat/pinned-messages-panel";
 import { ServerRail } from "@/components/layout/server-rail";
+import { AgeGateDialog } from "@/components/user/age-gate-dialog";
 import { NewDmDialog } from "@/components/user/new-dm-dialog";
 import { ServerSettingsDialog } from "@/components/layout/server-settings-dialog";
 import {
@@ -272,6 +274,16 @@ function MainAppContent({
   const [bootstrapReady, setBootstrapReady] = useState(false);
   const [bootstrapError, setBootstrapError] = useState<string | null>(null);
   const [bootstrapAttempt, setBootstrapAttempt] = useState(0);
+  /**
+   * Non-null while the 18+ gate is standing between this account and the app.
+   *
+   * Held here rather than read off `user` because it is a bootstrap outcome,
+   * not a profile field: the rest of the bootstrap never ran, so there are no
+   * servers, no conversations and no socket behind this screen to fall back to.
+   */
+  const [ageGate, setAgeGate] = useState<Exclude<AgeGateStatus, "passed"> | null>(
+    null,
+  );
   const [channelsLoading, setChannelsLoading] = useState(false);
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [unread, setUnread] = useState<Record<string, UnreadState>>({});
@@ -568,6 +580,23 @@ function MainAppContent({
         }
         setUser(me);
         chat.setCurrentUser(me);
+
+        // The gate, before anything else this function would do.
+        //
+        // It has to be a hard stop rather than an overlay: the server refuses
+        // every other route for an account that has not passed, so carrying on
+        // would fetch servers, channels and ICE credentials that all answer 403
+        // and then open a WebSocket that is closed on us — a screen of errors
+        // behind a dialog asking a question that explains none of them.
+        //
+        // An API that predates the gate sends no `ageGate` at all, which is
+        // read as "this deployment does not have one" and passes through. Only
+        // an explicit `pending` or `blocked` stops here.
+        if (me.ageGate === "pending" || me.ageGate === "blocked") {
+          setAgeGate(me.ageGate);
+          return;
+        }
+        setAgeGate(null);
 
         // Settings the account carries win over this device's stored copy —
         // another device may have changed them since this browser last saw
@@ -1390,6 +1419,25 @@ function MainAppContent({
         message={bootstrapError}
         onRetry={() => {
           setBootstrapError(null);
+          setBootstrapAttempt((n) => n + 1);
+        }}
+      />
+    );
+  }
+
+  if (ageGate) {
+    return (
+      <AgeGateDialog
+        status={ageGate}
+        // Passing re-runs the whole bootstrap from the top, which is exactly
+        // what is wanted: everything it would have loaded is still unloaded.
+        onPassed={() => {
+          setAgeGate(null);
+          setBootstrapAttempt((n) => n + 1);
+        }}
+        // Another tab already answered. Re-read rather than guess which way.
+        onStale={() => {
+          setAgeGate(null);
           setBootstrapAttempt((n) => n + 1);
         }}
       />

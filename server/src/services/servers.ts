@@ -86,7 +86,7 @@ async function serverAttachmentKeys(serverId: string): Promise<string[]> {
  * because a busy channel holds thousands of these and a store answers a
  * thousand simultaneous DELETEs with rate limiting.
  */
-function deleteObjectsInBackground(keys: string[]): void {
+export function deleteObjectsInBackground(keys: string[]): void {
   if (keys.length === 0) {
     return;
   }

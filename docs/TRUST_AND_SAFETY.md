@@ -168,7 +168,7 @@ Every action below maps to code that exists. Do not promise anything else.
 | Ban from a server | same route with `ban:true`, or `POST /api/servers/:id/bans` | Can be pre-emptive; the target need not be a member. Stores a free-text reason |
 | Change a role | `PATCH /api/servers/:id/members/:userId` | Owner only |
 | Delete a channel or a whole server | server routes | Owner/admin |
-| **Terminate an account** | **no endpoint — manual SQL** | See §5. This is the single biggest operational gap |
+| **Terminate an account** | **still no operator endpoint** | `DELETE /api/me` (§5.4) is a *self-serve* route: it authenticates as the account being deleted and there is no way to aim it at somebody else. Terminating a Tier 0 account is therefore still manual SQL — but `deleteAccount` in `server/src/services/account.ts` is now a tested, correctly-ordered implementation of exactly that sequence (Clerk first, then the row, plus the S3 sweep). Wrapping it in an operator route is a small job; nobody has done it |
 | **Timeout / mute / suspend** | **does not exist** | There is no temporary sanction of any kind. The ladder jumps from "delete the message" to "ban". Do not write a warning-then-timeout policy the product cannot execute |
 
 `servers.message_retention_days` (owner-set, daily sweep, pinned messages exempt)
@@ -187,6 +187,69 @@ Before deleting anything in a Tier 0/1 case:
   hour.
 - Audit-log rows are pruned at **90 days**. Anything you need beyond 90 days must
   be copied out.
+
+### 3.6 The 18+ age gate
+
+Shipped. The Terms state a hard 18 minimum; this is the mechanism behind that
+sentence. It is **self-declaration, enforced** — not verification. Nothing checks
+a document, and the public pages must keep saying so.
+
+**What the user does.** On the first authenticated request after signing in, the
+app stops on a non-dismissible dialog
+(`client/src/components/user/age-gate-dialog.tsx`) asking for a date of birth as
+a date — day, named month, year. It says, before the field, that the answer can
+be given only once and what happens if it is under 18.
+
+**What is stored** (`users`, three columns, see the comment in `schema.sql`):
+
+| Column | Adult | Under 18 |
+|---|---|---|
+| `age_checked_at` | set | set |
+| `age_check_passed` | `TRUE` | `FALSE` |
+| `age_check_dob` | **NULL** | the declared date |
+
+The date is kept only for a refusal, because that is the only case where it is
+still needed — it is the evidence an appeal has to be decided on. For an adult
+the answer is reduced to the boolean plus the moment of the check, which is what
+demonstrates the check ran. All three are on `users`, so account deletion takes
+them with the row.
+
+**One attempt, ever.** The declaration is written with
+`WHERE age_checked_at IS NULL`, so a second answer is refused by the database
+(409) rather than by a code path that could be raced. There is no self-serve way
+out of a refusal and no admin UI for one — reversing a block is a manual
+`UPDATE` on the row, done only through the appeals process in §4. A malformed or
+future date is a 400 and does *not* consume the attempt.
+
+**Enforcement is server-side, in two places, both of them chokepoints.**
+
+| Surface | Where | Behaviour |
+|---|---|---|
+| HTTP | `handleApi`, before `router.match` (`server/src/api/index.ts`) | 403 on every path, including ones that do not exist |
+| WebSocket | `resolveAuthUser` (`server/src/auth/clerk.ts`) | returns null, so the socket closes 4401 exactly as it would for a bad token |
+
+Four routes stay open to a refused account, and the list is in
+`AGE_GATE_EXEMPT` (`server/src/services/age-gate.ts`): `GET /api/me` and
+`POST /api/me/age-check`, because otherwise the question cannot be answered at
+all; and `DELETE /api/me` and `GET /api/me/export`, because **a blocked account
+is still a data subject** — LGPD art. 18 rights do not depend on being welcome.
+Anything added to that list should have to survive that sentence.
+
+**Existing accounts are prompted, not grandfathered.** Every row that predates
+the migration reads NULL, which is `pending`. An account created before the gate
+is precisely an account whose age was never asked.
+
+**The date arithmetic is deliberately generous by up to one day.** "Today" is
+the latest calendar date in use anywhere on Earth (UTC+14), because refusing is
+permanent and admitting somebody a few hours early is not: the alternative
+blocks an eighteen-year-old in Kiribati, forever, over a timezone. A 29 February
+birthday reaches 18 on 1 March in a non-leap year, matching CC art. 132 §3. All
+of it is pinned in `server/src/services/age-gate.test.ts`.
+
+**Operationally**, an account that answered under 18 is already terminated by
+the gate — Tier 0 in §3.2 still applies to a *suspected* minor who declared an
+adult date, and that case is unchanged: the gate does not detect lying, it only
+makes the declaration meaningful and final.
 
 ### 3.5 Closing the loop
 
@@ -216,33 +279,117 @@ platform-level decisions or the reasoning behind them.
 
 ## 5. LGPD data-subject request runbook
 
-Requests arrive at `{{PRIVACY_EMAIL}}` or `{{DPO_EMAIL}}`. Statutory deadline:
-**15 days** for a complete response (art. 19, II).
+**Access/portability and deletion are now self-serve.** Both live in Settings →
+*Your data*, and both are the *first* answer to a request that arrives by
+email: point the requester at the buttons rather than running anything by hand.
+Doing it manually in production, under a 15-day clock, is how a wrong `WHERE`
+clause deletes somebody else.
+
+Requests that still arrive at `{{PRIVACY_EMAIL}}` or `{{DPO_EMAIL}}`. Statutory
+deadline: **15 days** for a complete response (art. 19, II).
 
 1. **Verify identity** from the email address on the Clerk account. Do not
    collect an ID document — that is more personal data to hold, for a request
    whose whole point is data minimisation.
-2. **Access / portability (art. 18, II and V).** No endpoint exists. Assemble by
-   hand from Postgres: `users`, `server_members`, `messages` where
-   `author_id = ?`, `message_reactions`, `message_attachments` where
-   `uploader_id = ?`, `user_blocks`, `user_preferences`, `channel_reads`,
-   `server_invites` created, plus `audit_log` rows where they are the actor.
-   Deliver as JSON.
+
+2. **Access / portability (art. 18, II and V)** — `GET /api/me/export`,
+   *Download my data*. Returns one JSON file
+   (`format: "pqp.personal-data-export.v1"`) built by
+   `server/src/services/account.ts`: profile, the 18+ declaration, preferences,
+   every message the requester wrote with its channel and server context and its
+   attachments, servers and roles, conversation participation, blocks, reports
+   they filed, and audit entries where they were the actor. Capped at 50,000
+   messages with a `truncated` flag, keyset-paginated so a large account cannot
+   exhaust server memory, and rate limited to two per ten minutes.
+
+   **It deliberately excludes other people's message bodies, including the other
+   half of every DM.** Art. 18, II covers data *concerning the subject*; a
+   message somebody else wrote is that person's own expression, and packaging it
+   into a forwardable file is a disclosure the requester does not need — they can
+   already read it in the app. What they get instead is every conversation they
+   were in, who was in it, and how many of the messages were theirs. The
+   exclusion is stated in plain language inside the export file itself
+   (`notes`), and the full reasoning is in the `EXPORT_NOTES` comment in
+   `services/account.ts`. **If a requester genuinely needs the other side — a
+   court order, a harassment case — that is an encarregado decision, made by
+   hand, per request. There is no self-serve route to it and there should not
+   be.** Reported-content snapshots are excluded on the same grounds.
+
 3. **Correction (art. 18, III).** Mostly self-serve in Settings (display name,
    handle, avatar, DM privacy). Note that `users.display_name` can contain an
    email address, because `server/src/auth/clerk.ts` falls back to the primary
    email when Clerk has no name — worth checking on any access request.
-4. **Deletion (art. 18, IV and VI).** No endpoint exists. Deleting the `users`
-   row cascades to messages, memberships, blocks, preferences, reactions,
-   mentions, attachments, invites created, and DM pairs — but **preserves**
-   audit-log entries (`actor_id` → NULL), bans they issued (`banned_by` → NULL),
-   their pins (`pinned_by` → NULL), and webhooks they created
-   (`created_by` → NULL). Also delete the Clerk user. Attachment objects in S3
-   are swept hourly once their rows are gone.
-   **Write and test this script before launch. Doing it by hand under a 15-day
-   clock, in production, is how a wrong `WHERE` clause deletes someone else.**
-5. **Record** what was requested, what was done, and when. Retention of that
-   record is itself a legal-basis question for counsel.
+
+4. **Deletion (art. 18, IV and VI)** — `DELETE /api/me`, *Delete my account*.
+   Real deletion; there is no soft-delete flag anywhere on this path. The user
+   must type their own handle to confirm.
+
+   **Blocked by owned servers.** If the account owns any server that other
+   people are in, the delete answers `409` with `code: "owned_servers"` and the
+   servers named, and the UI offers the two remedies inline: transfer ownership,
+   or delete the server. It does **not** auto-transfer (ownership carries
+   obligations nobody absent has agreed to) and does **not** cascade-delete the
+   server (that destroys other members' data to serve one person's right). A
+   server the user owns *alone* is not blocking and goes with the account. If a
+   user refuses to do either and complains, that is an encarregado judgement
+   call — there is no code path for it.
+
+   **Deleted:** profile, preferences, every message body they wrote, reactions,
+   mentions, read cursors, memberships, conversation participation, blocks,
+   invites they created, uploaded attachments (rows *and* the S3 objects, which
+   are deleted explicitly — the hourly orphan sweeper never sees them, because
+   the rows naming them cascade away), and the Clerk identity.
+
+   **Retained**, each on an art. 16 basis rather than on convenience:
+
+   | Record | What happens | Basis |
+   |---|---|---|
+   | `audit_log` entries where they acted | Row survives, `actor_id` → NULL | Art. 16, I and II. The only record that a moderator deleted a message or banned a member in somebody else's server. If deleting an account erased it, abuse in a server would be one click from being laundered. Already pseudonymised by the NULL, and pruned at 90 days |
+   | Bans they issued against others | Row survives, `banned_by` → NULL | Art. 16, II. The row is a fact about the *banned* person and about the server. Cascading it would readmit everybody they ever banned |
+   | Reports filed about them | Row and `content_snapshot` survive, `reported_user_id` → NULL | Art. 16, II. The `reports` schema comment already argues it: the report must outlive what it points at, or deleting your account is a way to erase the record of your own conduct. Resolved reports prune at 90 days |
+   | Reports they filed | Row survives, `reporter_id` → NULL | A report is a record of somebody else's conduct. An open queue must not empty itself when a reporter leaves |
+
+   **Messages are deleted, not anonymised.** Repointing `author_id` at a shared
+   "Deleted User" row is expressible and is the wrong answer: message bodies are
+   free text in which people put addresses, phone numbers and health details,
+   and art. 5, III only calls data anonymised when it *cannot* be reverted by
+   reasonable technical means. Stripping a name off "my flight lands at 6, I'm at
+   Rua X 40" does not do that, and everybody who read it live knows who wrote it.
+   The honest cost is gaps in other people's threads; replies survive, because
+   `messages.reply_to_id` is `ON DELETE SET NULL`.
+
+   **Known abuse gap: deletion is a ban-evasion route.** Bans *against* the
+   departing user cascade away with them. Keeping the row would protect nothing
+   (it is keyed on `users.id`, and a re-registration gets a fresh uuid), and the
+   only durable defence — retaining a hash of the Clerk id after erasure — is a
+   new retention decision for counsel, not a code change.
+
+   **Ordering and partial failure.** The sequence is: stamp
+   `users.deletion_started_at` → delete the Clerk user → delete the local row.
+   Clerk first is the direction that fails safe. If Clerk refuses, the stamp is
+   rolled back, nothing is destroyed, and the API answers `502` telling the user
+   to retry. The reverse order has no safe state: with the local row gone and
+   the Clerk identity alive, the user signs back in and `upsertUser` mints them a
+   brand-new empty account while the product reports success. If the process
+   dies *after* the Clerk call, the stamped row is picked up by
+   `sweepPendingAccountDeletions` (every five minutes, from `server/src/index.ts`)
+   which re-runs the Clerk delete — a 404 there counts as success — and then the
+   local one. **Nothing here needs a human.** A row that stays stamped across
+   several sweeps means Clerk is persistently failing for that account; that one
+   does.
+
+   **Live sessions.** The request closes the deleted user's WebSockets and drops
+   them from voice on **the instance that served it only**. On a multi-replica
+   deploy a socket held elsewhere survives until it drops on its own. Closing
+   that gap needs a cluster-bus eviction frame in `server/src/ws/chat.ts`; it is
+   not built.
+
+5. **Record** what was requested, what was done, and when. Note that neither
+   self-serve route writes an audit entry: `audit_log.server_id` is `NOT NULL`
+   and these actions belong to no server, and logging that a named person
+   exercised a privacy right — in a log that server admins can read — would be
+   its own small disclosure. Retention of the encarregado's own record is a
+   legal-basis question for counsel.
 
 ---
 
@@ -252,9 +399,11 @@ Ordered by how badly it hurts at launch.
 
 | Gap | Impact | Status |
 |---|---|---|
-| **Self-serve account deletion** | LGPD art. 18 is a right, not a feature request. Today the only path is an email and a manual SQL delete that has never been run. There is no `DELETE /api/me` | **Not built.** Blocker for a Brazilian launch in anything but the narrowest reading |
-| **Personal data export** | Art. 18, V portability. `server/src/services/export.ts` is owner-scoped, exports *everyone's* messages in one server, and is not a data-subject tool | **Not built** |
-| **Age verification** | The Terms will say 18+. Nothing collects a date of birth; there is no `age`/`dob` field in `schema.sql` or any Zod schema. Enforcement is self-declaration plus reports. The pages say this plainly — keep it that way | **Not built.** Decide whether self-declaration is the launch position |
+| **Self-serve account deletion** | LGPD art. 18, IV and VI | **Built** — `DELETE /api/me`, §5.4. Confirmed by typing the handle, refuses while the caller owns a server other people are in, deletes the Clerk identity, and self-heals an interrupted deletion. Remaining gaps are named in §5.4: no cross-replica socket eviction, and deletion is a ban-evasion route |
+| **Personal data export** | Art. 18, II and V | **Built** — `GET /api/me/export`, §5.2. Note this is *not* `server/src/services/export.ts`, which is the owner-scoped server tool and exports everyone's messages; the two must stay separate |
+| **The other half of a DM in an export** | A subject who needs the other participant's messages (a court order, a harassment case) has no self-serve route, by design | **Deliberately not built.** Per-request encarregado decision. See §5.2 |
+| **Deletion is not disclosed as final to the other party** | Somebody mid-conversation with a deleted account sees their messages vanish with no explanation. Discord shows "Deleted User"; pqp shows a gap | **Known.** A consequence of deleting rather than anonymising (§5.4), and a UX gap rather than a compliance one |
+| **Age verification** | Deliberately not built, and the Terms must keep saying so. What ships is a **self-declared 18+ gate** (§3.6): a date of birth, entered once, enforced server-side. No document or ID check — that is disproportionate for this product and would mean holding far more personal data than the 18+ rule needs | **Self-declaration is the launch position.** The gate is built; identity verification is not, and is not planned |
 | **In-app reporting** | No report/flag action on messages or users; a user's only self-serve recourse is blocking. Email is the whole reporting surface | **In progress** — another work stream is building it now. Update terms-page.tsx when it lands |
 | **Temporary sanctions (timeout/mute)** | The ladder jumps from message deletion straight to ban. No graduated enforcement is possible | **Not built** |
 | **Platform-level moderation tooling** | No admin console. Every platform-level action is manual SQL or borrowing a server owner's permissions | **Not built** |
@@ -313,11 +462,23 @@ be *legally sufficient*. Specific items to put in front of counsel:
    consumers. The draft carries an explicit carve-out for mandatory law; counsel
    should confirm it is enough, and check the foro de eleição against consumer
    rules.
-6. **18+ positioning** — whether self-declared age is defensible for an
+6. **18+ positioning** — the gate in §3.6 is built and enforced, but the
+   question is unchanged: whether self-declared age is defensible for an
    adults-only service in Brazil, and what the Estatuto da Criança e do
    Adolescente requires once a minor is discovered on the platform.
 7. **The published SLAs** — once in the Terms they are enforceable promises.
    Counsel and the founder should agree the numbers together.
-8. **Deletion obligations** — whether shipping without self-serve deletion is
-   acceptable at launch given the manual process described in §5.
+8. **Deletion and export as built** — self-serve deletion and export now exist
+   (§5.2, §5.4), so the question for counsel is no longer whether to ship
+   without them but whether these two are *sufficient*. Specifically:
+   (a) whether excluding the other participant's DM messages from an export is
+   the right reading of art. 18, II and V, or whether the balancing test lands
+   the other way; (b) whether the art. 16 bases claimed for each retained
+   record — audit entries, bans issued, reports — hold up, since they are an
+   engineering reading and not advice; (c) whether refusing deletion until an
+   owned server is transferred or deleted is defensible against the 15-day
+   clock in art. 19, II when the user simply does not act; and (d) whether
+   deleting message bodies outright (rather than anonymising the author) is
+   required, given that art. 5, III arguably makes anonymisation unavailable
+   for free-text content anyway.
 9. **pt-BR versions** — and which language governs if the two ever diverge.

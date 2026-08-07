@@ -5,6 +5,7 @@ import {
   normalizeEmailDomain,
 } from "@pqp/shared";
 import { upsertUser } from "../services/users.js";
+import { getAgeGateStatus, type AgeGateStatus } from "../services/age-gate.js";
 import type { DbUser } from "../db.js";
 
 const clerk = createClerkClient({
@@ -319,14 +320,53 @@ async function resolveDbUser(auth: AuthUser): Promise<DbUser> {
   return request;
 }
 
-export async function resolveAuthUser(
+/** An authenticated identity, plus where it stands with the 18+ age gate. */
+export interface AuthSession {
+  user: DbUser;
+  ageGate: AgeGateStatus;
+}
+
+/**
+ * Identity WITHOUT the age gate applied.
+ *
+ * Only `handleApi` may use this, and only because it is the one caller that can
+ * see the request path and therefore make the exemption decision — a pending
+ * account still has to be able to read `/api/me`, submit its date of birth, and
+ * exercise its LGPD rights (see `isAgeGateExempt`). Every other caller wants
+ * `resolveAuthUser` below, which refuses.
+ */
+export async function resolveAuthSession(
   authorization: string | undefined,
-): Promise<{ user: DbUser } | null> {
+): Promise<AuthSession | null> {
   const auth = await verifyAuthHeader(authorization);
   if (!auth) {
     return null;
   }
-  return { user: await resolveDbUser(auth) };
+  const user = await resolveDbUser(auth);
+  return { user, ageGate: await getAgeGateStatus(user.id) };
+}
+
+/**
+ * An identity that has cleared every gate — the only thing most of the server
+ * should ever ask for.
+ *
+ * This is the age gate's chokepoint for everything that is not the HTTP router,
+ * which today means the WebSocket handshake in `ws/index.ts`. It refuses by
+ * returning null, so the socket takes the path it already had for a bad token
+ * and closes 4401: no new branch to add there, and nothing for a future
+ * connection type to forget. Failing closed is the point — an account that has
+ * not answered the age question is not a session, and the WebSocket carries
+ * chat, presence and voice, every one of which puts the account in front of
+ * other people.
+ */
+export async function resolveAuthUser(
+  authorization: string | undefined,
+): Promise<{ user: DbUser } | null> {
+  const session = await resolveAuthSession(authorization);
+  if (!session || session.ageGate !== "passed") {
+    return null;
+  }
+  return { user: session.user };
 }
 
 /**

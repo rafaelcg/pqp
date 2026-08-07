@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
-import type {
-  BlockedUser,
-  DmPrivacy,
-  User,
-  UserPreferences,
+import {
+  deleteConfirmationMatches,
+  expectedDeleteConfirmation,
+  type BlockedUser,
+  type DmPrivacy,
+  type User,
+  type UserPreferences,
 } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
@@ -21,7 +23,13 @@ import {
   type NotificationLevel,
 } from "@/lib/notifications";
 import type { ThemePreference } from "@/lib/theme";
-import { updateMe } from "@/lib/api";
+import {
+  deleteMyAccount,
+  exportMyData,
+  updateMe,
+  OwnedServersError,
+  type BlockingOwnedServer,
+} from "@/lib/api";
 import { queuePreferenceSync } from "@/lib/preferences";
 
 export interface LocalSettings {
@@ -573,6 +581,295 @@ function PrivacySection({
   );
 }
 
+function messageOf(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
+}
+
+/**
+ * The two rights the privacy policy promises, as buttons.
+ *
+ * Until these existed the only route was emailing an address and waiting for
+ * somebody to run SQL by hand inside a 15-day statutory deadline. The point of
+ * putting them here, rather than on a settings page of their own, is that this
+ * is where a user already goes to change their name and their privacy — the
+ * right to leave belongs next to the rest of the account, not hidden.
+ */
+function YourDataSection({
+  user,
+  onRequestDelete,
+}: {
+  user: User | null;
+  onRequestDelete: () => void;
+}) {
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+
+  async function download() {
+    setExporting(true);
+    setExportError(null);
+    try {
+      const blob = await exportMyData();
+      // A Blob has no URL of its own, so one is minted just long enough for the
+      // click to fire — the same mechanism the server export uses.
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `pqp-my-data-${new Date().toISOString().slice(0, 10)}.json`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setExportError(messageOf(err, "Could not build your export"));
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  return (
+    <div>
+      <p className="text-xs uppercase tracking-wide text-paper-muted">
+        Your data
+      </p>
+
+      <div className="mt-2 flex items-center gap-3">
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={() => void download()}
+          disabled={exporting || !user}
+        >
+          {exporting ? "Preparing…" : "Download my data"}
+        </Button>
+        <span className="text-xs text-text-muted">
+          A JSON file of everything we hold about you.
+        </span>
+      </div>
+      <p className="mt-1.5 text-xs text-text-muted">
+        It includes your profile, your settings, every message you wrote, the
+        servers you are in, and who you have blocked. It does not include
+        messages other people wrote — including their side of your direct
+        messages. Those are their words, not your data, and you can still read
+        them here in the app.
+      </p>
+      {exportError && (
+        <p role="alert" className="mt-1.5 text-xs text-danger">
+          {exportError}
+        </p>
+      )}
+
+      <div className="mt-4 flex items-center gap-3">
+        <Button
+          variant="ghost"
+          size="sm"
+          className="border border-danger/40 text-danger hover:bg-danger/10"
+          onClick={onRequestDelete}
+          disabled={!user}
+        >
+          Delete my account
+        </Button>
+        <span className="text-xs text-text-muted">
+          Permanent. There is no undo and no backup to restore from.
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The confirmation itself.
+ *
+ * Deliberately not a browser `confirm()` and deliberately not a single button.
+ * The user has to read what goes and what stays, and then type their own handle
+ * — the same value `deleteConfirmationMatches` checks on the server, so the
+ * button being enabled and the request being accepted can never disagree.
+ *
+ * It states what survives as plainly as what is destroyed. A deletion screen
+ * that only lists what disappears is quietly misleading: audit entries, bans
+ * this account issued, and reports filed about it all remain, and somebody
+ * deleting their account specifically to erase a moderation record deserves to
+ * learn that here rather than afterwards.
+ */
+function DeleteAccountDialog({
+  open,
+  user,
+  onCancel,
+  onDeleted,
+}: {
+  open: boolean;
+  user: User | null;
+  onCancel: () => void;
+  onDeleted: () => void;
+}) {
+  const [typed, setTyped] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [blockingServers, setBlockingServers] = useState<
+    BlockingOwnedServer[] | null
+  >(null);
+
+  useEffect(() => {
+    if (open) {
+      setTyped("");
+      setError(null);
+      setBlockingServers(null);
+    }
+  }, [open]);
+
+  const expected = expectedDeleteConfirmation(user?.tag);
+  const confirmed = deleteConfirmationMatches(typed, user?.tag);
+
+  async function submit() {
+    if (!confirmed || busy) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setBlockingServers(null);
+    try {
+      await deleteMyAccount(typed);
+      onDeleted();
+    } catch (err) {
+      if (err instanceof OwnedServersError) {
+        setBlockingServers(err.servers);
+        setError(null);
+      } else {
+        setError(messageOf(err, "Could not delete your account"));
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog
+      open={open}
+      eyebrow="Account"
+      title="Delete your account"
+      size="sm"
+      onClose={onCancel}
+      // A stray click on the backdrop must not be able to dismiss the one
+      // screen in the app whose next action cannot be undone.
+      closeOnBackdrop={false}
+      footer={
+        <>
+          <Button variant="ghost" onClick={onCancel} disabled={busy}>
+            Keep my account
+          </Button>
+          <Button
+            className="bg-danger text-white hover:bg-danger/90"
+            onClick={() => void submit()}
+            disabled={!confirmed || busy}
+          >
+            {busy ? "Deleting…" : "Delete for ever"}
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-4 px-5 py-4 text-sm">
+        <p className="text-text">
+          This cannot be undone. We keep no backup you can be restored from, and
+          nobody at pqp can bring your account back.
+        </p>
+
+        <div>
+          <p className="text-xs uppercase tracking-wide text-paper-muted">
+            What is deleted
+          </p>
+          <ul className="mt-2 list-disc space-y-1 pl-5 text-text-muted">
+            <li>Your profile, handle, avatar and settings.</li>
+            <li>
+              Every message you have written, everywhere — including in direct
+              messages. Other people will see gaps where your messages were.
+            </li>
+            <li>Your files and images, and the reactions you left.</li>
+            <li>
+              Your memberships, your conversations, and the list of people you
+              blocked.
+            </li>
+            <li>Your sign-in. You will not be able to log back in.</li>
+            <li>
+              Any server you own <strong>on your own</strong>, with nobody else
+              in it.
+            </li>
+          </ul>
+        </div>
+
+        <div>
+          <p className="text-xs uppercase tracking-wide text-paper-muted">
+            What is kept, and why
+          </p>
+          <ul className="mt-2 list-disc space-y-1 pl-5 text-text-muted">
+            <li>
+              Moderation records of actions you took in other people&apos;s
+              servers, with your name removed. Deleting an account must not
+              erase the record of how it was used to moderate somebody else.
+            </li>
+            <li>
+              Bans you issued. Removing them would let everybody you banned back
+              into servers you no longer have anything to do with.
+            </li>
+            <li>
+              Reports other people filed about you, with your name removed. We
+              are not able to let an account be deleted as a way of clearing its
+              own record.
+            </li>
+          </ul>
+          <p className="mt-2 text-xs text-text-muted">
+            All of these are pruned on their own schedule. The privacy policy
+            explains them in full.
+          </p>
+        </div>
+
+        {blockingServers && blockingServers.length > 0 && (
+          <div
+            role="alert"
+            className="rounded-md border border-warning/40 bg-warning/10 p-3"
+          >
+            <p className="font-medium text-text">
+              Do one of these first, for each server you own
+            </p>
+            <p className="mt-1 text-xs text-text-muted">
+              Other people are still in these servers, so we will not delete
+              them out from under them. In each server&apos;s settings, either
+              hand it to another member or delete the server yourself.
+            </p>
+            <ul className="mt-2 space-y-1">
+              {blockingServers.map((server) => (
+                <li key={server.id} className="text-sm text-text">
+                  {server.name}{" "}
+                  <span className="text-xs text-text-muted">
+                    — {server.otherMemberCount} other{" "}
+                    {server.otherMemberCount === 1 ? "member" : "members"}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        <label className="block">
+          <span className="mb-1 block text-xs uppercase tracking-wide text-paper-muted">
+            Type <span className="font-mono text-signal">{expected}</span> to
+            confirm
+          </span>
+          <Input
+            value={typed}
+            onChange={(event) => setTyped(event.target.value)}
+            autoComplete="off"
+            spellCheck={false}
+            aria-label={`Type ${expected} to confirm deletion`}
+          />
+        </label>
+
+        {error && (
+          <p role="alert" className="text-sm text-danger">
+            {error}
+          </p>
+        )}
+      </div>
+    </Dialog>
+  );
+}
+
 export function SettingsModal({
   open,
   user,
@@ -594,8 +891,21 @@ export function SettingsModal({
   const [inputs, setInputs] = useState<MediaDeviceOption[]>([]);
   const [outputs, setOutputs] = useState<MediaDeviceOption[]>([]);
   const [devicesError, setDevicesError] = useState<string | null>(null);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const canSelectOutput = supportsAudioOutputSelection();
   const settingsRef = useRef(localSettings);
+
+  // One dialog at a time rather than two stacked ones: `Dialog` installs a
+  // focus trap and an Escape handler per instance, and two live traps fight
+  // over which one Tab belongs to. Settings steps aside while the confirmation
+  // is up and comes back if it is cancelled.
+  const settingsOpen = open && !confirmingDelete;
+
+  useEffect(() => {
+    if (!open) {
+      setConfirmingDelete(false);
+    }
+  }, [open]);
 
   useEffect(() => {
     settingsRef.current = localSettings;
@@ -696,268 +1006,289 @@ export function SettingsModal({
   }
 
   return (
-    <Dialog
-      open={open}
-      eyebrow="Account"
-      title="Settings"
-      size="sm"
-      onClose={onClose}
-      footer={
-        <>
-          <Button variant="ghost" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button onClick={() => void handleSave()} disabled={saving}>
-            {saving ? "Saving…" : "Save"}
-          </Button>
-        </>
-      }
-    >
-      <div className="px-5 py-4">
-        {user?.tag && (
-          <p className="mb-4 rounded-md border border-ink-4 bg-ink px-3 py-2 font-mono text-sm text-signal">
-            {user.tag}
-          </p>
-        )}
-
-        <div className="mb-4">
-          <span className="mb-2 block text-xs uppercase tracking-wide text-paper-muted">
-            Avatar
-          </span>
-          <div className="mb-2 flex items-center gap-3">
-            {avatarUrl ? (
-              <img
-                src={avatarUrl}
-                alt=""
-                className="h-12 w-12 rounded-md object-cover ring-1 ring-ink-4"
-              />
-            ) : (
-              <div className="flex h-12 w-12 items-center justify-center rounded-md bg-signal font-display text-lg font-bold text-ink">
-                {(displayName || "?").slice(0, 1).toUpperCase()}
-              </div>
-            )}
-            <Input
-              value={avatarUrl}
-              onChange={(e) => setAvatarUrl(e.target.value)}
-              placeholder="https://… image URL"
-              aria-label="Avatar image URL"
-            />
-          </div>
-          <div className="flex flex-wrap gap-1.5">
-            {AVATAR_PRESETS.map((url) => (
-              <button
-                key={url}
-                type="button"
-                aria-label="Use preset avatar"
-                aria-pressed={avatarUrl === url}
-                className={`h-9 w-9 overflow-hidden rounded-md border ${
-                  avatarUrl === url
-                    ? "border-signal ring-1 ring-signal"
-                    : "border-ink-4 hover:border-signal/50"
-                }`}
-                onClick={() => setAvatarUrl(url)}
-              >
-                <img src={url} alt="" className="h-full w-full object-cover" />
-              </button>
-            ))}
-            <button
-              type="button"
-              className="rounded-md border border-ink-4 px-2 text-xs text-paper-muted hover:border-signal/50"
-              onClick={() => setAvatarUrl("")}
-            >
-              Clear
-            </button>
-          </div>
-        </div>
-
-        <label className="mb-3 block">
-          <span className="mb-1 block text-xs uppercase tracking-wide text-paper-muted">
-            Display name
-          </span>
-          <Input
-            value={displayName}
-            onChange={(e) => setDisplayName(e.target.value)}
-          />
-        </label>
-
-        <label className="mb-4 block">
-          <span className="mb-1 block text-xs uppercase tracking-wide text-paper-muted">
-            Username
-          </span>
-          <Input
-            value={username}
-            onChange={(e) =>
-              setUsername(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ""))
-            }
-            placeholder="cool_name"
-          />
-          <span className="mt-1 block text-xs text-paper-muted">
-            Becomes username#1234 — discriminator auto-assigned if taken.
-          </span>
-        </label>
-
-        <div className="border-t border-ink-4 pt-4">
-          <ThemePicker />
-        </div>
-
-        <div className="mt-4 border-t border-ink-4 pt-4">
-          <NotificationsSection />
-        </div>
-
-        <div className="mt-4 border-t border-ink-4 pt-4">
-          <PrivacySection
-            user={user}
-            blockedUsers={blockedUsers}
-            onUserUpdated={onUserUpdated}
-            onUnblockUser={onUnblockUser}
-          />
-        </div>
-
-        <div className="mt-4 border-t border-ink-4 pt-4">
-          <p className="text-xs uppercase tracking-wide text-paper-muted">
-            Chat
-          </p>
-          <label className="mt-2 flex cursor-pointer items-center gap-3">
-            <input
-              type="checkbox"
-              checked={draftLocal.showLinkEmbeds}
-              onChange={(e) => patchLocal({ showLinkEmbeds: e.target.checked })}
-              className="h-4 w-4 accent-[var(--color-signal)]"
-            />
-            <span className="text-sm">Show link previews</span>
-          </label>
-        </div>
-
-        <div className="mt-4 space-y-4 border-t border-ink-4 pt-4">
-          <div>
-            <p className="text-xs uppercase tracking-wide text-paper-muted">
-              Voice &amp; Video
-            </p>
-            <p className="mt-1 text-xs text-paper-muted">
-              Devices and levels apply when joining voice. Changes while
-              connected update live when possible.
-            </p>
-          </div>
-
-          {devicesError && (
-            <p className="text-xs text-warning" role="status">
-              {devicesError}
+    <>
+      <Dialog
+        open={settingsOpen}
+        eyebrow="Account"
+        title="Settings"
+        size="sm"
+        onClose={onClose}
+        footer={
+          <>
+            <Button variant="ghost" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button onClick={() => void handleSave()} disabled={saving}>
+              {saving ? "Saving…" : "Save"}
+            </Button>
+          </>
+        }
+      >
+        <div className="px-5 py-4">
+          {user?.tag && (
+            <p className="mb-4 rounded-md border border-ink-4 bg-ink px-3 py-2 font-mono text-sm text-signal">
+              {user.tag}
             </p>
           )}
 
-          <label className="block">
-            <span className="mb-1 block text-xs uppercase tracking-wide text-paper-muted">
-              Input device
+          <div className="mb-4">
+            <span className="mb-2 block text-xs uppercase tracking-wide text-paper-muted">
+              Avatar
             </span>
-            <select
-              value={draftLocal.inputDeviceId}
-              onChange={(e) => patchLocal({ inputDeviceId: e.target.value })}
-              className="h-10 w-full rounded-md border border-ink-4 bg-ink px-3 text-sm text-paper outline-none focus:border-signal"
-            >
-              <option value="">System default</option>
-              {inputs.map((device) => (
-                <option key={device.deviceId} value={device.deviceId}>
-                  {device.label}
-                </option>
+            <div className="mb-2 flex items-center gap-3">
+              {avatarUrl ? (
+                <img
+                  src={avatarUrl}
+                  alt=""
+                  className="h-12 w-12 rounded-md object-cover ring-1 ring-ink-4"
+                />
+              ) : (
+                <div className="flex h-12 w-12 items-center justify-center rounded-md bg-signal font-display text-lg font-bold text-ink">
+                  {(displayName || "?").slice(0, 1).toUpperCase()}
+                </div>
+              )}
+              <Input
+                value={avatarUrl}
+                onChange={(e) => setAvatarUrl(e.target.value)}
+                placeholder="https://… image URL"
+                aria-label="Avatar image URL"
+              />
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {AVATAR_PRESETS.map((url) => (
+                <button
+                  key={url}
+                  type="button"
+                  aria-label="Use preset avatar"
+                  aria-pressed={avatarUrl === url}
+                  className={`h-9 w-9 overflow-hidden rounded-md border ${
+                    avatarUrl === url
+                      ? "border-signal ring-1 ring-signal"
+                      : "border-ink-4 hover:border-signal/50"
+                  }`}
+                  onClick={() => setAvatarUrl(url)}
+                >
+                  <img src={url} alt="" className="h-full w-full object-cover" />
+                </button>
               ))}
-            </select>
-          </label>
+              <button
+                type="button"
+                className="rounded-md border border-ink-4 px-2 text-xs text-paper-muted hover:border-signal/50"
+                onClick={() => setAvatarUrl("")}
+              >
+                Clear
+              </button>
+            </div>
+          </div>
 
-          <label className="block">
+          <label className="mb-3 block">
             <span className="mb-1 block text-xs uppercase tracking-wide text-paper-muted">
-              Input volume
+              Display name
             </span>
-            <input
-              type="range"
-              min={0}
-              max={200}
-              value={Math.round(draftLocal.inputVolume * 100)}
-              onChange={(e) =>
-                patchLocal({ inputVolume: Number(e.target.value) / 100 })
-              }
-              className="w-full accent-[var(--color-signal)]"
+            <Input
+              value={displayName}
+              onChange={(e) => setDisplayName(e.target.value)}
             />
-            <span className="mt-0.5 block text-xs text-paper-muted">
-              {Math.round(draftLocal.inputVolume * 100)}%
+          </label>
+
+          <label className="mb-4 block">
+            <span className="mb-1 block text-xs uppercase tracking-wide text-paper-muted">
+              Username
+            </span>
+            <Input
+              value={username}
+              onChange={(e) =>
+                setUsername(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ""))
+              }
+              placeholder="cool_name"
+            />
+            <span className="mt-1 block text-xs text-paper-muted">
+              Becomes username#1234 — discriminator auto-assigned if taken.
             </span>
           </label>
 
-          <MicLevelMeter
-            deviceId={draftLocal.inputDeviceId}
-            inputVolume={draftLocal.inputVolume}
-            liveAnalyser={voiceAnalyser}
-            active={open}
-          />
+          <div className="border-t border-ink-4 pt-4">
+            <ThemePicker />
+          </div>
 
-          {canSelectOutput ? (
+          <div className="mt-4 border-t border-ink-4 pt-4">
+            <NotificationsSection />
+          </div>
+
+          <div className="mt-4 border-t border-ink-4 pt-4">
+            <PrivacySection
+              user={user}
+              blockedUsers={blockedUsers}
+              onUserUpdated={onUserUpdated}
+              onUnblockUser={onUnblockUser}
+            />
+          </div>
+
+          <div className="mt-4 border-t border-ink-4 pt-4">
+            <p className="text-xs uppercase tracking-wide text-paper-muted">
+              Chat
+            </p>
+            <label className="mt-2 flex cursor-pointer items-center gap-3">
+              <input
+                type="checkbox"
+                checked={draftLocal.showLinkEmbeds}
+                onChange={(e) => patchLocal({ showLinkEmbeds: e.target.checked })}
+                className="h-4 w-4 accent-[var(--color-signal)]"
+              />
+              <span className="text-sm">Show link previews</span>
+            </label>
+          </div>
+
+          <div className="mt-4 space-y-4 border-t border-ink-4 pt-4">
+            <div>
+              <p className="text-xs uppercase tracking-wide text-paper-muted">
+                Voice &amp; Video
+              </p>
+              <p className="mt-1 text-xs text-paper-muted">
+                Devices and levels apply when joining voice. Changes while
+                connected update live when possible.
+              </p>
+            </div>
+
+            {devicesError && (
+              <p className="text-xs text-warning" role="status">
+                {devicesError}
+              </p>
+            )}
+
             <label className="block">
               <span className="mb-1 block text-xs uppercase tracking-wide text-paper-muted">
-                Output device
+                Input device
               </span>
               <select
-                value={draftLocal.outputDeviceId}
-                onChange={(e) => patchLocal({ outputDeviceId: e.target.value })}
+                value={draftLocal.inputDeviceId}
+                onChange={(e) => patchLocal({ inputDeviceId: e.target.value })}
                 className="h-10 w-full rounded-md border border-ink-4 bg-ink px-3 text-sm text-paper outline-none focus:border-signal"
               >
                 <option value="">System default</option>
-                {outputs.map((device) => (
+                {inputs.map((device) => (
                   <option key={device.deviceId} value={device.deviceId}>
                     {device.label}
                   </option>
                 ))}
               </select>
             </label>
-          ) : (
-            <p className="text-xs text-paper-muted">
-              Output device selection is not supported in this browser.
+
+            <label className="block">
+              <span className="mb-1 block text-xs uppercase tracking-wide text-paper-muted">
+                Input volume
+              </span>
+              <input
+                type="range"
+                min={0}
+                max={200}
+                value={Math.round(draftLocal.inputVolume * 100)}
+                onChange={(e) =>
+                  patchLocal({ inputVolume: Number(e.target.value) / 100 })
+                }
+                className="w-full accent-[var(--color-signal)]"
+              />
+              <span className="mt-0.5 block text-xs text-paper-muted">
+                {Math.round(draftLocal.inputVolume * 100)}%
+              </span>
+            </label>
+
+            <MicLevelMeter
+              deviceId={draftLocal.inputDeviceId}
+              inputVolume={draftLocal.inputVolume}
+              liveAnalyser={voiceAnalyser}
+              active={open}
+            />
+
+            {canSelectOutput ? (
+              <label className="block">
+                <span className="mb-1 block text-xs uppercase tracking-wide text-paper-muted">
+                  Output device
+                </span>
+                <select
+                  value={draftLocal.outputDeviceId}
+                  onChange={(e) => patchLocal({ outputDeviceId: e.target.value })}
+                  className="h-10 w-full rounded-md border border-ink-4 bg-ink px-3 text-sm text-paper outline-none focus:border-signal"
+                >
+                  <option value="">System default</option>
+                  {outputs.map((device) => (
+                    <option key={device.deviceId} value={device.deviceId}>
+                      {device.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : (
+              <p className="text-xs text-paper-muted">
+                Output device selection is not supported in this browser.
+              </p>
+            )}
+
+            <label className="block">
+              <span className="mb-1 block text-xs uppercase tracking-wide text-paper-muted">
+                Output volume
+              </span>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                value={Math.round(draftLocal.outputVolume * 100)}
+                onChange={(e) =>
+                  patchLocal({ outputVolume: Number(e.target.value) / 100 })
+                }
+                className="w-full accent-[var(--color-signal)]"
+              />
+              <span className="mt-0.5 block text-xs text-paper-muted">
+                {Math.round(draftLocal.outputVolume * 100)}%
+              </span>
+            </label>
+
+            <label className="flex cursor-pointer items-center gap-3">
+              <input
+                type="checkbox"
+                checked={draftLocal.muteOnJoin}
+                onChange={(e) => patchLocal({ muteOnJoin: e.target.checked })}
+                className="h-4 w-4 accent-[var(--color-signal)]"
+              />
+              <span className="text-sm">Mute mic when joining voice</span>
+            </label>
+            <label className="flex cursor-pointer items-center gap-3">
+              <input
+                type="checkbox"
+                checked={draftLocal.compactPeers}
+                onChange={(e) => patchLocal({ compactPeers: e.target.checked })}
+                className="h-4 w-4 accent-[var(--color-signal)]"
+              />
+              <span className="text-sm">Compact peer list</span>
+            </label>
+          </div>
+
+          <div className="mt-4 border-t border-ink-4 pt-4">
+            <YourDataSection
+              user={user}
+              onRequestDelete={() => setConfirmingDelete(true)}
+            />
+          </div>
+
+          {error && (
+            <p className="mt-4 text-sm text-danger" role="alert">
+              {error}
             </p>
           )}
-
-          <label className="block">
-            <span className="mb-1 block text-xs uppercase tracking-wide text-paper-muted">
-              Output volume
-            </span>
-            <input
-              type="range"
-              min={0}
-              max={100}
-              value={Math.round(draftLocal.outputVolume * 100)}
-              onChange={(e) =>
-                patchLocal({ outputVolume: Number(e.target.value) / 100 })
-              }
-              className="w-full accent-[var(--color-signal)]"
-            />
-            <span className="mt-0.5 block text-xs text-paper-muted">
-              {Math.round(draftLocal.outputVolume * 100)}%
-            </span>
-          </label>
-
-          <label className="flex cursor-pointer items-center gap-3">
-            <input
-              type="checkbox"
-              checked={draftLocal.muteOnJoin}
-              onChange={(e) => patchLocal({ muteOnJoin: e.target.checked })}
-              className="h-4 w-4 accent-[var(--color-signal)]"
-            />
-            <span className="text-sm">Mute mic when joining voice</span>
-          </label>
-          <label className="flex cursor-pointer items-center gap-3">
-            <input
-              type="checkbox"
-              checked={draftLocal.compactPeers}
-              onChange={(e) => patchLocal({ compactPeers: e.target.checked })}
-              className="h-4 w-4 accent-[var(--color-signal)]"
-            />
-            <span className="text-sm">Compact peer list</span>
-          </label>
         </div>
+      </Dialog>
 
-        {error && (
-          <p className="mt-4 text-sm text-danger" role="alert">
-            {error}
-          </p>
-        )}
-      </div>
-    </Dialog>
+      <DeleteAccountDialog
+        open={open && confirmingDelete}
+        user={user}
+        onCancel={() => setConfirmingDelete(false)}
+        // A full reload rather than a Clerk `signOut()` call: `ClerkProvider`
+        // is not mounted at all under the dev auth bypass, so a Clerk hook here
+        // would throw in local development. Reloading works in both modes — the
+        // identity is gone at Clerk, so the session cannot be re-established and
+        // the app boots signed out.
+        onDeleted={() => window.location.replace("/")}
+      />
+    </>
   );
 }

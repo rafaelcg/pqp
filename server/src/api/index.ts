@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   addChannelMemberSchema,
+  ageDeclarationSchema,
   AUDIT_LOG_PAGE_MAX,
   AUDIT_LOG_PAGE_SIZE,
   auditActionSchema,
@@ -14,7 +15,11 @@ import {
   createInviteSchema,
   createServerSchema,
   createWebhookSchema,
+  deleteAccountSchema,
+  deleteConfirmationMatches,
   executeWebhookSchema,
+  expectedDeleteConfirmation,
+  formatUserTag,
   GIF_PAGE_MAX,
   GIF_PAGE_SIZE,
   GIF_QUERY_MAX_LENGTH,
@@ -57,10 +62,19 @@ import {
   evictVoiceChannel,
   evictVoiceUser,
   evictVoiceUsersExcept,
+  forEachAuthenticatedSocket,
   resolveEmbedInBackground,
 } from "../ws/index.js";
 import { getVoicePeer } from "../ws/voice.js";
-import { invalidateUserCache, resolveAuthUser } from "../auth/clerk.js";
+import { invalidateUserCache, resolveAuthSession } from "../auth/clerk.js";
+import {
+  AGE_GATE_BLOCKED_MESSAGE,
+  AGE_GATE_PENDING_MESSAGE,
+  isAgeGateExempt,
+  isPlausibleBirthDate,
+  parseCalendarDate,
+  recordAgeDeclaration,
+} from "../services/age-gate.js";
 import type { MemberRole } from "../db.js";
 import {
   clampLimit,
@@ -75,6 +89,12 @@ import {
 } from "../lib/http.js";
 import { clientAddress, createRateLimiter } from "../lib/rate-limit.js";
 import { createRouter, type RequestContext } from "../lib/router.js";
+import {
+  buildPersonalExport,
+  deleteAccount,
+  IdentityDeletionFailedError,
+  OwnedServersBlockDeletionError,
+} from "../services/account.js";
 import { listAuditLog, logAudit } from "../services/audit.js";
 import { buildServerExport } from "../services/export.js";
 import {
@@ -123,6 +143,7 @@ import {
   createChannel,
   createServer,
   deleteChannel,
+  deleteObjectsInBackground,
   deleteServer,
   getChannel,
   getChannelAudience,
@@ -274,6 +295,32 @@ const userSearchLimiter = createRateLimiter({
  */
 const exportLimiter = createRateLimiter({ capacity: 3, refillPerSecond: 0.02 });
 /**
+ * `GET /api/me/export` walks every message one account ever wrote, across every
+ * server and conversation, and serialises it into one response — the same shape
+ * of expense as the server export and the same reason to bound it. It is also a
+ * good DoS lever precisely because it is a *right*: the endpoint cannot be
+ * gated behind ownership of anything, so every account on the instance can
+ * reach it.
+ *
+ * Two in a burst covers a retry after a dropped download; sustained it is one
+ * every ten minutes, which is far more often than anybody genuinely needs their
+ * own data and far too slow to be worth pointing at the server.
+ */
+const personalExportLimiter = createRateLimiter({
+  capacity: 2,
+  refillPerSecond: 1 / 600,
+});
+/**
+ * Account deletion succeeds at most once, so this bucket exists only to bound
+ * the *failures* — a script guessing at the confirmation string, or hammering
+ * the owned-server pre-flight. Three attempts covers mistyping your own handle;
+ * the refill is slow because a fourth attempt in a minute is not a person.
+ */
+const accountDeleteLimiter = createRateLimiter({
+  capacity: 3,
+  refillPerSecond: 1 / 120,
+});
+/**
  * Keyed by webhook id rather than by caller identity — there is no Clerk
  * session on this path, only the token in the URL, so the webhook itself is
  * the only stable key available. Generous enough for real CI/monitoring
@@ -302,6 +349,8 @@ export function resetApiRateLimits(): void {
   uploadLimiter.reset();
   userSearchLimiter.reset();
   exportLimiter.reset();
+  personalExportLimiter.reset();
+  accountDeleteLimiter.reset();
   webhookExecuteLimiter.reset();
   reportLimiter.reset();
 }
@@ -343,6 +392,25 @@ class RawResponse {
 class NotFound extends HttpError {
   constructor(message = "Not found") {
     super(404, message);
+  }
+}
+
+/**
+ * An error whose body carries structured fields alongside `error`, for the one
+ * refusal a client has to *act* on rather than merely display: account deletion
+ * blocked by owned servers needs the list of servers, or the user is told to go
+ * fix something without being told which thing.
+ *
+ * `detail` is merged into the error envelope, so `error` stays exactly where
+ * every existing client already looks for it.
+ */
+class HttpErrorWithDetail extends HttpError {
+  constructor(
+    status: number,
+    message: string,
+    readonly detail: Record<string, unknown>,
+  ) {
+    super(status, message);
   }
 }
 
@@ -429,9 +497,44 @@ const router = createRouter();
 
 // ---------------------------------------------------------------- profile
 
-router.get("/api/me", async ({ user }) => toPublicUser(user));
+router.get("/api/me", async ({ user, ageGate }) => ({
+  ...(await toPublicUser(user)),
+  // Reachable while the gate is still pending or blocked — it is how the client
+  // finds out which of the two it is looking at.
+  ageGate,
+}));
 
-router.patch("/api/me", async ({ req, user }) => {
+/**
+ * The 18+ declaration. One per account, ever.
+ *
+ * Answers 200 for *both* outcomes and puts the result in the body, because
+ * recording a failing declaration is a successful request: the account has
+ * answered, the answer is on file, and the client needs to render the outcome
+ * rather than an error. A second attempt is what gets refused, with 409 — and
+ * refusing it here is the whole feature. See `recordAgeDeclaration`.
+ *
+ * A date that is not a real date, or is in the future, is a 400 and does NOT
+ * consume the attempt. That is not a loophole: every *plausible* date is final,
+ * so there is nothing to probe for.
+ */
+router.post("/api/me/age-check", async ({ req, user }) => {
+  const body = ageDeclarationSchema.parse(await readJsonBody(req));
+  const dob = parseCalendarDate(body.dateOfBirth);
+  if (!dob || !isPlausibleBirthDate(dob)) {
+    throw new HttpError(400, "Enter a valid date of birth.");
+  }
+
+  const result = await recordAgeDeclaration(user.id, dob);
+  if (!result.recorded) {
+    throw new HttpError(
+      409,
+      "This account has already answered the age question. It cannot be answered again.",
+    );
+  }
+  return { ageGate: result.status };
+});
+
+router.patch("/api/me", async ({ req, user, ageGate }) => {
   const body = updateProfileSchema.parse(await readJsonBody(req));
   const updated = await updateProfile(user.id, {
     displayName: body.displayName,
@@ -442,7 +545,7 @@ router.patch("/api/me", async ({ req, user }) => {
     dmPrivacy: body.dmPrivacy,
   });
   invalidateUserCache(updated.clerk_id);
-  return toPublicUser(updated);
+  return { ...(await toPublicUser(updated)), ageGate };
 });
 
 /**
@@ -454,6 +557,133 @@ router.patch("/api/me", async ({ req, user }) => {
 router.patch("/api/me/preferences", async ({ req, user }) => {
   const patch = userPreferencesSchema.parse(await readJsonBody(req));
   return { preferences: await mergePreferences(user.id, patch) };
+});
+
+// --------------------------------------------- LGPD art. 18 (own account)
+
+/**
+ * Everything this service holds about the caller, as a JSON file (art. 18, II
+ * and V).
+ *
+ * NOT `/api/servers/:id/export`. That one is a server owner's tool and contains
+ * every member's messages; this one is scoped to one person and deliberately
+ * excludes other people's content, including the other half of every DM. The
+ * reasoning for that exclusion is written out at length on `EXPORT_NOTES` in
+ * services/account.ts, and restated inside the file itself so the person
+ * reading the export knows what is not in it.
+ *
+ * Scoped by `user.id` from the resolved session and by nothing the caller sends
+ * — there is no `:userId` to get wrong, which is what makes "export somebody
+ * else" unrepresentable rather than merely refused.
+ *
+ * Not audit-logged, unlike the server export. An audit entry is server-scoped
+ * (`audit_log.server_id` is NOT NULL) and this read belongs to no server; more
+ * to the point, logging that a named person exercised a privacy right, in a log
+ * their own server admins can read, would be its own small disclosure.
+ */
+router.get("/api/me/export", async ({ user, res }) => {
+  const key = `user:${user.id}`;
+  if (!personalExportLimiter.take(key)) {
+    res.setHeader("Retry-After", String(personalExportLimiter.retryAfter(key)));
+    throw new HttpError(429, "Slow down");
+  }
+
+  const data = await buildPersonalExport(user.id);
+  if (!data) {
+    throw new NotFound("Account not found");
+  }
+
+  // A display name is fully user-controlled and may sanitize down to nothing —
+  // a filename of `pqp-my-data-server-…` would be nonsense, so the fallback is
+  // named for what this file actually is.
+  const filename = `pqp-my-data-${sanitizeFilenameSegment(
+    data.account.username ?? data.account.displayName,
+    "account",
+  )}-${data.exportedAt.slice(0, 10)}.json`;
+  return new RawResponse(
+    JSON.stringify(data, null, 2),
+    "application/json",
+    filename,
+  );
+});
+
+/**
+ * Delete your own account (art. 18, IV and VI). Irreversible, and real — there
+ * is no soft-delete flag anywhere in this path.
+ *
+ * `confirm` must carry the account's own handle. A destructive, unrecoverable
+ * action must not be one stray `fetch` away, and this is the only action in the
+ * product with no owner, moderator or backup on the other side to undo it.
+ *
+ * Three refusals, each of which the client renders as a distinct screen:
+ *
+ * - **400** — the confirmation does not match. Says what to type.
+ * - **409** — the caller owns servers other people are in, listed by name in
+ *   `servers`. `code` is machine-readable so the client can offer the two
+ *   remedies (transfer, or delete the server) inline rather than printing a
+ *   sentence and leaving the user to find Server Settings. See
+ *   `listBlockingOwnedServers` for why this refuses instead of choosing.
+ * - **502** — Clerk would not delete the identity. Nothing local was touched;
+ *   retrying is safe and is what the client tells the user to do.
+ */
+router.delete("/api/me", async ({ req, res, user }) => {
+  const key = `user:${user.id}`;
+  if (!accountDeleteLimiter.take(key)) {
+    res.setHeader("Retry-After", String(accountDeleteLimiter.retryAfter(key)));
+    throw new HttpError(429, "Slow down");
+  }
+
+  const body = deleteAccountSchema.parse(await readJsonBody(req));
+  const tag = formatUserTag(user.username, user.discriminator);
+  if (!deleteConfirmationMatches(body.confirm, tag)) {
+    throw new HttpError(
+      400,
+      `Type ${expectedDeleteConfirmation(tag)} to confirm.`,
+    );
+  }
+
+  let result;
+  try {
+    result = await deleteAccount(user.id, user.clerk_id);
+  } catch (error) {
+    if (error instanceof OwnedServersBlockDeletionError) {
+      throw new HttpErrorWithDetail(409, error.message, {
+        code: "owned_servers",
+        servers: error.servers,
+      });
+    }
+    if (error instanceof IdentityDeletionFailedError) {
+      console.error("[account] Clerk deletion failed:", error.cause);
+      throw new HttpError(
+        502,
+        "Could not reach the sign-in provider. Nothing was deleted — please try again.",
+      );
+    }
+    throw error;
+  }
+
+  // The account is gone from the database, but its live sockets are not: a
+  // WebSocket authenticates once at connect and never re-checks, so without
+  // this the deleted user keeps receiving message bodies until they happen to
+  // disconnect. `forEachAuthenticatedSocket` and `evictVoiceUser` are the
+  // already-exported handles for this; nothing here reaches into ws/.
+  //
+  // PROCESS-LOCAL. Both helpers walk this instance's own maps, so on a
+  // multi-replica deploy a socket held on *another* replica survives until it
+  // drops. Closing that gap needs a cluster-bus eviction frame, which lives in
+  // ws/chat.ts — see the note in docs/TRUST_AND_SAFETY.md §5.
+  evictVoiceUser(user.id);
+  forEachAuthenticatedSocket((socket, connected) => {
+    if (connected.id === user.id) {
+      socket.close(4003, "account deleted");
+    }
+  });
+
+  // Nothing names these objects any more — the rows that did cascaded away with
+  // the account, so the hourly orphan sweeper will never see them.
+  deleteObjectsInBackground(result.attachmentKeys);
+
+  return { ok: true };
 });
 
 // --------------------------------------------------------- user discovery
@@ -1702,8 +1932,8 @@ router.get(
 /** Strips everything but the characters a filename and a quoted
  * `Content-Disposition` value both tolerate — the server name is fully
  * user-controlled, and the alternative is trusting it inside a header. */
-function sanitizeFilenameSegment(value: string): string {
-  return value.replace(/[^a-zA-Z0-9 _-]/g, "").trim() || "server";
+function sanitizeFilenameSegment(value: string, fallback = "server"): string {
+  return value.replace(/[^a-zA-Z0-9 _-]/g, "").trim() || fallback;
 }
 
 /**
@@ -2114,9 +2344,9 @@ export async function handleApi(
     return;
   }
 
-  let resolved: Awaited<ReturnType<typeof resolveAuthUser>> = null;
+  let resolved: Awaited<ReturnType<typeof resolveAuthSession>> = null;
   try {
-    resolved = await resolveAuthUser(req.headers.authorization);
+    resolved = await resolveAuthSession(req.headers.authorization);
   } catch (error) {
     console.error("[auth] resolve failed:", error);
     sendError(res, 503, "Authentication temporarily unavailable", req);
@@ -2145,6 +2375,31 @@ export async function handleApi(
     return;
   }
 
+  // ------------------------------------------------------------ the age gate
+  //
+  // Here, and not in the routes. This is the same chokepoint argument the
+  // Bearer resolution above rests on (see CLAUDE.md pitfall #8): the router has
+  // over a hundred handlers and grows every week, so a per-route check is a
+  // check somebody will forget on the route where it matters. Placed before
+  // `router.match` so it covers every path — including ones that do not exist
+  // yet, and including 404s and 405s, which a refused account has no business
+  // enumerating either.
+  //
+  // The WebSocket half of the same gate lives in `resolveAuthUser`, which
+  // refuses outright; only this caller can see a path, so only this caller can
+  // grant the exemptions in `isAgeGateExempt`.
+  if (resolved.ageGate !== "passed" && !isAgeGateExempt(method, pathname)) {
+    sendError(
+      res,
+      403,
+      resolved.ageGate === "blocked"
+        ? AGE_GATE_BLOCKED_MESSAGE
+        : AGE_GATE_PENDING_MESSAGE,
+      req,
+    );
+    return;
+  }
+
   try {
     const url = new URL(req.url ?? "/", "http://localhost");
     const matched = router.match(method, pathname);
@@ -2153,7 +2408,7 @@ export async function handleApi(
       return;
     }
 
-    const ctx: RequestContext = { req, res, url, user };
+    const ctx: RequestContext = { req, res, url, user, ageGate: resolved.ageGate };
     const result = await matched.handler(ctx, matched.params);
     if (result instanceof Created) {
       sendJson(res, 201, result.body, req);
@@ -2173,6 +2428,12 @@ export async function handleApi(
     }
     sendJson(res, 200, result, req);
   } catch (error) {
+    // Checked before the plain `HttpError` branch it extends, or the extra
+    // fields would be silently dropped by the more general match.
+    if (error instanceof HttpErrorWithDetail) {
+      sendJson(res, error.status, { error: error.message, ...error.detail }, req);
+      return;
+    }
     if (error instanceof HttpError) {
       sendError(res, error.status, error.message, req);
       return;

@@ -50,6 +50,11 @@ vi.mock("../auth/clerk.js", () => ({
   invalidateUserCache: () => {},
   clearAuthCaches: () => {},
   resolveAuthUser: async () => (actor ? { user: actor } : null),
+  // Every actor in this suite is an adult who already answered the age
+  // gate — the gate itself is proved end-to-end against a real database in
+  // api/age-gate.test.ts, which does not stub this module.
+  resolveAuthSession: async () =>
+    actor ? { user: actor, ageGate: "passed" as const } : null,
   verifyAuthHeader: async () => null,
 }));
 

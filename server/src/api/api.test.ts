@@ -42,6 +42,11 @@ vi.mock("../auth/clerk.js", () => ({
   invalidateUserCache: () => {},
   clearAuthCaches: () => {},
   resolveAuthUser: async () => (actor ? { user: actor } : null),
+  // Every actor in this suite is an adult who already answered the age
+  // gate — the gate itself is proved end-to-end against a real database in
+  // api/age-gate.test.ts, which does not stub this module.
+  resolveAuthSession: async () =>
+    actor ? { user: actor, ageGate: "passed" as const } : null,
   verifyAuthHeader: async () => null,
 }));
 
@@ -3742,8 +3747,12 @@ describeDb("API authorization", () => {
       expect(res.status).toBe(404);
     });
 
+    // Was `DELETE /api/me`, which is a real route now that account deletion
+    // exists — so it answered 400 on the empty body rather than 405. Any path
+    // with no handler for the verb proves the same thing; preferences is
+    // PATCH-only.
     it("answers 405 when the path exists under a different method", async () => {
-      const res = await call(owner, "DELETE", "/api/me");
+      const res = await call(owner, "DELETE", "/api/me/preferences");
       expect(res.status).toBe(405);
     });
 

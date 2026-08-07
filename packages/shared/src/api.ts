@@ -112,6 +112,50 @@ export const userPreferencesSchema = z.object({
 
 export type UserPreferences = z.infer<typeof userPreferencesSchema>;
 
+// ------------------------------------------------------------- age gate (18+)
+
+/**
+ * The minimum age the Terms require. Shared rather than repeated so the
+ * sentence the user reads, the boundary the server computes, and the tests that
+ * pin it are all the same number.
+ */
+export const MINIMUM_AGE_YEARS = 18;
+
+/**
+ * Where an account stands with the 18+ check.
+ *
+ * - `pending` — never answered. Everything except the exempt routes is refused
+ *   until they do; this is also what every account that predates the gate
+ *   reads, so existing users are prompted rather than grandfathered.
+ * - `passed`  — declared a date of birth of at least `MINIMUM_AGE_YEARS`.
+ * - `blocked` — declared a date of birth under it. There is exactly one
+ *   attempt, and no self-serve way out of this state.
+ */
+export const ageGateStatusSchema = z.enum(["pending", "passed", "blocked"]);
+
+export type AgeGateStatus = z.infer<typeof ageGateStatusSchema>;
+
+/**
+ * The one-shot declaration.
+ *
+ * A plain `YYYY-MM-DD` calendar date with no time and no zone, because that is
+ * what a date of birth is — attaching an instant to it is what produces the
+ * classic off-by-one where somebody is refused on their own birthday. The
+ * regex only proves the shape; whether the date exists (and is not in the
+ * future) is decided server-side, since only the server's answer counts.
+ */
+export const ageDeclarationSchema = z.object({
+  dateOfBirth: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Enter a valid date"),
+});
+
+export type AgeDeclarationRequest = z.infer<typeof ageDeclarationSchema>;
+
+export const ageCheckResponseSchema = z.object({
+  ageGate: ageGateStatusSchema,
+});
+
+export type AgeCheckResponse = z.infer<typeof ageCheckResponseSchema>;
+
 export const userSchema = z.object({
   id: z.string().uuid(),
   clerkId: z.string(),
@@ -133,6 +177,16 @@ export const userSchema = z.object({
    * to the same value as the column so the two can never disagree.
    */
   dmPrivacy: dmPrivacySchema.default("server_members"),
+  /**
+   * Where this account stands with the 18+ check. Only ever sent to the
+   * account's own owner — like `clerkId` above, and for the same reason: it is
+   * the one field on this shape that says something about a person rather than
+   * about how they appear to others.
+   *
+   * Optional, and an absent value must be read as "this API predates the gate",
+   * not as "passed" — the client only *skips* the gate on an explicit `passed`.
+   */
+  ageGate: ageGateStatusSchema.optional(),
 });
 
 /**
@@ -455,6 +509,50 @@ export const updateProfileSchema = z.object({
     ),
   dmPrivacy: dmPrivacySchema.optional(),
 });
+
+/**
+ * Deleting your own account (LGPD art. 18, VI).
+ *
+ * `confirm` carries the account's own handle, typed by hand. A bare `DELETE`
+ * with an empty body is one mis-click, one stale tab replaying a request, or
+ * one CSRF-shaped mistake away from destroying an account that cannot be
+ * restored — and unlike every other destructive action in this product there is
+ * no owner, moderator or backup on the other side to undo it. Requiring a
+ * string only the account holder can read off their own profile makes the
+ * request impossible to issue by accident.
+ *
+ * The expected value is `expectedDeleteConfirmation` below, so the client's
+ * "does this match yet" check and the server's refusal can never drift.
+ */
+export const deleteAccountSchema = z.object({
+  confirm: z.string().min(1).max(100),
+});
+
+export type DeleteAccountRequest = z.infer<typeof deleteAccountSchema>;
+
+/**
+ * What the user must type to confirm deletion: their full handle (`name#1234`),
+ * or the literal phrase below for the vanishingly rare account that has no
+ * handle yet. Compared case-insensitively after trimming — the requirement is
+ * deliberate intent, not typing accuracy.
+ */
+export const DELETE_ACCOUNT_FALLBACK_PHRASE = "delete my account";
+
+export function expectedDeleteConfirmation(
+  tag: string | null | undefined,
+): string {
+  return tag ?? DELETE_ACCOUNT_FALLBACK_PHRASE;
+}
+
+export function deleteConfirmationMatches(
+  typed: string,
+  tag: string | null | undefined,
+): boolean {
+  return (
+    typed.trim().toLowerCase() ===
+    expectedDeleteConfirmation(tag).trim().toLowerCase()
+  );
+}
 
 /**
  * User discovery — the only way to reach somebody you share no server with.

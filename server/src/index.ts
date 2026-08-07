@@ -31,6 +31,7 @@ import {
   isAttachmentsConfigured,
   sweepOrphanedAttachments,
 } from "./services/attachments.js";
+import { sweepPendingAccountDeletions } from "./services/account.js";
 import { pruneAuditLog } from "./services/audit.js";
 import { pruneResolvedReports } from "./services/reports.js";
 import { sweepMessageRetention } from "./services/retention.js";
@@ -387,6 +388,30 @@ const retentionSweep = setInterval(() => {
 retentionSweep.unref?.();
 
 /**
+ * Finish account deletions that were interrupted between the Clerk call and the
+ * local DELETE — see the ordering note on `deleteAccount`.
+ *
+ * Five minutes rather than daily, and unlike every other sweep in this file it
+ * is not about disk: each pending row is an account whose owner has been told
+ * their data is gone and whose sign-in already is. A day of that is a day of
+ * being wrong about a statutory promise.
+ */
+const PENDING_DELETION_SWEEP_INTERVAL_MS = 5 * 60_000;
+
+const pendingDeletionSweep = setInterval(() => {
+  void sweepPendingAccountDeletions()
+    .then((finished) => {
+      if (finished > 0) {
+        console.warn(`[account] finished ${finished} interrupted deletion(s)`);
+      }
+    })
+    .catch((error) => {
+      console.error("[account] pending deletion sweep failed:", error);
+    });
+}, PENDING_DELETION_SWEEP_INTERVAL_MS);
+pendingDeletionSweep.unref?.();
+
+/**
  * Multi-instance chat, off by default.
  *
  * Unset (or `off`) leaves every fan-out purely in-process — exactly what this
@@ -462,6 +487,7 @@ async function shutdown(signal: string) {
   clearInterval(heartbeat);
   clearInterval(rateLimitSweep);
   clearInterval(attachmentSweep);
+  clearInterval(pendingDeletionSweep);
   stopPresenceRefresh?.();
   for (const socket of wss.clients) {
     socket.close(1001, "Server shutting down");
