@@ -439,6 +439,49 @@ export function createPeerConnectionManager(
     }
   }
 
+  /** A local track that no negotiated m-line carries — invisible to the peer. */
+  function hasUnnegotiatedSender(peer: ManagedPeer): boolean {
+    return peer.pc
+      .getTransceivers()
+      .some(
+        (transceiver) =>
+          transceiver.mid === null && transceiver.sender.track !== null,
+      );
+  }
+
+  /**
+   * Offer an unnegotiated local track once the pair has settled.
+   *
+   * Checked-and-retried rather than fired once: right after our answer goes
+   * out the remote is still applying it, and an offer landing in that window
+   * is glare that perfect negotiation resolves by *dropping* it — with nothing
+   * left to try again, since this manager does not use `onnegotiationneeded`.
+   * Every attempt re-checks the transceiver, so the loop is a no-op the moment
+   * the track has its m-line (or the peer is gone).
+   */
+  function scheduleRenegotiation(peer: ManagedPeer, attempt = 0) {
+    if (attempt >= 5) {
+      return;
+    }
+    setTimeout(() => {
+      if (peers.get(peer.peerId) !== peer) {
+        return;
+      }
+      if (!hasUnnegotiatedSender(peer)) {
+        return;
+      }
+      if (peer.makingOffer || peer.pc.signalingState !== "stable") {
+        scheduleRenegotiation(peer, attempt + 1);
+        return;
+      }
+      negotiate(peer)
+        .catch(() => {
+          // A failed offer (e.g. closed mid-call) is retried or given up on.
+        })
+        .finally(() => scheduleRenegotiation(peer, attempt + 1));
+    }, 400 * (attempt + 1));
+  }
+
   async function applyRemoteDescription(
     peer: ManagedPeer,
     description: RTCSessionDescriptionInit,
@@ -472,6 +515,21 @@ export function createPeerConnectionManager(
         });
       } finally {
         peer.isSettingRemoteAnswerPending = false;
+      }
+      // An answer can only cover the m-lines the offer carried. A track added
+      // *before* this connection first negotiated — camera or screen already
+      // on when this peer joined the call — sits on a transceiver with no
+      // m-line (`mid === null`), and no code path would ever offer it: the
+      // polite side never initiates, and set-local-stream renegotiates only
+      // when it adds a track to an existing connection. So the caller's video
+      // silently never reached anyone who joined after it was turned on.
+      // Follow the answer with our own offer for exactly that case. Deferred,
+      // not immediate: re-offering in the same tick as the answer reaches the
+      // remote while it is still applying that answer (signaling not stable),
+      // reads as glare, and gets dropped — the retry loop keeps trying until
+      // the track has an m-line or the attempts run out.
+      if (hasUnnegotiatedSender(peer)) {
+        scheduleRenegotiation(peer);
       }
     }
 
