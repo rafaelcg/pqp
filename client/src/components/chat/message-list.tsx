@@ -1,4 +1,9 @@
-import type { Embed, MessageReaction, WebhookEmbed } from "@pqp/shared";
+import type {
+  Embed,
+  MessageReaction,
+  ThreadSummary,
+  WebhookEmbed,
+} from "@pqp/shared";
 import {
   AlertCircle,
   ArrowDown,
@@ -27,6 +32,7 @@ import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import { AttachmentGrid } from "@/components/chat/attachment-grid";
 import { EmojiPickerPanel } from "@/components/chat/emoji-picker";
+import { ThreadChip } from "@/components/chat/thread-chip";
 import {
   ContextMenu,
   type ContextMenuItemDef,
@@ -38,6 +44,7 @@ import { messageRoutePath } from "@/lib/app-route";
 import { QUICK_REACTIONS } from "@/lib/emoji-shortcodes";
 import { gifMessageMedia, type GifMedia } from "@/lib/gif-media";
 import { remarkMentions } from "@/lib/remark-mentions";
+import { useTranslation } from "@/lib/i18n";
 import {
   cn,
   formatDayLabel,
@@ -110,6 +117,20 @@ interface MessageListProps {
   /** Client-render-only: the server unfurls and caches regardless, so turning
    * this off only stops this reader's own client from drawing the card. */
   showLinkEmbeds?: boolean;
+  // --- threads ---
+  /**
+   * Start a thread from a message that has none. Absent inside the thread
+   * panel itself (threads do not nest) and in conversations (a DM already is
+   * the scoped side-conversation a thread would create).
+   */
+  onStartThread?: (message: ChatMessage) => void;
+  /** Open the panel for a message's existing thread. */
+  onOpenThread?: (thread: ThreadSummary, message: ChatMessage) => void;
+  /** Thread channel ids with unread activity — drawn as a dot on the chip,
+   * never on the parent channel's own badge. */
+  unreadThreadIds?: ReadonlySet<string>;
+  /** The thread the panel is currently showing, so its chip reads as open. */
+  activeThreadId?: string | null;
 }
 
 interface Row {
@@ -170,6 +191,10 @@ export function MessageList({
   onUnpinMessage,
   onReportMessage,
   showLinkEmbeds = true,
+  onStartThread,
+  onOpenThread,
+  unreadThreadIds = EMPTY_BLOCKED,
+  activeThreadId = null,
 }: MessageListProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -777,6 +802,23 @@ export function MessageList({
               onDiscard={() =>
                 row.message.nonce && onDiscardMessage?.(row.message.nonce)
               }
+              onStartThread={
+                onStartThread ? () => onStartThread(row.message) : undefined
+              }
+              onOpenThread={
+                onOpenThread && row.message.thread
+                  ? () => onOpenThread(row.message.thread!, row.message)
+                  : undefined
+              }
+              isThreadOpen={
+                row.message.thread?.channelId != null &&
+                row.message.thread.channelId === activeThreadId
+              }
+              threadUnread={
+                row.message.thread
+                  ? unreadThreadIds.has(row.message.thread.channelId)
+                  : false
+              }
               showLinkEmbeds={showLinkEmbeds}
               isActive={row.message.id === effectiveActiveId}
               onFocusRow={() => setActiveMessageId(row.message.id)}
@@ -1019,6 +1061,13 @@ function buildMessageAriaLabel(
   if (message.pinnedAt) {
     parts.push("Pinned");
   }
+  if (message.thread) {
+    parts.push(
+      `Has thread ${message.thread.name}, ${message.thread.replyCount} ${
+        message.thread.replyCount === 1 ? "reply" : "replies"
+      }`,
+    );
+  }
 
   const reactions = message.reactions ?? [];
   if (reactions.length > 0) {
@@ -1059,6 +1108,13 @@ interface MessageRowProps {
   onToggleReaction: (messageId: string, emoji: string) => void;
   onRetry: () => void;
   onDiscard: () => void;
+  // --- threads ---
+  /** Undefined when threads make no sense here (thread panel, conversations). */
+  onStartThread?: () => void;
+  /** Undefined until the message actually has a thread. */
+  onOpenThread?: () => void;
+  isThreadOpen: boolean;
+  threadUnread: boolean;
   showLinkEmbeds: boolean;
   /** Whether this row is the one roving tab stop for the whole log. */
   isActive: boolean;
@@ -1101,6 +1157,10 @@ const MessageRow = memo(function MessageRow({
   onToggleReaction,
   onRetry,
   onDiscard,
+  onStartThread,
+  onOpenThread,
+  isThreadOpen,
+  threadUnread,
   showLinkEmbeds,
   isActive,
   onFocusRow,
@@ -1108,6 +1168,7 @@ const MessageRow = memo(function MessageRow({
   onMenuOpenRow,
   onMenuClose,
 }: MessageRowProps) {
+  const { t } = useTranslation();
   const { message, startsGroup, dayLabel } = row;
   // A body that is nothing but a GIF link is media, not prose — the URL is the
   // message, so it renders instead of the text rather than beside it.
@@ -1188,12 +1249,34 @@ const MessageRow = memo(function MessageRow({
 
   const reactions = message.reactions ?? [];
 
+  // --- threads --- one item, whichever half applies: a message with a thread
+  // opens it, a message without one starts it. Neither is offered where the
+  // handlers were not passed (the thread panel itself, conversations).
+  const threadAction =
+    isReal && message.thread && onOpenThread
+      ? { id: "open-thread", label: t("thread.open"), onSelect: onOpenThread }
+      : isReal && !message.thread && onStartThread
+        ? { id: "start-thread", label: t("thread.start"), onSelect: onStartThread }
+        : null;
+
   const items: ContextMenuItemDef[] = [
     ...(canReply
       ? [
           { id: "reply", label: "Reply", onSelect: selectAndClose(onReply, false) },
-          { id: "sep-reply", label: "", separator: true },
         ]
+      : []),
+    ...(threadAction
+      ? [
+          {
+            id: threadAction.id,
+            label: threadAction.label,
+            // Focus moves into the panel the action opens, so no refocus.
+            onSelect: selectAndClose(threadAction.onSelect, false),
+          },
+        ]
+      : []),
+    ...(canReply || threadAction
+      ? [{ id: "sep-reply", label: "", separator: true }]
       : []),
     {
       id: "copy-text",
@@ -1484,6 +1567,17 @@ const MessageRow = memo(function MessageRow({
                 onToggle={(emoji) => onToggleReaction(message.id, emoji)}
                 onOpenPicker={onOpenPicker}
                 onClosePicker={onClosePicker}
+                tabIndex={controlTabIndex}
+              />
+            )}
+
+            {/* --- threads --- the chip under the origin message. */}
+            {isReal && message.thread && onOpenThread && (
+              <ThreadChip
+                thread={message.thread}
+                unread={threadUnread}
+                isOpen={isThreadOpen}
+                onOpen={onOpenThread}
                 tabIndex={controlTabIndex}
               />
             )}
