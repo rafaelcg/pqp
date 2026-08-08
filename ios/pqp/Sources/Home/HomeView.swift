@@ -307,7 +307,6 @@ final class HomeModel {
         hasLoadedOnce = true
     }
 
-<<<<<<< HEAD
     /// Everything `FirstRun` needs, assembled from what the hub already holds.
     func firstRunInputs(session: SessionStore) -> FirstRun.Inputs {
         FirstRun.Inputs(

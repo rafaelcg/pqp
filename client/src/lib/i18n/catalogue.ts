@@ -701,6 +701,34 @@ export const en = {
   "profile.open": "Open {name}'s profile",
   "profile.viewProfile": "View profile",
 
+  // ------------------------------------------------------------- member list
+  // The always-there sidebar down the right of a server channel — who is here,
+  // grouped by rank and then by presence. Headings carry their own count
+  // because "Online" without a number is the one thing every reader wants to
+  // know and cannot see from a scrollbar.
+  "memberList.title": "Members",
+  "memberList.toggle": "Member list",
+  "memberList.close": "Hide the member list",
+  // One heading shape for every section, so a custom role later needs a label
+  // and nothing else. The dash is an em dash, matching Discord and Stoat.
+  "memberList.sectionHeading": "{label} — {count}",
+  "memberList.owner": "Owner",
+  "memberList.admins": "Admins",
+  "memberList.online": "Online",
+  "memberList.offline": "Offline",
+  // A group conversation's people: participants, not members — nobody is a
+  // member of a DM and nobody moderates one.
+  "memberList.participants": "Participants",
+  "memberList.inVoice": "In voice — {channel}",
+  "memberList.mention": "Mention",
+  // The door into the moderation panel. Kick, ban and timeout deliberately do
+  // not live in this sidebar — see the note in member-sidebar.tsx.
+  "memberList.manage": "Manage members…",
+  "memberList.loading": "Loading the list…",
+  "memberList.loadFailed": "Couldn't load the member list.",
+  "memberList.empty": "Nobody here yet.",
+  "memberList.showMore": "Show {count} more",
+
   // The quick-reaction strip across the top of a message's context menu. One
   // row of emoji, never a column of menu items.
   "reactions.quick": "Quick reactions",

@@ -609,6 +609,26 @@ export const ptBR: PartialMessages = {
   "profile.open": "Abrir o perfil de {name}",
   "profile.viewProfile": "Ver perfil",
 
+  // ------------------------------------------------------- lista de membros
+  // A barra fixa da direita, dentro de um canal de servidor.
+  "memberList.title": "Membros",
+  "memberList.toggle": "Lista de membros",
+  "memberList.close": "Esconder a lista de membros",
+  "memberList.sectionHeading": "{label} — {count}",
+  // "Dono" é o que se fala; "Proprietário" soa contrato de aluguel.
+  "memberList.owner": "Dono",
+  "memberList.admins": "Admins",
+  "memberList.online": "Online",
+  "memberList.offline": "Offline",
+  "memberList.participants": "Participantes",
+  "memberList.inVoice": "Na call — {channel}",
+  "memberList.mention": "Mencionar",
+  "memberList.manage": "Gerenciar membros…",
+  "memberList.loading": "Carregando a lista…",
+  "memberList.loadFailed": "Não foi possível carregar a lista de membros.",
+  "memberList.empty": "Ninguém aqui ainda.",
+  "memberList.showMore": "Mostrar mais {count}",
+
   // A fileira de reações rápidas no topo do menu de uma mensagem.
   "reactions.quick": "Reações rápidas",
   "reactions.more": "Mais reações",

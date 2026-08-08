@@ -1,5 +1,5 @@
 import { SignInButton, SignUpButton, useAuth } from "@clerk/clerk-react";
-import { Lock, Menu, Phone, Video, WifiOff } from "lucide-react";
+import { Lock, Menu, Phone, Users, Video, WifiOff } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import type {
@@ -9,6 +9,7 @@ import type {
   ChannelKind,
   DmSummary,
   MemberRole,
+  ProfileUpdate,
   SanctionNotice,
   Server,
   ThreadSummary,
@@ -40,6 +41,7 @@ import {
   useFriendsStore,
 } from "@/components/friends/use-friends";
 import { InvitePanel } from "@/components/layout/invite-panel";
+import { MemberSidebar } from "@/components/layout/member-sidebar";
 import { MembersPanel } from "@/components/layout/members-panel";
 import { ProfilePopoverProvider } from "@/components/user/user-profile-popover";
 import type { ProfileModerationContext } from "@/components/user/profile-relations";
@@ -143,11 +145,13 @@ import {
   notifyChannelActivity,
   rememberServers,
 } from "@/lib/notifications";
+import { useMemberSidebar } from "@/hooks/use-member-sidebar";
 import { useChannelNotifications } from "@/hooks/use-notifications";
 import { useUserStatus } from "@/hooks/use-status";
 import { createRealtimeTransport, type RealtimeStatus } from "@/lib/realtime";
 import { adoptThemePreference } from "@/lib/theme";
 import { isMeshForced } from "@/lib/voice-backend";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -336,6 +340,27 @@ function MainAppContent({
    */
   const [arrivalServerId, setArrivalServerId] = useState<string | null>(null);
   const [membersOpen, setMembersOpen] = useState(false);
+  // The always-there roster down the right. Its own hook because the state is a
+  // per-device preference plus a media query, and the button that flips it lives
+  // in the channel header rather than in the panel.
+  const memberSidebar = useMemberSidebar();
+  /**
+   * Two live signals the member sidebar cannot receive on its own.
+   *
+   * `memberRosterNudge` is bumped on any `presence-update` frame: status itself
+   * is a pull surface by design (see `server/src/ws/status.ts`), but "somebody
+   * just started looking at a channel in here" is a frame this client already
+   * gets for nothing, and it is the same event as "somebody just came online"
+   * almost every time. The sidebar debounces it into one re-read, which turns a
+   * 15-second worst case into about a second for the case people actually watch.
+   *
+   * `lastProfileUpdate` carries a rename or a new avatar straight into the
+   * roster. A fresh object per frame is what makes the sidebar's effect fire
+   * even when the same person changes the same field twice.
+   */
+  const [memberRosterNudge, setMemberRosterNudge] = useState(0);
+  const [lastProfileUpdate, setLastProfileUpdate] =
+    useState<ProfileUpdate | null>(null);
   // One dialog for both subjects — the target says which. Null means closed.
   const [reportTarget, setReportTarget] = useState<ReportTarget | null>(null);
   const [pinsOpen, setPinsOpen] = useState(false);
@@ -1153,6 +1178,14 @@ function MainAppContent({
             return;
           }
 
+          // Somebody started or stopped looking at a channel. The chat
+          // controller wants it for the header count; the member sidebar wants
+          // it as the cheapest available hint that presence has moved. Neither
+          // is the frame's owner, so it is nudged here and still falls through.
+          if (message.type === "presence-update") {
+            setMemberRosterNudge((n) => n + 1);
+          }
+
           if (
             message.type === "message-broadcast" ||
             message.type === "message-update" ||
@@ -1188,13 +1221,15 @@ function MainAppContent({
           // one frame — the transcript, the conversation sidebar, and the
           // account's own header when the change was made in another tab.
           //
-          // The member list is not, deliberately. It fetches its own roster
-          // when opened and is closed the overwhelming majority of the time;
-          // teaching the shell to hold and patch a list it does not own would
-          // cost more than reopening the panel does.
+          // The moderation *panel* is not, deliberately: it fetches its own
+          // roster when opened and is closed the overwhelming majority of the
+          // time. The member SIDEBAR is the opposite case — it is open all the
+          // time at desktop widths — so the frame is parked here and it patches
+          // itself from it rather than refetching a hundred rows for one name.
           if (message.type === "profile-update") {
             chat.applyProfileUpdate(message);
             threadChat.applyProfileUpdate(message);
+            setLastProfileUpdate(message);
             setConversations((prev) =>
               prev.map((conversation) =>
                 conversation.participants.some(
@@ -2224,6 +2259,25 @@ function MainAppContent({
   const canDropFiles = isAttachmentsEnabled && selectedChannel?.type === "text";
 
   /**
+   * Who the member sidebar would list, and therefore whether it exists here.
+   *
+   * A GROUP conversation gets one — three to ten people whose names are not all
+   * in the header is exactly the case a participant list answers, and it is what
+   * Discord shows too. A 1:1 does NOT: its "member list" is a single row naming
+   * the person whose name is already the title of the window, which is chrome
+   * pretending to be information.
+   */
+  const memberSidebarParticipants =
+    activeConversation?.kind === "group"
+      ? activeConversation.participants
+      : null;
+  const memberSidebarAvailable =
+    !!selectedChannel &&
+    (selection.kind === "server"
+      ? selectedServerId !== null
+      : memberSidebarParticipants !== null);
+
+  /**
    * The bottom of whichever sidebar is showing. Shared rather than duplicated:
    * an ongoing call and the mute button must not vanish because the reader
    * switched to their conversations.
@@ -2439,6 +2493,29 @@ function MainAppContent({
               onClick={() => setChannelMembersChannel(selectedChannel)}
             >
               Access
+            </button>
+          )}
+          {/* The roster toggle, last in the row — the same position and the
+              same icon Discord puts it in, because that is where the muscle
+              memory of everybody arriving from Discord already points. Shown at
+              every width: below the column breakpoint it opens the list as a
+              drawer rather than not at all. */}
+          {memberSidebarAvailable && (
+            <button
+              type="button"
+              aria-label={t("memberList.toggle")}
+              aria-pressed={memberSidebar.open}
+              title={t("memberList.toggle")}
+              data-member-sidebar-toggle=""
+              className={cn(
+                "shrink-0 rounded-md p-2 hover:bg-ink-3",
+                memberSidebar.open
+                  ? "text-paper"
+                  : "text-paper-muted hover:text-paper",
+              )}
+              onClick={memberSidebar.toggle}
+            >
+              <Users className="h-4 w-4" />
             </button>
           )}
         </div>
@@ -3003,6 +3080,56 @@ function MainAppContent({
           </div>
         )}
       </main>
+
+      {/* A SIBLING OF `<main>`, not a child of the chat pane. The root is the
+          app's flex row (rail | channels | chat), so slotting the roster here
+          makes it a real column: the transcript reflows to the width that is
+          left instead of having 15rem of itself covered up. It is also why the
+          voice channel's own two-pane layout needs no change — that lives
+          inside `<main>` and simply gets a narrower box. */}
+      {memberSidebarAvailable && (
+        <MemberSidebar
+          open={memberSidebar.open}
+          wide={memberSidebar.wide}
+          onClose={memberSidebar.close}
+          serverId={
+            selection.kind === "server" ? selectedServerId : null
+          }
+          participants={memberSidebarParticipants}
+          self={
+            memberSidebarParticipants && user
+              ? {
+                  id: user.id,
+                  displayName: user.displayName,
+                  username: user.username,
+                  tag: user.tag,
+                  avatarUrl: user.avatarUrl,
+                }
+              : null
+          }
+          currentUserId={user?.id ?? null}
+          role={selectedServer?.role ?? "member"}
+          blockedUserIds={blockedUserIds}
+          refreshNudge={memberRosterNudge}
+          profileUpdate={lastProfileUpdate}
+          onMention={(username) => setComposerInsert(`@${username}`)}
+          onBlockUser={(userId) => void handleBlockUser(userId)}
+          onUnblockUser={(userId) => void handleUnblockUser(userId)}
+          onReportUser={(member) =>
+            setReportTarget({
+              kind: "user",
+              userId: member.id,
+              subjectName: member.displayName,
+              serverId: selectedServerId,
+            })
+          }
+          onOpenMembersPanel={() => setMembersOpen(true)}
+          voiceOccupancy={voiceState.occupancy}
+          voiceChannels={channels
+            .filter((c) => c.type === "voice")
+            .map((c) => ({ id: c.id, name: c.name }))}
+        />
+      )}
 
       <SettingsModal
         open={settingsOpen}
