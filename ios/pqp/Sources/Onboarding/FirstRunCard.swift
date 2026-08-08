@@ -135,7 +135,7 @@ struct FirstRunCard: View {
     // web catalogue uses, and the reason none of these say "Set up your profile".
     private func title(for task: FirstRunTask) -> LocalizedStringKey {
         switch task {
-        case .server: "Get into a server"
+        case .server: "Get into a community"
         case .friend: "Find your people"
         case .avatar: "Put a face on it"
         }
@@ -163,7 +163,7 @@ struct FirstRunCard: View {
 
     private func actionTitle(for task: FirstRunTask) -> LocalizedStringKey {
         switch task {
-        case .server: "Make a server"
+        case .server: "Make a community"
         case .friend: "Add a friend"
         case .avatar: "Pick an avatar"
         }

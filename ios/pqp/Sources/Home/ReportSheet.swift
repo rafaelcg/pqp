@@ -5,11 +5,18 @@ import SwiftUI
 enum ReportTarget: Identifiable, Hashable {
     case message(id: String, authorName: String)
     case user(id: String, displayName: String, serverId: String?)
+    /// A whole community, reported off its directory card by somebody who has
+    /// not gone inside — which is the point of it. This one does NOT reach the
+    /// server's own moderators: `resolveServerSubject` routes a community report
+    /// to the instance queue, because a complaint about a room is not something
+    /// its owner should be the judge of.
+    case community(serverId: String, name: String)
 
     var id: String {
         switch self {
         case .message(let id, _): "message-\(id)"
         case .user(let id, _, _): "user-\(id)"
+        case .community(let serverId, _): "server-\(serverId)"
         }
     }
 }
@@ -34,6 +41,8 @@ struct ReportSheet: View {
             String(localized: "Report a message by \(authorName)")
         case .user(_, let displayName, _):
             String(localized: "Report \(displayName)")
+        case .community(_, let name):
+            String(localized: "Report the community \(name)")
         }
     }
 
@@ -143,6 +152,11 @@ struct ReportSheet: View {
             case .user(let id, _, let serverId):
                 try await session.api.reportUser(
                     userId: id, serverId: serverId, reason: reason.rawValue,
+                    details: trimmed.isEmpty ? nil : trimmed
+                )
+            case .community(let serverId, _):
+                try await session.api.reportCommunity(
+                    serverId: serverId, reason: reason.rawValue,
                     details: trimmed.isEmpty ? nil : trimmed
                 )
             }

@@ -73,6 +73,14 @@ struct ChannelListView: View {
                 )
             } else {
                 ScrollView {
+                    // Full-bleed, so it sits outside the list's own gutter.
+                    // Absent — which is every server that has not uploaded one —
+                    // leaves the large navigation title doing the naming, exactly
+                    // as before.
+                    if let banner = Avatar.resolve(current.bannerUrl) {
+                        CommunityBanner(url: banner, name: current.name)
+                    }
+
                     LazyVStack(alignment: .leading, spacing: 8) {
                         if !textChannels.isEmpty {
                             SectionLabel(text: String(localized: "Text"))
@@ -135,7 +143,9 @@ struct ChannelListView: View {
             }
         }
         .navigationTitle(current.name)
-        .navigationBarTitleDisplayMode(.large)
+        // The banner already says the name, in type twice the size. Leaving the
+        // large title on would print it twice, one under the other.
+        .navigationBarTitleDisplayMode(current.bannerUrl == nil ? .large : .inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
@@ -153,7 +163,7 @@ struct ChannelListView: View {
                             Label("New channel", systemImage: "plus.square")
                         }
                         Button { showingSettings = true } label: {
-                            Label("Server settings", systemImage: "gearshape")
+                            Label("Community settings", systemImage: "gearshape")
                         }
                     }
                     Divider()
@@ -162,7 +172,7 @@ struct ChannelListView: View {
                     // last-owner case and there is no sense offering it.
                     if server.role != "owner" {
                         Button(role: .destructive) { confirmingLeave = true } label: {
-                            Label("Leave server", systemImage: "rectangle.portrait.and.arrow.right")
+                            Label("Leave community", systemImage: "rectangle.portrait.and.arrow.right")
                         }
                     }
                 } label: {
@@ -392,6 +402,66 @@ struct ChannelListView: View {
             self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
         }
         isLoading = false
+    }
+}
+
+/// A community's banner, with its name over it.
+///
+/// THE SCRIM IS NOT DECORATION. The image is whatever the owner uploaded — a
+/// white photograph is as likely as a dark one — and white display type on an
+/// unknown picture is unreadable roughly half the time. The gradient is opaque
+/// enough at the bottom edge to carry text against anything, and clears away
+/// entirely at the top so the picture is still the thing you see.
+///
+/// 120pt: tall enough to read as a banner rather than a stripe, short enough
+/// that the first channel is still above the fold on the smallest screen this
+/// app supports.
+private struct CommunityBanner: View {
+    let url: URL
+    let name: String
+
+    var body: some View {
+        // FRAMED AND CLIPPED BEFORE THE SCRIM AND THE NAME GO ON. A
+        // `scaledToFill` image grows the stack it is in, not only itself, so a
+        // 1024×360 banner laid out as a sibling of the name would push the name
+        // far below the 120pt window and clipping would then remove it. The two
+        // things drawn on top are overlays, which measure against the strip.
+        ZStack {
+            // Under the image rather than instead of it, so a slow load shows a
+            // band of the app's own colour and not a white hole.
+            Palette.surface
+
+            AsyncImage(url: url) { image in
+                image.resizable().scaledToFill()
+            } placeholder: {
+                Color.clear
+            }
+        }
+        .frame(height: 120)
+        .frame(maxWidth: .infinity)
+        .clipped()
+        .overlay {
+            LinearGradient(
+                colors: [
+                    Palette.ink.opacity(0),
+                    Palette.ink.opacity(0.55),
+                    Palette.ink.opacity(0.88),
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        }
+        .overlay(alignment: .bottomLeading) {
+            Text(name)
+                .font(Typography.display(24))
+                .foregroundStyle(Palette.paper)
+                .lineLimit(2)
+                .shadow(color: .black.opacity(0.45), radius: 6, y: 1)
+                .padding(.horizontal, Metrics.hPadding)
+                .padding(.bottom, 12)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(name)
     }
 }
 

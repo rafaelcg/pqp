@@ -48,7 +48,35 @@ extension XCUIApplication {
 }
 
 enum TestSeed {
-    static let apiBase = "http://localhost:3001"
+    /// The dev server to seed against, and the one the app under test is pointed
+    /// at when it is not the default.
+    ///
+    /// OVERRIDABLE because one thing this suite needs cannot be seeded over
+    /// HTTP: `COMMUNITIES_ENABLED` is read from the server's process
+    /// environment, so a directory only exists on a server that was *started*
+    /// with it on — and restarting somebody's running dev server is not a thing
+    /// a test may do. Point a second server at the same database and run:
+    ///
+    ///     TEST_RUNNER_PQP_TEST_API_BASE=http://localhost:3002 xcodebuild test …
+    ///
+    /// (`TEST_RUNNER_`-prefixed variables reach the runner from xcodebuild's own
+    /// environment; passing the same name as a build-setting argument does not.)
+    ///
+    /// Unset, this is the ordinary local server and nothing about the suite
+    /// changes.
+    static let apiBase = ProcessInfo.processInfo
+        .environment["PQP_TEST_API_BASE"] ?? "http://localhost:3001"
+
+    /// Whether the app under test has to be told where the server is.
+    ///
+    /// Only when the base was overridden: the app already defaults to
+    /// `localhost:3001` in a debug build, and setting the variable unnecessarily
+    /// would route every test through a debug-only branch instead of the path
+    /// the app actually takes.
+    static var launchEnvironment: [String: String] {
+        ProcessInfo.processInfo.environment["PQP_TEST_API_BASE"]
+            .map { ["PQP_API_OVERRIDE": $0] } ?? [:]
+    }
 
     struct SeededServer: Sendable {
         let id: String

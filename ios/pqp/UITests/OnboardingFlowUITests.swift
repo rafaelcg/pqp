@@ -32,7 +32,7 @@ final class OnboardingFlowUITests: XCTestCase {
         let app = launchFresh()
 
         XCTAssertTrue(
-            app.staticTexts["Your friends.\nYour server.\nYour mess."].waitForExistence(timeout: 5),
+            app.staticTexts["Your friends.\nYour community.\nYour mess."].waitForExistence(timeout: 5),
             "First onboarding beat should be visible on a fresh install"
         )
 

@@ -28,6 +28,12 @@ final class ChatUXUITests: XCTestCase {
     private func openGeneral() -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments += ["-pqp.hasCompletedOnboarding", "NO"]
+        // …and forgets where the last run was reading. Without this the app
+        // restores that channel on top of the hub and the seeded server, which
+        // is on the hub, is never reachable — a failure that looks like the
+        // seed not working and depends entirely on which test ran last.
+        // `OnboardingFlowUITests` has carried the same line since it hit this.
+        app.launchArguments += ["-pqp.lastVisited", "none"]
         app.launch()
         XCTAssertTrue(app.buttons["Skip"].waitForExistence(timeout: 5))
         app.buttons["Skip"].tap()

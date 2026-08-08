@@ -52,9 +52,19 @@ struct Backend: Sendable, Equatable {
         // an unreachable server. Debug-only, so it cannot affect a release.
         if let override = ProcessInfo.processInfo.environment["PQP_API_OVERRIDE"],
            let url = URL(string: override) {
+            // The socket is DERIVED from the override rather than hardcoded at a
+            // dead port. The unreachable-server test points this at
+            // `127.0.0.1:9`, which derives to exactly the dead socket it used to
+            // hardcode — so that case is unchanged — while pointing the app at a
+            // *working* server on another port now moves both halves. Hardcoding
+            // meant a live API with a dead socket, which is the one combination
+            // that strands the app on the splash.
+            var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+            components?.scheme = url.scheme == "https" ? "wss" : "ws"
+            components?.path = "/ws"
             return Backend(
                 apiBaseURL: url,
-                webSocketURL: URL(string: "ws://127.0.0.1:9/ws")!
+                webSocketURL: components?.url ?? URL(string: "ws://127.0.0.1:9/ws")!
             )
         }
         // On a physical device `localhost` is the phone, not the Mac running
@@ -138,6 +148,11 @@ actor APIClient {
     /// Same arrangement, declared beside its uploader in AvatarUploader.swift.
     var avatarConfigCache: AvatarConfig?
     private var gifConfigCache: GifConfig?
+    /// Whether this deployment has a communities directory. Same arrangement as
+    /// the two above — declared here, memoised beside its own endpoints in
+    /// CommunitiesAPI.swift. A feature flag cannot change while the app runs, and
+    /// this one gates a button that is on screen every time the hub is.
+    var communityConfigCache: CommunityConfig?
 
     init(
         backend: Backend = .current,

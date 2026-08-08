@@ -6,6 +6,9 @@ import PhotosUI
 /// up some of the stacks a chat can live in.
 struct OpenedConversation: Identifiable, Hashable {
     let summary: DmSummary
+    /// Text to seed the composer with. Empty for every path but the depoimento
+    /// composer's DM fork, which carries what the author already typed.
+    var draft: String = ""
     var id: String { summary.channelId }
 }
 
@@ -35,7 +38,15 @@ struct ChatView: View {
     /// was gated on nothing, so a plain member tapped Pin and got a 403.
     var server: Server? = nil
 
+    /// Text to open the composer with. Set on exactly one path — the depoimento
+    /// composer's DM fork — so somebody who decides mid-sentence that what they
+    /// wrote is private does not have to type it twice.
+    var initialDraft: String = ""
+
     @State private var model = ChatModel()
+    /// Applied once. Without the guard, coming back to this screen from a thread
+    /// would overwrite whatever the person has since typed.
+    @State private var hasSeededDraft = false
     @State private var openedThread: ThreadSummary?
     @State private var showingPicker = false
     @State private var showingPins = false
@@ -166,7 +177,8 @@ struct ChatView: View {
             ChatView(
                 channelId: opened.summary.channelId,
                 title: opened.summary.title,
-                conversation: opened.summary
+                conversation: opened.summary,
+                initialDraft: opened.draft
             )
         }
         .sheet(isPresented: $showingPins) { PinnedMessagesView(channelId: channelId) }
@@ -184,8 +196,10 @@ struct ChatView: View {
             // filed with this server's moderators instead of the instance.
             UserProfileSheet(
                 subject: subject,
-                onOpenConversation: { conversation in
-                    openedConversation = OpenedConversation(summary: conversation)
+                onOpenConversation: { conversation, draft in
+                    openedConversation = OpenedConversation(
+                        summary: conversation, draft: draft
+                    )
                 },
                 server: server
             )
@@ -204,6 +218,14 @@ struct ChatView: View {
             }
         }
         .task { await model.open(channelId: channelId, session: session) }
+        // After `open`, which resets the model — seeding before it would be
+        // overwritten by the load it is racing.
+        .onAppear {
+            guard !hasSeededDraft, !initialDraft.isEmpty else { return }
+            hasSeededDraft = true
+            if model.draft.isEmpty { model.draft = initialDraft }
+            composerFocused = true
+        }
         .onDisappear { model.close() }
     }
 

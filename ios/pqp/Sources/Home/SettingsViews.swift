@@ -16,7 +16,7 @@ struct AccountSettingsView: View {
 
     private let privacyOptions = [
         ("everyone", "Anyone"),
-        ("server_members", "People I share a server with"),
+        ("server_members", "People I share a community with"),
         ("nobody", "Nobody"),
     ]
 
@@ -29,8 +29,13 @@ struct AccountSettingsView: View {
                     AvatarRow()
                     TextField("Display name", text: $displayName)
                     if let tag = session.currentUser?.tag {
-                        LabeledContent("Handle", value: tag)
+                        // `name#1234`, which is how somebody adds you INSIDE the
+                        // app. Deliberately labelled apart from the public link
+                        // below: two name fields in one form is a design smell,
+                        // so each has to say what it is for.
+                        LabeledContent("Tag", value: tag)
                     }
+                    HandleRow()
                 }
 
                 Section("Who can message you") {
@@ -133,6 +138,172 @@ struct AccountSettingsView: View {
     }
 }
 
+/// The public handle — `pqp.gg/@rafa` — claimed, copied and shared.
+///
+/// ITS OWN VIEW, AND ITS OWN SAVE, for the same reason `AvatarRow` is: this does
+/// not share the form's save cycle. A handle claim is the one field here that
+/// can fail for a reason nothing else can — somebody else already holds it — and
+/// a collision must never be swept into a retry of the whole profile. The
+/// server's PATCH handler splits it for exactly that reason; this is the client
+/// half of the same split.
+///
+/// WHAT IS DRAWN DEPENDS ON WHETHER ONE IS HELD. With a handle it is a LINK: a
+/// piece of text you own, with Copy and Share beside it. Without one it is a
+/// FIELD: a thing you are editing, which you can abandon. Collapsing the two
+/// would mean a copy button that copies a draft.
+private struct HandleRow: View {
+    @Environment(SessionStore.self) private var session
+
+    @State private var typed = ""
+    @State private var busy = false
+    @State private var error: String?
+    @State private var copied = false
+
+    private var handle: String? {
+        guard let held = session.currentUser?.handle, !held.isEmpty else { return nil }
+        return held
+    }
+
+    /// Nil while the account has never claimed one, or once the window is over.
+    private var renameAvailableAt: Date? {
+        guard !HandleRules.canRename(
+            changedAt: session.currentUser?.handleChangedDate,
+            currentHandle: handle
+        ) else { return nil }
+        return HandleRules.renameAvailableAt(
+            changedAt: session.currentUser?.handleChangedDate,
+            currentHandle: handle
+        )
+    }
+
+    /// The mirror's verdict on what is typed, or nil while it is too short to
+    /// judge — nagging somebody who has entered two characters of a name they
+    /// have not finished is noise, not help.
+    private var localRefusal: String? {
+        guard typed.count >= HandleRules.minLength else { return nil }
+        return HandleRules.validate(typed).map(HandleRules.message(for:))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if let handle {
+                // A plain row rather than `LabeledContent`: that container
+                // rewrites its value view into the row's own accessibility
+                // element, which swallows the identifier and leaves the link
+                // unaddressable from a UI test.
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Public link")
+                        .font(Typography.caption)
+                        .foregroundStyle(Palette.paperMuted)
+                    Text(HandleRules.displayUrl(handle))
+                        .font(Typography.mono)
+                        .foregroundStyle(Palette.signal)
+                        .textSelection(.enabled)
+                        .accessibilityIdentifier("settings.handle.url")
+                }
+
+                HStack(spacing: 16) {
+                    Button(copied ? "Copied" : "Copy") {
+                        UIPasteboard.general.string =
+                            HandleRules.shareUrl(handle)?.absoluteString
+                        copied = true
+                    }
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.signal)
+                    .accessibilityIdentifier("settings.handle.copy")
+
+                    if let url = HandleRules.shareUrl(handle) {
+                        // The point of a handle is that it travels — by
+                        // WhatsApp, by screenshot, by being read aloud. On a
+                        // phone the share sheet IS how a link leaves the app.
+                        ShareLink(item: url) {
+                            Text("Share")
+                                .font(Typography.caption)
+                                .foregroundStyle(Palette.signal)
+                        }
+                        .accessibilityIdentifier("settings.handle.share")
+                    }
+                }
+
+                if let available = renameAvailableAt {
+                    // The anti-squatting rule, stated as a date rather than as a
+                    // refusal: without it, one account can hold every desirable
+                    // handle in rotation.
+                    Text("You can change it again from \(available, format: .dateTime.day().month(.wide).year()).")
+                        .font(Typography.caption)
+                        .foregroundStyle(Palette.warning)
+                } else {
+                    claimField(label: String(localized: "Change it"))
+                }
+            } else {
+                Text("Claim a public link. Anyone can open it, even without an account.")
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.paperMuted)
+                claimField(label: String(localized: "Claim your link"))
+            }
+
+            if let message = error ?? localRefusal {
+                Text(message)
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.danger)
+            }
+        }
+        .onChange(of: copied) { _, isCopied in
+            guard isCopied else { return }
+            Task {
+                try? await Task.sleep(for: .seconds(2))
+                copied = false
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func claimField(label: String) -> some View {
+        HStack(spacing: 0) {
+            Text("pqp.gg/@")
+                .font(Typography.mono)
+                .foregroundStyle(Palette.paperMuted)
+            TextField("seunome", text: $typed)
+                .font(Typography.mono)
+                .textFieldStyle(.plain)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+                .accessibilityIdentifier("settings.handle.field")
+                .accessibilityLabel(Text(label))
+                // Normalised on every keystroke rather than validated on submit:
+                // `ç` and a capital letter become the handle they meant instead
+                // of an error message, which is the difference between a field
+                // people finish and one they leave.
+                .onChange(of: typed) { _, value in
+                    let normalised = HandleRules.normalize(value)
+                    if normalised != value { typed = normalised }
+                    error = nil
+                }
+            Button(busy ? "Saving…" : "Save") { Task { await claim() } }
+                .font(Typography.caption)
+                .foregroundStyle(Palette.signal)
+                .disabled(busy || localRefusal != nil || typed.count < HandleRules.minLength)
+                .accessibilityIdentifier("settings.handle.save")
+        }
+    }
+
+    private func claim() async {
+        busy = true
+        error = nil
+        defer { busy = false }
+        do {
+            _ = try await session.api.claimHandle(typed)
+            await session.refreshCurrentUser()
+            typed = ""
+        } catch {
+            // VERBATIM. "That handle is taken" is not a property of the string —
+            // only the unique index can say it — so the local mirror cannot
+            // produce this sentence and must not paraphrase it.
+            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+}
+
 /// Pick, upload and clear the account's profile picture.
 ///
 /// Its own view rather than lines in `AccountSettingsView` because it does not
@@ -187,7 +358,7 @@ private struct AvatarRow: View {
                         }
                     }
                 } else {
-                    Text("Photo uploads are off on this server.")
+                    Text("Photo uploads are off here.")
                         .font(Typography.caption)
                         .foregroundStyle(Palette.paperMuted)
                 }
@@ -276,7 +447,7 @@ struct ServerSettingsView: View {
         NavigationStack {
             Form {
                 Section("Name") {
-                    TextField("Server name", text: $name)
+                    TextField("Community name", text: $name)
                     Button("Rename") { Task { await rename() } }
                         .disabled(!isOwner || name.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
@@ -331,7 +502,7 @@ struct ServerSettingsView: View {
 
                 if isOwner {
                     Section("Data") {
-                        Button(exporting ? "Exporting…" : "Export server data") {
+                        Button(exporting ? "Exporting…" : "Export community data") {
                             Task { await export() }
                         }
                         .disabled(exporting)
@@ -344,7 +515,7 @@ struct ServerSettingsView: View {
 
                     Section("Transfer ownership") {
                         if transferCandidates.isEmpty {
-                            Text("Nobody else is in this server.")
+                            Text("Nobody else is in this community.")
                                 .foregroundStyle(Palette.paperMuted)
                         } else {
                             Picker("New owner", selection: $transferTo) {
@@ -361,7 +532,7 @@ struct ServerSettingsView: View {
                     }
 
                     Section {
-                        Button("Delete server", role: .destructive) { confirmingDelete = true }
+                        Button("Delete community", role: .destructive) { confirmingDelete = true }
                     } footer: {
                         Text("Every channel, message, and invite is deleted for everyone.")
                     }
@@ -369,7 +540,7 @@ struct ServerSettingsView: View {
             }
             .scrollContentBackground(.hidden)
             .background(Palette.ink)
-            .navigationTitle("Server settings")
+            .navigationTitle("Community settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -385,7 +556,7 @@ struct ServerSettingsView: View {
             .alert("Delete \(server.name)?", isPresented: $confirmingDelete) {
                 // Typed confirmation, matching the web client: a destructive
                 // action this total should cost more than one tap.
-                TextField("Type the server name", text: $deleteConfirmText)
+                TextField("Type the community name", text: $deleteConfirmText)
                 Button("Cancel", role: .cancel) { deleteConfirmText = "" }
                 Button("Delete forever", role: .destructive) {
                     guard deleteConfirmText == server.name else { return }
@@ -479,11 +650,11 @@ enum AuditLabels {
         "channel.delete": "deleted a channel",
         "channel.move": "reordered a channel",
         "message.delete": "deleted someone's message",
-        "server.update": "renamed the server",
+        "server.update": "renamed the community",
         "server.retention_update": "changed message retention",
         "server.sso_domain_update": "changed the SSO email domain",
         "server.ownership_transfer": "transferred ownership",
-        "server.data_export": "exported the server's data",
+        "server.data_export": "exported the community's data",
         "invite.create": "created an invite",
         "invite.delete": "revoked an invite",
         "webhook.create": "created a webhook",

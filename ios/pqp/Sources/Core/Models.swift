@@ -20,6 +20,31 @@ struct CurrentUser: Codable, Identifiable, Hashable, Sendable {
     /// matching the web client; a gate the server does not enforce must not be
     /// invented client-side, because its `POST /api/me/age-check` would 404.
     var ageGate: String?
+    /// The account's public handle — `pqp.gg/@rafa` — or nil when it has never
+    /// claimed one, which is most accounts.
+    ///
+    /// On this shape and deliberately NOT on `PublicUser`: a handle is a URL its
+    /// owner chose to publish, nothing in the app needs somebody else's to render
+    /// a row, and the public *profile* page is where one is read about anybody
+    /// else — keyed BY the handle.
+    var handle: String?
+    /// When the handle last moved, so Settings can say when it may move again.
+    /// A String rather than a Date because it is only ever fed back to
+    /// `HandleRules`, and a decode failure here must not cost the whole account.
+    var handleChangedAt: String?
+
+    /// `handleChangedAt` as the cooldown arithmetic wants it. Parsed here rather
+    /// than at the field so an unrecognised stamp reads as "no cooldown" — which
+    /// is the safe direction: the server refuses a rename inside the window
+    /// regardless, and its sentence is what gets shown.
+    var handleChangedDate: Date? {
+        guard let handleChangedAt else { return nil }
+        let withFraction = ISO8601DateFormatter()
+        withFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let plain = ISO8601DateFormatter()
+        plain.formatOptions = [.withInternetDateTime]
+        return withFraction.date(from: handleChangedAt) ?? plain.date(from: handleChangedAt)
+    }
 }
 
 struct PublicUser: Codable, Identifiable, Hashable, Sendable {
@@ -39,6 +64,79 @@ struct Server: Codable, Identifiable, Hashable, Sendable {
     let createdAt: Date
     let messageRetentionDays: Int?
     let ssoEmailDomain: String?
+    /// The server's two pictures, or nil where it set none. Root-relative
+    /// `/api/servers/:id/icon?v=…` — the API does not know its own public origin
+    /// (see `serverIconPath` in shared), so `Avatar.resolve` completes them.
+    ///
+    /// Both routes are served WITHOUT auth, before the Bearer is even resolved,
+    /// which is what lets `AsyncImage` fetch them directly.
+    let iconUrl: String?
+    let bannerUrl: String?
+    /// Whether this server is listed in the public directory.
+    ///
+    /// On the member's own list rather than only in the directory because it is
+    /// what decides whether the rail offers "show this on my profile" at all — a
+    /// private server is never chipped onto anybody's card, so offering the
+    /// switch there would be offering a no-op.
+    let isCommunity: Bool
+    /// This membership's badge opt-out, TRUE by default. Meaningless unless
+    /// `isCommunity`.
+    var showOnProfile: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, ownerId, role, createdAt, messageRetentionDays
+        case ssoEmailDomain, iconUrl, bannerUrl, isCommunity, showOnProfile
+    }
+
+    /// Hand-written for the four fields the communities wave added.
+    ///
+    /// `isCommunity` and `showOnProfile` are non-optional on the wire but
+    /// DEFAULTED here, which is the same leniency `Message.thread` gets and for
+    /// the same reason: this app talks to a deployment that may be a version
+    /// behind, and a server that predates communities must still appear in the
+    /// rail rather than failing the whole `/api/servers` decode. It is also what
+    /// lets a cache written by an older build still load.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
+        ownerId = try c.decodeIfPresent(String.self, forKey: .ownerId) ?? ""
+        role = try c.decodeIfPresent(String.self, forKey: .role)
+        createdAt = try c.decode(Date.self, forKey: .createdAt)
+        messageRetentionDays = try c.decodeIfPresent(Int.self, forKey: .messageRetentionDays)
+        ssoEmailDomain = try c.decodeIfPresent(String.self, forKey: .ssoEmailDomain)
+        iconUrl = try c.decodeIfPresent(String.self, forKey: .iconUrl)
+        bannerUrl = try c.decodeIfPresent(String.self, forKey: .bannerUrl)
+        isCommunity = try c.decodeIfPresent(Bool.self, forKey: .isCommunity) ?? false
+        showOnProfile = try c.decodeIfPresent(Bool.self, forKey: .showOnProfile) ?? true
+    }
+
+    /// For tests and previews; never for anything the server sent.
+    init(
+        id: String,
+        name: String,
+        ownerId: String,
+        role: String?,
+        createdAt: Date,
+        messageRetentionDays: Int? = nil,
+        ssoEmailDomain: String? = nil,
+        iconUrl: String? = nil,
+        bannerUrl: String? = nil,
+        isCommunity: Bool = false,
+        showOnProfile: Bool = true
+    ) {
+        self.id = id
+        self.name = name
+        self.ownerId = ownerId
+        self.role = role
+        self.createdAt = createdAt
+        self.messageRetentionDays = messageRetentionDays
+        self.ssoEmailDomain = ssoEmailDomain
+        self.iconUrl = iconUrl
+        self.bannerUrl = bannerUrl
+        self.isCommunity = isCommunity
+        self.showOnProfile = showOnProfile
+    }
 }
 
 struct Channel: Codable, Identifiable, Hashable, Sendable {

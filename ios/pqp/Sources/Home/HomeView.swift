@@ -208,10 +208,27 @@ final class HomeModel {
     /// this one number when it arrives. The hub is the screen a phone actually
     /// sits on, so this is where the difference is felt.
     var pendingFriendRequests = 0
+    /// Depoimentos friends have written about this account and nobody has seen
+    /// yet. Folded into the SAME badge as the requests above rather than given
+    /// one of its own — see `Depoimentos.waitingOnYou`: the badge promises
+    /// "somebody is waiting for you to answer something", and both are answered
+    /// from the Friends screen with the same two buttons.
+    var pendingDepoimentos = 0
+    /// What the badge actually draws.
+    var waitingOnYou: Int {
+        Depoimentos.waitingOnYou(
+            friendRequests: pendingFriendRequests,
+            pendingDepoimentos: pendingDepoimentos
+        )
+    }
     /// How many friends this account has, for the first-run checklist's middle
     /// row. Read off the same fetch the badge above uses — one request answers
     /// both questions.
     var friendCount = 0
+    /// Whether this deployment has a directory at all. False until the config
+    /// route says otherwise, and false forever on a deployment with the flag off
+    /// — a compass with nothing behind it is worse than no compass.
+    var communitiesEnabled = false
     /// This account's stored preferences, or nil until they have been read.
     ///
     /// Nil is load-bearing: `FirstRun.shouldShow` refuses to offer a card it
@@ -300,6 +317,9 @@ final class HomeModel {
             if let stored = try? await session.api.preferences() {
                 preferences = stored
             }
+            // Memoised behind the client, so this is one round trip for the
+            // life of the process rather than one per return to the hub.
+            communitiesEnabled = await session.api.communitiesEnabled()
         } catch {
             self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
         }
@@ -344,9 +364,43 @@ final class HomeModel {
     /// failure must not un-tick a checklist row.
     func refreshFriendBadge() async {
         guard let session else { return }
-        guard let friends = try? await session.api.friends() else { return }
-        pendingFriendRequests = FriendsDigest.pendingActionCount(friends)
-        friendCount = friends.friends.count
+        // Two independent reads, both non-fatal, and neither resets its number
+        // on a failure: a badge one behind is better than one that flickers to
+        // zero. The queue read is separate because it is a different table and
+        // a different route; folding them would mean a dropped friends request
+        // also hiding a depoimento somebody is waiting on.
+        let api = session.api
+        async let friendsResponse = try? await api.friends()
+        async let queue = try? await api.pendingDepoimentos()
+        if let friends = await friendsResponse {
+            pendingFriendRequests = FriendsDigest.pendingActionCount(friends)
+            friendCount = friends.friends.count
+        }
+        if let pending = await queue {
+            pendingDepoimentos = pending.count
+        }
+    }
+
+    /// One membership's badge opt-out, flipped from the rail's own menu.
+    ///
+    /// Optimistic, because the switch is a preference about a chip on a card
+    /// nobody is looking at right now: the tick moves on the tap, and a failed
+    /// write puts it back rather than leaving the menu claiming something the
+    /// server does not believe.
+    func setProfileVisibility(serverId: String, showOnProfile: Bool) async {
+        guard let session,
+              let index = servers.firstIndex(where: { $0.id == serverId })
+        else { return }
+        let previous = servers[index].showOnProfile
+        servers[index].showOnProfile = showOnProfile
+        do {
+            try await session.api.setProfileVisibility(
+                serverId: serverId, showOnProfile: showOnProfile
+            )
+        } catch {
+            servers[index].showOnProfile = previous
+            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+        }
     }
 
 
@@ -384,6 +438,9 @@ struct HubView: View {
     @State private var showingJoinInvite = false
     @State private var inviteCode = ""
     @State private var showingAccountSettings = false
+    /// The directory, over everything. A sheet rather than a push because
+    /// browsing is a different mode from talking — see `CommunitiesView`.
+    @State private var showingCommunities = false
     /// Non-nil pushes the Friends screen with its handle search already open.
     @State private var addingFriend: FriendsDestination?
 
@@ -446,7 +503,7 @@ struct HubView: View {
                     Button {
                         showingCreateServer = true
                     } label: {
-                        Label("New server", systemImage: "plus.square.on.square")
+                        Label("New community", systemImage: "plus.square.on.square")
                     }
                     Button {
                         showingJoinInvite = true
@@ -468,8 +525,8 @@ struct HubView: View {
             guard model.hasLoadedOnce else { return }
             Task { await model.refresh() }
         }
-        .alert("New server", isPresented: $showingCreateServer) {
-            TextField("Server name", text: $newServerName)
+        .alert("New community", isPresented: $showingCreateServer) {
+            TextField("Community name", text: $newServerName)
             Button("Cancel", role: .cancel) { newServerName = "" }
             Button("Create") {
                 let name = newServerName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -481,7 +538,7 @@ struct HubView: View {
         // A whole link pastes as happily as a bare code — `normalizeInviteCode`
         // takes the last path segment either way, and a whole link is what
         // people were actually sent.
-        .alert("Join a server", isPresented: $showingJoinInvite) {
+        .alert("Join a community", isPresented: $showingJoinInvite) {
             TextField("Invite code or link", text: $inviteCode)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
@@ -514,6 +571,18 @@ struct HubView: View {
         // tap — and nothing on the way there mentions an avatar.
         .sheet(isPresented: $showingAccountSettings) {
             AccountSettingsView()
+        }
+        // Joining lands in the community through the SAME path an invite link
+        // takes — `requestNavigation` is watched by `HomeView`, which resolves
+        // the server (refreshing the list, since this membership is seconds old)
+        // and pushes its channel list. One navigation, one place it is written.
+        .sheet(isPresented: $showingCommunities) {
+            CommunitiesView { serverId in
+                Task {
+                    await model.refresh()
+                    session.requestNavigation(.server(id: serverId))
+                }
+            }
         }
         // Close the derived-state loop: once all three read as done, record it so
         // that undoing one of them a year from now cannot bring the card back.
@@ -592,6 +661,24 @@ struct HubView: View {
 
             Spacer(minLength: 8)
 
+            // The two doors out of the hub that lead to people you have not met
+            // yet, side by side: a directory of rooms, and the people you
+            // already know. Absent entirely on a deployment with the flag off —
+            // not disabled, not present-and-empty.
+            if model.communitiesEnabled {
+                Button { showingCommunities = true } label: {
+                    Image(systemName: "safari")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(Palette.paper)
+                        .frame(width: 44, height: 44)
+                        .background(Circle().fill(Palette.surfaceRaised))
+                        .overlay(Circle().strokeBorder(Palette.border, lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("hub.communities")
+                .accessibilityLabel("Find communities")
+            }
+
             NavigationLink {
                 FriendsView()
             } label: {
@@ -602,7 +689,7 @@ struct HubView: View {
                     .background(Circle().fill(Palette.surfaceRaised))
                     .overlay(Circle().strokeBorder(Palette.border, lineWidth: 1))
                     .overlay(alignment: .topTrailing) {
-                        if model.pendingFriendRequests > 0 {
+                        if model.waitingOnYou > 0 {
                             Circle()
                                 .fill(Palette.signal)
                                 .frame(width: 10, height: 10)
@@ -614,8 +701,8 @@ struct HubView: View {
             .buttonStyle(.plain)
             .accessibilityIdentifier("hub.friends")
             .accessibilityLabel(
-                model.pendingFriendRequests > 0
-                    ? Text("Friends, \(model.pendingFriendRequests) requests waiting")
+                model.waitingOnYou > 0
+                    ? Text("Friends, \(model.waitingOnYou) waiting on you")
                     : Text("Friends")
             )
         }
@@ -632,7 +719,7 @@ struct HubView: View {
             )
             .ignoresSafeArea(edges: .bottom)
         }
-        .animation(Motion.standard, value: model.pendingFriendRequests)
+        .animation(Motion.standard, value: model.waitingOnYou)
     }
 
     /// The dock says "you"; when the socket is down it says that instead,
@@ -657,8 +744,23 @@ struct HubView: View {
     @ViewBuilder
     private var serverSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            SectionLabel(text: String(localized: "Servers"))
-                .padding(.horizontal, Metrics.hPadding)
+            HStack {
+                SectionLabel(text: String(localized: "Communities"))
+                Spacer()
+                if model.communitiesEnabled {
+                    Button { showingCommunities = true } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "safari")
+                                .font(.system(size: 11, weight: .semibold))
+                            Text("Find communities")
+                                .font(Typography.caption)
+                        }
+                    }
+                    .tint(Palette.signal)
+                    .accessibilityIdentifier("hub.findCommunities")
+                }
+            }
+            .padding(.horizontal, Metrics.hPadding)
 
             if model.servers.isEmpty {
                 // The checklist above already offers the create action with its
@@ -679,7 +781,7 @@ struct HubView: View {
                                 Image(systemName: "plus.circle")
                                     .font(.system(size: 20, weight: .light))
                                     .foregroundStyle(Palette.signal)
-                                Text("Create a server")
+                                Text("Create a community")
                                     .font(Typography.bodyMedium)
                                     .foregroundStyle(Palette.paper)
                                 Spacer()
@@ -718,6 +820,31 @@ struct HubView: View {
                             }
                             .buttonStyle(.plain)
                             .accessibilityIdentifier("hub.server.\(server.id)")
+                            // Only for a LISTED community. A private server is
+                            // never chipped onto anybody's card, so offering the
+                            // switch there would offer a no-op — and worse, imply
+                            // that private servers are shown by default, which is
+                            // the exact misreading this must not create.
+                            .contextMenu {
+                                if server.isCommunity {
+                                    Button {
+                                        Task {
+                                            await model.setProfileVisibility(
+                                                serverId: server.id,
+                                                showOnProfile: !server.showOnProfile
+                                            )
+                                        }
+                                    } label: {
+                                        Label(
+                                            server.showOnProfile
+                                                ? "Hide from my profile"
+                                                : "Show on my profile",
+                                            systemImage: server.showOnProfile
+                                                ? "eye.slash" : "eye"
+                                        )
+                                    }
+                                }
+                            }
                             // Staggered entrance so the rail assembles rather
                             // than snapping in as one block.
                             .animation(
@@ -731,7 +858,7 @@ struct HubView: View {
                         }
                         .buttonStyle(.plain)
                         .accessibilityIdentifier("hub.addServer")
-                        .accessibilityLabel("Create a server")
+                        .accessibilityLabel("Create a community")
                     }
                     .padding(.horizontal, Metrics.hPadding)
                 }
@@ -813,7 +940,11 @@ struct ServerTile: View {
 
     var body: some View {
         VStack(spacing: 7) {
-            Avatar(name: server.name, seed: server.id, size: 58)
+            // The community's own icon when it set one; the monogram is the
+            // fallback, not the feature. `Avatar` already resolves a
+            // root-relative path against the API base and falls back on its own,
+            // so an icon route that 404s costs nothing.
+            Avatar(name: server.name, seed: server.id, size: 58, url: server.iconUrl)
 
             Text(server.name)
                 .font(Typography.caption)

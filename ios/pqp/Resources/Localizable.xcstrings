@@ -22,6 +22,26 @@
         }
       }
     },
+    "%@ members": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ membros"
+          }
+        }
+      }
+    },
+    "%@ was removed from the community.": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ foi removido da comunidade."
+          }
+        }
+      }
+    },
     "%lld in this channel": {
       "localizations": {
         "pt-BR": {
@@ -42,6 +62,16 @@
         }
       }
     },
+    "+%lld": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+%lld"
+          }
+        }
+      }
+    },
     "1 day": {
       "localizations": {
         "pt-BR": {
@@ -58,6 +88,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "1 hora"
+          }
+        }
+      }
+    },
+    "1 member": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 membro"
           }
         }
       }
@@ -142,6 +182,16 @@
         }
       }
     },
+    "Add from the community": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Adicionar da comunidade"
+          }
+        }
+      }
+    },
     "Add photo": {
       "localizations": {
         "pt-BR": {
@@ -172,6 +222,16 @@
         }
       }
     },
+    "All": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tudo"
+          }
+        }
+      }
+    },
     "All messages": {
       "localizations": {
         "pt-BR": {
@@ -182,12 +242,32 @@
         }
       }
     },
+    "Anime": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Anime"
+          }
+        }
+      }
+    },
     "Anyone": {
       "localizations": {
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
             "value": "Qualquer pessoa"
+          }
+        }
+      }
+    },
+    "Anyone who opens your profile will read it, with %@'s name on it. You can take it down later.": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Quem abrir seu perfil vai ler, com o nome de %@ embaixo. Dá pra tirar depois."
           }
         }
       }
@@ -232,6 +312,26 @@
         }
       }
     },
+    "Ban %@ from this community?": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Banir %@ desta comunidade?"
+          }
+        }
+      }
+    },
+    "Ban from the community": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Banir da comunidade"
+          }
+        }
+      }
+    },
     "Banned people can't rejoin, even with a valid invite.": {
       "localizations": {
         "pt-BR": {
@@ -252,12 +352,32 @@
         }
       }
     },
+    "Between 3 and 20 characters.": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Entre 3 e 20 caracteres."
+          }
+        }
+      }
+    },
     "Blocked": {
       "localizations": {
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
             "value": "Bloqueados"
+          }
+        }
+      }
+    },
+    "By default a notification doesn't say who messaged you or what they said. You can change that in Settings.": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Por padrão, o aviso não diz quem te mandou mensagem nem o que foi dito. Você pode mudar isso nos Ajustes."
           }
         }
       }
@@ -272,12 +392,32 @@
         }
       }
     },
+    "Can't open that link": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não foi possível abrir esse link"
+          }
+        }
+      }
+    },
     "Cancel": {
       "localizations": {
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
             "value": "Cancelar"
+          }
+        }
+      }
+    },
+    "Change it": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Trocar"
           }
         }
       }
@@ -322,12 +462,82 @@
         }
       }
     },
+    "Claim a public link. Anyone can open it, even without an account.": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Garanta seu link público. Qualquer um abre, mesmo sem conta."
+          }
+        }
+      }
+    },
+    "Claim your link": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Garantir seu link"
+          }
+        }
+      }
+    },
+    "Clear search": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Limpar a busca"
+          }
+        }
+      }
+    },
     "Close": {
       "localizations": {
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
             "value": "Fechar"
+          }
+        }
+      }
+    },
+    "Communities": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Comunidades"
+          }
+        }
+      }
+    },
+    "Communities, channels, DMs. Voice you can drop into without scheduling it first.": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Comunidades, canais, DMs. Voz pra entrar sem marcar antes."
+          }
+        }
+      }
+    },
+    "Community name": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nome da comunidade"
+          }
+        }
+      }
+    },
+    "Community settings": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ajustes da comunidade"
           }
         }
       }
@@ -412,6 +622,16 @@
         }
       }
     },
+    "Could not load communities.": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não deu pra carregar as comunidades."
+          }
+        }
+      }
+    },
     "Could not play this file.": {
       "localizations": {
         "pt-BR": {
@@ -442,12 +662,12 @@
         }
       }
     },
-    "Create a server": {
+    "Create a community": {
       "localizations": {
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Criar um servidor"
+            "value": "Criar uma comunidade"
           }
         }
       }
@@ -602,6 +822,16 @@
         }
       }
     },
+    "Delete community": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apagar comunidade"
+          }
+        }
+      }
+    },
     "Delete forever": {
       "localizations": {
         "pt-BR": {
@@ -622,16 +852,6 @@
         }
       }
     },
-    "Delete server": {
-      "localizations": {
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Excluir servidor"
-          }
-        }
-      }
-    },
     "Deleted message": {
       "localizations": {
         "pt-BR": {
@@ -648,6 +868,26 @@
           "stringUnit": {
             "state": "translated",
             "value": "Rebaixar a membro"
+          }
+        }
+      }
+    },
+    "Depoimentos": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Depoimentos"
+          }
+        }
+      }
+    },
+    "Depoimentos waiting on you": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Depoimentos esperando você"
           }
         }
       }
@@ -752,12 +992,12 @@
         }
       }
     },
-    "Export server data": {
+    "Export community data": {
       "localizations": {
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Exportar dados do servidor"
+            "value": "Exportar dados da comunidade"
           }
         }
       }
@@ -772,12 +1012,32 @@
         }
       }
     },
+    "Find communities": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Buscar comunidades"
+          }
+        }
+      }
+    },
     "Find your people": {
       "localizations": {
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
             "value": "Acha sua gente"
+          }
+        }
+      }
+    },
+    "Football": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Futebol"
           }
         }
       }
@@ -792,22 +1052,42 @@
         }
       }
     },
-    "Friends, %lld requests waiting": {
+    "Friends, %lld waiting on you": {
       "localizations": {
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Amigos, %lld pedidos aguardando"
+            "value": "Amigos, %lld esperando você"
           }
         }
       }
     },
-    "Get into a server": {
+    "Games": {
       "localizations": {
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Entra num servidor"
+            "value": "Games"
+          }
+        }
+      }
+    },
+    "General": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Geral"
+          }
+        }
+      }
+    },
+    "Get into a community": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Entrar numa comunidade"
           }
         }
       }
@@ -832,16 +1112,6 @@
         }
       }
     },
-    "Handle": {
-      "localizations": {
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Identificador"
-          }
-        }
-      }
-    },
     "Harassment": {
       "localizations": {
         "pt-BR": {
@@ -862,12 +1132,62 @@
         }
       }
     },
+    "Hide from my profile": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não mostrar no meu perfil"
+          }
+        }
+      }
+    },
     "Hide this": {
       "localizations": {
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
             "value": "Esconder isso"
+          }
+        }
+      }
+    },
+    "How you met, what they're like, the thing nobody would guess…": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Como se conheceram, como essa pessoa é, aquilo que ninguém imagina…"
+          }
+        }
+      }
+    },
+    "Humour": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Humor"
+          }
+        }
+      }
+    },
+    "Hustle": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Corre"
+          }
+        }
+      }
+    },
+    "If they accept, this goes on their profile for anyone to read.": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Se a pessoa aceitar, isso vai pro perfil dela e qualquer um lê."
           }
         }
       }
@@ -892,6 +1212,16 @@
         }
       }
     },
+    "Invite code or link": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Código ou link do convite"
+          }
+        }
+      }
+    },
     "Invite people": {
       "localizations": {
         "pt-BR": {
@@ -908,6 +1238,56 @@
           "stringUnit": {
             "state": "translated",
             "value": "Convidar para %@"
+          }
+        }
+      }
+    },
+    "It's on your profile.": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tá no seu perfil."
+          }
+        }
+      }
+    },
+    "Join": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Entrar"
+          }
+        }
+      }
+    },
+    "Join a community": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Entrar numa comunidade"
+          }
+        }
+      }
+    },
+    "Join one with an invite": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Entrar em um com convite"
+          }
+        }
+      }
+    },
+    "Join with invite": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Entrar com convite"
           }
         }
       }
@@ -932,6 +1312,16 @@
         }
       }
     },
+    "Know when someone needs you": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saiba quando alguém precisa de você"
+          }
+        }
+      }
+    },
     "Leave": {
       "localizations": {
         "pt-BR": {
@@ -952,12 +1342,22 @@
         }
       }
     },
-    "Leave server": {
+    "Leave community": {
       "localizations": {
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Sair do servidor"
+            "value": "Sair da comunidade"
+          }
+        }
+      }
+    },
+    "Letters, numbers, dots, dashes and underscores — starting and ending with a letter or number.": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Letras, números, ponto, traço e underline — começando e terminando com letra ou número."
           }
         }
       }
@@ -982,6 +1382,16 @@
         }
       }
     },
+    "Loading…": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Carregando…"
+          }
+        }
+      }
+    },
     "Long-press a message and pin it to keep it here.": {
       "localizations": {
         "pt-BR": {
@@ -992,12 +1402,12 @@
         }
       }
     },
-    "Make a server": {
+    "Make a community": {
       "localizations": {
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Criar servidor"
+            "value": "Criar uma comunidade"
           }
         }
       }
@@ -1112,6 +1522,16 @@
         }
       }
     },
+    "Music": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Música"
+          }
+        }
+      }
+    },
     "Mute": {
       "localizations": {
         "pt-BR": {
@@ -1162,6 +1582,26 @@
         }
       }
     },
+    "New communities show up here once a couple of people are in them.": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Comunidade nova aparece aqui quando junta um punhado de gente."
+          }
+        }
+      }
+    },
+    "New community": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nova comunidade"
+          }
+        }
+      }
+    },
     "New message": {
       "localizations": {
         "pt-BR": {
@@ -1178,16 +1618,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Novo dono"
-          }
-        }
-      }
-    },
-    "New server": {
-      "localizations": {
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Novo servidor"
           }
         }
       }
@@ -1302,12 +1732,12 @@
         }
       }
     },
-    "Nobody else is in this server.": {
+    "Nobody else is in this community.": {
       "localizations": {
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Não tem mais ninguém neste servidor."
+            "value": "Não tem mais ninguém nesta comunidade."
           }
         }
       }
@@ -1332,12 +1762,42 @@
         }
       }
     },
+    "Not now": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Agora não"
+          }
+        }
+      }
+    },
     "Nothing": {
       "localizations": {
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
             "value": "Nada"
+          }
+        }
+      }
+    },
+    "Nothing by that name. A brand-new one only turns up if you type it exactly.": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nada com esse nome. Comunidade recém-criada só aparece se você digitar igualzinho."
+          }
+        }
+      }
+    },
+    "Nothing here yet": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não tem nada aqui ainda"
           }
         }
       }
@@ -1392,6 +1852,16 @@
         }
       }
     },
+    "OK": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OK"
+          }
+        }
+      }
+    },
     "Offline": {
       "localizations": {
         "pt-BR": {
@@ -1422,6 +1892,26 @@
         }
       }
     },
+    "Only you can see these. Nobody is told either way.": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Só você vê isso aqui. Ninguém fica sabendo, aceite ou não."
+          }
+        }
+      }
+    },
+    "Open": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Abrir"
+          }
+        }
+      }
+    },
     "Open source. Self-host it, or use the hosted one. Same product either way.": {
       "localizations": {
         "pt-BR": {
@@ -1442,12 +1932,32 @@
         }
       }
     },
-    "People I share a server with": {
+    "Paste the invite you were sent, or type the code.": {
       "localizations": {
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Pessoas que dividem um servidor comigo"
+            "value": "Cole o convite que você recebeu, ou digite o código."
+          }
+        }
+      }
+    },
+    "People I share a community with": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Quem está numa comunidade comigo"
+          }
+        }
+      }
+    },
+    "Photo uploads are off here.": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Upload de foto está desligado aqui."
           }
         }
       }
@@ -1522,6 +2032,36 @@
         }
       }
     },
+    "Public link": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Link público"
+          }
+        }
+      }
+    },
+    "Public rooms anyone can join. No invite, no queue.": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Salas públicas. Entra quem quiser, sem convite e sem fila."
+          }
+        }
+      }
+    },
+    "Publish": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Publicar"
+          }
+        }
+      }
+    },
     "Put a face on it": {
       "localizations": {
         "pt-BR": {
@@ -1532,12 +2072,52 @@
         }
       }
     },
+    "Put this on your profile?": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Publicar isso no seu perfil?"
+          }
+        }
+      }
+    },
     "Reconnecting…": {
       "localizations": {
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
             "value": "Reconectando…"
+          }
+        }
+      }
+    },
+    "Refuse": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recusar"
+          }
+        }
+      }
+    },
+    "Remove %@ from this community?": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remover %@ desta comunidade?"
+          }
+        }
+      }
+    },
+    "Remove from the community": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remover da comunidade"
           }
         }
       }
@@ -1622,6 +2202,26 @@
         }
       }
     },
+    "Report the community %@": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Denunciar a comunidade %@"
+          }
+        }
+      }
+    },
+    "Report this community": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Denunciar esta comunidade"
+          }
+        }
+      }
+    },
     "Rooms for\neverything.": {
       "localizations": {
         "pt-BR": {
@@ -1638,6 +2238,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Domínio de e-mail SSO"
+          }
+        }
+      }
+    },
+    "Save": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Salvar"
           }
         }
       }
@@ -1712,6 +2322,26 @@
         }
       }
     },
+    "Search by name…": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Procura pelo nome…"
+          }
+        }
+      }
+    },
+    "Search communities": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Buscar comunidades"
+          }
+        }
+      }
+    },
     "Search messages": {
       "localizations": {
         "pt-BR": {
@@ -1742,6 +2372,16 @@
         }
       }
     },
+    "Send it": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mandar"
+          }
+        }
+      }
+    },
     "Send report": {
       "localizations": {
         "pt-BR": {
@@ -1762,42 +2402,22 @@
         }
       }
     },
-    "Server name": {
+    "Sent to %@. They decide if it goes up.": {
       "localizations": {
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Nome do servidor"
+            "value": "Mandado pra %@. Agora é ela que decide se vai pro ar."
           }
         }
       }
     },
-    "Server settings": {
+    "Series & film": {
       "localizations": {
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Ajustes do servidor"
-          }
-        }
-      }
-    },
-    "Servers": {
-      "localizations": {
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Servidores"
-          }
-        }
-      }
-    },
-    "Servers, channels, DMs. Voice you can drop into without scheduling it first.": {
-      "localizations": {
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Servidores, canais, DMs. Call que você entra sem marcar antes."
+            "value": "Séries e filmes"
           }
         }
       }
@@ -1832,12 +2452,42 @@
         }
       }
     },
+    "Share": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compartilhar"
+          }
+        }
+      }
+    },
     "Show link previews": {
       "localizations": {
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
             "value": "Mostrar prévias de link"
+          }
+        }
+      }
+    },
+    "Show more": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ver mais"
+          }
+        }
+      }
+    },
+    "Show on my profile": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mostrar no meu perfil"
           }
         }
       }
@@ -1892,6 +2542,16 @@
         }
       }
     },
+    "Something you'd say about %@": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Um depoimento pra %@"
+          }
+        }
+      }
+    },
     "Spam": {
       "localizations": {
         "pt-BR": {
@@ -1932,6 +2592,16 @@
         }
       }
     },
+    "Study": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Estudos"
+          }
+        }
+      }
+    },
     "Switch to earpiece": {
       "localizations": {
         "pt-BR": {
@@ -1952,12 +2622,62 @@
         }
       }
     },
+    "Tag": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tag"
+          }
+        }
+      }
+    },
+    "Take down the depoimento from %@": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tirar o depoimento de %@"
+          }
+        }
+      }
+    },
+    "Tech": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tech"
+          }
+        }
+      }
+    },
     "Text": {
       "localizations": {
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
             "value": "Texto"
+          }
+        }
+      }
+    },
+    "That handle cannot be used.": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Esse @ não pode ser usado."
+          }
+        }
+      }
+    },
+    "That one is reserved.": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Esse aí é reservado."
           }
         }
       }
@@ -2002,6 +2722,26 @@
         }
       }
     },
+    "Their full handle is the only way to find someone who isn't in a community with you.": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O handle completo é o único jeito de achar quem não está numa comunidade com você."
+          }
+        }
+      }
+    },
+    "They can still read. They can't post, react or join voice in this community until it ends.": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Continua lendo. Não posta, não reage e não entra na voz desta comunidade até acabar."
+          }
+        }
+      }
+    },
     "This account can't be used": {
       "localizations": {
         "pt-BR": {
@@ -2018,6 +2758,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Isso não pode ser desfeito. Digite \"%@\" para confirmar."
+          }
+        }
+      }
+    },
+    "This is private — send it as a DM": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Isso é privado — mandar por DM"
           }
         }
       }
@@ -2132,12 +2882,22 @@
         }
       }
     },
-    "Type the server name": {
+    "Turn on notifications": {
       "localizations": {
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Digite o nome do servidor"
+            "value": "Ativar notificações"
+          }
+        }
+      }
+    },
+    "Type the community name": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Digite o nome da comunidade"
           }
         }
       }
@@ -2262,6 +3022,26 @@
         }
       }
     },
+    "Write a depoimento": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Escrever depoimento"
+          }
+        }
+      }
+    },
+    "Write a depoimento for %@": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Escrever depoimento pra %@"
+          }
+        }
+      }
+    },
     "Year": {
       "localizations": {
         "pt-BR": {
@@ -2282,12 +3062,32 @@
         }
       }
     },
+    "You can change it again from %@.": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Você pode trocar de novo a partir de %@."
+          }
+        }
+      }
+    },
     "You'll need a new invite to get back in.": {
       "localizations": {
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
             "value": "Você vai precisar de um novo convite para voltar."
+          }
+        }
+      }
+    },
+    "You're in": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Você está aqui"
           }
         }
       }
@@ -2312,12 +3112,12 @@
         }
       }
     },
-    "Your friends.\nYour server.\nYour mess.": {
+    "Your friends.\nYour community.\nYour mess.": {
       "localizations": {
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Seus amigos.\nSeu servidor.\nSua bagunça."
+            "value": "Sua turma.\nSua comunidade.\nSua bagunça."
           }
         }
       }
@@ -2352,106 +3152,6 @@
         }
       }
     },
-    "pqp is for people aged 18 and over. Enter your date of birth to continue — you can only answer once.": {
-      "localizations": {
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "O pqp é para maiores de 18 anos. Informe sua data de nascimento para continuar — você só pode responder uma vez."
-          }
-        }
-      }
-    },
-    "Join one with an invite": {
-      "localizations": {
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Entrar em um com convite"
-          }
-        }
-      }
-    },
-    "Join with invite": {
-      "localizations": {
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Entrar com convite"
-          }
-        }
-      }
-    },
-    "Join a server": {
-      "localizations": {
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Entrar em um servidor"
-          }
-        }
-      }
-    },
-    "Join": {
-      "localizations": {
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Entrar"
-          }
-        }
-      }
-    },
-    "Invite code or link": {
-      "localizations": {
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Código ou link do convite"
-          }
-        }
-      }
-    },
-    "Paste the invite you were sent, or type the code.": {
-      "localizations": {
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Cole o convite que você recebeu, ou digite o código."
-          }
-        }
-      }
-    },
-    "Can't open that link": {
-      "localizations": {
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Não foi possível abrir esse link"
-          }
-        }
-      }
-    },
-    "OK": {
-      "localizations": {
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "OK"
-          }
-        }
-      }
-    },
-    "Know when someone needs you": {
-      "localizations": {
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Saiba quando alguém precisa de você"
-          }
-        }
-      }
-    },
     "pqp can buzz your phone for direct messages, mentions, replies and incoming calls — and only those, only when you're not already online somewhere. No badges for every message in every channel.": {
       "localizations": {
         "pt-BR": {
@@ -2462,32 +3162,22 @@
         }
       }
     },
-    "By default a notification doesn't say who messaged you or what they said. You can change that in Settings.": {
+    "pqp is for people aged 18 and over. Enter your date of birth to continue — you can only answer once.": {
       "localizations": {
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Por padrão, o aviso não diz quem te mandou mensagem nem o que foi dito. Você pode mudar isso nos Ajustes."
+            "value": "O pqp é para maiores de 18 anos. Informe sua data de nascimento para continuar — você só pode responder uma vez."
           }
         }
       }
     },
-    "Turn on notifications": {
+    "seunome": {
       "localizations": {
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Ativar notificações"
-          }
-        }
-      }
-    },
-    "Not now": {
-      "localizations": {
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Agora não"
+            "value": "seunome"
           }
         }
       }

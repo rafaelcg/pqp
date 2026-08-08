@@ -18,12 +18,12 @@ struct OnboardingView: View {
 
     private let beats: [(title: String, body: String)] = [
         (
-            String(localized: "Your friends.\nYour server.\nYour mess."),
+            String(localized: "Your friends.\nYour community.\nYour mess."),
             String(localized: "Group chat you actually own. Text that flies, voice that doesn't flake.")
         ),
         (
             String(localized: "Rooms for\neverything."),
-            String(localized: "Servers, channels, DMs. Voice you can drop into without scheduling it first.")
+            String(localized: "Communities, channels, DMs. Voice you can drop into without scheduling it first.")
         ),
         (
             String(localized: "Yours to keep."),

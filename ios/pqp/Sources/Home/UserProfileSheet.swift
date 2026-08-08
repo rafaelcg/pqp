@@ -210,8 +210,8 @@ enum ModerationRung: Identifiable {
         switch self {
         case .timeout: "Time out…"
         case .endTimeout: "End timeout"
-        case .kick: "Remove from server"
-        case .ban: "Ban from server"
+        case .kick: "Remove from the community"
+        case .ban: "Ban from the community"
         }
     }
 
@@ -236,8 +236,8 @@ enum ModerationRung: Identifiable {
 
     func prompt(_ name: String) -> String {
         switch self {
-        case .kick: String(localized: "Remove \(name) from this server?")
-        case .ban: String(localized: "Ban \(name) from this server?")
+        case .kick: String(localized: "Remove \(name) from this community?")
+        case .ban: String(localized: "Ban \(name) from this community?")
         case .timeout, .endTimeout: ""
         }
     }
@@ -280,7 +280,11 @@ struct UserProfileSheet: View {
     /// has nowhere to push a chat, and then Message is not offered at all: a
     /// button that opens a conversation you are not taken to is a button that
     /// looks broken.
-    var onOpenConversation: ((DmSummary) -> Void)?
+    /// The second parameter is a DRAFT to open the composer with, and it is
+    /// empty for every path but one: the depoimento composer's DM fork hands the
+    /// typed text across so the escape hatch does not make anybody retype what
+    /// they wrote. See rule 2 in DepoimentoViews.swift.
+    var onOpenConversation: ((DmSummary, String) -> Void)?
     /// The server this sheet was opened inside, and this account's rank in it.
     ///
     /// Nil in a conversation, and nil for the callers that have no server to
@@ -315,6 +319,18 @@ struct UserProfileSheet: View {
     @State private var confirming: FriendshipAction?
     @State private var confirmingBlock = false
     @State private var reportTarget: ReportTarget?
+    /// What this person chose to display, and the rooms they are in. Both hide
+    /// themselves when empty — there is no count and no zero anywhere on this
+    /// card. See `DepoimentoViews`.
+    @State private var depoimentos: [Depoimento] = []
+    @State private var communities = ProfileCommunityList()
+    @State private var composing = false
+    /// The last thing a depoimento action said, kept apart from `message` so a
+    /// friend-action note and a depoimento note cannot overwrite each other.
+    @State private var removingDepoimento: String?
+    /// Text the DM fork is carrying out of the composer. Empty on every other
+    /// path through `openConversation`.
+    @State private var draft = ""
 
     private var state: FriendshipState {
         ProfileRelations.state(
@@ -369,7 +385,26 @@ struct UserProfileSheet: View {
                     actions
                         .padding(.horizontal, Metrics.hPadding)
                         .padding(.top, 16)
-                        .padding(.bottom, 24)
+
+                    // Below the actions on purpose: this card exists to answer
+                    // "who is this and what can I do about them", and the
+                    // testimonials are what you read once that is settled.
+                    VStack(alignment: .leading, spacing: 16) {
+                        CommunityBadges(list: communities)
+                        DepoimentosSection(
+                            depoimentos: depoimentos,
+                            // Only your own card gets the take-down button. Any
+                            // published one, any time, without notice — which is
+                            // what makes publishing safe to do in the first place.
+                            onRemove: state == .isSelf ? { id in
+                                Task { await removeDepoimento(id) }
+                            } : nil,
+                            busy: removingDepoimento != nil
+                        )
+                    }
+                    .padding(.horizontal, Metrics.hPadding)
+                    .padding(.top, 18)
+                    .padding(.bottom, 24)
                 }
             }
 
@@ -387,6 +422,25 @@ struct UserProfileSheet: View {
             .accessibilityLabel("Done")
         }
         .sheet(item: $reportTarget) { target in ReportSheet(target: target) }
+        .sheet(isPresented: $composing) {
+            DepoimentoComposer(
+                subject: subject,
+                onWritten: {
+                    // Nothing to add to the list: it landed PENDING, and the
+                    // only person who will ever see it before publication is its
+                    // subject. Saying so is the whole feedback there is.
+                    note(
+                        String(localized: "Sent to \(subject.displayName). They decide if it goes up."),
+                        failed: false
+                    )
+                },
+                onSendAsDm: { text in
+                    draft = text
+                    composing = false
+                    Task { await openConversation() }
+                }
+            )
+        }
         .confirmationDialog(
             confirmPrompt,
             isPresented: Binding(
@@ -633,6 +687,21 @@ struct UserProfileSheet: View {
                     }
                 }
 
+                // Friends only, and never behind the ellipsis: writing one is
+                // the warm thing you can do from this card, and the menu it
+                // would otherwise share is where blocking and banning live.
+                // `Depoimentos.canWrite` is deliberately stricter than "not a
+                // stranger" — half a handshake would earn a 403 nobody can
+                // explain.
+                if Depoimentos.canWrite(state) {
+                    Button { composing = true } label: {
+                        Label("Write a depoimento", systemImage: "quote.bubble")
+                    }
+                    .buttonStyle(SecondaryButtonStyle())
+                    .disabled(busy)
+                    .accessibilityIdentifier("profile.writeDepoimento")
+                }
+
                 // Declining is offered inline rather than behind the menu: a
                 // request you did not want should cost one tap, and it is
                 // silent, so the only way it can go wrong is by being hard to
@@ -698,6 +767,38 @@ struct UserProfileSheet: View {
         }
         loading = false
         await loadModeration()
+        await loadProfileExtras()
+    }
+
+    /// The two blocks under the actions, both of which hide themselves when
+    /// empty.
+    ///
+    /// AFTER the spinner clears, like the moderation reads and for the same
+    /// reason: the relationship buttons are the point of this sheet and must not
+    /// wait on two decorative lists. Neither read is fatal — a card with no
+    /// depoimentos is a card, and a failure here must look exactly like a person
+    /// who has none.
+    private func loadProfileExtras() async {
+        let api = session.api
+        let userId = subject.id
+        async let published = try? await api.depoimentos(userId: userId)
+        async let rooms = try? await api.profileCommunities(userId: userId)
+        depoimentos = await published ?? []
+        communities = await rooms ?? ProfileCommunityList()
+    }
+
+    /// Take one of your own down. Silent, and available at any time — which is
+    /// what makes publishing safe to do in the first place.
+    private func removeDepoimento(_ id: String) async {
+        removingDepoimento = id
+        defer { removingDepoimento = nil }
+        do {
+            try await session.api.deleteDepoimento(id: id)
+            depoimentos.removeAll { $0.id == id }
+        } catch {
+            note((error as? APIError)?.errorDescription ?? error.localizedDescription,
+                 failed: true)
+        }
     }
 
     /// This person's rank, and whether they are already timed out.
@@ -753,7 +854,7 @@ struct UserProfileSheet: View {
                 try await session.api.removeMember(
                     serverId: server.id, userId: subject.id, ban: false
                 )
-                note(String(localized: "\(subject.displayName) was removed from the server."),
+                note(String(localized: "\(subject.displayName) was removed from the community."),
                      failed: false)
             case .ban:
                 try await session.api.banMember(
@@ -820,7 +921,7 @@ struct UserProfileSheet: View {
         // Already know it: no round trip, and no chance of the server handing
         // back a differently-shaped summary for a conversation we can see.
         if let existingDm {
-            onOpenConversation?(existingDm)
+            onOpenConversation?(existingDm, draft)
             dismiss()
             return
         }
@@ -828,7 +929,7 @@ struct UserProfileSheet: View {
         defer { busy = false }
         do {
             let conversation = try await session.api.openConversation(userIds: [subject.id])
-            onOpenConversation?(conversation)
+            onOpenConversation?(conversation, draft)
             dismiss()
         } catch {
             note((error as? APIError)?.errorDescription ?? error.localizedDescription, failed: true)
@@ -935,7 +1036,7 @@ struct TimeoutComposer: View {
                 Palette.ink.ignoresSafeArea()
 
                 VStack(alignment: .leading, spacing: 14) {
-                    Text("They can still read. They can't post, react or join voice in this server until it ends.")
+                    Text("They can still read. They can't post, react or join voice in this community until it ends.")
                         .font(Typography.caption)
                         .foregroundStyle(Palette.paperMuted)
 

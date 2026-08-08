@@ -48,7 +48,7 @@ struct ChannelMembersView: View {
                                 }
                             }
 
-                            SectionLabel(text: "Add from server")
+                            SectionLabel(text: "Add from the community")
                                 .padding(.horizontal, 4)
                                 .padding(.top, 10)
                             ForEach(candidates.filter { !allowedIds.contains($0.id) }) { member in

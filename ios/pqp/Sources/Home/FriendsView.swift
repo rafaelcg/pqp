@@ -206,7 +206,18 @@ struct FriendsView: View {
 
     @ViewBuilder
     private var requestRows: some View {
-        if model.data.incoming.isEmpty && model.data.outgoing.isEmpty {
+        // The queue first: publishing something onto your own profile is a
+        // bigger decision than answering a friend request, and it is the one
+        // people did not know was waiting.
+        PendingDepoimentosSection(
+            depoimentos: model.pendingDepoimentos,
+            busyId: model.depoimentoBusyId,
+            onApprove: { id in Task { await model.approveDepoimento(id) } },
+            onReject: { id in Task { await model.rejectDepoimento(id) } }
+        )
+
+        if model.data.incoming.isEmpty && model.data.outgoing.isEmpty
+            && model.pendingDepoimentos.isEmpty {
             EmptyState(
                 icon: "tray",
                 title: "Nothing pending",
@@ -320,11 +331,26 @@ final class FriendsModel {
     /// request" is not. Never names the person — the frame carries no name, and
     /// the row that just appeared already does.
     var liveNotice: FriendActivityKind?
+    /// Depoimentos friends have written about this account and nobody has seen.
+    /// Kept beside the requests because they are answered from the same tab with
+    /// the same two buttons — see `Depoimentos.waitingOnYou`.
+    var pendingDepoimentos: [Depoimento] = []
+    /// The depoimento currently being published or refused. Its own id rather
+    /// than `busyId`, which belongs to a person: a row here is a piece of text,
+    /// and its author may also be sitting in the requests list above.
+    var depoimentoBusyId: String?
 
     private var session: SessionStore?
     private let handlerKey = "friends-" + UUID().uuidString
 
-    var pendingCount: Int { FriendsDigest.pendingActionCount(data) }
+    /// What the Pending tab's badge counts: requests waiting on you, plus
+    /// depoimentos waiting on you. One number for one errand.
+    var pendingCount: Int {
+        Depoimentos.waitingOnYou(
+            friendRequests: FriendsDigest.pendingActionCount(data),
+            pendingDepoimentos: pendingDepoimentos.count
+        )
+    }
 
     func knownIds(selfId: String?) -> Set<String> {
         FriendsDigest.alreadyKnown(data, selfId: selfId)
@@ -364,13 +390,59 @@ final class FriendsModel {
     func refresh() async {
         guard let session else { return }
         isLoading = true
+        // The queue is read alongside the three lists and its failure is NOT
+        // fatal: a dropped request here must not blank the friends list, and it
+        // must not empty a queue that still has something in it — the numbers on
+        // this screen are answers people owe somebody, and a flicker to zero
+        // reads as "it was dealt with".
+        let api = session.api
+        async let queue = try? await api.pendingDepoimentos()
         do {
             data = try await session.api.friends()
             error = nil
         } catch {
             self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
         }
+        if let pending = await queue {
+            pendingDepoimentos = pending
+        }
         isLoading = false
+    }
+
+    /// Publish one. The author is told — the one moment they hear anything, and
+    /// it is the warm one: their words are public now.
+    func approveDepoimento(_ id: String) async {
+        guard let session else { return }
+        depoimentoBusyId = id
+        liveNotice = nil
+        defer { depoimentoBusyId = nil }
+        do {
+            try await session.api.approveDepoimento(id: id)
+            pendingDepoimentos.removeAll { $0.id == id }
+            notice = String(localized: "It's on your profile.")
+        } catch {
+            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    /// Refuse one. Silent, unconfirmed, and the row stops existing.
+    ///
+    /// THE SILENCE IS THE MITIGATION rather than politeness: telling the author
+    /// "they read it and said no" is the single fact deleting the row exists to
+    /// withhold, and it would make refusing socially expensive in a feature whose
+    /// whole safety rests on refusing staying cheap.
+    func rejectDepoimento(_ id: String) async {
+        guard let session else { return }
+        depoimentoBusyId = id
+        liveNotice = nil
+        defer { depoimentoBusyId = nil }
+        do {
+            try await session.api.deleteDepoimento(id: id)
+            pendingDepoimentos.removeAll { $0.id == id }
+            notice = nil
+        } catch {
+            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+        }
     }
 
     func add(_ userId: String) async -> FriendActionOutcome {
@@ -585,7 +657,7 @@ struct AddFriendView: View {
                     .pqpSurface(cornerRadius: 20)
                     .padding(.horizontal, Metrics.hPadding)
 
-                    Text("Their full handle is the only way to find someone who isn't in a server with you.")
+                    Text("Their full handle is the only way to find someone who isn't in a community with you.")
                         .font(Typography.caption)
                         .foregroundStyle(Palette.paperMuted)
                         .multilineTextAlignment(.center)
