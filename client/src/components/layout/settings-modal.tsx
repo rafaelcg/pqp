@@ -1674,6 +1674,7 @@ function ProfileSection({
   onUsername,
   avatarUrl,
   onAvatarUrl,
+  onUserUpdated,
 }: {
   user: User | null;
   displayName: string;
@@ -1682,6 +1683,7 @@ function ProfileSection({
   onUsername: (next: string) => void;
   avatarUrl: string;
   onAvatarUrl: (next: string) => void;
+  onUserUpdated: (user: User) => void;
 }) {
   const { t } = useTranslation();
 
@@ -1708,7 +1710,14 @@ function ProfileSection({
             urlLabel: t("settings.profile.avatar.urlLabel"),
             presetLabel: t("settings.profile.avatar.preset"),
             clear: t("settings.profile.avatar.clear"),
+            upload: t("settings.profile.avatar.upload"),
+            uploading: t("settings.profile.avatar.uploading"),
           }}
+          // The claim already wrote it, so the app's copy of the account is
+          // updated here rather than waiting for Save — otherwise the sidebar
+          // keeps the old picture until the dialog closes, and Cancel would
+          // look like it undid an upload it cannot.
+          onUploaded={onUserUpdated}
         />
       </div>
 
@@ -1951,6 +1960,7 @@ export function SettingsModal({
                 onUsername={setUsername}
                 avatarUrl={avatarUrl}
                 onAvatarUrl={setAvatarUrl}
+                onUserUpdated={onUserUpdated}
               />
             )}
 

@@ -728,3 +728,65 @@ describe("channel switching", () => {
     expect((sent.at(-1) as { type: string }).type).toBe("join-channel");
   });
 });
+
+describe("applyProfileUpdate", () => {
+  const OTHER = "00000000-0000-4000-8000-000000000002";
+
+  it("repaints every message that author already has on screen", () => {
+    // The author's name and picture are denormalised onto each row when it is
+    // read — one query for a transcript instead of one per distinct author —
+    // so a profile change is invisible to loaded history until this rewrites it.
+    const { chat } = setup();
+    chat.setMessages([
+      serverMessage({ id: "a", authorId: OTHER, authorName: "Old" }),
+      serverMessage({ id: "b", authorId: OTHER, authorName: "Old" }),
+      serverMessage({ id: "c", authorId: ME.id, authorName: "Me" }),
+    ]);
+
+    chat.applyProfileUpdate({
+      userId: OTHER,
+      displayName: "New",
+      avatarUrl: "/api/avatars/x?v=1",
+    });
+
+    const messages = chat.getMessages();
+    expect(messages.map((one) => one.authorName)).toEqual(["New", "New", "Me"]);
+    expect(messages[0]!.authorAvatarUrl).toBe("/api/avatars/x?v=1");
+    // Somebody else's rows are untouched, including their null avatar.
+    expect(messages[2]!.authorAvatarUrl).toBeNull();
+  });
+
+  it("leaves a webhook's name and picture alone", () => {
+    // A webhook's author row *is* the webhook, and the name shown is the
+    // webhook's — overwriting it would rename a bot to whoever last edited
+    // their own profile.
+    const { chat } = setup();
+    chat.setMessages([
+      serverMessage({
+        id: "a",
+        authorId: OTHER,
+        authorName: "deploy-bot",
+        isWebhook: true,
+      }),
+    ]);
+
+    chat.applyProfileUpdate({
+      userId: OTHER,
+      displayName: "New",
+      avatarUrl: null,
+    });
+
+    expect(chat.getMessages()[0]!.authorName).toBe("deploy-bot");
+  });
+
+  it("does nothing for somebody with nothing on screen", () => {
+    const { chat } = setup();
+    chat.setMessages([serverMessage({ id: "a" })]);
+    chat.applyProfileUpdate({
+      userId: "00000000-0000-4000-8000-0000000000ff",
+      displayName: "Nobody",
+      avatarUrl: null,
+    });
+    expect(chat.getMessages()[0]!.authorName).toBe("Me");
+  });
+});

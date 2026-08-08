@@ -1007,6 +1007,57 @@ function MainAppContent({
             return;
           }
 
+          // Somebody's name or picture changed, anywhere on the instance.
+          //
+          // Not addressed to a channel, so it is handled here rather than in
+          // the chat controller alone: an avatar is drawn in places the
+          // controller knows nothing about. Three of them are repainted from
+          // one frame — the transcript, the conversation sidebar, and the
+          // account's own header when the change was made in another tab.
+          //
+          // The member list is not, deliberately. It fetches its own roster
+          // when opened and is closed the overwhelming majority of the time;
+          // teaching the shell to hold and patch a list it does not own would
+          // cost more than reopening the panel does.
+          if (message.type === "profile-update") {
+            chat.applyProfileUpdate(message);
+            threadChat.applyProfileUpdate(message);
+            setConversations((prev) =>
+              prev.map((conversation) =>
+                conversation.participants.some(
+                  (person) => person.id === message.userId,
+                )
+                  ? {
+                      ...conversation,
+                      participants: conversation.participants.map((person) =>
+                        person.id === message.userId
+                          ? {
+                              ...person,
+                              displayName: message.displayName,
+                              username: message.username,
+                              tag: message.tag,
+                              avatarUrl: message.avatarUrl,
+                            }
+                          : person,
+                      ),
+                    }
+                  : conversation,
+              ),
+            );
+            setUser((prev) =>
+              prev && prev.id === message.userId
+                ? {
+                    ...prev,
+                    displayName: message.displayName,
+                    username: message.username,
+                    tag: message.tag,
+                    avatarUrl: message.avatarUrl,
+                  }
+                : prev,
+            );
+            return;
+          }
+
           // --- threads --- the chip refresh: reply count and freshness for
           // an origin message in whatever channel the main view is showing.
           if (message.type === "thread-update") {

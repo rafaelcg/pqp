@@ -206,6 +206,32 @@ export const presenceUpdateSchema = z.object({
   ),
 });
 
+/**
+ * Somebody's profile changed — a new avatar, a rename, a new handle.
+ *
+ * FANNED OUT TO EVERY CONNECTED SOCKET, not to a channel. A person's name and
+ * picture are drawn in places that have no channel to key off: the member list
+ * of a server nobody is currently viewing, a conversation row in the sidebar,
+ * the roster of a call. Addressing this frame to a channel would leave every
+ * one of those showing the old picture until reload, which is the whole reason
+ * it exists.
+ *
+ * Everything in it is already public — it is exactly `publicUserSchema`'s
+ * fields, the same set any account can read about any other through user
+ * search — so a global fan-out discloses nothing that was not already
+ * enumerable. Nothing account-private may be added here for that reason;
+ * `clerkId`, `dmPrivacy` and `ageGate` in particular are `userSchema` fields
+ * and would be a real leak.
+ */
+export const profileUpdateSchema = z.object({
+  type: z.literal("profile-update"),
+  userId: z.string().uuid(),
+  displayName: z.string(),
+  username: z.string().nullable(),
+  tag: z.string().nullable(),
+  avatarUrl: z.string().nullable(),
+});
+
 export const chatServerMessageSchema = z.discriminatedUnion("type", [
   messageBroadcastSchema,
   messageUpdateBroadcastSchema,
@@ -215,6 +241,7 @@ export const chatServerMessageSchema = z.discriminatedUnion("type", [
   presenceUpdateSchema,
   typingBroadcastSchema,
   channelActivitySchema,
+  profileUpdateSchema,
   // --- threads ---
   threadUpdateBroadcastSchema,
   // A refusal is a chat outcome: it is sent over the chat socket, in response
@@ -269,6 +296,14 @@ export const chatClientMessageSchema = z
  * spellings are live on the wire (see the two schemas above, and the client's
  * `use-chat.ts`, which handles them in one case block).
  *
+ * `profile-update` is deliberately absent for the opposite reason to the one
+ * below: it is not too narrow for a channel fan-out but too *wide* for one. It
+ * is addressed to every connected socket and carries no channel at all, so it
+ * travels on its own cluster topic (`chat.profile`) and reaches other instances
+ * through that. Listing it here would hand it to the channel relay, which would
+ * deliver it to whichever channel id happened to be on the frame — there is
+ * none — and drop it.
+ *
  * `sanction-notice` is deliberately absent, and must stay absent. It is
  * addressed to one person — it names their timeout, its expiry and its reason —
  * and the server delivers it straight to that socket. Listing it here would
@@ -310,5 +345,6 @@ export type MessageDeletedBroadcast = z.infer<
 export type PresenceUpdate = z.infer<typeof presenceUpdateSchema>;
 export type TypingBroadcast = z.infer<typeof typingBroadcastSchema>;
 export type ChannelActivity = z.infer<typeof channelActivitySchema>;
+export type ProfileUpdate = z.infer<typeof profileUpdateSchema>;
 export type ChatClientMessage = z.infer<typeof chatClientMessageSchema>;
 export type ChatServerMessage = z.infer<typeof chatServerMessageSchema>;

@@ -88,9 +88,33 @@ struct Avatar: View {
 
     private var hue: Double { Avatar.hue(seed: seed) }
 
-    private var imageUrl: URL? {
-        guard let url, let parsed = URL(string: url),
-              parsed.scheme == "https" || parsed.scheme == "http" else { return nil }
+    private var imageUrl: URL? { Avatar.resolve(url) }
+
+    /// What the API sent, turned into something `AsyncImage` may be pointed at.
+    ///
+    /// Three shapes arrive and only three, matching `resolveAvatarUrl` in the
+    /// web client:
+    ///
+    ///  - `/api/avatars/…` — an avatar uploaded to this deployment. The server
+    ///    emits it root-relative because it does not know its own public origin
+    ///    (see `avatarPath` in packages/shared), so the backend's base URL is
+    ///    what completes it here. A device build points at a Mac on the LAN and
+    ///    a release build at api.pqp.gg; a bare path would resolve against
+    ///    neither.
+    ///  - an absolute `https` URL — a Clerk picture, a preset, a typed link.
+    ///  - anything else, which is refused and shows the monogram.
+    ///
+    /// `http` is refused along with everything else: ATS blocks it on a release
+    /// build anyway, so accepting it here would only mean a picture that works
+    /// in the simulator and silently does not on a phone. The one exception is
+    /// the *backend's own* base URL, which is `http://` for local development —
+    /// and that is not a scheme decision made about a URL somebody typed.
+    static func resolve(_ raw: String?, backend: Backend = .current) -> URL? {
+        guard let raw, !raw.isEmpty else { return nil }
+        if raw.hasPrefix("/") {
+            return URL(string: raw, relativeTo: backend.apiBaseURL)
+        }
+        guard let parsed = URL(string: raw), parsed.scheme == "https" else { return nil }
         return parsed
     }
 

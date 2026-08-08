@@ -25,6 +25,27 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_discrim
 -- queries — see the WHERE clause on `searchUsersByPrefix`/`findUserByTag`.
 ALTER TABLE users ADD COLUMN IF NOT EXISTS is_webhook BOOLEAN NOT NULL DEFAULT FALSE;
 
+-- The object-storage key of an *uploaded* profile picture, or NULL.
+--
+-- `avatar_url` above stays what it always was: whatever string is rendered as
+-- this person's picture. That may be a Clerk image copied in at signup, a
+-- preset the user picked, or a URL they typed — and for an uploaded avatar it
+-- is this server's own `/api/avatars/:userId?v=…` route. Keeping the two apart
+-- is what lets every existing read (a dozen joins that select `u.avatar_url`
+-- and hand it straight to a client) go on working untouched while uploads gain
+-- the one thing a URL cannot express: *which object in the bucket this is*.
+--
+-- That is needed for exactly one reason — deleting it. An avatar that is
+-- replaced or cleared leaves bytes behind, and unlike `message_attachments`
+-- there is no row here for a sweeper to find later: the account keeps one
+-- avatar, so the moment the column is overwritten is the only moment the old
+-- key is still known. `updateProfile` is where that happens.
+--
+-- NULL for every account that predates this, for every Clerk-supplied picture,
+-- and for every typed URL — all of which are bytes somebody else holds and we
+-- must never try to delete.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_key TEXT;
+
 -- Who is allowed to open a conversation with this user. 'server_members' —
 -- "someone I already share a server with" — is the default because a shared
 -- server is the only relationship this product models, and expressing the rule

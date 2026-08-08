@@ -28,6 +28,7 @@ import {
   type ReactNode,
 } from "react";
 import ReactMarkdown from "react-markdown";
+import { UserAvatar } from "@/components/user/user-avatar";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import { AttachmentGrid } from "@/components/chat/attachment-grid";
@@ -1428,19 +1429,14 @@ const MessageRow = memo(function MessageRow({
               message={message}
               tabIndex={controlTabIndex}
               onOpenProfile={openProfile}
-              className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-md bg-ink-3 text-sm font-semibold"
+              className="h-9 w-9 shrink-0 overflow-hidden rounded-md"
             >
-              {message.authorAvatarUrl ? (
-                <img
-                  src={message.authorAvatarUrl}
-                  alt=""
-                  loading="lazy"
-                  referrerPolicy="no-referrer"
-                  className="h-full w-full object-cover"
-                />
-              ) : (
-                message.authorName.slice(0, 1).toUpperCase()
-              )}
+              <UserAvatar
+                name={message.authorName}
+                avatarUrl={message.authorAvatarUrl}
+                className="h-9 w-9"
+                fallbackClassName="bg-ink-3 text-sm"
+              />
             </AuthorButton>
           ) : (
             <time

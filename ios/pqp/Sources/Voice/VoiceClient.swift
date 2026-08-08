@@ -8,6 +8,9 @@ struct VoicePeerState: Identifiable, Hashable, Sendable {
     var displayName: String
     var userId: String
     var connection: String
+    /// The roster carries it; the tile draws it. Optional and untrusted — a
+    /// nil or unusable value is the monogram, never a broken frame.
+    var avatarUrl: String?
     var isSpeaking: Bool = false
     var volume: Double = 1
 
@@ -74,6 +77,7 @@ actor VoiceClient {
     private var signal: (@Sendable (VoiceSignal) -> Void)?
     private var peerNames: [String: String] = [:]
     private var peerUserIds: [String: String] = [:]
+    private var peerAvatarUrls: [String: String] = [:]
     private var peerConnectionState: [String: String] = [:]
 
     // MARK: - Video (conversation calls)
@@ -442,6 +446,7 @@ actor VoiceClient {
         guard connections[participant.peerId] == nil else { return }
         peerNames[participant.peerId] = participant.displayName
         peerUserIds[participant.peerId] = participant.userId
+        peerAvatarUrls[participant.peerId] = participant.avatarUrl
 
         guard let connection = makeConnection(for: participant.peerId) else { return }
         connections[participant.peerId] = connection
@@ -464,6 +469,7 @@ actor VoiceClient {
         pendingCandidates[peerId] = nil
         peerNames[peerId] = nil
         peerUserIds[peerId] = nil
+        peerAvatarUrls[peerId] = nil
         peerConnectionState[peerId] = nil
         cameraSenders[peerId] = nil
         remoteVideoTracks[peerId] = nil
@@ -487,6 +493,7 @@ actor VoiceClient {
         pendingCandidates.removeAll()
         peerNames.removeAll()
         peerUserIds.removeAll()
+        peerAvatarUrls.removeAll()
         peerConnectionState.removeAll()
         // The camera is hardware: leaving the capturer running after a hang-up
         // is a lit camera light on a call that ended.
@@ -710,6 +717,7 @@ actor VoiceClient {
                 displayName: peerNames[peerId] ?? "Someone",
                 userId: peerUserIds[peerId] ?? "",
                 connection: peerConnectionState[peerId] ?? "connecting",
+                avatarUrl: peerAvatarUrls[peerId],
                 isSpeaking: speaking.contains(peerId),
                 volume: volumes[peerId] ?? 1
             )

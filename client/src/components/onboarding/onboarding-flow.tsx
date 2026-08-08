@@ -348,7 +348,14 @@ function ProfileStep({
               urlLabel: t("onboarding.profile.avatarUrl"),
               presetLabel: t("onboarding.profile.avatarPreset"),
               clear: t("onboarding.profile.avatarClear"),
+              upload: t("onboarding.profile.avatarUpload"),
+              uploading: t("onboarding.profile.avatarUploading"),
             }}
+            // An upload writes the avatar immediately, so the field is
+            // resynced to what the server now holds; the Continue button's
+            // PATCH then re-sends the same URL, which the server reads as "no
+            // change" and leaves the stored object alone.
+            onUploaded={(updated) => setAvatarUrl(updated.avatarUrl ?? "")}
           />
         </div>
 

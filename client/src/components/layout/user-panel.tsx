@@ -4,6 +4,7 @@ import { UserButton } from "@clerk/clerk-react";
 import type { ManualStatus, UserStatus } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
 import { StatusDot } from "@/components/user/status-dot";
+import { UserAvatar } from "@/components/user/user-avatar";
 import { isDevAuthBypassEnabled } from "@/lib/dev-auth";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -176,17 +177,12 @@ export function UserPanel({
         onClick={() => setOpen((prev) => !prev)}
       >
         <span className="relative shrink-0">
-          {avatarUrl ? (
-            <img
-              src={avatarUrl}
-              alt=""
-              className="h-8 w-8 rounded-md object-cover"
-            />
-          ) : (
-            <span className="flex h-8 w-8 items-center justify-center rounded-md bg-signal font-display text-xs font-bold text-ink">
-              {displayName.slice(0, 1).toUpperCase()}
-            </span>
-          )}
+          <UserAvatar
+            name={displayName}
+            avatarUrl={avatarUrl}
+            className="h-8 w-8"
+            fallbackClassName="bg-signal text-xs text-ink"
+          />
           <StatusDot
             status={effectiveStatus}
             label={ownLabel}

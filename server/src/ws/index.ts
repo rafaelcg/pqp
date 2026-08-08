@@ -23,6 +23,7 @@ import {
 export { forEachAuthenticatedSocket, getSocketUser } from "./sockets.js";
 export {
   broadcastMessageDeleted,
+  broadcastProfileUpdate,
   broadcastToChannel,
   evictChannelViewers,
   evictUserFromChannels,

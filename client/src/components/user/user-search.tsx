@@ -3,6 +3,7 @@ import { Loader2, Search } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 import { AutocompleteMenu } from "@/components/chat/autocomplete-menu";
 import { clampSelection } from "@/components/search/search-results";
+import { UserAvatar } from "@/components/user/user-avatar";
 import { ApiError, lookupUserByTag, searchUsers } from "@/lib/api";
 import { excludeUsers, readUserQuery } from "@/lib/user-search";
 import { cn } from "@/lib/utils";
@@ -188,7 +189,14 @@ export function UserSearch({
             id: user.id,
             primary: user.displayName,
             secondary: user.tag ?? undefined,
-            leading: <Avatar user={user} />,
+            leading: (
+              <UserAvatar
+                name={user.displayName}
+                avatarUrl={user.avatarUrl}
+                className="h-6 w-6"
+                fallbackClassName="bg-surface-2 text-[11px] text-text"
+              />
+            ),
           }))}
           selectedIndex={selected}
           onSelect={choose}
@@ -199,23 +207,3 @@ export function UserSearch({
   );
 }
 
-function Avatar({ user }: { user: PublicUser }) {
-  if (user.avatarUrl) {
-    return (
-      <img
-        src={user.avatarUrl}
-        alt=""
-        loading="lazy"
-        // The avatar is a URL the account owner typed. Telling whatever host it
-        // points at which deployment is reading it is not part of the deal.
-        referrerPolicy="no-referrer"
-        className="h-6 w-6 shrink-0 rounded-md object-cover"
-      />
-    );
-  }
-  return (
-    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-surface-2 text-[11px] font-semibold text-text">
-      {user.displayName.slice(0, 1).toUpperCase()}
-    </span>
-  );
-}

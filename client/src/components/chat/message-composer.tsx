@@ -20,6 +20,7 @@ import {
 } from "@/components/chat/autocomplete-menu";
 import { EmojiPickerPanel } from "@/components/chat/emoji-picker";
 import { GifPickerPanel } from "@/components/chat/gif-picker";
+import { UserAvatar } from "@/components/user/user-avatar";
 import { Button } from "@/components/ui/button";
 import {
   AttachmentAbortError,
@@ -204,19 +205,13 @@ export function MessageComposer({
         primary: `@${member.username}`,
         secondary: member.displayName,
         leading: (
-          <span className="flex h-5 w-5 shrink-0 items-center justify-center overflow-hidden rounded-full bg-surface-3 text-[10px] font-semibold text-text">
-            {member.avatarUrl ? (
-              <img
-                src={member.avatarUrl}
-                alt=""
-                loading="lazy"
-                referrerPolicy="no-referrer"
-                className="h-full w-full object-cover"
-              />
-            ) : (
-              member.displayName.slice(0, 1).toUpperCase()
-            )}
-          </span>
+          <UserAvatar
+            name={member.displayName}
+            avatarUrl={member.avatarUrl}
+            className="h-5 w-5"
+            fallbackClassName="bg-surface-3 text-[10px] text-text"
+            rounded="full"
+          />
         ),
       }));
     }

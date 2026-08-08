@@ -62,6 +62,13 @@ export interface DbUser {
   username: string | null;
   discriminator: string | null;
   avatar_url: string | null;
+  /**
+   * The object-storage key behind `avatar_url`, set only when the picture was
+   * uploaded here. Null for a Clerk image, a preset, or a typed URL — see the
+   * column comment in schema.sql. Optional because several reads select a
+   * narrower column list; treat an absent value as "unknown", not as "none".
+   */
+  avatar_key?: string | null;
   /** Domains of verified emails only — see `verifiedEmailDomains` in auth/clerk.ts. */
   email_domains?: string[];
 }

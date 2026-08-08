@@ -135,6 +135,8 @@ actor APIClient {
     /// beside the upload dance it belongs to, and memoising it there is better
     /// than moving the endpoint here to satisfy an access level.
     var attachmentConfigCache: AttachmentConfig?
+    /// Same arrangement, declared beside its uploader in AvatarUploader.swift.
+    var avatarConfigCache: AvatarConfig?
     private var gifConfigCache: GifConfig?
 
     init(

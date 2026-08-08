@@ -354,6 +354,56 @@ Also on boot: the server runs one sweep immediately after `initDb()` (unawaited,
 unreachable bucket cannot delay `listen()`) on top of the hourly interval. A process that
 redeploys more often than the interval would otherwise never sweep once in its lifetime.
 
+## Profile pictures ride the same bucket
+
+Uploaded avatars are the same subsystem, on purpose: same `S3_*` config, same hand-rolled SigV4,
+same presign-then-`HEAD`. There is no second storage path to configure, no second thing to turn
+on, and no second thing to get wrong.
+
+```
+POST /api/me/avatar        { contentType, byteSize }  ->  { key, uploadUrl, expiresAt }
+PUT  <uploadUrl>           the bytes, straight to storage
+POST /api/me/avatar/claim  { key }                    ->  { user }
+DELETE /api/me/avatar                                 ->  { user }
+GET  /api/avatars/config                              ->  { enabled, maxBytes, size }
+```
+
+What differs from a message attachment, and why:
+
+- **No table.** An attachment needs one because it exists before any message refers to it and
+  because unclaimed rows have to be swept. An account has exactly one avatar, so its whole
+  lifecycle fits in two columns on `users`: `avatar_url` (what everything renders — unchanged,
+  and still whatever a Clerk picture or a typed URL put there) and `avatar_key` (the object we
+  hold, or NULL). Replacing or clearing an avatar deletes the old object right there, because
+  that write is the last moment the key is known.
+- **The claim takes a client-supplied key**, which the attachment claim deliberately does not.
+  What stands in for the ownership row is the key itself: it is minted as
+  `avatars/<userId>/<uuid>.<ext>` from the *session's* user id, and the claim refuses any key
+  outside the caller's own prefix (traversal included). The worst a forged key can do is point at
+  another of the forger's own objects.
+- **5 MiB and `image/jpeg|png|webp` only** — narrower than attachments both ways. No GIF: an
+  avatar is drawn at 40px in a hundred places at once, and an animated one is a hundred decoders
+  behind a member list. Both clients centre-crop and scale to 512 and re-encode as JPEG before
+  uploading; the server never decodes an image, so the byte cap is what bounds a client that
+  skips that.
+- **Served through `GET /api/avatars/:userId`**, one of the three deliberately unauthenticated
+  routes in `api/index.ts` (with the embed-image proxy and webhook execution) — a browser cannot
+  put a Bearer token on an `<img src>`. It 302s to a presigned GET rather than proxying the
+  bytes: they are in our own bucket, so there is no third-party IP to hide and no reason to pay
+  the egress twice. `users.avatar_url` holds `/api/avatars/<id>?v=<hash of the key>`,
+  **root-relative** — the server does not know its own public origin, so each client prefixes its
+  own API base, exactly as it already does for `/api/embeds/:hash/image`. The `?v=` is what makes
+  a new avatar a new address, without which every cache in the path keeps the old picture.
+- **Off cleanly with no `S3_*`.** `GET /api/avatars/config` answers `enabled:false`, both clients
+  hide the upload control, and presets and typed URLs go on working — which is what avatars were
+  before uploads existed. `DELETE /api/me/avatar` keeps working regardless, so an account that
+  lost its bucket can still stop pointing at it.
+
+A profile change also fans out live: `profile-update` on `/ws`, addressed to every connected
+socket rather than to a channel (an avatar is drawn in places that have no channel), on its own
+cluster topic `chat.profile`. It carries exactly `publicUserSchema`'s fields — nothing in it is
+private.
+
 ## Troubleshooting
 
 | Symptom | Cause |

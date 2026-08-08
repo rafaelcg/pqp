@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/context-menu";
 import { ChannelListSkeleton } from "@/components/ui/skeleton";
 import { useProfilePopover } from "@/components/user/user-profile-popover";
+import { UserAvatar } from "@/components/user/user-avatar";
 import {
   notificationLevelItems,
   useChannelNotificationLevel,
@@ -382,25 +383,16 @@ function AvatarStack({
   }
   return (
     <span className="flex shrink-0 -space-x-2" aria-hidden="true">
-      {shown.map((person) =>
-        person.avatarUrl ? (
-          <img
-            key={person.id}
-            src={person.avatarUrl}
-            alt=""
-            loading="lazy"
-            referrerPolicy="no-referrer"
-            className="h-6 w-6 rounded-full object-cover ring-2 ring-channel"
-          />
-        ) : (
-          <span
-            key={person.id}
-            className="flex h-6 w-6 items-center justify-center rounded-full bg-ink-4 text-[10px] font-semibold text-paper ring-2 ring-channel"
-          >
-            {person.displayName.slice(0, 1).toUpperCase()}
-          </span>
-        ),
-      )}
+      {shown.map((person) => (
+        <UserAvatar
+          key={person.id}
+          name={person.displayName}
+          avatarUrl={person.avatarUrl}
+          className="h-6 w-6 ring-2 ring-channel"
+          fallbackClassName="bg-ink-4 text-[10px] text-paper"
+          rounded="full"
+        />
+      ))}
     </span>
   );
 }

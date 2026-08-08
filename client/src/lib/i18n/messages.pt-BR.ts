@@ -305,6 +305,8 @@ export const ptBR: PartialMessages = {
   "onboarding.profile.avatarUrlPlaceholder": "https://… URL da imagem",
   "onboarding.profile.avatarPreset": "Usar este avatar",
   "onboarding.profile.avatarClear": "Limpar",
+  "onboarding.profile.avatarUpload": "Enviar uma foto",
+  "onboarding.profile.avatarUploading": "Enviando…",
   "onboarding.profile.error": "Não deu pra salvar. Tenta de novo.",
 
   "onboarding.landing.eyebrow": "Última coisa",
@@ -560,6 +562,8 @@ export const ptBR: PartialMessages = {
   "settings.profile.avatar.urlLabel": "Link da imagem do avatar",
   "settings.profile.avatar.preset": "Usar avatar pronto",
   "settings.profile.avatar.clear": "Limpar",
+  "settings.profile.avatar.upload": "Enviar uma foto",
+  "settings.profile.avatar.uploading": "Enviando…",
   "settings.profile.displayName": "Nome de exibição",
   "settings.profile.username": "Nome de usuário",
   "settings.profile.usernamePlaceholder": "nome_maneiro",

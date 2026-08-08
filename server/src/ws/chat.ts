@@ -3,7 +3,9 @@ import {
   chatClientMessageSchema,
   extractMentionUsernames,
   isChatServerMessage,
+  profileUpdateSchema,
   type ChatServerMessage,
+  type ProfileUpdate,
 } from "@pqp/shared";
 import type { DbUser } from "../db.js";
 import {
@@ -85,6 +87,7 @@ const PRESENCE_TOPIC = "chat.presence";
 const TYPING_TOPIC = "chat.typing";
 const ACTIVITY_TOPIC = "chat.activity";
 const EVICT_TOPIC = "chat.evict";
+const PROFILE_TOPIC = "chat.profile";
 
 interface PresenceUser {
   id: string;
@@ -401,6 +404,41 @@ export function resolveEmbedInBackground(
         (error as Error).message,
       );
     });
+}
+
+/**
+ * Tell every connected client that somebody's name or picture changed.
+ *
+ * NOT ADDRESSED TO A CHANNEL, unlike everything else in this file. An avatar is
+ * drawn in the member list of a server nobody is viewing, in a conversation row
+ * in the sidebar, in a call roster, and beside every message that person ever
+ * sent — none of which is reachable from a channel id. Fanning out to every
+ * socket is what makes a change land in all of them at once instead of on the
+ * next reload.
+ *
+ * The cost is O(sockets) per profile edit, which is the right trade: a rename
+ * is a once-in-a-while action, and the frame is five short strings. Nothing in
+ * it is private — see the note on `profileUpdateSchema`.
+ *
+ * Called from the HTTP profile and avatar routes, so there is no sender socket
+ * and no need for one: the editor's own client is a client like any other and
+ * updating it from the same frame is what stops it drifting from everyone else.
+ */
+export function broadcastProfileUpdate(update: ProfileUpdate): void {
+  deliverProfileUpdate(update);
+  if (isBusEnabled()) {
+    publishToCluster(PROFILE_TOPIC, update);
+  }
+}
+
+/** The local half, and the only thing a bus frame may call. See above. */
+function deliverProfileUpdate(update: ProfileUpdate): void {
+  const payload = encode(update);
+  forEachAuthenticatedSocket((socket) => {
+    if (socket.readyState === 1) {
+      socket.send(payload);
+    }
+  });
 }
 
 /**
@@ -1193,6 +1231,22 @@ subscribeToCluster(EVICT_TOPIC, (data) => {
       return;
     }
     evictUserFromChannelsLocally(userId, new Set(channelIds));
+  }
+});
+
+/**
+ * A profile edit on another instance.
+ *
+ * Parsed with the schema rather than field-picked like the topics above,
+ * because this frame goes straight out to every socket on this box: anything
+ * that gets through here is something every client is asked to render. The
+ * schema is the same one those clients parse with, so a frame this instance
+ * would refuse is a frame they would have refused too.
+ */
+subscribeToCluster(PROFILE_TOPIC, (data) => {
+  const parsed = profileUpdateSchema.safeParse(data);
+  if (parsed.success) {
+    deliverProfileUpdate(parsed.data);
   }
 });
 

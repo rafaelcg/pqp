@@ -5,8 +5,11 @@ import {
   AUDIT_LOG_PAGE_MAX,
   AUDIT_LOG_PAGE_SIZE,
   auditActionSchema,
+  AVATAR_IMAGE_SIZE,
   banMemberSchema,
+  claimAvatarSchema,
   createAttachmentSchema,
+  createAvatarUploadSchema,
   createBlockSchema,
   createChannelSchema,
   moveChannelSchema,
@@ -21,6 +24,7 @@ import {
   expectedDeleteConfirmation,
   formatUserTag,
   issueTimeoutSchema,
+  MAX_AVATAR_BYTES,
   GIF_PAGE_MAX,
   GIF_PAGE_SIZE,
   GIF_QUERY_MAX_LENGTH,
@@ -59,6 +63,7 @@ import {
 } from "../voice/backends.js";
 import {
   applyManualStatus,
+  broadcastProfileUpdate,
   broadcastToChannel,
   evictChannelViewers,
   evictUserFromChannels,
@@ -89,7 +94,7 @@ import {
   parseCalendarDate,
   recordAgeDeclaration,
 } from "../services/age-gate.js";
-import type { MemberRole } from "../db.js";
+import type { DbUser, MemberRole } from "../db.js";
 import {
   clampLimit,
   corsHeaders,
@@ -112,6 +117,13 @@ import {
   OwnedServersBlockDeletionError,
 } from "../services/account.js";
 import { listAuditLog, logAudit } from "../services/audit.js";
+import {
+  avatarUrlForKey,
+  createAvatarUpload,
+  isAvatarUploadConfigured,
+  presignAvatarRead,
+  verifyAvatarObject,
+} from "../services/avatars.js";
 import { buildServerExport } from "../services/export.js";
 import {
   createWebhook,
@@ -583,8 +595,120 @@ router.patch("/api/me", async ({ req, user, ageGate }) => {
     dmPrivacy: body.dmPrivacy,
   });
   invalidateUserCache(updated.clerk_id);
+  announceProfile(updated);
   return { ...(await toPublicUser(updated)), ageGate };
 });
+
+// ------------------------------------------------------------- avatars
+//
+// The upload half of a profile picture. The *display* half needs nothing here:
+// `users.avatar_url` has always been on the wire and every payload that carries
+// a person already carries it, so a claimed avatar reaches message authors,
+// member lists, presence, friends, DM summaries and voice rosters through joins
+// that were written long before this existed.
+
+/**
+ * Mirrors `GET /api/attachments/config`, including that the limits ride along
+ * in both states so a picker can reject an over-size file against this
+ * deployment's cap rather than discovering it on a 413.
+ *
+ * `enabled: false` is a whole deployment shape, not an error: with no `S3_*`
+ * the upload button is absent and typed URLs and presets still work, which is
+ * what avatars were before uploads existed.
+ */
+router.get("/api/avatars/config", async () => ({
+  enabled: isAvatarUploadConfigured(),
+  maxBytes: MAX_AVATAR_BYTES,
+  size: AVATAR_IMAGE_SIZE,
+}));
+
+router.post("/api/me/avatar", async ({ req, res, user }) => {
+  if (!isAvatarUploadConfigured()) {
+    throw new HttpError(503, "Avatar uploads are not configured on this server");
+  }
+  const key = `user:${user.id}`;
+  if (!uploadLimiter.take(key)) {
+    res.setHeader("Retry-After", String(uploadLimiter.retryAfter(key)));
+    throw new HttpError(429, "Slow down");
+  }
+
+  const body = createAvatarUploadSchema.parse(await readJsonBody(req));
+  // The storage key is generated from the *session's* user id, never from
+  // anything on the request — which is also what makes the claim below able to
+  // trust a key the client hands back.
+  return created(
+    createAvatarUpload({
+      userId: user.id,
+      contentType: body.contentType,
+      byteSize: body.byteSize,
+    }),
+  );
+});
+
+/**
+ * The bytes are up: make them the avatar.
+ *
+ * The HEAD happens here and not at mint time for the reason spelled out in
+ * `docs/ATTACHMENTS.md` — it is the only thing that tells "never uploaded"
+ * apart from "uploaded", and it catches an object stored as something other
+ * than the type that was signed. A failure is a 400 rather than a 500: the
+ * request named an object that is not there or is not what it claimed, which is
+ * something the caller got wrong.
+ */
+router.post("/api/me/avatar/claim", async ({ req, user }) => {
+  if (!isAvatarUploadConfigured()) {
+    throw new HttpError(503, "Avatar uploads are not configured on this server");
+  }
+  const body = claimAvatarSchema.parse(await readJsonBody(req));
+  const byteSize = await verifyAvatarObject(user.id, body.key);
+  if (byteSize === null) {
+    throw new HttpError(400, "That upload could not be verified. Try again.");
+  }
+
+  const updated = await updateProfile(user.id, {
+    avatarUrl: avatarUrlForKey(user.id, body.key),
+    avatarKey: body.key,
+  });
+  invalidateUserCache(updated.clerk_id);
+  announceProfile(updated);
+  return { user: await toPublicUser(updated) };
+});
+
+/**
+ * Back to the monogram.
+ *
+ * Not gated on storage being configured, unlike the two above: an account that
+ * uploaded an avatar and then lost its bucket must still be able to stop
+ * pointing at it. Clearing the columns is a database write and succeeds either
+ * way; only the object deletion needs storage, and `updateProfile` treats that
+ * as best-effort.
+ */
+router.delete("/api/me/avatar", async ({ user }) => {
+  const updated = await updateProfile(user.id, {
+    avatarUrl: null,
+    avatarKey: null,
+  });
+  invalidateUserCache(updated.clerk_id);
+  announceProfile(updated);
+  return { user: await toPublicUser(updated) };
+});
+
+/**
+ * Tell every open client. Kept beside the three writers above rather than
+ * inside `updateProfile`, because the service is also what account deletion and
+ * the onboarding backfill call, and a broadcast belongs to a request somebody
+ * made — not to every write of the row.
+ */
+function announceProfile(updated: DbUser): void {
+  broadcastProfileUpdate({
+    type: "profile-update",
+    userId: updated.id,
+    displayName: updated.display_name,
+    username: updated.username,
+    tag: formatUserTag(updated.username, updated.discriminator),
+    avatarUrl: updated.avatar_url,
+  });
+}
 
 /**
  * Patch semantics: the body carries only what changed, and the response is the
@@ -2909,6 +3033,60 @@ async function serveEmbedImage(
   }
 }
 
+const AVATAR_OBJECT_PATH =
+  /^\/api\/avatars\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
+
+/**
+ * Somebody's uploaded profile picture, as a redirect to the object store.
+ *
+ * DELIBERATELY UNAUTHENTICATED, the third route in this file that is, and for
+ * the same reason as the embed-image proxy above: a browser cannot attach a
+ * Bearer token to an `<img src>`. Gating it behind Clerk would buy nothing
+ * either — an avatar is `publicUserSchema` material, readable about any account
+ * by any other through user search, so this discloses nothing that was not
+ * already enumerable. What it deliberately does *not* accept is a storage key:
+ * the path names a user, the key is looked up, and there is no shape of request
+ * that can address an arbitrary object in the bucket.
+ *
+ * A redirect rather than a proxy — the opposite of the embed route, which
+ * fetches the bytes itself. That one has to, because the origin is a third
+ * party we are hiding the reader's IP from. Here the bytes are in our own
+ * bucket, and streaming five megabytes per avatar per viewer through the API is
+ * exactly the egress bill the presigned-URL design exists to avoid.
+ *
+ * The 404 covers "no such user", "no uploaded avatar" and "storage is
+ * unconfigured" identically. All three mean the same thing to the client, which
+ * draws the monogram; and answering them apart would turn this into a way to
+ * probe which account ids exist.
+ */
+async function serveAvatarObject(
+  req: IncomingMessage,
+  res: ServerResponse,
+  userId: string,
+): Promise<void> {
+  let url: string | null;
+  try {
+    url = await presignAvatarRead(userId);
+  } catch (error) {
+    console.error(`[avatars] could not resolve ${userId}:`, error);
+    sendError(res, 404, "Not found", req);
+    return;
+  }
+  if (!url) {
+    sendError(res, 404, "Not found", req);
+    return;
+  }
+  // Cacheable because the URL carries `?v=<hash of the key>`: a new avatar is a
+  // new address, so nothing here can serve a stale picture. The window is kept
+  // under the presigned target's own hour so a cached redirect cannot outlive
+  // the URL it points at.
+  res.writeHead(302, {
+    location: url,
+    "cache-control": "public, max-age=300",
+  });
+  res.end();
+}
+
 const WEBHOOK_EXECUTE_PATH =
   /^\/api\/webhooks\/([0-9a-f-]{36})\/([A-Za-z0-9_-]+)$/;
 
@@ -2978,6 +3156,13 @@ export async function handleApi(
     req.method === "GET" ? EMBED_IMAGE_PATH.exec(pathname) : null;
   if (imageMatch) {
     await serveEmbedImage(req, res, imageMatch[1]!);
+    return;
+  }
+
+  const avatarMatch =
+    req.method === "GET" ? AVATAR_OBJECT_PATH.exec(pathname) : null;
+  if (avatarMatch) {
+    await serveAvatarObject(req, res, avatarMatch[1]!);
     return;
   }
 

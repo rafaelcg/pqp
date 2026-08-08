@@ -1,3 +1,4 @@
+import PhotosUI
 import SwiftUI
 
 /// Everything about you: profile, notifications, blocked people.
@@ -25,6 +26,7 @@ struct AccountSettingsView: View {
         NavigationStack {
             Form {
                 Section("Profile") {
+                    AvatarRow()
                     TextField("Display name", text: $displayName)
                     if let tag = session.currentUser?.tag {
                         LabeledContent("Handle", value: tag)
@@ -128,6 +130,118 @@ struct AccountSettingsView: View {
             self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
         }
         saving = false
+    }
+}
+
+/// Pick, upload and clear the account's profile picture.
+///
+/// Its own view rather than lines in `AccountSettingsView` because it does not
+/// share that screen's save cycle at all: an upload writes the avatar the
+/// moment it lands, and "Save changes" below has nothing of its to apply.
+/// Folding the two together would put an avatar behind a button that does not
+/// govern it.
+///
+/// The whole control is absent on a deployment with no object storage — the
+/// same shape the attach button and the GIF button take — rather than present
+/// and answering 503. There is no URL field here, unlike the web client's
+/// picker: typing a URL on a phone is not a thing anybody does, and the
+/// server keeps accepting one from any other client regardless.
+private struct AvatarRow: View {
+    @Environment(SessionStore.self) private var session
+
+    @State private var canUpload = false
+    @State private var picked: PhotosPickerItem?
+    @State private var busy = false
+    @State private var error: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 14) {
+                Avatar(
+                    name: session.currentUser?.displayName ?? "?",
+                    seed: session.currentUser?.id ?? "self",
+                    size: 56,
+                    url: session.currentUser?.avatarUrl
+                )
+                if canUpload {
+                    VStack(alignment: .leading, spacing: 6) {
+                        PhotosPicker(
+                            selection: $picked,
+                            matching: .images,
+                            photoLibrary: .shared()
+                        ) {
+                            Text(busy ? "Uploading…" : "Choose a photo")
+                                .font(Typography.bodyMedium)
+                                .foregroundStyle(Palette.signal)
+                        }
+                        .disabled(busy)
+                        .accessibilityIdentifier("settings.avatar.pick")
+
+                        if session.currentUser?.avatarUrl != nil {
+                            Button("Remove", role: .destructive) {
+                                Task { await clear() }
+                            }
+                            .font(Typography.caption)
+                            .disabled(busy)
+                            .accessibilityIdentifier("settings.avatar.remove")
+                        }
+                    }
+                } else {
+                    Text("Photo uploads are off on this server.")
+                        .font(Typography.caption)
+                        .foregroundStyle(Palette.paperMuted)
+                }
+            }
+            if let error {
+                Text(error)
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.danger)
+            }
+        }
+        .task {
+            canUpload = ((try? await session.api.avatarConfig())?.enabled) ?? false
+        }
+        .onChange(of: picked) { _, item in
+            guard let item else { return }
+            Task { await upload(item) }
+        }
+    }
+
+    private func upload(_ item: PhotosPickerItem) async {
+        busy = true
+        error = nil
+        defer {
+            busy = false
+            // Cleared so choosing the same photo again after a failure still
+            // fires `onChange`.
+            picked = nil
+        }
+        do {
+            guard let data = try await item.loadTransferable(type: Data.self),
+                  let image = UIImage(data: data) else {
+                error = "That photo could not be read."
+                return
+            }
+            let uploader = AvatarUploader(api: session.api)
+            _ = try await uploader.upload(image)
+            // From the server rather than from the response, so the account in
+            // memory matches every other field it holds.
+            await session.refreshCurrentUser()
+        } catch {
+            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    private func clear() async {
+        busy = true
+        error = nil
+        defer { busy = false }
+        do {
+            _ = try await session.api.deleteAvatar()
+            await session.refreshCurrentUser()
+        } catch {
+            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+        }
     }
 }
 

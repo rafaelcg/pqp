@@ -42,7 +42,8 @@ struct ChannelMembersView: View {
                                     .padding(.horizontal, 4)
                             }
                             ForEach(allowed) { user in
-                                row(name: user.displayName, seed: user.id, action: "Remove") {
+                                row(name: user.displayName, seed: user.id,
+                                    avatarUrl: user.avatarUrl, action: "Remove") {
                                     Task { await remove(user.id) }
                                 }
                             }
@@ -51,7 +52,8 @@ struct ChannelMembersView: View {
                                 .padding(.horizontal, 4)
                                 .padding(.top, 10)
                             ForEach(candidates.filter { !allowedIds.contains($0.id) }) { member in
-                                row(name: member.displayName, seed: member.id, action: "Add") {
+                                row(name: member.displayName, seed: member.id,
+                                    avatarUrl: member.avatarUrl, action: "Add") {
                                     Task { await add(member.id) }
                                 }
                             }
@@ -75,11 +77,12 @@ struct ChannelMembersView: View {
     private func row(
         name: String,
         seed: String,
+        avatarUrl: String? = nil,
         action: String,
         perform: @escaping () -> Void
     ) -> some View {
         HStack(spacing: 12) {
-            Avatar(name: name, seed: seed, size: 36)
+            Avatar(name: name, seed: seed, size: 36, url: avatarUrl)
             Text(name).font(Typography.bodyMedium).foregroundStyle(Palette.paper)
             Spacer()
             Button(action, action: perform)

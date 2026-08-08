@@ -785,6 +785,40 @@ export function createChatController(
       }
     },
 
+    /**
+     * Somebody changed their name or picture; repaint every message of theirs
+     * that is already on screen.
+     *
+     * The author's name and avatar are denormalised onto each message row when
+     * it is read, which is what makes a transcript one query instead of one per
+     * distinct author. The cost is exactly this: a profile change is invisible
+     * to already-loaded history until something rewrites it. A webhook message
+     * is skipped — its author *is* the row, and its name and picture are the
+     * webhook's, not the account's, so overwriting them would rename a bot to
+     * whoever last edited their profile.
+     */
+    applyProfileUpdate(update: {
+      userId: string;
+      displayName: string;
+      avatarUrl: string | null;
+    }) {
+      let changed = false;
+      messages = messages.map((message) => {
+        if (message.authorId !== update.userId || message.isWebhook) {
+          return message;
+        }
+        changed = true;
+        return {
+          ...message,
+          authorName: update.displayName,
+          authorAvatarUrl: update.avatarUrl,
+        };
+      });
+      if (changed) {
+        emit();
+      }
+    },
+
     notifyTyping() {
       const now = Date.now();
       if (!channelId || now - lastTypingSentAt < TYPING_THROTTLE_MS) {

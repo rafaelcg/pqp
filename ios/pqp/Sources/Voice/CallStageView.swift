@@ -287,7 +287,8 @@ private struct PeerStageTile: View {
                         name: peer.displayName,
                         seed: peer.userId.isEmpty ? peer.peerId : peer.userId,
                         size: large ? 108 : 46,
-                        isSpeaking: peer.isSpeaking
+                        isSpeaking: peer.isSpeaking,
+                        url: peer.avatarUrl
                     )
                     if large {
                         Text(peer.displayName)

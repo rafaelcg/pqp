@@ -354,6 +354,8 @@ export const en = {
   "onboarding.profile.avatarUrlPlaceholder": "https://… image URL",
   "onboarding.profile.avatarPreset": "Use this avatar",
   "onboarding.profile.avatarClear": "Clear",
+  "onboarding.profile.avatarUpload": "Upload a photo",
+  "onboarding.profile.avatarUploading": "Uploading…",
   "onboarding.profile.error": "Couldn't save that. Try again.",
 
   "onboarding.landing.eyebrow": "Last thing",
@@ -624,6 +626,8 @@ export const en = {
   "settings.profile.avatar.urlLabel": "Avatar image URL",
   "settings.profile.avatar.preset": "Use preset avatar",
   "settings.profile.avatar.clear": "Clear",
+  "settings.profile.avatar.upload": "Upload a photo",
+  "settings.profile.avatar.uploading": "Uploading…",
   "settings.profile.displayName": "Display name",
   "settings.profile.username": "Username",
   "settings.profile.usernamePlaceholder": "cool_name",

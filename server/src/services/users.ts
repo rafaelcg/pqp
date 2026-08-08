@@ -9,6 +9,10 @@ import type { DbUser } from "../db.js";
 import { getPool } from "../db.js";
 import type { AuthUser } from "../auth/clerk.js";
 import { HttpError } from "../lib/http.js";
+// One direction only: avatars.ts knows about storage and keys, this file knows
+// about the `users` row those two columns live on. Nothing in avatars.ts
+// imports back, so there is no cycle to reason about here.
+import { discardAvatarObject } from "./avatars.js";
 import { notBlockedSql } from "./blocks.js";
 import { getPreferences } from "./preferences.js";
 // A cycle: servers.ts imports `channelVisibleSql` from here. Both directions
@@ -18,7 +22,7 @@ import { getPreferences } from "./preferences.js";
 import { invalidateServerAudience } from "./servers.js";
 
 /** Every column of `DbUser`, single-sourced so the reads cannot drift apart. */
-const DB_USER_COLUMNS = `id, clerk_id, display_name, username, discriminator, avatar_url, email_domains`;
+const DB_USER_COLUMNS = `id, clerk_id, display_name, username, discriminator, avatar_url, avatar_key, email_domains`;
 
 const DISCRIMINATOR_MAX = 9999;
 /** Random probes tried before falling back to a sweep that cannot miss. */
@@ -346,7 +350,7 @@ export async function searchUsersByPrefix(
 
 export async function upsertUser(auth: AuthUser): Promise<DbUser> {
   const existing = await getPool().query<DbUser>(
-    `SELECT id, clerk_id, display_name, username, discriminator, avatar_url, email_domains
+    `SELECT ${DB_USER_COLUMNS}
      FROM users WHERE clerk_id = $1`,
     [auth.clerkId],
   );
@@ -361,7 +365,7 @@ export async function upsertUser(auth: AuthUser): Promise<DbUser> {
          avatar_url = COALESCE(avatar_url, $2),
          email_domains = $3
        WHERE clerk_id = $1
-       RETURNING id, clerk_id, display_name, username, discriminator, avatar_url, email_domains`,
+       RETURNING ${DB_USER_COLUMNS}`,
       [auth.clerkId, auth.avatarUrl, auth.emailDomains ?? []],
     );
     const user = result.rows[0]!;
@@ -462,7 +466,7 @@ async function ensureUsername(user: DbUser): Promise<DbUser> {
 
 export async function getUserById(userId: string): Promise<DbUser | null> {
   const result = await getPool().query<DbUser>(
-    `SELECT id, clerk_id, display_name, username, discriminator, avatar_url
+    `SELECT ${DB_USER_COLUMNS}
      FROM users WHERE id = $1`,
     [userId],
   );
@@ -475,6 +479,12 @@ export async function updateProfile(
     displayName?: string;
     username?: string;
     avatarUrl?: string | null;
+    /**
+     * The object we hold behind `avatarUrl`, when there is one. Only the avatar
+     * routes pass this; `PATCH /api/me` never does, and an absent value is
+     * resolved below from what happened to `avatarUrl`.
+     */
+    avatarKey?: string | null;
     dmPrivacy?: DmPrivacy;
   },
 ): Promise<DbUser> {
@@ -516,13 +526,48 @@ export async function updateProfile(
         : updates.avatarUrl
       : current.avatar_url;
 
+  // Which object, if any, the new `avatar_url` is backed by.
+  //
+  // The avatar routes state it outright. Everything else — the settings form,
+  // onboarding, a preset, a pasted link — states only a URL, and the rule for
+  // those is: a URL that *changed* means the uploaded object is no longer what
+  // is being shown, so the account no longer holds one. A URL that did not
+  // change means nothing happened, which matters more than it looks: the
+  // settings form re-sends the avatar it was given on every save, so treating
+  // "sent again" as "replaced" would clear the key of a user who edited their
+  // display name and delete the object out from under their own picture.
+  const avatarKey =
+    updates.avatarKey !== undefined
+      ? updates.avatarKey
+      : updates.avatarUrl !== undefined && avatarUrl !== current.avatar_url
+        ? null
+        : (current.avatar_key ?? null);
+
   // The pair was free a moment ago, but "a moment ago" is the whole problem:
   // another rename can claim it before this write lands. That is a lost race,
   // not a bad request, so take the next free number and try again instead of
   // handing the user an error for something they did nothing wrong in.
   for (let attempt = 0; attempt < 5; attempt++) {
     try {
-      return await writeProfile(userId, updates, username, discriminator, avatarUrl);
+      const written = await writeProfile(
+        userId,
+        updates,
+        username,
+        discriminator,
+        avatarUrl,
+        avatarKey,
+      );
+      // AFTER the write commits, and never before: an object deleted first and
+      // then rolled back is a picture that renders as a broken frame forever.
+      // Nothing points at the old key any more, and this is the only moment it
+      // is still known — there is no row for a sweeper to find it by later.
+      // Fire-and-forget, because a storage hiccup must not fail a profile
+      // change that has already happened; `discardAvatarObject` swallows and
+      // logs its own errors.
+      if (current.avatar_key && current.avatar_key !== avatarKey) {
+        void discardAvatarObject(current.avatar_key);
+      }
+      return written;
     } catch (error) {
       if (!isTagConflict(error) || !username) {
         throw error;
@@ -552,6 +597,7 @@ async function writeProfile(
   username: string | null,
   discriminator: string | null,
   avatarUrl: string | null,
+  avatarKey: string | null,
 ): Promise<DbUser> {
   const result = await getPool().query<DbUser>(
     `UPDATE users SET
@@ -559,7 +605,8 @@ async function writeProfile(
        username = $3,
        discriminator = $4,
        avatar_url = $5,
-       dm_privacy = COALESCE($6, dm_privacy)
+       avatar_key = $6,
+       dm_privacy = COALESCE($7, dm_privacy)
      WHERE id = $1
      RETURNING ${DB_USER_COLUMNS}`,
     [
@@ -568,6 +615,7 @@ async function writeProfile(
       username,
       discriminator,
       avatarUrl,
+      avatarKey,
       updates.dmPrivacy ?? null,
     ],
   );

@@ -1,3 +1,5 @@
+import { UserAvatar } from "@/components/user/user-avatar";
+
 export type VoiceAvatarSize = "sm" | "md" | "lg" | "xl";
 
 interface VoiceAvatarProps {
@@ -23,7 +25,6 @@ export function VoiceAvatar({
   muted = false,
 }: VoiceAvatarProps) {
   const dim = SIZE_CLASS[size];
-  const initial = name.trim().slice(0, 1).toUpperCase() || "?";
 
   return (
     <div
@@ -33,19 +34,18 @@ export function VoiceAvatar({
           : "ring-1 ring-ink-4"
       }`}
     >
-      {avatarUrl ? (
-        <img
-          src={avatarUrl}
-          alt=""
-          className={`h-full w-full rounded-full object-cover ${muted ? "opacity-50" : ""}`}
-        />
-      ) : (
-        <div
-          className={`flex h-full w-full items-center justify-center rounded-full bg-signal font-display font-bold text-ink ${muted ? "opacity-50" : ""}`}
-        >
-          {initial}
-        </div>
-      )}
+      {/* The sizing ring stays on the wrapper — it is what `isSpeaking`
+          animates — and the picture fills it. `text-inherit` keeps the
+          monogram at the size the wrapper's class set, which is the one thing
+          `SIZE_CLASS` carries that a fixed fallback class could not. */}
+      <UserAvatar
+        name={name}
+        avatarUrl={avatarUrl}
+        className="h-full w-full"
+        fallbackClassName="bg-signal text-inherit text-ink"
+        rounded="full"
+        dimmed={muted}
+      />
     </div>
   );
 }

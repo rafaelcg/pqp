@@ -25,6 +25,7 @@ import {
   type VoiceParticipant,
   type VoiceRoomTransport,
 } from "@pqp/shared";
+import { UserAvatar } from "@/components/user/user-avatar";
 import { Button } from "@/components/ui/button";
 import {
   ContextMenu,
@@ -1033,20 +1034,17 @@ export function MembersPanel({
                     type="button"
                     title={t("profile.open", { name: member.displayName })}
                     data-member-trigger={member.id}
-                    className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-md bg-ink-3 text-sm font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
+                    className="h-9 w-9 shrink-0 overflow-hidden rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
                     onClick={(event) =>
                       openProfile(subjectOf(member), event.currentTarget)
                     }
                   >
-                    {member.avatarUrl ? (
-                      <img
-                        src={member.avatarUrl}
-                        alt=""
-                        className="h-full w-full object-cover"
-                      />
-                    ) : (
-                      member.displayName.slice(0, 1).toUpperCase()
-                    )}
+                    <UserAvatar
+                      name={member.displayName}
+                      avatarUrl={member.avatarUrl}
+                      className="h-9 w-9"
+                      fallbackClassName="bg-ink-3 text-sm"
+                    />
                   </button>
                   <StatusDot
                     // Absent means an API that predates status. Read as

@@ -3,10 +3,13 @@ import type {
   Attachment,
   AttachmentUrlResponse,
   AuditLogPage,
+  AvatarConfig,
   BlockListResponse,
   Channel,
   ChannelUnread,
   CreateAttachmentRequest,
+  CreateAvatarUploadRequest,
+  CreateAvatarUploadResponse,
   CreateGifAttachmentRequest,
   CreateAttachmentResponse,
   DmListResponse,
@@ -202,6 +205,47 @@ export const updatePreferences = (body: UserPreferences) =>
  */
 export const submitAgeCheck = (dateOfBirth: string) =>
   post<AgeCheckResponse>("/api/me/age-check", { dateOfBirth });
+
+// -------------------------------------------------------------- avatar upload
+//
+// The same three-step dance attachments use — mint, PUT straight to storage,
+// claim — for the same reason: the bytes never pass through the API. See
+// `uploadAvatar` in lib/avatar-upload.ts for the whole sequence in one place.
+
+/**
+ * Whether this deployment can store an uploaded avatar, so the button can be
+ * hidden rather than 503. Presets and typed URLs work either way, which is what
+ * avatars were before uploads existed.
+ */
+export const fetchAvatarConfig = () =>
+  apiFetch<AvatarConfig>("/api/avatars/config");
+
+/**
+ * Reserve a key and get a presigned PUT for it. The key is chosen by the server
+ * from the *session's* user id, so nothing about the destination is negotiable
+ * here — it comes back only so the claim can name the object.
+ */
+export const createAvatarUpload = (
+  body: CreateAvatarUploadRequest,
+  signal?: AbortSignal,
+) =>
+  apiFetch<CreateAvatarUploadResponse>("/api/me/avatar", {
+    method: "POST",
+    body: JSON.stringify(body),
+    ...(signal ? { signal } : {}),
+  });
+
+/** The bytes are up: HEAD them server-side and make them the avatar. */
+export const claimAvatar = (key: string, signal?: AbortSignal) =>
+  apiFetch<{ user: User }>("/api/me/avatar/claim", {
+    method: "POST",
+    body: JSON.stringify({ key }),
+    ...(signal ? { signal } : {}),
+  });
+
+/** Back to the monogram, and the object is dropped from the bucket. */
+export const deleteAvatar = () =>
+  apiFetch<{ user: User }>("/api/me/avatar", { method: "DELETE" });
 
 // ---------------------------------------------------------- your own data
 

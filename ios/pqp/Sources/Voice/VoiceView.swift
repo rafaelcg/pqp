@@ -80,7 +80,8 @@ struct VoiceView: View {
                 SelfRow(
                     isMuted: model.isMuted,
                     isDeafened: model.isDeafened,
-                    name: session.currentUser?.displayName ?? "You"
+                    name: session.currentUser?.displayName ?? "You",
+                    avatarUrl: session.currentUser?.avatarUrl
                 )
             }
             ForEach(model.peers) { peer in
@@ -154,10 +155,11 @@ private struct SelfRow: View {
     let isMuted: Bool
     let isDeafened: Bool
     let name: String
+    var avatarUrl: String?
 
     var body: some View {
         HStack(spacing: 12) {
-            Avatar(name: name, seed: "self", size: 40, isSpeaking: false)
+            Avatar(name: name, seed: "self", size: 40, isSpeaking: false, url: avatarUrl)
             Text(name)
                 .font(Typography.bodyMedium)
                 .foregroundStyle(Palette.paper)
@@ -200,7 +202,8 @@ private struct PeerRow: View {
                 name: peer.displayName,
                 seed: peer.userId.isEmpty ? peer.peerId : peer.userId,
                 size: 40,
-                isSpeaking: peer.isSpeaking
+                isSpeaking: peer.isSpeaking,
+                url: peer.avatarUrl
             )
             Text(peer.displayName)
                 .font(Typography.bodyMedium)
