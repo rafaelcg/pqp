@@ -199,8 +199,11 @@ test("the checklist's buttons open the things they name", async ({ page }) => {
   ).toBeVisible();
 
   // "Pick an avatar" — settings, which nothing in the product pointed at.
+  // Asserted on the URL field rather than the upload button: upload only
+  // exists when object storage is configured, which CI's environment is not,
+  // and the row this button promises is the picker either way.
   await page.getByRole("button", { name: "Pick an avatar" }).click();
-  await expect(page.getByRole("button", { name: "Upload a photo" })).toBeVisible({
+  await expect(page.getByPlaceholder("https://… image URL")).toBeVisible({
     timeout: 10_000,
   });
 });
