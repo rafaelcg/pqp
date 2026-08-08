@@ -51,6 +51,18 @@ import {
 
 interface OnboardingFlowProps {
   user: User;
+  /**
+   * The account is already on its way into a server — it arrived on an invite
+   * link, and the app has joined (or is joining) it behind this dialog.
+   *
+   * Skips step 3 entirely. That step exists to answer "you have nowhere to go";
+   * somebody who clicked an invitation has answered it already, and showing them
+   * an empty "or use an invite" field while the app is holding their code is the
+   * product asking a question it knows the answer to. It was also the third time
+   * that one code got asked for: once in the URL, once here, once in the join
+   * dialog waiting underneath.
+   */
+  pendingInvite?: boolean;
   /** Reflect a saved profile back into the app (sidebar, message authorship). */
   onUserUpdated: (user: User) => void;
   /**
@@ -64,6 +76,7 @@ interface OnboardingFlowProps {
 
 export function OnboardingFlow({
   user,
+  pendingInvite = false,
   onUserUpdated,
   onServerReady,
   onDone,
@@ -77,6 +90,18 @@ export function OnboardingFlow({
    * costs one repeat of the flow on the next cold start, whereas awaiting it
    * would make a slow network look like a frozen dialog on the last click of
    * signup — the worst possible moment to look broken.
+   */
+  /**
+   * Record that the flow is answered, then get out of the way.
+   *
+   * Deliberately does NOT patch the local `user` to match. It is tempting —
+   * the app's copy now says "onboarding never ran" while the server says it did
+   * — but `ProfileStep` calls `onUserUpdated` and then this in the same handler,
+   * so the `user` this closure holds can still be the pre-save one, and writing
+   * it back would undo the display name and avatar that were just saved. The
+   * staleness is harmless instead: nothing downstream keys off `onboardedAt`
+   * except `shouldRunOnboarding`, and `needsOnboarding` has already been set
+   * false by `onDone`.
    */
   function finish() {
     void updatePreferences(onboardingCompletedPatch()).catch(() => {
@@ -101,7 +126,10 @@ export function OnboardingFlow({
       <ProfileStep
         user={user}
         onUserUpdated={onUserUpdated}
-        onNext={() => setStep("landing")}
+        // With an invite in hand this is the last screen, so Continue means
+        // "done" rather than "next" — and finishing here is what uncovers the
+        // channel they were invited to.
+        onNext={pendingInvite ? finish : () => setStep("landing")}
         onSkip={finish}
       />
     );

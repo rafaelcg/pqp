@@ -4,6 +4,7 @@ import type { Invite } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { useTranslation, type Translator } from "@/lib/i18n";
 import {
   createInvite,
   deleteInvite,
@@ -20,6 +21,15 @@ interface InvitePanelProps {
   canManage: boolean;
   /** Code from an `/app/invite/<code>` link or `pqp://invite/<code>` deep link. */
   initialCode?: string | null;
+  /**
+   * Why the app could not walk them in on its own.
+   *
+   * Arriving on an invite link no longer stops at this dialog — the app joins and
+   * opens the channel. So the only way a *link* gets here is a refusal, and
+   * opening pre-filled and silent after one would read as "nothing happened"
+   * rather than "that link is dead".
+   */
+  initialError?: string | null;
   onClose: () => void;
   onJoined: (serverId: string) => void;
 }
@@ -41,25 +51,25 @@ function normalizeCode(input: string): string {
   }
 }
 
-function formatExpiry(expiresAt: string | null): string {
+function formatExpiry(t: Translator["t"], expiresAt: string | null): string {
   if (!expiresAt) {
-    return "Never expires";
+    return t("invite.expiry.never");
   }
   const remainingMs = new Date(expiresAt).getTime() - Date.now();
   if (Number.isNaN(remainingMs) || remainingMs <= 0) {
-    return "Expired";
+    return t("invite.expiry.expired");
   }
   const hours = Math.round(remainingMs / 3_600_000);
   if (hours < 24) {
-    return `Expires in ${Math.max(1, hours)}h`;
+    return t("invite.expiry.hours", { count: Math.max(1, hours) });
   }
-  return `Expires in ${Math.round(hours / 24)}d`;
+  return t("invite.expiry.days", { count: Math.round(hours / 24) });
 }
 
-function formatUses(invite: Invite): string {
+function formatUses(t: Translator["t"], invite: Invite): string {
   return invite.maxUses === null
-    ? `${invite.uses} uses`
-    : `${invite.uses}/${invite.maxUses} uses`;
+    ? t("invite.uses.unlimited", { count: invite.uses })
+    : t("invite.uses.capped", { used: invite.uses, max: invite.maxUses });
 }
 
 export function InvitePanel({
@@ -69,9 +79,11 @@ export function InvitePanel({
   serverName,
   canManage,
   initialCode = null,
+  initialError = null,
   onClose,
   onJoined,
 }: InvitePanelProps) {
+  const { t } = useTranslation();
   const [code, setCode] = useState("");
   const [preview, setPreview] = useState<Invite | null>(null);
   const [invites, setInvites] = useState<Invite[]>([]);
@@ -85,9 +97,9 @@ export function InvitePanel({
   useEffect(() => {
     if (open && mode === "join") {
       setCode(initialCode ?? "");
-      setError(null);
+      setError(initialError);
     }
-  }, [open, mode, initialCode]);
+  }, [open, mode, initialCode, initialError]);
 
   useEffect(() => {
     if (!open || mode !== "create" || !serverId || !canManage) {
@@ -106,7 +118,7 @@ export function InvitePanel({
       .catch((err: unknown) => {
         if (!cancelled) {
           setError(
-            err instanceof Error ? err.message : "Failed to load invites",
+            err instanceof Error ? err.message : t("invite.create.loadFailed"),
           );
         }
       })
@@ -119,6 +131,9 @@ export function InvitePanel({
     return () => {
       cancelled = true;
     };
+    // `t` is stable for a locale and re-running on it would refetch the list on
+    // a language change for no gain.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, mode, serverId, canManage]);
 
   // Resolving the code before joining lets people confirm which server a
@@ -172,7 +187,7 @@ export function InvitePanel({
       }
       copyTimer.current = window.setTimeout(() => setCopied(null), 1600);
     } catch {
-      setError("Clipboard is blocked — select the link and copy it manually.");
+      setError(t("invite.create.copyFailed"));
     }
   }
 
@@ -189,7 +204,7 @@ export function InvitePanel({
       setInvites((prev) => [invite, ...prev]);
       await copyToClipboard(`link:${invite.id}`, inviteLink(invite.code));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create invite");
+      setError(err instanceof Error ? err.message : t("invite.create.failed"));
     } finally {
       setBusy(false);
     }
@@ -205,7 +220,9 @@ export function InvitePanel({
       await deleteInvite(serverId, inviteId);
       setInvites((prev) => prev.filter((invite) => invite.id !== inviteId));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to revoke invite");
+      setError(
+        err instanceof Error ? err.message : t("invite.create.revokeFailed"),
+      );
     } finally {
       setPendingId(null);
     }
@@ -223,7 +240,7 @@ export function InvitePanel({
       onJoined(result.serverId);
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to join");
+      setError(err instanceof Error ? err.message : t("invite.join.failed"));
     } finally {
       setBusy(false);
     }
@@ -234,36 +251,42 @@ export function InvitePanel({
   return (
     <Dialog
       open={open}
-      eyebrow={isCreate ? "Invite people" : "Join a server"}
-      title={isCreate ? (serverName ?? "Server") : "Enter invite code"}
+      eyebrow={
+        isCreate ? t("invite.create.eyebrow") : t("invite.join.eyebrow")
+      }
+      title={
+        isCreate
+          ? (serverName ?? t("invite.create.serverFallback"))
+          : t("invite.join.title")
+      }
       description={
         isCreate
-          ? "Anyone with the link can join until it expires or is revoked."
-          : "Paste an invite link or type the code you were given."
+          ? t("invite.create.description")
+          : t("invite.join.description")
       }
       onClose={onClose}
       footer={
         isCreate ? (
           <>
             <Button variant="ghost" onClick={onClose}>
-              Close
+              {t("invite.close")}
             </Button>
             {canManage && (
               <Button onClick={() => void handleCreate()} disabled={busy}>
-                {busy ? "Creating…" : "Create invite link"}
+                {busy ? t("invite.create.creating") : t("invite.create.action")}
               </Button>
             )}
           </>
         ) : (
           <>
             <Button variant="ghost" onClick={onClose}>
-              Cancel
+              {t("invite.join.cancel")}
             </Button>
             <Button
               onClick={() => void handleJoin()}
               disabled={busy || !code.trim()}
             >
-              {busy ? "Joining…" : "Join server"}
+              {busy ? t("invite.join.joining") : t("invite.join.action")}
             </Button>
           </>
         )
@@ -272,20 +295,22 @@ export function InvitePanel({
       <div className="space-y-4 px-5 py-4">
         {isCreate && !canManage && (
           <p className="text-sm text-paper-muted">
-            Only owners and admins can create invites.
+            {t("invite.create.notAllowed")}
           </p>
         )}
 
         {isCreate && canManage && (
           <section>
             <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-paper-muted">
-              Active invites
+              {t("invite.create.activeTitle")}
             </h3>
             {loadingInvites ? (
-              <p className="text-sm text-paper-muted">Loading invites…</p>
+              <p className="text-sm text-paper-muted">
+                {t("invite.create.loading")}
+              </p>
             ) : invites.length === 0 ? (
               <p className="text-sm text-paper-muted">
-                No invites yet. Create one to share this server.
+                {t("invite.create.none")}
               </p>
             ) : (
               <ul className="space-y-2">
@@ -302,7 +327,9 @@ export function InvitePanel({
                         size="icon"
                         variant="secondary"
                         className="h-8 w-8 shrink-0"
-                        aria-label={`Copy invite link for code ${invite.code}`}
+                        aria-label={t("invite.create.copyLink", {
+                          code: invite.code,
+                        })}
                         onClick={() =>
                           void copyToClipboard(
                             `link:${invite.id}`,
@@ -320,7 +347,9 @@ export function InvitePanel({
                         size="icon"
                         variant="ghost"
                         className="h-8 w-8 shrink-0"
-                        aria-label={`Copy invite code ${invite.code}`}
+                        aria-label={t("invite.create.copyCode", {
+                          code: invite.code,
+                        })}
                         onClick={() =>
                           void copyToClipboard(
                             `code:${invite.id}`,
@@ -338,7 +367,9 @@ export function InvitePanel({
                         size="icon"
                         variant="ghost"
                         className="h-8 w-8 shrink-0"
-                        aria-label={`Revoke invite ${invite.code}`}
+                        aria-label={t("invite.create.revoke", {
+                          code: invite.code,
+                        })}
                         disabled={pendingId === invite.id}
                         onClick={() => void handleRevoke(invite.id)}
                       >
@@ -350,9 +381,9 @@ export function InvitePanel({
                         {invite.code}
                       </span>
                       {" · "}
-                      {formatUses(invite)}
+                      {formatUses(t, invite)}
                       {" · "}
-                      {formatExpiry(invite.expiresAt)}
+                      {formatExpiry(t, invite.expiresAt)}
                     </p>
                   </li>
                 ))}
@@ -363,7 +394,7 @@ export function InvitePanel({
               role="status"
               aria-live="polite"
             >
-              {copied ? "Copied" : ""}
+              {copied ? t("invite.create.copied") : ""}
             </p>
           </section>
         )}
@@ -372,12 +403,12 @@ export function InvitePanel({
           <div className="space-y-2">
             <label className="block">
               <span className="mb-1 block text-xs uppercase tracking-wide text-paper-muted">
-                Invite code
+                {t("invite.join.label")}
               </span>
               <Input
                 value={code}
                 onChange={(e) => setCode(normalizeCode(e.target.value))}
-                placeholder="Invite code or link"
+                placeholder={t("invite.join.placeholder")}
                 autoFocus
               />
             </label>
@@ -386,7 +417,9 @@ export function InvitePanel({
               role="status"
               aria-live="polite"
             >
-              {preview?.serverName ? `Joins ${preview.serverName}` : ""}
+              {preview?.serverName
+                ? t("invite.join.preview", { name: preview.serverName })
+                : ""}
             </p>
           </div>
         )}

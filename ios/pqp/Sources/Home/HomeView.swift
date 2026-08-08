@@ -204,6 +204,17 @@ final class HomeModel {
     /// there is nothing to do about a request you sent. There is no friend WS
     /// frame on the server, so this moves on refresh, not live.
     var pendingFriendRequests = 0
+    /// How many friends this account has, for the first-run checklist's middle
+    /// row. Read off the same fetch the badge above uses — one request answers
+    /// both questions.
+    var friendCount = 0
+    /// This account's stored preferences, or nil until they have been read.
+    ///
+    /// Nil is load-bearing: `FirstRun.shouldShow` refuses to offer a card it
+    /// cannot record a dismissal for, so an unread blob keeps the checklist off
+    /// the screen rather than flashing it up and then hiding it once the real
+    /// answer lands.
+    var preferences: UserPreferences?
     /// Whether the first load has happened. The hub re-reads on every appear so
     /// coming back from a thread clears its badge; without this, launch would
     /// fetch everything twice before the first frame.
@@ -267,16 +278,52 @@ final class HomeModel {
             async let conversations = session.api.conversations()
             self.servers = try await servers
             self.conversations = try await conversations
-            // A separate, non-fatal read: the badge is a nicety and must not
-            // be able to blank the two lists that are the screen.
-            pendingFriendRequests = FriendsDigest.pendingActionCount(
-                (try? await session.api.friends()) ?? FriendsResponse()
-            )
+            // Separate, non-fatal reads: the badge and the first-run checklist
+            // are niceties and must not be able to blank the two lists that are
+            // the screen. Both keep their previous value on a failure rather
+            // than resetting to zero — a dropped request must not un-tick a row
+            // or spring the card back open.
+            if let friends = try? await session.api.friends() {
+                pendingFriendRequests = FriendsDigest.pendingActionCount(friends)
+                friendCount = friends.friends.count
+            }
+            if let stored = try? await session.api.preferences() {
+                preferences = stored
+            }
         } catch {
             self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
         }
         isLoading = false
         hasLoadedOnce = true
+    }
+
+    /// Everything `FirstRun` needs, assembled from what the hub already holds.
+    func firstRunInputs(session: SessionStore) -> FirstRun.Inputs {
+        FirstRun.Inputs(
+            avatarURL: session.currentUser?.avatarUrl,
+            serverCount: servers.count,
+            friendCount: friendCount,
+            preferences: preferences
+        )
+    }
+
+    /// The checklist is answered — put away by hand, or finished.
+    ///
+    /// Optimistic: the local copy is patched first so the card goes on the tap
+    /// rather than after a round trip, and a failed write costs one repeat of a
+    /// dismissible card. Patching locally is also what stops the stamp-on-complete
+    /// path from firing twice — `FirstRun.shouldStampComplete` reads the same
+    /// field and goes false immediately.
+    func settleFirstRun() async {
+        guard let session else { return }
+        guard !FirstRun.isDismissed(preferences ?? UserPreferences()) else { return }
+        let stamp = FirstRun.dismissedStamp()
+        var local = preferences ?? UserPreferences()
+        local.firstRunDismissedAt = stamp
+        preferences = local
+        if let stored = try? await session.api.dismissFirstRun(at: stamp) {
+            preferences = stored
+        }
     }
 
     func createServer(named name: String) async {
@@ -312,6 +359,19 @@ struct HubView: View {
     /// message. The empty-servers card has promised this since it shipped.
     @State private var showingJoinInvite = false
     @State private var inviteCode = ""
+    @State private var showingAccountSettings = false
+    /// Non-nil pushes the Friends screen with its handle search already open.
+    @State private var addingFriend: FriendsDestination?
+
+    /// A pushed Friends screen. A type rather than a `Bool` so it can ride the
+    /// same item-based `navigationDestination` idiom the conversation uses.
+    private struct FriendsDestination: Hashable, Identifiable {
+        let id = "friends"
+    }
+
+    private var firstRunInputs: FirstRun.Inputs {
+        model.firstRunInputs(session: session)
+    }
 
     var body: some View {
         ZStack {
@@ -325,6 +385,19 @@ struct HubView: View {
                         if let error = model.error {
                             errorNote(error)
                         }
+                        // First, because on a fresh account it is the reason the
+                        // screen is not empty — and because two of its three
+                        // errands have no other affordance on this app at all.
+                        if FirstRun.shouldShow(firstRunInputs) {
+                            FirstRunCard(
+                                state: FirstRun.state(firstRunInputs),
+                                tag: session.currentUser?.tag,
+                                onCreateServer: { showingCreateServer = true },
+                                onAddFriend: { addingFriend = FriendsDestination() },
+                                onPickAvatar: { showingAccountSettings = true },
+                                onDismiss: { Task { await model.settleFirstRun() } }
+                            )
+                        }
                         serverSection
                         conversationSection
                     }
@@ -332,6 +405,7 @@ struct HubView: View {
                     .padding(.bottom, 24)
                 }
                 .refreshable { await model.refresh() }
+                .animation(Motion.gentle, value: FirstRun.shouldShow(firstRunInputs))
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) { profileDock }
@@ -407,6 +481,23 @@ struct HubView: View {
         }
         .navigationDestination(item: $openedConversation) { conversation in
             chat(for: conversation)
+        }
+        .navigationDestination(item: $addingFriend) { _ in
+            FriendsView(opensAddImmediately: true)
+        }
+        // The avatar picker's only home. It lives inside `AccountSettingsView`,
+        // which the hub otherwise only reaches through the dock pill and a second
+        // tap — and nothing on the way there mentions an avatar.
+        .sheet(isPresented: $showingAccountSettings) {
+            AccountSettingsView()
+        }
+        // Close the derived-state loop: once all three read as done, record it so
+        // that undoing one of them a year from now cannot bring the card back.
+        // `settleFirstRun` is a no-op after the first call, so a re-appear cannot
+        // write twice.
+        .onChange(of: FirstRun.shouldStampComplete(firstRunInputs)) { _, complete in
+            guard complete else { return }
+            Task { await model.settleFirstRun() }
         }
     }
 
@@ -546,43 +637,52 @@ struct HubView: View {
                 .padding(.horizontal, Metrics.hPadding)
 
             if model.servers.isEmpty {
-                // Two actions, two buttons. The card used to mention an invite
-                // code in its subtitle and then create a server when tapped —
-                // which was the only way in, so the sentence described something
-                // the app could not do.
-                VStack(alignment: .leading, spacing: 8) {
-                    Button { showingCreateServer = true } label: {
-                        HStack(spacing: 12) {
-                            Image(systemName: "plus.circle")
-                                .font(.system(size: 20, weight: .light))
-                                .foregroundStyle(Palette.signal)
-                            Text("Create a server")
-                                .font(Typography.bodyMedium)
-                                .foregroundStyle(Palette.paper)
-                            Spacer()
+                // The checklist above already offers the create action with its
+                // own button. Two "make a server" cards a thumb apart is not
+                // twice the encouragement — it is a screen that looks
+                // unfinished. So while the card is up this shrinks to one line,
+                // and once it is gone the section offers both doors: create,
+                // or join with a typed invite code.
+                if FirstRun.shouldShow(firstRunInputs) {
+                    Text("Nothing here yet.")
+                        .font(Typography.callout)
+                        .foregroundStyle(Palette.paperMuted)
+                        .padding(.horizontal, Metrics.hPadding)
+                } else {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Button { showingCreateServer = true } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: "plus.circle")
+                                    .font(.system(size: 20, weight: .light))
+                                    .foregroundStyle(Palette.signal)
+                                Text("Create a server")
+                                    .font(Typography.bodyMedium)
+                                    .foregroundStyle(Palette.paper)
+                                Spacer()
+                            }
+                            .padding(14)
+                            .pqpSurface()
                         }
-                        .padding(14)
-                        .pqpSurface()
-                    }
-                    .buttonStyle(.plain)
+                        .buttonStyle(.plain)
 
-                    Button { showingJoinInvite = true } label: {
-                        HStack(spacing: 12) {
-                            Image(systemName: "envelope.open")
-                                .font(.system(size: 20, weight: .light))
-                                .foregroundStyle(Palette.paperMuted)
-                            Text("Join one with an invite")
-                                .font(Typography.bodyMedium)
-                                .foregroundStyle(Palette.paper)
-                            Spacer()
+                        Button { showingJoinInvite = true } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: "envelope.open")
+                                    .font(.system(size: 20, weight: .light))
+                                    .foregroundStyle(Palette.paperMuted)
+                                Text("Join one with an invite")
+                                    .font(Typography.bodyMedium)
+                                    .foregroundStyle(Palette.paper)
+                                Spacer()
+                            }
+                            .padding(14)
+                            .pqpSurface()
                         }
-                        .padding(14)
-                        .pqpSurface()
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("hub.joinInvite")
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityIdentifier("hub.joinInvite")
+                    .padding(.horizontal, Metrics.hPadding)
                 }
-                .padding(.horizontal, Metrics.hPadding)
             } else {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(alignment: .top, spacing: 12) {

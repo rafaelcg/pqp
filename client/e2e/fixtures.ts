@@ -47,10 +47,20 @@ export async function ensureServer(): Promise<void> {
   // grandfathering backfill never saw it and the wizard would cover the app —
   // every message spec then times out uniformly in setup. Locally this is a
   // no-op, since the shared dev account has long since been stamped.
+  //
+  // `firstRunDismissedAt` rides along for the same reason one step further in.
+  // The shared account has a server but never a friend and never an avatar, so
+  // the hub's first-run checklist reads as outstanding forever and would draw
+  // itself above the tab content on every spec that opens `/app/dm` — moving the
+  // rows the DM and call specs measure. Only `first-run.spec.ts` wants to see it,
+  // and that spec mints its own account rather than borrowing this one.
   await fetch(`${API}/api/me/preferences`, {
     method: "PATCH",
     headers,
-    body: JSON.stringify({ onboardedAt: new Date().toISOString() }),
+    body: JSON.stringify({
+      onboardedAt: new Date().toISOString(),
+      firstRunDismissedAt: new Date().toISOString(),
+    }),
   });
   const existing = await fetch(`${API}/api/servers`, { headers });
   const { servers } = (await existing.json()) as { servers: unknown[] };
@@ -79,9 +89,11 @@ export async function ensureServer(): Promise<void> {
  * to name every key and its default value rather than sending `{}`, and it is
  * why this list must grow whenever `userPreferencesSchema` does.
  *
- * `onboardedAt` is deliberately absent: clearing it re-arms first-run
- * onboarding, and every spec would then open into the handle picker instead of
- * the app. It is the one preference a reset must leave alone.
+ * `onboardedAt` and `firstRunDismissedAt` are deliberately absent: clearing
+ * either re-arms a first-run surface, and every spec would then open into the
+ * handle picker, or into a hub with a checklist sitting on top of the rows it
+ * came to measure. They are the two preferences a reset must leave alone —
+ * `ensureServer` sets them instead.
  */
 const DEFAULT_PREFERENCES = {
   theme: "system",

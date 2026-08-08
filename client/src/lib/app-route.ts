@@ -108,3 +108,50 @@ export function messageRoutePath(
     : conversationRoutePath(channelId);
   return `${base}/message/${encodeURIComponent(messageId)}`;
 }
+
+/**
+ * Where Clerk should drop somebody after they sign in or sign up, given the
+ * `/app/…` URL they were trying to reach.
+ *
+ * THIS FIXES A LOST INVITE, which is the worst bug in the product's growth path.
+ * The signed-out gate used to hand Clerk a hardcoded `/app`. So the one journey
+ * that brings new people in — a friend sends `pqp.gg/app/invite/<code>`, they
+ * click it, they have no account — ran: gate → Clerk sign-up → `/app`. The code
+ * was in the URL and the URL was thrown away, so the new account arrived at the
+ * emptiest screen in the app with no memory of why it came, and the friend who
+ * sent the link had to be asked to send it again. Every invite to somebody who
+ * was not already a user died here.
+ *
+ * Returning the path unchanged is the whole fix; it is a function rather than an
+ * inline expression so that "does an invite survive sign-up" is a unit test
+ * instead of something only a hosted Clerk round-trip can answer.
+ *
+ * Only ever returns a path under `/app`. It is interpolated into an auth
+ * redirect, and a redirect target taken from the address bar is exactly the
+ * shape an open-redirect wants to be — so anything that is not an `/app` path
+ * this build recognises falls back to `/app` rather than being echoed back.
+ * `parseAppRoute` returning non-null is that recognition: it means the string
+ * matched one of the known route forms and nothing else got through.
+ */
+export function signedOutRedirectPath(pathname: string): string {
+  const target = parseAppRoute(pathname);
+  if (!target) {
+    // `/app` itself parses to null, and so does anything unrecognised. Both
+    // want the same answer, and it is the one that was always used.
+    return "/app";
+  }
+  if (target.kind === "invite") {
+    return `/app/invite/${encodeURIComponent(target.code)}`;
+  }
+  // Both remaining kinds can carry a message permalink, and that is the form
+  // people actually paste at each other — dropping the message id here would
+  // land them in the right channel at the wrong end of the scrollback.
+  if (target.kind === "conversation") {
+    return target.channelId && target.messageId
+      ? messageRoutePath(null, target.channelId, target.messageId)
+      : conversationRoutePath(target.channelId);
+  }
+  return target.channelId && target.messageId
+    ? messageRoutePath(target.serverId, target.channelId, target.messageId)
+    : channelRoutePath(target.serverId, target.channelId);
+}

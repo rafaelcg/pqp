@@ -26,6 +26,7 @@ struct NewConversationView: View {
     /// `server_members` DM privacy setting — so these are the names least
     /// likely to end in a refusal.
     @State private var friends: [Friend] = []
+    @State private var hasLoadedFriends = false
 
     private var looksLikeTag: Bool {
         query.contains("#") && query.split(separator: "#").count == 2
@@ -53,6 +54,18 @@ struct NewConversationView: View {
                         SectionLabel(text: String(localized: "Friends"))
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, Metrics.hPadding)
+                    } else if query.isEmpty && hasLoadedFriends {
+                        // The hole this fills: with no friends and no query, every
+                        // other branch here was false, so a brand-new account
+                        // opened this sheet onto a search field above a void — no
+                        // copy, no hint that a full `name#1234` is what the field
+                        // wants, and nothing saying why the list was empty.
+                        Text("No friends yet. Search a full handle like name#1234, or add someone from Friends first.")
+                            .font(Typography.callout)
+                            .foregroundStyle(Palette.paperMuted)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 32)
+                            .padding(.top, 20)
                     } else if results.isEmpty && !query.isEmpty {
                         Text(looksLikeTag
                              ? String(localized: "No one with that tag.")
@@ -101,8 +114,14 @@ struct NewConversationView: View {
                 }
             }
             // Failing this leaves the search box, which is the whole screen —
-            // so it is deliberately not surfaced as an error.
-            .task { friends = (try? await session.api.friends())?.friends ?? [] }
+            // so it is deliberately not surfaced as an error. The flag is what
+            // keeps the "no friends yet" line from flashing up before the read
+            // has come back, which would say something false for a moment to
+            // everybody who does have friends.
+            .task {
+                friends = (try? await session.api.friends())?.friends ?? []
+                hasLoadedFriends = true
+            }
         }
     }
 

@@ -328,6 +328,73 @@ export const ptBR: PartialMessages = {
   "onboarding.continue": "Continuar",
   "onboarding.saving": "Salvando…",
 
+  // ------------------------------------------------------------- first run
+  // "Aqui" rather than a literal "este lugar": Portuguese does not want the
+  // demonstrative, and "três coisas e aqui funciona" is how somebody would
+  // actually say it.
+  "firstRun.title": "Três coisas e aqui já funciona",
+  "firstRun.dismiss": "Esconder isso",
+  "firstRun.done": "Feito",
+  "firstRun.server.title": "Entra num servidor",
+  "firstRun.server.body": "Cria um pra sua turma, ou cola um convite que te mandaram.",
+  "firstRun.server.create": "Criar servidor",
+  "firstRun.server.join": "Usar convite",
+  "firstRun.friend.title": "Acha sua gente",
+  "firstRun.friend.body":
+    "Adiciona alguém pelo @ dele. O seu é {tag} — sai distribuindo.",
+  "firstRun.friend.action": "Adicionar amigo",
+  "firstRun.avatar.title": "Põe uma cara nisso",
+  "firstRun.avatar.body": "Uma letra num quadrado serve. Uma foto serve mais.",
+  "firstRun.avatar.action": "Escolher avatar",
+
+  // ------------------------------------------------------- invite arrival
+  // "Dá um oi" — the English says "say oi", which is already the Portuguese
+  // word; here it becomes the natural full phrase.
+  "arrival.title": "Você entrou em {server}",
+  "arrival.body":
+    "Dá um oi no #{channel}. É só isso — ninguém sabe que você chegou até você falar algo.",
+  "arrival.bodyNoChannel":
+    "Escolhe um canal na esquerda e fala algo. Ninguém sabe que você chegou até você falar.",
+  "arrival.dismiss": "Entendi",
+
+  // ------------------------------------------------------------ invite panel
+  "invite.create.eyebrow": "Chamar gente",
+  "invite.create.description":
+    "Qualquer pessoa com o link entra até ele expirar ou você revogar.",
+  "invite.create.serverFallback": "Servidor",
+  "invite.create.notAllowed": "Só donos e admins podem criar convites.",
+  "invite.create.activeTitle": "Convites ativos",
+  "invite.create.loading": "Carregando convites…",
+  "invite.create.none": "Nenhum convite ainda. Cria um pra compartilhar esse servidor.",
+  "invite.create.action": "Criar link de convite",
+  "invite.create.creating": "Criando…",
+  "invite.create.copyLink": "Copiar link do convite {code}",
+  "invite.create.copyCode": "Copiar código do convite {code}",
+  "invite.create.revoke": "Revogar convite {code}",
+  "invite.create.copied": "Copiado",
+  "invite.create.copyFailed":
+    "A área de transferência está bloqueada — selecione o link e copie na mão.",
+  "invite.create.failed": "Não deu pra criar o convite.",
+  "invite.create.revokeFailed": "Não deu pra revogar.",
+  "invite.create.loadFailed": "Não deu pra carregar os convites.",
+  "invite.close": "Fechar",
+  "invite.join.eyebrow": "Entrar num servidor",
+  "invite.join.title": "Código do convite",
+  "invite.join.description": "Cola o link do convite, ou digita o código que te deram.",
+  "invite.join.label": "Código do convite",
+  "invite.join.placeholder": "Código ou link do convite",
+  "invite.join.preview": "Entra em {name}",
+  "invite.join.action": "Entrar",
+  "invite.join.joining": "Entrando…",
+  "invite.join.cancel": "Cancelar",
+  "invite.join.failed": "Esse convite não funciona. Pede outro.",
+  "invite.expiry.never": "Não expira",
+  "invite.expiry.expired": "Expirado",
+  "invite.expiry.hours": "Expira em {count}h",
+  "invite.expiry.days": "Expira em {count}d",
+  "invite.uses.unlimited": "{count} usos",
+  "invite.uses.capped": "{used}/{max} usos",
+
   // ------------------------------------------------------------------- voice
   // "Call" é o que se fala no Brasil — "cair na call", "tá na call" — e já
   // aparece assim na landing. "Mesh", "SFU" e "Live" ficam em inglês: são

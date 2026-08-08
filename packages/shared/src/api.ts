@@ -170,6 +170,33 @@ export const userPreferencesSchema = z.object({
    * for telling a backfilled account from one that really ran the flow.
    */
   onboardedAt: z.string().optional(),
+  /**
+   * When the first-run checklist in the hub was put away, as an ISO instant.
+   *
+   * Separate from `onboardedAt` because they answer different questions.
+   * `onboardedAt` means "the wizard has run"; this means "stop offering the
+   * three things a new account has not done yet". The wizard is a modal you
+   * cannot avoid and it ends in a couple of clicks, so finishing it says almost
+   * nothing about whether the account has a server, a friend, or a face — all
+   * three are skippable from inside it. The checklist is what covers the gap
+   * after, and it needs its own "no thanks".
+   *
+   * Set two ways, and the second is the one that matters. Explicitly, when
+   * somebody dismisses the card. And automatically, the first time all three
+   * items read as done — because the card's visibility is otherwise *derived*
+   * from live state (servers, friends, avatar), and derived state comes back:
+   * leave your last server a year from now and a "get into a server" nudge
+   * would reappear at somebody who has been here a year. Stamping on completion
+   * is what makes "never returns" true rather than "usually does not return".
+   *
+   * A preference and not localStorage for the same reason as `onboardedAt`: a
+   * new browser must not re-offer a checklist somebody already answered. No
+   * migration and no backfill — absent means "never dismissed", which is the
+   * right reading for both a brand-new account and an old one, since an old
+   * account with all three done never renders the card and gets stamped on its
+   * first hub visit anyway.
+   */
+  firstRunDismissedAt: z.string().optional(),
 });
 
 export type UserPreferences = z.infer<typeof userPreferencesSchema>;

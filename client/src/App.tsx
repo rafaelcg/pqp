@@ -73,6 +73,7 @@ import {
 } from "@/hooks/use-chat";
 import { createVoiceController } from "@/hooks/use-voice";
 import {
+  ApiError,
   blockUser,
   createChannel,
   createServer,
@@ -98,9 +99,13 @@ import {
   unblockUser,
   updateChannel,
   updateMe,
+  updatePreferences,
 } from "@/lib/api";
-import { parseAppRoute } from "@/lib/app-route";
+import { parseAppRoute, signedOutRedirectPath } from "@/lib/app-route";
 import { shouldRunOnboarding } from "@/lib/onboarding";
+import { firstRunDismissedPatch } from "@/lib/first-run";
+import { browserStorage, hasArrived, rememberArrival } from "@/lib/arrival";
+import { ArrivalBanner } from "@/components/onboarding/arrival-banner";
 import { translateMessage, useTranslation } from "@/lib/i18n";
 import {
   conversationChannel,
@@ -172,6 +177,18 @@ export function App({ devBypass = false }: AppProps) {
 function ClerkAppGate() {
   const { t } = useTranslation();
   const { isLoaded, isSignedIn } = useAuth();
+  const location = useLocation();
+  /**
+   * Come back to the URL they were trying to open, not to `/app`.
+   *
+   * This is the invite fix. Both buttons used to hand Clerk a literal "/app", so
+   * somebody arriving on `/app/invite/<code>` without an account signed up and
+   * landed on an empty hub with the code gone — the single journey that brings
+   * new people to the product, dropping them at the exact moment it worked. See
+   * `signedOutRedirectPath`, which also refuses to reflect back anything that is
+   * not a route this build recognises.
+   */
+  const redirectUrl = signedOutRedirectPath(location.pathname);
 
   if (!isLoaded) {
     return <AppLoadingShell label={t("app.loading.signingIn")} />;
@@ -193,10 +210,10 @@ function ClerkAppGate() {
           </h1>
           <p className="mt-4 max-w-sm text-paper-muted">{t("signedOut.body")}</p>
           <div className="mt-8 flex flex-wrap gap-3">
-            <SignUpButton mode="modal" forceRedirectUrl="/app">
+            <SignUpButton mode="modal" forceRedirectUrl={redirectUrl}>
               <Button>{t("signedOut.createAccount")}</Button>
             </SignUpButton>
-            <SignInButton mode="modal" forceRedirectUrl="/app">
+            <SignInButton mode="modal" forceRedirectUrl={redirectUrl}>
               <Button variant="secondary">{t("nav.signIn")}</Button>
             </SignInButton>
           </div>
@@ -281,6 +298,36 @@ function MainAppContent({
   const [serverSettingsOpen, setServerSettingsOpen] = useState(false);
   const [inviteMode, setInviteMode] = useState<"create" | "join" | null>(null);
   const [inviteCodeFromUrl, setInviteCodeFromUrl] = useState<string | null>(null);
+  /**
+   * The refusal an auto-joined invite came back with, handed to the panel that
+   * opens as the fallback. Without it the panel would open pre-filled and silent,
+   * which reads as "nothing happened" rather than "that link is dead".
+   */
+  const [inviteErrorFromUrl, setInviteErrorFromUrl] = useState<string | null>(
+    null,
+  );
+  /**
+   * This session started on an invite link.
+   *
+   * Sticky for the life of the session, and it has to be: the wizard reads it to
+   * decide whether to skip its "you have nowhere to go" step, and the obvious
+   * source — is the URL an invite URL — stops being true almost immediately.
+   * `refreshAfterJoin` moves the selection, `syncRoute` rewrites the address bar
+   * to the channel, and the wizard is still on its first screen. Reading the
+   * pathname there answered "no" every time and the dead step showed anyway.
+   */
+  const [arrivedOnInviteLink, setArrivedOnInviteLink] = useState(false);
+  /**
+   * The server this session just walked into from an invite link, if the banner
+   * for it has not been shown on this device before.
+   *
+   * Session state and not just the localStorage record, because the two answer
+   * different questions: the record says "this device has been welcomed here",
+   * and this says "the welcome is on screen right now". Arming it only from a
+   * completed join is what keeps the banner off servers the account has been in
+   * for months but is opening on a new machine.
+   */
+  const [arrivalServerId, setArrivalServerId] = useState<string | null>(null);
   const [membersOpen, setMembersOpen] = useState(false);
   // One dialog for both subjects — the target says which. Null means closed.
   const [reportTarget, setReportTarget] = useState<ReportTarget | null>(null);
@@ -1680,6 +1727,79 @@ function MainAppContent({
     [loadConversations, selectConversation],
   );
 
+  /**
+   * The first-run checklist is answered — hidden by hand, or finished.
+   *
+   * Optimistic and unawaited, for the same reason `finish()` in the wizard is:
+   * the card must go on the click, and a failed write costs one repeat of a
+   * dismissible card rather than a dialog that looks frozen. The local `user` is
+   * patched first so `shouldShowFirstRun` goes false immediately — that is also
+   * what makes this safe to call from the stamp-on-complete effect, which stops
+   * asking as soon as the preference is present.
+   */
+  const settleFirstRun = useCallback(() => {
+    const patch = firstRunDismissedPatch();
+    setUser((previous) =>
+      previous
+        ? { ...previous, preferences: { ...previous.preferences, ...patch } }
+        : previous,
+    );
+    void updatePreferences(patch).catch(() => {
+      // Nothing to recover. The next bootstrap re-reads the truth, and the worst
+      // case is the card offered once more.
+    });
+  }, []);
+
+  /**
+   * Walk in, rather than asking whether they meant to.
+   *
+   * WHAT THIS REPLACES. `/app/invite/<code>` used to open the join dialog with
+   * the code already typed into it — a form asking somebody to confirm the link
+   * they had just clicked, with a Cancel button next to it that threw away the
+   * only reason they were there. For a brand-new account it was worse still: the
+   * wizard ran first, its last step offered an empty "or use an invite" field
+   * while the app was already holding the code, and the dialog was waiting
+   * underneath to ask a third time.
+   *
+   * Clicking an invite link is not an ambiguous gesture, and joining a server is
+   * reversible — you can leave. So the click is taken at face value: join, open
+   * the channel, and say where they landed. The dialog is now only what a *typed*
+   * code and a *dead link* get.
+   *
+   * Idempotent by the server's own design: `redeemInvite` upserts the membership
+   * and only counts a use on a real join, so re-opening a link you have already
+   * used costs nothing and does not burn the invite. That is what makes it safe
+   * to do this on a plain page load.
+   */
+  const acceptInviteFromLink = useCallback(
+    async (code: string) => {
+      setInviteErrorFromUrl(null);
+      try {
+        const result = await joinInvite(code);
+        const storage = browserStorage();
+        // Only welcome them somewhere this device has not welcomed them before.
+        // Invite links get re-clicked weeks later, and the join succeeds again.
+        if (!hasArrived(storage, result.serverId)) {
+          rememberArrival(storage, result.serverId);
+          setArrivalServerId(result.serverId);
+        }
+        await refreshAfterJoin(result.serverId);
+      } catch (error) {
+        // Expired, revoked, used up, banned, or mistyped. Fall back to the panel
+        // with the code and the reason, so there is somewhere to go from here —
+        // ask for a fresh link, or paste a different one.
+        setInviteCodeFromUrl(code);
+        setInviteErrorFromUrl(
+          error instanceof ApiError
+            ? error.message
+            : t("invite.join.failed"),
+        );
+        setInviteMode("join");
+      }
+    },
+    [refreshAfterJoin, t],
+  );
+
   // Deep links (`pqp://…` via Electron) and shareable web URLs both land here.
   useEffect(() => {
     if (!bootstrapReady) {
@@ -1696,8 +1816,8 @@ function MainAppContent({
     routeRef.current = path;
 
     if (target.kind === "invite") {
-      setInviteCodeFromUrl(target.code);
-      setInviteMode("join");
+      setArrivedOnInviteLink(true);
+      void acceptInviteFromLink(target.code);
       return;
     }
     if (target.kind === "conversation") {
@@ -1919,6 +2039,7 @@ function MainAppContent({
     return (
       <OnboardingFlow
         user={user}
+        pendingInvite={arrivedOnInviteLink}
         onUserUpdated={(updated) => {
           setUser(updated);
           chat.setCurrentUser(updated);
@@ -2187,6 +2308,23 @@ function MainAppContent({
           )}
         </div>
       </header>
+      {/* Straight under the header, above everything a message could push
+          around: an invited stranger's first screen otherwise says "Start the
+          thread" over a markdown cheatsheet and nothing else. */}
+      {arrivalServerId &&
+        arrivalServerId === selectedServerId &&
+        selectedServer && (
+          <ArrivalBanner
+            serverName={selectedServer.name}
+            channelName={
+              selectedChannel.kind === "server" &&
+              selectedChannel.type === "text"
+                ? selectedChannel.name
+                : null
+            }
+            onDismiss={() => setArrivalServerId(null)}
+          />
+        )}
       {/* The conversation's call surface: invisible until a call exists, a
           join banner while others talk, the full stage once we are in. */}
       {activeConversation && user && (
@@ -2551,6 +2689,21 @@ function MainAppContent({
               setConversations((prev) => upsertConversation(prev, conversation));
               void selectConversation(conversation.channelId);
             }}
+            firstRun={
+              user
+                ? {
+                    user,
+                    serverCount: servers.length,
+                    onCreateServer: () => setShowCreateServer(true),
+                    onJoinServer: () => setInviteMode("join"),
+                    // The avatar picker's only home is the profile section of
+                    // settings, three clicks in and behind a gear nothing points
+                    // at. The card is the first thing in the product that does.
+                    onPickAvatar: () => setSettingsOpen(true),
+                    onSettled: settleFirstRun,
+                  }
+                : undefined
+            }
             extras={
               // A freshly federated account lands here with no servers at all;
               // the SSO suggestions used to live in the old empty state and
@@ -2751,12 +2904,22 @@ function MainAppContent({
         serverName={selectedServer?.name ?? null}
         canManage={!!canManage}
         initialCode={inviteCodeFromUrl}
+        initialError={inviteErrorFromUrl}
         onClose={() => {
           setInviteMode(null);
           setInviteCodeFromUrl(null);
+          setInviteErrorFromUrl(null);
         }}
         onJoined={(serverId) => {
           setInviteCodeFromUrl(null);
+          setInviteErrorFromUrl(null);
+          // A code typed in by hand earns the same welcome as one clicked, for
+          // the same reason: the room is just as cold either way.
+          const storage = browserStorage();
+          if (!hasArrived(storage, serverId)) {
+            rememberArrival(storage, serverId);
+            setArrivalServerId(serverId);
+          }
           void refreshAfterJoin(serverId);
         }}
       />

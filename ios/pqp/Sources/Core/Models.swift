@@ -441,6 +441,21 @@ struct UserPreferences: Codable, Hashable, Sendable {
     var showLinkEmbeds: Bool?
     /// Manual status: `"online" | "dnd" | "invisible"`. Absent means online.
     var status: String?
+    /// When the hub's first-run checklist was put away, as an ISO instant.
+    ///
+    /// Shared with the web deliberately — it is the same three errands and the
+    /// same account, so answering it on one device has to answer it on the other.
+    /// Preferences merge one level deep server-side, so this can be patched on its
+    /// own exactly the way `setStatus` patches `status`; nothing else in the blob
+    /// is disturbed.
+    ///
+    /// Note what is NOT here: `onboardedAt`. The web gates its sign-up wizard on
+    /// it, while iOS gates its intro beats on a device-local `UserDefaults` bool
+    /// (`SessionStore.onboardedKey`) — so the two flows do not know about each
+    /// other, and somebody who signed up on the web still sees the beats here.
+    /// Worth fixing, but it is a change to the sign-in path rather than to
+    /// first-run guidance, and it is not what this field is for.
+    var firstRunDismissedAt: String?
 }
 
 struct PreferencesResponse: Codable, Sendable { let preferences: UserPreferences }

@@ -379,6 +379,95 @@ export const en = {
   "onboarding.continue": "Continue",
   "onboarding.saving": "Saving…",
 
+  // ------------------------------------------------------------- first run
+  // The three rows the hub offers a new account, and the only nudge in the
+  // product about any of them. The wizard is a modal that ends in two clicks and
+  // every one of these is skippable from inside it, so finishing it says nothing
+  // about whether somebody has a server, a friend, or a face.
+  //
+  // Each row is written as the thing you get, not the chore you do — "find your
+  // people", not "add a friend" — and each has a real button next to it. The
+  // done state is a tick and a shrug, never a congratulation: this product does
+  // not applaud people for filling in a form.
+  "firstRun.title": "Three things and this place works",
+  "firstRun.dismiss": "Hide this",
+  "firstRun.done": "Done",
+  "firstRun.server.title": "Get into a server",
+  "firstRun.server.body": "Make one for your people, or paste an invite you were sent.",
+  "firstRun.server.create": "Make a server",
+  "firstRun.server.join": "Use an invite",
+  // Prints the reader's own handle, because "add someone by their handle" is
+  // useless advice until you know that you have one and what it is. The wizard
+  // showed it once, on a screen they are unlikely to ever see again.
+  "firstRun.friend.title": "Find your people",
+  "firstRun.friend.body":
+    "Add someone by their handle. Yours is {tag} — hand it out.",
+  "firstRun.friend.action": "Add a friend",
+  "firstRun.avatar.title": "Put a face on it",
+  "firstRun.avatar.body": "A letter in a box works. A photo works better.",
+  "firstRun.avatar.action": "Pick an avatar",
+
+  // ------------------------------------------------------- invite arrival
+  // Shown once, on the transcript, the first time this device opens a server
+  // the account has just joined. Without it, an invited stranger's first screen
+  // is "Start the thread" over a markdown cheatsheet — the same thing the
+  // server's owner sees in a channel nobody has used, and nothing on it says
+  // where they are or what to do.
+  //
+  // The channel name arrives with no `#`; the component draws that, so pt-BR
+  // cannot accidentally drop it.
+  "arrival.title": "You're in {server}",
+  "arrival.body": "Say oi in #{channel}. That's the whole trick — nobody knows you're here until you say something.",
+  "arrival.bodyNoChannel": "Pick a channel on the left and say something. Nobody knows you're here until you do.",
+  "arrival.dismiss": "Got it",
+
+  // ------------------------------------------------------------ invite panel
+  // Both halves of one dialog: handing out a link, and walking in with one.
+  //
+  // These were hardcoded English until now, which made the *join* half the one
+  // untranslated screen on the newcomer path — a Brazilian who clicks a friend's
+  // link met an English form at the single highest-stakes moment the product
+  // has. Arriving from a link no longer stops here at all (the app joins and
+  // opens the channel), so the join half is now what a *pasted* code and a
+  // failed auto-join get.
+  "invite.create.eyebrow": "Invite people",
+  "invite.create.description":
+    "Anyone with the link can join until it expires or you revoke it.",
+  "invite.create.serverFallback": "Server",
+  "invite.create.notAllowed": "Only owners and admins can make invites.",
+  "invite.create.activeTitle": "Live invites",
+  "invite.create.loading": "Loading invites…",
+  "invite.create.none": "No invites yet. Make one to share this server.",
+  "invite.create.action": "Make an invite link",
+  "invite.create.creating": "Making…",
+  "invite.create.copyLink": "Copy invite link for code {code}",
+  "invite.create.copyCode": "Copy invite code {code}",
+  "invite.create.revoke": "Revoke invite {code}",
+  "invite.create.copied": "Copied",
+  "invite.create.copyFailed":
+    "Clipboard is blocked — select the link and copy it by hand.",
+  "invite.create.failed": "Couldn't make an invite.",
+  "invite.create.revokeFailed": "Couldn't revoke that.",
+  "invite.create.loadFailed": "Couldn't load the invites.",
+  "invite.close": "Close",
+  "invite.join.eyebrow": "Join a server",
+  "invite.join.title": "Invite code",
+  "invite.join.description": "Paste an invite link, or type the code you were given.",
+  "invite.join.label": "Invite code",
+  "invite.join.placeholder": "Invite code or link",
+  "invite.join.preview": "Joins {name}",
+  "invite.join.action": "Go in",
+  "invite.join.joining": "Going in…",
+  "invite.join.cancel": "Cancel",
+  "invite.join.failed": "That invite doesn't work. Ask for another.",
+  // Expiry and use counters, on the create side.
+  "invite.expiry.never": "Never expires",
+  "invite.expiry.expired": "Expired",
+  "invite.expiry.hours": "Expires in {count}h",
+  "invite.expiry.days": "Expires in {count}d",
+  "invite.uses.unlimited": "{count} uses",
+  "invite.uses.capped": "{used}/{max} uses",
+
   // ------------------------------------------------------------------- voice
   // Labels and states, so the bar is clarity rather than voice. Three different
   // things are deliberately three different words and must stay that way in

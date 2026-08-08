@@ -72,6 +72,32 @@ enum TestSeed {
         let done = XCTestExpectation(description: "pass age gate")
         URLSession.shared.dataTask(with: request) { _, _, _ in done.fulfill() }.resume()
         test.wait(for: [done], timeout: 15)
+        dismissFirstRun(test)
+    }
+
+    /// Put the hub's first-run checklist away for the dev-bypass account.
+    ///
+    /// Rides along with the age gate for the same reason the web suite's
+    /// `ensureServer` stamps it: the shared dev account reliably has a server but
+    /// may have no friend and no avatar, so the checklist reads as outstanding and
+    /// draws itself at the top of the hub — above the server rail and the
+    /// conversation rows the hub tests measure and tap. Only a test about first run
+    /// should see it, and such a test can clear the flag itself.
+    ///
+    /// Best effort and unasserted: a failure here costs a card on a screen, not a
+    /// wrong result.
+    static func dismissFirstRun(_ test: XCTestCase) {
+        var request = URLRequest(url: URL(string: "\(apiBase)/api/me/preferences")!)
+        request.httpMethod = "PATCH"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer dev-local-token", forHTTPHeaderField: "Authorization")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "firstRunDismissedAt": "2026-01-01T00:00:00.000Z"
+        ])
+
+        let done = XCTestExpectation(description: "dismiss first run")
+        URLSession.shared.dataTask(with: request) { _, _, _ in done.fulfill() }.resume()
+        test.wait(for: [done], timeout: 15)
     }
 
     /// Creates a server and returns it. Unique per call so concurrent tests

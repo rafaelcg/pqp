@@ -505,6 +505,23 @@ extension APIClient {
         return response.preferences
     }
 
+    /// Put the hub's first-run checklist away, on this account and every device.
+    ///
+    /// A one-key patch for the same reason `setStatus` is one: the server merges
+    /// the blob one level deep, so naming a single top-level key leaves the rest
+    /// alone. Sending a whole `UserPreferences` here would be actively wrong —
+    /// every field this client does not model (`compactPeers`, `inputMode`,
+    /// `micProcessing`) would encode as absent and the merge would leave them
+    /// stale while the round-trip claimed success.
+    func dismissFirstRun(at stamp: String) async throws -> UserPreferences {
+        struct Body: Encodable { let firstRunDismissedAt: String }
+        let response: PreferencesResponse = try await patch(
+            "/api/me/preferences",
+            body: Body(firstRunDismissedAt: stamp)
+        )
+        return response.preferences
+    }
+
     func auditLog(serverId: String) async throws -> [AuditEntry] {
         let response: AuditResponse = try await get("/api/servers/\(serverId)/audit-log")
         return response.entries

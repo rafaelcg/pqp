@@ -4,6 +4,7 @@ import {
   conversationRoutePath,
   messageRoutePath,
   parseAppRoute,
+  signedOutRedirectPath,
 } from "./app-route";
 
 describe("parseAppRoute", () => {
@@ -142,5 +143,70 @@ describe("parseAppRoute — conversations", () => {
     expect(messageRoutePath("s1", "c1", "m1")).toBe(
       "/app/server/s1/channel/c1/message/m1",
     );
+  });
+});
+
+describe("signedOutRedirectPath", () => {
+  it("carries an invite through the sign-up round trip", () => {
+    // THE BUG THIS PINS. The gate handed Clerk a hardcoded "/app", so the only
+    // journey that brings new people into the product — click a friend's invite
+    // link, have no account — signed up and landed on an empty hub with the code
+    // thrown away. Every invite to a non-user died here.
+    expect(signedOutRedirectPath("/app/invite/abc123")).toBe(
+      "/app/invite/abc123",
+    );
+  });
+
+  it("keeps an invite code that needed escaping", () => {
+    expect(signedOutRedirectPath("/app/invite/a%2Fb")).toBe("/app/invite/a%2Fb");
+  });
+
+  it("sends a bare /app back to /app", () => {
+    expect(signedOutRedirectPath("/app")).toBe("/app");
+    expect(signedOutRedirectPath("/app/")).toBe("/app");
+  });
+
+  it("carries a shared channel link", () => {
+    expect(signedOutRedirectPath("/app/server/s1/channel/c1")).toBe(
+      "/app/server/s1/channel/c1",
+    );
+    expect(signedOutRedirectPath("/app/server/s1")).toBe("/app/server/s1");
+  });
+
+  it("carries a message permalink, which is how people share one line", () => {
+    expect(signedOutRedirectPath("/app/server/s1/channel/c1/message/m1")).toBe(
+      "/app/server/s1/channel/c1/message/m1",
+    );
+    expect(signedOutRedirectPath("/app/dm/c1/message/m1")).toBe(
+      "/app/dm/c1/message/m1",
+    );
+  });
+
+  it("carries a conversation link", () => {
+    expect(signedOutRedirectPath("/app/dm")).toBe("/app/dm");
+    expect(signedOutRedirectPath("/app/dm/c1")).toBe("/app/dm/c1");
+  });
+
+  it("refuses to echo anything that is not a route this build knows", () => {
+    // The argument comes off the address bar and is interpolated into an auth
+    // redirect, so an unrecognised string must not be reflected back.
+    const elsewhere = ["/", "/appendix/invite/x", "/app/../../etc/passwd"];
+    for (const input of elsewhere) {
+      expect(signedOutRedirectPath(input)).toBe("/app");
+    }
+  });
+
+  it("always answers with a path under /app", () => {
+    const hostile = [
+      "/app/invite/x",
+      "/app/dm/c1",
+      "/",
+      "",
+      "..",
+      "not-a-path",
+    ];
+    for (const input of hostile) {
+      expect(signedOutRedirectPath(input).startsWith("/app")).toBe(true);
+    }
   });
 });

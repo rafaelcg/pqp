@@ -19,9 +19,20 @@ import Observation
 ///   by the act of asking. So no status dot on a request row — the server does
 ///   not send one to draw.
 struct FriendsView: View {
+    /// Open the handle search as soon as this screen appears.
+    ///
+    /// For the hub's first-run checklist, whose "Add a friend" button has to land
+    /// on the search field rather than on a screen with a search *button* in a
+    /// corner. Pushing this view rather than presenting the sheet over the hub is
+    /// deliberate: this is where the friend they are about to add will show up, so
+    /// dismissing the sheet leaves them looking at the result.
+    var opensAddImmediately = false
+
     @Environment(SessionStore.self) private var session
     @State private var model = FriendsModel()
     @State private var opened: DmSummary?
+    /// One-shot, so returning from a pushed chat does not reopen the sheet.
+    @State private var hasAutoOpenedAdd = false
 
     var body: some View {
         ZStack {
@@ -106,6 +117,11 @@ struct FriendsView: View {
             Text(model.confirming?.explanation ?? "")
         }
         .task { await model.load(session: session) }
+        .onAppear {
+            guard opensAddImmediately, !hasAutoOpenedAdd else { return }
+            hasAutoOpenedAdd = true
+            model.showingAdd = true
+        }
     }
 
     private var tabBar: some View {
@@ -301,6 +317,15 @@ final class FriendsModel {
     func load(session: SessionStore) async {
         self.session = session
         await refresh()
+        // An account with no friends at all opens on the wrong tab. Online says
+        // "Nobody's around", which is true and useless — it reads as "your
+        // friends are offline" to somebody who has none, and carries no way to
+        // change that. All says "No friends yet" and tells them a handle is what
+        // to search for. Only on the first load: yanking the tab out from under
+        // somebody who has chosen Online themselves would be worse than either.
+        if data.friends.isEmpty, tab == .online {
+            tab = .all
+        }
     }
 
     func refresh() async {

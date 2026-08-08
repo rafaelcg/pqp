@@ -53,7 +53,13 @@ async function materialiseAccount(suffix: string): Promise<Account> {
   await fetch(`${API}/api/me/preferences`, {
     method: "PATCH",
     headers,
-    body: JSON.stringify({ onboardedAt: new Date().toISOString() }),
+    body: JSON.stringify({
+      onboardedAt: new Date().toISOString(),
+      // B opens `/app/dm` to accept the request, and a fresh account with no
+      // friends and no avatar draws the first-run checklist there — above the
+      // Pending tab's rows. This spec is about the profile card, not the hub.
+      firstRunDismissedAt: new Date().toISOString(),
+    }),
   });
   return { id: body.id, displayName: body.displayName };
 }
