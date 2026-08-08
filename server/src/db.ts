@@ -92,6 +92,16 @@ export interface DbServer {
   created_at: Date;
   message_retention_days: number | null;
   sso_email_domain: string | null;
+  /**
+   * The server's own pictures. `*_url` is what every payload carries; `*_key`
+   * is the storage key and is read only by `server-images.ts` and by the delete
+   * path that has to orphan the objects. Optional on the type because
+   * `SERVER_COLUMNS` deliberately does not select the keys.
+   */
+  icon_url: string | null;
+  banner_url: string | null;
+  icon_key?: string | null;
+  banner_key?: string | null;
   role?: "owner" | "admin" | "member";
 }
 

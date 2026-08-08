@@ -26,8 +26,19 @@ export type ChannelRow = Omit<DbChannel, "server_id"> & {
 /** Every channel read selects the same columns, `kind` included. */
 const CHANNEL_COLUMNS = `id, server_id, name, type, position, is_private, kind, topic, image_url, parent_id`;
 
-/** Every server read selects the same columns. */
-const SERVER_COLUMNS = `id, name, owner_id, created_at, message_retention_days, sso_email_domain`;
+/**
+ * Every server read selects the same columns.
+ *
+ * Exported because `server-images.ts` writes this table too, and a picture
+ * upload has to hand the whole updated row back to the client for the same
+ * reason a rename does. Threading the list through rather than restating it
+ * there is what keeps a column added here from being invisible in that payload.
+ *
+ * `icon_key` / `banner_key` are deliberately NOT in it: the key is what the
+ * bucket is asked about, never what a client is told. `mapServer` has no field
+ * for either.
+ */
+export const SERVER_COLUMNS = `id, name, owner_id, created_at, message_retention_days, sso_email_domain, icon_url, banner_url`;
 
 /**
  * How many attachment objects one channel or server delete will clean up.
@@ -81,6 +92,28 @@ async function serverAttachmentKeys(serverId: string): Promise<string[]> {
 }
 
 /**
+ * The server's own icon and banner objects, if it uploaded either.
+ *
+ * Separate from `serverAttachmentKeys` because they hang off the `servers` row
+ * itself rather than off a message, and because a server with no pictures — the
+ * common case — should cost nothing beyond the one row read the query already
+ * needs.
+ */
+async function serverImageKeys(serverId: string): Promise<string[]> {
+  if (!isStorageConfigured()) {
+    return [];
+  }
+  const result = await getPool().query<{
+    icon_key: string | null;
+    banner_key: string | null;
+  }>(`SELECT icon_key, banner_key FROM servers WHERE id = $1`, [serverId]);
+  const row = result.rows[0];
+  return [row?.icon_key, row?.banner_key].filter(
+    (key): key is string => typeof key === "string" && key.length > 0,
+  );
+}
+
+/**
  * Drop the objects a completed delete just orphaned, best effort.
  *
  * Neither awaited nor allowed to fail, matching `deleteMessage`: the row that
@@ -116,8 +149,9 @@ export function deleteObjectsInBackground(keys: string[]): void {
 
 export async function listServersForUser(userId: string): Promise<DbServer[]> {
   const result = await getPool().query<DbServer>(
-    `SELECT s.id, s.name, s.owner_id, s.created_at, s.message_retention_days,
-            s.sso_email_domain, sm.role
+    `SELECT ${SERVER_COLUMNS.split(", ")
+      .map((c) => `s.${c}`)
+      .join(", ")}, sm.role
      FROM servers s
      JOIN server_members sm ON sm.server_id = s.id
      WHERE sm.user_id = $1
@@ -490,6 +524,11 @@ export async function deleteChannel(channelId: string): Promise<boolean> {
 
 export async function deleteServer(serverId: string): Promise<boolean> {
   const keys = await serverAttachmentKeys(serverId);
+  // The icon and banner ride along on the same list, and for the same reason
+  // the attachments do: their only mention anywhere is a column on the row this
+  // is about to delete, so read afterwards nothing in Postgres names the bytes
+  // ever again.
+  keys.push(...(await serverImageKeys(serverId)));
 
   // channels / members / invites / bans all cascade from servers — and so do
   // the attachment rows, which is why their keys are already in hand.
@@ -1233,5 +1272,10 @@ export function mapServer(s: DbServer) {
     createdAt: s.created_at.toISOString(),
     messageRetentionDays: s.message_retention_days,
     ssoEmailDomain: s.sso_email_domain,
+    // Root-relative when uploaded here (`/api/servers/:id/icon?v=…`); null for
+    // the overwhelmingly common server that has set neither. Never the storage
+    // key — see the note on `SERVER_COLUMNS`.
+    iconUrl: s.icon_url ?? null,
+    bannerUrl: s.banner_url ?? null,
   };
 }

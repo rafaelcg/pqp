@@ -1904,3 +1904,26 @@ BEGIN
 
   EXECUTE format('COMMENT ON COLUMN users.is_character IS %L', marker);
 END $$;
+
+-- ---------------------------------------------------------------------------
+-- A server's own two pictures: the icon in the rail, the banner over the
+-- channel list.
+--
+-- FOUR COLUMNS AND NO TABLE, exactly as `users.avatar_url` / `avatar_key` is
+-- four-columns-fewer than an `avatars` table would be. An attachment needs a
+-- row because it exists in a pending state before any message refers to it and
+-- because unclaimed rows must be swept; a server picture's whole lifecycle is
+-- "the key of the object we hold, and the URL everything else already reads".
+--
+-- WHY BOTH A KEY AND A URL, per picture. The URL is what every payload carries
+-- and what an `<img src>` is pointed at; the key is what the bucket is asked
+-- about. Keeping the key is also the only way to tell "this is the object we
+-- stored" from "somebody typed a link", which is what decides whether a
+-- replaced object has become an orphan to delete. Same reasoning as avatars.
+--
+-- Nothing here is NOT NULL: a server without a picture is the overwhelmingly
+-- common case and the monogram is a real design, not a placeholder.
+ALTER TABLE servers ADD COLUMN IF NOT EXISTS icon_key TEXT;
+ALTER TABLE servers ADD COLUMN IF NOT EXISTS icon_url TEXT;
+ALTER TABLE servers ADD COLUMN IF NOT EXISTS banner_key TEXT;
+ALTER TABLE servers ADD COLUMN IF NOT EXISTS banner_url TEXT;

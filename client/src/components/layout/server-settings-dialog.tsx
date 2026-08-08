@@ -1,11 +1,29 @@
 import type { AuditLogEntry, Server } from "@pqp/shared";
-import { useEffect, useRef, useState } from "react";
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
+import {
+  Image as ImageIcon,
+  KeyRound,
+  ScrollText,
+  ShieldCheck,
+  TriangleAlert,
+  type LucideIcon,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { ReportsSection } from "@/components/layout/reports-section";
+import { ServerIdentitySection } from "@/components/layout/server-identity-section";
 import { CommunitySettingsSection } from "@/components/communities/community-settings-section";
 import { useCommunitiesEnabled } from "@/components/communities/use-communities-enabled";
+import { useTranslation, type MessageKey } from "@/lib/i18n";
+import { cn } from "@/lib/utils";
 import {
   ApiError,
   deleteServer,
@@ -18,32 +36,275 @@ import {
 
 const TRANSFER_PHRASE = "TRANSFER";
 
-/** A short, human verb phrase per action — the actor's name and (for
- * role/ban actions) the reason carry the rest of the sentence. */
-const AUDIT_ACTION_LABELS: Record<string, string> = {
-  "member.kick": "kicked a member",
-  "member.ban": "banned a member",
-  "member.unban": "unbanned a member",
-  "member.role_update": "changed a member's role",
-  "channel.create": "created a channel",
-  "channel.update": "updated a channel",
-  "channel.delete": "deleted a channel",
-  "channel.move": "reordered a channel",
-  "message.delete": "deleted someone's message",
-  "server.update": "renamed the server",
-  "server.retention_update": "changed message retention",
-  "server.ownership_transfer": "transferred ownership",
-  "server.data_export": "exported the server's data",
-  "invite.create": "created an invite",
-  "invite.delete": "revoked an invite",
-  "server.sso_domain_update": "changed the SSO email domain",
-  "member.sso_join": "joined via SSO email domain",
-  "server.community_update": "changed the public community listing",
-  "member.community_join": "joined from the community directory",
-  "webhook.create": "created a webhook",
-  "webhook.delete": "deleted a webhook",
-  "report.resolve": "closed a report",
+/**
+ * Every action the log can carry, as a catalogue key.
+ *
+ * A `Record` rather than a template string built at the call site, so a new
+ * `AuditAction` that nobody wrote copy for is a compile error here rather than
+ * a raw `member.voice_mute` rendered to an owner. The fallback below still
+ * exists for a server newer than the client during a rolling deploy.
+ */
+const AUDIT_ACTION_KEYS: Record<string, MessageKey> = {
+  "member.kick": "serverSettings.audit.action.member.kick",
+  "member.ban": "serverSettings.audit.action.member.ban",
+  "member.unban": "serverSettings.audit.action.member.unban",
+  "member.role_update": "serverSettings.audit.action.member.role_update",
+  "channel.create": "serverSettings.audit.action.channel.create",
+  "channel.update": "serverSettings.audit.action.channel.update",
+  "channel.delete": "serverSettings.audit.action.channel.delete",
+  "channel.move": "serverSettings.audit.action.channel.move",
+  "message.delete": "serverSettings.audit.action.message.delete",
+  "server.update": "serverSettings.audit.action.server.update",
+  "server.retention_update":
+    "serverSettings.audit.action.server.retention_update",
+  "server.icon_update": "serverSettings.audit.action.server.icon_update",
+  "server.banner_update": "serverSettings.audit.action.server.banner_update",
+  "server.ownership_transfer":
+    "serverSettings.audit.action.server.ownership_transfer",
+  "server.data_export": "serverSettings.audit.action.server.data_export",
+  "invite.create": "serverSettings.audit.action.invite.create",
+  "invite.delete": "serverSettings.audit.action.invite.delete",
+  "server.sso_domain_update":
+    "serverSettings.audit.action.server.sso_domain_update",
+  "member.sso_join": "serverSettings.audit.action.member.sso_join",
+  "server.community_update":
+    "serverSettings.audit.action.server.community_update",
+  "member.community_join":
+    "serverSettings.audit.action.member.community_join",
+  "webhook.create": "serverSettings.audit.action.webhook.create",
+  "webhook.delete": "serverSettings.audit.action.webhook.delete",
+  "report.resolve": "serverSettings.audit.action.report.resolve",
 };
+
+/* ------------------------------------------------------------------ layout */
+
+/**
+ * The sections, in rail order.
+ *
+ * WHY THESE FIVE. The dialog was one column that ran a rename, a retention
+ * policy, an SSO domain, a public-listing switch, a moderation queue, an audit
+ * log and the button that destroys the server all past each other. The grouping
+ * below is by the question an owner arrived with, not by which API each control
+ * happens to call:
+ *
+ *  - **Overview** — what the server is: its name and its two pictures, plus the
+ *    community listing, because "is this room public" is part of what it *is*.
+ *  - **Access** — who can walk in without an invite. Today that is the SSO
+ *    domain alone; invites and bans have their own surfaces already.
+ *  - **Moderation** — the reports queue and message retention. Both are "what
+ *    happens to things members said".
+ *  - **Audit log** — its own door because it is a *record*, not a setting, and
+ *    it is the one thing here an admin can see without being able to change
+ *    anything.
+ *  - **Danger zone** — export, transfer, delete. Export sits with the other two
+ *    because all three are things you do to the server as a whole rather than
+ *    settings you change on it, and because an export taken on the way out is
+ *    the common reason to want one.
+ *
+ * There is no Channels section: channel management lives in the sidebar, where
+ * the channels are. There is no Members or Webhooks section either — both are
+ * their own dialogs already, reached from the rail and the channel row. Adding
+ * a door here that opens another dialog would be a worse version of both.
+ */
+type SectionId = "overview" | "access" | "moderation" | "audit" | "danger";
+
+interface SectionDef {
+  id: SectionId;
+  label: MessageKey;
+  description: MessageKey;
+  icon: LucideIcon;
+  /** False for a section an admin may see too. */
+  ownerOnly: boolean;
+}
+
+const SECTIONS: SectionDef[] = [
+  {
+    id: "overview",
+    label: "serverSettings.section.overview",
+    description: "serverSettings.overview.description",
+    icon: ImageIcon,
+    ownerOnly: true,
+  },
+  {
+    id: "access",
+    label: "serverSettings.section.access",
+    description: "serverSettings.access.description",
+    icon: KeyRound,
+    ownerOnly: true,
+  },
+  {
+    id: "moderation",
+    label: "serverSettings.section.moderation",
+    description: "serverSettings.moderation.description",
+    icon: ShieldCheck,
+    ownerOnly: false,
+  },
+  {
+    id: "audit",
+    label: "serverSettings.section.audit",
+    description: "serverSettings.audit.description",
+    icon: ScrollText,
+    ownerOnly: false,
+  },
+  {
+    id: "danger",
+    label: "serverSettings.section.danger",
+    description: "serverSettings.danger.description",
+    icon: TriangleAlert,
+    ownerOnly: true,
+  },
+];
+
+/**
+ * The section rail. Structurally the one in `settings-modal.tsx`, deliberately
+ * — two rails that behaved differently at the same width would be worse than
+ * either. See that file for why it is a real tablist rather than a list of
+ * buttons: arrow keys move between sections and only the selected tab is in the
+ * tab order, so a keyboard user crosses five sections with two keystrokes.
+ *
+ * The one difference is that the list is passed in rather than module-level: an
+ * admin sees two of these five, and a rail whose arrow keys walked onto a
+ * section that is not rendered would be a trap.
+ */
+function SectionRail({
+  sections,
+  active,
+  onSelect,
+  idFor,
+  panelId,
+}: {
+  sections: SectionDef[];
+  active: SectionId;
+  onSelect: (id: SectionId) => void;
+  idFor: (id: SectionId) => string;
+  panelId: string;
+}) {
+  const { t } = useTranslation();
+  const railRef = useRef<HTMLDivElement>(null);
+
+  function move(to: number) {
+    const index = (to + sections.length) % sections.length;
+    const next = sections[index]!;
+    onSelect(next.id);
+    const tabs =
+      railRef.current?.querySelectorAll<HTMLButtonElement>('[role="tab"]');
+    tabs?.[index]?.focus();
+  }
+
+  function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    const current = sections.findIndex((section) => section.id === active);
+    switch (event.key) {
+      case "ArrowRight":
+      case "ArrowDown":
+        event.preventDefault();
+        move(current + 1);
+        break;
+      case "ArrowLeft":
+      case "ArrowUp":
+        event.preventDefault();
+        move(current - 1);
+        break;
+      case "Home":
+        event.preventDefault();
+        move(0);
+        break;
+      case "End":
+        event.preventDefault();
+        move(sections.length - 1);
+        break;
+      default:
+        break;
+    }
+  }
+
+  return (
+    <div
+      ref={railRef}
+      role="tablist"
+      aria-label={t("serverSettings.nav.label")}
+      onKeyDown={handleKeyDown}
+      className={cn(
+        // The phone strip scrolls sideways *inside the panel*. That is the only
+        // place sideways scrolling is allowed to exist here — the page itself
+        // must never move, which is what the 390px layout test measures.
+        "flex shrink-0 gap-1 overflow-x-auto border-b border-ink-4 px-3 py-2",
+        "sm:w-56 sm:flex-col sm:overflow-x-hidden sm:overflow-y-auto sm:border-b-0 sm:border-r sm:px-3 sm:py-4",
+      )}
+    >
+      {sections.map((section) => {
+        const selected = section.id === active;
+        const Icon = section.icon;
+        return (
+          <button
+            key={section.id}
+            id={idFor(section.id)}
+            type="button"
+            role="tab"
+            aria-selected={selected}
+            aria-controls={panelId}
+            tabIndex={selected ? 0 : -1}
+            onClick={() => onSelect(section.id)}
+            className={cn(
+              "flex shrink-0 items-center gap-2 rounded-md px-3 py-2 text-sm whitespace-nowrap transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60 sm:w-full",
+              selected
+                ? "bg-signal/12 font-medium text-paper"
+                : "text-paper-muted hover:bg-ink-3 hover:text-paper",
+              section.id === "danger" && !selected && "text-danger/80",
+            )}
+          >
+            <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+            {t(section.label)}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Heading for the pane, so a section always says what it is. */
+function SectionHeader({ section }: { section: SectionDef }) {
+  const { t } = useTranslation();
+  return (
+    <div className="mb-5">
+      <h3 className="font-display text-lg font-bold text-paper">
+        {t(section.label)}
+      </h3>
+      <p className="mt-1 text-xs text-paper-muted">{t(section.description)}</p>
+    </div>
+  );
+}
+
+/** A titled group inside a section. */
+function Block({
+  title,
+  children,
+  tone = "normal",
+}: {
+  title: string;
+  children: ReactNode;
+  tone?: "normal" | "danger";
+}) {
+  return (
+    <section
+      className={cn(
+        "space-y-2",
+        tone === "danger" && "rounded-lg border border-danger/40 bg-danger/5 p-4",
+      )}
+    >
+      <h4
+        className={cn(
+          "font-display text-sm font-bold uppercase tracking-wider",
+          tone === "danger" ? "text-danger" : "text-paper-muted",
+        )}
+      >
+        {title}
+      </h4>
+      {children}
+    </section>
+  );
+}
+
+/* --------------------------------------------------------------- audit log */
 
 /**
  * Visible to owners and admins alike — the whole point is that a moderator
@@ -51,6 +312,7 @@ const AUDIT_ACTION_LABELS: Record<string, string> = {
  * community for having used it, not just to the owner.
  */
 function AuditLogSection({ serverId }: { serverId: string }) {
+  const { t } = useTranslation();
   const [entries, setEntries] = useState<AuditLogEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -70,7 +332,7 @@ function AuditLogSection({ serverId }: { serverId: string }) {
       })
       .catch((err: unknown) => {
         if (!cancelled) {
-          setError(messageOf(err, "Failed to load the audit log"));
+          setError(messageOf(err, t("serverSettings.audit.failed")));
         }
       })
       .finally(() => {
@@ -81,7 +343,7 @@ function AuditLogSection({ serverId }: { serverId: string }) {
     return () => {
       cancelled = true;
     };
-  }, [serverId]);
+  }, [serverId, t]);
 
   async function loadMore() {
     const last = entries.at(-1);
@@ -94,20 +356,17 @@ function AuditLogSection({ serverId }: { serverId: string }) {
       setEntries((prev) => [...prev, ...res.entries]);
       setHasMore(res.hasMore);
     } catch (err) {
-      setError(messageOf(err, "Failed to load more"));
+      setError(messageOf(err, t("serverSettings.audit.failedMore")));
     } finally {
       setLoadingMore(false);
     }
   }
 
   return (
-    <section className="space-y-2 border-t border-ink-4 pt-5">
-      <h3 className="font-display text-sm font-bold uppercase tracking-wider text-paper-muted">
-        Audit log
-      </h3>
+    <div className="space-y-2">
       {loading && (
         <p role="status" aria-live="polite" className="text-sm text-paper-muted">
-          Loading…
+          {t("serverSettings.audit.loading")}
         </p>
       )}
       {error && (
@@ -117,31 +376,37 @@ function AuditLogSection({ serverId }: { serverId: string }) {
       )}
       {!loading && entries.length === 0 && !error && (
         <p className="text-sm text-paper-muted">
-          Nothing recorded yet. Kicks, bans, role changes, and channel or
-          server edits will show up here.
+          {t("serverSettings.audit.empty")}
         </p>
       )}
       {entries.length > 0 && (
-        <ul className="max-h-72 space-y-1.5 overflow-y-auto">
-          {entries.map((entry) => (
-            <li
-              key={entry.id}
-              className="rounded-md border border-ink-4 bg-ink-3/40 p-2 text-sm"
-            >
-              <p className="text-paper">
-                <span className="font-semibold">
-                  {entry.actorName ?? "A departed account"}
-                </span>{" "}
-                {AUDIT_ACTION_LABELS[entry.action] ?? entry.action}
-                {entry.reason && (
-                  <span className="text-paper-muted"> — {entry.reason}</span>
-                )}
-              </p>
-              <p className="text-xs text-paper-muted">
-                {new Date(entry.createdAt).toLocaleString()}
-              </p>
-            </li>
-          ))}
+        <ul className="space-y-1.5">
+          {entries.map((entry) => {
+            const key = AUDIT_ACTION_KEYS[entry.action];
+            return (
+              <li
+                key={entry.id}
+                className="rounded-md border border-ink-4 bg-ink-3/40 p-2 text-sm"
+              >
+                <p className="text-paper">
+                  <span className="font-semibold">
+                    {entry.actorName ??
+                      t("serverSettings.audit.departedActor")}
+                  </span>{" "}
+                  {/* The raw action id is the fallback for a server newer than
+                      this client — legible enough to file a bug about, which a
+                      blank would not be. */}
+                  {key ? t(key) : entry.action}
+                  {entry.reason && (
+                    <span className="text-paper-muted"> — {entry.reason}</span>
+                  )}
+                </p>
+                <p className="text-xs text-paper-muted">
+                  {new Date(entry.createdAt).toLocaleString()}
+                </p>
+              </li>
+            );
+          })}
         </ul>
       )}
       {hasMore && (
@@ -151,10 +416,12 @@ function AuditLogSection({ serverId }: { serverId: string }) {
           disabled={loadingMore}
           onClick={() => void loadMore()}
         >
-          {loadingMore ? "Loading…" : "Load more"}
+          {loadingMore
+            ? t("serverSettings.audit.loadingMore")
+            : t("serverSettings.audit.loadMore")}
         </Button>
       )}
-    </section>
+    </div>
   );
 }
 
@@ -184,6 +451,7 @@ export function ServerSettingsDialog({
   onOwnershipTransferred,
   onDeleted,
 }: ServerSettingsDialogProps) {
+  const { t } = useTranslation();
   const [name, setName] = useState("");
   const [nameError, setNameError] = useState<string | null>(null);
   const [nameSaved, setNameSaved] = useState(false);
@@ -214,8 +482,12 @@ export function ServerSettingsDialog({
   const [exportError, setExportError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   // False on every deployment that has not turned the directory on, which is
-  // all of them today — the opt-in section is then never rendered at all.
+  // all of them today — the opt-in block is then never rendered at all.
   const communitiesEnabled = useCommunitiesEnabled();
+
+  const [section, setSection] = useState<SectionId>("overview");
+  const tabIdPrefix = useId();
+  const panelId = useId();
 
   const serverId = server?.id ?? null;
   const isOwner = server?.role === "owner";
@@ -253,6 +525,16 @@ export function ServerSettingsDialog({
     setExportError(null);
   }, [open, serverId]);
 
+  // Reopening lands on the first section the *current* role can see. An admin
+  // reopening after an ownership change must not be left staring at a pane that
+  // no longer exists for them.
+  const firstSection: SectionId = isOwner ? "overview" : "moderation";
+  useEffect(() => {
+    if (open) {
+      setSection(firstSection);
+    }
+  }, [open, serverId, firstSection]);
+
   useEffect(() => {
     if (!open || !isOwner || !serverId) {
       return;
@@ -267,7 +549,9 @@ export function ServerSettingsDialog({
       })
       .catch((err) => {
         if (!cancelled) {
-          setTransferError(messageOf(err, "Failed to load members"));
+          setTransferError(
+            messageOf(err, t("serverSettings.transfer.membersFailed")),
+          );
         }
       })
       .finally(() => {
@@ -278,7 +562,7 @@ export function ServerSettingsDialog({
     return () => {
       cancelled = true;
     };
-  }, [open, isOwner, serverId, currentUserId]);
+  }, [open, isOwner, serverId, currentUserId, t]);
 
   if (!open || !server) {
     return null;
@@ -302,10 +586,10 @@ export function ServerSettingsDialog({
         setRetentionDays(days);
         setRetentionSaved(true);
       } else {
-        setRetentionError("Server did not return the updated server.");
+        setRetentionError(t("serverSettings.retention.failed"));
       }
     } catch (err) {
-      setRetentionError(messageOf(err, "Failed to update retention"));
+      setRetentionError(messageOf(err, t("serverSettings.retention.failed")));
     } finally {
       setSavingRetention(false);
     }
@@ -330,10 +614,10 @@ export function ServerSettingsDialog({
         setSsoDomain(res.server.ssoEmailDomain ?? "");
         setSsoSaved(true);
       } else {
-        setSsoError("Server did not return the updated server.");
+        setSsoError(t("serverSettings.sso.failed"));
       }
     } catch (err) {
-      setSsoError(messageOf(err, "Failed to update the SSO domain"));
+      setSsoError(messageOf(err, t("serverSettings.sso.failed")));
     } finally {
       setSavingSso(false);
     }
@@ -356,7 +640,7 @@ export function ServerSettingsDialog({
       link.click();
       URL.revokeObjectURL(url);
     } catch (err) {
-      setExportError(messageOf(err, "Failed to export data"));
+      setExportError(messageOf(err, t("serverSettings.export.failed")));
     } finally {
       setExporting(false);
     }
@@ -375,10 +659,10 @@ export function ServerSettingsDialog({
         onRenamed(res.server);
         setNameSaved(true);
       } else {
-        setNameError("Server did not return the updated server.");
+        setNameError(t("serverSettings.name.failed"));
       }
     } catch (err) {
-      setNameError(messageOf(err, "Failed to rename server"));
+      setNameError(messageOf(err, t("serverSettings.name.failed")));
     } finally {
       setSavingName(false);
     }
@@ -397,7 +681,7 @@ export function ServerSettingsDialog({
       onOwnershipTransferred();
       onClose();
     } catch (err) {
-      setTransferError(messageOf(err, "Failed to transfer ownership"));
+      setTransferError(messageOf(err, t("serverSettings.transfer.failed")));
     } finally {
       setTransferring(false);
     }
@@ -413,38 +697,41 @@ export function ServerSettingsDialog({
       await deleteServer(serverId);
       onDeleted(serverId);
     } catch (err) {
-      setDeleteError(messageOf(err, "Failed to delete server"));
+      setDeleteError(messageOf(err, t("serverSettings.delete.failed")));
     } finally {
       setDeleting(false);
     }
   }
 
-  if (!isOwner) {
+  const sections = SECTIONS.filter((s) => isOwner || !s.ownerOnly);
+  const active = sections.find((s) => s.id === section) ?? sections[0]!;
+
+  /**
+   * A plain member — neither owner nor admin — gets no rail at all.
+   *
+   * There is exactly one thing to say to them and no section that would contain
+   * it, so a five-door surface behind which four doors are locked and the fifth
+   * holds a sentence would be theatre. The `size="md"` dialog stays what it was.
+   */
+  if (!isManager) {
     return (
       <Dialog
         open
         title={server.name}
-        eyebrow="Server settings"
+        eyebrow={t("serverSettings.eyebrow")}
         size="md"
         onClose={onClose}
         footer={
           <Button variant="secondary" onClick={onClose}>
-            Close
+            {t("serverSettings.close")}
           </Button>
         }
       >
         <div className="space-y-2 px-5 py-5">
           <p className="text-sm text-paper-muted">
-            {isManager
-              ? "Only the server owner can rename this server, transfer ownership, or delete it."
-              : "Only owners and admins can change server settings. Ask one if something here needs to change."}
+            {t("serverSettings.readOnly.member")}
           </p>
         </div>
-        {isManager && serverId && (
-          <div className="px-5 pb-5">
-            <AuditLogSection serverId={serverId} />
-          </div>
-        )}
       </Dialog>
     );
   }
@@ -453,308 +740,380 @@ export function ServerSettingsDialog({
     <Dialog
       open
       title={server.name}
-      eyebrow="Server settings"
-      size="md"
+      eyebrow={t("serverSettings.eyebrow")}
+      size="xl"
+      fill
       closeOnBackdrop={!transferArmed && !deleteArmed}
       onClose={onClose}
       footer={
         <Button variant="secondary" disabled={busy} onClick={onClose}>
-          Close
+          {t("serverSettings.close")}
         </Button>
       }
     >
-      <div className="space-y-6 px-5 py-5">
-        <section className="space-y-2">
-          <h3 className="font-display text-sm font-bold uppercase tracking-wider text-paper-muted">
-            Server name
-          </h3>
-          <div className="flex gap-2">
-            <Input
-              value={name}
-              maxLength={64}
-              aria-label="Server name"
-              disabled={savingName}
-              onChange={(e) => {
-                setName(e.target.value);
-                setNameSaved(false);
-              }}
-            />
-            <Button
-              disabled={
-                savingName || !trimmedName || trimmedName === server.name
-              }
-              onClick={() => void saveName()}
-            >
-              {savingName ? "Saving…" : "Save"}
-            </Button>
-          </div>
-          <p role="status" aria-live="polite" className="text-xs text-paper-muted">
-            {nameSaved ? "Server renamed." : ""}
-          </p>
-          {nameError && (
-            <p role="alert" className="text-sm text-danger">
-              {nameError}
-            </p>
+      <div className="flex h-full min-h-0 flex-col sm:flex-row">
+        <SectionRail
+          sections={sections}
+          active={active.id}
+          onSelect={setSection}
+          idFor={(id) => `${tabIdPrefix}-${id}`}
+          panelId={panelId}
+        />
+
+        <div
+          id={panelId}
+          role="tabpanel"
+          aria-labelledby={`${tabIdPrefix}-${active.id}`}
+          tabIndex={0}
+          className="min-w-0 flex-1 space-y-6 overflow-y-auto overscroll-contain px-5 py-5 focus-visible:outline-none"
+        >
+          <SectionHeader section={active} />
+
+          {active.id === "overview" && (
+            <>
+              <Block title={t("serverSettings.name.title")}>
+                <div className="flex gap-2">
+                  <Input
+                    value={name}
+                    maxLength={64}
+                    aria-label={t("serverSettings.name.label")}
+                    disabled={savingName}
+                    onChange={(e) => {
+                      setName(e.target.value);
+                      setNameSaved(false);
+                    }}
+                  />
+                  <Button
+                    disabled={
+                      savingName || !trimmedName || trimmedName === server.name
+                    }
+                    onClick={() => void saveName()}
+                  >
+                    {savingName
+                      ? t("serverSettings.name.saving")
+                      : t("serverSettings.name.save")}
+                  </Button>
+                </div>
+                <p
+                  role="status"
+                  aria-live="polite"
+                  className="text-xs text-paper-muted"
+                >
+                  {nameSaved ? t("serverSettings.name.saved") : ""}
+                </p>
+                {nameError && (
+                  <p role="alert" className="text-sm text-danger">
+                    {nameError}
+                  </p>
+                )}
+              </Block>
+
+              {serverId && (
+                <ServerIdentitySection server={server} onUpdated={onRenamed} />
+              )}
+
+              {serverId && communitiesEnabled && (
+                <CommunitySettingsSection serverId={serverId} />
+              )}
+            </>
           )}
-        </section>
 
-        <section className="space-y-2 border-t border-ink-4 pt-5">
-          <h3 className="font-display text-sm font-bold uppercase tracking-wider text-paper-muted">
-            Transfer ownership
-          </h3>
-          <p className="text-sm text-paper-muted">
-            The new owner gets full control of {server.name}. You become an admin
-            and cannot take ownership back yourself.
-          </p>
-
-          {candidatesLoading ? (
-            <p role="status" aria-live="polite" className="text-sm text-paper-muted">
-              Loading members…
-            </p>
-          ) : candidates.length === 0 ? (
-            <p className="text-sm text-paper-muted">
-              There is nobody else in this server to hand it to.
-            </p>
-          ) : (
-            <div className="space-y-2">
-              <select
-                value={targetId}
-                aria-label="New owner"
-                disabled={transferArmed || transferring}
-                className="h-10 w-full rounded-md border border-ink-4 bg-ink px-3 text-sm text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/50 disabled:opacity-50"
-                onChange={(e) => setTargetId(e.target.value)}
-              >
-                <option value="">Select a member…</option>
-                {candidates.map((member) => (
-                  <option key={member.id} value={member.id}>
-                    {member.displayName}
-                    {member.tag ? ` ${member.tag}` : ""}
-                  </option>
-                ))}
-              </select>
-
-              {!transferArmed ? (
+          {active.id === "access" && (
+            <Block title={t("serverSettings.sso.title")}>
+              <p className="text-sm text-paper-muted">
+                {t("serverSettings.sso.description", { server: server.name })}
+              </p>
+              <div className="flex gap-2">
+                <Input
+                  value={ssoDomain}
+                  placeholder="acme.com"
+                  aria-label={t("serverSettings.sso.label")}
+                  disabled={savingSso}
+                  onChange={(e) => {
+                    setSsoDomain(e.target.value);
+                    setSsoSaved(false);
+                    setSsoError(null);
+                  }}
+                />
                 <Button
                   variant="secondary"
-                  disabled={!targetId || busy}
-                  onClick={() => setTransferArmed(true)}
+                  disabled={savingSso}
+                  onClick={() => void saveSso()}
                 >
-                  Transfer ownership
-                </Button>
-              ) : (
-                <div className="space-y-2 rounded-lg border border-warning/40 bg-warning/5 p-3">
-                  <p className="text-sm text-paper">
-                    Hand {server.name} to{" "}
-                    <span className="font-semibold">{target?.displayName}</span>?
-                    Type <span className="font-mono">{TRANSFER_PHRASE}</span> to
-                    confirm.
-                  </p>
-                  <Input
-                    value={transferPhrase}
-                    aria-label={`Type ${TRANSFER_PHRASE} to confirm the transfer`}
-                    autoFocus
-                    disabled={transferring}
-                    onChange={(e) => setTransferPhrase(e.target.value)}
-                  />
-                  <div className="flex gap-2">
-                    <Button
-                      variant="danger"
-                      disabled={
-                        transferring ||
-                        !target ||
-                        transferPhrase.trim().toUpperCase() !== TRANSFER_PHRASE
-                      }
-                      onClick={() => void transferOwnership()}
-                    >
-                      {transferring ? "Transferring…" : "Confirm transfer"}
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      disabled={transferring}
-                      onClick={() => {
-                        setTransferArmed(false);
-                        setTransferPhrase("");
-                      }}
-                    >
-                      Cancel
-                    </Button>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          {transferError && (
-            <p role="alert" className="text-sm text-danger">
-              {transferError}
-            </p>
-          )}
-        </section>
-
-        <section className="space-y-2 border-t border-ink-4 pt-5">
-          <h3 className="font-display text-sm font-bold uppercase tracking-wider text-paper-muted">
-            Export data
-          </h3>
-          <p className="text-sm text-paper-muted">
-            Download every channel, member, and message in {server.name} as a
-            JSON file. Attachment bytes are not included — only their
-            filenames and sizes.
-          </p>
-          <Button
-            variant="secondary"
-            disabled={exporting}
-            onClick={() => void exportData()}
-          >
-            {exporting ? "Preparing export…" : "Export server data"}
-          </Button>
-          {exportError && (
-            <p role="alert" className="text-sm text-danger">
-              {exportError}
-            </p>
-          )}
-        </section>
-
-        <section className="space-y-2 rounded-lg border border-danger/40 bg-danger/5 p-4">
-          <h3 className="font-display text-sm font-bold uppercase tracking-wider text-danger">
-            Delete server
-          </h3>
-          <p className="text-sm text-paper-muted">
-            Every channel, message, and invite in {server.name} is deleted for
-            everyone. This cannot be undone.
-          </p>
-
-          {!deleteArmed ? (
-            <Button
-              variant="danger"
-              disabled={busy}
-              onClick={() => setDeleteArmed(true)}
-            >
-              Delete server
-            </Button>
-          ) : (
-            <div className="space-y-2">
-              <label className="block text-sm text-paper">
-                Type <span className="font-mono font-semibold">{server.name}</span>{" "}
-                to confirm.
-                <Input
-                  className="mt-2"
-                  value={deletePhrase}
-                  autoFocus
-                  disabled={deleting}
-                  onChange={(e) => setDeletePhrase(e.target.value)}
-                />
-              </label>
-              <div className="flex gap-2">
-                <Button
-                  variant="danger"
-                  disabled={deleting || deletePhrase !== server.name}
-                  onClick={() => void destroyServer()}
-                >
-                  {deleting ? "Deleting…" : "Delete forever"}
-                </Button>
-                <Button
-                  variant="ghost"
-                  disabled={deleting}
-                  onClick={() => {
-                    setDeleteArmed(false);
-                    setDeletePhrase("");
-                  }}
-                >
-                  Cancel
+                  {savingSso
+                    ? t("serverSettings.sso.saving")
+                    : t("serverSettings.sso.save")}
                 </Button>
               </div>
-            </div>
+              <p
+                role="status"
+                aria-live="polite"
+                className="text-xs text-paper-muted"
+              >
+                {ssoSaved ? t("serverSettings.sso.saved") : ""}
+              </p>
+              {ssoError && (
+                <p role="alert" className="text-sm text-danger">
+                  {ssoError}
+                </p>
+              )}
+            </Block>
           )}
 
-          {deleteError && (
-            <p role="alert" className="text-sm text-danger">
-              {deleteError}
-            </p>
+          {active.id === "moderation" && (
+            <>
+              {serverId && <ReportsSection serverId={serverId} />}
+
+              {isOwner && (
+                <Block title={t("serverSettings.retention.title")}>
+                  <p className="text-sm text-paper-muted">
+                    {t("serverSettings.retention.description", {
+                      server: server.name,
+                    })}
+                  </p>
+                  <select
+                    value={retentionDays === null ? "" : String(retentionDays)}
+                    aria-label={t("serverSettings.retention.label")}
+                    disabled={savingRetention}
+                    className="h-10 w-full rounded-md border border-ink-4 bg-ink px-3 text-sm text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/50 disabled:opacity-50"
+                    onChange={(e) =>
+                      void saveRetention(
+                        e.target.value === "" ? null : Number(e.target.value),
+                      )
+                    }
+                  >
+                    <option value="">
+                      {t("serverSettings.retention.forever")}
+                    </option>
+                    <option value="30">
+                      {t("serverSettings.retention.days30")}
+                    </option>
+                    <option value="90">
+                      {t("serverSettings.retention.days90")}
+                    </option>
+                    <option value="365">
+                      {t("serverSettings.retention.year")}
+                    </option>
+                  </select>
+                  <p
+                    role="status"
+                    aria-live="polite"
+                    className="text-xs text-paper-muted"
+                  >
+                    {retentionSaved ? t("serverSettings.retention.saved") : ""}
+                  </p>
+                  {retentionError && (
+                    <p role="alert" className="text-sm text-danger">
+                      {retentionError}
+                    </p>
+                  )}
+                </Block>
+              )}
+
+              {!isOwner && (
+                <p className="text-sm text-paper-muted">
+                  {t("serverSettings.readOnly.admin")}
+                </p>
+              )}
+            </>
           )}
-        </section>
 
-        <section className="space-y-2 border-t border-ink-4 pt-5">
-          <h3 className="font-display text-sm font-bold uppercase tracking-wider text-paper-muted">
-            Message retention
-          </h3>
-          <p className="text-sm text-paper-muted">
-            Automatically delete messages older than this, across every
-            channel in {server.name}. Pinned messages are never touched.
-          </p>
-          <select
-            value={retentionDays === null ? "" : String(retentionDays)}
-            aria-label="Message retention"
-            disabled={savingRetention}
-            className="h-10 w-full rounded-md border border-ink-4 bg-ink px-3 text-sm text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/50 disabled:opacity-50"
-            onChange={(e) =>
-              void saveRetention(e.target.value === "" ? null : Number(e.target.value))
-            }
-          >
-            <option value="">Keep forever</option>
-            <option value="30">30 days</option>
-            <option value="90">90 days</option>
-            <option value="365">1 year</option>
-          </select>
-          <p role="status" aria-live="polite" className="text-xs text-paper-muted">
-            {retentionSaved ? "Retention updated." : ""}
-          </p>
-          {retentionError && (
-            <p role="alert" className="text-sm text-danger">
-              {retentionError}
-            </p>
+          {active.id === "audit" && serverId && (
+            <AuditLogSection serverId={serverId} />
           )}
-        </section>
 
-        <section className="space-y-2 border-t border-ink-4 pt-5">
-          <h3 className="font-display text-sm font-bold uppercase tracking-wider text-paper-muted">
-            SSO email domain
-          </h3>
-          <p className="text-sm text-paper-muted">
-            Anyone with a verified email at this domain can join {server.name}{" "}
-            without an invite. Only verified addresses count, and existing bans
-            still apply. Leave empty to turn this off.
-          </p>
-          <div className="flex gap-2">
-            <Input
-              value={ssoDomain}
-              placeholder="acme.com"
-              aria-label="SSO email domain"
-              disabled={savingSso}
-              onChange={(e) => {
-                setSsoDomain(e.target.value);
-                setSsoSaved(false);
-                setSsoError(null);
-              }}
-            />
-            <Button
-              variant="secondary"
-              disabled={savingSso}
-              onClick={() => void saveSso()}
-            >
-              {savingSso ? "Saving…" : "Save"}
-            </Button>
-          </div>
-          <p role="status" aria-live="polite" className="text-xs text-paper-muted">
-            {ssoSaved ? "SSO domain updated." : ""}
-          </p>
-          {ssoError && (
-            <p role="alert" className="text-sm text-danger">
-              {ssoError}
-            </p>
+          {active.id === "danger" && (
+            <>
+              <Block title={t("serverSettings.export.title")}>
+                <p className="text-sm text-paper-muted">
+                  {t("serverSettings.export.description", {
+                    server: server.name,
+                  })}
+                </p>
+                <Button
+                  variant="secondary"
+                  disabled={exporting}
+                  onClick={() => void exportData()}
+                >
+                  {exporting
+                    ? t("serverSettings.export.preparing")
+                    : t("serverSettings.export.action")}
+                </Button>
+                {exportError && (
+                  <p role="alert" className="text-sm text-danger">
+                    {exportError}
+                  </p>
+                )}
+              </Block>
+
+              <Block title={t("serverSettings.transfer.title")}>
+                <p className="text-sm text-paper-muted">
+                  {t("serverSettings.transfer.description", {
+                    server: server.name,
+                  })}
+                </p>
+
+                {candidatesLoading ? (
+                  <p
+                    role="status"
+                    aria-live="polite"
+                    className="text-sm text-paper-muted"
+                  >
+                    {t("serverSettings.transfer.loading")}
+                  </p>
+                ) : candidates.length === 0 ? (
+                  <p className="text-sm text-paper-muted">
+                    {t("serverSettings.transfer.nobody")}
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    <select
+                      value={targetId}
+                      aria-label={t("serverSettings.transfer.label")}
+                      disabled={transferArmed || transferring}
+                      className="h-10 w-full rounded-md border border-ink-4 bg-ink px-3 text-sm text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/50 disabled:opacity-50"
+                      onChange={(e) => setTargetId(e.target.value)}
+                    >
+                      <option value="">
+                        {t("serverSettings.transfer.placeholder")}
+                      </option>
+                      {candidates.map((member) => (
+                        <option key={member.id} value={member.id}>
+                          {member.displayName}
+                          {member.tag ? ` ${member.tag}` : ""}
+                        </option>
+                      ))}
+                    </select>
+
+                    {!transferArmed ? (
+                      <Button
+                        variant="secondary"
+                        disabled={!targetId || busy}
+                        onClick={() => setTransferArmed(true)}
+                      >
+                        {t("serverSettings.transfer.action")}
+                      </Button>
+                    ) : (
+                      <div className="space-y-2 rounded-lg border border-warning/40 bg-warning/5 p-3">
+                        <p className="text-sm text-paper">
+                          {t("serverSettings.transfer.confirmLead", {
+                            server: server.name,
+                            member: target?.displayName ?? "",
+                            phrase: TRANSFER_PHRASE,
+                          })}
+                        </p>
+                        <Input
+                          value={transferPhrase}
+                          aria-label={t("serverSettings.transfer.confirmAria", {
+                            phrase: TRANSFER_PHRASE,
+                          })}
+                          autoFocus
+                          disabled={transferring}
+                          onChange={(e) => setTransferPhrase(e.target.value)}
+                        />
+                        <div className="flex gap-2">
+                          <Button
+                            variant="danger"
+                            disabled={
+                              transferring ||
+                              !target ||
+                              transferPhrase.trim().toUpperCase() !==
+                                TRANSFER_PHRASE
+                            }
+                            onClick={() => void transferOwnership()}
+                          >
+                            {transferring
+                              ? t("serverSettings.transfer.transferring")
+                              : t("serverSettings.transfer.confirm")}
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            disabled={transferring}
+                            onClick={() => {
+                              setTransferArmed(false);
+                              setTransferPhrase("");
+                            }}
+                          >
+                            {t("serverSettings.transfer.cancel")}
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {transferError && (
+                  <p role="alert" className="text-sm text-danger">
+                    {transferError}
+                  </p>
+                )}
+              </Block>
+
+              <Block title={t("serverSettings.delete.title")} tone="danger">
+                <p className="text-sm text-paper-muted">
+                  {t("serverSettings.delete.description", {
+                    server: server.name,
+                  })}
+                </p>
+
+                {!deleteArmed ? (
+                  <Button
+                    variant="danger"
+                    disabled={busy}
+                    onClick={() => setDeleteArmed(true)}
+                  >
+                    {t("serverSettings.delete.action")}
+                  </Button>
+                ) : (
+                  <div className="space-y-2">
+                    <label className="block text-sm text-paper">
+                      {t("serverSettings.delete.typeLabel", {
+                        server: server.name,
+                      })}
+                      <Input
+                        className="mt-2"
+                        value={deletePhrase}
+                        aria-label={t("serverSettings.delete.typeAria", {
+                          server: server.name,
+                        })}
+                        autoFocus
+                        disabled={deleting}
+                        onChange={(e) => setDeletePhrase(e.target.value)}
+                      />
+                    </label>
+                    <div className="flex gap-2">
+                      <Button
+                        variant="danger"
+                        disabled={deleting || deletePhrase !== server.name}
+                        onClick={() => void destroyServer()}
+                      >
+                        {deleting
+                          ? t("serverSettings.delete.deleting")
+                          : t("serverSettings.delete.confirm")}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        disabled={deleting}
+                        onClick={() => {
+                          setDeleteArmed(false);
+                          setDeletePhrase("");
+                        }}
+                      >
+                        {t("serverSettings.delete.cancel")}
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                {deleteError && (
+                  <p role="alert" className="text-sm text-danger">
+                    {deleteError}
+                  </p>
+                )}
+              </Block>
+            </>
           )}
-        </section>
-
-        {/* Owner-only, and only where the deployment has a directory. Placed
-            after the SSO domain because the two are the same kind of decision —
-            "who can walk in without an invite" — and this is the wider of the
-            two by a long way. */}
-        {serverId && communitiesEnabled && (
-          <CommunitySettingsSection serverId={serverId} />
-        )}
-
-        {serverId && isManager && <ReportsSection serverId={serverId} />}
-
-        {serverId && <AuditLogSection serverId={serverId} />}
+        </div>
       </div>
     </Dialog>
   );

@@ -15,6 +15,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import type { Channel, Server, VoiceParticipant } from "@pqp/shared";
 import { SearchDialog } from "@/components/search/search-dialog";
 import { ChannelIcon } from "@/components/layout/channel-icon";
+import { ServerBanner, ServerIcon } from "@/components/layout/server-identity";
 import {
   ContextMenu,
   type ContextMenuItemDef,
@@ -356,17 +357,36 @@ export function ChannelList({
           : "-translate-x-[calc(100%+72px)] md:translate-x-0"
       }`}
     >
+      {/* Above the header, and only when there is one. See `ServerBanner`: a
+          server without a banner keeps exactly the column it has always had. */}
+      {server && <ServerBanner name={server.name} bannerUrl={server.bannerUrl} />}
+
       <ContextMenu items={headerItems}>
-        <div className="flex h-14 items-center justify-between gap-2 border-b border-ink-4/60 px-4">
-          <div className="min-w-0">
-            <p className="truncate font-display text-base font-bold">
-              {server?.name ?? (isLoading ? "Loading…" : "No server")}
-            </p>
-            {server?.role && (
-              <p className="text-[11px] uppercase tracking-wider text-paper-muted">
-                {server.role}
-              </p>
+        {/* `min-h-16` rather than a fixed `h-14`: the row now has to hold a
+            36px icon beside two lines of text without either crowding the
+            other, and a header that can grow by a few pixels for a long name
+            is better than one that truncates the role away. */}
+        <div className="flex min-h-16 items-center justify-between gap-2 border-b border-ink-4/60 px-4 py-3">
+          <div className="flex min-w-0 items-center gap-2.5">
+            {/* Desktop only. The drawer is the same 256px wide at 390px but
+                carries one more control — the button that closes it — and the
+                icon is what tips the row into truncating the server's name to
+                a single letter. The rail's icon is still on screen there. */}
+            {server && (
+              <span className="hidden h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-ink-3 font-display text-xs font-bold text-paper md:flex">
+                <ServerIcon name={server.name} iconUrl={server.iconUrl} />
+              </span>
             )}
+            <div className="min-w-0">
+              <p className="truncate font-display text-base font-bold leading-tight">
+                {server?.name ?? (isLoading ? "Loading…" : "No server")}
+              </p>
+              {server?.role && (
+                <p className="mt-0.5 text-[11px] uppercase tracking-wider text-paper-muted">
+                  {server.role}
+                </p>
+              )}
+            </div>
           </div>
           <div className="flex items-center gap-1">
             {server && (
@@ -415,10 +435,10 @@ export function ChannelList({
       </ContextMenu>
 
       {server && (
-        <div className="px-2 pt-2">
+        <div className="px-3 pt-3">
           <button
             type="button"
-            className="flex w-full items-center gap-2 rounded-md border border-border bg-surface-0/60 px-2 py-1.5 text-xs text-text-muted transition-colors hover:border-border-strong hover:text-text"
+            className="flex w-full items-center gap-2 rounded-md border border-border bg-surface-0/60 px-2.5 py-2 text-xs text-text-muted transition-colors hover:border-border-strong hover:text-text"
             onClick={() => setSearchOpen(true)}
           >
             <Search className="h-3.5 w-3.5 shrink-0" />
@@ -437,7 +457,7 @@ export function ChannelList({
         </div>
       )}
 
-      <div className="flex-1 overflow-y-auto p-2">
+      <div className="flex-1 overflow-y-auto px-3 pb-3 pt-2">
         {isLoading ? (
           <ChannelListSkeleton />
         ) : (

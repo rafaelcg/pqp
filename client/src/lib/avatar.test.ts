@@ -1,3 +1,4 @@
+import { SERVER_BANNER_HEIGHT, SERVER_BANNER_WIDTH } from "@pqp/shared";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/utils", async (importOriginal) => ({
@@ -5,7 +6,8 @@ vi.mock("@/lib/utils", async (importOriginal) => ({
   getApiBaseUrl: () => "https://api.example.test",
 }));
 
-const { centerCropRect, resolveAvatarUrl } = await import("./avatar");
+const { centerCropRect, centerCropRectForAspect, resolveAvatarUrl } =
+  await import("./avatar");
 
 /**
  * The two pieces of avatar handling that are logic rather than markup.
@@ -93,6 +95,72 @@ describe("centerCropRect", () => {
       expect(crop.y + crop.size).toBeLessThanOrEqual(height!);
       expect(crop.x).toBeGreaterThanOrEqual(0);
       expect(crop.y).toBeGreaterThanOrEqual(0);
+    }
+  });
+});
+
+describe("centerCropRectForAspect", () => {
+  const BANNER = SERVER_BANNER_WIDTH / SERVER_BANNER_HEIGHT;
+
+  it("takes the whole image when it is already the target shape", () => {
+    expect(centerCropRectForAspect(1024, 360, BANNER)).toEqual({
+      x: 0,
+      y: 0,
+      width: 1024,
+      height: 360,
+    });
+  });
+
+  it("crops the sides of an image wider than the target", () => {
+    // 4000×360 is far wider than 2.84:1, so the height survives untouched.
+    const crop = centerCropRectForAspect(4000, 360, BANNER);
+    expect(crop.height).toBe(360);
+    expect(crop.width).toBe(1024);
+    expect(crop.x).toBe(1488);
+    expect(crop.y).toBe(0);
+  });
+
+  it("crops the top and bottom of a portrait photo", () => {
+    // The common case, and the one that goes silently wrong: pick the branch
+    // the wrong way round and a phone photo becomes a strip of forehead.
+    const crop = centerCropRectForAspect(1080, 1920, BANNER);
+    expect(crop.width).toBe(1080);
+    expect(crop.height).toBe(380);
+    expect(crop.x).toBe(0);
+    expect(crop.y).toBe(770);
+  });
+
+  it("degenerates to centerCropRect at an aspect of 1", () => {
+    // Not an accident worth losing: the square crop is this function with one
+    // argument fixed, and the two must not drift apart.
+    for (const [width, height] of [
+      [1600, 900],
+      [1080, 1920],
+      [512, 512],
+      [101, 100],
+    ]) {
+      const square = centerCropRect(width!, height!);
+      const rect = centerCropRectForAspect(width!, height!, 1);
+      expect({ x: rect.x, y: rect.y, size: rect.width }).toEqual(square);
+      expect(rect.width).toBe(rect.height);
+    }
+  });
+
+  it("never crops outside the source, at any shape", () => {
+    for (const [width, height] of [
+      [1, 4000],
+      [4000, 1],
+      [3, 2],
+      [2, 3],
+      [1024, 361],
+    ]) {
+      for (const aspect of [BANNER, 1, 16 / 9, 0.5]) {
+        const crop = centerCropRectForAspect(width!, height!, aspect);
+        expect(crop.x).toBeGreaterThanOrEqual(0);
+        expect(crop.y).toBeGreaterThanOrEqual(0);
+        expect(crop.x + crop.width).toBeLessThanOrEqual(width!);
+        expect(crop.y + crop.height).toBeLessThanOrEqual(height!);
+      }
     }
   });
 });

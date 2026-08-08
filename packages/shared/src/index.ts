@@ -13,6 +13,7 @@ export * from "./moderation.js";
 export * from "./reports.js";
 export * from "./sanctions.js";
 export * from "./search.js";
+export * from "./server-images.js";
 export * from "./signaling.js";
 export * from "./sso.js";
 export * from "./status.js";

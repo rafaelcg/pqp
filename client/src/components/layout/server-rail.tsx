@@ -4,6 +4,7 @@ import {
   formatBadgeCount,
   type UnreadState,
 } from "@/components/layout/channel-list";
+import { ServerIcon } from "@/components/layout/server-identity";
 import { Button } from "@/components/ui/button";
 import {
   ContextMenu,
@@ -211,7 +212,13 @@ export function ServerRail({
               {selected && (
                 <span className="absolute -left-3 h-8 w-1 rounded-r bg-signal" />
               )}
-              {server.name.slice(0, 2).toUpperCase()}
+              {/* The clip lives on this span rather than on the button so the
+                  selection pip, which is drawn outside the button's own box,
+                  survives. `rounded-[inherit]` keeps the icon following the
+                  squircle-to-rounded-square animation the button plays. */}
+              <span className="flex h-full w-full items-center justify-center overflow-hidden rounded-[inherit]">
+                <ServerIcon name={server.name} iconUrl={server.iconUrl} />
+              </span>
               {hasUnread && mentions === 0 && (
                 <span
                   aria-hidden="true"

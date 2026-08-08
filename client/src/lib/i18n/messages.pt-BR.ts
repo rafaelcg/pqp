@@ -927,4 +927,159 @@ export const ptBR: PartialMessages = {
   "settings.delete.ownedMembers": "— mais {count} pessoas",
   "settings.delete.typeLabel": "Digite seu identificador pra confirmar",
   "settings.delete.typeAria": "Digite {handle} pra confirmar a exclusão",
+
+  // ------------------------------------------------ configurações do servidor
+  "serverSettings.eyebrow": "Config do servidor",
+  "serverSettings.nav.label": "Seções das configurações do servidor",
+  "serverSettings.close": "Fechar",
+
+  "serverSettings.section.overview": "Visão geral",
+  "serverSettings.overview.description":
+    "Como esse servidor se chama e com que cara ele fica.",
+  "serverSettings.section.access": "Acesso",
+  "serverSettings.access.description":
+    "Quem pode entrar, e como as pessoas chegam aqui.",
+  "serverSettings.section.moderation": "Moderação",
+  "serverSettings.moderation.description":
+    "Denúncias dos membros, e por quanto tempo as mensagens ficam.",
+  "serverSettings.section.audit": "Registro",
+  "serverSettings.audit.description":
+    "Tudo que a moderação fez neste servidor, do mais novo pro mais velho.",
+  "serverSettings.section.danger": "Zona de risco",
+  "serverSettings.danger.description":
+    "Leve os dados com você, passe o servidor pra frente, ou acabe com ele.",
+
+  "serverSettings.readOnly.admin":
+    "Só quem é dono do servidor pode renomear, trocar as imagens, transferir ou apagar.",
+  "serverSettings.readOnly.member":
+    "Só dono e admin mexem nas configurações. Fale com alguém se precisar mudar algo aqui.",
+
+  "serverSettings.name.title": "Nome do servidor",
+  "serverSettings.name.label": "Nome do servidor",
+  "serverSettings.name.save": "Salvar",
+  "serverSettings.name.saving": "Salvando…",
+  "serverSettings.name.saved": "Servidor renomeado.",
+  "serverSettings.name.failed": "Não deu pra renomear o servidor",
+
+  "serverSettings.identity.title": "Ícone e capa",
+  "serverSettings.identity.description":
+    "O ícone é a cara do servidor na barra lateral. A capa fica no topo da lista de canais, com o nome por cima. As duas são opcionais — sem elas o servidor mostra as duas primeiras letras, que é como está hoje.",
+  "serverSettings.identity.icon": "Ícone",
+  "serverSettings.identity.iconHint":
+    "Quadrado. Cortado pelo meio e redimensionado pra {size}×{size}.",
+  "serverSettings.identity.banner": "Capa",
+  "serverSettings.identity.bannerHint":
+    "Deitada. Cortada pelo meio e redimensionada pra {width}×{height}.",
+  "serverSettings.identity.bannerEmpty": "Sem capa",
+  "serverSettings.identity.upload": "Enviar",
+  "serverSettings.identity.replace": "Trocar",
+  "serverSettings.identity.uploading": "Enviando…",
+  "serverSettings.identity.remove": "Remover",
+  "serverSettings.identity.removing": "Removendo…",
+  "serverSettings.identity.failed": "O envio falhou.",
+  "serverSettings.identity.removeFailed": "Não deu pra remover essa imagem.",
+  "serverSettings.identity.unconfigured":
+    "Esta instalação não tem armazenamento de arquivos configurado, então não dá pra enviar imagem. O servidor segue com o monograma.",
+
+  "serverSettings.sso.title": "Domínio de e-mail (SSO)",
+  "serverSettings.sso.description":
+    "Quem tiver e-mail verificado nesse domínio entra em {server} sem convite. Só conta endereço verificado, e ban continua valendo. Deixe vazio pra desligar.",
+  "serverSettings.sso.label": "Domínio de e-mail (SSO)",
+  "serverSettings.sso.save": "Salvar",
+  "serverSettings.sso.saving": "Salvando…",
+  "serverSettings.sso.saved": "Domínio atualizado.",
+  "serverSettings.sso.failed": "Não deu pra atualizar o domínio",
+
+  "serverSettings.retention.title": "Retenção de mensagens",
+  "serverSettings.retention.description":
+    "Apaga sozinho as mensagens mais antigas que isso, em todos os canais de {server}. Mensagem fixada nunca é tocada.",
+  "serverSettings.retention.label": "Retenção de mensagens",
+  "serverSettings.retention.forever": "Guardar pra sempre",
+  "serverSettings.retention.days30": "30 dias",
+  "serverSettings.retention.days90": "90 dias",
+  "serverSettings.retention.year": "1 ano",
+  "serverSettings.retention.saved": "Retenção atualizada.",
+  "serverSettings.retention.failed": "Não deu pra atualizar a retenção",
+
+  "serverSettings.audit.title": "Registro de auditoria",
+  "serverSettings.audit.loading": "Carregando…",
+  "serverSettings.audit.empty":
+    "Nada por aqui ainda. Expulsão, ban, mudança de cargo e edição de canal ou do servidor aparecem aqui.",
+  "serverSettings.audit.loadMore": "Carregar mais",
+  "serverSettings.audit.loadingMore": "Carregando…",
+  "serverSettings.audit.failed": "Não deu pra carregar o registro",
+  "serverSettings.audit.failedMore": "Não deu pra carregar mais",
+  "serverSettings.audit.departedActor": "Uma conta que saiu",
+  "serverSettings.audit.action.member.kick": "expulsou um membro",
+  "serverSettings.audit.action.member.ban": "baniu um membro",
+  "serverSettings.audit.action.member.unban": "desbaniu um membro",
+  "serverSettings.audit.action.member.role_update":
+    "mudou o cargo de um membro",
+  "serverSettings.audit.action.channel.create": "criou um canal",
+  "serverSettings.audit.action.channel.update": "editou um canal",
+  "serverSettings.audit.action.channel.delete": "apagou um canal",
+  "serverSettings.audit.action.channel.move": "reordenou um canal",
+  "serverSettings.audit.action.message.delete":
+    "apagou a mensagem de alguém",
+  "serverSettings.audit.action.server.update": "renomeou o servidor",
+  "serverSettings.audit.action.server.retention_update":
+    "mudou a retenção de mensagens",
+  "serverSettings.audit.action.server.icon_update":
+    "mudou o ícone do servidor",
+  "serverSettings.audit.action.server.banner_update":
+    "mudou a capa do servidor",
+  "serverSettings.audit.action.server.ownership_transfer":
+    "transferiu o servidor",
+  "serverSettings.audit.action.server.data_export":
+    "exportou os dados do servidor",
+  "serverSettings.audit.action.invite.create": "criou um convite",
+  "serverSettings.audit.action.invite.delete": "revogou um convite",
+  "serverSettings.audit.action.server.sso_domain_update":
+    "mudou o domínio de e-mail (SSO)",
+  "serverSettings.audit.action.member.sso_join":
+    "entrou pelo domínio de e-mail",
+  "serverSettings.audit.action.server.community_update":
+    "mudou a listagem pública",
+  "serverSettings.audit.action.member.community_join":
+    "entrou pelo diretório de comunidades",
+  "serverSettings.audit.action.webhook.create": "criou um webhook",
+  "serverSettings.audit.action.webhook.delete": "apagou um webhook",
+  "serverSettings.audit.action.report.resolve": "fechou uma denúncia",
+
+  "serverSettings.export.title": "Exportar dados",
+  "serverSettings.export.description":
+    "Baixe todos os canais, membros e mensagens de {server} num arquivo JSON. Os arquivos anexados não vão junto — só o nome e o tamanho deles.",
+  "serverSettings.export.action": "Exportar dados do servidor",
+  "serverSettings.export.preparing": "Preparando…",
+  "serverSettings.export.failed": "Não deu pra exportar",
+
+  "serverSettings.transfer.title": "Transferir o servidor",
+  "serverSettings.transfer.description":
+    "Quem receber fica com o controle total de {server}. Você vira admin e não consegue pegar de volta sozinho.",
+  "serverSettings.transfer.loading": "Carregando membros…",
+  "serverSettings.transfer.nobody":
+    "Não tem mais ninguém neste servidor pra passar pra frente.",
+  "serverSettings.transfer.label": "Novo dono",
+  "serverSettings.transfer.placeholder": "Escolha um membro…",
+  "serverSettings.transfer.action": "Transferir o servidor",
+  "serverSettings.transfer.confirmLead":
+    "Passar {server} pra {member}? Digite {phrase} pra confirmar.",
+  "serverSettings.transfer.confirmAria":
+    "Digite {phrase} pra confirmar a transferência",
+  "serverSettings.transfer.confirm": "Confirmar transferência",
+  "serverSettings.transfer.transferring": "Transferindo…",
+  "serverSettings.transfer.cancel": "Cancelar",
+  "serverSettings.transfer.failed": "Não deu pra transferir",
+  "serverSettings.transfer.membersFailed": "Não deu pra carregar os membros",
+
+  "serverSettings.delete.title": "Apagar o servidor",
+  "serverSettings.delete.description":
+    "Todos os canais, mensagens e convites de {server} somem pra todo mundo. Não tem como desfazer.",
+  "serverSettings.delete.action": "Apagar o servidor",
+  "serverSettings.delete.typeLabel": "Digite {server} pra confirmar.",
+  "serverSettings.delete.typeAria": "Digite {server} pra confirmar a exclusão",
+  "serverSettings.delete.confirm": "Apagar pra sempre",
+  "serverSettings.delete.deleting": "Apagando…",
+  "serverSettings.delete.cancel": "Cancelar",
+  "serverSettings.delete.failed": "Não deu pra apagar o servidor",
 };

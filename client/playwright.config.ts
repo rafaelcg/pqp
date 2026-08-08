@@ -91,6 +91,27 @@ export default defineConfig({
         // two together are the whole contract; a third webServer on a third
         // port would prove nothing extra and double the suite's boot time.
         COMMUNITIES_ENABLED: "true",
+        // Object storage, passed through rather than pinned.
+        //
+        // The webServer `env` REPLACES the environment rather than extending
+        // it, and the server's own dotenv load cannot help here: a worktree has
+        // no `.env` at all. So a suite run needs these named explicitly to
+        // reach a bucket — which is exactly the switch that decides whether
+        // `server-identity.spec.ts` uploads a real banner to MinIO
+        // (`docker compose --profile storage up -d`, then export these) or
+        // skips that half with a note. Absent, `GET /api/servers/images/config`
+        // answers `enabled: false`, which is the shape every deployment without
+        // `S3_*` is in and is itself worth having a spec run against.
+        ...(process.env.S3_ENDPOINT
+          ? {
+              S3_ENDPOINT: process.env.S3_ENDPOINT,
+              S3_BUCKET: process.env.S3_BUCKET ?? "pqp-attachments",
+              S3_REGION: process.env.S3_REGION ?? "us-east-1",
+              S3_ACCESS_KEY_ID: process.env.S3_ACCESS_KEY_ID ?? "",
+              S3_SECRET_ACCESS_KEY: process.env.S3_SECRET_ACCESS_KEY ?? "",
+              S3_FORCE_PATH_STYLE: process.env.S3_FORCE_PATH_STYLE ?? "true",
+            }
+          : {}),
       },
     },
     {

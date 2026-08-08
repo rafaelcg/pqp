@@ -1028,6 +1028,176 @@ export const en = {
   "settings.delete.ownedMembers": "— {count} other members",
   "settings.delete.typeLabel": "Type your handle to confirm",
   "settings.delete.typeAria": "Type {handle} to confirm deletion",
+
+  // ---------------------------------------------------------- server settings
+  //
+  // Sectioned for the same reason the account settings above were, and after
+  // the same complaint: one column that ran a rename, a retention policy, an
+  // SSO domain, a public-listing switch, a moderation queue, an audit log and
+  // the button that destroys the server all past each other, with scrolling as
+  // the only navigation. The section names are the whole fix — a person looking
+  // for "how do I stop strangers walking in" should be able to see the door.
+  "serverSettings.eyebrow": "Server settings",
+  "serverSettings.nav.label": "Server settings sections",
+  "serverSettings.close": "Close",
+
+  "serverSettings.section.overview": "Overview",
+  "serverSettings.overview.description":
+    "What this server is called and what it looks like.",
+  "serverSettings.section.access": "Access",
+  "serverSettings.access.description":
+    "Who can walk in, and how they find their way here.",
+  "serverSettings.section.moderation": "Moderation",
+  "serverSettings.moderation.description":
+    "Reports from members, and how long messages are kept.",
+  "serverSettings.section.audit": "Audit log",
+  "serverSettings.audit.description":
+    "Every moderator action taken in this server, newest first.",
+  "serverSettings.section.danger": "Danger zone",
+  "serverSettings.danger.description":
+    "Take the data with you, hand the server on, or end it.",
+
+  // -- who may see what
+  "serverSettings.readOnly.admin":
+    "Only the server owner can rename this server, change its pictures, transfer ownership, or delete it.",
+  "serverSettings.readOnly.member":
+    "Only owners and admins can change server settings. Ask one if something here needs to change.",
+
+  // -- overview: name
+  "serverSettings.name.title": "Server name",
+  "serverSettings.name.label": "Server name",
+  "serverSettings.name.save": "Save",
+  "serverSettings.name.saving": "Saving…",
+  "serverSettings.name.saved": "Server renamed.",
+  "serverSettings.name.failed": "Failed to rename server",
+
+  // -- overview: icon and banner
+  "serverSettings.identity.title": "Icon & banner",
+  "serverSettings.identity.description":
+    "The icon is what this server looks like in the sidebar. The banner runs across the top of the channel list, with the name over it. Both are optional — without them the server draws its first two letters, which is how it looks today.",
+  "serverSettings.identity.icon": "Icon",
+  "serverSettings.identity.iconHint":
+    "Square. Cropped from the middle and scaled to {size}×{size}.",
+  "serverSettings.identity.banner": "Banner",
+  "serverSettings.identity.bannerHint":
+    "Wide. Cropped from the middle and scaled to {width}×{height}.",
+  "serverSettings.identity.bannerEmpty": "No banner",
+  "serverSettings.identity.upload": "Upload",
+  "serverSettings.identity.replace": "Replace",
+  "serverSettings.identity.uploading": "Uploading…",
+  "serverSettings.identity.remove": "Remove",
+  "serverSettings.identity.removing": "Removing…",
+  "serverSettings.identity.failed": "That upload failed.",
+  "serverSettings.identity.removeFailed": "Could not remove that picture.",
+  "serverSettings.identity.unconfigured":
+    "This deployment has no file storage configured, so pictures cannot be uploaded. The server keeps its monogram.",
+
+  // -- access: SSO email domain
+  "serverSettings.sso.title": "SSO email domain",
+  "serverSettings.sso.description":
+    "Anyone with a verified email at this domain can join {server} without an invite. Only verified addresses count, and existing bans still apply. Leave empty to turn this off.",
+  "serverSettings.sso.label": "SSO email domain",
+  "serverSettings.sso.save": "Save",
+  "serverSettings.sso.saving": "Saving…",
+  "serverSettings.sso.saved": "SSO domain updated.",
+  "serverSettings.sso.failed": "Failed to update the SSO domain",
+
+  // -- moderation: retention
+  "serverSettings.retention.title": "Message retention",
+  "serverSettings.retention.description":
+    "Automatically delete messages older than this, across every channel in {server}. Pinned messages are never touched.",
+  "serverSettings.retention.label": "Message retention",
+  "serverSettings.retention.forever": "Keep forever",
+  "serverSettings.retention.days30": "30 days",
+  "serverSettings.retention.days90": "90 days",
+  "serverSettings.retention.year": "1 year",
+  "serverSettings.retention.saved": "Retention updated.",
+  "serverSettings.retention.failed": "Failed to update retention",
+
+  // -- audit log
+  "serverSettings.audit.title": "Audit log",
+  "serverSettings.audit.loading": "Loading…",
+  "serverSettings.audit.empty":
+    "Nothing recorded yet. Kicks, bans, role changes, and channel or server edits will show up here.",
+  "serverSettings.audit.loadMore": "Load more",
+  "serverSettings.audit.loadingMore": "Loading…",
+  "serverSettings.audit.failed": "Failed to load the audit log",
+  "serverSettings.audit.failedMore": "Failed to load more",
+  "serverSettings.audit.departedActor": "A departed account",
+  // A short, human verb phrase per action — the actor's name and (for
+  // role/ban actions) the reason carry the rest of the sentence.
+  "serverSettings.audit.action.member.kick": "kicked a member",
+  "serverSettings.audit.action.member.ban": "banned a member",
+  "serverSettings.audit.action.member.unban": "unbanned a member",
+  "serverSettings.audit.action.member.role_update":
+    "changed a member's role",
+  "serverSettings.audit.action.channel.create": "created a channel",
+  "serverSettings.audit.action.channel.update": "updated a channel",
+  "serverSettings.audit.action.channel.delete": "deleted a channel",
+  "serverSettings.audit.action.channel.move": "reordered a channel",
+  "serverSettings.audit.action.message.delete": "deleted someone's message",
+  "serverSettings.audit.action.server.update": "renamed the server",
+  "serverSettings.audit.action.server.retention_update":
+    "changed message retention",
+  "serverSettings.audit.action.server.icon_update":
+    "changed the server icon",
+  "serverSettings.audit.action.server.banner_update":
+    "changed the server banner",
+  "serverSettings.audit.action.server.ownership_transfer":
+    "transferred ownership",
+  "serverSettings.audit.action.server.data_export":
+    "exported the server's data",
+  "serverSettings.audit.action.invite.create": "created an invite",
+  "serverSettings.audit.action.invite.delete": "revoked an invite",
+  "serverSettings.audit.action.server.sso_domain_update":
+    "changed the SSO email domain",
+  "serverSettings.audit.action.member.sso_join":
+    "joined via SSO email domain",
+  "serverSettings.audit.action.server.community_update":
+    "changed the public community listing",
+  "serverSettings.audit.action.member.community_join":
+    "joined from the community directory",
+  "serverSettings.audit.action.webhook.create": "created a webhook",
+  "serverSettings.audit.action.webhook.delete": "deleted a webhook",
+  "serverSettings.audit.action.report.resolve": "closed a report",
+
+  // -- danger zone
+  "serverSettings.export.title": "Export data",
+  "serverSettings.export.description":
+    "Download every channel, member, and message in {server} as a JSON file. Attachment bytes are not included — only their filenames and sizes.",
+  "serverSettings.export.action": "Export server data",
+  "serverSettings.export.preparing": "Preparing export…",
+  "serverSettings.export.failed": "Failed to export data",
+
+  "serverSettings.transfer.title": "Transfer ownership",
+  "serverSettings.transfer.description":
+    "The new owner gets full control of {server}. You become an admin and cannot take ownership back yourself.",
+  "serverSettings.transfer.loading": "Loading members…",
+  "serverSettings.transfer.nobody":
+    "There is nobody else in this server to hand it to.",
+  "serverSettings.transfer.label": "New owner",
+  "serverSettings.transfer.placeholder": "Select a member…",
+  "serverSettings.transfer.action": "Transfer ownership",
+  "serverSettings.transfer.confirmLead":
+    "Hand {server} to {member}? Type {phrase} to confirm.",
+  "serverSettings.transfer.confirmAria":
+    "Type {phrase} to confirm the transfer",
+  "serverSettings.transfer.confirm": "Confirm transfer",
+  "serverSettings.transfer.transferring": "Transferring…",
+  "serverSettings.transfer.cancel": "Cancel",
+  "serverSettings.transfer.failed": "Failed to transfer ownership",
+  "serverSettings.transfer.membersFailed": "Failed to load members",
+
+  "serverSettings.delete.title": "Delete server",
+  "serverSettings.delete.description":
+    "Every channel, message, and invite in {server} is deleted for everyone. This cannot be undone.",
+  "serverSettings.delete.action": "Delete server",
+  "serverSettings.delete.typeLabel": "Type {server} to confirm.",
+  "serverSettings.delete.typeAria": "Type {server} to confirm deletion",
+  "serverSettings.delete.confirm": "Delete forever",
+  "serverSettings.delete.deleting": "Deleting…",
+  "serverSettings.delete.cancel": "Cancel",
+  "serverSettings.delete.failed": "Failed to delete server",
 } as const;
 
 export type MessageKey = keyof typeof en;

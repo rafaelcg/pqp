@@ -24,6 +24,8 @@ function community(
     memberCount: 5,
     joined: false,
     createdAt: "2026-01-01T00:00:00.000Z",
+    iconUrl: null,
+    bannerUrl: null,
     ...overrides,
   };
 }

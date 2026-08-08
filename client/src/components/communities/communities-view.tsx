@@ -7,6 +7,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ChannelListSkeleton } from "@/components/ui/skeleton";
+import { ServerIcon } from "@/components/layout/server-identity";
+import { resolveUploadedImageUrl } from "@/lib/avatar";
 import { ApiError, fetchCommunities, joinCommunity } from "@/lib/api";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -310,15 +312,27 @@ function CommunityCard({
   return (
     <li
       ref={cardRef}
-      className="group relative flex flex-col gap-3 rounded-lg border border-ink-4 bg-ink-2/60 p-4 transition-colors hover:border-ink-4/80 hover:bg-ink-3/40"
+      className="group relative flex flex-col overflow-hidden rounded-lg border border-ink-4 bg-ink-2/60 transition-colors hover:border-ink-4/80 hover:bg-ink-3/40"
       data-community={community.id}
     >
+      {/* The banner, where there is one, above everything and edge to edge.
+          A card without one keeps the layout it had — the padding moved off the
+          `<li>` and onto the body below precisely so the image can bleed. */}
+      <CommunityBanner name={community.name} bannerUrl={community.bannerUrl} />
+
+      <div className="flex flex-1 flex-col gap-3 p-4">
       <div className="flex items-start gap-3">
         <span
           aria-hidden="true"
-          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-ink-4 font-display text-sm font-bold text-paper"
+          className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-ink-4 font-display text-sm font-bold text-paper"
         >
-          {monogram(community.name)}
+          {/* The directory keeps its own monogram — see the `fallback` note on
+              `ServerIcon`. Only the image path is shared. */}
+          <ServerIcon
+            name={community.name}
+            iconUrl={community.iconUrl}
+            fallback={monogram(community.name)}
+          />
         </span>
         <div className="min-w-0 flex-1">
           <p className="truncate font-display text-base font-bold text-paper">
@@ -366,6 +380,41 @@ function CommunityCard({
             : t(action === "open" ? "communities.open" : "communities.join")}
         </Button>
       </div>
+      </div>
     </li>
+  );
+}
+
+/**
+ * The card's banner strip, or nothing.
+ *
+ * Its own small component rather than `ServerBanner` reused: that one overlays
+ * the server's name, because the channel column has no other place to put it.
+ * Here the name is already the card's first line, and printing it twice — once
+ * over the image, once under it — is what makes a directory look generated. So
+ * this is the image alone, at the aspect ratio a 1024×360 upload actually has.
+ */
+function CommunityBanner({
+  name,
+  bannerUrl,
+}: {
+  name: string;
+  bannerUrl: string | null;
+}) {
+  const [failed, setFailed] = useState(false);
+  const resolved = resolveUploadedImageUrl(bannerUrl);
+  if (!resolved || failed) {
+    return null;
+  }
+  return (
+    <img
+      src={resolved}
+      alt=""
+      loading="lazy"
+      referrerPolicy="no-referrer"
+      data-community-banner={name}
+      className="h-24 w-full shrink-0 border-b border-ink-4 object-cover"
+      onError={() => setFailed(true)}
+    />
   );
 }

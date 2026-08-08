@@ -318,6 +318,17 @@ export const serverSchema = z.object({
   messageRetentionDays: z.number().int().positive().max(MAX_MESSAGE_RETENTION_DAYS).nullable(),
   /** Null means SSO domain joining is off for this server. */
   ssoEmailDomain: z.string().nullable().default(null),
+  /**
+   * The server's two pictures, or null where it has none.
+   *
+   * Root-relative `/api/servers/:id/icon?v=…` when uploaded here — see
+   * `serverIconPath` in `./server-images.js` for why the server does not bake
+   * its own origin in. Defaulted so a client built against this schema still
+   * parses a response from an API that predates them, which is what lets the
+   * rail keep drawing monograms during a rolling deploy.
+   */
+  iconUrl: z.string().nullable().default(null),
+  bannerUrl: z.string().nullable().default(null),
 });
 
 export const channelSchema = z.object({

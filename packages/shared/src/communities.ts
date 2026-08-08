@@ -139,6 +139,16 @@ export const communitySummarySchema = z.object({
   /** True when the caller is already inside — the card says "Abrir", not "Entrar". */
   joined: z.boolean(),
   createdAt: z.string(),
+  /**
+   * The server's own icon and banner, or null where it set none.
+   *
+   * Public by construction: a community has asked to be found, and its picture
+   * is the first thing a directory card is for. Nothing else about the server
+   * is widened by carrying them — both are already visible to anyone who walks
+   * in through the card, which is what the card exists to let them do.
+   */
+  iconUrl: z.string().nullable().default(null),
+  bannerUrl: z.string().nullable().default(null),
 });
 export type CommunitySummary = z.infer<typeof communitySummarySchema>;
 

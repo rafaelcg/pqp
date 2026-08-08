@@ -33,6 +33,18 @@ export const AUDIT_ACTIONS = [
   "message.delete",
   "server.update",
   "server.retention_update",
+  /**
+   * The icon or the banner changed, or was cleared.
+   *
+   * Their own actions rather than folded into `server.update`, and for a
+   * smaller reason than the community opt-in has but the same shape: these are
+   * the two things every member sees before they read a word of the server, so
+   * "who replaced the banner, and when" is a question a co-owner will actually
+   * ask. The `changes` entry records only whether a picture is now set —
+   * neither the storage key nor the URL belongs in a log every admin can read.
+   */
+  "server.icon_update",
+  "server.banner_update",
   "server.sso_domain_update",
   "member.sso_join",
   /**

@@ -457,9 +457,16 @@ describeDb("communities", () => {
         "/api/communities",
       );
       const card = res.body.communities[0]!;
+      // The list is the assertion, and it is exhaustive on purpose: a column
+      // added to `DIRECTORY_COLUMNS` has to be a deliberate decision to show a
+      // stranger, not something that arrived because it was already selected
+      // somewhere else. `iconUrl` / `bannerUrl` are here because a community
+      // asked to be found and its picture is what a card is for.
       expect(Object.keys(card).sort()).toEqual([
+        "bannerUrl",
         "category",
         "createdAt",
+        "iconUrl",
         "id",
         "joined",
         "memberCount",

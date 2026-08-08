@@ -32,6 +32,10 @@ import type {
   ReportSummaryPage,
   ResolveReportRequest,
   Server,
+  ServerImageConfig,
+  ServerImageKind,
+  CreateServerImageUploadRequest,
+  CreateServerImageUploadResponse,
   ThreadSummary,
   User,
   UserPreferences,
@@ -250,6 +254,43 @@ export const claimAvatar = (key: string, signal?: AbortSignal) =>
 /** Back to the monogram, and the object is dropped from the bucket. */
 export const deleteAvatar = () =>
   apiFetch<{ user: User }>("/api/me/avatar", { method: "DELETE" });
+
+// ------------------------------------------------------- server identity
+//
+// A server's icon and banner, through the same mint / PUT / claim dance —
+// owner-gated on the server side, which is the one difference from an avatar
+// (see the section comment in server/src/api/index.ts).
+
+/** One config for both pictures: the deployment either has storage or it does not. */
+export const fetchServerImageConfig = () =>
+  apiFetch<ServerImageConfig>("/api/servers/images/config");
+
+export const createServerImageUpload = (
+  serverId: string,
+  kind: ServerImageKind,
+  body: CreateServerImageUploadRequest,
+) =>
+  apiFetch<CreateServerImageUploadResponse>(
+    `/api/servers/${serverId}/${kind}`,
+    { method: "POST", body: JSON.stringify(body) },
+  );
+
+/** The bytes are up: HEAD them server-side and point the row at them. */
+export const claimServerImage = (
+  serverId: string,
+  kind: ServerImageKind,
+  key: string,
+) =>
+  apiFetch<{ server: Server }>(`/api/servers/${serverId}/${kind}/claim`, {
+    method: "POST",
+    body: JSON.stringify({ key }),
+  });
+
+/** Back to the monogram; the object is dropped from the bucket. */
+export const deleteServerImage = (serverId: string, kind: ServerImageKind) =>
+  apiFetch<{ server: Server }>(`/api/servers/${serverId}/${kind}`, {
+    method: "DELETE",
+  });
 
 // ---------------------------------------------------------- your own data
 

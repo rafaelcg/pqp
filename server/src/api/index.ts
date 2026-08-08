@@ -8,8 +8,10 @@ import {
   AVATAR_IMAGE_SIZE,
   banMemberSchema,
   claimAvatarSchema,
+  claimServerImageSchema,
   createAttachmentSchema,
   createAvatarUploadSchema,
+  createServerImageUploadSchema,
   createBlockSchema,
   createChannelSchema,
   moveChannelSchema,
@@ -25,6 +27,13 @@ import {
   formatUserTag,
   issueTimeoutSchema,
   MAX_AVATAR_BYTES,
+  MAX_SERVER_BANNER_BYTES,
+  MAX_SERVER_ICON_BYTES,
+  maxServerImageBytes,
+  SERVER_BANNER_HEIGHT,
+  SERVER_BANNER_WIDTH,
+  SERVER_ICON_SIZE,
+  type ServerImageKind,
   GIF_PAGE_MAX,
   GIF_PAGE_SIZE,
   GIF_QUERY_MAX_LENGTH,
@@ -130,6 +139,15 @@ import {
   presignAvatarRead,
   verifyAvatarObject,
 } from "../services/avatars.js";
+import {
+  createServerImageUpload,
+  discardServerImageObject,
+  isServerImageUploadConfigured,
+  presignServerImageRead,
+  serverImageUrlForKey,
+  setServerImage,
+  verifyServerImageObject,
+} from "../services/server-images.js";
 import { buildServerExport } from "../services/export.js";
 import {
   getCommunity,
@@ -207,6 +225,7 @@ import {
   moveChannel,
   removeChannelMember,
   renameServer,
+  SERVER_COLUMNS,
   transferOwnership,
   updateChannel,
   updateMessageRetention,
@@ -1547,6 +1566,179 @@ router.post("/api/servers/:serverId/sso-join", async ({ user }, { serverId }) =>
   }
   return { ok: true, server: mapServer(result.server) };
 });
+
+// ------------------------------------------------------- server identity
+//
+// A server's icon and banner. The upload half only: the *display* half needs
+// nothing here, because `iconUrl` / `bannerUrl` are on `SERVER_COLUMNS` and
+// therefore ride in every server payload and every directory card already.
+//
+// Structurally the avatar routes with one difference, and it is the whole
+// difference: an avatar's storage key contains the claiming account's own id,
+// so the claim authorises itself. A server key contains a *server* id, which
+// many people are members of — so `requireOwner` is what stands in for that, on
+// every route below, and `isServerImageKey` only ever proves the weaker "this
+// object belongs to the server named in the URL".
+
+/**
+ * Mirrors `GET /api/avatars/config`, limits in both states so a picker can
+ * refuse an over-size file against this deployment's cap rather than
+ * discovering it on a 413.
+ *
+ * Above the `:serverId` routes on purpose: `images` is not a UUID, but the
+ * router matches by segment shape and a path that could be read either way is
+ * a bug waiting for the first server whose id is the word "images".
+ */
+router.get("/api/servers/images/config", async () => ({
+  enabled: isServerImageUploadConfigured(),
+  icon: { maxBytes: MAX_SERVER_ICON_BYTES, size: SERVER_ICON_SIZE },
+  banner: {
+    maxBytes: MAX_SERVER_BANNER_BYTES,
+    width: SERVER_BANNER_WIDTH,
+    height: SERVER_BANNER_HEIGHT,
+  },
+}));
+
+/**
+ * Mint an upload for one of a server's two pictures.
+ *
+ * The per-kind cap is applied here rather than in `createServerImageUploadSchema`
+ * because the schema does not know which kind it is parsing, and a banner's
+ * eight megabytes must not become an icon's ceiling. The number goes into the
+ * *signature* (see `presignPut`), so a client cannot mint a URL for 40 KB and
+ * then push eight megabytes through it.
+ */
+async function mintServerImage(
+  kind: ServerImageKind,
+  ctx: { req: IncomingMessage; res: ServerResponse; user: { id: string } },
+  serverId: string,
+) {
+  if (!isServerImageUploadConfigured()) {
+    throw new HttpError(503, "Image uploads are not configured on this server");
+  }
+  await requireOwner(serverId, ctx.user.id);
+
+  const key = `user:${ctx.user.id}`;
+  if (!uploadLimiter.take(key)) {
+    ctx.res.setHeader("Retry-After", String(uploadLimiter.retryAfter(key)));
+    throw new HttpError(429, "Slow down");
+  }
+
+  const body = createServerImageUploadSchema.parse(await readJsonBody(ctx.req));
+  if (body.byteSize > maxServerImageBytes(kind)) {
+    throw new HttpError(413, "That image is too large.");
+  }
+
+  return created(
+    createServerImageUpload({
+      kind,
+      serverId,
+      contentType: body.contentType,
+      byteSize: body.byteSize,
+    }),
+  );
+}
+
+/**
+ * The bytes are up: make them the picture.
+ *
+ * The HEAD runs *before* anything is written, for the reason spelled out in
+ * `docs/ATTACHMENTS.md`, and a failure is a 400 rather than a 500 — the request
+ * named an object that is not there or is not what it claimed. The object the
+ * row stopped pointing at is dropped afterwards and best-effort: it is
+ * unreferenced by then, and failing the owner's request over a bucket that did
+ * not answer would undo a change that has already committed.
+ */
+async function claimServerImage(
+  kind: ServerImageKind,
+  ctx: { req: IncomingMessage; user: { id: string } },
+  serverId: string,
+) {
+  if (!isServerImageUploadConfigured()) {
+    throw new HttpError(503, "Image uploads are not configured on this server");
+  }
+  await requireOwner(serverId, ctx.user.id);
+
+  const body = claimServerImageSchema.parse(await readJsonBody(ctx.req));
+  const byteSize = await verifyServerImageObject(kind, serverId, body.key);
+  if (byteSize === null) {
+    throw new HttpError(400, "That upload could not be verified. Try again.");
+  }
+
+  const updated = await setServerImage(
+    kind,
+    serverId,
+    { url: serverImageUrlForKey(kind, serverId, body.key), key: body.key },
+    SERVER_COLUMNS,
+  );
+  if (!updated) {
+    throw new NotFound("Server not found");
+  }
+  if (updated.previousKey && updated.previousKey !== body.key) {
+    void discardServerImageObject(updated.previousKey);
+  }
+  await logAudit({
+    serverId,
+    actorId: ctx.user.id,
+    action: kind === "banner" ? "server.banner_update" : "server.icon_update",
+    targetType: "server",
+    targetId: serverId,
+    changes: [{ key: kind, old: null, new: "set" }],
+  });
+  return { server: mapServer(updated.server) };
+}
+
+/**
+ * Back to the monogram.
+ *
+ * NOT gated on storage being configured, unlike the two above and for the same
+ * reason `DELETE /api/me/avatar` is not: a server that uploaded a banner and
+ * then lost its bucket must still be able to stop pointing at it. Clearing the
+ * columns is a database write and succeeds either way.
+ */
+async function clearServerImage(
+  kind: ServerImageKind,
+  userId: string,
+  serverId: string,
+) {
+  await requireOwner(serverId, userId);
+  const updated = await setServerImage(kind, serverId, null, SERVER_COLUMNS);
+  if (!updated) {
+    throw new NotFound("Server not found");
+  }
+  if (updated.previousKey) {
+    void discardServerImageObject(updated.previousKey);
+  }
+  await logAudit({
+    serverId,
+    actorId: userId,
+    action: kind === "banner" ? "server.banner_update" : "server.icon_update",
+    targetType: "server",
+    targetId: serverId,
+    changes: [{ key: kind, old: "set", new: null }],
+  });
+  return { server: mapServer(updated.server) };
+}
+
+router.post("/api/servers/:serverId/icon", async (ctx, { serverId }) =>
+  mintServerImage("icon", ctx, serverId!),
+);
+router.post("/api/servers/:serverId/icon/claim", async (ctx, { serverId }) =>
+  claimServerImage("icon", ctx, serverId!),
+);
+router.delete("/api/servers/:serverId/icon", async ({ user }, { serverId }) =>
+  clearServerImage("icon", user.id, serverId!),
+);
+
+router.post("/api/servers/:serverId/banner", async (ctx, { serverId }) =>
+  mintServerImage("banner", ctx, serverId!),
+);
+router.post("/api/servers/:serverId/banner/claim", async (ctx, { serverId }) =>
+  claimServerImage("banner", ctx, serverId!),
+);
+router.delete("/api/servers/:serverId/banner", async ({ user }, { serverId }) =>
+  clearServerImage("banner", user.id, serverId!),
+);
 
 // ------------------------------------------------------------- communities
 
@@ -3414,6 +3606,58 @@ async function serveAvatarObject(
   res.end();
 }
 
+const SERVER_IMAGE_OBJECT_PATH =
+  /^\/api\/servers\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/(icon|banner)$/;
+
+/**
+ * A server's icon or banner, as a redirect to the object store.
+ *
+ * DELIBERATELY UNAUTHENTICATED, the fourth route in this file that is, and for
+ * the same reason as `serveAvatarObject`: a browser cannot attach a Bearer
+ * token to an `<img src>`. What it discloses is one image about a server whose
+ * id the caller already has — and for a listed community, the directory hands
+ * that id to strangers by design. For an unlisted server, the id is the secret
+ * (as it is for every other id in this schema), and a picture is strictly less
+ * than the name and member count an invite already reveals.
+ *
+ * A redirect rather than a proxy, exactly as avatars are: the bytes are in our
+ * own bucket and streaming a banner per viewer per render is the egress bill
+ * the presigned-URL design exists to avoid.
+ *
+ * The 404 covers "no such server", "no picture of that kind" and "storage is
+ * unconfigured" identically — all three mean the same thing to the client,
+ * which draws the monogram or nothing at all, and answering them apart would
+ * turn this into a way to probe which server ids exist.
+ */
+async function serveServerImageObject(
+  req: IncomingMessage,
+  res: ServerResponse,
+  serverId: string,
+  kind: ServerImageKind,
+): Promise<void> {
+  let url: string | null;
+  try {
+    url = await presignServerImageRead(kind, serverId);
+  } catch (error) {
+    console.error(`[server-images] could not resolve ${serverId}:`, error);
+    sendError(res, 404, "Not found", req);
+    return;
+  }
+  if (!url) {
+    sendError(res, 404, "Not found", req);
+    return;
+  }
+  // Cacheable because the URL carries `?v=<hash of the key>`: a new picture is
+  // a new address, so nothing here can serve a stale one. The window stays
+  // under the presigned target's own hour so a cached redirect cannot outlive
+  // the URL it points at.
+  res.writeHead(302, {
+    location: url,
+    "cache-control": "public, max-age=300",
+  });
+  res.end();
+}
+
 const WEBHOOK_EXECUTE_PATH =
   /^\/api\/webhooks\/([0-9a-f-]{36})\/([A-Za-z0-9_-]+)$/;
 
@@ -3490,6 +3734,18 @@ export async function handleApi(
     req.method === "GET" ? AVATAR_OBJECT_PATH.exec(pathname) : null;
   if (avatarMatch) {
     await serveAvatarObject(req, res, avatarMatch[1]!);
+    return;
+  }
+
+  const serverImageMatch =
+    req.method === "GET" ? SERVER_IMAGE_OBJECT_PATH.exec(pathname) : null;
+  if (serverImageMatch) {
+    await serveServerImageObject(
+      req,
+      res,
+      serverImageMatch[1]!,
+      serverImageMatch[2] as ServerImageKind,
+    );
     return;
   }
 

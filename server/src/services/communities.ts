@@ -88,7 +88,7 @@ const LISTED_SQL = `s.is_community
  * nothing that is not already visible to anyone who joined belongs in it.
  */
 const DIRECTORY_COLUMNS = `s.id, s.name, s.community_tagline, s.community_category,
-  s.member_count, s.created_at,
+  s.member_count, s.created_at, s.icon_url, s.banner_url,
   EXISTS (
     SELECT 1 FROM server_members m WHERE m.server_id = s.id AND m.user_id = $1
   ) AS joined`;
@@ -100,6 +100,8 @@ interface DirectoryRow {
   community_category: CommunityCategory;
   member_count: number;
   created_at: Date;
+  icon_url: string | null;
+  banner_url: string | null;
   joined: boolean;
 }
 
@@ -112,6 +114,10 @@ function toSummary(row: DirectoryRow): CommunitySummary {
     memberCount: row.member_count,
     joined: row.joined,
     createdAt: row.created_at.toISOString(),
+    // Root-relative, resolved against the API base by whichever client renders
+    // the card — the same treatment `avatarUrl` gets everywhere else.
+    iconUrl: row.icon_url,
+    bannerUrl: row.banner_url,
   };
 }
 

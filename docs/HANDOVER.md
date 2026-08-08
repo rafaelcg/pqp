@@ -480,6 +480,33 @@ Runbook, exact first-run commands and the guardrail table: [`ambient-deploy.md`]
 Owner decision: launch personas ship `disclosure: undisclosed`. §04 of the design doc argues against
 that and the argument stands; the flag is one line so the decision stays one line.
 
+## Sectioned server settings + server icon and banner (2026-08-08)
+
+**Server settings is a sectioned dialog now**, the same category-rail-plus-one-pane shape the
+account settings modal got (`Dialog size="xl" fill`, a real `role="tablist"` rail, arrow keys, phone
+strip above the pane). Five sections for an owner — **Overview** (name, icon, banner, community
+listing), **Access** (SSO email domain), **Moderation** (reports queue, message retention),
+**Audit log**, **Danger zone** (export, transfer, delete) — and two for an admin (Moderation, Audit
+log). Nothing was dropped and nothing invented; there is no Channels, Members or Webhooks section
+because all three already have their own surfaces. Every string is in the catalogue with a pt-BR
+translation, including the audit-action verb phrases, which were hardcoded English before.
+
+**Servers have an icon and a banner.** Four nullable columns (`icon_key`/`icon_url`,
+`banner_key`/`banner_url`) added boot-idempotently, and the whole upload path is the avatar path
+with one structural difference: an avatar key contains the claiming account's own id and therefore
+authorises itself, while a server key names a server many people belong to — so `requireOwner` gates
+the mint, the claim and the delete, and the prefix check only ever proves "this object belongs to
+this server". Caps are per kind (5 MiB icon, 8 MiB banner) and applied in the route, since the
+shared schema does not know which kind it is parsing. Both are served through unauthenticated 302s
+(`GET /api/servers/:id/icon|banner`) exactly as `/api/avatars/:userId` is, and both ride in
+`SERVER_COLUMNS` so they reach every server payload and the communities directory card.
+
+In the client: the banner is a ~120px band above the channel list with the name over a scrim, absent
+entirely when unset; the icon draws in the rail and the channel-list header (desktop only there —
+the 390px drawer has one more control and the icon was what truncated the name). Cropping is
+client-side and reuses the avatar machinery — `centerCropRectForAspect` is the square crop
+generalised, and `cropImageToRect` is `cropImageToSquare` with two dimensions.
+
 ## Verification status
 
 | Checked | How |
@@ -505,6 +532,10 @@ that and the argument stands; the flag is one line so the decision stays one lin
 | Ambient end to end, locally | 5 characters provisioned, Resenha FC seeded (5 channels + pinned welcome), 3 scenes posted over the real WS as character accounts, read back through the API; reply-to-human answered by name; identity-probe / hostile / banned-topic / per-human-cap all declined with a logged reason; `SIGTERM` halted a scene at `posted=2 remaining=2` |
 | **A live Claude generation** | **Not verified** — no `ANTHROPIC_API_KEY` was available in the environment, so every run above was `--canned`. The live path differs only in where the transcript string comes from (`generate.js`), but it has not been exercised since the spike |
 | **Ambient against a deploy** | **Not verified** — character accounts have never authenticated against a hosted API, and no Fly app exists yet |
+| Server icon/banner: auth, owner gate, per-kind caps, claim HEAD, cross-server and cross-kind key theft, payload + directory presence, orphan cleanup, the unauthenticated image route | 38 tests against real Postgres and the real router (`server/src/api/server-images.test.ts`) |
+| Server icon/banner in a browser, against MinIO | 6 Playwright specs (`client/e2e/server-identity.spec.ts`) — real crop, real direct-to-storage PUT, real claim, picture appearing in the column, on the card, and at 390px. Skips itself when the API under test has no `S3_*`; `playwright.config.ts` passes them through |
+| Sectioned server settings: every section reachable, arrow keys, a setting that persists across close/reopen, Esc, 1440 and 390 layouts | 7 Playwright specs (`client/e2e/server-settings-sections.spec.ts`) |
+| **Server icon/banner against R2** | **Not verified** — same gap as attachments; signing is exercised on MinIO only |
 | **Universal links** | **Not verified** — Apple's CDN must fetch `/.well-known/apple-app-site-association` from `pqp.gg` first, so this cannot work until the web deploy lands. `pqp://invite/<code>` is testable now |
 
 ## Suggested next work (priority)
