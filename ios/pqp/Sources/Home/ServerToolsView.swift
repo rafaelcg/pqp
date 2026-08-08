@@ -42,8 +42,12 @@ struct InviteView: View {
                         ScrollView {
                             LazyVStack(spacing: 10) {
                                 ForEach(invites) { invite in
+                                    // The LINK, never the bare code: the code
+                                    // makes the recipient find an entry field,
+                                    // the link opens the app (universal link)
+                                    // or the web app and lands them joined.
                                     InviteRow(invite: invite, copied: copied == invite.code) {
-                                        UIPasteboard.general.string = invite.code
+                                        UIPasteboard.general.string = invite.shareURL.absoluteString
                                         copied = invite.code
                                     }
                                 }
@@ -123,7 +127,14 @@ private struct InviteRow: View {
                 .foregroundStyle(Palette.paperMuted)
             }
             Spacer()
-            Button(copied ? "Copied" : "Copy", action: onCopy)
+            // The system share sheet is the real journey — straight into
+            // WhatsApp — with copy-the-link beside it for everything else.
+            ShareLink(item: invite.shareURL) {
+                Image(systemName: "square.and.arrow.up")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(Palette.signal)
+            }
+            Button(copied ? "Copied" : "Copy link", action: onCopy)
                 .font(Typography.caption)
                 .foregroundStyle(Palette.signal)
         }

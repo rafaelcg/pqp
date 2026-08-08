@@ -284,6 +284,13 @@ struct Invite: Codable, Identifiable, Hashable, Sendable {
     let uses: Int
     let expiresAt: Date?
     let createdAt: Date
+
+    /// What actually gets shared. Always the web URL: it is a universal link,
+    /// so a phone with the app opens the app, and everybody else lands on the
+    /// web app — either way they arrive joined, no code entry anywhere.
+    var shareURL: URL {
+        URL(string: "https://pqp.gg/app/invite/\(code)")!
+    }
 }
 
 struct SearchResult: Codable, Identifiable, Hashable, Sendable {
