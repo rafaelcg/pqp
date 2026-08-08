@@ -352,6 +352,13 @@ export const ptBR: PartialMessages = {
   "communities.category.series-filmes": "Séries e filmes",
   "communities.category.corre": "Corre",
   "communities.category.geral": "Geral",
+  // Segmento de idioma. PT e EN ficam como sigla — é o que cabe no controle e é
+  // como todo mundo escreve. "Todos" é a saída, e vem por último de propósito.
+  "communities.language.label": "Idioma",
+  "communities.language.pt": "PT",
+  "communities.language.en": "EN",
+  "communities.language.all": "Todos",
+  "communities.settings.language": "Idioma",
   "communities.members": "{count} membros",
   "communities.members.one": "1 membro",
   "communities.join": "Entrar",

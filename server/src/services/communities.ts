@@ -3,6 +3,7 @@ import {
   deriveCommunitySlug,
   monthStamp,
   type CommunityCategory,
+  type CommunityLanguage,
   type CommunitySettings,
   type CommunitySummary,
   type PublicCommunity,
@@ -91,7 +92,8 @@ const LISTED_SQL = `s.is_community
  * nothing that is not already visible to anyone who joined belongs in it.
  */
 const DIRECTORY_COLUMNS = `s.id, s.name, s.community_slug, s.community_tagline,
-  s.community_category, s.member_count, s.created_at, s.icon_url, s.banner_url,
+  s.community_category, s.community_language, s.member_count, s.created_at,
+  s.icon_url, s.banner_url,
   EXISTS (
     SELECT 1 FROM server_members m WHERE m.server_id = s.id AND m.user_id = $1
   ) AS joined`;
@@ -102,6 +104,7 @@ interface DirectoryRow {
   community_slug: string | null;
   community_tagline: string | null;
   community_category: CommunityCategory;
+  community_language: CommunityLanguage;
   member_count: number;
   created_at: Date;
   icon_url: string | null;
@@ -119,6 +122,7 @@ function toSummary(row: DirectoryRow): CommunitySummary {
     slug: row.community_slug,
     tagline: row.community_tagline,
     category: row.community_category,
+    language: row.community_language,
     memberCount: row.member_count,
     joined: row.joined,
     createdAt: row.created_at.toISOString(),
@@ -131,6 +135,12 @@ function toSummary(row: DirectoryRow): CommunitySummary {
 
 export interface ListCommunitiesOptions {
   category?: CommunityCategory | null;
+  /**
+   * `null` (or absent) is "every language", which is what the chip row's "todos"
+   * segment sends. Orthogonal to `category` — the two narrow independently and
+   * compose, so "futebol + en" is one room and "futebol + pt" is the rest.
+   */
+  language?: CommunityLanguage | null;
   /** Already trimmed and validated by `communitySearchQuerySchema`. */
   search?: string | null;
   limit: number;
@@ -182,6 +192,15 @@ export async function listCommunities(
   if (options.category) {
     params.push(options.category);
     filters.push(`s.community_category = $${params.length}`);
+  }
+
+  // Applied to SEARCH AS WELL as to browsing, unlike the member floor: the
+  // floor is a curation heuristic the searcher is deliberately exempt from, and
+  // this is a filter they set on purpose one control away from the search box.
+  // Ignoring it there would answer a narrowed request with unnarrowed results.
+  if (options.language) {
+    params.push(options.language);
+    filters.push(`s.community_language = $${params.length}`);
   }
 
   if (options.search) {
@@ -426,10 +445,11 @@ export async function getCommunitySettings(
     community_slug: string | null;
     community_tagline: string | null;
     community_category: CommunityCategory;
+    community_language: CommunityLanguage;
     is_community_suspended: boolean;
   }>(
     `SELECT is_community, community_slug, community_tagline, community_category,
-            is_community_suspended
+            community_language, is_community_suspended
      FROM servers WHERE id = $1`,
     [serverId],
   );
@@ -442,6 +462,7 @@ export async function getCommunitySettings(
     slug: row.community_slug,
     tagline: row.community_tagline,
     category: row.community_category,
+    language: row.community_language,
     suspended: row.is_community_suspended,
   };
 }
@@ -456,6 +477,8 @@ export interface CommunityUpdate {
    * none yet, otherwise leave it alone" — see `updateCommunitySettings`.
    */
   slug?: string;
+  /** Absent leaves it — the column's default is what makes a new listing `pt`. */
+  language?: CommunityLanguage;
 }
 
 /** Postgres' unique-violation SQLSTATE. Same arbiter `claimHandle` leans on. */
@@ -534,10 +557,11 @@ export async function updateCommunitySettings(
       community_slug: string | null;
       community_tagline: string | null;
       community_category: CommunityCategory;
+      community_language: CommunityLanguage;
       is_community_suspended: boolean;
     }>(
       `SELECT name, is_community, community_slug, community_tagline,
-              community_category, is_community_suspended
+              community_category, community_language, is_community_suspended
        FROM servers WHERE id = $1 FOR UPDATE`,
       [serverId],
     );
@@ -575,16 +599,18 @@ export async function updateCommunitySettings(
       community_slug: string | null;
       community_tagline: string | null;
       community_category: CommunityCategory;
+      community_language: CommunityLanguage;
       is_community_suspended: boolean;
     }>(
       `UPDATE servers SET
          is_community = COALESCE($2, is_community),
          community_tagline = CASE WHEN $3::boolean THEN $4 ELSE community_tagline END,
          community_category = COALESCE($5, community_category),
-         community_slug = $6
+         community_slug = $6,
+         community_language = COALESCE($7, community_language)
        WHERE id = $1
        RETURNING is_community, community_slug, community_tagline,
-                 community_category, is_community_suspended`,
+                 community_category, community_language, is_community_suspended`,
       [
         serverId,
         update.isCommunity ?? null,
@@ -592,6 +618,7 @@ export async function updateCommunitySettings(
         update.tagline ?? null,
         update.category ?? null,
         nextSlug,
+        update.language ?? null,
       ],
     );
     await client.query("COMMIT");
@@ -603,6 +630,7 @@ export async function updateCommunitySettings(
         slug: row.community_slug,
         tagline: row.community_tagline,
         category: row.community_category,
+        language: row.community_language,
         suspended: row.is_community_suspended,
       },
       previous: {
@@ -610,6 +638,7 @@ export async function updateCommunitySettings(
         slug: previousRow.community_slug,
         tagline: previousRow.community_tagline,
         category: previousRow.community_category,
+        language: previousRow.community_language,
         suspended: previousRow.is_community_suspended,
       },
     };

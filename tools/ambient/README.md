@@ -16,7 +16,7 @@ Option C of the design doc, and it is auth code: read
 
 | Path | What it is |
 |---|---|
-| `personas.yaml` | **The whole content surface.** Five communities, 25 personas. Adding a persona is a diff here, never in `src/`. |
+| `personas.yaml` | **The whole content surface.** Fifteen communities, 76 personas. Adding a persona is a diff here, never in `src/`. Also carries each community's directory listing — `category`, `tagline`, `language` — so the deploy scripts read it instead of holding a map of their own. |
 | `personas.example.yaml` | The one-community template, kept for reference. |
 | `src/schedule.js` | Activity windows, jitter, rate caps, casting. Pure. |
 | `src/scene.js` | Prompt building, the reply screen's verdict, transcript splitting, typing timings. Pure. |
@@ -28,7 +28,10 @@ Option C of the design doc, and it is auth code: read
 | `src/runner.js` | The only file that touches the network, the clock or the disk. |
 | `src/memory.js`, `src/log.js` | Per-community memory; JSONL audit log + kill switch. |
 | `scripts/provision.mjs` | Mint / rotate / revoke character accounts. Needs `DATABASE_URL`. |
-| `scripts/seed-servers.mjs` | Create the five servers, their channels, topics and pinned welcome posts. |
+| `scripts/seed-servers.mjs` | Create the servers, their channels, topics and pinned welcome posts, over the API. |
+| `scripts/seed-servers-db.mjs` | The same, straight through the server's services. Needs only `DATABASE_URL`; the one to use in production. |
+| `scripts/opt-in-communities.mjs` | List the seeded servers in the public directory, reading category / tagline / language from `personas.yaml`. |
+| `scripts/expand-roster.md` | The operator runbook for adding communities to a deploy that is already live — including how not to lose the tokens already out there. |
 | `scripts/say.mjs` | Post a message as a visitor — how you test the reply-to-humans path. |
 | `scripts/transcript.mjs` | Read a channel back through the API, as a visitor would see it. |
 

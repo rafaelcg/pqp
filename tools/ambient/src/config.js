@@ -19,6 +19,45 @@ const REQUIRED_PERSONA_FIELDS = [
   "activity",
 ];
 
+/**
+ * The languages a community may be written in.
+ *
+ * MIRRORS `COMMUNITY_LANGUAGES` in `@pqp/shared` and the CHECK constraint in
+ * `server/src/schema.sql`, and the duplication is the same deliberate kind the
+ * category list already carries: `tools/ambient` is outside the pnpm workspace
+ * (see the README), so there is no `@pqp/shared` to import here. Three copies
+ * that must be edited together beats a config file that can name a language the
+ * database will refuse at `opt-in` time — which is the failure this catches, at
+ * load, rather than halfway through an UPDATE loop.
+ *
+ * The value is not decoration. It picks which language the generation prompt is
+ * written in (see `buildSystemPrompt`), so a community that says `en` and a cast
+ * whose register notes are in English produce English chat; getting it wrong
+ * produces a room that writes in neither.
+ */
+export const LANGUAGES = ["pt", "en"];
+
+/**
+ * Category slugs, mirrored from `COMMUNITY_CATEGORIES` in `@pqp/shared`.
+ *
+ * Checked here so a typo — `serie-filmes`, `esportes` — is a load-time error in
+ * front of the operator rather than a CHECK-constraint violation from Postgres
+ * in the middle of `opt-in-communities.mjs`, after some of the rooms are
+ * already listed and some are not.
+ */
+export const CATEGORIES = [
+  "games",
+  "musica",
+  "futebol",
+  "estudos",
+  "anime",
+  "tech",
+  "humor",
+  "series-filmes",
+  "corre",
+  "geral",
+];
+
 export function loadConfig(path) {
   const parsed = yaml.load(readFileSync(path, "utf8"));
   return normalizeConfig(parsed, path);
@@ -114,6 +153,26 @@ export function normalizeConfig(raw, source = "<inline>") {
   community.channel ??= "geral";
   community.banned ??= [];
 
+  // The listing half of a community: what the directory card says, which shelf
+  // it sits on, and which language it is written in. Optional at load — the
+  // runner needs none of them to hold a conversation, and a one-off test file
+  // should not have to invent a category — but validated the moment they are
+  // present, because the only consumer that reads them (`opt-in-communities`)
+  // writes them straight into a column with a CHECK constraint behind it.
+  community.language ??= "pt";
+  if (!LANGUAGES.includes(community.language)) {
+    fail(
+      `community.language must be one of ${LANGUAGES.join(", ")} ` +
+        `(got "${community.language}")`,
+    );
+  }
+  if (community.category && !CATEGORIES.includes(community.category)) {
+    fail(
+      `community.category "${community.category}" is not a known slug ` +
+        `(${CATEGORIES.join(", ")})`,
+    );
+  }
+
   const defaults = {
     disclosure: "character",
     locale: "pt-BR",
@@ -167,6 +226,24 @@ export function normalizeConfig(raw, source = "<inline>") {
     persona.maxMessagesPerHour ??= defaults.maxMessagesPerHour;
     persona.avatarSeed ??= persona.id;
     persona.replyToHumans ??= { enabled: false };
+
+    /**
+     * Terms THIS persona may not say, on top of the room's list.
+     *
+     * The room-wide list answers "what is this community not about". This
+     * answers a narrower and sharper question: which character would somebody
+     * naturally ask the dangerous question of. In a gym server it is the woman
+     * who has trained for ten years who gets asked about a sore shoulder; in a
+     * money server it is every single persona, because every one of them is one
+     * "and where do you put yours?" away from giving financial advice.
+     *
+     * Additive only — there is no way to REMOVE a term the community banned,
+     * which would be a persona quietly exempting itself from the room's rules.
+     */
+    if (persona.banned !== undefined && !Array.isArray(persona.banned)) {
+      fail(`persona ${persona.id}: \`banned\` must be a list`);
+    }
+    persona.banned ??= [];
 
     for (const kind of ["weekday", "weekend"]) {
       const windows = persona.activity[kind] ?? [];

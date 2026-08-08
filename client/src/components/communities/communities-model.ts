@@ -1,9 +1,12 @@
 import {
   COMMUNITY_CATEGORIES,
+  COMMUNITY_LANGUAGES,
   type CommunityCategory,
+  type CommunityLanguage,
   type CommunitySummary,
 } from "@pqp/shared";
 import type { MessageKey } from "@/lib/i18n";
+import type { Locale } from "@/lib/locale";
 
 /**
  * The pure half of the Communities directory: everything the view decides that
@@ -86,6 +89,67 @@ export function categoryChips(active: CategoryFilter): CategoryChip[] {
       active: active === slug,
     })),
   ];
+}
+
+/** `null` is the "todos" segment: no language filter at all. */
+export type LanguageFilter = CommunityLanguage | null;
+
+export interface LanguageSegment {
+  id: LanguageFilter;
+  labelKey: MessageKey;
+  active: boolean;
+}
+
+/**
+ * The language segment: "PT | EN | todos", in that order.
+ *
+ * A SEGMENTED CONTROL RATHER THAN THREE MORE CHIPS. The chip row already runs
+ * to eleven items and scrolls horizontally on a phone; adding language chips to
+ * it would put two different questions ("what is this about", "can I read it")
+ * in one undifferentiated queue, and the second question would land off-screen
+ * behind the first. A separate control of three fixed options reads as what it
+ * is: a narrowing of whatever the chips already chose.
+ *
+ * "todos" IS LAST, not first, and that is the opposite of the chip row's
+ * ordering on purpose. The chips default to "Tudo" because browsing a directory
+ * with no subject in mind is the normal way in; language does not work that way
+ * — the useful default is your own language, and "all" is the deliberate step
+ * out of it. Putting the escape hatch at the end is what makes the two live
+ * defaults sit where the eye starts.
+ */
+export function languageSegments(active: LanguageFilter): LanguageSegment[] {
+  return [
+    ...COMMUNITY_LANGUAGES.map((code) => ({
+      id: code as LanguageFilter,
+      labelKey: `communities.language.${code}` as MessageKey,
+      active: active === code,
+    })),
+    {
+      id: null,
+      labelKey: "communities.language.all" as MessageKey,
+      active: active === null,
+    },
+  ];
+}
+
+/**
+ * Which language the directory opens on.
+ *
+ * A BRAZILIAN OPENS ON PORTUGUESE; EVERYONE ELSE OPENS ON EVERYTHING. The
+ * asymmetry is deliberate and it is not a value judgement about the languages —
+ * it follows from what each default costs when it is wrong. A pt-BR reader
+ * shown the whole directory gets a grid with rooms they cannot participate in
+ * mixed into the ones they can, which is the cold-start problem made worse by
+ * a feature. An English reader defaulted to `en` would see ONE room and
+ * conclude the product is empty, because that is very nearly true today.
+ *
+ * Derived from the app's own locale rather than read from `navigator` again:
+ * `lib/locale.ts` is the single thing that answers "what language is this", and
+ * a second, subtly different notion of it here is how the directory ends up
+ * disagreeing with the interface it is drawn in.
+ */
+export function defaultLanguageFilter(locale: Locale): LanguageFilter {
+  return locale === "pt-BR" ? "pt" : null;
 }
 
 /**

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { COMMUNITY_CATEGORIES, type CommunitySummary } from "@pqp/shared";
+import {
+  COMMUNITY_CATEGORIES,
+  COMMUNITY_LANGUAGES,
+  type CommunitySummary,
+} from "@pqp/shared";
 import { en } from "@/lib/i18n/catalogue";
 import { ptBR } from "@/lib/i18n/messages.pt-BR";
 import {
@@ -7,8 +11,10 @@ import {
   cardAction,
   categoryChips,
   communityHue,
+  defaultLanguageFilter,
   emptyStateKeys,
   formatMemberCount,
+  languageSegments,
   memberCountKey,
   mergePages,
   monogram,
@@ -24,6 +30,7 @@ function community(
     slug: `community-${id}`,
     tagline: null,
     category: "geral",
+    language: "pt",
     memberCount: 5,
     joined: false,
     createdAt: "2026-01-01T00:00:00.000Z",
@@ -55,6 +62,39 @@ describe("categoryChips", () => {
       expect(en[chip.labelKey]).toBeTruthy();
       expect(ptBR[chip.labelKey]).toBeTruthy();
     }
+  });
+});
+
+describe("languageSegments", () => {
+  it("lists the languages first and the escape hatch last", () => {
+    // The opposite order to the chip row, and deliberately — see the note on
+    // `languageSegments`. "todos" is the step OUT of a working default, so it
+    // does not get the position the eye starts from.
+    const segments = languageSegments("pt");
+    expect(segments.map((s) => s.id)).toEqual([...COMMUNITY_LANGUAGES, null]);
+  });
+
+  it("marks exactly one segment active, including the `all` one", () => {
+    expect(languageSegments("pt").filter((s) => s.active)).toHaveLength(1);
+    expect(languageSegments("en").find((s) => s.active)!.id).toBe("en");
+    expect(languageSegments(null).find((s) => s.active)!.id).toBeNull();
+  });
+
+  it("has a translated label for every segment, in both catalogues", () => {
+    for (const segment of languageSegments(null)) {
+      expect(en[segment.labelKey]).toBeTruthy();
+      expect(ptBR[segment.labelKey]).toBeTruthy();
+    }
+  });
+});
+
+describe("defaultLanguageFilter", () => {
+  it("opens a Brazilian on Portuguese and everyone else on everything", () => {
+    // The asymmetry is the point: a pt-BR reader defaulted to "all" gets rooms
+    // they cannot talk in mixed into the grid, and an English reader defaulted
+    // to "en" would see one room and conclude the product is empty.
+    expect(defaultLanguageFilter("pt-BR")).toBe("pt");
+    expect(defaultLanguageFilter("en")).toBeNull();
   });
 });
 

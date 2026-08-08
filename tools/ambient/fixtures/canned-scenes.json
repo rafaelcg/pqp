@@ -1,94 +1,370 @@
 {
-  "_note": "Fixture dialogue for --canned mode. Speakers are SLOT INDEXES, not persona ids, so these scenes cast onto whatever the scheduler picked and stay valid when personas.yaml changes. The first three are TOPIC-NEUTRAL on purpose: a football line appearing in a music server's dry run reads as a bug rather than as a fixture, and canned mode is now used against all five communities. The football scenes are kept because they are the ones the spike was verified against. This exists to prove the pipeline, not to be shipped content.",
+  "_note": "Fixture dialogue for --canned mode. Speakers are SLOT INDEXES, not persona ids, so these scenes cast onto whatever the scheduler picked and stay valid when personas.yaml changes. `neutral: true` marks a scene that fits ANY community, and it is the only kind a non-football room is ever handed: a football line in a music server's dry run reads as a bug rather than as a fixture, and canned mode now runs against fifteen communities. The football scenes are kept because they are the ones the spike was verified against, and `resenha-fc` still gets them. `ambientEn`/`repliesEn` are the same thing for a community whose `language` is `en` — canned mode is how the pipeline is exercised without an API key, and a dry run of an English room that prints Portuguese proves the wrong thing. This exists to prove the pipeline, not to be shipped content.",
   "ambient": [
     {
       "id": "chegando",
       "lines": [
-        { "speaker": 0, "text": "bom dia, alguém acordado ou é só eu" },
-        { "speaker": 1, "text": "Acordado é uma palavra forte. Presente, digamos." },
-        { "speaker": 0, "text": "kkkk serve" },
-        { "speaker": 1, "text": "O dia começou torto, mas começou. Já é alguma coisa." },
-        { "speaker": 0, "text": "hoje eu tô decidido a não fazer nada e vou cumprir" },
-        { "speaker": 1, "text": "Essa é a única meta que ninguém aqui nunca falhou." }
-      ]
+        {
+          "speaker": 0,
+          "text": "bom dia, alguém acordado ou é só eu"
+        },
+        {
+          "speaker": 1,
+          "text": "Acordado é uma palavra forte. Presente, digamos."
+        },
+        {
+          "speaker": 0,
+          "text": "kkkk serve"
+        },
+        {
+          "speaker": 1,
+          "text": "O dia começou torto, mas começou. Já é alguma coisa."
+        },
+        {
+          "speaker": 0,
+          "text": "hoje eu tô decidido a não fazer nada e vou cumprir"
+        },
+        {
+          "speaker": 1,
+          "text": "Essa é a única meta que ninguém aqui nunca falhou."
+        }
+      ],
+      "neutral": true
     },
     {
       "id": "recomendacao",
       "lines": [
-        { "speaker": 0, "text": "alguém tem uma indicação pro fim de semana? tô sem nada" },
-        { "speaker": 1, "text": "Tenho três, e você vai reclamar de todas. Começo pela pior?" },
-        { "speaker": 0, "text": "começa pela pior sim, adoro sofrer" },
-        { "speaker": 1, "text": "Sabia. Anota aí, e depois volta pra falar mal comigo junto." },
-        { "speaker": 0, "text": "combinado, domingo eu volto reclamando" },
-        { "speaker": 1, "text": "É assim que este servidor funciona, no fundo." }
-      ]
+        {
+          "speaker": 0,
+          "text": "alguém tem uma indicação pro fim de semana? tô sem nada"
+        },
+        {
+          "speaker": 1,
+          "text": "Tenho três, e você vai reclamar de todas. Começo pela pior?"
+        },
+        {
+          "speaker": 0,
+          "text": "começa pela pior sim, adoro sofrer"
+        },
+        {
+          "speaker": 1,
+          "text": "Sabia. Anota aí, e depois volta pra falar mal comigo junto."
+        },
+        {
+          "speaker": 0,
+          "text": "combinado, domingo eu volto reclamando"
+        },
+        {
+          "speaker": 1,
+          "text": "É assim que este servidor funciona, no fundo."
+        }
+      ],
+      "neutral": true
     },
     {
       "id": "discordancia",
       "lines": [
-        { "speaker": 0, "text": "discordo total do que falaram ontem aqui" },
-        { "speaker": 1, "text": "Fale. A gente discute muito e não briga, é a regra da casa." },
-        { "speaker": 0, "text": "é que vocês julgam rápido demais, dá um tempo pra coisa" },
-        { "speaker": 1, "text": "Justo. Já mudei de opinião umas quatro vezes só este mês." },
-        { "speaker": 0, "text": "pronto, então somos dois indecisos" },
-        { "speaker": 1, "text": "Indecisos com convicção, que é pior." }
-      ]
+        {
+          "speaker": 0,
+          "text": "discordo total do que falaram ontem aqui"
+        },
+        {
+          "speaker": 1,
+          "text": "Fale. A gente discute muito e não briga, é a regra da casa."
+        },
+        {
+          "speaker": 0,
+          "text": "é que vocês julgam rápido demais, dá um tempo pra coisa"
+        },
+        {
+          "speaker": 1,
+          "text": "Justo. Já mudei de opinião umas quatro vezes só este mês."
+        },
+        {
+          "speaker": 0,
+          "text": "pronto, então somos dois indecisos"
+        },
+        {
+          "speaker": 1,
+          "text": "Indecisos com convicção, que é pior."
+        }
+      ],
+      "neutral": true
     },
     {
       "id": "rodada-ruim",
       "lines": [
-        { "speaker": 0, "text": "gente que rodada sem graça hein" },
-        { "speaker": 1, "text": "Sem graça é apelido. Time nenhum quis jogar." },
-        { "speaker": 0, "text": "meu time entrou já pensando no ponto fora, dá raiva" },
-        { "speaker": 1, "text": "Melhor assim do que tomar de três em casa, vai por mim." },
-        { "speaker": 0, "text": "kkkk tá certo" },
-        { "speaker": 1, "text": "Semana que vem melhora. Sempre digo isso e sempre erro." }
-      ]
+        {
+          "speaker": 0,
+          "text": "gente que rodada sem graça hein"
+        },
+        {
+          "speaker": 1,
+          "text": "Sem graça é apelido. Time nenhum quis jogar."
+        },
+        {
+          "speaker": 0,
+          "text": "meu time entrou já pensando no ponto fora, dá raiva"
+        },
+        {
+          "speaker": 1,
+          "text": "Melhor assim do que tomar de três em casa, vai por mim."
+        },
+        {
+          "speaker": 0,
+          "text": "kkkk tá certo"
+        },
+        {
+          "speaker": 1,
+          "text": "Semana que vem melhora. Sempre digo isso e sempre erro."
+        }
+      ],
+      "neutral": false
     },
     {
       "id": "moleque-da-base",
       "lines": [
-        { "speaker": 0, "text": "vcs viram o moleque que entrou no segundo tempo?" },
-        { "speaker": 1, "text": "Vi. Tem personalidade, pediu a bola desde o primeiro toque." },
-        { "speaker": 0, "text": "é isso que falta, gente com sangue no olho" },
-        { "speaker": 1, "text": "Só não pode queimar. Já vi essa história terminar mal umas dez vezes." },
-        { "speaker": 0, "text": "verdade, calma nele" },
-        { "speaker": 1, "text": "Se jogar mais uns dez jogos assim eu volto aqui pra falar bem." }
-      ]
+        {
+          "speaker": 0,
+          "text": "vcs viram o moleque que entrou no segundo tempo?"
+        },
+        {
+          "speaker": 1,
+          "text": "Vi. Tem personalidade, pediu a bola desde o primeiro toque."
+        },
+        {
+          "speaker": 0,
+          "text": "é isso que falta, gente com sangue no olho"
+        },
+        {
+          "speaker": 1,
+          "text": "Só não pode queimar. Já vi essa história terminar mal umas dez vezes."
+        },
+        {
+          "speaker": 0,
+          "text": "verdade, calma nele"
+        },
+        {
+          "speaker": 1,
+          "text": "Se jogar mais uns dez jogos assim eu volto aqui pra falar bem."
+        }
+      ],
+      "neutral": false
     },
     {
       "id": "tabela",
       "lines": [
-        { "speaker": 0, "text": "olhei a tabela agora e passei mal" },
-        { "speaker": 1, "text": "A tabela é cruel mesmo. Mas ainda tem muito jogo pela frente." },
-        { "speaker": 0, "text": "muito jogo é o que todo mundo fala antes de cair" },
-        { "speaker": 1, "text": "Pessimista desse jeito não dá. Conta os pontos que ainda estão em disputa." },
-        { "speaker": 0, "text": "tá bom tá bom, vou contar e depois choro" },
-        { "speaker": 1, "text": "Combinado. Choro coletivo na quinta." }
-      ]
+        {
+          "speaker": 0,
+          "text": "olhei a tabela agora e passei mal"
+        },
+        {
+          "speaker": 1,
+          "text": "A tabela é cruel mesmo. Mas ainda tem muito jogo pela frente."
+        },
+        {
+          "speaker": 0,
+          "text": "muito jogo é o que todo mundo fala antes de cair"
+        },
+        {
+          "speaker": 1,
+          "text": "Pessimista desse jeito não dá. Conta os pontos que ainda estão em disputa."
+        },
+        {
+          "speaker": 0,
+          "text": "tá bom tá bom, vou contar e depois choro"
+        },
+        {
+          "speaker": 1,
+          "text": "Combinado. Choro coletivo na quinta."
+        }
+      ],
+      "neutral": false
     }
   ],
   "replies": [
     {
       "id": "resposta-neutra",
       "lines": [
-        { "speaker": 0, "text": "opa {human}, boa pergunta — eu ia perguntar a mesma coisa" },
-        { "speaker": 1, "text": "Bem-vindo, {human}. Aqui todo mundo tem opinião e ninguém tem razão." },
-        { "speaker": 0, "text": "e quem tem razão some do chat na hora" },
-        { "speaker": 1, "text": "Some mesmo. Fica à vontade, {human}." },
-        { "speaker": 0, "text": "kkkkk isso" },
-        { "speaker": 1, "text": "Puxa assunto quando quiser, a casa é sua." }
-      ]
+        {
+          "speaker": 0,
+          "text": "opa {human}, boa pergunta — eu ia perguntar a mesma coisa"
+        },
+        {
+          "speaker": 1,
+          "text": "Bem-vindo, {human}. Aqui todo mundo tem opinião e ninguém tem razão."
+        },
+        {
+          "speaker": 0,
+          "text": "e quem tem razão some do chat na hora"
+        },
+        {
+          "speaker": 1,
+          "text": "Some mesmo. Fica à vontade, {human}."
+        },
+        {
+          "speaker": 0,
+          "text": "kkkkk isso"
+        },
+        {
+          "speaker": 1,
+          "text": "Puxa assunto quando quiser, a casa é sua."
+        }
+      ],
+      "neutral": true
     },
     {
       "id": "boas-vindas",
       "lines": [
-        { "speaker": 0, "text": "opa {human}, chegou junto! qual teu time?" },
-        { "speaker": 1, "text": "Bem-vindo, {human}. Aqui a gente discute muito e não briga, é a regra." },
-        { "speaker": 0, "text": "a regra é essa, e perder junto também" },
-        { "speaker": 1, "text": "Perder junto é o esporte principal deste servidor." },
-        { "speaker": 0, "text": "kkkkk fala a verdade" },
-        { "speaker": 1, "text": "Só falo a verdade, é meu problema." }
+        {
+          "speaker": 0,
+          "text": "opa {human}, chegou junto! qual teu time?"
+        },
+        {
+          "speaker": 1,
+          "text": "Bem-vindo, {human}. Aqui a gente discute muito e não briga, é a regra."
+        },
+        {
+          "speaker": 0,
+          "text": "a regra é essa, e perder junto também"
+        },
+        {
+          "speaker": 1,
+          "text": "Perder junto é o esporte principal deste servidor."
+        },
+        {
+          "speaker": 0,
+          "text": "kkkkk fala a verdade"
+        },
+        {
+          "speaker": 1,
+          "text": "Só falo a verdade, é meu problema."
+        }
+      ],
+      "neutral": false
+    }
+  ],
+  "ambientEn": [
+    {
+      "id": "turning-up",
+      "neutral": true,
+      "lines": [
+        {
+          "speaker": 0,
+          "text": "morning. anyone else up or is it just me"
+        },
+        {
+          "speaker": 1,
+          "text": "Up is a strong word. Present, let's say."
+        },
+        {
+          "speaker": 0,
+          "text": "ha, that'll do"
+        },
+        {
+          "speaker": 1,
+          "text": "The day started badly, but it started. That's something."
+        },
+        {
+          "speaker": 0,
+          "text": "my plan today is to do nothing and i intend to see it through"
+        },
+        {
+          "speaker": 1,
+          "text": "That is the one goal nobody here has ever failed."
+        }
+      ]
+    },
+    {
+      "id": "a-recommendation",
+      "neutral": true,
+      "lines": [
+        {
+          "speaker": 0,
+          "text": "anyone got something for the weekend? i've got nothing"
+        },
+        {
+          "speaker": 1,
+          "text": "I have three, and you will complain about all of them. Worst first?"
+        },
+        {
+          "speaker": 0,
+          "text": "worst first please, i love suffering"
+        },
+        {
+          "speaker": 1,
+          "text": "Thought so. Write it down, then come back and moan with me."
+        },
+        {
+          "speaker": 0,
+          "text": "deal, sunday i come back complaining"
+        },
+        {
+          "speaker": 1,
+          "text": "That is broadly how this place works, if we're honest."
+        }
+      ]
+    },
+    {
+      "id": "disagreement",
+      "neutral": true,
+      "lines": [
+        {
+          "speaker": 0,
+          "text": "i completely disagree with what was said in here yesterday"
+        },
+        {
+          "speaker": 1,
+          "text": "Go on, then. We argue a lot and fall out never; house rule."
+        },
+        {
+          "speaker": 0,
+          "text": "you all make your minds up too fast, give it a minute"
+        },
+        {
+          "speaker": 1,
+          "text": "Fair. I have changed mine four times this month alone."
+        },
+        {
+          "speaker": 0,
+          "text": "right, so that's two of us with no opinions"
+        },
+        {
+          "speaker": 1,
+          "text": "No opinions, held firmly. Which is worse."
+        }
+      ]
+    }
+  ],
+  "repliesEn": [
+    {
+      "id": "welcome",
+      "neutral": true,
+      "lines": [
+        {
+          "speaker": 0,
+          "text": "alright {human}, good question — i was about to ask the same"
+        },
+        {
+          "speaker": 1,
+          "text": "Welcome, {human}. Everyone here has an opinion and nobody is right."
+        },
+        {
+          "speaker": 0,
+          "text": "and whoever is right goes quiet immediately"
+        },
+        {
+          "speaker": 1,
+          "text": "They do. Make yourself at home, {human}."
+        },
+        {
+          "speaker": 0,
+          "text": "ha, that's the one"
+        },
+        {
+          "speaker": 1,
+          "text": "Start a conversation whenever. The place is yours."
+        }
       ]
     }
   ]

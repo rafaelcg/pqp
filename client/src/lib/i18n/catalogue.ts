@@ -390,6 +390,15 @@ export const en = {
   "communities.category.series-filmes": "Series & film",
   "communities.category.corre": "Hustle",
   "communities.category.geral": "General",
+  // The language segment. The two codes are printed as codes on purpose —
+  // "Portuguese"/"English" spelled out is twice the width for a control that
+  // sits at the end of a filter row, and PT/EN is what every other product this
+  // audience uses prints there.
+  "communities.language.label": "Language",
+  "communities.language.pt": "PT",
+  "communities.language.en": "EN",
+  "communities.language.all": "All",
+  "communities.settings.language": "Language",
   "communities.members": "{count} members",
   "communities.members.one": "1 member",
   "communities.join": "Join",

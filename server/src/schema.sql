@@ -1636,6 +1636,35 @@ EXCEPTION
   WHEN others THEN NULL;
 END $$;
 
+-- The language the room is held in — the directory's second filter axis.
+--
+-- NOT A CATEGORY, and not a locale. See `COMMUNITY_LANGUAGES` in @pqp/shared for
+-- the argument in full; the short version is that an English football server
+-- belongs on the `futebol` shelf next to the Portuguese ones, so language has to
+-- be something you narrow by *after* picking a subject rather than instead of
+-- picking one. Two axes, one filter each.
+--
+-- NOT NULL DEFAULT 'pt' for the same reason `community_category` is defaulted
+-- rather than nullable: a filter with three states ("all", "this one", "unset")
+-- is a filter whose third state nobody can name in the UI. This is a Brazilian
+-- instance; a row that never thinks about this column is Portuguese.
+ALTER TABLE servers ADD COLUMN IF NOT EXISTS community_language TEXT NOT NULL DEFAULT 'pt';
+
+-- Same shape, and the same argument, as the category CHECK above: the list is
+-- duplicated from @pqp/shared on purpose, because a constraint that says "some
+-- text" defends nothing against an API layer that was supposed to have
+-- validated. Wrapped in the same DO block so a boot against a database whose
+-- rows predate the column cannot abort the rest of the schema.
+DO $$
+BEGIN
+  ALTER TABLE servers DROP CONSTRAINT IF EXISTS servers_community_language_check;
+  ALTER TABLE servers
+    ADD CONSTRAINT servers_community_language_check
+    CHECK (community_language IN ('pt', 'en'));
+EXCEPTION
+  WHEN others THEN NULL;
+END $$;
+
 -- THE OPERATOR'S KILL SWITCH, AND IT IS NOT THE OWNER'S.
 --
 -- Set by whoever holds the DATABASE_URL, with one UPDATE, and reachable by no

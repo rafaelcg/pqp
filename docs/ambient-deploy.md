@@ -6,6 +6,13 @@ creating the five servers, shipping the runner, and stopping it.
 Design and cost model: [`docs/research/ambient-agents.html`](./research/ambient-agents.html).
 Code layout and local development: [`tools/ambient/README.md`](../tools/ambient/README.md).
 
+> **Adding communities to a deploy that is already live** is a different job
+> from this one, and it has its own runbook:
+> [`tools/ambient/scripts/expand-roster.md`](../tools/ambient/scripts/expand-roster.md).
+> Read that one instead — the step this document does not cover is restoring the
+> existing `secrets/characters.json` *before* provisioning, and getting that
+> wrong takes the cast that is already running offline.
+
 ---
 
 ## What this needs from you

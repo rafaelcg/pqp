@@ -12,9 +12,12 @@ import { CommunityCard, CommunityCardSkeleton } from "./community-card";
 import {
   applyJoin,
   categoryChips,
+  defaultLanguageFilter,
   emptyStateKeys,
+  languageSegments,
   mergePages,
   type CategoryFilter,
+  type LanguageFilter,
 } from "./communities-model";
 
 /** Long enough that typing a word does not fire five requests. */
@@ -71,8 +74,15 @@ export function CommunitiesView({
   onCreateCommunity,
   onReport,
 }: CommunitiesViewProps) {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   const [category, setCategory] = useState<CategoryFilter>(null);
+  // Initialised from the app's locale ONCE rather than derived per render: this
+  // is a starting point the reader is meant to override, and a value recomputed
+  // from `locale` would snap their choice back the next time anything above
+  // this re-rendered.
+  const [language, setLanguage] = useState<LanguageFilter>(() =>
+    defaultLanguageFilter(locale),
+  );
   const [rawQuery, setRawQuery] = useState("");
   const [query, setQuery] = useState("");
   const [communities, setCommunities] = useState<CommunitySummary[]>([]);
@@ -124,7 +134,7 @@ export function CommunitiesView({
     setLoading(true);
     setError(null);
     fetchCommunities(
-      { category, query: query || null, limit: COMMUNITY_PAGE_SIZE },
+      { category, language, query: query || null, limit: COMMUNITY_PAGE_SIZE },
       controller.signal,
     )
       .then((page) => {
@@ -145,13 +155,14 @@ export function CommunitiesView({
         }
       });
     return () => controller.abort();
-  }, [category, query, reloadKey, t]);
+  }, [category, language, query, reloadKey, t]);
 
   const loadMore = useCallback(async () => {
     setLoadingMore(true);
     try {
       const page = await fetchCommunities({
         category,
+        language,
         query: query || null,
         limit: COMMUNITY_PAGE_SIZE,
         offset: communities.length,
@@ -165,7 +176,7 @@ export function CommunitiesView({
     } finally {
       setLoadingMore(false);
     }
-  }, [category, query, communities.length, t]);
+  }, [category, language, query, communities.length, t]);
 
   async function enter(community: CommunitySummary) {
     if (community.joined) {
@@ -190,6 +201,7 @@ export function CommunitiesView({
   }
 
   const chips = categoryChips(category);
+  const languages = languageSegments(language);
   const empty = emptyStateKeys(query);
 
   return (
@@ -285,6 +297,39 @@ export function CommunitiesView({
                 {t(chip.labelKey)}
               </button>
             ))}
+          </div>
+
+          {/* Language, on its own line under the chips rather than in them.
+              Eleven chips already scroll sideways on a phone; three more at the
+              end of that queue would be off-screen exactly when they are most
+              useful. A joined pill of three fixed options also reads as a
+              different KIND of control — it narrows what the chips chose,
+              rather than being another thing to choose. */}
+          <div
+            role="group"
+            aria-label={t("communities.language.label")}
+            data-language-filter
+            className="mt-3 flex justify-center sm:justify-end"
+          >
+            <div className="inline-flex items-center gap-0.5 rounded-full border border-ink-4 bg-ink-2 p-0.5">
+              {languages.map((segment) => (
+                <button
+                  key={segment.id ?? "all"}
+                  type="button"
+                  aria-pressed={segment.active}
+                  data-language={segment.id ?? "all"}
+                  className={cn(
+                    "rounded-full px-3 py-1 text-xs font-medium transition",
+                    segment.active
+                      ? "bg-signal text-ink"
+                      : "text-paper-muted hover:text-paper",
+                  )}
+                  onClick={() => setLanguage(segment.id)}
+                >
+                  {t(segment.labelKey)}
+                </button>
+              ))}
+            </div>
           </div>
 
           {/* The Create call to action, above the grid and not buried under it.

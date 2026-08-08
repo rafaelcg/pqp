@@ -61,6 +61,36 @@ export const communityCategorySchema = z.enum(COMMUNITY_CATEGORIES);
 export type CommunityCategory = z.infer<typeof communityCategorySchema>;
 
 /**
+ * The language a community is held in — a second, orthogonal axis to category.
+ *
+ * WHY IT IS NOT A CATEGORY. "English-speaking" is not a subject, and modelling
+ * it as one would force every English room to give up its real shelf: an
+ * English football server belongs under `futebol` next to the Portuguese ones,
+ * because somebody browsing football wants to see it. Language is what they
+ * filter by *afterwards*, when what they need is a room they can actually talk
+ * in. Two axes, one filter each.
+ *
+ * TWO VALUES, AND DELIBERATELY NOT A BCP-47 TAG. `pt-BR` versus `pt-PT` is a
+ * distinction no member of this directory needs to make — they are the same
+ * room to a person looking for one — and a free-text locale column is a column
+ * that accumulates `PT`, `pt_br`, `português` and `en-US` until the filter
+ * matches nothing. Adding a third language is additive and safe; removing one
+ * has the same problem `COMMUNITY_CATEGORIES` documents, for the same reason
+ * (rows carry it, and schema.sql rebuilds the CHECK on every boot).
+ *
+ * `pt` is the default everywhere — in the column, in the PATCH, and in the
+ * seeder — because this is a Brazilian instance and the overwhelming majority
+ * of rooms will never think about this field at all.
+ */
+export const COMMUNITY_LANGUAGES = ["pt", "en"] as const;
+
+export const communityLanguageSchema = z.enum(COMMUNITY_LANGUAGES);
+export type CommunityLanguage = z.infer<typeof communityLanguageSchema>;
+
+/** What a listing gets when nobody says otherwise. */
+export const DEFAULT_COMMUNITY_LANGUAGE: CommunityLanguage = "pt";
+
+/**
  * One line. Long enough to carry a joke, short enough that a directory card is
  * a card and not a paragraph — the same 140 the research doc proposed, and the
  * length at which the whole tagline is legible at a glance on a 390px phone.
@@ -350,6 +380,13 @@ export const updateCommunitySchema = z.object({
    * message, the same split the tagline uses.
    */
   slug: z.string().max(120).optional(),
+  /**
+   * Absent means "not changing this", like every other field here — NOT "reset
+   * to pt". The default belongs to the column, so a PATCH that only edits a
+   * tagline cannot silently move an English room back into the Portuguese
+   * filter.
+   */
+  language: communityLanguageSchema.optional(),
 });
 export type UpdateCommunityRequest = z.infer<typeof updateCommunitySchema>;
 
@@ -374,6 +411,16 @@ export const communitySummarySchema = z.object({
   slug: z.string().nullable().default(null),
   tagline: z.string().nullable(),
   category: communityCategorySchema,
+  /**
+   * Which language the room is held in. Public for the same reason the category
+   * is: it is the second thing somebody filters a directory by, and knowing it
+   * before you walk in is the difference between joining a room and leaving it.
+   *
+   * Defaulted rather than required so a client built against an older server —
+   * or a fixture written before this column existed — parses instead of
+   * throwing on every card.
+   */
+  language: communityLanguageSchema.default(DEFAULT_COMMUNITY_LANGUAGE),
   /**
    * Read from the maintained counter column, never from a COUNT(*) per row —
    * see `servers.member_count` in schema.sql. Approximate by construction and
@@ -409,6 +456,7 @@ export const communitySettingsSchema = z.object({
   slug: z.string().nullable().default(null),
   tagline: z.string().nullable(),
   category: communityCategorySchema,
+  language: communityLanguageSchema.default(DEFAULT_COMMUNITY_LANGUAGE),
   /**
    * Set by the instance operator, never by the owner, and the reason the panel
    * can say "this is not listed" without lying about why. See

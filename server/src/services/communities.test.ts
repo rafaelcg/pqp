@@ -123,6 +123,7 @@ interface CommunityCard {
   name: string;
   tagline: string | null;
   category: string;
+  language: string;
   memberCount: number;
   joined: boolean;
 }
@@ -185,6 +186,7 @@ describeDb("communities", () => {
     name: string,
     options: {
       category?: string;
+      language?: string;
       tagline?: string | null;
       listed?: boolean;
       suspended?: boolean;
@@ -210,7 +212,8 @@ describeDb("communities", () => {
     await getPool().query(
       `UPDATE servers SET is_community = $2, community_category = $3,
               community_tagline = $4, is_community_suspended = $5,
-              community_slug = $6
+              community_slug = $6,
+              community_language = $7
        WHERE id = $1`,
       [
         serverId,
@@ -221,6 +224,9 @@ describeDb("communities", () => {
         options.slug === undefined
           ? slugifyCommunityName(name) || null
           : options.slug,
+        // Only set by the tests that are about language. The default is the
+        // column's own, which is the state every row in production is in.
+        options.language ?? "pt",
       ],
     );
     return serverId;
@@ -345,6 +351,106 @@ describeDb("communities", () => {
       expect(
         (await call(joiner, "GET", "/api/communities?category=cripto")).status,
       ).toBe(400);
+    });
+
+    it("carries the language on every card, defaulting to pt", async () => {
+      // Every row that existed before the column did is `pt`, and nothing in
+      // the seeding path has to say so. A card that arrived without a language
+      // would fail the shared schema at the client, so this is the assertion
+      // that the projection and the column agree.
+      await makeCommunity("Sem idioma");
+      const res = await call<{ communities: CommunityCard[] }>(
+        joiner,
+        "GET",
+        "/api/communities",
+      );
+      expect(res.body.communities[0]!.language).toBe("pt");
+    });
+
+    it("filters by language, and refuses one nobody defined", async () => {
+      const english = await makeCommunity("The Away End", {
+        category: "futebol",
+        language: "en",
+      });
+      const portuguese = await makeCommunity("Resenha FC", {
+        category: "futebol",
+      });
+
+      const en = await call<{ communities: CommunityCard[] }>(
+        joiner,
+        "GET",
+        "/api/communities?language=en",
+      );
+      expect(en.body.communities.map((c) => c.id)).toEqual([english]);
+
+      const pt = await call<{ communities: CommunityCard[] }>(
+        joiner,
+        "GET",
+        "/api/communities?language=pt",
+      );
+      expect(pt.body.communities.map((c) => c.id)).toEqual([portuguese]);
+
+      // No parameter is "every language", which is what the "todos" segment
+      // sends — it omits the key rather than sending an empty one.
+      const all = await call<{ communities: CommunityCard[] }>(
+        joiner,
+        "GET",
+        "/api/communities",
+      );
+      expect(all.body.communities).toHaveLength(2);
+
+      // Refused rather than ignored, exactly like an unknown category.
+      expect(
+        (await call(joiner, "GET", "/api/communities?language=es")).status,
+      ).toBe(400);
+    });
+
+    it("composes language with category rather than replacing it", async () => {
+      // The two axes are the whole design: an English football room belongs on
+      // the football shelf, and language is what narrows it afterwards. If
+      // either filter overrode the other this returns the wrong room.
+      const enFutebol = await makeCommunity("Away End", {
+        category: "futebol",
+        language: "en",
+      });
+      await makeCommunity("Resenha", { category: "futebol" });
+      await makeCommunity("Deu Merge", { category: "tech" });
+
+      const res = await call<{ communities: CommunityCard[] }>(
+        joiner,
+        "GET",
+        "/api/communities?category=futebol&language=en",
+      );
+      expect(res.body.communities.map((c) => c.id)).toEqual([enFutebol]);
+
+      const none = await call<{ communities: CommunityCard[] }>(
+        joiner,
+        "GET",
+        "/api/communities?category=tech&language=en",
+      );
+      expect(none.body.communities).toHaveLength(0);
+    });
+
+    it("applies the language filter to search too", async () => {
+      // Unlike the member floor, which search is deliberately exempt from: the
+      // floor is curation the searcher opted out of, and this is a control
+      // sitting one inch from the search box that they set on purpose.
+      await makeCommunity("Football Weekly", { language: "en" });
+      await makeCommunity("Futebol Semanal");
+
+      const res = await call<{ communities: CommunityCard[] }>(
+        joiner,
+        "GET",
+        "/api/communities?q=fut&language=en",
+      );
+      expect(res.body.communities).toHaveLength(0);
+
+      const found = await call<{ communities: CommunityCard[] }>(
+        joiner,
+        "GET",
+        "/api/communities?q=Football&language=en",
+      );
+      expect(found.body.communities).toHaveLength(1);
     });
 
     it("searches name and tagline, and treats `%` as text", async () => {
@@ -504,6 +610,10 @@ describeDb("communities", () => {
         "iconUrl",
         "id",
         "joined",
+        // Language is on the card because it is the second thing somebody
+        // filters by, and knowing it before you walk in is the difference
+        // between joining a room and leaving it again.
+        "language",
         "memberCount",
         "name",
         "slug",
@@ -730,6 +840,9 @@ describeDb("communities", () => {
         slug: "vira-comunidade",
         tagline: "acorda cedo não",
         category: "humor",
+        // Never sent by this PATCH, and it comes back as the column's default:
+        // a listing nobody said anything about is a Portuguese one.
+        language: "pt",
         suspended: false,
       });
 
@@ -825,6 +938,54 @@ describeDb("communities", () => {
       const serverId = await makeCommunity("Categoria");
       const res = await call(owner, "PATCH", `/api/servers/${serverId}/community`, {
         category: "cripto",
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it("sets the language, defaults it to pt, and audits the change", async () => {
+      const serverId = await makeCommunity("Idioma", { listed: false });
+
+      const before = await call<{ community: { language: string } }>(
+        owner,
+        "GET",
+        `/api/servers/${serverId}/community`,
+      );
+      expect(before.body.community.language).toBe("pt");
+
+      const patched = await call<{ community: { language: string } }>(
+        owner,
+        "PATCH",
+        `/api/servers/${serverId}/community`,
+        { isCommunity: true, category: "futebol", language: "en" },
+      );
+      expect(patched.status).toBe(200);
+      expect(patched.body.community.language).toBe("en");
+
+      // Absent means "not changing this", NOT "back to pt" — a PATCH that only
+      // edits the tagline must not quietly move an English room out of the
+      // English filter.
+      const untouched = await call<{ community: { language: string } }>(
+        owner,
+        "PATCH",
+        `/api/servers/${serverId}/community`,
+        { tagline: "brunch hour football" },
+      );
+      expect(untouched.body.community.language).toBe("en");
+
+      const audit = await call<{
+        entries: { action: string; changes: { key: string; old: unknown; new: unknown }[] }[];
+      }>(owner, "GET", `/api/servers/${serverId}/audit-log`);
+      const changed = audit.body.entries
+        .filter((e) => e.action === "server.community_update")
+        .flatMap((e) => e.changes)
+        .find((c) => c.key === "communityLanguage");
+      expect(changed).toEqual({ key: "communityLanguage", old: "pt", new: "en" });
+    });
+
+    it("refuses a language the schema does not know", async () => {
+      const serverId = await makeCommunity("Idioma inválido");
+      const res = await call(owner, "PATCH", `/api/servers/${serverId}/community`, {
+        language: "es",
       });
       expect(res.status).toBe(400);
     });

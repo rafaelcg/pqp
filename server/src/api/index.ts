@@ -51,6 +51,7 @@ import {
   COMMUNITY_PAGE_SIZE,
   COMMUNITY_SLUG_PATTERN,
   communityCategorySchema,
+  communityLanguageSchema,
   communitySearchQuerySchema,
   communitySlugSchema,
   createUserBannerUploadSchema,
@@ -2007,6 +2008,20 @@ router.get("/api/communities", async ({ url, user }) => {
     category = parsed.data;
   }
 
+  // Absent is "every language" — the client's "todos" segment simply omits the
+  // parameter. An unknown value is refused for the same reason an unknown
+  // category is: answering a narrowed request with the whole directory reads as
+  // the control being broken rather than as a lenient API.
+  const rawLanguage = url.searchParams.get("language");
+  let language = null;
+  if (rawLanguage) {
+    const parsed = communityLanguageSchema.safeParse(rawLanguage);
+    if (!parsed.success) {
+      throw new HttpError(400, "Unknown language");
+    }
+    language = parsed.data;
+  }
+
   const rawSearch = url.searchParams.get("q");
   let search = null;
   if (rawSearch && rawSearch.trim()) {
@@ -2031,7 +2046,7 @@ router.get("/api/communities", async ({ url, user }) => {
       ? Math.min(Math.floor(offsetParam), 1000)
       : 0;
 
-  return listCommunities(user.id, { category, search, limit, offset });
+  return listCommunities(user.id, { category, language, search, limit, offset });
 });
 
 /** One listing, for a deep link into the directory. */
@@ -2220,6 +2235,7 @@ router.patch(
         ...(tagline !== undefined ? { tagline } : {}),
         ...(body.category !== undefined ? { category: body.category } : {}),
         ...(slug !== undefined ? { slug } : {}),
+        ...(body.language !== undefined ? { language: body.language } : {}),
       });
     } catch (error) {
       // 409 for a collision — the status `HandleTakenError` answers, for the
@@ -2286,6 +2302,16 @@ router.patch(
               key: "communitySlug",
               old: updated.previous.slug,
               new: updated.settings.slug,
+            },
+          ]
+        : []),
+      ...(body.language !== undefined &&
+      updated.previous.language !== updated.settings.language
+        ? [
+            {
+              key: "communityLanguage",
+              old: updated.previous.language,
+              new: updated.settings.language,
             },
           ]
         : []),

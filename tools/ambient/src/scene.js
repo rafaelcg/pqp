@@ -8,9 +8,29 @@
  * setting up. Pure, like schedule.js, so the splitting rules are testable.
  */
 
-/** The stable half of the prompt: world, cast, rules. Cacheable in principle. */
+/**
+ * The stable half of the prompt: world, cast, rules. Cacheable in principle.
+ *
+ * TWO LANGUAGES, ONE STRUCTURE. `community.language` picks which of the two
+ * prompt bodies is written, and they say the same things in the same order —
+ * the English one is not a looser prompt with fewer guardrails, it is the same
+ * prompt in the language the room speaks. The reason it exists at all is that
+ * every register note in an English community is written in English ("dry
+ * Northern understatement", "calls everyone mate"), and a model handed those
+ * notes under an instruction to write português coloquial produces neither: it
+ * writes translated English, which reads as a subtitle rather than as chat.
+ *
+ * The register notes are pasted verbatim in both cases. That is the whole
+ * mechanism by which a persona has a voice, and paraphrasing it here would be
+ * paraphrasing the only content this system has.
+ */
 export function buildSystemPrompt(config, cast) {
   const { community, defaults } = config;
+
+  if (community.language === "en") {
+    return buildEnglishSystemPrompt(config, cast);
+  }
+
   const roster = cast
     .map(
       (p) =>
@@ -18,6 +38,14 @@ export function buildSystemPrompt(config, cast) {
         `Assuntos: ${p.interests.join(", ")}.`,
     )
     .join("\n");
+
+  // Per-persona bans, stated as lines about that character rather than folded
+  // into the room's list. Folding them in would forbid the topic to everybody,
+  // which is a different (and much duller) room — the point is that the one
+  // person who would be asked is the one who cannot answer.
+  const personaBans = cast
+    .filter((p) => (p.banned ?? []).length > 0)
+    .map((p) => `- ${p.displayName} NUNCA fala sobre: ${p.banned.join(", ")}.`);
 
   return [
     `Você escreve diálogo para um chat de comunidade brasileira chamado "${community.displayName}".`,
@@ -34,6 +62,7 @@ export function buildSystemPrompt(config, cast) {
     `- Cada mensagem com no máximo ${config.limits.maxMessageChars} caracteres.`,
     `- As pessoas respondem umas às outras. Discordam, brincam, mudam de assunto no meio.`,
     `- PROIBIDO falar sobre: ${community.banned.join(", ")}.`,
+    ...personaBans,
     `- PROIBIDO dar conselho médico, jurídico ou financeiro.`,
     `- PROIBIDO combinar encontro presencial, pedir contato, ou dizer que vai ligar/chamar no zap.`,
     `- Ninguém menciona ser bot, IA, personagem ou programa. Também ninguém afirma ser humano.`,
@@ -41,8 +70,66 @@ export function buildSystemPrompt(config, cast) {
   ].join("\n");
 }
 
+/**
+ * The same prompt, for a community whose `language` is `en`.
+ *
+ * Kept as its own function rather than as a table of translated fragments: the
+ * rules are the product's safety posture, and a fragment table is where one
+ * language quietly loses a rule during an edit. Two whole prompts side by side
+ * can be read against each other.
+ *
+ * The register is British English because the only English room this product
+ * has is an English-football room; if a second one lands that is not, this line
+ * is the thing to move into the community's own config.
+ */
+function buildEnglishSystemPrompt(config, cast) {
+  const { community } = config;
+  const roster = cast
+    .map(
+      (p) =>
+        `- ${p.displayName}: ${p.register.trim().replace(/\s+/g, " ")} ` +
+        `Talks about: ${p.interests.join(", ")}.`,
+    )
+    .join("\n");
+  const personaBans = cast
+    .filter((p) => (p.banned ?? []).length > 0)
+    .map((p) => `- ${p.displayName} NEVER talks about: ${p.banned.join(", ")}.`);
+
+  return [
+    `You write dialogue for a chat community called "${community.displayName}".`,
+    ``,
+    `SETTING: ${community.premise.trim()}`,
+    ``,
+    `CHARACTERS (write ONLY as these):`,
+    roster,
+    ``,
+    `RULES:`,
+    `- Write in British English, the way people type in a group chat — not narration.`,
+    `- One line per message, in the exact format "Name: text".`,
+    `- No quotation marks, asterisks, narration, excessive emoji or markdown.`,
+    `- Each message is at most ${config.limits.maxMessageChars} characters.`,
+    `- People answer each other. They disagree, joke, and change the subject halfway.`,
+    `- FORBIDDEN subjects: ${community.banned.join(", ")}.`,
+    ...personaBans,
+    `- FORBIDDEN to give medical, legal or financial advice.`,
+    `- FORBIDDEN to arrange to meet in person, ask for contact details, or move the chat elsewhere.`,
+    `- Nobody mentions being a bot, an AI, a character or a program. Nobody claims to be human either.`,
+    `- Do not invent names, results or news tied to real dates; keep it general.`,
+  ].join("\n");
+}
+
 /** The volatile half: this scene's topic, memory, and any human to answer. */
-export function buildUserPrompt({ topic, lines, cast, memory = {}, replyTo }) {
+export function buildUserPrompt({
+  topic,
+  lines,
+  cast,
+  memory = {},
+  replyTo,
+  language = "pt",
+}) {
+  if (language === "en") {
+    return buildEnglishUserPrompt({ topic, lines, cast, memory, replyTo });
+  }
   const names = cast.map((p) => p.displayName).join(", ");
   const avoid = (memory.recentTopics ?? []).slice(0, 6);
   const parts = [
@@ -85,8 +172,55 @@ export function buildUserPrompt({ topic, lines, cast, memory = {}, replyTo }) {
   return parts.join("\n");
 }
 
+/** The English half of the volatile prompt. See `buildEnglishSystemPrompt`. */
+function buildEnglishUserPrompt({ topic, lines, cast, memory = {}, replyTo }) {
+  const names = cast.map((p) => p.displayName).join(", ");
+  const avoid = (memory.recentTopics ?? []).slice(0, 6);
+  const parts = [
+    `Write a short exchange of ${lines} messages between: ${names}.`,
+    `SUBJECT: ${topic}`,
+  ];
+  if (avoid.length > 0) {
+    parts.push(
+      `This came up recently, so do NOT repeat: ${avoid.join("; ")}.`,
+    );
+  }
+  if (replyTo) {
+    parts.push(
+      `IMPORTANT: a real person has just written in the channel:`,
+      `"${replyTo.body}" — ${replyTo.authorName}`,
+      ``,
+      `BEFORE WRITING, decide whether this is worth answering. Reply with the`,
+      `single line "${SKIP_MARKER_EN} reason" and nothing else if the message:`,
+      `- is about a forbidden subject, or asks for medical, legal or financial advice;`,
+      `- is aggressive, prejudiced, or aimed at attacking somebody;`,
+      `- asks whether anyone here is a bot, an AI or a real person;`,
+      `- asks for contact details, a meeting, or moves the chat elsewhere;`,
+      `- is spam, a link, or makes no sense in this channel.`,
+      ``,
+      `If it is worth answering:`,
+      `the first message must genuinely answer that person, by name, about what` +
+        ` they actually said. Then the conversation carries on.`,
+    );
+  }
+  parts.push(`Answer with the ${lines} lines only, nothing before and nothing after.`);
+  return parts.join("\n");
+}
+
 /** The token the model uses to decline a reply. Never posted, only logged. */
 export const SKIP_MARKER = "PULAR:";
+
+/**
+ * Its English counterpart.
+ *
+ * TWO MARKERS RATHER THAN ONE TRANSLATED PROMPT AROUND A PORTUGUESE TOKEN. A
+ * model writing an otherwise entirely English answer is being asked to emit a
+ * Portuguese word as a sentinel, and that is exactly the instruction models
+ * quietly normalise away — it would decline in fluent English, `parseTranscript`
+ * would find no speaker in the line, and the decline would surface as an empty
+ * scene: the one failure `parseSceneDecision` exists to distinguish.
+ */
+export const SKIP_MARKER_EN = "SKIP:";
 
 /**
  * Did the model decline to answer?
@@ -107,11 +241,14 @@ export function parseSceneDecision(text) {
     if (line.length === 0) {
       continue;
     }
-    if (line.toUpperCase().startsWith(SKIP_MARKER)) {
-      return {
-        skip: true,
-        reason: line.slice(SKIP_MARKER.length).trim() || "unspecified",
-      };
+    const upper = line.toUpperCase();
+    for (const marker of [SKIP_MARKER, SKIP_MARKER_EN]) {
+      if (upper.startsWith(marker)) {
+        return {
+          skip: true,
+          reason: line.slice(marker.length).trim() || "unspecified",
+        };
+      }
     }
     return { skip: false, reason: null };
   }

@@ -1,9 +1,12 @@
 import {
   COMMUNITY_CATEGORIES,
+  COMMUNITY_LANGUAGES,
   COMMUNITY_SLUG_MAX_LENGTH,
   COMMUNITY_TAGLINE_MAX_LENGTH,
+  DEFAULT_COMMUNITY_LANGUAGE,
   slugifyCommunityName,
   type CommunityCategory,
+  type CommunityLanguage,
   type CommunitySettings,
 } from "@pqp/shared";
 import { Globe } from "lucide-react";
@@ -46,6 +49,9 @@ export function CommunitySettingsSection({
   const [tagline, setTagline] = useState("");
   const [category, setCategory] = useState<CommunityCategory>("geral");
   const [slug, setSlug] = useState("");
+  const [language, setLanguage] = useState<CommunityLanguage>(
+    DEFAULT_COMMUNITY_LANGUAGE,
+  );
   const [listed, setListed] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -65,6 +71,7 @@ export function CommunitySettingsSection({
   const taglineId = useId();
   const categoryId = useId();
   const slugId = useId();
+  const languageId = useId();
 
   useEffect(() => {
     let cancelled = false;
@@ -79,6 +86,7 @@ export function CommunitySettingsSection({
         setTagline(res.community.tagline ?? "");
         setCategory(res.community.category);
         setSlug(res.community.slug ?? "");
+        setLanguage(res.community.language);
       })
       .catch((err: unknown) => {
         if (!cancelled) {
@@ -116,6 +124,7 @@ export function CommunitySettingsSection({
         // turning "I have not chosen one" into an error about a field the owner
         // never touched.
         ...(typedSlug ? { slug: typedSlug } : {}),
+        language,
       });
       setSettings(res.community);
       setListed(res.community.isCommunity);
@@ -124,6 +133,7 @@ export function CommunitySettingsSection({
       // The server may have DERIVED one; reading it back is what puts the
       // address the owner now owns into the box they left empty.
       setSlug(res.community.slug ?? "");
+      setLanguage(res.community.language);
       setSaved(true);
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
@@ -152,7 +162,8 @@ export function CommunitySettingsSection({
     (listed !== settings.isCommunity ||
       (tagline.trim() || null) !== settings.tagline ||
       category !== settings.category ||
-      (slug.trim() || null) !== settings.slug);
+      (slug.trim() || null) !== settings.slug ||
+      language !== settings.language);
 
   return (
     <section
@@ -297,6 +308,35 @@ export function CommunitySettingsSection({
                 {slugError}
               </p>
             )}
+          </div>
+
+          {/* Language sits under the category because it is the narrower of the
+              two decisions and reads as one: this room is about X, held in Y.
+              A select rather than a segment here — this is a form, and it
+              matches the control directly above it. */}
+          <div className="space-y-1">
+            <label
+              className="block text-xs font-semibold uppercase tracking-wide text-paper-muted"
+              htmlFor={languageId}
+            >
+              {t("communities.settings.language")}
+            </label>
+            <select
+              id={languageId}
+              value={language}
+              disabled={saving}
+              className="h-10 w-full rounded-md border border-ink-4 bg-ink px-3 text-sm text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/50 disabled:opacity-50"
+              onChange={(e) => {
+                setLanguage(e.target.value as CommunityLanguage);
+                setSaved(false);
+              }}
+            >
+              {COMMUNITY_LANGUAGES.map((code) => (
+                <option key={code} value={code}>
+                  {t(`communities.language.${code}` as never)}
+                </option>
+              ))}
+            </select>
           </div>
 
           <Button disabled={saving || !dirty} onClick={() => void save()}>

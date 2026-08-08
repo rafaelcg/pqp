@@ -51,7 +51,17 @@ const valueOf = (args, flag) => {
 };
 const configPath = valueOf(argv, "--config") ?? join(ROOT, "personas.yaml");
 const ownerTag = valueOf(argv, "--owner-tag");
-const only = valueOf(argv, "--community") ?? null;
+/**
+ * Which communities to seed. COMMA-SEPARATED, and it accepts a list rather than
+ * one key because the roster is now fifteen: provisioning a batch of new rooms
+ * against a live database is something you do a few at a time, checking the
+ * result, and `--community a,b,c` is the difference between one careful run and
+ * three commands with a different flag value each.
+ */
+const only = (valueOf(argv, "--community") ?? "")
+  .split(",")
+  .map((key) => key.trim())
+  .filter(Boolean);
 const outPath = valueOf(argv, "--out") ?? join(ROOT, "state", "servers.json");
 
 if (!process.env.DATABASE_URL) {
@@ -81,9 +91,16 @@ if (!owner) {
 console.log(`Owner: ${owner.display_name} (${ownerTag})\n`);
 
 const all = loadCommunities(configPath);
-const communities = only
-  ? all.filter((c) => c.community.key === only)
+const communities = only.length
+  ? all.filter((c) => only.includes(c.community.key))
   : all;
+if (communities.length === 0) {
+  console.error(
+    `No community matched --community ${only.join(",")}. Known: ` +
+      all.map((c) => c.community.key).join(", "),
+  );
+  process.exit(1);
+}
 
 const placements = existsSync(outPath)
   ? JSON.parse(readFileSync(outPath, "utf8"))
@@ -167,6 +184,16 @@ for (const config of communities) {
     );
   }
   console.log(`   cast: ${cast.rows.length} member(s)`);
+  if (cast.rows.length < labels.length) {
+    // Loud, because the symptom otherwise arrives hours later as a room whose
+    // scheduler picks a persona that has no account to speak from. The usual
+    // cause is a provision run that predates this community.
+    const missing = labels.length - cast.rows.length;
+    console.log(
+      `   ! ${missing} persona(s) have no character account — ` +
+        `run: node scripts/provision.mjs --config ${configPath}`,
+    );
+  }
 
   // Invite + pinned welcome, authored by the owner like the API path.
   const inviteRow = await invites.createInvite(serverId, owner.id, {});
@@ -188,11 +215,19 @@ for (const config of communities) {
     channelId: mainRow.id,
     channelName: mainRow.name ?? mainName,
     displayName: community.displayName,
+    // Recorded for the operator reading this file, not read back by anything:
+    // `opt-in-communities.mjs` takes the listing from personas.yaml so the two
+    // cannot drift. Here they answer "what did this run actually seed".
+    category: community.category ?? null,
+    language: community.language,
     seededAt: new Date().toISOString(),
   };
 }
 
 mkdirSync(dirname(outPath), { recursive: true });
 writeFileSync(outPath, JSON.stringify(placements, null, 2));
-console.log(`\nWrote ${outPath}`);
+console.log(
+  `\n${communities.length} communit(ies) seeded. Wrote ${outPath}` +
+    `\nNext: node scripts/opt-in-communities.mjs --dry-run`,
+);
 await pool.end();

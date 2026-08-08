@@ -626,6 +626,8 @@ export const fetchCommunityConfig = () =>
 export const fetchCommunities = (
   options: {
     category?: string | null;
+    /** Omitted entirely when null — absent is "every language" on the server. */
+    language?: string | null;
     query?: string | null;
     limit?: number;
     offset?: number;
@@ -635,6 +637,9 @@ export const fetchCommunities = (
   const params = new URLSearchParams();
   if (options.category) {
     params.set("category", options.category);
+  }
+  if (options.language) {
+    params.set("language", options.language);
   }
   if (options.query) {
     params.set("q", options.query);

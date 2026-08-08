@@ -54,11 +54,15 @@ export async function generateScene({ config, plan, memory, replyTo, canned }) {
     cast: plan.cast,
     memory,
     replyTo,
+    // Both halves of the prompt have to agree on the language, or the system
+    // half asks for British English and the user half asks for the lines "em
+    // português" three paragraphs later.
+    language: config.community.language,
   });
 
   if (canned) {
     return {
-      text: cannedTranscript(plan, replyTo),
+      text: cannedTranscript(plan, replyTo, config.community),
       usage: null,
       model: "canned",
       system,
@@ -101,12 +105,29 @@ export async function generateScene({ config, plan, memory, replyTo, canned }) {
  * The fixture stores lines by speaker *slot* rather than by persona id, so the
  * same fixtures work for any community's cast — which is what keeps the canned
  * path honest as a pipeline test rather than a test of one YAML file.
+ *
+ * TWO NARROWINGS, both of which exist because the roster grew from five rooms
+ * to fifteen. The pool follows the community's LANGUAGE, because a dry run of
+ * an English room printing Portuguese proves the plumbing works for a room that
+ * does not exist. And every room except the football one it was written for
+ * gets only the scenes marked `neutral`, because "que rodada sem graça" in a
+ * pets server reads to whoever is checking the output as a bug in the casting
+ * rather than as a fixture nobody bothered to write twice.
  */
-function cannedTranscript(plan, replyTo) {
+function cannedTranscript(plan, replyTo, community = {}) {
   const fixtures = JSON.parse(
     readFileSync(join(HERE, "..", "fixtures", "canned-scenes.json"), "utf8"),
   );
-  const pool = replyTo ? fixtures.replies : fixtures.ambient;
+  const english = community.language === "en";
+  const all = replyTo
+    ? (english ? fixtures.repliesEn : fixtures.replies)
+    : (english ? fixtures.ambientEn : fixtures.ambient);
+  // `resenha-fc` is the community the football fixtures were written for and
+  // verified against, so it keeps all of them. Fall back to the whole pool if a
+  // future edit ever leaves no neutral scene, rather than throwing here.
+  const neutral = all.filter((scene) => scene.neutral);
+  const pool =
+    community.key === "resenha-fc" || neutral.length === 0 ? all : neutral;
   const scene = pool[Math.floor(Math.random() * pool.length)];
   const names = plan.cast.map((p) => p.displayName);
 

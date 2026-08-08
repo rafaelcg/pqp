@@ -280,7 +280,11 @@ async function playScene({ runtime, plan, replyTo, args, log }) {
   const approved = [];
   for (const message of parsed) {
     const verdict = screenLine(message.body, {
-      banned: config.community.banned,
+      // The room's list PLUS whatever this particular character may not say.
+      // The prompt already carries both (see `buildSystemPrompt`); this is the
+      // half that still holds when the model ignores it, which is the whole
+      // arrangement guardrails.js exists for.
+      banned: [...config.community.banned, ...(message.persona.banned ?? [])],
       maxLength: config.limits.maxMessageChars,
     });
     if (!verdict.ok) {

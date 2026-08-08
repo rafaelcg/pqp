@@ -3,9 +3,18 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { normalizeCommunities } from "../src/config.js";
-import { screenInbound } from "../src/guardrails.js";
-import { parseSceneDecision, buildUserPrompt, SKIP_MARKER } from "../src/scene.js";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname } from "node:path";
+import { loadCommunities, normalizeCommunities } from "../src/config.js";
+import { screenInbound, screenLine } from "../src/guardrails.js";
+import {
+  parseSceneDecision,
+  buildSystemPrompt,
+  buildUserPrompt,
+  SKIP_MARKER,
+  SKIP_MARKER_EN,
+} from "../src/scene.js";
 import { resolveIdentity, devSuffix, loadTokensFile } from "../src/identity.js";
 import {
   killSwitchEngaged,
@@ -147,6 +156,265 @@ describe("normalizeCommunities", () => {
     });
     assert.equal(typeof result[0].limits.maxRepliesPerHumanPerHour, "number");
     assert.ok(result[0].limits.maxRepliesPerHumanPerHour > 0);
+  });
+});
+
+// ------------------------------------------------------- language and listing
+
+describe("community language", () => {
+  test("defaults to pt when a community does not say", () => {
+    const [only] = normalizeCommunities({
+      version: 1,
+      timezone: "America/Sao_Paulo",
+      communities: [community("sem-idioma")],
+    });
+    assert.equal(only.community.language, "pt");
+  });
+
+  test("carries an explicit language through", () => {
+    const [only] = normalizeCommunities({
+      version: 1,
+      timezone: "America/Sao_Paulo",
+      communities: [community("ingles", { language: "en" })],
+    });
+    assert.equal(only.community.language, "en");
+  });
+
+  test("refuses a language the database would refuse", () => {
+    // The CHECK constraint in schema.sql is the last line of defence; this is
+    // the one that fires before an operator has half a roster listed.
+    assert.throws(
+      () =>
+        normalizeCommunities({
+          version: 1,
+          timezone: "America/Sao_Paulo",
+          communities: [community("ruim", { language: "es" })],
+        }),
+      /community\.language must be one of/,
+    );
+  });
+
+  test("refuses a category slug the database would refuse", () => {
+    assert.throws(
+      () =>
+        normalizeCommunities({
+          version: 1,
+          timezone: "America/Sao_Paulo",
+          communities: [community("ruim", { category: "esportes" })],
+        }),
+      /is not a known slug/,
+    );
+  });
+
+  test("writes the prompt in the community's language", () => {
+    const [pt] = normalizeCommunities({
+      version: 1,
+      timezone: "America/Sao_Paulo",
+      communities: [community("br")],
+    });
+    const [en] = normalizeCommunities({
+      version: 1,
+      timezone: "America/Sao_Paulo",
+      communities: [community("uk", { language: "en" })],
+    });
+
+    const ptPrompt = buildSystemPrompt(pt, pt.personas);
+    const enPrompt = buildSystemPrompt(en, en.personas);
+    assert.ok(ptPrompt.includes("português brasileiro coloquial"));
+    assert.ok(enPrompt.includes("British English"));
+    // …and the English one is the same prompt, not a looser one: every rule the
+    // Portuguese prompt carries has to survive the translation.
+    assert.ok(enPrompt.includes("FORBIDDEN to give medical, legal or financial advice"));
+    assert.ok(enPrompt.includes("Nobody mentions being a bot"));
+    assert.ok(!enPrompt.includes("PROIBIDO"));
+
+    const enUser = buildUserPrompt({
+      topic: "the weekend",
+      lines: 3,
+      cast: en.personas,
+      replyTo: { body: "hello", authorName: "Sam" },
+      language: "en",
+    });
+    // An English prompt asks for an English sentinel — see `SKIP_MARKER_EN`.
+    assert.ok(enUser.includes(SKIP_MARKER_EN));
+    assert.ok(!enUser.includes(SKIP_MARKER));
+    assert.equal(parseSceneDecision(`${SKIP_MARKER_EN} hostile`).skip, true);
+  });
+});
+
+describe("per-persona banned terms", () => {
+  test("default to an empty list and reject a non-list", () => {
+    const [only] = normalizeCommunities({
+      version: 1,
+      timezone: "America/Sao_Paulo",
+      communities: [community("um")],
+    });
+    assert.deepEqual(only.personas[0].banned, []);
+
+    assert.throws(
+      () =>
+        normalizeCommunities({
+          version: 1,
+          timezone: "America/Sao_Paulo",
+          communities: [
+            community("ruim", {
+              personas: [
+                persona("a", { banned: "investimento" }),
+                persona("b"),
+              ],
+            }),
+          ],
+        }),
+      /`banned` must be a list/,
+    );
+  });
+
+  test("narrow ONE character without narrowing the room", () => {
+    // The whole point: the room may discuss the topic, and the one persona
+    // somebody would ask about it cannot. Folding these into the community list
+    // would forbid it to everybody, which is a different and duller room.
+    const [config] = normalizeCommunities({
+      version: 1,
+      timezone: "America/Sao_Paulo",
+      communities: [
+        community("academia", {
+          banned: ["remédio"],
+          personas: [
+            persona("fabi", { banned: ["lesão"] }),
+            persona("outro"),
+          ],
+        }),
+      ],
+    });
+    const [fabi, outro] = config.personas;
+    const roomOnly = { banned: config.community.banned };
+    const withFabi = { banned: [...config.community.banned, ...fabi.banned] };
+
+    assert.equal(screenLine("e a lesão no ombro", roomOnly).ok, true);
+    assert.equal(
+      screenLine("e a lesão no ombro", withFabi).reason,
+      "banned-topic:lesão",
+    );
+    assert.deepEqual(outro.banned, []);
+
+    // …and the prompt says so too, naming the character rather than the room.
+    const prompt = buildSystemPrompt(config, config.personas);
+    assert.ok(/fabi NUNCA fala sobre: lesão/i.test(prompt));
+  });
+});
+
+// --------------------------------------------------------- the shipped roster
+//
+// These read the real personas.yaml rather than a fixture. Everything else in
+// this file tests the machinery; this tests the CONTENT, because the content is
+// what ships and its failures are quiet — a community with no category is a
+// room that never reaches the directory, and a duplicated persona id is two
+// characters sharing one account.
+
+describe("personas.yaml", () => {
+  const HERE = dirname(fileURLToPath(import.meta.url));
+  const CONFIG = `${HERE}/../personas.yaml`;
+  const roster = loadCommunities(CONFIG);
+
+  test("loads, and every community can hold a conversation", () => {
+    assert.ok(roster.length >= 15, `${roster.length} communities`);
+    for (const config of roster) {
+      assert.ok(
+        config.personas.length >= 4,
+        `${config.community.key} has ${config.personas.length} personas`,
+      );
+      const channels = config.community.channels ?? [];
+      assert.ok(
+        channels.length >= 4 && channels.length <= 6,
+        `${config.community.key} has ${channels.length} channels`,
+      );
+      // The channel the runner posts in has to be one that exists and is text.
+      const main = channels.find((c) => c.name === config.community.channel);
+      assert.ok(main, `${config.community.key}: no #${config.community.channel}`);
+      assert.equal((main.type ?? "text"), "text");
+      for (const channel of channels) {
+        // Channel names reach a URL and a `#mention`; ASCII is the contract.
+        assert.match(channel.name, /^[a-z0-9-]+$/, channel.name);
+      }
+    }
+  });
+
+  test("every persona id is unique across the whole file", () => {
+    // Not merely per-community, which is all `normalizeCommunities` can check:
+    // `provision.mjs` mints a character account per persona id and
+    // `character_accounts.label` is globally unique, so a collision would give
+    // two characters in two different servers one account and one voice.
+    const seen = new Map();
+    for (const config of roster) {
+      for (const persona of config.personas) {
+        assert.ok(
+          !seen.has(persona.id),
+          `${persona.id} appears in ${seen.get(persona.id)} and ${config.community.key}`,
+        );
+        seen.set(persona.id, config.community.key);
+      }
+    }
+  });
+
+  test("every community is listable: category, tagline, language", () => {
+    for (const config of roster) {
+      const { key, category, tagline, language } = config.community;
+      assert.ok(category, `${key} has no category`);
+      assert.ok(tagline, `${key} has no tagline`);
+      assert.ok(tagline.length <= 140, `${key}'s tagline is ${tagline.length} chars`);
+      assert.ok(["pt", "en"].includes(language), `${key}: ${language}`);
+    }
+  });
+
+  test("the money room bans investment advice at the room AND at every persona", () => {
+    // The one community where a missing guardrail is a regulatory problem
+    // rather than a tonal one. Every persona there is one "and where do you put
+    // yours?" away from giving financial advice, so every persona carries a ban
+    // of their own on top of the room's.
+    const money = roster.find((c) => c.community.key === "fim-do-mes");
+    assert.ok(money, "fim-do-mes is missing from the roster");
+    for (const term of ["investimento", "cripto", "renda fixa", "aposta"]) {
+      assert.ok(
+        money.community.banned.includes(term),
+        `fim-do-mes does not ban "${term}"`,
+      );
+    }
+    for (const persona of money.personas) {
+      assert.ok(
+        persona.banned.length > 0,
+        `${persona.id} carries no bans of its own`,
+      );
+    }
+    // And the deterministic screen really does drop the line.
+    assert.equal(
+      screenLine("vale a pena investir agora", {
+        banned: money.community.banned,
+      }).reason,
+      "banned-topic:investir",
+    );
+  });
+
+  test("the English room is written in English", () => {
+    const away = roster.find((c) => c.community.key === "the-away-end");
+    assert.ok(away, "the-away-end is missing from the roster");
+    assert.equal(away.community.language, "en");
+    // A register note in Portuguese under an English prompt is the exact
+    // mismatch `language` exists to prevent, and it is invisible until the
+    // first generated scene.
+    for (const persona of away.personas) {
+      assert.ok(
+        !/[áàâãéêíóôõúç]/i.test(persona.register),
+        `${persona.id}'s register is not written in English`,
+      );
+    }
+    assert.ok(buildSystemPrompt(away, away.personas).includes("British English"));
+  });
+
+  test("the file itself still explains itself", () => {
+    // The header is load-bearing documentation — it is what tells the next
+    // person that `register` is how somebody writes rather than who they are.
+    const raw = readFileSync(CONFIG, "utf8");
+    assert.ok(raw.includes("THIS FILE IS THE WHOLE CONTENT SURFACE"));
   });
 });
 
