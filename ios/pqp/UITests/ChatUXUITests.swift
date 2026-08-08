@@ -191,7 +191,13 @@ final class ChatUXUITests: XCTestCase {
         XCTAssertTrue(app.buttons["composer.send"].waitForExistence(timeout: 3))
     }
 
-    func testComposerEmojiSheetInsertsIntoTheDraft() {
+    /// The defect this replaces: the picker was a sheet, so it covered the
+    /// composer it was writing into. The emoji landed in the draft and the
+    /// draft was behind the sheet, which is indistinguishable from a dead
+    /// button. So the assertion is not merely "the emoji reached the draft" —
+    /// it is "the emoji reached the draft *while the composer was on screen*",
+    /// checked before anything is dismissed.
+    func testComposerEmojiPanelInsertsIntoTheDraftWithTheComposerStillVisible() {
         let app = openGeneral()
         let composer = app.textFields["composer.input"]
         XCTAssertTrue(composer.waitForExistence(timeout: 5))
@@ -199,6 +205,11 @@ final class ChatUXUITests: XCTestCase {
         composer.typeText("ship it ")
 
         app.buttons["composer.express"].tap()
+
+        let panel = app.otherElements["expression.panel"]
+        XCTAssertTrue(panel.waitForExistence(timeout: 5),
+                      "The smiley should open the inline panel")
+
         let search = app.textFields["picker.search"]
         XCTAssertTrue(search.waitForExistence(timeout: 5))
         search.tap()
@@ -207,9 +218,6 @@ final class ChatUXUITests: XCTestCase {
         let rocket = app.buttons["emoji.🚀"]
         XCTAssertTrue(rocket.waitForExistence(timeout: 5))
         rocket.tap()
-        // Compose mode keeps the sheet up on purpose — picking two in a row is
-        // normal — so it is dismissed explicitly.
-        app.buttons["picker.done"].tap()
 
         let deadline = Date().addingTimeInterval(5)
         while !(composer.value as? String ?? "").contains("🚀") && Date() < deadline {
@@ -217,6 +225,73 @@ final class ChatUXUITests: XCTestCase {
         }
         XCTAssertTrue((composer.value as? String ?? "").contains("🚀"),
                       "Picking an emoji should append it to the draft")
+        // The whole point: with the panel still open, the composer is visible
+        // and the emoji is visibly in it.
+        XCTAssertTrue(composer.exists && composer.isHittable,
+                      "The composer must stay reachable while the panel is up")
+    }
+
+    /// The panel takes the keyboard's place *below* the composer, and says how
+    /// to get rid of it. A sheet needed neither check; a panel does.
+    func testExpressionPanelSitsBelowTheComposerAndCloses() {
+        let app = openGeneral()
+        let composer = app.textFields["composer.input"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 5))
+
+        app.buttons["composer.express"].tap()
+        let panel = app.otherElements["expression.panel"]
+        XCTAssertTrue(panel.waitForExistence(timeout: 5))
+        // Measured *after* the panel is up: opening it lifts the composer, so a
+        // frame captured beforehand describes a layout that no longer exists.
+        XCTAssertGreaterThan(
+            panel.frame.minY, composer.frame.maxY - 1,
+            "The panel belongs under the composer, not over it — covering the "
+            + "composer is the defect it exists to fix"
+        )
+
+        let close = app.buttons["picker.close"]
+        XCTAssertTrue(close.exists, "A panel with no visible way out is a trap")
+        close.tap()
+
+        let deadline = Date().addingTimeInterval(5)
+        while panel.exists && Date() < deadline { usleep(200_000) }
+        XCTAssertFalse(panel.exists, "Closing should collapse the panel")
+        XCTAssertTrue(composer.isHittable)
+    }
+
+    /// The dead tap, as a test.
+    ///
+    /// A GIF cell's label is nothing but a `UIViewRepresentable` once the
+    /// frames decode, and a plain `Button` derives its hit region from what
+    /// SwiftUI draws — so the cell had no hit region at all and every tap fell
+    /// through it. Skipped rather than failed where the deployment has no GIF
+    /// provider: there is no grid to tap and pretending otherwise would make
+    /// the suite depend on a third-party key.
+    func testTappingAGifSendsIt() throws {
+        let app = openGeneral()
+        app.buttons["composer.express"].tap()
+        XCTAssertTrue(app.otherElements["expression.panel"].waitForExistence(timeout: 5))
+
+        let gifs = app.buttons["picker.tab.gifs"]
+        try XCTSkipUnless(gifs.waitForExistence(timeout: 3),
+                          "No GIF provider configured on the dev server")
+        gifs.tap()
+
+        let cell = app.buttons["picker.gif.0"]
+        XCTAssertTrue(cell.waitForExistence(timeout: 15), "The grid should fill")
+        cell.tap()
+
+        // Picking a GIF closes the panel and posts it — the message has no body,
+        // so the attachment appearing in the transcript is the evidence.
+        let panel = app.otherElements["expression.panel"]
+        let deadline = Date().addingTimeInterval(10)
+        while panel.exists && Date() < deadline { usleep(200_000) }
+        XCTAssertFalse(panel.exists, "Picking a GIF should close the panel")
+
+        XCTAssertFalse(app.staticTexts["chat.error"].exists,
+                       "Sending the GIF should not have failed")
+        XCTAssertTrue(app.buttons["message.avatar"].firstMatch.waitForExistence(timeout: 15),
+                      "The GIF should arrive in the transcript as a message")
     }
 
     // MARK: - Profiles

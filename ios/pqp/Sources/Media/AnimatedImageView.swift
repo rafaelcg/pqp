@@ -23,6 +23,17 @@ struct AnimatedImageView: View {
         ZStack {
             if !frames.isEmpty {
                 GIFPlayerView(frames: frames, key: url?.absoluteString ?? "", contentMode: contentMode)
+                    // Hidden from accessibility, which is also what keeps an
+                    // enclosing Button's *frame* honest. The hosted
+                    // `UIImageView` reports an accessibility frame derived from
+                    // the decoded image rather than from the layout, and a
+                    // control containing it inherits that union — in the GIF
+                    // picker that turned four tidy 182×110 cells into four
+                    // overlapping 460pt rectangles in the accessibility tree,
+                    // half of them off-screen. There is nothing to announce
+                    // here anyway: the animation is the content, and the
+                    // control around it carries the label.
+                    .accessibilityHidden(true)
             } else if failed {
                 Rectangle()
                     .fill(Palette.surface)
@@ -36,6 +47,19 @@ struct AnimatedImageView: View {
                     .overlay(ProgressView().tint(Palette.paperMuted))
             }
         }
+        // The one line that makes a GIF tappable.
+        //
+        // Once the frames arrive this view's entire content is a
+        // `UIViewRepresentable` — and a representable draws nothing SwiftUI can
+        // hit-test, while the `UIImageView` it hosts has
+        // `isUserInteractionEnabled == false` like every UIImageView. So a
+        // `Button` whose label is just this had no hit region at all: taps went
+        // straight through it to whatever was behind. That is exactly the GIF
+        // picker's dead tap, and the same bug made a GIF in the transcript
+        // refuse to open fullscreen. It only looked intermittent because the
+        // placeholder shown *while* loading is a real `Rectangle`, which is
+        // hittable — tap early enough and it worked.
+        .contentShape(Rectangle())
         .task(id: url) { await load() }
     }
 

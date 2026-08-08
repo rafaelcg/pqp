@@ -112,7 +112,7 @@ enum EmojiCatalog {
     }
 }
 
-/// Emoji and GIFs, in one sheet.
+/// Emoji and GIFs, in one place.
 ///
 /// They used to be two: a smiley in the message menu and a separate "GIF" text
 /// button in the composer, which meant two different journeys for "put
@@ -120,25 +120,33 @@ enum EmojiCatalog {
 /// rarer of the two. One smiley, two tabs — and the GIF tab only exists when
 /// the deployment actually configured a provider, so the tab bar never offers a
 /// dead end.
-struct ExpressionPicker: View {
+///
+/// Two hosts, deliberately. Reacting to a message is a sheet: the composer is
+/// irrelevant there and the sheet's dimming is what keeps the eye on the one
+/// message being reacted to. Composing is an inline panel below the composer
+/// — see `ExpressionPanel` — because a sheet covered the pill and the draft it
+/// was writing into, so an emoji did land and nothing appeared to happen.
+struct ExpressionContent: View {
     enum Mode {
         /// Opened from the composer: emoji are inserted into the draft and the
-        /// sheet stays up, because picking two in a row is normal.
+        /// picker stays up, because picking two in a row is normal.
         case compose
         /// Opened from a message's menu: one emoji, then done.
         case reaction
     }
 
-    @Environment(\.dismiss) private var dismiss
     let mode: Mode
     var gifsEnabled = false
     var onEmoji: (String) -> Void
     var onGif: (Gif) -> Void = { _ in }
+    /// The picker asking its host to go away — `dismiss()` for a sheet,
+    /// collapsing the panel for the inline one.
+    var onClose: () -> Void = {}
 
     @State private var tab = Tab.emoji
     @State private var query = ""
 
-    private enum Tab: String, CaseIterable, Identifiable {
+    enum Tab: String, CaseIterable, Identifiable {
         case emoji, gifs
         var id: String { rawValue }
         var label: LocalizedStringKey {
@@ -154,45 +162,28 @@ struct ExpressionPicker: View {
     private var showsGifTab: Bool { mode == .compose && gifsEnabled }
 
     var body: some View {
-        NavigationStack {
-            ZStack {
-                Palette.ink.ignoresSafeArea()
+        VStack(spacing: 10) {
+            if showsGifTab { tabBar }
+            searchField
 
-                VStack(spacing: 10) {
-                    if showsGifTab { tabBar }
-                    searchField
-
-                    switch tab {
-                    case .emoji:
-                        EmojiGrid(query: query) { emoji in
-                            Haptics.selection()
-                            onEmoji(emoji)
-                            if mode == .reaction { dismiss() }
-                        }
-                    case .gifs:
-                        GifGrid(query: query) { gif in
-                            onGif(gif)
-                            dismiss()
-                        }
-                    }
+            switch tab {
+            case .emoji:
+                EmojiGrid(query: query) { emoji in
+                    Haptics.selection()
+                    onEmoji(emoji)
+                    if mode == .reaction { onClose() }
                 }
-                .padding(.top, 8)
-            }
-            .navigationTitle(mode == .reaction ? "React" : "Express yourself")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("Done") { dismiss() }
-                        .tint(Palette.paperMuted)
-                        .accessibilityIdentifier("picker.done")
+            case .gifs:
+                GifGrid(query: query) { gif in
+                    Haptics.selection()
+                    onGif(gif)
+                    // Always closes, in both modes: a GIF *is* the message, so
+                    // there is nothing left to pick and the transcript is the
+                    // thing worth looking at.
+                    onClose()
                 }
             }
         }
-        // Medium first: the sheet lands roughly where the keyboard was, so the
-        // composer stays visible above it and the transition reads as the
-        // keyboard being replaced rather than the screen being taken over.
-        .presentationDetents([.medium, .large])
-        .presentationDragIndicator(.visible)
     }
 
     private var tabBar: some View {
@@ -246,6 +237,120 @@ struct ExpressionPicker: View {
         .padding(.vertical, 11)
         .pqpSurface(cornerRadius: 20)
         .padding(.horizontal, Metrics.hPadding)
+    }
+}
+
+/// The sheet host: reacting to a message.
+///
+/// A sheet is right here and wrong for the composer. The message menu has no
+/// input to keep in view, there is exactly one thing to pick, and the dimmed
+/// backdrop is what keeps the eye on the message being reacted to. Composing
+/// gets `ExpressionPanel` instead, for precisely the opposite reasons.
+struct ExpressionPicker: View {
+    @Environment(\.dismiss) private var dismiss
+    var onEmoji: (String) -> Void
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Palette.ink.ignoresSafeArea()
+
+                ExpressionContent(
+                    mode: .reaction,
+                    onEmoji: onEmoji,
+                    onClose: { dismiss() }
+                )
+                .padding(.top, 8)
+            }
+            .navigationTitle("React")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Done") { dismiss() }
+                        .tint(Palette.paperMuted)
+                        .accessibilityIdentifier("picker.done")
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+    }
+}
+
+/// The inline host: a panel that takes the keyboard's place under the composer.
+///
+/// This is the fix for a picker that worked and looked broken. As a sheet it
+/// covered the bottom of the screen — pill, draft and all — so tapping an
+/// emoji appended it to a text field nobody could see. Discord puts the picker
+/// where the keyboard was and leaves the composer above it, and that is what
+/// this is: the pill stays put, the draft grows under your thumb, and the
+/// panel is visibly a *panel* rather than a new screen.
+///
+/// The height is fixed rather than proportional. The keyboard is a fixed height
+/// too, and a panel that resized with its content would make the composer jump
+/// every time the emoji search narrowed.
+struct ExpressionPanel: View {
+    var gifsEnabled = false
+    var onEmoji: (String) -> Void
+    var onGif: (Gif) -> Void = { _ in }
+    var onClose: () -> Void
+
+    /// Roughly a keyboard. Deliberately in the same range, so the composer
+    /// lands in the same place whether the panel or the keyboard is up.
+    static let height: CGFloat = 340
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            ExpressionContent(
+                mode: .compose,
+                gifsEnabled: gifsEnabled,
+                onEmoji: onEmoji,
+                onGif: onGif,
+                onClose: onClose
+            )
+        }
+        .frame(height: Self.height)
+        .frame(maxWidth: .infinity)
+        .background(Palette.ink)
+        // A hairline is all the separation this needs: the panel is a
+        // continuation of the composer, not a card floating over the chat.
+        .overlay(alignment: .top) {
+            Rectangle().fill(Palette.border).frame(height: 1)
+        }
+        // `.contain` rather than a bare identifier: an identifier on a plain
+        // container is inherited by every descendant, which renamed the search
+        // field, both tabs and the close button to "expression.panel" and made
+        // all four unfindable. This makes the panel one addressable container
+        // whose children keep their own identities.
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("expression.panel")
+    }
+
+    private var header: some View {
+        HStack {
+            Text("Express yourself")
+                .font(Typography.caption)
+                .foregroundStyle(Palette.paperMuted)
+            Spacer()
+            // The close affordance. A panel with no visible way out is a trap:
+            // there is no sheet to swipe down and no dimmed backdrop to tap,
+            // and the smiley that opened it is now above the panel rather than
+            // in it.
+            Button(action: onClose) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(Palette.paperMuted)
+                    .frame(width: 30, height: 30)
+                    .background(Circle().fill(Palette.surface))
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("picker.close")
+            .accessibilityLabel("Close the emoji panel")
+        }
+        .padding(.horizontal, Metrics.hPadding)
+        .padding(.top, 10)
+        .padding(.bottom, 4)
     }
 }
 
@@ -341,7 +446,7 @@ private struct GifGrid: View {
 
             ScrollView {
                 LazyVGrid(columns: columns, spacing: 6) {
-                    ForEach(gifs) { gif in
+                    ForEach(Array(gifs.enumerated()), id: \.element.id) { index, gif in
                         Button {
                             onPick(gif)
                         } label: {
@@ -358,6 +463,11 @@ private struct GifGrid: View {
                             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                         }
                         .buttonStyle(.plain)
+                        // Indexed, not keyed on the GIF id: a UI test cannot
+                        // know what the provider will return today, and "the
+                        // first cell in the grid" is the thing being tapped.
+                        .accessibilityIdentifier("picker.gif.\(index)")
+                        .accessibilityLabel(gif.title.isEmpty ? Text("GIF") : Text(gif.title))
                     }
                 }
                 .padding(.horizontal, Metrics.hPadding)

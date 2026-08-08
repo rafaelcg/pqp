@@ -29,7 +29,9 @@ struct ChatView: View {
     @State private var openedThread: ThreadSummary?
     @State private var showingPicker = false
     @State private var showingPins = false
-    /// The composer's emoji/GIF sheet.
+    /// The composer's emoji/GIF panel — inline, below the composer, where the
+    /// keyboard was. Not a sheet: a sheet covered the pill and the draft, so
+    /// picking an emoji worked and looked like nothing at all had happened.
     @State private var showingExpression = false
     /// The message whose long-press menu is up, and the message whose full
     /// reaction picker is up. Two states, because the menu closes *into* the
@@ -50,6 +52,7 @@ struct ChatView: View {
                 messageList
                 typingRow
                 sanctionRow
+                errorRow
                 composerContext
                 attachmentStrip
                 Composer(
@@ -57,17 +60,41 @@ struct ChatView: View {
                     isSending: model.isSending,
                     canAttach: model.attachmentsEnabled,
                     hasAttachments: !model.pendingAttachments.isEmpty,
+                    isExpressing: showingExpression,
                     onSend: { Task { await model.send() } },
                     onType: { model.noteTyping() },
                     onAttach: { showingPicker = true },
                     onExpress: {
-                        // The keyboard goes first: the sheet lands where it was,
-                        // so the two do not fight over the bottom of the screen.
+                        // The keyboard goes first: the panel takes its place, so
+                        // the two never fight over the bottom of the screen.
                         composerFocused = false
-                        showingExpression = true
+                        withAnimation(Motion.standard) { showingExpression.toggle() }
                     }
                 )
                 .focused($composerFocused)
+
+                if showingExpression {
+                    ExpressionPanel(
+                        gifsEnabled: model.gifsEnabled,
+                        onEmoji: { model.draft.append($0) },
+                        onGif: { gif in Task { await model.sendGif(gif) } },
+                        onClose: {
+                            withAnimation(Motion.standard) { showingExpression = false }
+                        }
+                    )
+                    .transition(.move(edge: .bottom))
+                }
+            }
+            // The panel and the keyboard occupy the same space, so the one that
+            // was asked for wins: typing in the composer collapses the panel
+            // rather than stacking a keyboard on top of it. The panel's *own*
+            // search field is a different matter — the keyboard covers the
+            // panel there, exactly as it does in Discord, and that is fine
+            // because the thing being typed into is still on screen.
+            .onChange(of: composerFocused) { _, focused in
+                if focused, showingExpression {
+                    withAnimation(Motion.standard) { showingExpression = false }
+                }
             }
 
             if let target = actionTarget {
@@ -79,6 +106,7 @@ struct ChatView: View {
         .navigationBarTitleDisplayMode(.inline)
         .animation(Motion.standard, value: model.replyingTo?.id)
         .animation(Motion.standard, value: model.editing?.id)
+        .animation(Motion.standard, value: model.error)
         .toolbar {
             if let conversation {
                 ToolbarItemGroup(placement: .topBarTrailing) {
@@ -132,16 +160,8 @@ struct ChatView: View {
             )
         }
         .sheet(isPresented: $showingPins) { PinnedMessagesView(channelId: channelId) }
-        .sheet(isPresented: $showingExpression) {
-            ExpressionPicker(
-                mode: .compose,
-                gifsEnabled: model.gifsEnabled,
-                onEmoji: { model.draft.append($0) },
-                onGif: { gif in Task { await model.sendGif(gif) } }
-            )
-        }
         .sheet(item: $reactionTarget) { target in
-            ExpressionPicker(mode: .reaction) { emoji in
+            ExpressionPicker { emoji in
                 Task { await model.toggleReaction(emoji, on: target) }
             }
         }
@@ -382,6 +402,43 @@ struct ChatView: View {
         }
     }
 
+    /// Whatever went wrong, said out loud, directly above the composer.
+    ///
+    /// `ChatModel.error` was write-only until now: eight code paths set it and
+    /// no view ever read it, so a GIF the server refused, a history page that
+    /// failed to load and a send that was rejected were all equally silent.
+    /// Above the composer rather than over it, because the panel now occupies
+    /// the bottom of the screen and a notice underneath it would be a notice
+    /// nobody sees — the exact failure being fixed.
+    @ViewBuilder
+    private var errorRow: some View {
+        if let error = model.error {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Palette.danger)
+                    .padding(.top, 2)
+                Text(error)
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.paper)
+                    .accessibilityIdentifier("chat.error")
+                Spacer()
+                Button {
+                    withAnimation(Motion.standard) { model.error = nil }
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(Palette.paperMuted)
+                }
+                .accessibilityLabel("Dismiss")
+            }
+            .padding(.horizontal, Metrics.hPadding)
+            .padding(.vertical, 8)
+            .background(Palette.danger.opacity(0.12))
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
+    }
+
     @ViewBuilder
     private var typingRow: some View {
         if !model.typingNames.isEmpty {
@@ -415,6 +472,10 @@ struct Composer: View {
     let isSending: Bool
     var canAttach: Bool = false
     var hasAttachments: Bool = false
+    /// Whether the expression panel is currently open. The smiley is a toggle,
+    /// so it has to look like one — an unlit button over an open panel reads as
+    /// "tap me to open the thing that is already open".
+    var isExpressing: Bool = false
     let onSend: () -> Void
     let onType: () -> Void
     var onAttach: () -> Void = {}
@@ -457,14 +518,15 @@ struct Composer: View {
                     .onChange(of: text) { _, _ in onType() }
 
                 Button(action: onExpress) {
-                    Image(systemName: "face.smiling")
+                    Image(systemName: isExpressing ? "keyboard" : "face.smiling")
                         .font(.system(size: 18))
-                        .foregroundStyle(Palette.paperMuted)
+                        .foregroundStyle(isExpressing ? Palette.signal : Palette.paperMuted)
                         .frame(width: 34, height: 34)
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("composer.express")
                 .accessibilityLabel("Emoji and GIFs")
+                .accessibilityAddTraits(isExpressing ? .isSelected : [])
             }
             .padding(.horizontal, 5)
             // A continuous rounded rectangle rather than a Capsule: at one line
