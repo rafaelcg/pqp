@@ -15,12 +15,12 @@ import { uploadAvatar } from "@/lib/avatar-upload";
  * that names them.
  */
 export const AVATAR_PRESETS = [
-  "https://api.dicebear.com/9.x/shapes/svg?seed=signal",
-  "https://api.dicebear.com/9.x/shapes/svg?seed=phosphor",
-  "https://api.dicebear.com/9.x/shapes/svg?seed=desk",
-  "https://api.dicebear.com/9.x/shapes/svg?seed=mesh",
-  "https://api.dicebear.com/9.x/shapes/svg?seed=lobby",
-  "https://api.dicebear.com/9.x/shapes/svg?seed=relay",
+  "https://api.dicebear.com/9.x/shapes/png?seed=signal",
+  "https://api.dicebear.com/9.x/shapes/png?seed=phosphor",
+  "https://api.dicebear.com/9.x/shapes/png?seed=desk",
+  "https://api.dicebear.com/9.x/shapes/png?seed=mesh",
+  "https://api.dicebear.com/9.x/shapes/png?seed=lobby",
+  "https://api.dicebear.com/9.x/shapes/png?seed=relay",
   "https://api.dicebear.com/9.x/bottts-neutral/svg?seed=pqp1",
   "https://api.dicebear.com/9.x/bottts-neutral/svg?seed=pqp2",
 ];
