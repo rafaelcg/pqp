@@ -16,26 +16,19 @@
 	<string>$(PRODUCT_NAME)</string>
 	<key>CFBundlePackageType</key>
 	<string>XPC!</string>
-	<!-- Must match the host app exactly, or App Store validation rejects the
-	     upload with a version-mismatch error that never mentions the extension. -->
 	<key>CFBundleShortVersionString</key>
-	<string>0.1.0</string>
+	<string>1.0</string>
 	<key>CFBundleVersion</key>
-	<string>9</string>
+	<string>10</string>
 	<key>NSExtension</key>
 	<dict>
 		<key>NSExtensionAttributes</key>
 		<dict>
-			<!-- SampleBuffer, not MovieFile: the frames are wanted live, to be
-			     published over WebRTC. MovieFile hands over a finished recording,
-			     which is the wrong shape for a call entirely. -->
 			<key>RPBroadcastProcessMode</key>
 			<string>RPBroadcastProcessModeSampleBuffer</string>
 		</dict>
 		<key>NSExtensionPointIdentifier</key>
 		<string>com.apple.broadcast-services-upload</string>
-		<!-- Swift classes are namespaced by module, and the module is the
-		     extension target, not the app. -->
 		<key>NSExtensionPrincipalClass</key>
 		<string>$(PRODUCT_MODULE_NAME).SampleHandler</string>
 	</dict>

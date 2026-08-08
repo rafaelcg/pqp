@@ -96,7 +96,7 @@ targets:
         INFOPLIST_FILE: pqp/Info.plist
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
-        TARGETED_DEVICE_FAMILY: "1,2"
+        TARGETED_DEVICE_FAMILY: "1"
         SUPPORTS_MACCATALYST: NO
         # The app is a dark, high-contrast surface by design; letting iOS
         # light-mode it produces an unreadable half-theme.
