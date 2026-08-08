@@ -10,6 +10,11 @@ import {
   upsertUser,
 } from "../services/users.js";
 import { getAgeGateStatus, type AgeGateStatus } from "../services/age-gate.js";
+import {
+  CHARACTER_TOKEN_PREFIX,
+  isCharacterAccountsEnabled,
+  resolveCharacterToken,
+} from "../services/characters.js";
 import type { DbUser } from "../db.js";
 
 const clerk = createClerkClient({
@@ -463,6 +468,48 @@ export async function verifyAuthHeader(
       // not survive the next call. Reachable only under the bypass, which
       // already refuses to run when NODE_ENV=production.
       emailDomains: devEmailDomains(),
+    };
+  }
+
+  /**
+   * The character branch — the house cast's production identity.
+   *
+   * Placed here, between the dev bypass and Clerk, for two reasons. It is
+   * ahead of Clerk because a `character:` token is not a JWT and would cost a
+   * guaranteed-failing `verifyToken` (plus a logged rejection) on every request
+   * a character makes. It is behind the bypass because the bypass already
+   * refuses to exist in production, so nothing about this can widen it.
+   *
+   * `resolveCharacterToken` is null for every failure — gate off, unknown
+   * token, revoked account, tampered hash — and this returns null in turn
+   * rather than falling through to Clerk. Falling through would be a bug with
+   * teeth: a `character:` string is not a Clerk token, so the fallthrough could
+   * only ever end in the same null, but it would do so via a code path that
+   * logs the token's shape and consults an external service on an
+   * attacker-controlled schedule.
+   *
+   * `emailDomains: []` is not a placeholder. It is the statement that a
+   * character proves no email address, and therefore can never be granted an
+   * SSO domain join — `upsertUser` overwrites the column with this on every
+   * request, so a domain cannot be pinned onto a character by hand either.
+   */
+  if (token.startsWith(CHARACTER_TOKEN_PREFIX)) {
+    if (!isCharacterAccountsEnabled()) {
+      return null;
+    }
+    const character = await resolveCharacterToken(
+      token.slice(CHARACTER_TOKEN_PREFIX.length),
+    );
+    if (!character) {
+      // No token material, and no distinction between the failure modes.
+      console.error("[auth] character token rejected");
+      return null;
+    }
+    return {
+      clerkId: character.clerkId,
+      displayName: character.displayName,
+      avatarUrl: character.avatarUrl,
+      emailDomains: [],
     };
   }
 

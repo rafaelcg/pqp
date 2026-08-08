@@ -23,20 +23,42 @@ export class PqpApi {
     this.token = token;
   }
 
-  async call(path, { method = "GET", body } = {}) {
-    const response = await fetch(`${this.baseUrl}${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${this.token}`,
-        ...(body ? { "Content-Type": "application/json" } : {}),
-      },
-      ...(body ? { body: JSON.stringify(body) } : {}),
-    });
-    const text = await response.text();
-    if (!response.ok) {
+  /**
+   * One API call, waiting out a 429 rather than failing on it.
+   *
+   * The server rate-limits *writes* per user (`writeLimiter` in
+   * `api/index.ts`), and the seed script legitimately makes twenty-five channel
+   * writes in a row — so a run that creates the launch communities hits the
+   * ceiling every time and used to die halfway through a server, leaving it
+   * with three of its five channels. That is a script problem, not a server
+   * problem: the limit is correct and the fix is to respect it.
+   *
+   * `Retry-After` is what the server actually sends, so it is what is honoured;
+   * the fallback exists only for a proxy that strips it. Bounded, because an
+   * operator script that hangs forever on a misconfigured deploy is worse than
+   * one that reports the 429.
+   */
+  async call(path, { method = "GET", body, retries = 4 } = {}) {
+    for (let attempt = 0; ; attempt++) {
+      const response = await fetch(`${this.baseUrl}${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${this.token}`,
+          ...(body ? { "Content-Type": "application/json" } : {}),
+        },
+        ...(body ? { body: JSON.stringify(body) } : {}),
+      });
+      const text = await response.text();
+      if (response.ok) {
+        return text ? JSON.parse(text) : null;
+      }
+      if (response.status === 429 && attempt < retries) {
+        const after = Number(response.headers.get("retry-after"));
+        await sleep((Number.isFinite(after) && after > 0 ? after : 2) * 1000);
+        continue;
+      }
       throw new Error(`${method} ${path} → ${response.status} ${text}`);
     }
-    return text ? JSON.parse(text) : null;
   }
 
   /**
@@ -96,12 +118,47 @@ export class PqpApi {
     return result.channel ?? result;
   }
 
+  async updateChannel(channelId, patch) {
+    const result = await this.call(`/api/channels/${channelId}`, {
+      method: "PATCH",
+      body: patch,
+    });
+    return result.channel ?? result;
+  }
+
+  async listInvites(serverId) {
+    return (await this.call(`/api/servers/${serverId}/invites`)).invites ?? [];
+  }
+
   async createInvite(serverId) {
     const result = await this.call(`/api/servers/${serverId}/invites`, {
       method: "POST",
       body: {},
     });
     return (result.invite ?? result).code;
+  }
+
+  /**
+   * A permanent invite for this server, reusing one if it already has a
+   * never-expiring, never-exhausted code.
+   *
+   * Minting a fresh invite on every seed run would leave a pile of live codes
+   * behind, each of which is a working door into a public-facing server that
+   * nobody is tracking.
+   */
+  async ensureInvite(serverId) {
+    const existing = (await this.listInvites(serverId)).find(
+      (invite) => !invite.expiresAt && !invite.maxUses,
+    );
+    return existing?.code ?? (await this.createInvite(serverId));
+  }
+
+  async pinMessage(messageId) {
+    return this.call(`/api/messages/${messageId}/pin`, { method: "POST" });
+  }
+
+  async listPins(channelId) {
+    return (await this.call(`/api/channels/${channelId}/pins`)).messages ?? [];
   }
 
   async joinInvite(code) {

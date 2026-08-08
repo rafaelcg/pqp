@@ -55,9 +55,26 @@ export function buildUserPrompt({ topic, lines, cast, memory = {}, replyTo }) {
     );
   }
   if (replyTo) {
+    // The screening decision rides in the SAME call that writes the reply.
+    // A separate "should we answer this?" request would double the cost and
+    // the latency of every human interaction — the one interaction where
+    // latency is visible to a person waiting — for a judgement the model is
+    // already making implicitly when it drafts the answer. The deterministic
+    // screen in guardrails.js runs before this and again after it; this is the
+    // judgement call in the middle, the part a regex cannot make.
     parts.push(
       `IMPORTANTE: uma pessoa real acabou de escrever no canal:`,
       `"${replyTo.body}" — ${replyTo.authorName}`,
+      ``,
+      `ANTES DE ESCREVER, decida se vale responder. Responda com a única linha`,
+      `"${SKIP_MARKER} motivo" e mais nada se a mensagem:`,
+      `- for sobre algo proibido, ou pedir conselho médico, jurídico ou financeiro;`,
+      `- for agressiva, preconceituosa, ou dirigida a atacar alguém;`,
+      `- perguntar se alguém é bot, IA, robô ou pessoa real;`,
+      `- pedir contato, encontro presencial, ou levar a conversa para fora daqui;`,
+      `- for spam, link, ou não fizer sentido nenhum no canal.`,
+      ``,
+      `Se valer responder:`,
       `A primeira mensagem tem que responder essa pessoa de verdade, pelo nome,` +
         ` sobre o que ela disse. Depois a conversa segue.`,
     );
@@ -66,6 +83,39 @@ export function buildUserPrompt({ topic, lines, cast, memory = {}, replyTo }) {
     `Responda apenas com as ${lines} linhas, nada antes e nada depois.`,
   );
   return parts.join("\n");
+}
+
+/** The token the model uses to decline a reply. Never posted, only logged. */
+export const SKIP_MARKER = "PULAR:";
+
+/**
+ * Did the model decline to answer?
+ *
+ * Checked before `parseTranscript`, because a declined scene and an empty scene
+ * are the same thing to the parser — no line names a cast member, so nothing
+ * survives — and the operator needs to be able to tell "the model judged this
+ * message not worth answering" from "the generation was garbage". One is the
+ * system working.
+ *
+ * Only the FIRST non-empty line counts. A model that declines and then writes
+ * the dialogue anyway has not declined, and reading the marker from anywhere in
+ * the text would let a persona quoting the word suppress a whole scene.
+ */
+export function parseSceneDecision(text) {
+  for (const raw of String(text ?? "").split("\n")) {
+    const line = raw.trim();
+    if (line.length === 0) {
+      continue;
+    }
+    if (line.toUpperCase().startsWith(SKIP_MARKER)) {
+      return {
+        skip: true,
+        reason: line.slice(SKIP_MARKER.length).trim() || "unspecified",
+      };
+    }
+    return { skip: false, reason: null };
+  }
+  return { skip: false, reason: null };
 }
 
 /**

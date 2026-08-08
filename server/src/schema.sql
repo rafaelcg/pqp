@@ -25,6 +25,47 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_discrim
 -- queries — see the WHERE clause on `searchUsersByPrefix`/`findUserByTag`.
 ALTER TABLE users ADD COLUMN IF NOT EXISTS is_webhook BOOLEAN NOT NULL DEFAULT FALSE;
 
+-- A CHARACTER account: an operator-provisioned member of the house cast.
+--
+-- Deliberately NOT `is_webhook`. A webhook's pseudo-row is a posting mechanism —
+-- the client badges every one of its messages "not a member", it cannot react,
+-- cannot show typing, and never appears in the member list. A character is the
+-- opposite: an ordinary account in every read path, which is the entire point.
+-- Reusing the webhook flag would have inherited all three of those behaviours
+-- and made the cast read as an RSS feed.
+--
+-- What the flag is FOR is the small set of places where an operator-owned
+-- account must behave differently from a person, and each of them names this
+-- column rather than guessing from the `clerk_id` prefix:
+--
+--   * discovery — `searchUsersByPrefix` / `findUserByTag` hide a character from
+--     anyone who does not already share a server with it, so the cast is
+--     findable inside its community and not enumerable from outside it;
+--   * contact — friend requests are refused (services/friends.ts) and DMs are
+--     refused in both directions (services/dms.ts), on top of the
+--     `dm_privacy = 'nobody'` these rows are created with;
+--   * voice — refused at the `join-voice-room` chokepoint (ws/voice.ts);
+--   * self-service account lifecycle — deletion and export are refused, because
+--     a long-lived bearer token must not be able to erase or exfiltrate the
+--     account it authenticates as.
+--
+-- See services/characters.ts and `character_accounts` at the foot of this file.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS is_character BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- The two pseudo-identity flags are mutually exclusive. They are opposite
+-- answers to the same question — "is there a person behind this row" — and a
+-- row claiming both would be read one way by the client's webhook badge and
+-- another by every check listed above.
+DO $$
+BEGIN
+  ALTER TABLE users DROP CONSTRAINT IF EXISTS users_pseudo_identity_exclusive;
+  ALTER TABLE users
+    ADD CONSTRAINT users_pseudo_identity_exclusive
+    CHECK (NOT (is_character AND is_webhook));
+EXCEPTION
+  WHEN others THEN NULL;
+END $$;
+
 -- The object-storage key of an *uploaded* profile picture, or NULL.
 --
 -- `avatar_url` above stays what it always was: whatever string is rendered as
@@ -1753,3 +1794,113 @@ END $$;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_reports_open_server_dedupe
   ON reports (reporter_id, reported_server_id)
   WHERE status = 'open' AND subject_type = 'server';
+-- ============================================================ character accounts
+--
+-- The production identity for the house cast: a `users` row that a long-lived
+-- bearer token can authenticate as. Webhooks already proved half of this — a
+-- real row with a synthetic `clerk_id` that nothing authenticates as — and this
+-- table is the other half, and only the other half.
+--
+-- WHAT IS STORED IS A HASH, NEVER THE TOKEN. `token_hash` is the hex SHA-256 of
+-- a 256-bit random secret that exists exactly once, in the provisioning script's
+-- output. There is no route, no log line and no column that can hand it back:
+-- losing it means minting a new one (`provision.mjs --rotate`), which is the
+-- correct trade for a credential that is checked on every request a character
+-- makes.
+--
+-- REVOCATION IS ONE UPDATE. `revoked_at` is checked in the auth lookup, so
+-- stopping a character is `UPDATE character_accounts SET revoked_at = NOW()` and
+-- takes effect on its next request — without deleting the row, which would take
+-- the audit trail of which account the token belonged to with it.
+--
+-- `label` is the operator's name for the account (the persona id in the ambient
+-- runner's YAML). Unique, so provisioning is idempotent: re-running the script
+-- finds the existing account instead of minting a second one that would join the
+-- server as a duplicate stranger.
+CREATE TABLE IF NOT EXISTS character_accounts (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+  label TEXT NOT NULL UNIQUE,
+  token_hash TEXT NOT NULL UNIQUE,
+  -- Free text: who provisioned this and why. Not a foreign key, because the
+  -- operator running a script against DATABASE_URL may not be a `users` row.
+  created_by TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  revoked_at TIMESTAMPTZ
+);
+
+-- The auth lookup's only index. Partial on the live rows because a revoked
+-- token must never be found by it, and the overwhelming majority of lookups are
+-- for live accounts.
+CREATE INDEX IF NOT EXISTS idx_character_accounts_live
+  ON character_accounts (token_hash)
+  WHERE revoked_at IS NULL;
+
+-- Character invariants, repaired on boot under a fingerprint guard.
+--
+-- Three facts have to be true of every character row, and all three are written
+-- at creation by `createCharacterAccount`. They are restated here because the
+-- creation path is not the only way a row can reach this table — a hand-run
+-- INSERT during an incident, a restored backup taken before a rule existed, or
+-- this rule itself changing — and a character that trips the age gate is a
+-- socket that closes 4401 with no error anyone will connect to the cause.
+--
+--   age gate  — a character has no date of birth to declare, so the gate is
+--               satisfied at creation. `age_check_dob` stays NULL exactly as it
+--               does for a person who passed (see the age-gate block above).
+--   dm_privacy — 'nobody'. The hard guardrail is that characters are never in
+--               anyone's inbox; this makes the server enforce it with the
+--               machinery it already has, rather than trusting the runner to
+--               have no code path.
+--   onboarding — the wizard's completion flag, so the client never opens a
+--               first-run modal at an account with no browser.
+--
+-- The guard is the same shape as the email scrub and the search-vector
+-- migration above: a fingerprint of the rule, stashed in the column comment.
+-- Changing any part of the rule string re-arms the pass; leaving it alone makes
+-- every subsequent boot a single `col_description` read.
+DO $$
+DECLARE
+  rule CONSTANT TEXT := 'age_checked_at=NOW,age_check_passed=TRUE,dm_privacy=nobody,prefs.onboardedAt';
+  marker CONSTANT TEXT := 'pqp-character-invariants ' || md5(rule);
+  col_attnum SMALLINT;
+  repaired INT := 0;
+BEGIN
+  SELECT a.attnum INTO col_attnum FROM pg_attribute a
+  WHERE a.attrelid = 'users'::regclass AND a.attname = 'is_character'
+    AND NOT a.attisdropped;
+
+  IF col_description('users'::regclass, col_attnum) IS NOT DISTINCT FROM marker THEN
+    RETURN;
+  END IF;
+
+  WITH fixed AS (
+    UPDATE users
+       SET age_checked_at = COALESCE(age_checked_at, NOW()),
+           age_check_passed = TRUE,
+           age_check_dob = NULL,
+           dm_privacy = 'nobody'
+     WHERE is_character
+       AND (age_checked_at IS NULL
+            OR age_check_passed IS DISTINCT FROM TRUE
+            OR dm_privacy <> 'nobody')
+    RETURNING id
+  )
+  SELECT count(*) INTO repaired FROM fixed;
+
+  INSERT INTO user_preferences (user_id, settings)
+  SELECT u.id, jsonb_build_object('onboardedAt', to_char(NOW() AT TIME ZONE 'UTC',
+           'YYYY-MM-DD"T"HH24:MI:SS"Z"'))
+    FROM users u WHERE u.is_character
+  ON CONFLICT (user_id) DO UPDATE
+    SET settings = user_preferences.settings
+        || jsonb_build_object('onboardedAt',
+             COALESCE(user_preferences.settings ->> 'onboardedAt',
+               to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')));
+
+  IF repaired > 0 THEN
+    RAISE NOTICE 'pqp: repaired invariants on % character row(s)', repaired;
+  END IF;
+
+  EXECUTE format('COMMENT ON COLUMN users.is_character IS %L', marker);
+END $$;

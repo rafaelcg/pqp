@@ -2,9 +2,17 @@
 node_modules/
 package-lock.json
 
-# Runtime output. `state/` is per-community memory, the JSONL is the audit log.
+# Runtime output. `state/` is per-community memory and the placement file the
+# seed script writes; the JSONL is the audit log.
 state/
 *.log.jsonl
+
+# CHARACTER TOKENS. The only copy of a credential that authenticates as an
+# account in a public server, and one that cannot be read back out of the
+# database. It must never be in a commit, and it is listed before anything else
+# an editor might tab-complete into `git add`.
+secrets/
+characters.json
 
 # The real cast. `personas.example.yaml` is the checked-in template; the live
 # communities are operational content, not source.

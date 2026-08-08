@@ -37,7 +37,8 @@ export type DmRefusalReason =
   | "unknown-user"
   | "blocked"
   | "privacy"
-  | "too-many";
+  | "too-many"
+  | "character";
 
 /**
  * Why a conversation could not be opened.
@@ -82,6 +83,28 @@ async function assertReachable(
     // `dm_pairs` would refuse a self-pair through its `low < high` CHECK, but
     // as a 500 well after the channel row was written.
     throw new DmRefusedError("self");
+  }
+
+  /**
+   * A CHARACTER IS NEVER IN ANYBODY'S INBOX, and never opens one.
+   *
+   * The incoming half is already covered — character rows are created with
+   * `dm_privacy = 'nobody'`, which the loop below refuses. This is the outgoing
+   * half, and it is here rather than left to the runner having no code path for
+   * it, because "the fictional stranger cannot be in your DMs" is a promise the
+   * product makes and a config file cannot keep. A bug in the runner, an
+   * operator experimenting with a token, or a future feature that opens a
+   * conversation on somebody's behalf all have to hit this.
+   *
+   * Read as an actor check on `is_character` rather than inferred from the
+   * `clerk_id` prefix: the flag is the fact, the prefix is a formatting detail.
+   */
+  const actor = await getPool().query<{ is_character: boolean | null }>(
+    `SELECT is_character FROM users WHERE id = $1`,
+    [actorId],
+  );
+  if (actor.rows[0]?.is_character) {
+    throw new DmRefusedError("character");
   }
 
   const result = await getPool().query<ReachabilityRow>(

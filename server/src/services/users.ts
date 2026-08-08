@@ -22,7 +22,7 @@ import { getPreferences } from "./preferences.js";
 import { invalidateServerAudience } from "./servers.js";
 
 /** Every column of `DbUser`, single-sourced so the reads cannot drift apart. */
-const DB_USER_COLUMNS = `id, clerk_id, display_name, username, discriminator, avatar_url, avatar_key, email_domains`;
+const DB_USER_COLUMNS = `id, clerk_id, display_name, username, discriminator, avatar_url, avatar_key, email_domains, is_character`;
 
 const DISCRIMINATOR_MAX = 9999;
 /** Random probes tried before falling back to a sweep that cannot miss. */
@@ -215,7 +215,7 @@ function isTagConflict(error: unknown): boolean {
  * `joao_k2f#0417` the user can change later beats an error page they cannot get
  * past.
  */
-async function deriveHandle(
+export async function deriveHandle(
   displayName: string,
 ): Promise<{ username: string; discriminator: string }> {
   const base = slugifyUsername(displayName);
@@ -303,17 +303,53 @@ export async function getDmPrivacy(userId: string): Promise<DmPrivacy> {
 }
 
 /**
+ * "This row is discoverable by `viewer`", as a SQL fragment.
+ *
+ * An ordinary account always is — discovery by handle is how the product works.
+ * A CHARACTER is discoverable only from inside a server it is already in, which
+ * is the one rule that keeps the house cast from being enumerable: a character
+ * is a full member of its community, mentionable and taggable by the people who
+ * are in the room with it, and simply absent from the directory to everybody
+ * else.
+ *
+ * Written as a fragment shared by both discovery routes, because search and
+ * exact lookup are one surface — an enumerator does not care which of the two
+ * answers, and a rule applied to only one of them is not a rule.
+ *
+ * `viewer` must be a UUID-typed expression. Ordinary rows short-circuit on the
+ * first disjunct, so the EXISTS is only ever evaluated for a character.
+ */
+export function discoverableSql(viewer: string): string {
+  return `(
+    COALESCE(users.is_character, FALSE) = FALSE
+    OR EXISTS (
+      SELECT 1 FROM server_members theirs
+      JOIN server_members mine
+        ON mine.server_id = theirs.server_id AND mine.user_id = ${viewer}
+      WHERE theirs.user_id = users.id
+    )
+  )`;
+}
+
+/**
  * Exact handle lookup — the half of discovery that is not enumerable, because
  * the caller has to already know both the name and the number.
+ *
+ * Takes the viewer even though the handle is exact: `discoverableSql` needs it,
+ * and a character that answered here would be reachable by anyone who guessed
+ * or was shown its tag — including from a screenshot, which is the realistic
+ * way a handle travels.
  */
 export async function findUserByTag(
   username: string,
   discriminator: string,
+  viewerId: string,
 ): Promise<PublicUser | null> {
   const result = await getPool().query<PublicUserRow>(
     `SELECT ${PUBLIC_USER_COLUMNS} FROM users
-     WHERE username = $1 AND discriminator = $2`,
-    [username, discriminator],
+     WHERE username = $1 AND discriminator = $2
+       AND ${discoverableSql("$3::uuid")}`,
+    [username, discriminator, viewerId],
   );
   const row = result.rows[0];
   return row ? toPublicUserSummary(row) : null;
@@ -341,6 +377,7 @@ export async function searchUsersByPrefix(
      WHERE username IS NOT NULL
        AND username LIKE $1 || '%' ESCAPE '\\'
        AND id <> $2
+       AND ${discoverableSql("$2::uuid")}
      ORDER BY username ASC, discriminator ASC
      LIMIT $3`,
     [escaped, viewerId, limit],

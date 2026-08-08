@@ -34,7 +34,7 @@ import { toPublicUserSummary } from "./users.js";
  * module stays testable against nothing but Postgres.
  */
 
-export type FriendRequestRefusalReason = "self" | "blocked";
+export type FriendRequestRefusalReason = "self" | "blocked" | "character";
 
 /**
  * Why a request could not be sent. The reason must never reach the response
@@ -126,6 +126,31 @@ export async function sendFriendRequest(
   );
   if (!blocked.rows[0]?.no_block) {
     throw new FriendRequestRefusedError("blocked");
+  }
+
+  /**
+   * NO FRIENDSHIPS WITH A CHARACTER, in either direction.
+   *
+   * REFUSED rather than silently accepted-and-ignored, which was the other
+   * candidate. A no-op leaves a request sitting "pending" in the sender's list
+   * forever against an account that will never answer — worse to use than a
+   * refusal, and a louder tell than one, because "the only account that never
+   * responds" is exactly the pattern somebody screenshots. Auto-declining is
+   * worse still: it means the character *took an action*, on a timer, which is
+   * a behaviour to explain.
+   *
+   * And a refusal costs nothing in information, because this module's standing
+   * rule is that a refusal is not an oracle: the route answers one sentence for
+   * every reason, so "is a character" and "has blocked me" are the same
+   * response. The character is simply an account you cannot add.
+   */
+  const character = await getPool().query<{ any_character: boolean }>(
+    `SELECT bool_or(COALESCE(is_character, FALSE)) AS any_character
+       FROM users WHERE id = ANY($1::uuid[])`,
+    [[actorId, targetId]],
+  );
+  if (character.rows[0]?.any_character) {
+    throw new FriendRequestRefusedError("character");
   }
 
   const [low, high] = sortedPair(actorId, targetId);

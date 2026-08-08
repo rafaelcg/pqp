@@ -47,6 +47,111 @@ const IDENTITY_PATTERNS = [
 ];
 
 /**
+ * Somebody asking, in any spelling, whether they are talking to software.
+ *
+ * Kept apart from `IDENTITY_PATTERNS` because they screen opposite directions:
+ * those catch a persona *claiming* something about itself, these catch a human
+ * *asking*. The rule they share is that the answer is always silence — see
+ * `screenInbound`.
+ */
+const IDENTITY_PROBE_PATTERNS = [
+  // `vcs` and `vc` are how the audience actually types "vocês"/"você", so the
+  // alternation carries them everywhere it carries the spelled-out form. A
+  // screen that only catches correct orthography catches almost nothing here.
+  /\b(voc[êe]s?|vcs?|tu|isso|isso a[íi]|aqui)\s+(é|e|s[ãa]o|tá|ta)\s+(um\s+|uma\s+)?(bot|rob[ôo]|ia|chatgpt|gpt|chatbot|ai)(?![a-zà-ú])/i,
+  /\b(é|e)\s+(um\s+|uma\s+)?(bot|rob[ôo]|ia|chatbot)\s*\??/i,
+  /\b(bot|rob[ôo]|ia|chatbot)\s*\?/i,
+  /\b(intelig[êe]ncia artificial|modelo de linguagem|prompt|llm)\b/i,
+  /\b(voc[êe]s?|vcs?|tu)\s+(s[ãa]o|é|e)\s+(gente\s+)?(de\s+)?verdade\b/i,
+  /\bpessoa\s+real\b/i,
+];
+
+/**
+ * Somebody being aimed at, rather than talked to.
+ *
+ * Not a moderation system and not trying to be — the server has one of those.
+ * This is the narrow question "would replying to this amplify it", and the
+ * failure it exists to prevent is the one §06 of the design doc names: a
+ * character quoting, answering or reacting to a real user's harmful message
+ * lends it a second voice in the room.
+ */
+const HOSTILITY_PATTERNS = [
+  /\b(vai\s+(se\s+)?(fode?r|tomar\s+no)|fdp|filho\s+da\s+puta|arrombad[oa]|corno|viado|bicha|macac[oa]|preto\s+imundo|retardad[oa]|mongol[oó]ide)\b/i,
+  /\b(te\s+mato|vou\s+te\s+(pegar|achar|matar|quebrar)|sei\s+onde\s+voc[êe]\s+mora)\b/i,
+  /\b(se\s+mata|se\s+mate|vai\s+morrer)\b/i,
+];
+
+/** A message asking the room for medical / legal / financial guidance. */
+const ADVICE_REQUEST_PATTERNS = [
+  /\b(o que|oque)\s+(eu\s+)?(tomo|fa[çc]o)\s+(pra|para)\b/i,
+  /\bposso\s+(tomar|misturar|beber)\b/i,
+  /\b(vale a pena|devo)\s+(investir|comprar|vender)\b/i,
+  /\b(sintoma|diagn[oó]stic|dor\s+no|advogad|processo\s+judicial)/i,
+];
+
+/**
+ * Should a persona answer this real person at all?
+ *
+ * The runner asks this BEFORE it plans a reply scene, and the answer is a
+ * verdict plus a reason for the log. Every "no" is silence — never a canned
+ * refusal, never "não posso falar sobre isso", because a character that
+ * announces its own rules is a character explaining that it has rules.
+ *
+ * The list is deliberately short and deliberately conservative. Four of the
+ * five reasons are the guardrails restated as an inbound question (banned
+ * topics, advice, off-platform, identity), which is the same duplication the
+ * outbound screen makes and for the same reason: the generation call is also
+ * asked to decline, and only one of the two still works when the model does
+ * not. The fifth, hostility, exists because a reply is amplification.
+ *
+ * Pure. `now`, randomness and rate caps are the runner's problem — this
+ * function answers only "is this message one to engage with".
+ */
+export function screenInbound(body, { banned = [], minLength = 2 } = {}) {
+  const text = String(body ?? "").trim();
+  if (text.length < minLength) {
+    return { reply: false, reason: "too-short" };
+  }
+  const folded = fold(text);
+  for (const term of banned) {
+    const pattern = new RegExp(`(^|[^a-z0-9])${escapeRegex(fold(term))}`, "i");
+    if (pattern.test(folded)) {
+      return { reply: false, reason: `banned-topic:${term}` };
+    }
+  }
+  for (const pattern of HOSTILITY_PATTERNS) {
+    if (pattern.test(text)) {
+      return { reply: false, reason: "hostile" };
+    }
+  }
+  for (const pattern of IDENTITY_PROBE_PATTERNS) {
+    if (pattern.test(text)) {
+      // The one case where silence is the *policy* and not just caution. A
+      // persona may not claim to be human and may not volunteer being
+      // software, so there is no sentence it can say here. Not answering is
+      // the only move that keeps both halves of that rule.
+      return { reply: false, reason: "identity-probe" };
+    }
+  }
+  for (const pattern of ADVICE_REQUEST_PATTERNS) {
+    if (pattern.test(text)) {
+      return { reply: false, reason: "advice-request" };
+    }
+  }
+  for (const pattern of ADVICE_PATTERNS) {
+    if (pattern.test(text)) {
+      return { reply: false, reason: "advice-request" };
+    }
+  }
+  for (const pattern of OFFPLATFORM_PATTERNS) {
+    if (pattern.test(text)) {
+      return { reply: false, reason: "off-platform" };
+    }
+  }
+  return { reply: true, reason: "ok" };
+}
+
+/**
  * Screen one generated line.
  *
  * Returns `{ ok: true }` or `{ ok: false, reason }`. The reason is written into

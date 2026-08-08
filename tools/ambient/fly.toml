@@ -1,0 +1,97 @@
+# Fly.io configuration for the ambient-life runner.
+#
+# A SECOND, TINY APP — not a process group on `pqp-api`. Three reasons, in order
+# of how much they would hurt:
+#
+#   1. The API machine is single-by-design (see the root fly.toml's banner:
+#      presence, voice rooms and rate-limit buckets are in-process Maps). Adding
+#      a process to it means every persona edit restarts the chat server for
+#      everybody. A separate app decouples the two deploy cadences entirely.
+#   2. Blast radius. This process holds ~25 WebSockets and calls an external API
+#      on a timer. If it wedges, leaks or gets rate-limited, the thing that goes
+#      down should be the ambient chatter, not the product.
+#   3. The kill switch has to be reachable without touching the API. It is
+#      `fly secrets set AMBIENT_KILL_SWITCH=1 -a pqp-ambient`, which restarts
+#      THIS machine and nothing else.
+#
+# Runbook: docs/ambient-deploy.md.
+#
+#   fly deploy --config tools/ambient/fly.toml --dockerfile tools/ambient/Dockerfile --ha=false
+#
+# ONE MACHINE, ALWAYS. Two runners against the same community would double every
+# rate cap, interleave two scenes in one channel, and race on the memory file —
+# and none of that raises an error, it just makes the room read as a bot farm.
+# `fly scale count 1 -a pqp-ambient`, and check it after every deploy.
+
+app = "pqp-ambient"
+
+# Same region as the API. Every message is a WebSocket round trip to `pqp-api`,
+# and the typing-indicator heartbeat is on a 2.5s budget against a limiter that
+# runs at ~1/s — a cross-region hop is the kind of thing that turns "Cacau is
+# typing…" into a flicker.
+primary_region = "gru"
+
+kill_signal = "SIGTERM"
+kill_timeout = 15
+
+[build]
+  dockerfile = "tools/ambient/Dockerfile"
+
+[env]
+  # Where the cast posts. The runner derives the WebSocket URL from this, so
+  # there is one variable to point at an environment rather than two to
+  # disagree.
+  PQP_API_URL = "https://pqp-api.fly.dev"
+
+  # Read from the image; the file is content, not configuration.
+  AMBIENT_CONFIG = "/app/tools/ambient/personas.yaml"
+
+  # Mounted below. Written by `fly secrets set AMBIENT_CHARACTER_TOKENS=…`.
+  AMBIENT_TOKENS_FILE = "/secrets/characters.json"
+
+  # The volume. Per-community memory and the JSONL audit log live here, and both
+  # have to survive a deploy: memory that resets is a community that repeats its
+  # last topic every time somebody ships.
+  AMBIENT_STATE_DIR = "/data"
+
+  # The placement file is the ONE piece of state that does NOT live on the
+  # volume. It is written on your laptop by `seed-servers.mjs` and is immutable
+  # for the life of a deploy, so it travels in the image with `personas.yaml` —
+  # the two are a matched pair, and a community added to one without the other
+  # is a runner that fails at boot rather than one that quietly skips a server.
+  # Defaulting it to the volume would have meant an empty file on the first boot
+  # of a fresh machine and no way to fill it without an SSH session.
+  AMBIENT_SERVERS_FILE = "/app/tools/ambient/state/servers.json"
+
+  # Haiku 4.5 — see the cost model in docs/research/ambient-agents.html §05.
+  # Move one community up a tier by running a second app with a different value
+  # and `--community`, rather than by paying Sonnet rates for all five.
+  AMBIENT_MODEL = "claude-haiku-4-5"
+
+# The character tokens, as a file rather than an env var.
+#
+# `fly secrets set AMBIENT_CHARACTER_TOKENS="$(base64 < secrets/characters.json)"`
+# and Fly writes the decoded bytes to `guest_path` at boot. A file because that
+# is what the runner reads and what `provision.mjs` writes — round-tripping 25
+# secrets through a single environment variable would put them all in
+# `fly ssh console`'s `env` output and in every crash dump that prints the
+# environment.
+[[files]]
+  guest_path = "/secrets/characters.json"
+  secret_name = "AMBIENT_CHARACTER_TOKENS"
+
+[mounts]
+  source = "ambient_state"
+  destination = "/data"
+
+# NO [[services]] BLOCK, DELIBERATELY. This process listens on nothing — it is a
+# WebSocket *client*. Giving it a public port would put a health-checked, empty
+# HTTP listener on the internet for no reason, and Fly's autostop machinery
+# would then be entitled to stop the machine when nobody connects to it, which
+# is every second of its life.
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
+  # One. See the banner.
+  processes = ["app"]

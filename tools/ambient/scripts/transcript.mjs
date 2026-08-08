@@ -8,9 +8,19 @@
  * and rate caps did what they claimed.
  *
  *   node scripts/transcript.mjs [serverName]
+ *
+ * Reads as the host account by default, which is the dev-bypass identity that
+ * owns the servers locally. Against a deploy, pass your own bearer token in
+ * `AMBIENT_HOST_TOKEN` — the transcript is only ever as complete as the
+ * membership of whoever is asking, which is exactly the property being checked.
  */
-const API = process.env.AMBIENT_API_URL ?? "http://127.0.0.1:3001";
-const TOKEN = `${process.env.AMBIENT_DEV_TOKEN ?? "dev-local-token"}:ambienthost`;
+const API =
+  process.env.PQP_API_URL ??
+  process.env.AMBIENT_API_URL ??
+  "http://127.0.0.1:3001";
+const TOKEN =
+  process.env.AMBIENT_HOST_TOKEN ??
+  `${process.env.AMBIENT_DEV_TOKEN ?? "dev-local-token"}:ambienthost`;
 
 async function api(path) {
   const response = await fetch(`${API}${path}`, {

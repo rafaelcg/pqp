@@ -559,6 +559,30 @@ async function requireServerChannel(channelId: string) {
 
 const router = createRouter();
 
+/**
+ * The two account-lifecycle routes a character must not reach.
+ *
+ * `DELETE /api/me` and `GET /api/me/export` exist because a *person* has rights
+ * over their own account under LGPD art. 18 — erasure and portability. A
+ * character has no person behind it and therefore no such rights, and what the
+ * routes would be instead is the worst thing a leaked bearer token could do
+ * with one call: erase an account and everything the operator built on it, or
+ * walk off with a full dump of every server it is in.
+ *
+ * Refused rather than made a no-op, because the caller here is an operator's
+ * script, not a member of the public — a clear 403 is the answer that gets the
+ * mistake fixed. Deleting a character is a database operation
+ * (`revokeCharacterAccount`), which is the correct amount of friction for an
+ * action with no undo.
+ */
+function refuseCharacterSelfService(user: DbUser): void {
+  if (user.is_character) {
+    throw new Forbidden(
+      "Character accounts cannot be deleted or exported through the API",
+    );
+  }
+}
+
 // ---------------------------------------------------------------- profile
 
 router.get("/api/me", async ({ user, ageGate }) => ({
@@ -772,6 +796,7 @@ router.patch("/api/me/preferences", async ({ req, user }) => {
  * their own server admins can read, would be its own small disclosure.
  */
 router.get("/api/me/export", async ({ user, res }) => {
+  refuseCharacterSelfService(user);
   const key = `user:${user.id}`;
   if (!personalExportLimiter.take(key)) {
     res.setHeader("Retry-After", String(personalExportLimiter.retryAfter(key)));
@@ -817,6 +842,7 @@ router.get("/api/me/export", async ({ user, res }) => {
  *   retrying is safe and is what the client tells the user to do.
  */
 router.delete("/api/me", async ({ req, res, user }) => {
+  refuseCharacterSelfService(user);
   const key = `user:${user.id}`;
   if (!accountDeleteLimiter.take(key)) {
     res.setHeader("Retry-After", String(accountDeleteLimiter.retryAfter(key)));
@@ -996,7 +1022,11 @@ router.get("/api/users/lookup", async (ctx) => {
   if (!parsed) {
     throw new HttpError(400, "Use the form name#1234");
   }
-  const found = await findUserByTag(parsed.username, parsed.discriminator);
+  const found = await findUserByTag(
+    parsed.username,
+    parsed.discriminator,
+    ctx.user.id,
+  );
   if (!found) {
     throw new NotFound("User not found");
   }
@@ -1371,6 +1401,15 @@ router.get("/api/servers", async ({ user }) =>
 );
 
 router.post("/api/servers", async ({ req, user }) => {
+  // A CHARACTER IS A MEMBER, NEVER A LANDLORD. The communities the product
+  // advertises are owned by a person who receives their reports and can be held
+  // to them, and `seed-servers.mjs` creates them with the owner's own token for
+  // exactly that reason. This is the other half of that promise: it closes the
+  // last way a leaked character token could create a durable public artifact —
+  // ownership carries invites, bans, retention and the audit log with it.
+  if (user.is_character) {
+    throw new Forbidden("Character accounts cannot create servers");
+  }
   const body = createServerSchema.parse(await readJsonBody(req));
   const { server, channels } = await createServer(body.name, user.id);
   return created({

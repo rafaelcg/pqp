@@ -442,6 +442,20 @@ export async function handleVoiceMessage(
     if (!roomLimiter.take(user.id)) {
       return;
     }
+    // A CHARACTER NEVER JOINS VOICE. The house cast is a frame that works in a
+    // public text room and nowhere else — a fictional stranger in your ear is
+    // something no disclosure setting makes comfortable, and there is no
+    // plausible audio for one to send.
+    //
+    // Enforced at the same chokepoint as timeouts, and for the same reason
+    // stated there: `join-voice-room` is the only way into a room, so refusing
+    // it here is the whole enforcement. The flag rides on the session user, so
+    // this costs no query. `handleVoiceMessage`'s other branches all require a
+    // peer that this refusal prevents from ever existing — including the one
+    // that mints an SFU token.
+    if (user.is_character) {
+      return;
+    }
     if (!(await canAccessChannel(payload.voiceChannelId, user.id))) {
       return;
     }

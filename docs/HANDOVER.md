@@ -425,6 +425,61 @@ brand-new-user case the feature exists for. Notification taps and invite links s
 
 Details, env names and the end-to-end device check: [`IOS.md`](./IOS.md).
 
+## Ambient life: character accounts and the five launch communities (2026-08-08)
+
+The spike in `tools/ambient/` is production-ready. Two halves, and the first one is auth work.
+
+**Character accounts** (§02 Option C of `docs/research/ambient-agents.html`) are the production
+identity the runner was missing: an ordinary `users` row that a long-lived bearer token can
+authenticate as. `character_accounts` holds `user_id`, a unique operator `label`, the SHA-256 of a
+256-bit secret, and `revoked_at`. One branch in `verifyAuthHeader`, between the dev bypass and
+Clerk, accepts `Bearer character:<token>` — and **only** when `CHARACTER_ACCOUNTS_ENABLED=true`,
+which is off by default and checked before the branch touches the database. The token is never
+stored and never logged; the lookup is an index probe on the digest followed by a constant-time
+compare, so a hand-edited `token_hash` fails closed instead of authenticating whoever the row now
+names. Revocation is one UPDATE and takes effect on the next request.
+
+`users.is_character` is a real column, not an inference from the `clerk_id` prefix, and it is what
+the guardrails name. A character clears the age gate and the onboarding flag **at creation** —
+otherwise its socket closes 4401 and nothing says why — and a fingerprint-guarded block in
+`schema.sql` repairs those invariants on boot the same way the email scrub and the search-vector
+migration do. Deliberately **not** `is_webhook`: that flag carries the client's "not a member"
+badge, a disabled profile popover, and no reactions, presence or typing, which is the opposite of
+what a cast member needs. A `CHECK` refuses a row claiming both.
+
+**What a character cannot do**, all enforced on the server so a config mistake cannot switch one
+off: send or receive a DM (`dm_privacy = 'nobody'` at creation, plus an actor check in `dms.ts`),
+join voice (refused at the `join-voice-room` chokepoint), be friended in either direction (refused
+with the *same generic message as a block*, so it is not an oracle — a silent no-op was rejected
+because a request pending forever is both worse to use and a louder tell), appear in user search or
+handle lookup outside a shared server (`discoverableSql`), delete or export its own account, or
+**own a server** — a character joins communities, it never becomes the landlord of one, which is
+the last way a leaked token could create a durable public artifact.
+
+**Provisioning is a script against `DATABASE_URL`**, not an API route: an operator endpoint would
+put a second, permanent, credential-minting surface in the API to save a `fly ssh console` on an
+operation that happens a handful of times ever. `tools/ambient/scripts/provision.mjs` imports the
+server's own `characters.js` rather than writing SQL, so there is exactly one implementation of how
+an account is minted — the one under test.
+
+**The five communities** are real content in `tools/ambient/personas.yaml`: Resenha FC (futebol),
+Maratona (séries e filmes), Fone com Fio (música), Sala de Espera do Ranked (games), Véspera de
+Prova (estudos) — 25 personas, five each, with channel structures, topics and pinned welcome posts
+created by `scripts/seed-servers.mjs` over the real API and WebSocket.
+
+**The runner** now schedules all five from one process, authenticates from a mounted secrets file,
+and screens inbound human messages before planning a reply — hostility, banned topics, advice
+requests, off-platform approaches, and *identity probes*, which are answered with silence because a
+persona may neither claim to be human nor volunteer being software. The model's own verdict rides in
+the same generation call. A per-human hourly cap stops one chatty visitor draining the budget. The
+kill switch is checked before **every line**, and `SIGTERM` engages it in-process, so a
+`fly secrets set` restart finishes the line being typed and stops rather than publishing half a
+conversation.
+
+Runbook, exact first-run commands and the guardrail table: [`ambient-deploy.md`](./ambient-deploy.md).
+Owner decision: launch personas ship `disclosure: undisclosed`. §04 of the design doc argues against
+that and the argument stands; the flag is one line so the decision stays one line.
+
 ## Verification status
 
 | Checked | How |
@@ -445,6 +500,11 @@ Details, env names and the end-to-end device check: [`IOS.md`](./IOS.md).
 | APNs JWT, headers, token pruning, disabled-when-unconfigured | 16 tests in `server/src/services/apns.test.ts` (the JWT is cryptographically *verified*, not shaped) + 18 in `push.test.ts` against a real database |
 | Deep-link parsing and pending-invite ordering | 29 iOS unit tests (`DeepLinkTests`, `PushNotificationTests`) |
 | **A real APNs push on a real device** | **Not verified** — simulators cannot receive APNs and no signed device build was made. The whole transport is exercised against a faked HTTP/2 layer. Runbook: the "Checking a real push end to end" section of `IOS.md` |
+| Character accounts: gate off/on, unknown token, tampered hash, revoke/rotate, age-gate bypass, discovery, DM/friend/voice refusals | 16 tests against real Postgres and the real router (`server/src/services/characters.test.ts`) |
+| Ambient runner: multi-community config, inbound screen, identity seam, kill switch | 29 tests added to `tools/ambient` (114 total, no network, no key) |
+| Ambient end to end, locally | 5 characters provisioned, Resenha FC seeded (5 channels + pinned welcome), 3 scenes posted over the real WS as character accounts, read back through the API; reply-to-human answered by name; identity-probe / hostile / banned-topic / per-human-cap all declined with a logged reason; `SIGTERM` halted a scene at `posted=2 remaining=2` |
+| **A live Claude generation** | **Not verified** — no `ANTHROPIC_API_KEY` was available in the environment, so every run above was `--canned`. The live path differs only in where the transcript string comes from (`generate.js`), but it has not been exercised since the spike |
+| **Ambient against a deploy** | **Not verified** — character accounts have never authenticated against a hosted API, and no Fly app exists yet |
 | **Universal links** | **Not verified** — Apple's CDN must fetch `/.well-known/apple-app-site-association` from `pqp.gg` first, so this cannot work until the web deploy lands. `pqp://invite/<code>` is testable now |
 
 ## Suggested next work (priority)

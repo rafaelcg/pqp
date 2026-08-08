@@ -71,6 +71,18 @@ export interface DbUser {
   avatar_key?: string | null;
   /** Domains of verified emails only — see `verifiedEmailDomains` in auth/clerk.ts. */
   email_domains?: string[];
+  /**
+   * True for an operator-provisioned member of the house cast — see
+   * services/characters.ts and the `users.is_character` comment in schema.sql.
+   *
+   * Optional because several reads select a narrower column list, and an absent
+   * value must read as "not a character": the flag only ever *removes*
+   * capability (no DMs, no friend requests, no voice, no self-deletion), so
+   * failing to see it degrades to the ordinary user's behaviour rather than to
+   * a character's, which is the safe direction for a person and the loud one
+   * for a character.
+   */
+  is_character?: boolean;
 }
 
 export interface DbServer {
