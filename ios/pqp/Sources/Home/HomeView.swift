@@ -157,6 +157,15 @@ final class HomeModel {
 
     func refresh() async {
         guard let session else { return }
+        // The hub paints from the last visit before the network is asked. Both
+        // spinners below are already conditioned on the list being empty, so
+        // filling them from disk is the whole of the fix here.
+        if servers.isEmpty, let cached = await session.api.cachedServers() {
+            servers = cached
+        }
+        if conversations.isEmpty, let cached = await session.api.cachedConversations() {
+            conversations = cached
+        }
         isLoading = true
         error = nil
         do {

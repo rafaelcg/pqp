@@ -93,8 +93,14 @@ actor AttachmentUploader {
 }
 
 extension APIClient {
+    /// Memoised for the life of the process: storage is either configured on
+    /// the deployment or it is not, and re-asking on every channel open was a
+    /// round trip the first message had to queue behind.
     func attachmentConfig() async throws -> AttachmentConfig {
-        try await get("/api/attachments/config")
+        if let attachmentConfigCache { return attachmentConfigCache }
+        let config: AttachmentConfig = try await get("/api/attachments/config")
+        attachmentConfigCache = config
+        return config
     }
 
     /// A freshly signed URL for an attachment whose presigned link has expired.

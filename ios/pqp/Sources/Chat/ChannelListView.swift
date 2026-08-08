@@ -365,6 +365,12 @@ struct ChannelListView: View {
     }
 
     private func load() async {
+        // Draw the last known list first, so opening a server you were just in
+        // is instant. The fetch below still runs; on an unchanged server it
+        // comes back 304 and this list is already correct.
+        if channels.isEmpty, let cached = await session.api.cachedChannels(serverId: server.id) {
+            channels = cached
+        }
         isLoading = true
         error = nil
         do {

@@ -289,6 +289,11 @@ final class SessionStore {
         await realtime.stop()
         eventTask?.cancel()
         eventTask = nil
+        eventHandlers.removeValue(forKey: Self.cacheHandlerKey)
+        // Cached pages are one account's private messages sitting in
+        // Application Support. The next person to sign in on this device must
+        // not find them, so the whole directory goes.
+        await ReadCache.shared.clear()
         currentUser = nil
         phase = .onboarding
     }
@@ -306,8 +311,18 @@ final class SessionStore {
         Task { await realtime.sendIdle(idle) }
     }
 
+    /// The one handler that is not a screen. Registered here because the cache
+    /// has to stay current for channels *nobody is looking at* — a `ChatModel`
+    /// only exists while its channel is open, so leaving this to the views
+    /// would mean reopening a busy channel showed a page that is visibly
+    /// behind until the refetch landed.
+    private static let cacheHandlerKey = "read-cache"
+
     private func startRealtime() async {
         guard eventTask == nil else { return }
+        eventHandlers[Self.cacheHandlerKey] = { event in
+            Task { await ReadCache.shared.apply(event) }
+        }
         let stream = await realtime.events()
         await realtime.onStatusChange { [weak self] status in
             Task { @MainActor in self?.realtimeStatus = status }

@@ -65,50 +65,96 @@ final class ChatModel {
         return current.createdAt.timeIntervalSince(previous.createdAt) < 300
     }
 
+    /// Cache first, then network.
+    ///
+    /// The old shape of this method is what the owner was complaining about:
+    /// it joined the socket, then asked for the attachment config, then the GIF
+    /// config, and only then — three round trips deep — asked for the messages,
+    /// showing a spinner for the whole of it. Every visit to every channel,
+    /// including one you left ten seconds ago.
+    ///
+    /// Now the last page is read off disk and drawn before anything network-
+    /// bound starts, and there is no spinner at all when there is something to
+    /// draw. The join, the two configs (memoised in `APIClient`, so usually
+    /// free) and the refetch then run concurrently instead of in single file.
     func open(channelId: String, session: SessionStore) async {
         self.session = session
         self.channelId = channelId
 
+        // Registered before the fetch, so a message that lands mid-flight is
+        // applied rather than lost; `reconcile` carries it across the swap.
         session.eventHandlers[handlerKey] = { [weak self] event in
             self?.apply(event)
         }
-        await session.realtime.join(channelId: channelId)
-
         uploader = AttachmentUploader(api: session.api)
+
+        if let cached = await session.api.cachedMessages(channelId: channelId) {
+            messages = cached.messages
+            hasMore = cached.hasMore
+        }
+        // The spinner is the disruption being complained about. It stays only
+        // for a channel this device has genuinely never opened.
+        isLoading = messages.isEmpty
+        startTypingSweeper()
+
+        async let joined: Void = session.realtime.join(channelId: channelId)
         // Attachments are off entirely unless the deployment configured
         // storage, so the button is hidden rather than failing on tap.
-        attachmentsEnabled = (try? await session.api.attachmentConfig())?.enabled ?? false
-        gifsEnabled = (try? await session.api.gifConfig())?.enabled ?? false
+        async let attachments = (try? await session.api.attachmentConfig())?.enabled ?? false
+        async let gifs = (try? await session.api.gifConfig())?.enabled ?? false
+        async let fetched: MessagesResponse = session.api.messages(channelId: channelId)
 
-        isLoading = true
+        await joined
         do {
-            let page = try await session.api.messages(channelId: channelId)
-            // Folded in, never assigned over. The fetch is awaited, and a thread
-            // is opened *in order to say something* — so the window between the
-            // request and the response is exactly where the user types. Assigning
-            // the page threw away whatever arrived in that window: the optimistic
-            // row for a message already on its way to the server, and the
-            // broadcast that confirmed it. The server had the message and the app
-            // did not, which reads as a send that failed and cannot be recovered
-            // by scrolling.
-            // Narrowed to this channel first: `open` is the one entry point a
-            // reused model can be handed a *different* channel through, and
-            // carrying rows across that would put one channel's messages under
-            // another's name.
-            messages = ChatModel.merge(
-                page: page.messages,
-                with: messages.filter { $0.channelId == channelId }
-            )
-            hasMore = page.hasMore
+            reconcile(try await fetched)
             // Clearing on open is what makes the badge disappear when you
             // actually read something, rather than on some timer.
             try? await session.api.markRead(channelId: channelId)
         } catch {
+            // With a cached page already on screen this is a note, not a blank
+            // screen — but it is still said out loud rather than swallowed.
             self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
         }
+        attachmentsEnabled = await attachments
+        gifsEnabled = await gifs
         isLoading = false
+    }
 
-        startTypingSweeper()
+    /// Swaps a freshly fetched page in over whatever is on screen.
+    ///
+    /// Two things it has to get right. Identity: message ids are stable and the
+    /// list is keyed on them, so an unchanged page must produce an *equal*
+    /// array — assigning a re-decoded but identical page is a no-op for
+    /// SwiftUI's diff, and skipping the assignment entirely when nothing moved
+    /// keeps the scroll position untouched. And anything the socket delivered
+    /// while the page was in flight (or an optimistic row we drew ourselves)
+    /// has to survive the swap, or a message sent during the open would vanish.
+    private func reconcile(_ page: MessagesResponse) {
+        // Narrowed to this channel first: `open` is the one entry point a
+        // reused model can be handed a *different* channel through, and
+        // carrying rows across that would put one channel's messages under
+        // another's name.
+        let local = messages.filter { $0.channelId == channelId }
+        let known = Set(page.messages.map(\.id))
+        let carried: [Message]
+        if let newest = page.messages.last?.createdAt {
+            carried = local.filter {
+                !known.contains($0.id) && ($0.isPending || $0.createdAt > newest)
+            }
+        } else {
+            // An empty page still cannot swallow what arrived while it was in
+            // flight. A thread is opened *in order to say something*, so the
+            // first send routinely races the very first history fetch — and by
+            // the time the (empty) page lands, the broadcast may already have
+            // confirmed the message, which makes `isPending` alone too narrow:
+            // the server HAD the message and assigning the page erased it.
+            carried = local.filter { !known.contains($0.id) }
+        }
+        let merged = page.messages + carried
+        if merged != messages {
+            messages = merged
+        }
+        hasMore = page.hasMore
     }
 
     /// A fetched page plus whatever the page does not already account for.

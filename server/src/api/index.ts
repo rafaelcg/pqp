@@ -98,9 +98,11 @@ import {
   isUuid,
   readJsonBody,
   SECURITY_HEADERS,
+  sendConditionalJson,
   sendError,
   sendJson,
 } from "../lib/http.js";
+import { Etagged, etagged } from "../lib/etag.js";
 import { clientAddress, createRateLimiter } from "../lib/rate-limit.js";
 import { createRouter, type RequestContext } from "../lib/router.js";
 import {
@@ -920,9 +922,9 @@ router.delete("/api/blocks/:userId", async ({ user }, { userId }) => {
 
 // ----------------------------------------------------------- conversations
 
-router.get("/api/dms", async ({ user }) => ({
-  conversations: await listConversations(user.id),
-}));
+router.get("/api/dms", async ({ user }) =>
+  etagged({ conversations: await listConversations(user.id) }),
+);
 
 /**
  * Open a conversation. 201 when one was created, 200 when an existing 1:1 was
@@ -1226,9 +1228,9 @@ router.get(
 
 // ---------------------------------------------------------------- servers
 
-router.get("/api/servers", async ({ user }) => ({
-  servers: (await listServersForUser(user.id)).map(mapServer),
-}));
+router.get("/api/servers", async ({ user }) =>
+  etagged({ servers: (await listServersForUser(user.id)).map(mapServer) }),
+);
 
 router.post("/api/servers", async ({ req, user }) => {
   const body = createServerSchema.parse(await readJsonBody(req));
@@ -1406,7 +1408,9 @@ router.get(
   "/api/servers/:serverId/channels",
   async ({ user }, { serverId }) => {
     await requireServerMember(serverId!, user.id);
-    return { channels: (await listChannels(serverId!, user.id)).map(mapChannel) };
+    return etagged({
+      channels: (await listChannels(serverId!, user.id)).map(mapChannel),
+    });
   },
 );
 
@@ -1702,11 +1706,13 @@ router.get(
         around,
         viewerId: user.id,
       });
-      return {
+      // Conditional: this is the read a client makes every single time a
+      // channel is opened, and most of those opens find nothing changed.
+      return etagged({
         messages: page.messages.map(mapMessage),
         hasMore: page.hasMore,
         hasNewer: page.hasNewer,
-      };
+      });
     } catch (error) {
       if (error instanceof UnknownCursorError) {
         throw new HttpError(400, "Unknown cursor");
@@ -3071,6 +3077,18 @@ export async function handleApi(
 
     const ctx: RequestContext = { req, res, url, user, ageGate: resolved.ageGate };
     const result = await matched.handler(ctx, matched.params);
+    // Conditional reads. Deliberately *here*, downstream of everything above:
+    // the Bearer token has been resolved, the age gate and timeout gate have
+    // run, the route matched, and the handler has finished — which means its
+    // own `requireChannelAccess` / `requireServerMember` check has already
+    // passed. An `If-None-Match` cannot short-circuit any of that, because the
+    // tag is computed from a body this caller was just proved entitled to. A
+    // caller who cannot see the channel gets the same 403/404 they always did,
+    // whatever validator they present.
+    if (result instanceof Etagged) {
+      sendConditionalJson(req, res, result.body);
+      return;
+    }
     if (result instanceof Created) {
       sendJson(res, 201, result.body, req);
       return;

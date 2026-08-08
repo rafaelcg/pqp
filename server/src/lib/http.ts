@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { computeEtag, ifNoneMatchSatisfiedBy } from "./etag.js";
 import { logEvent } from "./log.js";
 
 /**
@@ -80,7 +81,12 @@ export function assertCorsConfig(): void {
 
 export function corsHeaders(req: IncomingMessage): Record<string, string> {
   const headers: Record<string, string> = {
-    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+    // `If-None-Match` has to be allowed explicitly or the preflight refuses the
+    // conditional GET outright — a browser will not send a request header the
+    // preflight did not name, and `Expose-Headers` is likewise the only way
+    // cross-origin JS can read the `ETag` back off the response.
+    "Access-Control-Allow-Headers": "Content-Type, Authorization, If-None-Match",
+    "Access-Control-Expose-Headers": "ETag",
     "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
     "Access-Control-Max-Age": "600",
   };
@@ -128,6 +134,46 @@ export function sendError(
   req?: IncomingMessage,
 ) {
   sendJson(res, status, { error: message }, req);
+}
+
+/**
+ * A 200 with a validator, or a bodyless 304 when the caller already holds this
+ * exact response.
+ *
+ * `Cache-Control` stays `no-store`, same as every other JSON response here.
+ * That is not an oversight: these payloads are per-viewer and Bearer-authed, so
+ * the only party allowed to keep one is the client that asked for it, and the
+ * only thing this adds is letting *that* client revalidate cheaply. A
+ * `max-age` would invite a shared proxy to hand one user's messages to the
+ * next caller.
+ *
+ * Call this only with a body the caller has already been proved entitled to —
+ * see `Etagged` in ./etag.ts.
+ */
+export function sendConditionalJson(
+  req: IncomingMessage,
+  res: ServerResponse,
+  data: unknown,
+): void {
+  const serialized = JSON.stringify(data);
+  const etag = computeEtag(serialized);
+  const shared = {
+    ETag: etag,
+    "Cache-Control": "no-store",
+    ...SECURITY_HEADERS,
+    ...corsHeaders(req),
+  };
+
+  if (ifNoneMatchSatisfiedBy(req.headers["if-none-match"], etag)) {
+    // No Content-Type and no body: a 304 carries neither, and writing one
+    // makes clients that follow the spec (URLSession among them) misparse it.
+    res.writeHead(304, shared);
+    res.end();
+    return;
+  }
+
+  res.writeHead(200, { "Content-Type": "application/json", ...shared });
+  res.end(serialized);
 }
 
 export async function readJsonBody<T>(req: IncomingMessage): Promise<T> {

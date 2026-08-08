@@ -123,12 +123,36 @@ actor APIClient {
     private let backend: Backend
     private let tokenProvider: any TokenProviding
     private let session: URLSession
+    /// The on-disk copy of the reads that happen on every screen change. Held
+    /// here rather than at the call sites so every existing caller gets the
+    /// conditional request and the cache write-through for free.
+    private let cache: ReadCache
 
-    init(backend: Backend = .current, tokenProvider: any TokenProviding) {
+    /// Deployment-wide switches that cannot change while the app is running.
+    /// Re-asking on every channel open cost two round trips *before* the first
+    /// message was even requested.
+    /// Not `private`: `attachmentConfig()` is declared in AttachmentUploader.swift,
+    /// beside the upload dance it belongs to, and memoising it there is better
+    /// than moving the endpoint here to satisfy an access level.
+    var attachmentConfigCache: AttachmentConfig?
+    private var gifConfigCache: GifConfig?
+
+    init(
+        backend: Backend = .current,
+        tokenProvider: any TokenProviding,
+        cache: ReadCache = .shared
+    ) {
         self.backend = backend
         self.tokenProvider = tokenProvider
+        self.cache = cache
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 15
+        // No URL cache. Revalidation is done explicitly against the ETags this
+        // app persists itself, and every API response is `no-store` anyway —
+        // leaving URLCache in place would only add a second, invisible layer
+        // with its own opinions about the same responses.
+        config.urlCache = nil
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
         // Deliberately NOT waitsForConnectivity. That flag parks a request
         // until the network comes back, bounded only by
         // `timeoutIntervalForResource` — which defaults to seven days. With an
@@ -170,6 +194,35 @@ actor APIClient {
         query: [URLQueryItem],
         body: Data?
     ) async throws -> T {
+        let (data, _) = try await perform(
+            path: path, method: method, query: query, body: body, ifNoneMatch: nil
+        )
+
+        if T.self == EmptyResponse.self, let empty = EmptyResponse() as? T {
+            return empty
+        }
+
+        do {
+            return try Coding.decoder.decode(T.self, from: data)
+        } catch {
+            throw APIError.decoding(String(describing: error))
+        }
+    }
+
+    /// The transport, minus decoding.
+    ///
+    /// Split out so a conditional GET can see the status code: a `304` is a
+    /// *success* with no body, and the error mapping below would otherwise turn
+    /// it into `APIError.server(304)`. It is only accepted when this call
+    /// actually asked a question with `If-None-Match`; an unsolicited 304 is a
+    /// broken server, not a cache hit.
+    private func perform(
+        path: String,
+        method: String,
+        query: [URLQueryItem],
+        body: Data?,
+        ifNoneMatch: String?
+    ) async throws -> (Data, HTTPURLResponse) {
         guard var components = URLComponents(
             url: backend.apiBaseURL.appendingPathComponent(path),
             resolvingAgainstBaseURL: false
@@ -187,6 +240,9 @@ actor APIClient {
         if let token = await tokenProvider.currentToken() {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
+        if let ifNoneMatch {
+            request.setValue(ifNoneMatch, forHTTPHeaderField: "If-None-Match")
+        }
         request.httpBody = body
 
         let data: Data
@@ -199,6 +255,10 @@ actor APIClient {
 
         guard let http = response as? HTTPURLResponse else {
             throw APIError.transport("Malformed response")
+        }
+
+        if http.statusCode == 304, ifNoneMatch != nil {
+            return (data, http)
         }
 
         guard (200..<300).contains(http.statusCode) else {
@@ -216,12 +276,30 @@ actor APIClient {
             }
         }
 
-        if T.self == EmptyResponse.self, let empty = EmptyResponse() as? T {
-            return empty
-        }
+        return (data, http)
+    }
 
+    /// A conditional GET. Returns `nil` when the server answered `304`, meaning
+    /// the validator we sent still describes the current representation.
+    ///
+    /// The 304 is only ever *reachable* for a caller the server has already
+    /// authenticated and authorized — it compares validators after the route's
+    /// own access check, never instead of it — so this is a bandwidth
+    /// optimisation, not a permission shortcut.
+    private func conditionalGet<T: Decodable>(
+        _ path: String,
+        query: [URLQueryItem] = [],
+        ifNoneMatch: String?
+    ) async throws -> (value: T?, etag: String?) {
+        let (data, http) = try await perform(
+            path: path, method: "GET", query: query, body: nil, ifNoneMatch: ifNoneMatch
+        )
+        let etag = http.value(forHTTPHeaderField: "ETag")
+        if http.statusCode == 304 {
+            return (nil, etag ?? ifNoneMatch)
+        }
         do {
-            return try Coding.decoder.decode(T.self, from: data)
+            return (try Coding.decoder.decode(T.self, from: data), etag)
         } catch {
             throw APIError.decoding(String(describing: error))
         }
@@ -240,26 +318,101 @@ extension APIClient {
         try await get("/api/me")
     }
 
+    // MARK: The cached reads
+    //
+    // Four endpoints, one shape: ask conditionally with whatever validator is
+    // on disk, treat a 304 as "what you already have is current", and write
+    // through on a 200. Every existing caller keeps its signature — the only
+    // visible difference is that a warm read costs a header exchange instead of
+    // a page of JSON.
+    //
+    // The `cached…` variants beside them return the disk copy with no network
+    // at all, for screens that want to paint before they ask.
+
     func servers() async throws -> [Server] {
-        let response: ServersResponse = try await get("/api/servers")
+        let stored = await cache.list(Server.self, for: .servers)
+        let (response, etag): (ServersResponse?, String?) = try await conditionalGet(
+            "/api/servers", ifNoneMatch: stored?.etag
+        )
+        guard let response else { return stored?.items ?? [] }
+        await cache.setList(
+            CachedList(items: response.servers, etag: etag), for: .servers
+        )
         return response.servers
     }
 
+    func cachedServers() async -> [Server]? {
+        await cache.list(Server.self, for: .servers)?.items
+    }
+
     func channels(serverId: String) async throws -> [Channel] {
-        let response: ChannelsResponse = try await get("/api/servers/\(serverId)/channels")
+        let key = CacheKey.channels(serverId: serverId)
+        let stored = await cache.list(Channel.self, for: key)
+        let (response, etag): (ChannelsResponse?, String?) = try await conditionalGet(
+            "/api/servers/\(serverId)/channels", ifNoneMatch: stored?.etag
+        )
+        guard let response else { return stored?.items ?? [] }
+        await cache.setList(CachedList(items: response.channels, etag: etag), for: key)
         return response.channels
     }
 
+    func cachedChannels(serverId: String) async -> [Channel]? {
+        await cache.list(Channel.self, for: .channels(serverId: serverId))?.items
+    }
+
     /// `before` is a **message id**, not a timestamp or an offset.
+    ///
+    /// Only the newest page (no cursor) is cached. A page from halfway up the
+    /// scrollback is not what reopening the channel should show, and keeping
+    /// every page anyone ever scrolled to would be an unbounded transcript on
+    /// a phone.
     func messages(channelId: String, before: String? = nil, limit: Int = 50) async throws -> MessagesResponse {
         var query = [URLQueryItem(name: "limit", value: String(limit))]
         if let before { query.append(URLQueryItem(name: "before", value: before)) }
-        return try await get("/api/channels/\(channelId)/messages", query: query)
+        let path = "/api/channels/\(channelId)/messages"
+
+        guard before == nil else {
+            return try await get(path, query: query)
+        }
+
+        let stored = await cache.page(for: channelId)
+        let (response, etag): (MessagesResponse?, String?) = try await conditionalGet(
+            path, query: query, ifNoneMatch: stored?.etag
+        )
+        guard let response else {
+            // 304. The disk copy is what the server would have sent; the
+            // validator can only have come from a page we still hold, so this
+            // fallback is defensive rather than expected.
+            guard let stored else { return try await get(path, query: query) }
+            return MessagesResponse(
+                messages: stored.messages, hasMore: stored.hasMore, hasNewer: false
+            )
+        }
+        await cache.store(
+            CachedPage(messages: response.messages, hasMore: response.hasMore, etag: etag),
+            for: channelId
+        )
+        return response
+    }
+
+    func cachedMessages(channelId: String) async -> CachedPage? {
+        await cache.page(for: channelId)
     }
 
     func conversations() async throws -> [DmSummary] {
-        let response: DmsResponse = try await get("/api/dms")
+        let stored = await cache.list(DmSummary.self, for: .conversations)
+        let (response, etag): (DmsResponse?, String?) = try await conditionalGet(
+            "/api/dms", ifNoneMatch: stored?.etag
+        )
+        guard let response else { return stored?.items ?? [] }
+        await cache.setList(
+            CachedList(items: response.conversations, etag: etag), for: .conversations
+        )
         return response.conversations
+    }
+
+    func cachedConversations() async -> [DmSummary]? {
+        await cache.list(DmSummary.self, for: .conversations)?.items
     }
 
     func unread(serverId: String) async throws -> [UnreadEntry] {
@@ -458,8 +611,14 @@ extension APIClient {
 
     // MARK: GIFs
 
+    /// Memoised: whether the deployment has a GIF provider configured cannot
+    /// change while the app is running, and this was one of two round trips
+    /// standing between opening a channel and asking for its messages.
     func gifConfig() async throws -> GifConfig {
-        try await get("/api/gifs/config")
+        if let gifConfigCache { return gifConfigCache }
+        let config: GifConfig = try await get("/api/gifs/config")
+        gifConfigCache = config
+        return config
     }
 
     func trendingGifs() async throws -> [Gif] {
