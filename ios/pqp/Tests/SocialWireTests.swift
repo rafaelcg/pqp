@@ -218,3 +218,55 @@ final class SocialWireTests: XCTestCase {
         return try Coding.decoder.decode(Message.self, from: Data(json.utf8))
     }
 }
+
+/// Opening a thread is the one moment the app fetches an empty history and the
+/// person is *already typing into it* — a thread exists to be said something in.
+/// That made `ChatModel.open` the place where a page landing after a send wiped
+/// the send: the server had the message, the transcript did not, and no amount
+/// of scrolling brought it back. Reported from TestFlight build 7 as "started a
+/// thread and sent a message but that failed".
+@MainActor
+final class ChatHistoryMergeTests: XCTestCase {
+    private func stored(id: String, body: String) throws -> Message {
+        let json = """
+        {"id":"\(id)","channelId":"c","authorId":"a","authorName":"Ana","body":"\(body)",
+         "createdAt":"2026-08-01T10:00:00.000Z"}
+        """
+        return try Coding.decoder.decode(Message.self, from: Data(json.utf8))
+    }
+
+    private func pendingRow(_ body: String) throws -> Message {
+        let author = try Coding.decoder.decode(
+            CurrentUser.self,
+            from: Data(#"{"id":"a","clerkId":"ck","displayName":"Ana"}"#.utf8)
+        )
+        return Message(pendingBody: body, channelId: "c", author: author)
+    }
+
+    /// The bug: a history page requested when the thread opened, answered after
+    /// the first message was sent into it.
+    func testAPageThatPredatesASendDoesNotSwallowIt() throws {
+        let inFlight = try pendingRow("first thing said in the thread")
+        let merged = ChatModel.merge(page: [], with: [inFlight])
+        XCTAssertEqual(merged.map(\.id), [inFlight.id],
+                       "An empty page must not erase a message already on its way to the server")
+    }
+
+    /// Same window, one beat later: the broadcast already retired the optimistic
+    /// row, so what the page would erase is a *confirmed* message.
+    func testAPageDoesNotSwallowAMessageTheBroadcastAlreadyConfirmed() throws {
+        let history = try stored(id: "00000000-0000-4000-8000-000000000001", body: "older")
+        let live = try stored(id: "00000000-0000-4000-8000-00000000000f", body: "arrived mid-fetch")
+        let merged = ChatModel.merge(page: [history], with: [live])
+        XCTAssertEqual(merged.map(\.id), [history.id, live.id],
+                       "A message that arrived while the page was in flight belongs after it")
+    }
+
+    /// And the other direction: a page that already contains what is on screen
+    /// must not double it, or `ForEach(id: \.id)` gets two rows with one identity.
+    func testAPageThatAlreadyContainsALocalMessageDoesNotDuplicateIt() throws {
+        let message = try stored(id: "00000000-0000-4000-8000-000000000002", body: "once")
+        let merged = ChatModel.merge(page: [message], with: [message])
+        XCTAssertEqual(merged.count, 1, "The same message must not appear twice")
+    }
+}

@@ -193,6 +193,52 @@ describe("optimistic sending", () => {
     expect(chat.getMessages()[1]!.pending).toBe(true);
   });
 
+  it("keeps a message the broadcast confirmed while the page was in flight", () => {
+    // The window that made "start a thread and say something" lose the message
+    // on iOS: a thread is opened *in order to type into it*, so the send lands
+    // between the history request and its answer — and by the time the page
+    // arrives the broadcast has already retired the optimistic row, leaving an
+    // ordinary stored message that the page (which predates it) cannot contain.
+    const { chat } = setup();
+    chat.sendMessage("first thing said in the thread");
+    const nonce = chat.getMessages()[0]!.nonce!;
+    const confirmed = serverMessage({
+      id: "00000000-0000-4000-8000-0000000000aa",
+      body: "first thing said in the thread",
+    });
+    chat.handleServerMessage({
+      type: "message-broadcast",
+      message: confirmed,
+      nonce,
+    } as never);
+    expect(chat.getMessages()[0]!.pending).toBeFalsy();
+
+    // The page that was already in flight when the thread opened: empty, and
+    // the tail (`hasNewer` false), because nothing had been said yet.
+    chat.setMessages([], false, false);
+
+    expect(chat.getMessages().map((m) => m.body)).toEqual([
+      "first thing said in the thread",
+    ]);
+  });
+
+  it("does not append live traffic onto a jumped-to window of older history", () => {
+    // A page that stops short of the newest message is a jump, not a re-sync;
+    // hanging live messages off the end of it would show them an hour early.
+    const { chat } = setup();
+    chat.handleServerMessage({
+      type: "message-broadcast",
+      message: serverMessage({
+        id: "00000000-0000-4000-8000-0000000000bb",
+        body: "live",
+      }),
+    } as never);
+
+    chat.setMessages([serverMessage({ body: "old" })], true, true);
+
+    expect(chat.getMessages().map((m) => m.body)).toEqual(["old"]);
+  });
+
   it("drops an optimistic message the re-sync already contains", () => {
     const { chat } = setup();
     chat.sendMessage("hello");

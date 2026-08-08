@@ -83,7 +83,22 @@ final class ChatModel {
         isLoading = true
         do {
             let page = try await session.api.messages(channelId: channelId)
-            messages = page.messages
+            // Folded in, never assigned over. The fetch is awaited, and a thread
+            // is opened *in order to say something* — so the window between the
+            // request and the response is exactly where the user types. Assigning
+            // the page threw away whatever arrived in that window: the optimistic
+            // row for a message already on its way to the server, and the
+            // broadcast that confirmed it. The server had the message and the app
+            // did not, which reads as a send that failed and cannot be recovered
+            // by scrolling.
+            // Narrowed to this channel first: `open` is the one entry point a
+            // reused model can be handed a *different* channel through, and
+            // carrying rows across that would put one channel's messages under
+            // another's name.
+            messages = ChatModel.merge(
+                page: page.messages,
+                with: messages.filter { $0.channelId == channelId }
+            )
             hasMore = page.hasMore
             // Clearing on open is what makes the badge disappear when you
             // actually read something, rather than on some timer.
@@ -94,6 +109,20 @@ final class ChatModel {
         isLoading = false
 
         startTypingSweeper()
+    }
+
+    /// A fetched page plus whatever the page does not already account for.
+    ///
+    /// Anything still local when a page lands arrived *after* that page was
+    /// requested, so it belongs at the end. Deduplicating by id is what stops
+    /// the two sources contributing the same message twice — `ForEach(id: \.id)`
+    /// cannot render two rows sharing an identity — and an optimistic row can
+    /// never collide, because its id is local (`pending-…`) until the nonce echo
+    /// swaps it for the server's copy.
+    static func merge(page: [Message], with local: [Message]) -> [Message] {
+        guard !local.isEmpty else { return page }
+        let stored = Set(page.map(\.id))
+        return page + local.filter { !stored.contains($0.id) }
     }
 
     func close() {
@@ -332,9 +361,16 @@ final class ChatModel {
         case .messageCreated(let message, let nonce):
             guard message.channelId == channelId else { return }
             // Replace our optimistic row if this is the echo of it; the server
-            // copy has the real id, timestamp and any resolved embeds.
+            // copy has the real id, timestamp and any resolved embeds. If a
+            // history page already delivered that copy, the optimistic row is
+            // dropped instead of overwritten — otherwise the swap would put two
+            // rows with the same id in the list.
             if let nonce, let index = messages.firstIndex(where: { $0.pendingNonce == nonce }) {
-                messages[index] = message
+                if messages.contains(where: { $0.id == message.id }) {
+                    messages.remove(at: index)
+                } else {
+                    messages[index] = message
+                }
             } else if !messages.contains(where: { $0.id == message.id }) {
                 messages.append(message)
             }
@@ -416,7 +452,7 @@ final class ChatModel {
         let cutoff = Date().addingTimeInterval(-10)
         let pending = messages.filter { $0.isPending && $0.createdAt > cutoff }
         let lost = messages.contains { $0.isPending && $0.createdAt <= cutoff }
-        messages = page.messages + pending
+        messages = ChatModel.merge(page: page.messages, with: pending)
         hasMore = page.hasMore
         if lost {
             error = String(localized: "The connection dropped and some messages were not sent.")

@@ -336,8 +336,24 @@ export function createChatController(
     newerAvailable: boolean,
   ) {
     const stored = new Set(next.map((message) => message.id));
+    // Keeping only the *optimistic* rows was one beat short. A page requested
+    // when a channel opened and answered a moment later has a window in it, and
+    // a message sent into that window is usually confirmed by its broadcast
+    // before the page lands — at which point it is an ordinary stored message,
+    // and it was dropped, having never been in a page that predates it. That is
+    // the iOS "started a thread and sent a message but that failed" report: a
+    // thread is opened in order to type into it, so the send is always inside
+    // that window.
+    //
+    // Live traffic is only carried across when BOTH windows are the tail. The
+    // old window being the tail is what makes a surviving row newer than the
+    // page rather than left over from somewhere else in history, and the new
+    // page being the tail is what gives it a place to sit — `resetToTail` and
+    // a jump both replace the window outright, and hanging live messages off
+    // the end of an older one would show them an hour early.
+    const carryLive = !hasNewer && !newerAvailable;
     const inFlight = messages.filter(
-      (message) => isOptimistic(message) && !stored.has(message.id),
+      (message) => !stored.has(message.id) && (carryLive || isOptimistic(message)),
     );
 
     messages = [...next.map(toStoredMessage), ...inFlight];
