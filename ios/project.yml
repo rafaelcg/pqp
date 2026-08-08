@@ -105,7 +105,15 @@ targets:
         Release:
           DEVELOPMENT_TEAM: WXBFUF9WMA
           CODE_SIGNING_REQUIRED: "YES"
-          CODE_SIGN_STYLE: Automatic
+          # Manual, with API-minted profiles: xcodebuild's automatic signing
+          # rejects the App Store Connect API key for capability registration
+          # ("Authentication failed"), so the profiles are created via the API
+          # directly and named here. Recreate with the asc scripts if they
+          # expire — the App Group, push and associated-domains capabilities
+          # live on the App IDs, not in this file.
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: "Apple Distribution"
+          PROVISIONING_PROFILE_SPECIFIER: "pqp appstore"
           # TestFlight builds talk to production, so they need the live key —
           # it is publishable by design, same one the web bundle ships.
           CLERK_PUBLISHABLE_KEY: pk_live_Y2xlcmsucHFwLmdnJA
@@ -161,7 +169,9 @@ targets:
         Release:
           DEVELOPMENT_TEAM: WXBFUF9WMA
           CODE_SIGNING_REQUIRED: "YES"
-          CODE_SIGN_STYLE: Automatic
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: "Apple Distribution"
+          PROVISIONING_PROFILE_SPECIFIER: "pqp broadcast appstore"
     entitlements:
       path: pqp/Broadcast/pqpBroadcast.entitlements
       properties:
