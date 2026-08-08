@@ -124,6 +124,9 @@ struct RootView: View {
         // specified. Backgrounding is the phone's version of walking away.
         .onChange(of: scenePhase) { _, phase in
             session.reportIdle(phase == .background)
+            // The realtime heartbeat pauses while suspended — pinging a socket
+            // the OS killed during sleep crashed inside CFNetwork on wake.
+            Task { await session.realtime.appStateChanged(active: phase == .active) }
         }
     }
 }

@@ -284,10 +284,33 @@ actor RealtimeClient {
     // MARK: - Sending
 
     private func send(raw: [String: Any]) async {
-        guard let task,
+        // `.running` is checked because sending on a task the OS tore down
+        // while the app slept crashes inside CFNetwork itself (a null deref in
+        // -[__NSURLSessionWebSocketTask _onqueue_sendMessage:], seen from
+        // TestFlight on wake-from-lock). The state read races the teardown in
+        // principle, but it closes the window that actually fired: a heartbeat
+        // queued against a socket that died during suspension.
+        guard let task, task.state == .running,
               let data = try? JSONSerialization.data(withJSONObject: raw),
               let text = String(data: data, encoding: .utf8) else { return }
         try? await task.send(.string(text))
+    }
+
+    /// Called on scene-phase changes. Suspension kills sockets out from under
+    /// the process, and a ping fired into that corpse is the crash above —
+    /// so the heartbeat pauses in the background and the foreground transition
+    /// nudges the socket instead: a live one answers the immediate ping, a
+    /// dead one fails the pending receive, which is the reconnect path.
+    func appStateChanged(active: Bool) async {
+        if active {
+            if task != nil, !isStopped {
+                startHeartbeat()
+                await beat()
+            }
+        } else {
+            pingTask?.cancel()
+            pingTask = nil
+        }
     }
 
     func join(channelId: String) async {
