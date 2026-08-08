@@ -32,12 +32,25 @@ final class ChatUXUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Skip"].waitForExistence(timeout: 5))
         app.buttons["Skip"].tap()
 
-        // The seeded server is appended to the end of a lazy list, so on a
-        // machine with leftover servers from an interrupted run it starts below
-        // the fold — and a row a `LazyVStack` has not built does not exist to
-        // query. Scroll until it does rather than depending on a clean database.
+        // The seeded server is appended to the END of the rail, so on a machine
+        // that already holds a few servers it starts off the right-hand edge.
+        //
+        // TWO THINGS THIS USED TO GET WRONG, both of which made it pass only
+        // while the dev database happened to be nearly empty:
+        //
+        //  * THE RAIL SCROLLS HORIZONTALLY. Swiping *up* cannot reveal anything
+        //    in it. Four pre-existing servers is already enough to push the
+        //    seeded one out of reach.
+        //  * `exists` IS NOT `isHittable`. A tile clipped at the rail's edge is
+        //    in the accessibility tree and still refuses a tap, so waiting for
+        //    existence and then tapping produced a tap that went nowhere and a
+        //    failure on the *next* assertion instead of this one.
+        //
+        // So: wait for the hub to have loaded its list at all, then scroll until
+        // the tile is genuinely tappable.
         let server = app.staticTexts[serverName]
-        XCTAssertTrue(server.waitForExistence(timeout: 10) || scrollTo(server, in: app),
+        _ = server.waitForExistence(timeout: 10)
+        XCTAssertTrue(scrollIntoReach(server, in: app),
                       "A seeded server should be reachable in the list")
         server.tap()
 
@@ -46,12 +59,20 @@ final class ChatUXUITests: XCTestCase {
         return app
     }
 
-    private func scrollTo(_ element: XCUIElement, in app: XCUIApplication) -> Bool {
-        for _ in 0..<10 {
-            if element.exists { return true }
-            app.swipeUp()
+    private func scrollIntoReach(_ element: XCUIElement, in app: XCUIApplication) -> Bool {
+        let rail = app.scrollViews["hub.serverRail"]
+        for _ in 0..<8 {
+            if element.exists, element.isHittable { return true }
+            if rail.exists {
+                rail.swipeLeft()
+            } else {
+                app.swipeUp()
+            }
+            // The scroll animates; querying straight after the swipe reads the
+            // tree mid-flight and finds the tile still clipped.
+            _ = element.waitForExistence(timeout: 1)
         }
-        return element.exists
+        return element.exists && element.isHittable
     }
 
     @discardableResult

@@ -1,0 +1,15 @@
+{
+  "applinks": {
+    "details": [
+      {
+        "appIDs": ["WXBFUF9WMA.gg.pqp.app"],
+        "components": [
+          {
+            "/": "/app/invite/*",
+            "comment": "Invite links, and only invite links: this is the one URL on pqp.gg where the native app is a better destination than the web app."
+          }
+        ]
+      }
+    ]
+  }
+}

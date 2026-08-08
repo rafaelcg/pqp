@@ -379,6 +379,51 @@ and you cannot share your iPhone screen" against build 9.
 
 Verified on a simulator against the local server with a real Chrome peer, in both
 rooms and both directions; the extension itself needs a physical device.
+## Native iOS notifications and invite links (2026-08-08)
+
+APNs shipped as a **second leg of the existing push feature**, not as a parallel system. Every
+decision about who gets a notification stays in `sendChannelPush` / `sendCallPush` — mentions,
+replies, DMs and rings only, only when the recipient has no live socket anywhere in the cluster,
+respecting stored DND and per-channel levels — and `deliverToUsers` now fans out to Web Push *or*
+APNs per row. That is the whole integration: one query, one payload, two envelopes. A platform
+added later is a branch there, not a pipeline.
+
+**`push_subscriptions` holds both shapes**, discriminated by a new `platform` column and kept
+honest by a `CHECK`: a `web` row has an endpoint and keys, an `apns` row has a device token and
+none of them. A second table would have meant a second query on every fan-out and two places that
+could disagree about the per-user cap (which is now deliberately shared — a phone's token costs
+the same round trip as a laptop's endpoint). Uniqueness on `token` is a *partial* index, so
+`ON CONFLICT (token) WHERE platform = 'apns'` is required, not optional — omit the predicate and
+every insert fails.
+
+**No APNs dependency.** `server/src/services/apns.ts` is an ES256 provider JWT (cached 40
+minutes) plus one reused HTTP/2 session. The `web-push` dependency is justified by RFC 8291
+payload encryption; APNs has none — the body is plain JSON over TLS — so there is nothing here
+this codebase should not hand-roll. Two things in it are easy to get wrong and fail only against
+the real gateway: the signature must be raw P1363 rather than DER (`dsaEncoding: "ieee-p1363"`),
+and `400 BadDeviceToken` is *also* what the production gateway says about a valid **sandbox**
+token — so pruning it is right, and the log line beside the prune is the only thing that points at
+a misconfigured `APNS_ENVIRONMENT`.
+
+**VoIP / PushKit is out of scope.** A ring arrives as an ordinary alert push (priority 10,
+expiring with the 50s ring, collapsed on the conversation). CallKit would be better and costs a
+second push type, a `PKPushRegistry`, and a hard OS rule that every VoIP push reports a call or
+the app is killed.
+
+On the phone: permission is asked **once, after a real sign-in reaches `.ready`**, behind an
+explainer — the system dialog is one-shot per install and a refusal is permanent, so the timing
+*is* the feature. The token is re-sent every launch because iOS rotates it silently. Sign-out
+unregisters first, while the call can still authenticate, or a shared phone keeps buzzing with the
+previous account's DMs.
+
+**Invite links** reuse the shape the web already copies (`/app/invite/<code>`) — universal links
+via `applinks:pqp.gg` and an AASA claiming *only* that path, plus `pqp://invite/<code>` for where
+universal links do not fire. A pending invite is stashed in `UserDefaults`, not a property:
+Clerk sign-in can hand off to a web flow and return through a relaunch, which is exactly the
+brand-new-user case the feature exists for. Notification taps and invite links share one parser
+(`DeepLink`), which reads the same paths the server emits and the web SPA parses.
+
+Details, env names and the end-to-end device check: [`IOS.md`](./IOS.md).
 
 ## Verification status
 
@@ -397,6 +442,10 @@ rooms and both directions; the extension itself needs a physical device.
 | **iOS screen share, the extension itself** | **Not verified** — ReplayKit broadcast has no simulator equivalent; the extension, the App Group socket and the rotation mapping are device-only |
 | Image scanning: fail-closed paths | 36 provider tests (unreachable, timeout, 401, HTML body, unparseable scores, missing verdict) + 13 DB tests for quarantine, reports and the sweepers |
 | **Image scanning against a real provider** | **Not verified** — every provider call in the suite is a stubbed `fetch`. No live OpenAI / Sightengine / Worker round trip has been made |
+| APNs JWT, headers, token pruning, disabled-when-unconfigured | 16 tests in `server/src/services/apns.test.ts` (the JWT is cryptographically *verified*, not shaped) + 18 in `push.test.ts` against a real database |
+| Deep-link parsing and pending-invite ordering | 29 iOS unit tests (`DeepLinkTests`, `PushNotificationTests`) |
+| **A real APNs push on a real device** | **Not verified** — simulators cannot receive APNs and no signed device build was made. The whole transport is exercised against a faked HTTP/2 layer. Runbook: the "Checking a real push end to end" section of `IOS.md` |
+| **Universal links** | **Not verified** — Apple's CDN must fetch `/.well-known/apple-app-site-association` from `pqp.gg` first, so this cannot work until the web deploy lands. `pqp://invite/<code>` is testable now |
 
 ## Suggested next work (priority)
 

@@ -52,6 +52,26 @@ final class SessionStore {
     private(set) var realtimeStatus: RealtimeStatus = .idle
     private(set) var lastError: String?
 
+    /// Where a link, or a tapped notification, is asking to go.
+    ///
+    /// Owned here rather than in a view because the two things that produce one
+    /// are both outside the view tree: `PushDelegate` (a notification tap, which
+    /// can arrive before any view exists) and `PqpApp`'s `onOpenURL`. `HomeView`
+    /// watches it and calls `navigationHandled()`.
+    private(set) var navigationRequest: DeepLinkTarget?
+
+    /// Something to tell the user about a link that did not work out — the
+    /// server's own refusal sentence, verbatim. Cleared by whoever shows it.
+    var linkError: String?
+
+    /// The channel a `ChatModel` currently has open, or nil.
+    ///
+    /// Reported by `ChatModel.open`/`close` — the model is the only thing that
+    /// knows, and its own `channelId` is private. This exists for exactly one
+    /// consumer: `PushPresentation.shouldInterrupt`, which uses it to not draw
+    /// a banner over the conversation it is announcing.
+    private(set) var visibleChannelId: String?
+
     private let tokenProvider: any TokenProviding
     let authMode: AuthMode
 
@@ -209,9 +229,26 @@ final class SessionStore {
         case "blocked":
             phase = .blocked
         default:
-            await startRealtime()
-            phase = .ready
+            await becomeReady()
         }
+    }
+
+    /// The single place the app becomes usable.
+    ///
+    /// Everything that must happen "once we're actually in" hangs off this
+    /// rather than off each of the four paths that get here (restore, adopt,
+    /// sign-in, age declaration) — a fifth path would otherwise silently skip
+    /// the pending invite and the push token.
+    ///
+    /// ORDER: realtime first, then `.ready` so the shell renders connected, then
+    /// the two things that need an authenticated API. The invite goes last
+    /// because it navigates, and navigating before `HomeView` exists is a
+    /// request nobody is listening for.
+    private func becomeReady() async {
+        await startRealtime()
+        phase = .ready
+        await uploadPushToken()
+        await consumePendingInvite()
     }
 
     /// The one-shot declaration. `POST /api/me/age-check` answers **200 for
@@ -226,8 +263,7 @@ final class SessionStore {
             )
             if response.ageGate == "passed" {
                 await refreshCurrentUser()
-                await startRealtime()
-                phase = .ready
+                await becomeReady()
             } else {
                 phase = .blocked
             }
@@ -247,6 +283,96 @@ final class SessionStore {
         } catch {
             return error.localizedDescription
         }
+    }
+
+    // MARK: - Links and notifications
+
+    /// The one entry point for "something outside the view tree wants to go
+    /// somewhere". Called by `PqpApp`'s `onOpenURL` / `onContinueUserActivity`
+    /// and by `PushDelegate` on a notification tap.
+    ///
+    /// An invite is not a destination — it is an action that *produces* one, and
+    /// which may have to wait for sign-in — so it forks here. Everything else is
+    /// a place, and places are handed straight to `HomeView`.
+    func requestNavigation(_ target: DeepLinkTarget) {
+        if case .invite(let code) = target {
+            Task { await openInvite(code: code) }
+            return
+        }
+        navigationRequest = target
+    }
+
+    /// Called by `HomeView` once it has acted on the request, so a later
+    /// identical one still registers as new.
+    func navigationHandled() {
+        navigationRequest = nil
+    }
+
+    /// An invite code, from a link or typed in.
+    ///
+    /// Signed in: redeem now. Not signed in: stash it and let sign-in run — the
+    /// landing on `.ready` consumes it (`becomeReady`). The gated phases stash
+    /// too: an account that has not answered the age question cannot join
+    /// anything, and the invite should survive the answer rather than be lost to
+    /// it.
+    func openInvite(code: String) async {
+        let normalized = DeepLink.normalizeInviteCode(code)
+        guard !normalized.isEmpty else { return }
+        guard phase == .ready else {
+            PendingInvite.stash(normalized)
+            return
+        }
+        await redeemInvite(normalized)
+    }
+
+    private func consumePendingInvite() async {
+        guard let code = PendingInvite.consume() else { return }
+        await redeemInvite(code)
+    }
+
+    /// `POST /api/invites/<code>/join`, then navigate into the server.
+    ///
+    /// ALREADY A MEMBER IS A SUCCESS, and needs no special case here: the server
+    /// inserts `ON CONFLICT DO NOTHING`, does not burn a use, and returns the
+    /// same `serverId` — so re-opening a link you have already used just takes
+    /// you there. What does need handling is refusal (expired, revoked, no uses
+    /// left, banned), and the server's sentence is shown verbatim because it is
+    /// the only thing that knows which of those it was.
+    private func redeemInvite(_ code: String) async {
+        do {
+            let serverId = try await api.joinInvite(code: code)
+            linkError = nil
+            navigationRequest = .server(id: serverId)
+        } catch let error as APIError {
+            linkError = error.errorDescription
+        } catch {
+            linkError = error.localizedDescription
+        }
+    }
+
+    // MARK: - Push registration
+
+    /// The freshest APNs token iOS has handed this launch, whether or not the
+    /// server has been told yet.
+    private var deviceToken: String?
+
+    /// Called by `PushDelegate` when iOS produces a device token.
+    ///
+    /// The token can land before the session is authenticated — on a launch
+    /// where permission is already held, registration starts as soon as the app
+    /// does — so it is remembered and flushed by `becomeReady`. Posting it
+    /// unauthenticated would just 401.
+    func registerPushToken(_ token: String) async {
+        deviceToken = token
+        await uploadPushToken()
+    }
+
+    private func uploadPushToken() async {
+        guard phase == .ready, let deviceToken else { return }
+        // Silent on failure. The user did not ask for this and there is nothing
+        // for them to do about it; the next launch re-registers, which is the
+        // retry.
+        try? await api.registerApnsToken(deviceToken)
     }
 
     /// Re-reads `/api/me` after a profile edit so the change is visible without
@@ -276,6 +402,22 @@ final class SessionStore {
     }
 
     func signOut() async {
+        // BEFORE the token is revoked, because this needs an authenticated call.
+        //
+        // Not politeness — a correctness fix for the shared-phone case. The
+        // server owns one row per device token, so it would move to whoever
+        // signs in next; but if nobody does, the row stays pointed at the
+        // account that just left and this phone keeps buzzing with their DMs on
+        // somebody else's lock screen.
+        if let deviceToken {
+            try? await api.unregisterApnsToken(deviceToken)
+        }
+        deviceToken = nil
+        // A link tapped by the previous account is not the next one's to follow.
+        navigationRequest = nil
+        linkError = nil
+        PendingInvite.clear()
+        visibleChannelId = nil
         // Deliberately also forgets onboarding: signing out is the only way
         // back to a first-run state, and on a dev build that is how the intro
         // gets exercised.
@@ -296,6 +438,22 @@ final class SessionStore {
         await ReadCache.shared.clear()
         currentUser = nil
         phase = .onboarding
+    }
+
+    // MARK: - Where the user is looking
+
+    /// Reported by `ChatModel.open`. See `visibleChannelId`.
+    func channelBecameVisible(_ channelId: String) {
+        visibleChannelId = channelId
+    }
+
+    /// Reported by `ChatModel.close`. Guarded on identity because SwiftUI can
+    /// build the next screen's model before tearing down the last one's, and an
+    /// unguarded clear would blank the channel that is now on screen.
+    func channelWentAway(_ channelId: String) {
+        if visibleChannelId == channelId {
+            visibleChannelId = nil
+        }
     }
 
     /// Whether this device has told the server it is idle. Kept here because

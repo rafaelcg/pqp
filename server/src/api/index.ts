@@ -3321,65 +3321,85 @@ export async function handleApi(
 // declarations are hoisted like any other.
 //
 // All of the behaviour lives in services/push.ts; these handlers only parse,
-// authorise by the session user, and answer. Like the attachment routes, the
-// whole surface is inert until VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY /
-// VAPID_SUBJECT are configured — `/api/push/config` is how the client finds
-// out, and the write routes refuse rather than store subscriptions nothing
-// will ever send to.
+// authorise by the session user, and answer. Like the attachment routes, each
+// leg is inert until its own env is configured — VAPID_PUBLIC_KEY /
+// VAPID_PRIVATE_KEY / VAPID_SUBJECT for the browser, APNS_KEY_ID /
+// APNS_TEAM_ID / APNS_PRIVATE_KEY for the iOS app. `/api/push/config` is how
+// either client finds out, and the write routes refuse rather than store
+// registrations nothing will ever send to.
 // ===========================================================================
 
 import {
+  deleteApnsSubscription,
   deletePushSubscription,
   getPushSettings,
   getVapidPublicKey,
   isPushEnabled,
+  pushRegistrationSchema,
   pushSettingsSchema,
-  pushSubscriptionSchema,
+  savePushRegistration,
   savePushSettings,
-  savePushSubscription,
 } from "../services/push.js";
+import { isApnsEnabled } from "../services/apns.js";
 
 /**
- * What the client needs before it can offer the toggle: whether this server
- * can send at all, the public VAPID key to subscribe with, and the account's
- * DM-detail choice so the settings screen renders the stored truth. The
- * private key never has a route.
+ * What a client needs before it can offer the toggle: whether this server can
+ * send at all, the public VAPID key to subscribe with, and the account's
+ * DM-detail choice so the settings screen renders the stored truth. Neither
+ * private key ever has a route.
+ *
+ * `enabled` remains the *Web Push* answer, unqualified, because that is what
+ * the browser has always read it as. `apns` is the iOS app's equivalent, and
+ * the two are independent: a deployment can run either, both, or neither.
  */
 router.get("/api/push/config", async ({ user }) => {
   const enabled = isPushEnabled();
   return {
     enabled,
     publicKey: enabled ? getVapidPublicKey() : null,
+    apns: isApnsEnabled(),
     ...(await getPushSettings(user.id)),
   };
 });
 
 /**
- * Register this browser's subscription. Idempotent per endpoint — the client
- * re-posts on every enable and after a browser rotates the subscription, and
- * the upsert keeps exactly one row per endpoint, owned by the caller.
+ * Register this device. One route for both platforms — the body's shape says
+ * which (see `pushRegistrationSchema`) — and idempotent per device identity:
+ * the browser re-posts on every enable and after a rotation, and iOS hands the
+ * app a device token on *every* launch, so the upsert keeps exactly one row per
+ * endpoint or token, owned by the caller.
+ *
+ * The refusal is per leg. A server with VAPID keys and no APNs key must not
+ * accept device tokens it can never send to, and vice versa.
  */
 router.post("/api/push/subscriptions", async ({ req, user }) => {
-  if (!isPushEnabled()) {
+  const body = pushRegistrationSchema.parse(await readJsonBody(req));
+  const isApns = "platform" in body && body.platform === "apns";
+  if (isApns ? !isApnsEnabled() : !isPushEnabled()) {
     throw new HttpError(409, "Push notifications are not configured on this server");
   }
-  const body = pushSubscriptionSchema.parse(await readJsonBody(req));
-  await savePushSubscription(user.id, body);
+  await savePushRegistration(user.id, body);
   return { ok: true };
 });
 
 /**
- * Unregister. The endpoint travels as a query parameter because it is a URL —
- * a path segment would need double-encoding, and the router's `:xId` params
- * are UUID-gated anyway. Scoped to the caller's own rows in the service.
+ * Unregister. Both identities travel as query parameters because one of them is
+ * a URL — a path segment would need double-encoding, and the router's `:xId`
+ * params are UUID-gated anyway. Exactly one must be given. Scoped to the
+ * caller's own rows in the service.
  */
 router.delete("/api/push/subscriptions", async ({ url, user }) => {
   const endpoint = url.searchParams.get("endpoint");
-  if (!endpoint) {
-    throw new HttpError(400, "endpoint query parameter required");
+  const token = url.searchParams.get("token");
+  if (endpoint) {
+    await deletePushSubscription(user.id, endpoint);
+    return { ok: true };
   }
-  await deletePushSubscription(user.id, endpoint);
-  return { ok: true };
+  if (token) {
+    await deleteApnsSubscription(user.id, token);
+    return { ok: true };
+  }
+  throw new HttpError(400, "endpoint or token query parameter required");
 });
 
 /**

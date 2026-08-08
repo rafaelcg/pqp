@@ -54,6 +54,8 @@
 | Public status page | Done (`/status` + unauthenticated `/status.json`; per-component probes sampled once a minute, real 24h/7d uptime kept 30 days) |
 | SSO / SAML readiness | Done (Clerk federates; app adds verified-email-domain joining per server, owner-only, exact-match, bans still apply — `docs/SSO.md`) |
 | Screen share | Done (mesh: second video track + manual renegotiation per peer; SFU: LiveKit `Track.Source.ScreenShare`; one presenter per voice channel, server-enforced) |
+| Native iOS push notifications | Done, unverified on device (APNs as a second leg of the existing push fan-out — same triggers, same content-free defaults, HTTP/2 + ES256 JWT with no new dependency; VoIP/PushKit deliberately out of scope — `docs/IOS.md`) |
+| Invite links that open the iOS app | Done, universal links unverified until the web deploy lands (`applinks:pqp.gg` + an AASA claiming only `/app/invite/*`, `pqp://invite/<code>` fallback, pending invite survives sign-in) |
 
 ## Product roadmap
 

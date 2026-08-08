@@ -1,3 +1,4 @@
+import { generateKeyPairSync } from "node:crypto";
 import {
   afterAll,
   afterEach,
@@ -36,13 +37,19 @@ const {
   CALL_PUSH_TTL_SECONDS,
   MAX_PUSH_SUBSCRIPTIONS_PER_USER,
   PUSH_TTL_SECONDS,
+  buildApnsBody,
   buildCallPushPayload,
   buildPushPayload,
+  deleteApnsSubscription,
   deletePushSubscription,
+  isAnyPushEnabled,
   isPushEnabled,
   getVapidPublicKey,
   listPushSubscriptions,
+  pushRegistrationSchema,
   resolvePushLevel,
+  saveApnsSubscription,
+  savePushRegistration,
   savePushSettings,
   savePushSubscription,
   sendCallPush,
@@ -53,10 +60,15 @@ const {
   truncateLabel,
   wantsDmDetails,
 } = await import("./push.js");
+const {
+  resetApnsJwtCacheForTests,
+  setApnsTransportForTests,
+} = await import("./apns.js");
 // Erased at compile time, so this static import cannot run module side effects
 // before the DATABASE_URL patching above.
 type ChannelAudienceView = import("./push.js").ChannelAudienceView;
 type StoredPushSubscription = import("./push.js").StoredPushSubscription;
+type ApnsRequest = import("./apns.js").ApnsRequest;
 
 const VAPID_ENV = {
   VAPID_PUBLIC_KEY: "test-public-key",
@@ -72,6 +84,32 @@ function clearVapidEnv(): void {
   for (const key of Object.keys(VAPID_ENV)) {
     delete process.env[key];
   }
+}
+
+// A real P-256 key: `buildApnsJwt` verifies the curve before signing, so a
+// placeholder string would make every APNs case throw for the wrong reason.
+const { privateKey: apnsPrivateKey } = generateKeyPairSync("ec", {
+  namedCurve: "prime256v1",
+  privateKeyEncoding: { type: "pkcs8", format: "pem" },
+  publicKeyEncoding: { type: "spki", format: "pem" },
+});
+
+const APNS_ENV = {
+  APNS_KEY_ID: "ABCD123456",
+  APNS_TEAM_ID: "WXBFUF9WMA",
+  APNS_PRIVATE_KEY: apnsPrivateKey,
+  APNS_TOPIC: "gg.pqp.app",
+};
+
+function setApnsEnv(): void {
+  Object.assign(process.env, APNS_ENV);
+}
+
+function clearApnsEnv(): void {
+  for (const key of Object.keys(APNS_ENV)) {
+    delete process.env[key];
+  }
+  delete process.env.APNS_ENVIRONMENT;
 }
 
 // --------------------------------------------------------- pure decisions
@@ -332,6 +370,10 @@ describeDb("web push fan-out", () => {
   }[];
   /** Users the stubbed cluster registry claims are connected somewhere. */
   let online: Set<string>;
+  /** Every APNs request the fake HTTP/2 layer was handed. */
+  let apnsSent: ApnsRequest[];
+  /** Per-device-token answers; anything unlisted is a 200. */
+  let apnsAnswers: Map<string, { status: number; reason: string | null }>;
 
   beforeAll(async () => {
     await initDb();
@@ -354,6 +396,21 @@ describeDb("web push fan-out", () => {
       });
     });
     setLiveSocketProbeForTests((userId) => online.has(userId));
+
+    // APNs is configured for every case here. The two legs are independent, so
+    // "web only" and "APNs only" are asserted explicitly in the cases that care
+    // by clearing one env — leaving both on by default is what makes the
+    // ordinary assertions prove the fan-out reaches both.
+    apnsSent = [];
+    apnsAnswers = new Map();
+    setApnsEnv();
+    resetApnsJwtCacheForTests();
+    setApnsTransportForTests(async (request) => {
+      apnsSent.push(request);
+      return (
+        apnsAnswers.get(request.deviceToken) ?? { status: 200, reason: null }
+      );
+    });
 
     await getPool().query(`TRUNCATE users RESTART IDENTITY CASCADE`);
     const makeUser = (name: string) =>
@@ -380,8 +437,11 @@ describeDb("web push fan-out", () => {
 
   afterEach(() => {
     clearVapidEnv();
+    clearApnsEnv();
     setPushSenderForTests(null);
     setLiveSocketProbeForTests(null);
+    setApnsTransportForTests(null);
+    resetApnsJwtCacheForTests();
   });
 
   function audienceOf(
@@ -406,6 +466,17 @@ describeDb("web push fan-out", () => {
       keys: { p256dh: "p256dh-key", auth: "auth-key" },
     });
     return endpoint;
+  }
+
+  /** A device token that satisfies the schema's hex/length rule. */
+  function deviceToken(seed: string): string {
+    return seed.padEnd(64, "0").slice(0, 64).replace(/[^0-9a-f]/g, "a");
+  }
+
+  async function registerPhone(userId: string, seed = userId) {
+    const token = deviceToken(seed);
+    await saveApnsSubscription(userId, token);
+    return token;
   }
 
   function serverEvent(overrides: Partial<Parameters<typeof sendChannelPush>[0]> = {}) {
@@ -794,6 +865,287 @@ describeDb("web push fan-out", () => {
     expect((await listPushSubscriptions(bea.id)).length).toBe(1);
     await deletePushSubscription(bea.id, endpoint);
     expect((await listPushSubscriptions(bea.id)).length).toBe(0);
+  });
+
+  // ------------------------------------------------------------------ APNs
+  //
+  // The iOS leg. What these pin is that it is a *leg* and not a second system:
+  // the same triggers reach it, the same content-free defaults apply, the same
+  // no-live-socket narrowing gates it, and the same row cap bounds it. The
+  // HTTP/2 layer is faked (see `setApnsTransportForTests`); the JWT and header
+  // construction it would exercise are pinned in apns.test.ts.
+
+  it("registers a device token through the shared route schema", async () => {
+    const token = deviceToken("beabea");
+    const parsed = pushRegistrationSchema.parse({ platform: "apns", token });
+    await savePushRegistration(bea.id, parsed);
+
+    const rows = await listPushSubscriptions(bea.id);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.platform).toBe("apns");
+    expect(rows[0]!.token).toBe(token);
+    // The `web` columns stay null — that is the CHECK constraint's whole job.
+    expect(rows[0]!.endpoint).toBeNull();
+    expect(rows[0]!.p256dh).toBeNull();
+  });
+
+  /**
+   * The compatibility guarantee of putting both shapes on one route: a body the
+   * web client has always sent must still parse as a web subscription, not fall
+   * into the APNs member.
+   */
+  it("still parses a Web Push body, which carries no platform key", async () => {
+    const parsed = pushRegistrationSchema.parse({
+      endpoint: "https://push.example/browser",
+      keys: { p256dh: "p", auth: "a" },
+    });
+    await savePushRegistration(bea.id, parsed);
+
+    const rows = await listPushSubscriptions(bea.id);
+    expect(rows[0]!.platform).toBe("web");
+    expect(rows[0]!.token).toBeNull();
+  });
+
+  it("rejects a device token that is not lowercase hex", () => {
+    expect(() =>
+      pushRegistrationSchema.parse({
+        platform: "apns",
+        token: "NOTHEX".padEnd(64, "0"),
+      }),
+    ).toThrow();
+    expect(() =>
+      pushRegistrationSchema.parse({ platform: "apns", token: "abcd" }),
+    ).toThrow();
+  });
+
+  it("a mention reaches a phone and a browser from one fan-out", async () => {
+    await subscribe(bea.id);
+    const token = await registerPhone(bea.id);
+
+    await sendChannelPush(serverEvent({ mentionedUsernames: [beaUsername] }));
+
+    expect(sent.map((s) => s.userId)).toEqual([bea.id]);
+    expect(apnsSent).toHaveLength(1);
+    expect(apnsSent[0]!.deviceToken).toBe(token);
+    const body = JSON.parse(apnsSent[0]!.body) as {
+      aps: { alert: { title: string; body: string }; "thread-id": string };
+      path: string;
+    };
+    // The same words the browser leg was handed — one payload, two envelopes.
+    expect(body.aps.alert.body).toBe(sent[0]!.payload.body);
+    expect(body.path).toBe(sent[0]!.payload.path);
+    expect(body.aps["thread-id"]).toBe(channelId);
+  });
+
+  it("says nothing about a DM by default, exactly as the browser leg does", async () => {
+    const conversation = await openConversation(ana.id, [bea.id]);
+    await registerPhone(bea.id);
+
+    await sendChannelPush({
+      channelId: conversation.channelId,
+      audience: audienceOf("dm", [ana.id, bea.id], null),
+      authorId: ana.id,
+      mentionedUsernames: [],
+      repliedToUserId: null,
+      blockerIds: new Set<string>(),
+    });
+
+    const body = JSON.parse(apnsSent[0]!.body) as {
+      aps: { alert: { title: string; body: string } };
+    };
+    expect(body.aps.alert).toEqual({
+      title: "pqp",
+      body: "New direct message",
+    });
+  });
+
+  it("does not reach a phone whose owner has a live socket anywhere", async () => {
+    await registerPhone(bea.id);
+    online.add(bea.id);
+
+    await sendChannelPush(serverEvent({ mentionedUsernames: [beaUsername] }));
+
+    expect(apnsSent).toEqual([]);
+  });
+
+  it("gives a call ring priority 10, the ring's own expiry, and the conversation as collapse id", async () => {
+    const conversation = await openConversation(ana.id, [bea.id]);
+    await registerPhone(bea.id);
+    const before = Math.floor(Date.now() / 1000);
+
+    await sendCallPush({
+      conversationId: conversation.channelId,
+      kind: "dm",
+      rungUserIds: [bea.id],
+      callerName: "ana",
+    });
+
+    expect(apnsSent).toHaveLength(1);
+    const headers = apnsSent[0]!.headers;
+    expect(headers["apns-push-type"]).toBe("alert");
+    expect(headers["apns-priority"]).toBe("10");
+    expect(headers["apns-collapse-id"]).toBe(conversation.channelId);
+    // Expiry is the 50s ring, not the 24h message TTL: a call push delivered
+    // after the ring times out is not late, it is wrong.
+    const expiry = Number(headers["apns-expiration"]);
+    expect(expiry).toBeGreaterThanOrEqual(before + CALL_PUSH_TTL_SECONDS);
+    expect(expiry).toBeLessThanOrEqual(
+      before + CALL_PUSH_TTL_SECONDS + 5,
+    );
+  });
+
+  it("gives a message the long TTL, and both legs agree on it", async () => {
+    await subscribe(bea.id);
+    await registerPhone(bea.id);
+    const before = Math.floor(Date.now() / 1000);
+
+    await sendChannelPush(serverEvent({ mentionedUsernames: [beaUsername] }));
+
+    expect(sent[0]!.delivery.ttlSeconds).toBe(PUSH_TTL_SECONDS);
+    const expiry = Number(apnsSent[0]!.headers["apns-expiration"]);
+    expect(expiry).toBeGreaterThanOrEqual(before + PUSH_TTL_SECONDS);
+  });
+
+  /**
+   * The garbage collection. These rows have no other lifecycle: nothing else
+   * knows a phone was wiped, so a token that is never pruned is a permanent
+   * per-message round trip to a device that no longer exists.
+   */
+  it("prunes a device token on 410 Unregistered and on 400 BadDeviceToken", async () => {
+    const unregistered = await registerPhone(bea.id, "aaaa");
+    const badToken = await registerPhone(bea.id, "bbbb");
+    const healthy = await registerPhone(bea.id, "cccc");
+    apnsAnswers.set(unregistered, { status: 410, reason: "Unregistered" });
+    apnsAnswers.set(badToken, { status: 400, reason: "BadDeviceToken" });
+
+    await sendChannelPush(serverEvent({ mentionedUsernames: [beaUsername] }));
+
+    const remaining = await listPushSubscriptions(bea.id);
+    expect(remaining.map((r) => r.token)).toEqual([healthy]);
+  });
+
+  it("keeps a device token through a failure it would survive", async () => {
+    const token = await registerPhone(bea.id);
+    apnsAnswers.set(token, { status: 429, reason: "TooManyRequests" });
+
+    await sendChannelPush(serverEvent({ mentionedUsernames: [beaUsername] }));
+
+    expect((await listPushSubscriptions(bea.id)).map((r) => r.token)).toEqual([
+      token,
+    ]);
+  });
+
+  it("survives a transport failure without taking the fan-out down", async () => {
+    await subscribe(bea.id);
+    await registerPhone(bea.id);
+    setApnsTransportForTests(async () => {
+      throw new Error("APNs request timed out");
+    });
+
+    await expect(
+      sendChannelPush(serverEvent({ mentionedUsernames: [beaUsername] })),
+    ).resolves.toBeUndefined();
+    // The browser leg still went out — one dead vendor must not silence both.
+    expect(sent.map((s) => s.userId)).toEqual([bea.id]);
+  });
+
+  it("upserting the same device token moves the phone to the signed-in account", async () => {
+    const token = await registerPhone(ana.id, "shared");
+    await saveApnsSubscription(bea.id, token);
+
+    expect(await listPushSubscriptions(ana.id)).toEqual([]);
+    expect((await listPushSubscriptions(bea.id)).map((r) => r.token)).toEqual([
+      token,
+    ]);
+  });
+
+  it("apns delete is scoped to the owner", async () => {
+    const token = await registerPhone(bea.id);
+    await deleteApnsSubscription(ana.id, token);
+    expect(await listPushSubscriptions(bea.id)).toHaveLength(1);
+    await deleteApnsSubscription(bea.id, token);
+    expect(await listPushSubscriptions(bea.id)).toHaveLength(0);
+  });
+
+  it("the per-user cap counts phones and browsers together", async () => {
+    for (let i = 0; i < MAX_PUSH_SUBSCRIPTIONS_PER_USER; i += 1) {
+      const endpoint = `https://push.example/device-${i}`;
+      await subscribe(bea.id, endpoint);
+      await getPool().query(
+        `UPDATE push_subscriptions
+         SET created_at = NOW() - make_interval(mins => $2)
+         WHERE endpoint = $1`,
+        [endpoint, MAX_PUSH_SUBSCRIPTIONS_PER_USER - i],
+      );
+    }
+    const token = await registerPhone(bea.id);
+
+    const remaining = await listPushSubscriptions(bea.id);
+    expect(remaining).toHaveLength(MAX_PUSH_SUBSCRIPTIONS_PER_USER);
+    // The phone is the newest registration, so it is the one that survives.
+    expect(remaining.map((r) => r.token)).toContain(token);
+    expect(remaining.map((r) => r.endpoint)).not.toContain(
+      "https://push.example/device-0",
+    );
+  });
+
+  it("is inert without APNs configuration", async () => {
+    clearApnsEnv();
+    await registerPhone(bea.id);
+
+    await sendChannelPush(serverEvent({ mentionedUsernames: [beaUsername] }));
+
+    expect(apnsSent).toEqual([]);
+  });
+
+  /**
+   * The reason `isAnyPushEnabled` exists. Guarding the fan-out on VAPID alone
+   * would make a deployment that only ever wanted native pushes silently send
+   * none — and nothing about that failure points at the VAPID env.
+   */
+  it("pushes to phones on a deployment that has no VAPID keys at all", async () => {
+    clearVapidEnv();
+    expect(isPushEnabled()).toBe(false);
+    expect(isAnyPushEnabled()).toBe(true);
+    await subscribe(bea.id);
+    await registerPhone(bea.id);
+
+    await sendChannelPush(serverEvent({ mentionedUsernames: [beaUsername] }));
+
+    expect(sent).toEqual([]);
+    expect(apnsSent).toHaveLength(1);
+  });
+
+  it("is inert when neither leg is configured", async () => {
+    clearVapidEnv();
+    clearApnsEnv();
+    expect(isAnyPushEnabled()).toBe(false);
+    await subscribe(bea.id);
+    await registerPhone(bea.id);
+
+    await sendChannelPush(serverEvent({ mentionedUsernames: [beaUsername] }));
+
+    expect(sent).toEqual([]);
+    expect(apnsSent).toEqual([]);
+  });
+
+  it("builds an aps envelope that carries an alert, a thread and the route", () => {
+    expect(
+      buildApnsBody({
+        title: "ana",
+        body: "Sent you a direct message",
+        path: "/app/dm/abc",
+        tag: "abc",
+      }),
+    ).toEqual({
+      aps: {
+        alert: { title: "ana", body: "Sent you a direct message" },
+        sound: "default",
+        "thread-id": "abc",
+      },
+      path: "/app/dm/abc",
+      tag: "abc",
+    });
   });
 
   it("push settings round-trip through user_preferences without clobbering others", async () => {

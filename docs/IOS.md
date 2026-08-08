@@ -280,6 +280,104 @@ moment the field has text — so a test that queries by `"Message"` silently sto
 finding the composer exactly when it is mid-edit, and fails somewhere later with
 an unrelated-looking assertion.
 
+## Notifications (APNs)
+
+Native pushes are the **second leg of the server's existing push feature**, not a
+system of their own. `server/src/services/push.ts` decides *who* gets told —
+mentions, replies, DMs and rings only, only when the person has no live socket
+anywhere, respecting do-not-disturb and per-channel levels — and then fans out to
+Web Push and APNs from one place (`deliverToUsers`). The iOS app re-decides none
+of that.
+
+Server env (all in `.env.example`); the leg is off entirely unless the first
+three are set:
+
+| Name | Notes |
+|---|---|
+| `APNS_KEY_ID`, `APNS_TEAM_ID` | from the auth key in the developer portal |
+| `APNS_PRIVATE_KEY` | the PEM **contents** of the `.p8`, not a path. Literal `\n` between lines is accepted |
+| `APNS_TOPIC` | the bundle id. Defaults to `gg.pqp.app` |
+| `APNS_ENVIRONMENT` | `sandbox` or `production`. **Defaults to production**, which is right for TestFlight and the App Store; only a build run from Xcode needs `sandbox` |
+
+The transport is `server/src/services/apns.ts`: an ES256 provider JWT cached 40
+minutes, HTTP/2 to `api.push.apple.com` over one reused session, and no new
+dependency (APNs bodies are plain JSON over TLS — there is no RFC 8291 payload
+encryption to justify a library the way Web Push does). Calls go out as
+`apns-push-type: alert`, priority 10, expiring with the 50s ring, collapsed on
+the conversation id. **VoIP / PushKit is deliberately out of scope**: it would
+let the app present the system call UI before the user touches anything, but it
+needs a second push type, a `PKPushRegistry`, and CallKit reporting on every
+single push or the OS kills the app.
+
+On the device: permission is asked **once, after a real sign-in lands on
+`.ready`**, behind an explainer sheet (`PushExplainerView`) — the system dialog
+appears once per install and a refusal is permanent, so the timing is the
+feature. The token is re-sent on **every** launch, because iOS may hand over a
+different one (`registerIfAlreadyAuthorized`). A notification for the
+conversation already on screen is listed but not banner-ed
+(`PushPresentation.shouldInterrupt`, fed by `SessionStore.visibleChannelId`).
+Tapping one routes through `DeepLink`, which parses the very same
+`/app/dm/<id>` and `/app/server/<sid>/channel/<cid>` paths the server puts in the
+payload and the web SPA parses in `client/src/lib/app-route.ts`.
+
+Signing out unregisters the token first, while the call can still authenticate —
+otherwise a shared phone keeps buzzing with the previous account's DMs.
+
+### Checking a real push end to end
+
+Simulators cannot receive APNs, so this needs a device.
+
+1. `fly secrets list -a pqp-api` — confirm the four `APNS_*` names are present.
+   A secret is only picked up by a **new** machine, so deploy after setting them.
+2. `curl -s https://api.pqp.gg/api/push/config -H "Authorization: Bearer <token>"`
+   → must answer `"apns": true`. False means the three required names are not all
+   set, and nothing else below will work.
+3. Install a TestFlight build on a device, sign in, accept the explainer, accept
+   the system dialog. In the server log the registration is a plain
+   `POST /api/push/subscriptions`; confirm the row exists with
+   `SELECT platform, left(token, 8), created_at FROM push_subscriptions;`
+4. **Force-quit the app** (swipe it away). A backgrounded app still holds its
+   WebSocket, and a live socket is exactly what suppresses the push — this is the
+   step that makes people think the feature is broken.
+5. From another account, DM that user. The phone should show "pqp / New direct
+   message" within a second or two. Tap it: the app opens on that conversation.
+6. If nothing arrives, the log says which: `[apns] send failed (403
+   InvalidProviderToken)` is the key/team id or the `.p8` contents; `[apns]
+   pruning device token … 400 BadDeviceToken` is almost always
+   `APNS_ENVIRONMENT` disagreeing with how the build was signed (Xcode build →
+   `sandbox`, TestFlight → `production`); `TopicDisallowed` is `APNS_TOPIC` not
+   matching the bundle id.
+7. Then a ring: start a call to the same user. The push must arrive within the
+   ring, and must **not** arrive a minute later — that expiry is what
+   `apns-expiration` buys.
+
+## Invite links
+
+An invite is `https://pqp.gg/app/invite/<code>` — the same URL the web client
+copies to the clipboard (`client/src/components/layout/invite-panel.tsx`).
+
+Two ways it reaches the app:
+
+- **Universal links.** `applinks:pqp.gg` in the entitlements (generated from
+  `ios/project.yml`), plus
+  `client/public/.well-known/apple-app-site-association` served by Cloudflare
+  Pages, which claims **only** `/app/invite/*` — not `/*`, which would hijack
+  every link on the site. Apple's CDN fetches that file, so a universal link
+  cannot work until it is deployed, and can be cached stale for ~24h after a
+  change.
+- **`pqp://invite/<code>`**, registered in `Info.plist`, for everywhere universal
+  links do not fire. During development this is the only one that works:
+  `xcrun simctl openurl booted "pqp://invite/ABC123"`.
+
+Both land in `SessionStore.requestNavigation`. Signed in: join and navigate.
+Not signed in: the code is stashed in `UserDefaults` (`PendingInvite`) — not a
+property, because Clerk sign-in can hand off to a web flow and come back through
+a relaunch — and consumed exactly once when the session reaches `.ready`.
+Already a member is a success and just navigates (the server's insert is `ON
+CONFLICT DO NOTHING` and burns no use); a refusal shows the server's own
+sentence verbatim, because only it knows whether the code was expired, revoked,
+exhausted or the user is banned.
+
 ## Tests
 
 The UI tests run against a **live local server** rather than mocks. That is the
@@ -313,10 +411,12 @@ Also done: channel categories with move-between, the private-channel member
 picker, group DMs, data export (via the share sheet), ownership transfer, and
 per-peer volume.
 
+Also done: **native push notifications** (APNs — see above) and invite links that
+open the app, by universal link or `pqp://`.
+
 Still only on web: **screen share** (needs a second video track through the
 existing mesh) and drag-to-reorder within a category (channels can be moved
-between categories, but not dragged into a position). Neither client has push
-notifications.
+between categories, but not dragged into a position).
 
 ## Not built yet
 
@@ -327,8 +427,9 @@ This is the foundation, not the finished app.
   the post-authentication path (token → `/api/me` → `.ready`) is unverified on
   device. Everything after that point is the same code the bypass already
   exercises.
-- **Push notifications** — needs APNs and a server-side sender, which does not
-  exist for web either.
+- **VoIP pushes (PushKit + CallKit).** An incoming call arrives as an ordinary
+  notification, not as the system call screen. See the Notifications section for
+  what that would cost.
 - **Group DMs.** The API takes up to nine participants; the picker starts one
   conversation with one person.
 - **iPad layout.** The target builds universal but the layout is phone-first.

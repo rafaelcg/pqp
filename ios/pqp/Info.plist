@@ -23,6 +23,26 @@
 	<string>$(PRODUCT_NAME)</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
+	<!-- The custom-scheme fallback for invite links: pqp://invite/CODE.
+	     Universal links (applinks:pqp.gg, see pqp.entitlements) are the primary
+	     path and the only one that works from a link somebody was sent — but
+	     they do not fire everywhere. A URL typed into Safari's address bar, a
+	     link in an app that opens its own web view, or a device that has not
+	     yet fetched the association file all fall through, and this is what
+	     catches them. Parsed by DeepLink.target(url:). -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>gg.pqp.app</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>pqp</string>
+			</array>
+		</dict>
+	</array>
 	<key>CFBundleShortVersionString</key>
 	<string>0.1.0</string>
 	<key>CFBundleVersion</key>

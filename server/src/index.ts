@@ -12,6 +12,7 @@ import {
   sweepAuthCaches,
 } from "./auth/clerk.js";
 import { closePool, getPool, initDb } from "./db.js";
+import { closeApnsSessions } from "./services/apns.js";
 import { closeBus, INSTANCE_ID, setBusTransport } from "./lib/bus.js";
 import { createPostgresBusTransport } from "./lib/bus-postgres.js";
 import {
@@ -541,6 +542,10 @@ async function shutdown(signal: string) {
     socket.close(1001, "Server shutting down");
   }
   await new Promise<void>((done) => httpServer.close(() => done()));
+  // The long-lived HTTP/2 connection to Apple. It is `unref`ed, so it cannot
+  // hold the loop open on its own; closing it politely is still better than
+  // having the process exit mid-stream on a push that was in flight.
+  closeApnsSessions();
   // Last, so the presence withdrawals that closing those sockets produces still
   // have a bus to travel on. Best-effort — anything that misses the window is
   // covered by the contribution TTL on the other instances.

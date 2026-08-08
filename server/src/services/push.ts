@@ -4,13 +4,30 @@ import type { ChannelKind, UserPreferences } from "@pqp/shared";
 import { getPool } from "../db.js";
 import { getPreferences, mergePreferences } from "./preferences.js";
 import { isInvisible, resolveStatus } from "../ws/status.js";
+import {
+  type ApnsConfig,
+  isApnsEnabled,
+  isApnsTokenGone,
+  readApnsConfig,
+  sendApnsPush,
+} from "./apns.js";
 
 /**
- * Web Push — how a mention, reply or DM reaches a phone that is closed.
+ * Push — how a mention, reply or DM reaches a phone that is closed.
  *
- * Everything here is inert unless all three VAPID_* env vars are set, the same
- * posture as S3: an instance with no keys answers `enabled: false`, stores no
- * subscriptions, and sends nothing. There is no partial mode.
+ * TWO LEGS, ONE DECISION. Web Push (VAPID, for browsers and the installed PWA)
+ * and APNs (for the native iOS app) are different transports for the same
+ * conclusion. Everything above the last mile — who is a candidate, who has no
+ * live socket, whose level allows it, what the notification says — is decided
+ * once here and handed to both. `deliverToUsers` is where they diverge, and it
+ * is the only place they do. Adding a platform means adding a branch there and
+ * a row shape in `push_subscriptions`, not a parallel pipeline.
+ *
+ * Each leg is inert unless its own env is set, the same posture as S3: an
+ * instance with no VAPID keys answers `enabled: false` to the browser and
+ * stores no subscriptions; an instance with no APNs key refuses device tokens.
+ * There is no partial mode within a leg. An instance with neither sends
+ * nothing and does no work at all.
  *
  * The `web-push` dependency is deliberate, not convenience. Sending one push
  * means per-message ECDH key agreement + HKDF + AES-128-GCM payload encryption
@@ -55,8 +72,24 @@ export function readVapidConfig(): VapidConfig | null {
   return { publicKey, privateKey, subject };
 }
 
+/**
+ * Whether the *Web Push* leg can send. Named without a qualifier for history:
+ * the web client reads it through `/api/push/config` to decide whether to offer
+ * its toggle, and that answer is about VAPID specifically. Use
+ * `isAnyPushEnabled` for "is there any point doing push work at all".
+ */
 export function isPushEnabled(): boolean {
   return readVapidConfig() !== null;
+}
+
+/**
+ * The guard on the fan-out entry points. A deployment with APNs configured but
+ * no VAPID keys must still push to phones — checking only VAPID here is the
+ * bug that would make the whole iOS leg dead on a server that never wanted the
+ * web one.
+ */
+export function isAnyPushEnabled(): boolean {
+  return isPushEnabled() || isApnsEnabled();
 }
 
 /** What the client needs to call `pushManager.subscribe`. Never the private key. */
@@ -87,6 +120,40 @@ export const pushSubscriptionSchema = z.object({
 });
 
 export type PushSubscriptionBody = z.infer<typeof pushSubscriptionSchema>;
+
+/**
+ * An APNs device token, as `didRegisterForRemoteNotificationsWithDeviceToken`
+ * hands it over: 32 bytes hex-encoded today, but Apple has changed the length
+ * before (it went from 32 to 100 bytes for a while) and explicitly documents
+ * that the size is not fixed. So the shape is checked — lowercase hex, because
+ * that is what the app's own encoder produces — and the length is bounded
+ * generously rather than pinned.
+ */
+export const apnsSubscriptionSchema = z.object({
+  platform: z.literal("apns"),
+  token: z
+    .string()
+    .min(32)
+    .max(400)
+    .regex(/^[0-9a-f]+$/, "APNs device tokens are lowercase hex"),
+});
+
+export type ApnsSubscriptionBody = z.infer<typeof apnsSubscriptionSchema>;
+
+/**
+ * What `POST /api/push/subscriptions` accepts. A union rather than a second
+ * route, so "register this device for notifications" stays one endpoint.
+ *
+ * ORDER MATTERS AND IS THE COMPATIBILITY GUARANTEE: the APNs member is tried
+ * first and requires `platform: "apns"`, which a Web Push body does not carry,
+ * so every request the web client has ever sent still parses as it did before.
+ */
+export const pushRegistrationSchema = z.union([
+  apnsSubscriptionSchema,
+  pushSubscriptionSchema,
+]);
+
+export type PushRegistrationBody = z.infer<typeof pushRegistrationSchema>;
 
 export const pushSettingsSchema = z.object({
   /**
@@ -148,40 +215,41 @@ export async function savePushSettings(
  */
 export const MAX_PUSH_SUBSCRIPTIONS_PER_USER = 8;
 
+export type PushPlatform = "web" | "apns";
+
+/**
+ * One row shape for both legs. The nullability is not sloppiness — it is the
+ * `platform` discriminant, and the CHECK constraint in schema.sql is what makes
+ * it a real one: a `web` row has an endpoint and keys and no token, an `apns`
+ * row has a token and neither. Reading a row means switching on `platform`
+ * first, exactly as the delivery code below does.
+ */
 export interface StoredPushSubscription {
   id: string;
   user_id: string;
-  endpoint: string;
-  p256dh: string;
-  auth: string;
+  platform: PushPlatform;
+  /** Web Push only. */
+  endpoint: string | null;
+  p256dh: string | null;
+  auth: string | null;
+  /** APNs only. */
+  token: string | null;
 }
 
+const SUBSCRIPTION_COLUMNS =
+  "id, user_id, platform, endpoint, p256dh, auth, token";
+
 /**
- * Upsert on the endpoint, not on (user, endpoint): a browser profile has one
- * endpoint, and if a second account subscribes on the same device the endpoint
- * must follow the account that is actually signed in — two rows would push
- * user A's mentions to whoever holds the phone now.
+ * Trim to the cap, oldest first. Old is the right axis: the newest subscription
+ * is the device the user is holding right now, and the stalest is the most
+ * likely to be a browser profile that no longer exists.
  *
- * Past the cap the *oldest* rows go. Old is the right axis: the newest
- * subscription is the device the user is holding right now, and the stalest is
- * the most likely to be a browser profile that no longer exists.
+ * The cap is per *account*, across both platforms deliberately: the thing being
+ * bounded is how many vendor round-trips one mention can cost, and a phone's
+ * APNs token costs exactly as much as a laptop's endpoint.
  */
-export async function savePushSubscription(
-  userId: string,
-  body: PushSubscriptionBody,
-): Promise<void> {
-  const pool = getPool();
-  await pool.query(
-    `INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth)
-     VALUES ($1, $2, $3, $4)
-     ON CONFLICT (endpoint) DO UPDATE
-       SET user_id = EXCLUDED.user_id,
-           p256dh = EXCLUDED.p256dh,
-           auth = EXCLUDED.auth,
-           created_at = NOW()`,
-    [userId, body.endpoint, body.keys.p256dh, body.keys.auth],
-  );
-  await pool.query(
+async function trimSubscriptions(userId: string): Promise<void> {
+  await getPool().query(
     `DELETE FROM push_subscriptions
      WHERE user_id = $1
        AND id NOT IN (
@@ -192,6 +260,74 @@ export async function savePushSubscription(
        )`,
     [userId, MAX_PUSH_SUBSCRIPTIONS_PER_USER],
   );
+}
+
+/**
+ * Upsert on the endpoint, not on (user, endpoint): a browser profile has one
+ * endpoint, and if a second account subscribes on the same device the endpoint
+ * must follow the account that is actually signed in — two rows would push
+ * user A's mentions to whoever holds the phone now.
+ */
+export async function savePushSubscription(
+  userId: string,
+  body: PushSubscriptionBody,
+): Promise<void> {
+  await getPool().query(
+    `INSERT INTO push_subscriptions (user_id, platform, endpoint, p256dh, auth)
+     VALUES ($1, 'web', $2, $3, $4)
+     ON CONFLICT (endpoint) DO UPDATE
+       SET user_id = EXCLUDED.user_id,
+           platform = 'web',
+           p256dh = EXCLUDED.p256dh,
+           auth = EXCLUDED.auth,
+           created_at = NOW()`,
+    [userId, body.endpoint, body.keys.p256dh, body.keys.auth],
+  );
+  await trimSubscriptions(userId);
+}
+
+/**
+ * The APNs equivalent, upserting on the token for exactly the same reason: one
+ * device has one token, and if two accounts sign in on the same phone the token
+ * must follow whoever is signed in now — the alternative is one person's DMs on
+ * another person's lock screen.
+ *
+ * Re-posting an unchanged token is the normal case, not an edge one: iOS hands
+ * the token to the app on *every* launch and it may silently differ, so the app
+ * is expected to send it every time. That makes this the hottest write in the
+ * push surface, which is why it is one statement with no read first.
+ */
+export async function saveApnsSubscription(
+  userId: string,
+  token: string,
+): Promise<void> {
+  await getPool().query(
+    // `WHERE platform = 'apns'` is not a filter on the update — it is how
+    // Postgres *infers* which index arbitrates the conflict. The uniqueness on
+    // `token` is a partial index (see schema.sql: `web` rows all have a null
+    // token), and inference against a partial index requires its predicate
+    // restated here. Omit it and every insert fails with "no unique or
+    // exclusion constraint matching the ON CONFLICT specification".
+    `INSERT INTO push_subscriptions (user_id, platform, token)
+     VALUES ($1, 'apns', $2)
+     ON CONFLICT (token) WHERE platform = 'apns' DO UPDATE
+       SET user_id = EXCLUDED.user_id,
+           created_at = NOW()`,
+    [userId, token],
+  );
+  await trimSubscriptions(userId);
+}
+
+/** Dispatches on the discriminant so the route stays four lines. */
+export async function savePushRegistration(
+  userId: string,
+  body: PushRegistrationBody,
+): Promise<void> {
+  if ("platform" in body && body.platform === "apns") {
+    await saveApnsSubscription(userId, body.token);
+    return;
+  }
+  await savePushSubscription(userId, body as PushSubscriptionBody);
 }
 
 /** Scoped by user id as well as endpoint, so nobody can delete another account's. */
@@ -205,11 +341,23 @@ export async function deletePushSubscription(
   );
 }
 
+/** Same scoping, for a phone turning notifications off. */
+export async function deleteApnsSubscription(
+  userId: string,
+  token: string,
+): Promise<void> {
+  await getPool().query(
+    `DELETE FROM push_subscriptions
+     WHERE user_id = $1 AND platform = 'apns' AND token = $2`,
+    [userId, token],
+  );
+}
+
 export async function listPushSubscriptions(
   userId: string,
 ): Promise<StoredPushSubscription[]> {
   const result = await getPool().query<StoredPushSubscription>(
-    `SELECT id, user_id, endpoint, p256dh, auth
+    `SELECT ${SUBSCRIPTION_COLUMNS}
      FROM push_subscriptions WHERE user_id = $1
      ORDER BY created_at DESC`,
     [userId],
@@ -234,8 +382,19 @@ export interface PushDeliveryOptions {
   urgency: "normal" | "high";
 }
 
+/**
+ * A `push_subscriptions` row already narrowed to the Web Push leg — the three
+ * columns an `apns` row leaves null are non-null here. The narrowing happens
+ * once, in `deliverToUsers`, so nothing downstream re-checks it.
+ */
+export type WebPushTarget = StoredPushSubscription & {
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+};
+
 type PushSender = (
-  subscription: StoredPushSubscription,
+  subscription: WebPushTarget,
   payload: string,
   config: VapidConfig,
   delivery: PushDeliveryOptions,
@@ -511,7 +670,7 @@ export interface ChannelPushEvent {
  * rejection here would take the whole process down (CLAUDE.md pitfall #9).
  */
 export function pushChannelActivity(event: ChannelPushEvent): void {
-  if (!isPushEnabled()) {
+  if (!isAnyPushEnabled()) {
     return;
   }
   void sendChannelPush(event).catch((error) => {
@@ -535,8 +694,8 @@ interface PreferenceRow {
  * — which is almost every message.
  */
 export async function sendChannelPush(event: ChannelPushEvent): Promise<void> {
-  const config = readVapidConfig();
-  if (!config) {
+  const transports = readTransports();
+  if (!transports) {
     return;
   }
   const { audience } = event;
@@ -625,43 +784,73 @@ export async function sendChannelPush(event: ChannelPushEvent): Promise<void> {
     author_name: null,
   };
 
-  const payloads = new Map<string, string>();
+  // Built as objects, not strings: each leg serialises its own envelope (a raw
+  // payload for Web Push, an `aps` wrapper for APNs), so pre-stringifying here
+  // would only mean parsing it straight back on the APNs side.
+  const payloads = new Map<string, PushPayload>();
   for (const userId of recipients) {
     const settings = preferences.get(userId) ?? null;
     payloads.set(
       userId,
-      JSON.stringify(
-        buildPushPayload({
-          channelKind: audience.kind,
-          mention: mentioned.has(userId),
-          reply: userId === replied,
-          dmDetails: wantsDmDetails(settings),
-          channelId: event.channelId,
-          serverId: audience.serverId,
-          channelName: names.channel_name,
-          serverName: names.server_name,
-          authorName: names.author_name,
-        }),
-      ),
+      buildPushPayload({
+        channelKind: audience.kind,
+        mention: mentioned.has(userId),
+        reply: userId === replied,
+        dmDetails: wantsDmDetails(settings),
+        channelId: event.channelId,
+        serverId: audience.serverId,
+        channelName: names.channel_name,
+        serverName: names.server_name,
+        authorName: names.author_name,
+      }),
     );
   }
 
-  await deliverToUsers(recipients, (userId) => payloads.get(userId), config, MESSAGE_DELIVERY);
+  await deliverToUsers(
+    recipients,
+    (userId) => payloads.get(userId),
+    transports,
+    MESSAGE_DELIVERY,
+  );
+}
+
+/**
+ * What each leg needs to send, resolved once per fan-out. Either may be null —
+ * a deployment can run web-only, APNs-only, or both — and a null leg means its
+ * rows are skipped, not that the fan-out stops.
+ */
+interface PushTransports {
+  vapid: VapidConfig | null;
+  apns: ApnsConfig | null;
+}
+
+function readTransports(): PushTransports | null {
+  const vapid = readVapidConfig();
+  const apns = readApnsConfig();
+  if (!vapid && !apns) {
+    return null;
+  }
+  return { vapid, apns };
 }
 
 /**
  * The shared last mile: look up every recipient's subscriptions, hand each to
- * the sender, prune on the vendor's "gone" signal. Both the message path and
- * the call path end here — they differ in who and what, never in how.
+ * the transport its platform calls for, prune on the vendor's "gone" signal.
+ * Both the message path and the call path end here — they differ in who and
+ * what, never in how.
+ *
+ * ONE QUERY FOR BOTH PLATFORMS. The alternative — a query per leg — would ask
+ * the same index the same question twice for the common case of a person with a
+ * laptop and a phone.
  */
 async function deliverToUsers(
   userIds: readonly string[],
-  payloadFor: (userId: string) => string | undefined,
-  config: VapidConfig,
+  payloadFor: (userId: string) => PushPayload | undefined,
+  transports: PushTransports,
   delivery: PushDeliveryOptions,
 ): Promise<void> {
   const subscriptions = await getPool().query<StoredPushSubscription>(
-    `SELECT id, user_id, endpoint, p256dh, auth
+    `SELECT ${SUBSCRIPTION_COLUMNS}
      FROM push_subscriptions
      WHERE user_id = ANY($1::uuid[])`,
     [userIds],
@@ -673,25 +862,139 @@ async function deliverToUsers(
       if (!payload) {
         return;
       }
-      try {
-        await sender(subscription, payload, config, delivery);
-      } catch (error) {
-        const statusCode = (error as { statusCode?: number }).statusCode;
-        // 404/410 is the vendor saying this subscription no longer exists —
-        // the user cleared site data, or the browser rotated it. Pruning on
-        // this signal is the only garbage collection these rows get.
-        if (statusCode === 404 || statusCode === 410) {
-          await pruneSubscription(subscription.id).catch(() => {
-            // Best-effort: the next 410 will try again.
-          });
-          return;
-        }
-        console.error(
-          `[push] send failed (${statusCode ?? "network"}) for user ${subscription.user_id}`,
-        );
+      if (subscription.platform === "apns") {
+        await deliverApns(subscription, payload, transports.apns, delivery);
+        return;
       }
+      await deliverWebPush(subscription, payload, transports.vapid, delivery);
     }),
   );
+}
+
+async function deliverWebPush(
+  subscription: StoredPushSubscription,
+  payload: PushPayload,
+  config: VapidConfig | null,
+  delivery: PushDeliveryOptions,
+): Promise<void> {
+  if (!config) {
+    return;
+  }
+  // The CHECK constraint guarantees these on a `web` row; this narrowing is
+  // what lets the sender's type say so, and a row that somehow violated it is
+  // skipped rather than sent as `undefined`.
+  const { endpoint, p256dh, auth } = subscription;
+  if (!endpoint || !p256dh || !auth) {
+    return;
+  }
+  try {
+    await sender(
+      { ...subscription, endpoint, p256dh, auth },
+      JSON.stringify(payload),
+      config,
+      delivery,
+    );
+  } catch (error) {
+    const statusCode = (error as { statusCode?: number }).statusCode;
+    // 404/410 is the vendor saying this subscription no longer exists —
+    // the user cleared site data, or the browser rotated it. Pruning on
+    // this signal is the only garbage collection these rows get.
+    if (statusCode === 404 || statusCode === 410) {
+      await pruneSubscription(subscription.id).catch(() => {
+        // Best-effort: the next 410 will try again.
+      });
+      return;
+    }
+    console.error(
+      `[push] send failed (${statusCode ?? "network"}) for user ${subscription.user_id}`,
+    );
+  }
+}
+
+/**
+ * The APNs last mile. Note what is NOT here: no decision about who, no reading
+ * of preferences, no second opinion about the payload. The body is the same
+ * `PushPayload` the web leg sends, re-wrapped for `aps`, so the two platforms
+ * cannot start saying different things about the same event.
+ */
+async function deliverApns(
+  subscription: StoredPushSubscription,
+  payload: PushPayload,
+  config: ApnsConfig | null,
+  delivery: PushDeliveryOptions,
+): Promise<void> {
+  if (!config || !subscription.token) {
+    return;
+  }
+  try {
+    const result = await sendApnsPush({
+      config,
+      deviceToken: subscription.token,
+      payload: JSON.stringify(buildApnsBody(payload)),
+      delivery: {
+        pushType: "alert",
+        priority: APNS_ALERT_PRIORITY,
+        // Absolute, from the same TTL the web leg sends: a call push expires
+        // with the ring instead of arriving after it.
+        expirationSeconds: Math.floor(Date.now() / 1000) + delivery.ttlSeconds,
+        collapseId: payload.tag,
+      },
+    });
+    if (isApnsTokenGone(result)) {
+      // Said out loud rather than pruned silently, because the other thing
+      // that produces `400 BadDeviceToken` is a correct token sent to the
+      // wrong gateway — see the note on `isApnsTokenGone`. A log line is the
+      // difference between diagnosing APNS_ENVIRONMENT in a minute and
+      // wondering why registration "works" and nothing ever arrives.
+      console.warn(
+        `[apns] pruning device token for user ${subscription.user_id}: ${result.status} ${result.reason ?? ""}`.trim(),
+      );
+      await pruneSubscription(subscription.id).catch(() => {});
+      return;
+    }
+    if (result.status >= 400) {
+      console.error(
+        `[apns] send failed (${result.status} ${result.reason ?? "no reason"}) for user ${subscription.user_id}`,
+      );
+    }
+  } catch (error) {
+    // A transport failure — dead session, timeout, TLS. Never fatal: this whole
+    // module is fire-and-forget from the message fan-out's point of view.
+    console.error(
+      `[apns] send failed (network) for user ${subscription.user_id}:`,
+      (error as Error).message,
+    );
+  }
+}
+
+/** See the note on `ApnsDelivery.priority` for why a message is not a 5. */
+const APNS_ALERT_PRIORITY = 10 as const;
+
+/**
+ * The `aps` envelope, built from the payload both legs share.
+ *
+ * `thread-id` is the same conversation id as `apns-collapse-id`, doing the
+ * other half of the same job: collapse-id replaces an *undelivered or
+ * displayed* notification, thread-id groups what remains under one heading in
+ * Notification Center. `path` and `tag` are carried through under the names the
+ * web payload already uses, because the iOS app parses the same `path` the
+ * service worker opens — one routing vocabulary, two clients.
+ *
+ * No `badge`: an accurate count would mean an unread aggregate query per
+ * recipient per push, and a wrong one is worse than none. No
+ * `interruption-level`: `time-sensitive` needs its own entitlement, and this
+ * round deliberately adds one (Associated Domains) and no more.
+ */
+export function buildApnsBody(payload: PushPayload): Record<string, unknown> {
+  return {
+    aps: {
+      alert: { title: payload.title, body: payload.body },
+      sound: "default",
+      "thread-id": payload.tag,
+    },
+    path: payload.path,
+    tag: payload.tag,
+  };
 }
 
 // ------------------------------------------------------------ incoming calls
@@ -750,7 +1053,7 @@ export function buildCallPushPayload(input: {
  * fan-out must never wait on, or die with, a push vendor (pitfall #9).
  */
 export function pushIncomingCall(event: CallPushEvent): void {
-  if (!isPushEnabled()) {
+  if (!isAnyPushEnabled()) {
     return;
   }
   void sendCallPush(event).catch((error) => {
@@ -763,8 +1066,8 @@ export function pushIncomingCall(event: CallPushEvent): void {
 
 /** The awaitable pipeline, mirroring `sendChannelPush` for tests. */
 export async function sendCallPush(event: CallPushEvent): Promise<void> {
-  const config = readVapidConfig();
-  if (!config) {
+  const transports = readTransports();
+  if (!transports) {
     return;
   }
 
@@ -791,12 +1094,10 @@ export async function sendCallPush(event: CallPushEvent): Promise<void> {
   }
 
   // One payload for everybody: a call names its caller, never its callee.
-  const payload = JSON.stringify(
-    buildCallPushPayload({
-      conversationId: event.conversationId,
-      kind: event.kind,
-      callerName: event.callerName,
-    }),
-  );
-  await deliverToUsers(recipients, () => payload, config, CALL_DELIVERY);
+  const payload = buildCallPushPayload({
+    conversationId: event.conversationId,
+    kind: event.kind,
+    callerName: event.callerName,
+  });
+  await deliverToUsers(recipients, () => payload, transports, CALL_DELIVERY);
 }

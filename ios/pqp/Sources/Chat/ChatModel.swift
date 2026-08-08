@@ -80,6 +80,11 @@ final class ChatModel {
     func open(channelId: String, session: SessionStore) async {
         self.session = session
         self.channelId = channelId
+        // "This conversation is on screen", for the one consumer that needs it:
+        // a push arriving for the channel you are reading must not banner over
+        // it. Reported from here because `channelId` is private and this is the
+        // only object that knows.
+        session.channelBecameVisible(channelId)
 
         // Registered before the fetch, so a message that lands mid-flight is
         // applied rather than lost; `reconcile` carries it across the swap.
@@ -173,6 +178,9 @@ final class ChatModel {
 
     func close() {
         session?.eventHandlers.removeValue(forKey: handlerKey)
+        if let channelId {
+            session?.channelWentAway(channelId)
+        }
         typingSweeper?.cancel()
         typingSweeper = nil
     }

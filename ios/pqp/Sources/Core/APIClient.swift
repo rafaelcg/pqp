@@ -848,7 +848,65 @@ extension APIClient {
 
     func joinInvite(code: String) async throws -> String {
         struct Response: Decodable { let serverId: String }
-        let response: Response = try await post("/api/invites/\(code)/join")
+        let response: Response = try await post(
+            "/api/invites/\(pathEscaped(code))/join"
+        )
         return response.serverId
     }
+
+    /// What an invite points at, without joining it. Readable by any signed-in
+    /// user by design — that is the point of an invite link.
+    func invitePreview(code: String) async throws -> Invite {
+        struct Response: Decodable { let invite: Invite }
+        let response: Response = try await get("/api/invites/\(pathEscaped(code))")
+        return response.invite
+    }
+
+    // MARK: Push
+
+    /// Whether this deployment can send notifications, per transport. `apns` is
+    /// the one this app cares about; `enabled` is the browser's VAPID answer and
+    /// is carried only so the shape matches the server's.
+    func pushConfig() async throws -> PushConfig {
+        try await get("/api/push/config")
+    }
+
+    /// Register this device's APNs token. Idempotent server-side — the row is
+    /// upserted on the token — which is what makes re-posting on every launch
+    /// the right thing rather than a waste.
+    func registerApnsToken(_ token: String) async throws {
+        struct Body: Encodable {
+            let platform = "apns"
+            let token: String
+        }
+        let _: EmptyResponse = try await post(
+            "/api/push/subscriptions", body: Body(token: token)
+        )
+    }
+
+    func unregisterApnsToken(_ token: String) async throws {
+        let _: EmptyResponse = try await send(
+            path: "/api/push/subscriptions",
+            method: "DELETE",
+            query: [URLQueryItem(name: "token", value: token)],
+            body: nil
+        )
+    }
+
+    /// Invite codes are base64url, which includes `-` and `_` but never `/` or
+    /// `+` — so in practice nothing needs escaping. Applied anyway because the
+    /// code here came from a URL somebody else wrote, and a code containing a
+    /// slash would otherwise silently address a different route.
+    private func pathEscaped(_ value: String) -> String {
+        value.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? value
+    }
+}
+
+struct PushConfig: Decodable, Sendable {
+    /// Web Push (VAPID). Present for shape parity with the browser; unused here.
+    let enabled: Bool
+    /// Whether the server holds an APNs key. False means never ask for
+    /// permission — a prompt for notifications that cannot arrive is worse than
+    /// no prompt, and permission refused is refused for good.
+    let apns: Bool
 }

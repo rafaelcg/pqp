@@ -1325,22 +1325,26 @@ CREATE INDEX IF NOT EXISTS idx_audit_log_actor
   ON audit_log (actor_id) WHERE actor_id IS NOT NULL;
 
 -- ---------------------------------------------------------------------------
--- push  — Web Push subscriptions (services/push.ts)
+-- push  — Web Push subscriptions + APNs device tokens (services/push.ts)
 -- ---------------------------------------------------------------------------
 --
--- One row per browser push endpoint. The endpoint is UNIQUE across users, not
--- per user: a browser profile holds exactly one subscription, and if another
--- account signs in on the same device the endpoint must follow the account —
--- two rows would push one person's mentions to whoever holds the phone now.
+-- One row per *device registration*, whichever transport reaches it. The
+-- identity column is UNIQUE across users, not per user: a browser profile holds
+-- exactly one subscription and a phone holds exactly one APNs token, and if
+-- another account signs in on that device the registration must follow the
+-- account — two rows would push one person's mentions to whoever holds the
+-- phone now.
 --
 -- Rows are capped per user (MAX_PUSH_SUBSCRIPTIONS_PER_USER, enforced on
--- insert) and garbage-collected on the vendor's own signal: a 404/410 from the
--- push service deletes the row. Nothing else prunes them, because nothing else
--- knows a subscription is dead.
+-- insert) and garbage-collected on the vendor's own signal: a 404/410 from a
+-- push service, or 410 Unregistered / 400 BadDeviceToken from APNs, deletes the
+-- row. Nothing else prunes them, because nothing else knows a registration is
+-- dead.
 --
 -- The p256dh/auth values are the browser-generated *public* encryption
 -- parameters from PushSubscription.getKey() — no message content is ever
--- stored here, and the VAPID private key lives only in the environment.
+-- stored here, and neither the VAPID private key nor the APNs signing key ever
+-- leaves the environment.
 CREATE TABLE IF NOT EXISTS push_subscriptions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -1349,6 +1353,51 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
   auth TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- APNs arrives as a SECOND SHAPE IN THE SAME TABLE rather than a table of its
+-- own. The whole point of the arrangement in services/push.ts is that the
+-- decision "who deserves to hear about this" is made once and the last mile
+-- fans out by platform; a second table would mean a second query on every
+-- fan-out and two places that could disagree about the per-user cap.
+--
+-- So: `platform` is the discriminant, and the CHECK below is what makes it a
+-- real one instead of a hint. A `web` row is the original shape. An `apns` row
+-- carries a device token and nothing else — no endpoint (there is no URL), no
+-- keys (APNs bodies are plain JSON over TLS; see services/apns.ts).
+--
+-- The three DROP NOT NULLs are what an existing deployment needs and are
+-- replay-safe: dropping a constraint that is already absent is a no-op. They
+-- are also why the CHECK exists — without it, relaxing those columns for the
+-- APNs shape would have quietly permitted a `web` row with no endpoint, which
+-- is a row that can never be sent to and never be cleaned up.
+ALTER TABLE push_subscriptions
+  ADD COLUMN IF NOT EXISTS platform TEXT NOT NULL DEFAULT 'web';
+ALTER TABLE push_subscriptions ADD COLUMN IF NOT EXISTS token TEXT;
+ALTER TABLE push_subscriptions ALTER COLUMN endpoint DROP NOT NULL;
+ALTER TABLE push_subscriptions ALTER COLUMN p256dh DROP NOT NULL;
+ALTER TABLE push_subscriptions ALTER COLUMN auth DROP NOT NULL;
+
+-- DROP-then-ADD, the same shape every other constraint in this file uses: the
+-- rule is stated once, here, and editing it re-applies it on the next boot
+-- instead of leaving an old version in place.
+ALTER TABLE push_subscriptions
+  DROP CONSTRAINT IF EXISTS push_subscriptions_platform_shape;
+ALTER TABLE push_subscriptions
+  ADD CONSTRAINT push_subscriptions_platform_shape CHECK (
+    (platform = 'web'
+      AND endpoint IS NOT NULL AND p256dh IS NOT NULL AND auth IS NOT NULL
+      AND token IS NULL)
+    OR
+    (platform = 'apns'
+      AND token IS NOT NULL
+      AND endpoint IS NULL AND p256dh IS NULL AND auth IS NULL)
+  );
+
+-- The APNs half of "one row per device". A partial UNIQUE index rather than a
+-- column constraint, because the `endpoint` uniqueness already permits many
+-- NULLs and this must do the same for the many `web` rows whose token is null.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_push_subscriptions_token
+  ON push_subscriptions (token) WHERE platform = 'apns';
 
 -- The send-time lookup ("every subscription these offline users hold") and the
 -- account-deletion cascade both start from user_id.

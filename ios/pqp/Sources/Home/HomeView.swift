@@ -35,9 +35,13 @@ struct HomeView: View {
     /// the destination closure SwiftUI runs on a push is the one it captured
     /// before the update, so only the state driving the push is reliably fresh.
     /// A single item cannot be half-applied.
+    ///
+    /// `channel` is optional because a redeemed invite knows the server and
+    /// nothing else — landing on the channel list is right there, and it is the
+    /// same push either way.
     struct RestoredChannel: Hashable {
         let server: Server
-        let channel: Channel
+        let channel: Channel?
     }
 
     var body: some View {
@@ -50,8 +54,96 @@ struct HomeView: View {
         .tint(Palette.signal)
         .task {
             await model.load(session: session)
-            await restoreLastVisited()
+            // BOTH BRANCHES ARE NEEDED, and this one is easy to leave out.
+            // A pending invite is consumed inside `becomeReady`, which runs
+            // *before* this view exists — so the request can already be sitting
+            // there, and `onChange` below never fires for a value it did not see
+            // change. Whichever of the two lands first, one of them handles it.
+            //
+            // An explicit link outranks the remembered place: somebody who
+            // tapped an invite meant to go there, not back to yesterday's
+            // channel.
+            if let request = session.navigationRequest {
+                // Marked so a later restore cannot push yesterday's channel on
+                // top of where the link just took us.
+                hasAttemptedRestore = true
+                await follow(request)
+            } else {
+                await restoreLastVisited()
+            }
         }
+        // A link or a notification tap that arrives while the shell is up,
+        // resolved against what the server still says exists — the same
+        // validation `restoreLastVisited` does, and for the same reason: a stale
+        // pointer must land on the hub, not on a screen that can only show an
+        // error.
+        .onChange(of: session.navigationRequest) { _, request in
+            guard let request else { return }
+            Task { await follow(request) }
+        }
+        // A refused invite is the one link failure worth interrupting for: the
+        // person tapped something expecting to end up somewhere, and silence
+        // would read as the app being broken. The server's sentence, verbatim.
+        .alert(
+            "Can't open that link",
+            isPresented: Binding(
+                get: { session.linkError != nil },
+                set: { if !$0 { session.linkError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { session.linkError = nil }
+        } message: {
+            Text(session.linkError ?? "")
+        }
+    }
+
+    /// Navigates to a link's destination.
+    ///
+    /// Invites never arrive here — `SessionStore.requestNavigation` redeems one
+    /// first and then asks for the `.server` it turned into, so by this point
+    /// every case is a place that either exists or does not.
+    private func follow(_ request: DeepLinkTarget) async {
+        defer { session.navigationHandled() }
+
+        switch request {
+        case .invite:
+            // Unreachable by construction; ignored rather than guessed at.
+            return
+
+        case .conversation(let channelId):
+            // A DM from a notification may be one this list has never seen —
+            // somebody messaging for the first time — so refresh before giving
+            // up on it.
+            if model.conversations.first(where: { $0.channelId == channelId }) == nil {
+                await model.refresh()
+            }
+            guard let conversation = model.conversations
+                .first(where: { $0.channelId == channelId })
+            else { return }
+            openedConversation = conversation
+
+        case .channel(let serverId, let channelId):
+            guard let server = await resolveServer(serverId),
+                  let channels = try? await session.api.channels(serverId: serverId),
+                  let channel = channels.first(where: { $0.id == channelId && $0.isText })
+            else { return }
+            restoredChannel = RestoredChannel(server: server, channel: channel)
+
+        case .server(let serverId):
+            guard let server = await resolveServer(serverId) else { return }
+            restoredChannel = RestoredChannel(server: server, channel: nil)
+        }
+    }
+
+    /// A server by id, refreshing the list once if it is not already known —
+    /// which is exactly the case after joining by invite, where the membership
+    /// is seconds old.
+    private func resolveServer(_ serverId: String) async -> Server? {
+        if let known = model.servers.first(where: { $0.id == serverId }) {
+            return known
+        }
+        await model.refresh()
+        return model.servers.first(where: { $0.id == serverId })
     }
 
     /// Reopens where the user left off, or does nothing.
@@ -215,6 +307,11 @@ struct HubView: View {
     @State private var showingCreateServer = false
     @State private var newServerName = ""
     @State private var showingNewConversation = false
+    /// Typing or pasting a code, for the invite that did not arrive as a
+    /// tappable link — read out loud over voice chat, or copied out of a
+    /// message. The empty-servers card has promised this since it shipped.
+    @State private var showingJoinInvite = false
+    @State private var inviteCode = ""
 
     var body: some View {
         ZStack {
@@ -253,6 +350,11 @@ struct HubView: View {
                     } label: {
                         Label("New server", systemImage: "plus.square.on.square")
                     }
+                    Button {
+                        showingJoinInvite = true
+                    } label: {
+                        Label("Join with invite", systemImage: "envelope.open")
+                    }
                 } label: {
                     Image(systemName: "plus")
                 }
@@ -277,6 +379,22 @@ struct HubView: View {
                 guard !name.isEmpty else { return }
                 Task { await model.createServer(named: name) }
             }
+        }
+        // A whole link pastes as happily as a bare code — `normalizeInviteCode`
+        // takes the last path segment either way, and a whole link is what
+        // people were actually sent.
+        .alert("Join a server", isPresented: $showingJoinInvite) {
+            TextField("Invite code or link", text: $inviteCode)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+            Button("Cancel", role: .cancel) { inviteCode = "" }
+            Button("Join") {
+                let pasted = inviteCode
+                inviteCode = ""
+                Task { await session.openInvite(code: pasted) }
+            }
+        } message: {
+            Text("Paste the invite you were sent, or type the code.")
         }
         .sheet(isPresented: $showingNewConversation) {
             NewConversationView { conversation in
@@ -428,25 +546,42 @@ struct HubView: View {
                 .padding(.horizontal, Metrics.hPadding)
 
             if model.servers.isEmpty {
-                Button { showingCreateServer = true } label: {
-                    HStack(spacing: 12) {
-                        Image(systemName: "plus.circle")
-                            .font(.system(size: 20, weight: .light))
-                            .foregroundStyle(Palette.signal)
-                        VStack(alignment: .leading, spacing: 2) {
+                // Two actions, two buttons. The card used to mention an invite
+                // code in its subtitle and then create a server when tapped —
+                // which was the only way in, so the sentence described something
+                // the app could not do.
+                VStack(alignment: .leading, spacing: 8) {
+                    Button { showingCreateServer = true } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "plus.circle")
+                                .font(.system(size: 20, weight: .light))
+                                .foregroundStyle(Palette.signal)
                             Text("Create a server")
                                 .font(Typography.bodyMedium)
                                 .foregroundStyle(Palette.paper)
-                            Text("Or join one with an invite code.")
-                                .font(Typography.caption)
-                                .foregroundStyle(Palette.paperMuted)
+                            Spacer()
                         }
-                        Spacer()
+                        .padding(14)
+                        .pqpSurface()
                     }
-                    .padding(14)
-                    .pqpSurface()
+                    .buttonStyle(.plain)
+
+                    Button { showingJoinInvite = true } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "envelope.open")
+                                .font(.system(size: 20, weight: .light))
+                                .foregroundStyle(Palette.paperMuted)
+                            Text("Join one with an invite")
+                                .font(Typography.bodyMedium)
+                                .foregroundStyle(Palette.paper)
+                            Spacer()
+                        }
+                        .padding(14)
+                        .pqpSurface()
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("hub.joinInvite")
                 }
-                .buttonStyle(.plain)
                 .padding(.horizontal, Metrics.hPadding)
             } else {
                 ScrollView(.horizontal, showsIndicators: false) {

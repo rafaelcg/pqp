@@ -23,6 +23,17 @@
 /.well-known/api-catalog
   Content-Type: application/linkset+json
 
+# Universal links. Apple's CDN fetches this file, not the device, so what it
+# needs is to be JSON at a stable URL over https with no redirect — which is
+# exactly what a static file in client/public/ on Pages is. The media type is
+# stated for the same reason as the two above (extension-less filename), and the
+# short cache is because this is the file you edit when a claimed path changes
+# and then wait on: Apple's CDN can hold a stale copy for ~24h regardless, so
+# there is nothing to gain by adding our own cache on top of that.
+/.well-known/apple-app-site-association
+  Content-Type: application/json
+  Cache-Control: public, max-age=300
+
 # RFC 8288 discovery pointers on the homepage: where the API catalog and the
 # live status live. Cheap, standard, and true — unlike advertising agent
 # registration surfaces this product does not have.
