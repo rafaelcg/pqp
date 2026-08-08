@@ -26,6 +26,7 @@ struct ChannelListView: View {
     @State private var showingSettings = false
     @State private var webhooksFor: Channel?
     @State private var memberPickerFor: Channel?
+    @State private var threadsFor: Channel?
     @State private var current: Server
     @State private var handlerKey = UUID().uuidString
 
@@ -69,7 +70,8 @@ struct ChannelListView: View {
                                 .padding(.top, 4)
                             ForEach(textChannels) { channel in
                                 NavigationLink {
-                                    ChatView(channelId: channel.id, title: "#\(channel.name)")
+                                    ChatView(channelId: channel.id, title: "#\(channel.name)",
+                                             canStartThreads: true)
                                 } label: {
                                     ChannelRow(channel: channel, unread: unread[channel.id])
                                 }
@@ -92,7 +94,8 @@ struct ChannelListView: View {
                                     .contextMenu { channelActions(for: channel) }
                                 } else {
                                     NavigationLink {
-                                        ChatView(channelId: channel.id, title: "#\(channel.name)")
+                                        ChatView(channelId: channel.id, title: "#\(channel.name)",
+                                                 canStartThreads: true)
                                     } label: {
                                         ChannelRow(channel: channel, unread: unread[channel.id])
                                     }
@@ -174,6 +177,7 @@ struct ChannelListView: View {
         .sheet(item: $memberPickerFor) { channel in
             ChannelMembersView(channel: channel, server: current)
         }
+        .sheet(item: $threadsFor) { channel in ThreadListView(channel: channel) }
         .alert("New channel", isPresented: $showingNewChannel) {
             TextField("Channel name", text: $newChannelName)
             Button("Cancel", role: .cancel) { newChannelName = "" }
@@ -282,6 +286,13 @@ struct ChannelListView: View {
 
     @ViewBuilder
     private func channelActions(for channel: Channel) -> some View {
+        // Threads are readable by anyone who can read the channel — their
+        // visibility IS the channel's — so this sits above the manager block.
+        if channel.isText {
+            Button { threadsFor = channel } label: {
+                Label("Threads", systemImage: "bubble.left.and.text.bubble.right")
+            }
+        }
         if isManager {
             Button {
                 renameText = channel.name

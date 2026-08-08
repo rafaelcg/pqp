@@ -38,6 +38,11 @@ final class HomeModel {
     var conversations: [DmSummary] = []
     var isLoading = true
     var error: String?
+    /// Friend requests waiting on this account — the badge on the Friends
+    /// entry point. Only incoming ones count: a badge is a call to action, and
+    /// there is nothing to do about a request you sent. There is no friend WS
+    /// frame on the server, so this moves on refresh, not live.
+    var pendingFriendRequests = 0
 
     private var session: SessionStore?
     private let handlerKey = "home-" + UUID().uuidString
@@ -88,6 +93,11 @@ final class HomeModel {
             async let conversations = session.api.conversations()
             self.servers = try await servers
             self.conversations = try await conversations
+            // A separate, non-fatal read: the badge is a nicety and must not
+            // be able to blank the two lists that are the screen.
+            pendingFriendRequests = FriendsDigest.pendingActionCount(
+                (try? await session.api.friends()) ?? FriendsResponse()
+            )
         } catch {
             self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
         }
@@ -247,6 +257,30 @@ struct ConversationListView: View {
         .onAppear { Task { await model.refresh() } }
         .navigationTitle("Messages")
         .toolbar {
+            // Friends live beside DMs rather than in a fourth tab: on the web
+            // they are the same pane, and the thing you do with a friend is
+            // message them.
+            ToolbarItem(placement: .topBarLeading) {
+                NavigationLink {
+                    FriendsView()
+                } label: {
+                    Image(systemName: "person.2.fill")
+                        .overlay(alignment: .topTrailing) {
+                            if model.pendingFriendRequests > 0 {
+                                Circle()
+                                    .fill(Palette.signal)
+                                    .frame(width: 8, height: 8)
+                                    .offset(x: 5, y: -3)
+                            }
+                        }
+                }
+                .tint(Palette.signal)
+                .accessibilityLabel(
+                    model.pendingFriendRequests > 0
+                        ? Text("Friends, \(model.pendingFriendRequests) requests waiting")
+                        : Text("Friends")
+                )
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Button { showingNew = true } label: { Image(systemName: "square.and.pencil") }
                     .tint(Palette.signal)

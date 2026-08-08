@@ -14,6 +14,12 @@ enum RealtimeEvent: Sendable {
     case typing(channelId: String, userId: String, displayName: String)
     case presence(channelId: String, users: [PresenceUser])
     case activity(channelId: String, serverId: String?, mention: Bool)
+    /// A thread on `messageId` was created, or gained a message. Fanned out to
+    /// viewers of the PARENT channel — `channelId` is the parent, not the
+    /// thread — and deliberately content-free: the thread's own messages travel
+    /// only to the thread's own viewers, so this can never leak a body into a
+    /// channel view.
+    case threadUpdate(channelId: String, messageId: String, thread: ThreadSummary)
     /// The one WS refusal that explains itself. Every other refused frame is a
     /// silent drop; this one is unicast to the person who tried, so the client
     /// can say why the send vanished instead of showing a bug-shaped nothing.
@@ -140,6 +146,9 @@ actor RealtimeClient {
     private var statusHandler: (@Sendable (RealtimeStatus) -> Void)?
     private var reconnectAttempt = 0
     private var joinedChannelId: String?
+    /// The thread panel's slot, re-asserted on reconnect for the same reason
+    /// the primary channel is: the server forgets both when the socket dies.
+    private var joinedThreadChannelId: String?
     private var isStopped = false
     private var pingTask: Task<Void, Never>?
     private var missedPongs = 0
@@ -210,6 +219,9 @@ actor RealtimeClient {
         // disconnect and would otherwise deliver nothing.
         if let joinedChannelId {
             await send(raw: ["type": "join-channel", "channelId": joinedChannelId])
+        }
+        if let joinedThreadChannelId {
+            await send(raw: ["type": "thread-join", "channelId": joinedThreadChannelId])
         }
 
         startHeartbeat()
@@ -283,6 +295,27 @@ actor RealtimeClient {
     func join(channelId: String) async {
         joinedChannelId = channelId
         await send(raw: ["type": "join-channel", "channelId": channelId])
+    }
+
+    /// Open a thread's live view *beside* the primary channel.
+    ///
+    /// Deliberately not `join-channel`: a connection has exactly one primary
+    /// channel slot, and joining a thread through it would silently stop
+    /// delivery for the channel the panel is open next to. The server holds one
+    /// extra slot per connection for exactly this.
+    ///
+    /// The phone shows one conversation at a time, so opening a thread as a
+    /// full screen uses `join(channelId:)` — a thread id IS a channel id. This
+    /// pair exists for a side-by-side view (iPad, or a future split layout) and
+    /// keeps the client honest about the frame the server already speaks.
+    func joinThread(channelId: String) async {
+        joinedThreadChannelId = channelId
+        await send(raw: ["type": "thread-join", "channelId": channelId])
+    }
+
+    func leaveThread() async {
+        joinedThreadChannelId = nil
+        await send(raw: ["type": "thread-leave"])
     }
 
     /// Returns the nonce so the caller can match the echo back to its optimistic
@@ -439,13 +472,15 @@ actor RealtimeClient {
         let kind: String?
         let caller: CallerSummary?
         let reason: String?
+        // Threads
+        let thread: ThreadSummary?
 
         enum CodingKeys: String, CodingKey {
             case type, nonce, message, channelId, messageId, emoji, userId
             case displayName, added, users, serverId, mention
             case peerId, voiceChannelId, peers, participants, peer, sdp, from
             case candidate, limit, transport
-            case conversationId, kind, caller, reason
+            case conversationId, kind, caller, reason, thread
             // `self` is a Swift keyword, so the wire key is remapped.
             case selfPeer = "self"
         }
@@ -530,6 +565,10 @@ actor RealtimeClient {
             guard let channelId = envelope.channelId else { return }
             event = .activity(channelId: channelId, serverId: envelope.serverId,
                               mention: envelope.mention ?? false)
+        case "thread-update":
+            guard let channelId = envelope.channelId, let messageId = envelope.messageId,
+                  let thread = envelope.thread else { return }
+            event = .threadUpdate(channelId: channelId, messageId: messageId, thread: thread)
 
         case "welcome":
             guard let peerId = envelope.peerId,

@@ -157,6 +157,13 @@ actor APIClient {
         try await send(path: path, method: "PATCH", query: [], body: try Coding.encoder.encode(body))
     }
 
+    /// Bodyless DELETE. `send` is fileprivate, so endpoints declared in other
+    /// files (see SocialAPI.swift) need this to reach the verb at all.
+    @discardableResult
+    func delete<T: Decodable>(_ path: String) async throws -> T {
+        try await send(path: path, method: "DELETE", query: [], body: nil)
+    }
+
     fileprivate func send<T: Decodable>(
         path: String,
         method: String,

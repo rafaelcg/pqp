@@ -147,6 +147,10 @@ struct Message: Codable, Identifiable, Hashable, Sendable {
     var pinnedAt: Date?
     let isWebhook: Bool
     var webhookEmbeds: [WebhookEmbed]
+    /// The thread anchored to this message, or nil. Defaulted rather than
+    /// required: `message-broadcast` for a brand-new message omits it (nothing
+    /// can have a thread yet) and an older server never sends it at all.
+    var thread: ThreadSummary?
 
     /// Client-only. A message sent optimistically has not been acknowledged by
     /// the server yet; the `nonce` echo on `message-broadcast` replaces it.
@@ -158,7 +162,7 @@ struct Message: Codable, Identifiable, Hashable, Sendable {
     enum CodingKeys: String, CodingKey {
         case id, channelId, authorId, authorName, authorTag, authorAvatarUrl
         case body, createdAt, editedAt, reactions, replyTo, attachments, embeds
-        case blocked, pinnedAt, isWebhook, webhookEmbeds
+        case blocked, pinnedAt, isWebhook, webhookEmbeds, thread
     }
 
     init(from decoder: Decoder) throws {
@@ -180,6 +184,11 @@ struct Message: Codable, Identifiable, Hashable, Sendable {
         pinnedAt = try c.decodeIfPresent(Date.self, forKey: .pinnedAt)
         isWebhook = try c.decodeIfPresent(Bool.self, forKey: .isWebhook) ?? false
         webhookEmbeds = try c.decodeIfPresent([WebhookEmbed].self, forKey: .webhookEmbeds) ?? []
+        // Lenient on purpose, unlike every other key here: a thread payload
+        // this client cannot read must cost the *chip*, not the message. The
+        // body is the payload; the chip is a nicety, and a strict decode here
+        // would drop a whole message over a shape change on an accessory.
+        thread = (try? c.decodeIfPresent(ThreadSummary.self, forKey: .thread)) ?? nil
         isPending = false
         pendingNonce = nil
     }
@@ -203,6 +212,7 @@ struct Message: Codable, Identifiable, Hashable, Sendable {
         pinnedAt = nil
         isWebhook = false
         webhookEmbeds = []
+        thread = nil
         isPending = true
         pendingNonce = nil
     }

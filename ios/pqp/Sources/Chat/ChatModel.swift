@@ -287,6 +287,30 @@ final class ChatModel {
         }
     }
 
+    /// Start a thread on a message, or get back the one it already has — the
+    /// server is idempotent here, so tapping twice cannot make two threads.
+    ///
+    /// The chip is written onto the local row immediately: the `thread-update`
+    /// broadcast goes to the parent channel's viewers, and we are one, but the
+    /// person who tapped should not watch a round trip to learn it worked.
+    /// Returns the thread so the caller can push straight into it.
+    func startThread(on message: Message) async -> ThreadSummary? {
+        guard let session else { return nil }
+        do {
+            let thread = try await session.api.createThread(messageId: message.id)
+            if let index = messages.firstIndex(where: { $0.id == message.id }) {
+                messages[index].thread = thread
+            }
+            return thread
+        } catch {
+            // 400 here is the server refusing the *target*: a DM (already the
+            // scoped side-conversation threads exist to create) or a message
+            // inside a thread (they do not nest). Its wording says which.
+            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+            return nil
+        }
+    }
+
     func isMine(_ message: Message) -> Bool {
         message.authorId == session?.currentUser?.id
     }
@@ -346,6 +370,14 @@ final class ChatModel {
         case .typing(let typingChannelId, _, let displayName):
             guard typingChannelId == channelId else { return }
             typingNames[displayName] = Date()
+
+        case .threadUpdate(let parentChannelId, let messageId, let thread):
+            // The chip on the origin message, live. `channelId` on this frame
+            // is the PARENT — a thread's own messages never travel here, so
+            // this is only ever a count and a timestamp moving.
+            guard parentChannelId == channelId,
+                  let index = messages.firstIndex(where: { $0.id == messageId }) else { return }
+            messages[index].thread = thread
 
         case .sanctionNotice(let notice):
             // Attached to the composer the person is actually looking at; a

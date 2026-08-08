@@ -21,6 +21,11 @@ struct NewConversationView: View {
     /// Picking more than one person opens a group conversation. The server caps
     /// it at nine, so the button says so rather than failing at ten.
     @State private var selected: [PublicUser] = []
+    /// Offered before anything is typed. A friend is the person you are most
+    /// likely to be messaging, and the server already lets a friend through a
+    /// `server_members` DM privacy setting — so these are the names least
+    /// likely to end in a refusal.
+    @State private var friends: [Friend] = []
 
     private var looksLikeTag: Bool {
         query.contains("#") && query.split(separator: "#").count == 2
@@ -44,6 +49,10 @@ struct NewConversationView: View {
 
                     if searching {
                         ProgressView().tint(Palette.signal).padding(.top, 20)
+                    } else if query.isEmpty && !suggestions.isEmpty {
+                        SectionLabel(text: String(localized: "Friends"))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, Metrics.hPadding)
                     } else if results.isEmpty && !query.isEmpty {
                         Text(looksLikeTag
                              ? String(localized: "No one with that tag.")
@@ -57,7 +66,7 @@ struct NewConversationView: View {
 
                     ScrollView {
                         LazyVStack(spacing: 8) {
-                            ForEach(results) { user in
+                            ForEach(query.isEmpty ? suggestions : results) { user in
                                 Button {
                                     toggle(user)
                                 } label: {
@@ -91,7 +100,16 @@ struct NewConversationView: View {
                     Button("Cancel") { dismiss() }.tint(Palette.paperMuted)
                 }
             }
+            // Failing this leaves the search box, which is the whole screen —
+            // so it is deliberately not surfaced as an error.
+            .task { friends = (try? await session.api.friends())?.friends ?? [] }
         }
+    }
+
+    /// Friends, online first, as the pre-search list. Anyone already picked
+    /// stays in the list so the checkmark has somewhere to live.
+    private var suggestions: [PublicUser] {
+        FriendsDigest.onlineFirst(friends).map(\.asPublicUser)
     }
 
     private var searchField: some View {

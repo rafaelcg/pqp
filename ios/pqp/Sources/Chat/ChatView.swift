@@ -11,8 +11,14 @@ struct ChatView: View {
     /// channel list, and putting a call button on its text channel would ring
     /// nobody. Nil here is what keeps the header identical for server channels.
     var conversation: DmSummary? = nil
+    /// Only a server text channel can host threads — a DM already is the scoped
+    /// side-conversation threads exist to create, and threads do not nest. The
+    /// server refuses the other cases with a 400; the call sites that can say
+    /// yes pass it, so the action is not offered where it would always fail.
+    var canStartThreads: Bool = false
 
     @State private var model = ChatModel()
+    @State private var openedThread: ThreadSummary?
     @State private var showingPicker = false
     @State private var showingPins = false
     @State private var showingGifs = false
@@ -88,6 +94,7 @@ struct ChatView: View {
             }
         }
         .animation(Motion.standard, value: call.isCollapsed)
+        .threadDestination($openedThread)
         .sheet(isPresented: $showingPins) { PinnedMessagesView(channelId: channelId) }
         .sheet(isPresented: $showingGifs) {
             GifPicker { gif in Task { await model.sendGif(gif) } }
@@ -140,7 +147,8 @@ struct ChatView: View {
                             isGrouped: model.isGrouped(at: index),
                             onToggleReaction: { emoji in
                                 Task { await model.toggleReaction(emoji, on: message) }
-                            }
+                            },
+                            onOpenThread: { openedThread = $0 }
                         )
                         .id(message.id)
                         .contextMenu {
@@ -198,6 +206,24 @@ struct ChatView: View {
             composerFocused = true
         } label: {
             Label("Reply", systemImage: "arrowshape.turn.up.left")
+        }
+
+        // Start a thread, or open the one this message already has — the server
+        // route is idempotent, so both are the same tap and the label just says
+        // which one it will be.
+        if canStartThreads {
+            Button {
+                if let existing = message.thread {
+                    openedThread = existing
+                } else {
+                    Task { openedThread = await model.startThread(on: message) }
+                }
+            } label: {
+                Label(
+                    message.thread == nil ? "Start thread" : "Open thread",
+                    systemImage: "bubble.left.and.text.bubble.right"
+                )
+            }
         }
 
         Button {
@@ -439,6 +465,7 @@ struct MessageRow: View {
     let message: Message
     let isGrouped: Bool
     var onToggleReaction: (String) -> Void = { _ in }
+    var onOpenThread: (ThreadSummary) -> Void = { _ in }
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -503,6 +530,10 @@ struct MessageRow: View {
 
                 if !message.reactions.isEmpty {
                     ReactionRow(reactions: message.reactions, onTap: onToggleReaction)
+                }
+
+                if let thread = message.thread {
+                    ThreadChip(thread: thread) { onOpenThread(thread) }
                 }
             }
 
