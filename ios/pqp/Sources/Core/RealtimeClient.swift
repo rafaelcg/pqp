@@ -214,15 +214,13 @@ actor RealtimeClient {
 
         await send(raw: ["type": "auth", "token": token])
         listen()
-
-        // Re-enter the channel the user is looking at; the server forgets on
-        // disconnect and would otherwise deliver nothing.
-        if let joinedChannelId {
-            await send(raw: ["type": "join-channel", "channelId": joinedChannelId])
-        }
-        if let joinedThreadChannelId {
-            await send(raw: ["type": "thread-join", "channelId": joinedThreadChannelId])
-        }
+        // The channel re-joins wait for `ready`. The server verifies the token
+        // asynchronously, and any frame that lands during that window hits an
+        // unauthenticated socket, which answers 4401 "Auth required" — so a
+        // reconnect with a channel open (a server restart mid-conversation,
+        // precisely) sent auth and join back-to-back and lost the race every
+        // time, looping on "Reconnecting…" forever. First connects never hit
+        // it: there is nothing to rejoin yet.
 
         startHeartbeat()
     }
@@ -536,6 +534,16 @@ actor RealtimeClient {
             reconnectAttempt = 0
             missedPongs = 0
             statusHandler?(.online)
+            // Now — and only now — the socket is authenticated, so the slots
+            // the server forgot on disconnect can be re-asserted.
+            Task { [joinedChannelId, joinedThreadChannelId] in
+                if let joinedChannelId {
+                    await self.send(raw: ["type": "join-channel", "channelId": joinedChannelId])
+                }
+                if let joinedThreadChannelId {
+                    await self.send(raw: ["type": "thread-join", "channelId": joinedThreadChannelId])
+                }
+            }
             event = .ready
         case "message-broadcast":
             guard let message = envelope.message else { return }
