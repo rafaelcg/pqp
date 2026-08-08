@@ -471,7 +471,7 @@ test("right-click offers the light actions and a door to the panel, not a second
   // The enforcement ladder lives in one place. If these ever appear here, two
   // copies of it exist.
   await expect(
-    menu.getByRole("menuitem", { name: "Ban from server" }),
+    menu.getByRole("menuitem", { name: "Ban from community" }),
   ).toHaveCount(0);
   await expect(
     menu.getByRole("menuitem", { name: "Time out" }),

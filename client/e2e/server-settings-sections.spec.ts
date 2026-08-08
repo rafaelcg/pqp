@@ -24,7 +24,7 @@ const SECTIONS = [
 ] as const;
 
 async function openServerSettings(page: Page): Promise<void> {
-  await page.getByRole("button", { name: "Server settings" }).first().click();
+  await page.getByRole("button", { name: "Community settings" }).first().click();
   await expect(page.getByRole("dialog")).toBeVisible();
 }
 
@@ -118,7 +118,7 @@ test.describe("server settings sections", () => {
   test("escape closes server settings", async ({ page }) => {
     await openApp(page);
     const trigger = page
-      .getByRole("button", { name: "Server settings" })
+      .getByRole("button", { name: "Community settings" })
       .first();
     await trigger.click();
     await expect(page.getByRole("dialog")).toBeVisible();

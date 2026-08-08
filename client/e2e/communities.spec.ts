@@ -273,7 +273,7 @@ test.describe("Communities", () => {
     page,
   }) => {
     await openApp(page);
-    await page.getByRole("button", { name: "Server settings" }).click();
+    await page.getByRole("button", { name: "Community settings" }).click();
 
     const section = page.locator("[data-community-settings]");
     await expect(section).toBeVisible();
@@ -371,7 +371,7 @@ test.describe("Communities", () => {
     await expect(page.getByRole("button", { name: "Send" })).toBeVisible({
       timeout: 20_000,
     });
-    await page.getByRole("button", { name: "Server settings" }).click();
+    await page.getByRole("button", { name: "Community settings" }).click();
     await expect(page.getByText(/Server name/i).first()).toBeVisible();
     await expect(page.locator("[data-community-settings]")).toHaveCount(0);
   });

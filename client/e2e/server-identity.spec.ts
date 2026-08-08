@@ -81,7 +81,7 @@ async function storageEnabled(): Promise<boolean> {
 const columnBanner = (page: Page) => page.locator("aside [data-server-banner]");
 
 async function openServerSettings(page: Page): Promise<void> {
-  await page.getByRole("button", { name: "Server settings" }).first().click();
+  await page.getByRole("button", { name: "Community settings" }).first().click();
   await expect(page.getByRole("dialog")).toBeVisible();
 }
 
