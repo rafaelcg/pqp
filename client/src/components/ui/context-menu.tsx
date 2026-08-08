@@ -11,8 +11,41 @@ export interface ContextMenuItemDef {
   separator?: boolean;
 }
 
+/**
+ * One emoji in the strip across the top of the menu.
+ *
+ * Separate from `ContextMenuItemDef` on purpose. Quick reactions used to be
+ * ordinary items, and an item is a full-width row — eight of them stacked into
+ * a tall column of one emoji per line, which is what the menu looked like on
+ * desktop and on iOS. Giving them their own type is what stops the next person
+ * from putting an emoji back in `items` and re-growing the column.
+ */
+export interface ContextMenuReactionDef {
+  emoji: string;
+  /**
+   * Accessible name override. Left undefined the emoji itself names the
+   * button, which is what a reader wants; set it only to add state ("you
+   * already reacted with this one") that the glyph cannot carry.
+   */
+  label?: string;
+  onSelect: () => void;
+  /** Drawn lit, the same way the reaction pill under the message is. */
+  active?: boolean;
+}
+
 interface ContextMenuProps {
   items: ContextMenuItemDef[];
+  /**
+   * Drawn as ONE horizontal row at the top of the menu, above `items`.
+   * Empty or omitted and the strip is not rendered at all.
+   */
+  reactions?: ContextMenuReactionDef[];
+  /** Accessible name for the strip as a whole. */
+  reactionsLabel?: string;
+  /** The `+` at the tail of the strip. Omitted and no tail is drawn. */
+  onMoreReactions?: () => void;
+  /** Accessible name for that `+`. */
+  moreReactionsLabel?: string;
   children: ReactNode;
   disabled?: boolean;
 }
@@ -22,6 +55,10 @@ const COLLISION_PADDING = 8;
 
 export function ContextMenu({
   items,
+  reactions,
+  reactionsLabel,
+  onMoreReactions,
+  moreReactionsLabel,
   children,
   disabled = false,
 }: ContextMenuProps) {
@@ -62,7 +99,10 @@ export function ContextMenu({
     setAlignOffset(!fitsBelow && fitsAbove ? -height : 0);
   }, []);
 
-  if (disabled || items.length === 0) {
+  const strip = reactions ?? [];
+  const hasStrip = strip.length > 0;
+
+  if (disabled || (items.length === 0 && !hasStrip)) {
     return <>{children}</>;
   }
 
@@ -86,9 +126,55 @@ export function ContextMenu({
           // `animate-fade-in` rather than `animate-rise`: the latter animates
           // `translateY(14px)` over 650ms, so the menu spends half a second
           // visibly detached from the point it is anchored to.
-          className="z-[100] max-h-[var(--radix-context-menu-content-available-height)] min-w-[11.5rem] overflow-y-auto overscroll-contain rounded-lg border border-ink-4 bg-ink-2 p-1 shadow-[var(--shadow-popover)] animate-fade-in"
+          className={cn(
+            "z-[100] max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto overscroll-contain rounded-lg border border-ink-4 bg-ink-2 p-1 shadow-[var(--shadow-popover)] animate-fade-in",
+            // The strip sets the width: it is a fixed number of equal cells
+            // laid out in a row, and a menu narrower than their natural width
+            // would wrap them back into the column this exists to kill.
+            hasStrip ? "min-w-[16.5rem]" : "min-w-[11.5rem]",
+          )}
           onCloseAutoFocus={(e) => e.preventDefault()}
         >
+          {hasStrip && (
+            <>
+              {/* ONE ROW. `flex` with no wrapping and equal-basis cells is the
+                  whole fix — every emoji shares a y-centre, which is what a
+                  quick-reaction strip is supposed to look like and what the
+                  e2e test measures. */}
+              <div
+                role="group"
+                aria-label={reactionsLabel}
+                className="flex items-center gap-0.5 px-0.5 pb-1"
+                data-quick-reactions=""
+              >
+                {strip.map((reaction) => (
+                  <ContextMenuPrimitive.Item
+                    key={reaction.emoji}
+                    aria-label={reaction.label}
+                    onSelect={reaction.onSelect}
+                    data-quick-reaction=""
+                    className={cn(
+                      "flex h-8 flex-1 cursor-default select-none items-center justify-center rounded-md text-base leading-none outline-none data-[highlighted]:bg-ink-3",
+                      reaction.active && "bg-signal/15 ring-1 ring-signal/40",
+                    )}
+                  >
+                    {reaction.emoji}
+                  </ContextMenuPrimitive.Item>
+                ))}
+                {onMoreReactions && (
+                  <ContextMenuPrimitive.Item
+                    aria-label={moreReactionsLabel}
+                    onSelect={onMoreReactions}
+                    data-quick-reaction-more=""
+                    className="flex h-8 flex-1 cursor-default select-none items-center justify-center rounded-md border border-dashed border-ink-4 text-sm leading-none text-paper-muted outline-none data-[highlighted]:bg-ink-3 data-[highlighted]:text-paper"
+                  >
+                    <span aria-hidden="true">+</span>
+                  </ContextMenuPrimitive.Item>
+                )}
+              </div>
+              {items.length > 0 && <div className="mb-1 h-px bg-ink-4" />}
+            </>
+          )}
           {items.map((item) =>
             item.separator ? (
               <ContextMenuPrimitive.Separator

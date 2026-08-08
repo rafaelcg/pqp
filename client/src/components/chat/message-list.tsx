@@ -38,6 +38,8 @@ import {
   type ContextMenuItemDef,
 } from "@/components/ui/context-menu";
 import { Button } from "@/components/ui/button";
+import { useProfilePopover } from "@/components/user/user-profile-popover";
+import type { ProfileSubject } from "@/components/user/profile-relations";
 import type { ChatMessage, TypingUser } from "@/hooks/use-chat";
 import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
 import { messageRoutePath } from "@/lib/app-route";
@@ -1169,6 +1171,7 @@ const MessageRow = memo(function MessageRow({
   onMenuClose,
 }: MessageRowProps) {
   const { t } = useTranslation();
+  const openProfile = useProfilePopover();
   const { message, startsGroup, dayLabel } = row;
   // A body that is nothing but a GIF link is media, not prose — the URL is the
   // message, so it renders instead of the text rather than beside it.
@@ -1354,33 +1357,50 @@ const MessageRow = memo(function MessageRow({
           },
         ]
       : []),
-    { id: "sep-quick", label: "", separator: true },
-    {
-      id: "add-reaction",
-      label: "Add reaction",
-      onSelect: selectAndClose(onOpenPicker, false),
-    },
-    // The label carries reaction state too: a screen reader reading the menu
-    // item by item has no other way to learn "you already reacted with this
-    // one" short of opening the row and cross-referencing the reaction bar.
-    ...QUICK_REACTIONS.map((emoji) => {
-      const mine = reactions.some((r) => r.emoji === emoji && r.me);
-      return {
-        id: `react-${emoji}`,
-        label: mine ? `${emoji} (remove your reaction)` : emoji,
-        onSelect: selectAndClose(
-          () => onToggleReaction(message.id, emoji),
-          true,
-        ),
-      };
-    }),
   ];
+
+  /**
+   * The quick reactions, as a STRIP rather than as menu items.
+   *
+   * They used to be appended to `items` above, one `ContextMenuItemDef` per
+   * emoji — and a menu item is a full-width row, so eight of them rendered as a
+   * tall column of single emoji under an "Add reaction" heading. They are not
+   * commands in a list; they are one control with eight cells, which is why
+   * they now go through the menu's own `reactions` prop and get laid out in a
+   * row at the top (see `ui/context-menu.tsx`).
+   *
+   * `label` still carries reaction state: a screen reader has no other way to
+   * learn "you already reacted with this one" short of leaving the menu and
+   * cross-referencing the reaction bar.
+   */
+  const quickReactions = isReal
+    ? QUICK_REACTIONS.map((emoji) => {
+        const mine = reactions.some((r) => r.emoji === emoji && r.me);
+        return {
+          emoji,
+          label: mine ? `${emoji} (remove your reaction)` : undefined,
+          active: mine,
+          onSelect: selectAndClose(
+            () => onToggleReaction(message.id, emoji),
+            true,
+          ),
+        };
+      })
+    : undefined;
 
   return (
     <>
       {dayLabel && <DaySeparator label={dayLabel} />}
 
-      <ContextMenu items={items}>
+      <ContextMenu
+        items={items}
+        reactions={quickReactions}
+        reactionsLabel={t("reactions.quick")}
+        onMoreReactions={
+          isReal ? selectAndClose(onOpenPicker, false) : undefined
+        }
+        moreReactionsLabel={t("reactions.more")}
+      >
         <article
           ref={(node) => {
             registerRow(message.id, node);
@@ -1404,7 +1424,12 @@ const MessageRow = memo(function MessageRow({
           )}
         >
           {startsGroup ? (
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-md bg-ink-3 text-sm font-semibold">
+            <AuthorButton
+              message={message}
+              tabIndex={controlTabIndex}
+              onOpenProfile={openProfile}
+              className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-md bg-ink-3 text-sm font-semibold"
+            >
               {message.authorAvatarUrl ? (
                 <img
                   src={message.authorAvatarUrl}
@@ -1416,7 +1441,7 @@ const MessageRow = memo(function MessageRow({
               ) : (
                 message.authorName.slice(0, 1).toUpperCase()
               )}
-            </div>
+            </AuthorButton>
           ) : (
             <time
               className="w-9 shrink-0 pt-0.5 text-right text-[10px] leading-5 text-paper-muted opacity-0 group-hover:opacity-100"
@@ -1436,14 +1461,17 @@ const MessageRow = memo(function MessageRow({
             )}
             {startsGroup && (
               <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-                <span
+                <AuthorButton
+                  message={message}
+                  tabIndex={controlTabIndex}
+                  onOpenProfile={openProfile}
                   className={cn(
-                    "font-semibold",
+                    "rounded font-semibold",
                     isMine ? "text-signal" : "text-paper",
                   )}
                 >
                   {message.authorName}
-                </span>
+                </AuthorButton>
                 {message.isWebhook && (
                   <span
                     className="rounded bg-ink-4 px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-paper-muted"
@@ -1649,6 +1677,65 @@ const MessageRow = memo(function MessageRow({
     </>
   );
 });
+
+/**
+ * The author's avatar, or their name — whichever was clicked, it opens their
+ * profile card.
+ *
+ * LEFT-click. Until this existed the only affordance on an author was the
+ * row's right-click menu, which is not an affordance at all on a trackpad you
+ * have never right-clicked, and there was no route to "add friend" from a
+ * conversation. It stays a `<span>` for the two authors a profile makes no
+ * sense for — a webhook is not an account, and a message the server has not
+ * accepted yet has nothing to look up.
+ */
+function AuthorButton({
+  message,
+  className,
+  tabIndex,
+  onOpenProfile,
+  children,
+}: {
+  message: ChatMessage;
+  className?: string;
+  tabIndex: number;
+  onOpenProfile: (subject: ProfileSubject, anchor: HTMLElement) => void;
+  children: ReactNode;
+}) {
+  const { t } = useTranslation();
+  const isReal = !message.pending && !message.failed;
+  if (message.isWebhook || !isReal) {
+    return <span className={className}>{children}</span>;
+  }
+  return (
+    <button
+      type="button"
+      tabIndex={tabIndex}
+      title={t("profile.open", { name: message.authorName })}
+      data-author-trigger={message.authorId}
+      className={cn(
+        "text-left hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60",
+        className,
+      )}
+      onClick={(event) => {
+        // The row itself has a click handler for focus; the profile is the
+        // more specific intent, so it does not also select the row.
+        event.stopPropagation();
+        onOpenProfile(
+          {
+            id: message.authorId,
+            displayName: message.authorName,
+            tag: message.authorTag ?? null,
+            avatarUrl: message.authorAvatarUrl ?? null,
+          },
+          event.currentTarget,
+        );
+      }}
+    >
+      {children}
+    </button>
+  );
+}
 
 /** The date rule between two days of messages. */
 function DaySeparator({ label }: { label: string }) {

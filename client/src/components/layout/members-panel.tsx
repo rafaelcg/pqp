@@ -32,6 +32,9 @@ import {
 } from "@/components/ui/context-menu";
 import { Dialog } from "@/components/ui/dialog";
 import { StatusDot } from "@/components/user/status-dot";
+import { useProfilePopover } from "@/components/user/user-profile-popover";
+import type { ProfileSubject } from "@/components/user/profile-relations";
+import { useTranslation } from "@/lib/i18n";
 import {
   ApiError,
   banMember,
@@ -190,6 +193,21 @@ interface MembersPanelProps {
   voiceChannels?: Array<{ id: string; name: string }>;
 }
 
+/**
+ * A roster row, as the profile card wants it. The panel already resolved this
+ * person's presence server-side, so the card is handed it rather than left to
+ * guess — see `resolvePresence`, which never invents an `offline`.
+ */
+function subjectOf(member: ServerMember): ProfileSubject {
+  return {
+    id: member.id,
+    displayName: member.displayName,
+    tag: member.tag ?? null,
+    avatarUrl: member.avatarUrl ?? null,
+    status: member.status ?? null,
+  };
+}
+
 function messageOf(error: unknown, fallback: string): string {
   if (error instanceof ApiError) {
     return error.message;
@@ -213,6 +231,8 @@ export function MembersPanel({
   voiceRoomTransports = {},
   voiceChannels = [],
 }: MembersPanelProps) {
+  const { t } = useTranslation();
+  const openProfile = useProfilePopover();
   const [members, setMembers] = useState<ServerMember[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1006,7 +1026,18 @@ export function MembersPanel({
                     name out of a narrow panel. `ring-ink` punches it out of
                     whatever is behind it, including the hover surface. */}
                 <div className="relative shrink-0">
-                  <div className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-md bg-ink-3 text-sm font-semibold">
+                  {/* Left-click opens the profile card — the same one a
+                      message author opens, so "add friend" is one click from
+                      the roster as well as from the transcript. */}
+                  <button
+                    type="button"
+                    title={t("profile.open", { name: member.displayName })}
+                    data-member-trigger={member.id}
+                    className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-md bg-ink-3 text-sm font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
+                    onClick={(event) =>
+                      openProfile(subjectOf(member), event.currentTarget)
+                    }
+                  >
                     {member.avatarUrl ? (
                       <img
                         src={member.avatarUrl}
@@ -1016,7 +1047,7 @@ export function MembersPanel({
                     ) : (
                       member.displayName.slice(0, 1).toUpperCase()
                     )}
-                  </div>
+                  </button>
                   <StatusDot
                     // Absent means an API that predates status. Read as
                     // offline, never as online: showing nobody as present is a
@@ -1027,9 +1058,16 @@ export function MembersPanel({
                   />
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-semibold">
+                  <button
+                    type="button"
+                    title={t("profile.open", { name: member.displayName })}
+                    className="block max-w-full truncate rounded text-left text-sm font-semibold hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
+                    onClick={(event) =>
+                      openProfile(subjectOf(member), event.currentTarget)
+                    }
+                  >
                     {member.displayName}
-                  </p>
+                  </button>
                   {member.tag && (
                     <p className="truncate font-mono text-[11px] text-paper-muted">
                       {member.tag}

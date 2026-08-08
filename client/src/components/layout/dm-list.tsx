@@ -1,6 +1,6 @@
 import type { DmSummary, PublicUser } from "@pqp/shared";
 import { Phone, Plus, Users, X } from "lucide-react";
-import type { ReactNode } from "react";
+import { useRef, type ReactNode } from "react";
 import {
   formatBadgeCount,
   type UnreadState,
@@ -10,6 +10,7 @@ import {
   type ContextMenuItemDef,
 } from "@/components/ui/context-menu";
 import { ChannelListSkeleton } from "@/components/ui/skeleton";
+import { useProfilePopover } from "@/components/user/user-profile-popover";
 import {
   notificationLevelItems,
   useChannelNotificationLevel,
@@ -209,6 +210,9 @@ function ConversationRow({
   onStartCall?: () => void;
 }) {
   const { t } = useTranslation();
+  const openProfile = useProfilePopover();
+  /** What the profile card hangs off, since the trigger is a menu item. */
+  const rowRef = useRef<HTMLDivElement>(null);
   // The same per-channel levels a server channel gets. Muting a conversation is
   // the same act as muting #general, and giving it its own store would be a
   // second place for "leave me alone" to be recorded and forgotten.
@@ -225,6 +229,33 @@ function ConversationRow({
   const blocked = solo ? blockedUserIds.has(solo.id) : false;
 
   const items: ContextMenuItemDef[] = [
+    // The profile card is a menu item here rather than a click on the avatar,
+    // which is the one place it does NOT drop in cleanly: a conversation row
+    // is one big button whose entire job is opening the conversation, and
+    // stealing part of it for a popover would break the row's own purpose.
+    // A group row offers nothing — there is no single "them" to profile.
+    ...(solo
+      ? [
+          {
+            id: "profile",
+            label: t("profile.viewProfile"),
+            onSelect: () => {
+              const anchor = rowRef.current;
+              if (anchor) {
+                openProfile(
+                  {
+                    id: solo.id,
+                    displayName: solo.displayName,
+                    tag: solo.tag ?? null,
+                    avatarUrl: solo.avatarUrl ?? null,
+                  },
+                  anchor,
+                );
+              }
+            },
+          },
+        ]
+      : []),
     {
       id: "copy-id",
       label: "Copy conversation ID",
@@ -262,6 +293,7 @@ function ConversationRow({
   return (
     <ContextMenu items={items}>
       <div
+        ref={rowRef}
         className={cn(
           "group relative mb-0.5 flex items-center gap-1 rounded-md px-2 py-1.5 text-sm",
           selected

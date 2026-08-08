@@ -543,6 +543,38 @@ export const en = {
   "friends.onlineCount": "{count} online",
   "friends.pendingBadge": "{count} pending",
 
+  // ----------------------------------------------------------------- profile
+  // The card that opens on a left-click of somebody's avatar or name, wherever
+  // they are drawn. It is the app's only one-click route to "add friend", so
+  // its primary button is deliberately the widest thing on it.
+  "profile.cardLabel": "{name}'s profile",
+  "profile.addFriend": "Add friend",
+  "profile.acceptRequest": "Accept request",
+  "profile.cancelRequest": "Cancel request",
+  "profile.cancelRequest.confirm":
+    "Take back your request to {name}? They won't be told either way.",
+  "profile.keep": "Keep waiting",
+  "profile.friends": "Friends",
+  "profile.removeFriend": "Remove friend",
+  "profile.removeFriend.confirm":
+    "Remove {name} from your friends? They won't be told.",
+  "profile.unblock": "Unblock",
+  "profile.block": "Block",
+  "profile.block.confirm":
+    "Block {name}? This ends the friendship and hides their messages.",
+  "profile.report": "Report",
+  "profile.more": "More",
+  "profile.isYou": "This is you.",
+  "profile.loading": "Loading",
+  "profile.friendsSince": "Friends since {date}",
+  "profile.open": "Open {name}'s profile",
+  "profile.viewProfile": "View profile",
+
+  // The quick-reaction strip across the top of a message's context menu. One
+  // row of emoji, never a column of menu items.
+  "reactions.quick": "Quick reactions",
+  "reactions.more": "More reactions",
+
   // ----------------------------------------------------------------- threads
   // A reply-chain that becomes its own scoped conversation off a message.
   // pt-BR keeps the English word "thread" — it is what BR gamers actually say

@@ -36,6 +36,7 @@ import { DmList } from "@/components/layout/dm-list";
 import { FriendsView } from "@/components/friends/friends-view";
 import { InvitePanel } from "@/components/layout/invite-panel";
 import { MembersPanel } from "@/components/layout/members-panel";
+import { ProfilePopoverProvider } from "@/components/user/user-profile-popover";
 import { PinnedMessagesPanel } from "@/components/chat/pinned-messages-panel";
 import { ServerRail } from "@/components/layout/server-rail";
 import { AgeGateDialog } from "@/components/user/age-gate-dialog";
@@ -2282,6 +2283,30 @@ function MainAppContent({
   ) : null;
 
   return (
+    // One provider for the whole app: the profile card is opened from the
+    // transcript, the members panel and the conversation list, and every one of
+    // them wants the same block list, the same "open this DM" navigation and
+    // the same report dialog that already live up here.
+    <ProfilePopoverProvider
+      currentUserId={user?.id ?? null}
+      blockedUserIds={blockedUserIds}
+      onOpenConversation={(conversation) => {
+        setConversations((prev) => upsertConversation(prev, conversation));
+        void selectConversation(conversation.channelId);
+      }}
+      onBlockUser={(userId) => void handleBlockUser(userId)}
+      onUnblockUser={(userId) => void handleUnblockUser(userId)}
+      onReportUser={(subject) =>
+        setReportTarget({
+          kind: "user",
+          userId: subject.id,
+          subjectName: subject.displayName,
+          // Reported from inside a server, so that server's moderators are the
+          // ones who see it; from a conversation it goes to the instance.
+          serverId: selectedServerId,
+        })
+      }
+    >
     <div className="animate-fade-in relative flex h-full overflow-hidden">
       {/* Mounted at the root so remote audio keeps playing when you navigate
           away from the voice channel. */}
@@ -2808,5 +2833,6 @@ function MainAppContent({
         }}
       />
     </div>
+    </ProfilePopoverProvider>
   );
 }

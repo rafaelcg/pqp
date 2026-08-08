@@ -483,6 +483,37 @@ export const ptBR: PartialMessages = {
   "friends.retry": "Tentar de novo",
   "friends.onlineCount": "{count} online",
   "friends.pendingBadge": "{count} pendente(s)",
+
+  // ----------------------------------------------------------------- profile
+  // O cartão que abre ao clicar no nome ou na foto de alguém. Registro
+  // informal, como o resto do app: "bloquear", "denunciar", "amigos".
+  "profile.cardLabel": "Perfil de {name}",
+  "profile.addFriend": "Adicionar amigo",
+  "profile.acceptRequest": "Aceitar pedido",
+  "profile.cancelRequest": "Cancelar pedido",
+  "profile.cancelRequest.confirm":
+    "Cancelar o pedido pra {name}? A pessoa não fica sabendo de nada.",
+  "profile.keep": "Deixa pendente",
+  "profile.friends": "Amigos",
+  "profile.removeFriend": "Remover amigo",
+  "profile.removeFriend.confirm":
+    "Remover {name} dos seus amigos? A pessoa não fica sabendo.",
+  "profile.unblock": "Desbloquear",
+  "profile.block": "Bloquear",
+  "profile.block.confirm":
+    "Bloquear {name}? Isso acaba com a amizade e esconde as mensagens da pessoa.",
+  "profile.report": "Denunciar",
+  "profile.more": "Mais",
+  "profile.isYou": "Esse é você.",
+  "profile.loading": "Carregando",
+  "profile.friendsSince": "Amigos desde {date}",
+  "profile.open": "Abrir o perfil de {name}",
+  "profile.viewProfile": "Ver perfil",
+
+  // A fileira de reações rápidas no topo do menu de uma mensagem.
+  "reactions.quick": "Reações rápidas",
+  "reactions.more": "Mais reações",
+
   // ----------------------------------------------------------------- threads
   // "Thread" fica em inglês de propósito — é o que se fala em call e em chat
   // ("abre uma thread aí"); "tópico" soa fórum de 2005. Gênero feminino,
