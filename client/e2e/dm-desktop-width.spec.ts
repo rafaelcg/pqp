@@ -10,7 +10,7 @@ test("DM search results render inside the dialog at desktop width", async ({ pag
   // Search excludes the caller, so a fresh database returns nothing — seed a
   // few extra accounts through the dev-bypass suffix so there are rows to clip.
   for (const who of ["raquel", "rafinha", "ramon"]) {
-    await fetch("http://localhost:3101/api/me", {
+    await fetch(`${process.env.E2E_API_URL ?? "http://localhost:3101"}/api/me`, {
       headers: { Authorization: `Bearer dev-local-token:${who}` },
     });
   }
