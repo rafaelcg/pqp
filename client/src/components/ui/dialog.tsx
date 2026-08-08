@@ -105,7 +105,18 @@ interface DialogProps {
   description?: string;
   children: ReactNode;
   footer?: ReactNode;
-  size?: "sm" | "md" | "lg";
+  size?: "sm" | "md" | "lg" | "xl";
+  /**
+   * Give the panel the whole layer's height and stop the body scrolling itself.
+   *
+   * For a dialog whose content is its own layout — settings has a fixed section
+   * rail beside a scrolling pane — a body that scrolls as one column would carry
+   * the rail off the top of the screen. With this set the children own their
+   * scrollers, and the panel stops resizing as sections of different lengths
+   * swap in, which is what makes the rail feel like furniture rather than part
+   * of the page.
+   */
+  fill?: boolean;
   onClose: () => void;
   /** Set false for destructive flows that should not close on a stray click. */
   closeOnBackdrop?: boolean;
@@ -132,6 +143,7 @@ export function Dialog({
   children,
   footer,
   size = "md",
+  fill = false,
   onClose,
   closeOnBackdrop = true,
   dismissible = true,
@@ -243,7 +255,13 @@ export function Dialog({
   }
 
   const width =
-    size === "sm" ? "sm:max-w-md" : size === "lg" ? "sm:max-w-2xl" : "sm:max-w-lg";
+    size === "sm"
+      ? "sm:max-w-md"
+      : size === "lg"
+        ? "sm:max-w-2xl"
+        : size === "xl"
+          ? "sm:max-w-4xl"
+          : "sm:max-w-lg";
 
   // `right`/`bottom` are cleared because Tailwind's `inset-0` — the fallback
   // when there is no `visualViewport` — would otherwise over-constrain the box.
@@ -290,6 +308,7 @@ export function Dialog({
             // Heights are a percentage of the layer, which is the visible
             // rectangle — never `vh`, which no browser shrinks for a keyboard.
             "animate-rise flex max-h-[calc(100%-1.5rem)] w-full max-w-full flex-col overflow-hidden rounded-t-2xl border border-ink-4 bg-ink-2 shadow-2xl outline-none sm:max-h-full sm:rounded-2xl",
+            fill && "h-[calc(100%-1.5rem)] sm:h-full",
             width,
           )}
         >
@@ -321,7 +340,12 @@ export function Dialog({
             )}
           </div>
 
-          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+          <div
+            className={cn(
+              "min-h-0 flex-1 overscroll-contain",
+              fill ? "overflow-hidden" : "overflow-y-auto",
+            )}
+          >
             {children}
           </div>
 

@@ -223,6 +223,8 @@ test.describe("push-to-talk", () => {
     await expect(holdButton(page)).toHaveCount(0);
 
     await page.getByRole("button", { name: "Open settings" }).click();
+    // Settings is sectioned, and the input mode lives in Voice & Audio.
+    await page.getByRole("tab", { name: "Voice & Audio" }).click();
     await page.getByRole("radio", { name: /Push to talk/ }).check();
     await page.getByRole("button", { name: "Cancel" }).click();
 

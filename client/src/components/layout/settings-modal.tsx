@@ -4,7 +4,17 @@ import {
   useRef,
   useState,
   type KeyboardEvent,
+  type ReactNode,
 } from "react";
+import {
+  Bell,
+  Database,
+  Mic,
+  Palette,
+  ShieldCheck,
+  UserRound,
+  type LucideIcon,
+} from "lucide-react";
 import {
   deleteConfirmationMatches,
   expectedDeleteConfirmation,
@@ -36,6 +46,12 @@ import {
   type MediaDeviceOption,
   type MicProcessing,
 } from "@/lib/audio-devices";
+import { useTranslation, type MessageKey } from "@/lib/i18n";
+import {
+  SUPPORTED_LOCALES,
+  setLocalePreference,
+  type Locale,
+} from "@/lib/locale";
 import {
   adoptNotificationPreferences,
   type NotificationLevel,
@@ -58,6 +74,7 @@ import {
   type BlockingOwnedServer,
 } from "@/lib/api";
 import { queuePreferenceSync } from "@/lib/preferences";
+import { cn } from "@/lib/utils";
 
 export interface LocalSettings {
   muteOnJoin: boolean;
@@ -223,6 +240,226 @@ interface SettingsModalProps {
   onAudioSettingsLive?: (settings: LocalSettings) => void;
 }
 
+/* ------------------------------------------------------------------ layout */
+
+/**
+ * The sections, in nav order.
+ *
+ * This list is the whole information architecture: settings used to be one
+ * column that mixed a display name, a microphone gain slider and the button
+ * that deletes your account, and finding anything meant scrolling past
+ * everything. The grouping below is what the old column already implied —
+ * nothing moved between meanings, it was only given a name and a door.
+ *
+ * "Your data" is its own section rather than the tail of Profile on purpose:
+ * export and deletion are rights the privacy policy promises, and a promise
+ * that is only reachable by scrolling to the bottom of the longest page in the
+ * app is one nobody finds. As a named door it is more visible than it was.
+ */
+type SectionId =
+  | "profile"
+  | "voice"
+  | "notifications"
+  | "appearance"
+  | "privacy"
+  | "data";
+
+interface SectionDef {
+  id: SectionId;
+  label: MessageKey;
+  description: MessageKey;
+  icon: LucideIcon;
+}
+
+const SECTIONS: SectionDef[] = [
+  {
+    id: "profile",
+    label: "settings.section.profile",
+    description: "settings.profile.description",
+    icon: UserRound,
+  },
+  {
+    id: "voice",
+    label: "settings.section.voice",
+    description: "settings.voice.description",
+    icon: Mic,
+  },
+  {
+    id: "notifications",
+    label: "settings.section.notifications",
+    description: "settings.notifications.description",
+    icon: Bell,
+  },
+  {
+    id: "appearance",
+    label: "settings.section.appearance",
+    description: "settings.appearance.description",
+    icon: Palette,
+  },
+  {
+    id: "privacy",
+    label: "settings.section.privacy",
+    description: "settings.privacy.description",
+    icon: ShieldCheck,
+  },
+  {
+    id: "data",
+    label: "settings.section.data",
+    description: "settings.data.description",
+    icon: Database,
+  },
+];
+
+/**
+ * The section rail — a vertical list beside the content on a desktop, a
+ * horizontally scrolling strip above it on a phone.
+ *
+ * It is a real tablist: arrow keys move between sections and only the selected
+ * tab is in the tab order, so a keyboard user crosses six sections with two
+ * keystrokes rather than six. Both axes are accepted because the same control
+ * is vertical at one width and horizontal at another, and a user should not
+ * have to know which one the CSS picked.
+ */
+function SectionRail({
+  active,
+  onSelect,
+  idFor,
+  panelId,
+}: {
+  active: SectionId;
+  onSelect: (id: SectionId) => void;
+  idFor: (id: SectionId) => string;
+  panelId: string;
+}) {
+  const { t } = useTranslation();
+  const railRef = useRef<HTMLDivElement>(null);
+
+  function move(to: number) {
+    const index = (to + SECTIONS.length) % SECTIONS.length;
+    const next = SECTIONS[index]!;
+    onSelect(next.id);
+    const tabs =
+      railRef.current?.querySelectorAll<HTMLButtonElement>('[role="tab"]');
+    tabs?.[index]?.focus();
+  }
+
+  function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    const current = SECTIONS.findIndex((section) => section.id === active);
+    switch (event.key) {
+      case "ArrowRight":
+      case "ArrowDown":
+        event.preventDefault();
+        move(current + 1);
+        break;
+      case "ArrowLeft":
+      case "ArrowUp":
+        event.preventDefault();
+        move(current - 1);
+        break;
+      case "Home":
+        event.preventDefault();
+        move(0);
+        break;
+      case "End":
+        event.preventDefault();
+        move(SECTIONS.length - 1);
+        break;
+      default:
+        break;
+    }
+  }
+
+  return (
+    <div
+      ref={railRef}
+      role="tablist"
+      aria-label={t("settings.nav.label")}
+      onKeyDown={handleKeyDown}
+      className={cn(
+        // The phone strip scrolls sideways *inside the panel*. That is the only
+        // place sideways scrolling is allowed to exist here — the page itself
+        // must never move, which is what the 390px layout test measures.
+        "flex shrink-0 gap-1 overflow-x-auto border-b border-ink-4 px-3 py-2",
+        "sm:w-56 sm:flex-col sm:overflow-x-hidden sm:overflow-y-auto sm:border-b-0 sm:border-r sm:px-3 sm:py-4",
+      )}
+    >
+      {SECTIONS.map((section) => {
+        const selected = section.id === active;
+        const Icon = section.icon;
+        return (
+          <button
+            key={section.id}
+            id={idFor(section.id)}
+            type="button"
+            role="tab"
+            aria-selected={selected}
+            aria-controls={panelId}
+            tabIndex={selected ? 0 : -1}
+            onClick={() => onSelect(section.id)}
+            className={cn(
+              "flex shrink-0 items-center gap-2 rounded-md px-3 py-2 text-sm whitespace-nowrap transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60 sm:w-full",
+              selected
+                ? "bg-signal/12 font-medium text-paper"
+                : "text-paper-muted hover:bg-ink-3 hover:text-paper",
+            )}
+          >
+            <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+            {t(section.label)}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Heading for the pane on the right, so a section always says what it is. */
+function SectionHeader({ section }: { section: SectionDef }) {
+  const { t } = useTranslation();
+  return (
+    <div className="mb-5">
+      <h3 className="font-display text-lg font-bold text-paper">
+        {t(section.label)}
+      </h3>
+      <p className="mt-1 text-xs text-paper-muted">{t(section.description)}</p>
+    </div>
+  );
+}
+
+/** A labelled group inside a section. */
+function Field({
+  label,
+  hint,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div>
+      <p className="mb-2 text-xs uppercase tracking-wide text-paper-muted">
+        {label}
+      </p>
+      {children}
+      {hint && <p className="mt-1.5 text-xs text-paper-muted">{hint}</p>}
+    </div>
+  );
+}
+
+const CHIP_BASE =
+  "rounded-md border px-3 py-1.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent disabled:opacity-60";
+
+function chipClass(selected: boolean): string {
+  return cn(
+    CHIP_BASE,
+    selected
+      ? "border-accent bg-accent/10 text-text"
+      : "border-border text-text-muted hover:border-accent/50",
+  );
+}
+
+/* ------------------------------------------------------------------- voice */
+
 /**
  * Volume only scales how the level reads, so it is held in a ref: putting it in
  * the effect deps would tear down the preview stream and re-prompt
@@ -239,6 +476,7 @@ function MicLevelMeter({
   liveAnalyser: AnalyserNode | null;
   active: boolean;
 }) {
+  const { t } = useTranslation();
   const [level, setLevel] = useState(0);
   const volumeRef = useRef(inputVolume);
 
@@ -316,15 +554,17 @@ function MicLevelMeter({
     };
   }, [active, deviceId, liveAnalyser]);
 
+  const label = t("settings.voice.inputLevel");
+
   return (
     <div className="space-y-1.5">
       <span className="block text-xs uppercase tracking-wide text-paper-muted">
-        Input level
+        {label}
       </span>
       <div
         className="h-2 overflow-hidden rounded-full bg-ink"
         role="progressbar"
-        aria-label="Input level"
+        aria-label={label}
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={Math.round(level * 100)}
@@ -340,47 +580,288 @@ function MicLevelMeter({
 
 const INPUT_MODES: {
   value: VoiceInputMode;
-  label: string;
-  description: string;
+  label: MessageKey;
+  description: MessageKey;
 }[] = [
   {
     value: "voice-activity",
-    label: "Voice activity",
-    description: "Your mic is open whenever you are not muted.",
+    label: "settings.voice.mode.activity",
+    description: "settings.voice.mode.activityHint",
   },
   {
     value: "push-to-talk",
-    label: "Push to talk",
-    description: "Your mic stays closed until you hold a key or the button.",
+    label: "settings.voice.mode.ptt",
+    description: "settings.voice.mode.pttHint",
   },
 ];
 
 const MIC_PROCESSING_OPTIONS: {
   key: keyof MicProcessing;
-  label: string;
-  description: string;
+  label: MessageKey;
+  description: MessageKey;
 }[] = [
   {
     key: "echoCancellation",
-    label: "Echo cancellation",
-    description: "Stops others hearing themselves back through your speakers.",
+    label: "settings.voice.processing.echo",
+    description: "settings.voice.processing.echoHint",
   },
   {
     key: "noiseSuppression",
-    label: "Noise suppression",
-    description: "Removes fans and keyboards — and some of your consonants.",
+    label: "settings.voice.processing.noise",
+    description: "settings.voice.processing.noiseHint",
   },
   {
     key: "autoGainControl",
-    label: "Automatic gain control",
-    description: "Evens out your level, and raises the room between sentences.",
+    label: "settings.voice.processing.gain",
+    description: "settings.voice.processing.gainHint",
   },
 ];
 
-const THEME_OPTIONS: { value: ThemePreference; label: string }[] = [
-  { value: "light", label: "Light" },
-  { value: "dark", label: "Dark" },
-  { value: "system", label: "System" },
+/**
+ * Devices, levels, input mode and microphone processing.
+ *
+ * Everything here applies live rather than on Save — the same behaviour it had
+ * in the single column, kept because a level you cannot hear while you set it
+ * is a level you set twice.
+ */
+function VoiceSection({
+  draftLocal,
+  patchLocal,
+  inputs,
+  outputs,
+  devicesError,
+  voiceAnalyser,
+  metering,
+}: {
+  draftLocal: LocalSettings;
+  patchLocal: (partial: Partial<LocalSettings>) => void;
+  inputs: MediaDeviceOption[];
+  outputs: MediaDeviceOption[];
+  devicesError: string | null;
+  voiceAnalyser: AnalyserNode | null;
+  metering: boolean;
+}) {
+  const { t } = useTranslation();
+  const canSelectOutput = supportsAudioOutputSelection();
+  // Probed once: whether this machine has a keyboard worth binding does not
+  // change while the dialog is open, and re-evaluating it per render would run
+  // a media query on every slider tick.
+  const canBindKey = useMemo(() => supportsKeyBinding(), []);
+  const selectClass =
+    "h-10 w-full rounded-md border border-ink-4 bg-ink px-3 text-sm text-paper outline-none focus:border-signal";
+
+  return (
+    <div className="space-y-5">
+      {devicesError && (
+        <p className="text-xs text-warning" role="status">
+          {devicesError}
+        </p>
+      )}
+
+      <label className="block">
+        <span className="mb-2 block text-xs uppercase tracking-wide text-paper-muted">
+          {t("settings.voice.inputDevice")}
+        </span>
+        <select
+          value={draftLocal.inputDeviceId}
+          onChange={(e) => patchLocal({ inputDeviceId: e.target.value })}
+          className={selectClass}
+        >
+          <option value="">{t("settings.voice.systemDefault")}</option>
+          {inputs.map((device) => (
+            <option key={device.deviceId} value={device.deviceId}>
+              {device.label}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      <label className="block">
+        <span className="mb-2 block text-xs uppercase tracking-wide text-paper-muted">
+          {t("settings.voice.inputVolume")}
+        </span>
+        <input
+          type="range"
+          min={0}
+          max={200}
+          value={Math.round(draftLocal.inputVolume * 100)}
+          onChange={(e) =>
+            patchLocal({ inputVolume: Number(e.target.value) / 100 })
+          }
+          className="w-full accent-[var(--color-signal)]"
+        />
+        <span className="mt-0.5 block text-xs text-paper-muted">
+          {t("settings.voice.percent", {
+            percent: Math.round(draftLocal.inputVolume * 100),
+          })}
+        </span>
+      </label>
+
+      <MicLevelMeter
+        deviceId={draftLocal.inputDeviceId}
+        inputVolume={draftLocal.inputVolume}
+        liveAnalyser={voiceAnalyser}
+        active={metering}
+      />
+
+      <fieldset className="space-y-2">
+        <legend className="mb-1 block text-xs uppercase tracking-wide text-paper-muted">
+          {t("settings.voice.inputMode")}
+        </legend>
+        {INPUT_MODES.map((mode) => (
+          <label
+            key={mode.value}
+            className="flex cursor-pointer items-start gap-3"
+          >
+            <input
+              type="radio"
+              name="input-mode"
+              className="mt-1 h-4 w-4 accent-[var(--color-signal)]"
+              checked={draftLocal.inputMode === mode.value}
+              onChange={() => patchLocal({ inputMode: mode.value })}
+            />
+            <span className="min-w-0">
+              <span className="block text-sm">{t(mode.label)}</span>
+              <span className="block text-xs text-paper-muted">
+                {t(mode.description)}
+              </span>
+            </span>
+          </label>
+        ))}
+      </fieldset>
+
+      {draftLocal.inputMode === "push-to-talk" &&
+        (canBindKey ? (
+          <div className="space-y-1.5">
+            <KeyBindingField
+              label={t("settings.voice.pttKey")}
+              binding={draftLocal.pushToTalkKey}
+              onChange={(pushToTalkKey) => patchLocal({ pushToTalkKey })}
+            />
+            {/* The honest limit, stated where the binding is set rather than
+                discovered later by talking to nobody. A web page cannot receive
+                a key pressed while another window has focus; there is no global
+                hotkey short of the desktop shell. */}
+            <p className="text-xs text-paper-muted">
+              {t("settings.voice.pttHint", {
+                key: formatBinding(draftLocal.pushToTalkKey),
+              })}
+            </p>
+          </div>
+        ) : (
+          <p className="text-xs text-paper-muted">
+            {t("settings.voice.pttNoKeyboard")}
+          </p>
+        ))}
+
+      <fieldset className="space-y-2">
+        <legend className="mb-1 block text-xs uppercase tracking-wide text-paper-muted">
+          {t("settings.voice.processing")}
+        </legend>
+        {MIC_PROCESSING_OPTIONS.map((option) => (
+          <label
+            key={option.key}
+            className="flex cursor-pointer items-start gap-3"
+          >
+            <input
+              type="checkbox"
+              className="mt-1 h-4 w-4 accent-[var(--color-signal)]"
+              checked={draftLocal.micProcessing[option.key]}
+              onChange={(e) =>
+                patchLocal({
+                  micProcessing: {
+                    ...draftLocal.micProcessing,
+                    [option.key]: e.target.checked,
+                  },
+                })
+              }
+            />
+            <span className="min-w-0">
+              <span className="block text-sm">{t(option.label)}</span>
+              <span className="block text-xs text-paper-muted">
+                {t(option.description)}
+              </span>
+            </span>
+          </label>
+        ))}
+        <p className="text-xs text-paper-muted">
+          {t("settings.voice.processing.note")}
+        </p>
+      </fieldset>
+
+      {canSelectOutput ? (
+        <label className="block">
+          <span className="mb-2 block text-xs uppercase tracking-wide text-paper-muted">
+            {t("settings.voice.outputDevice")}
+          </span>
+          <select
+            value={draftLocal.outputDeviceId}
+            onChange={(e) => patchLocal({ outputDeviceId: e.target.value })}
+            className={selectClass}
+          >
+            <option value="">{t("settings.voice.systemDefault")}</option>
+            {outputs.map((device) => (
+              <option key={device.deviceId} value={device.deviceId}>
+                {device.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : (
+        <p className="text-xs text-paper-muted">
+          {t("settings.voice.outputUnsupported")}
+        </p>
+      )}
+
+      <label className="block">
+        <span className="mb-2 block text-xs uppercase tracking-wide text-paper-muted">
+          {t("settings.voice.outputVolume")}
+        </span>
+        <input
+          type="range"
+          min={0}
+          max={100}
+          value={Math.round(draftLocal.outputVolume * 100)}
+          onChange={(e) =>
+            patchLocal({ outputVolume: Number(e.target.value) / 100 })
+          }
+          className="w-full accent-[var(--color-signal)]"
+        />
+        <span className="mt-0.5 block text-xs text-paper-muted">
+          {t("settings.voice.percent", {
+            percent: Math.round(draftLocal.outputVolume * 100),
+          })}
+        </span>
+      </label>
+
+      <label className="flex cursor-pointer items-center gap-3">
+        <input
+          type="checkbox"
+          checked={draftLocal.muteOnJoin}
+          onChange={(e) => patchLocal({ muteOnJoin: e.target.checked })}
+          className="h-4 w-4 accent-[var(--color-signal)]"
+        />
+        <span className="text-sm">{t("settings.voice.muteOnJoin")}</span>
+      </label>
+      <label className="flex cursor-pointer items-center gap-3">
+        <input
+          type="checkbox"
+          checked={draftLocal.compactPeers}
+          onChange={(e) => patchLocal({ compactPeers: e.target.checked })}
+          className="h-4 w-4 accent-[var(--color-signal)]"
+        />
+        <span className="text-sm">{t("settings.voice.compactPeers")}</span>
+      </label>
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------- appearance */
+
+const THEME_OPTIONS: { value: ThemePreference; label: MessageKey }[] = [
+  { value: "light", label: "settings.appearance.theme.light" },
+  { value: "dark", label: "settings.appearance.theme.dark" },
+  { value: "system", label: "settings.appearance.theme.system" },
 ];
 
 /**
@@ -389,6 +870,7 @@ const THEME_OPTIONS: { value: ThemePreference; label: string }[] = [
  * without parsing the audio blob.
  */
 function ThemePicker() {
+  const { t } = useTranslation();
   const { preference, resolved, setPreference } = useTheme();
 
   function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
@@ -414,14 +896,24 @@ function ThemePicker() {
   }
 
   return (
-    <div>
-      <p className="text-xs uppercase tracking-wide text-text-muted">
-        Appearance
-      </p>
+    <Field
+      label={t("settings.appearance.theme")}
+      hint={
+        preference === "system"
+          ? t("settings.appearance.themeFollowing", {
+              theme: t(
+                resolved === "light"
+                  ? "settings.appearance.resolved.light"
+                  : "settings.appearance.resolved.dark",
+              ),
+            })
+          : t("settings.appearance.themeHint")
+      }
+    >
       <div
         role="radiogroup"
-        aria-label="Theme"
-        className="mt-2 flex gap-1.5"
+        aria-label={t("settings.appearance.theme")}
+        className="flex gap-1.5"
         onKeyDown={handleKeyDown}
       >
         {THEME_OPTIONS.map((option) => {
@@ -434,30 +926,119 @@ function ThemePicker() {
               aria-checked={selected}
               tabIndex={selected ? 0 : -1}
               onClick={() => setPreference(option.value)}
-              className={`rounded-md border px-3 py-1.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent ${
-                selected
-                  ? "border-accent bg-accent/10 text-text"
-                  : "border-border text-text-muted hover:border-accent/50"
-              }`}
+              className={chipClass(selected)}
             >
-              {option.label}
+              {t(option.label)}
             </button>
           );
         })}
       </div>
-      <p className="mt-1.5 text-xs text-text-muted">
-        {preference === "system"
-          ? `Following your system — currently ${resolved}.`
-          : "Applies immediately, and follows your account to other devices."}
-      </p>
+    </Field>
+  );
+}
+
+const LOCALE_LABELS: Record<Locale, MessageKey> = {
+  en: "settings.appearance.language.en",
+  "pt-BR": "settings.appearance.language.ptBR",
+};
+
+/**
+ * The language switch `lib/locale.ts` has always been written for — it exposes
+ * `setLocalePreference` with a comment saying "once there is UI to set one",
+ * and this is that UI.
+ *
+ * Switching reloads rather than swapping strings under the mounted tree.
+ * `I18nProvider` reads the locale once at boot on purpose, and Clerk's own
+ * catalogue is wired at the provider in `main.tsx` — changing it in place would
+ * leave the sign-in and account modals speaking the old language, which is a
+ * worse answer than a reload. It is also what the legal pages already do.
+ *
+ * `?lang=` is dropped from the URL on the way out: it outranks the stored
+ * preference, so a visitor who arrived on a `?lang=pt` link would otherwise
+ * click "English" and get Portuguese back.
+ */
+function LanguagePicker() {
+  const { t, locale } = useTranslation();
+
+  function choose(next: Locale) {
+    if (next === locale) {
+      return;
+    }
+    setLocalePreference(next);
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("lang");
+      window.location.replace(url.toString());
+    } catch {
+      window.location.reload();
+    }
+  }
+
+  return (
+    <Field
+      label={t("settings.appearance.language")}
+      hint={t("settings.appearance.languageHint")}
+    >
+      <div
+        role="radiogroup"
+        aria-label={t("settings.appearance.language")}
+        className="flex flex-wrap gap-1.5"
+      >
+        {SUPPORTED_LOCALES.map((option) => {
+          const selected = option === locale;
+          return (
+            <button
+              key={option}
+              type="button"
+              role="radio"
+              aria-checked={selected}
+              onClick={() => choose(option)}
+              className={chipClass(selected)}
+            >
+              {t(LOCALE_LABELS[option])}
+            </button>
+          );
+        })}
+      </div>
+    </Field>
+  );
+}
+
+function AppearanceSection({
+  showLinkEmbeds,
+  onShowLinkEmbeds,
+}: {
+  showLinkEmbeds: boolean;
+  onShowLinkEmbeds: (next: boolean) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="space-y-6">
+      <ThemePicker />
+      <LanguagePicker />
+      <Field label={t("settings.appearance.chat")}>
+        <label className="flex cursor-pointer items-center gap-3">
+          <input
+            type="checkbox"
+            checked={showLinkEmbeds}
+            onChange={(e) => onShowLinkEmbeds(e.target.checked)}
+            className="h-4 w-4 accent-[var(--color-signal)]"
+          />
+          <span className="text-sm">
+            {t("settings.appearance.linkPreviews")}
+          </span>
+        </label>
+      </Field>
     </div>
   );
 }
 
-const LEVEL_OPTIONS: { value: NotificationLevel; label: string }[] = [
-  { value: "all", label: "All messages" },
-  { value: "mentions", label: "Only @mentions" },
-  { value: "none", label: "Nothing" },
+/* ----------------------------------------------------------- notifications */
+
+const LEVEL_OPTIONS: { value: NotificationLevel; label: MessageKey }[] = [
+  { value: "all", label: "settings.notifications.level.all" },
+  { value: "mentions", label: "settings.notifications.level.mentions" },
+  { value: "none", label: "settings.notifications.level.none" },
 ];
 
 /**
@@ -468,71 +1049,68 @@ const LEVEL_OPTIONS: { value: NotificationLevel; label: string }[] = [
  * is no second prompt to fall back on — so the ask has to be worth spending.
  */
 function NotificationsSection() {
+  const { t } = useTranslation();
   const { state, permission, enable, disable, setDefaultLevel } =
     useNotificationSettings();
   const active = state.desktop && permission === "granted";
 
   return (
-    <div>
-      <p className="text-xs uppercase tracking-wide text-text-muted">
-        Notifications
-      </p>
-
-      {permission === "unsupported" ? (
-        <p className="mt-2 text-xs text-text-muted">
-          This browser cannot show desktop notifications.
-        </p>
-      ) : permission === "denied" ? (
-        <p className="mt-2 text-xs text-warning" role="status">
-          Blocked for this site. Allow notifications in your browser&apos;s site
-          settings to turn them back on — the page cannot ask again.
-        </p>
-      ) : (
-        <div className="mt-2 flex items-center gap-3">
-          <Button
-            variant={active ? "secondary" : "default"}
-            size="sm"
-            onClick={() => (active ? disable() : void enable())}
-          >
-            {active ? "Turn off" : "Enable desktop notifications"}
-          </Button>
-          <span className="text-xs text-text-muted">
-            {active
-              ? "On for this account."
-              : "Your browser will ask for permission."}
-          </span>
-        </div>
-      )}
-
-      <div
-        role="radiogroup"
-        aria-label="Default notification level"
-        className="mt-3 flex flex-wrap gap-1.5"
-      >
-        {LEVEL_OPTIONS.map((option) => {
-          const selected = option.value === state.default;
-          return (
-            <button
-              key={option.value}
-              type="button"
-              role="radio"
-              aria-checked={selected}
-              onClick={() => setDefaultLevel(option.value)}
-              className={`rounded-md border px-3 py-1.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent ${
-                selected
-                  ? "border-accent bg-accent/10 text-text"
-                  : "border-border text-text-muted hover:border-accent/50"
-              }`}
+    <div className="space-y-6">
+      <div>
+        {permission === "unsupported" ? (
+          <p className="text-xs text-paper-muted">
+            {t("settings.notifications.unsupported")}
+          </p>
+        ) : permission === "denied" ? (
+          <p className="text-xs text-warning" role="status">
+            {t("settings.notifications.denied")}
+          </p>
+        ) : (
+          <div className="flex flex-wrap items-center gap-3">
+            <Button
+              variant={active ? "secondary" : "default"}
+              size="sm"
+              onClick={() => (active ? disable() : void enable())}
             >
-              {option.label}
-            </button>
-          );
-        })}
+              {active
+                ? t("settings.notifications.turnOff")
+                : t("settings.notifications.enable")}
+            </Button>
+            <span className="text-xs text-paper-muted">
+              {active
+                ? t("settings.notifications.on")
+                : t("settings.notifications.willAsk")}
+            </span>
+          </div>
+        )}
       </div>
-      <p className="mt-1.5 text-xs text-text-muted">
-        Applies where a server or channel has no setting of its own. Right-click
-        a server or channel to change just that one.
-      </p>
+
+      <Field
+        label={t("settings.notifications.levelLabel")}
+        hint={t("settings.notifications.levelHint")}
+      >
+        <div
+          role="radiogroup"
+          aria-label={t("settings.notifications.levelLabel")}
+          className="flex flex-wrap gap-1.5"
+        >
+          {LEVEL_OPTIONS.map((option) => {
+            const selected = option.value === state.default;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                role="radio"
+                aria-checked={selected}
+                onClick={() => setDefaultLevel(option.value)}
+                className={chipClass(selected)}
+              >
+                {t(option.label)}
+              </button>
+            );
+          })}
+        </div>
+      </Field>
 
       <PushNotificationsSection />
     </div>
@@ -552,6 +1130,7 @@ function NotificationsSection() {
  * work.
  */
 function PushNotificationsSection() {
+  const { t } = useTranslation();
   const [availability, setAvailability] = useState<PushAvailability | null>(null);
   const [serverEnabled, setServerEnabled] = useState<boolean | null>(null);
   const [subscribed, setSubscribed] = useState(false);
@@ -599,15 +1178,13 @@ function PushNotificationsSection() {
         if (result === "enabled") {
           setSubscribed(true);
         } else if (result === "denied") {
-          setError(
-            "Notifications are blocked for this site. Allow them in your browser's settings first.",
-          );
+          setError(t("settings.push.denied"));
         } else {
-          setError("Could not subscribe this device. Try again after a reload.");
+          setError(t("settings.push.failed"));
         }
       }
     } catch {
-      setError("Could not reach the server. Your subscription was not saved.");
+      setError(t("settings.push.unreachable"));
     } finally {
       setBusy(false);
     }
@@ -630,40 +1207,34 @@ function PushNotificationsSection() {
   }
 
   return (
-    <div className="mt-4">
-      <p className="text-xs uppercase tracking-wide text-text-muted">
-        Push — when the app is closed
-      </p>
-
+    <Field label={t("settings.push.title")}>
       {availability === "needs-install" ? (
-        <p className="mt-2 text-xs text-text-muted">
-          On iPhone and iPad, push only works from the installed app: open pqp
-          in Safari, tap Share, then &quot;Add to Home Screen&quot;, and enable
-          push from inside the installed app.
+        <p className="text-xs text-paper-muted">
+          {t("settings.push.needsInstall")}
         </p>
       ) : availability === "unsupported" ? (
-        <p className="mt-2 text-xs text-text-muted">
-          This browser cannot receive push notifications.
+        <p className="text-xs text-paper-muted">
+          {t("settings.push.unsupported")}
         </p>
       ) : serverEnabled === false ? (
-        <p className="mt-2 text-xs text-text-muted">
-          Push is not configured on this server.
+        <p className="text-xs text-paper-muted">
+          {t("settings.push.notConfigured")}
         </p>
       ) : serverEnabled === null ? null : (
         <>
-          <div className="mt-2 flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <Button
               variant={subscribed ? "secondary" : "default"}
               size="sm"
               disabled={busy}
               onClick={() => void toggle()}
             >
-              {subscribed ? "Turn off on this device" : "Enable push on this device"}
-            </Button>
-            <span className="text-xs text-text-muted">
               {subscribed
-                ? "Mentions, replies and DMs reach this device when the app is closed."
-                : "Only mentions, replies and direct messages — never every message."}
+                ? t("settings.push.turnOff")
+                : t("settings.push.enable")}
+            </Button>
+            <span className="text-xs text-paper-muted">
+              {subscribed ? t("settings.push.on") : t("settings.push.off")}
             </span>
           </div>
           {error ? (
@@ -672,7 +1243,7 @@ function PushNotificationsSection() {
             </p>
           ) : null}
           {subscribed ? (
-            <label className="mt-3 flex items-start gap-2 text-sm text-text">
+            <label className="mt-3 flex items-start gap-2 text-sm text-paper">
               <input
                 type="checkbox"
                 checked={dmDetails}
@@ -680,33 +1251,34 @@ function PushNotificationsSection() {
                 className="mt-0.5 accent-accent"
               />
               <span>
-                Show who sent a direct message
-                <span className="block text-xs text-text-muted">
-                  Off, a DM push says only &quot;New direct message&quot;.
-                  Message text is never included either way.
+                {t("settings.push.dmDetails")}
+                <span className="block text-xs text-paper-muted">
+                  {t("settings.push.dmDetailsHint")}
                 </span>
               </span>
             </label>
           ) : null}
         </>
       )}
-    </div>
+    </Field>
   );
 }
 
-const DM_PRIVACY_OPTIONS: { value: DmPrivacy; label: string }[] = [
-  { value: "everyone", label: "Anyone" },
-  { value: "server_members", label: "People I share a server with" },
-  { value: "nobody", label: "No one" },
+/* ----------------------------------------------------------------- privacy */
+
+const DM_PRIVACY_OPTIONS: { value: DmPrivacy; label: MessageKey }[] = [
+  { value: "everyone", label: "settings.privacy.dm.everyone" },
+  { value: "server_members", label: "settings.privacy.dm.serverMembers" },
+  { value: "nobody", label: "settings.privacy.dm.nobody" },
 ];
 
 /**
  * Who may open a conversation with this account, and who has been blocked.
  *
  * Both apply the moment they are clicked rather than on Save, unlike the
- * profile fields above them. A privacy control that silently did nothing
- * because the dialog was dismissed with Cancel is the one failure this section
- * cannot have: the user believes they are closed off and they are not.
+ * profile fields in their own section. A privacy control that silently did
+ * nothing because the dialog was dismissed with Cancel is the one failure this
+ * section cannot have: the user believes they are closed off and they are not.
  *
  * The rule is enforced on the server on every attempt to open a conversation.
  * Nothing here is the enforcement — this is the switch, not the lock.
@@ -722,6 +1294,7 @@ function PrivacySection({
   onUserUpdated: (user: User) => void;
   onUnblockUser: (userId: string) => void;
 }) {
+  const { t } = useTranslation();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const current = user?.dmPrivacy ?? "server_members";
@@ -735,92 +1308,81 @@ function PrivacySection({
     try {
       onUserUpdated(await updateMe({ dmPrivacy: value }));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not save that");
+      setError(messageOf(err, t("settings.privacy.saveFailed")));
     } finally {
       setBusy(false);
     }
   }
 
   return (
-    <div>
-      <p className="text-xs uppercase tracking-wide text-text-muted">Privacy</p>
-
-      <p className="mt-2 text-xs text-text-muted">
-        Who can start a direct message with you.
-      </p>
-      <div
-        role="radiogroup"
-        aria-label="Who can direct message me"
-        className="mt-2 flex flex-wrap gap-1.5"
+    <div className="space-y-6">
+      <Field
+        label={t("settings.privacy.dmLabel")}
+        hint={t("settings.privacy.dmHint")}
       >
-        {DM_PRIVACY_OPTIONS.map((option) => {
-          const selected = option.value === current;
-          return (
-            <button
-              key={option.value}
-              type="button"
-              role="radio"
-              aria-checked={selected}
-              disabled={busy || !user}
-              onClick={() => void choose(option.value)}
-              className={`rounded-md border px-3 py-1.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent disabled:opacity-60 ${
-                selected
-                  ? "border-accent bg-accent/10 text-text"
-                  : "border-border text-text-muted hover:border-accent/50"
-              }`}
-            >
-              {option.label}
-            </button>
-          );
-        })}
-      </div>
-      <p className="mt-1.5 text-xs text-text-muted">
-        Applies to new conversations. Anyone you are already talking to can still
-        reach you — tightening this is not a way to disappear on someone
-        mid-sentence.
-      </p>
-      {error && (
-        <p role="alert" className="mt-1.5 text-xs text-danger">
-          {error}
-        </p>
-      )}
-
-      <p className="mt-4 text-xs uppercase tracking-wide text-text-muted">
-        Blocked
-      </p>
-      {blockedUsers.length === 0 ? (
-        <p className="mt-2 text-xs text-text-muted">
-          Nobody. Blocking someone stops their messages reaching you and hides
-          what they say in shared channels behind a tap.
-        </p>
-      ) : (
-        <ul className="mt-2 space-y-1">
-          {blockedUsers.map((blocked) => (
-            <li
-              key={blocked.id}
-              className="flex items-center gap-3 rounded-md px-2 py-1.5 hover:bg-surface-2/60"
-            >
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm text-text">
-                  {blocked.displayName}
-                </p>
-                {blocked.tag && (
-                  <p className="truncate font-mono text-[11px] text-text-muted">
-                    {blocked.tag}
-                  </p>
-                )}
-              </div>
-              <Button
-                size="sm"
-                variant="secondary"
-                onClick={() => onUnblockUser(blocked.id)}
+        <div
+          role="radiogroup"
+          aria-label={t("settings.privacy.dmLabel")}
+          className="flex flex-wrap gap-1.5"
+        >
+          {DM_PRIVACY_OPTIONS.map((option) => {
+            const selected = option.value === current;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                role="radio"
+                aria-checked={selected}
+                disabled={busy || !user}
+                onClick={() => void choose(option.value)}
+                className={chipClass(selected)}
               >
-                Unblock
-              </Button>
-            </li>
-          ))}
-        </ul>
-      )}
+                {t(option.label)}
+              </button>
+            );
+          })}
+        </div>
+        {error && (
+          <p role="alert" className="mt-1.5 text-xs text-danger">
+            {error}
+          </p>
+        )}
+      </Field>
+
+      <Field label={t("settings.privacy.blocked")}>
+        {blockedUsers.length === 0 ? (
+          <p className="text-xs text-paper-muted">
+            {t("settings.privacy.blockedEmpty")}
+          </p>
+        ) : (
+          <ul className="space-y-1">
+            {blockedUsers.map((blocked) => (
+              <li
+                key={blocked.id}
+                className="flex items-center gap-3 rounded-md px-2 py-1.5 hover:bg-surface-2/60"
+              >
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm text-paper">
+                    {blocked.displayName}
+                  </p>
+                  {blocked.tag && (
+                    <p className="truncate font-mono text-[11px] text-paper-muted">
+                      {blocked.tag}
+                    </p>
+                  )}
+                </div>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => onUnblockUser(blocked.id)}
+                >
+                  {t("settings.privacy.unblock")}
+                </Button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Field>
     </div>
   );
 }
@@ -829,14 +1391,15 @@ function messageOf(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
 }
 
+/* --------------------------------------------------------------- your data */
+
 /**
  * The two rights the privacy policy promises, as buttons.
  *
  * Until these existed the only route was emailing an address and waiting for
- * somebody to run SQL by hand inside a 15-day statutory deadline. The point of
- * putting them here, rather than on a settings page of their own, is that this
- * is where a user already goes to change their name and their privacy — the
- * right to leave belongs next to the rest of the account, not hidden.
+ * somebody to run SQL by hand inside a 15-day statutory deadline. They have a
+ * section of their own now rather than a footer at the end of a scroll: the
+ * right to leave belongs somewhere a person can find it on purpose.
  */
 function YourDataSection({
   user,
@@ -845,6 +1408,7 @@ function YourDataSection({
   user: User | null;
   onRequestDelete: () => void;
 }) {
+  const { t } = useTranslation();
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
 
@@ -862,57 +1426,55 @@ function YourDataSection({
       link.click();
       URL.revokeObjectURL(url);
     } catch (err) {
-      setExportError(messageOf(err, "Could not build your export"));
+      setExportError(messageOf(err, t("settings.data.exportFailed")));
     } finally {
       setExporting(false);
     }
   }
 
   return (
-    <div>
-      <p className="text-xs uppercase tracking-wide text-paper-muted">
-        Your data
-      </p>
-
-      <div className="mt-2 flex items-center gap-3">
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={() => void download()}
-          disabled={exporting || !user}
-        >
-          {exporting ? "Preparing…" : "Download my data"}
-        </Button>
-        <span className="text-xs text-text-muted">
-          A JSON file of everything we hold about you.
-        </span>
-      </div>
-      <p className="mt-1.5 text-xs text-text-muted">
-        It includes your profile, your settings, every message you wrote, the
-        servers you are in, and who you have blocked. It does not include
-        messages other people wrote — including their side of your direct
-        messages. Those are their words, not your data, and you can still read
-        them here in the app.
-      </p>
-      {exportError && (
-        <p role="alert" className="mt-1.5 text-xs text-danger">
-          {exportError}
+    <div className="space-y-6">
+      <div>
+        <div className="flex flex-wrap items-center gap-3">
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => void download()}
+            disabled={exporting || !user}
+          >
+            {exporting
+              ? t("settings.data.exporting")
+              : t("settings.data.export")}
+          </Button>
+          <span className="text-xs text-paper-muted">
+            {t("settings.data.exportHint")}
+          </span>
+        </div>
+        <p className="mt-1.5 text-xs text-paper-muted">
+          {t("settings.data.exportBody")}
         </p>
-      )}
+        {exportError && (
+          <p role="alert" className="mt-1.5 text-xs text-danger">
+            {exportError}
+          </p>
+        )}
+      </div>
 
-      <div className="mt-4 flex items-center gap-3">
-        <Button
-          variant="ghost"
-          size="sm"
-          className="border border-danger/40 text-danger hover:bg-danger/10"
-          onClick={onRequestDelete}
-          disabled={!user}
-        >
-          Delete my account
-        </Button>
-        <span className="text-xs text-text-muted">
-          Permanent. There is no undo and no backup to restore from.
-        </span>
+      <div className="rounded-md border border-danger/30 p-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="border border-danger/40 text-danger hover:bg-danger/10"
+            onClick={onRequestDelete}
+            disabled={!user}
+          >
+            {t("settings.data.delete")}
+          </Button>
+          <span className="text-xs text-paper-muted">
+            {t("settings.data.deleteHint")}
+          </span>
+        </div>
       </div>
     </div>
   );
@@ -943,6 +1505,7 @@ function DeleteAccountDialog({
   onCancel: () => void;
   onDeleted: () => void;
 }) {
+  const { t } = useTranslation();
   const [typed, setTyped] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -976,7 +1539,7 @@ function DeleteAccountDialog({
         setBlockingServers(err.servers);
         setError(null);
       } else {
-        setError(messageOf(err, "Could not delete your account"));
+        setError(messageOf(err, t("settings.delete.failed")));
       }
     } finally {
       setBusy(false);
@@ -986,8 +1549,8 @@ function DeleteAccountDialog({
   return (
     <Dialog
       open={open}
-      eyebrow="Account"
-      title="Delete your account"
+      eyebrow={t("settings.delete.eyebrow")}
+      title={t("settings.delete.title")}
       size="sm"
       onClose={onCancel}
       // A stray click on the backdrop must not be able to dismiss the one
@@ -996,70 +1559,46 @@ function DeleteAccountDialog({
       footer={
         <>
           <Button variant="ghost" onClick={onCancel} disabled={busy}>
-            Keep my account
+            {t("settings.delete.keep")}
           </Button>
           <Button
             className="bg-danger text-white hover:bg-danger/90"
             onClick={() => void submit()}
             disabled={!confirmed || busy}
           >
-            {busy ? "Deleting…" : "Delete for ever"}
+            {busy ? t("settings.delete.deleting") : t("settings.delete.confirm")}
           </Button>
         </>
       }
     >
       <div className="space-y-4 px-5 py-4 text-sm">
-        <p className="text-text">
-          This cannot be undone. We keep no backup you can be restored from, and
-          nobody at pqp can bring your account back.
-        </p>
+        <p className="text-paper">{t("settings.delete.lead")}</p>
 
         <div>
           <p className="text-xs uppercase tracking-wide text-paper-muted">
-            What is deleted
+            {t("settings.delete.whatGoes")}
           </p>
-          <ul className="mt-2 list-disc space-y-1 pl-5 text-text-muted">
-            <li>Your profile, handle, avatar and settings.</li>
-            <li>
-              Every message you have written, everywhere — including in direct
-              messages. Other people will see gaps where your messages were.
-            </li>
-            <li>Your files and images, and the reactions you left.</li>
-            <li>
-              Your memberships, your conversations, and the list of people you
-              blocked.
-            </li>
-            <li>Your sign-in. You will not be able to log back in.</li>
-            <li>
-              Any server you own <strong>on your own</strong>, with nobody else
-              in it.
-            </li>
+          <ul className="mt-2 list-disc space-y-1 pl-5 text-paper-muted">
+            <li>{t("settings.delete.goes.profile")}</li>
+            <li>{t("settings.delete.goes.messages")}</li>
+            <li>{t("settings.delete.goes.files")}</li>
+            <li>{t("settings.delete.goes.memberships")}</li>
+            <li>{t("settings.delete.goes.signIn")}</li>
+            <li>{t("settings.delete.goes.servers")}</li>
           </ul>
         </div>
 
         <div>
           <p className="text-xs uppercase tracking-wide text-paper-muted">
-            What is kept, and why
+            {t("settings.delete.whatStays")}
           </p>
-          <ul className="mt-2 list-disc space-y-1 pl-5 text-text-muted">
-            <li>
-              Moderation records of actions you took in other people&apos;s
-              servers, with your name removed. Deleting an account must not
-              erase the record of how it was used to moderate somebody else.
-            </li>
-            <li>
-              Bans you issued. Removing them would let everybody you banned back
-              into servers you no longer have anything to do with.
-            </li>
-            <li>
-              Reports other people filed about you, with your name removed. We
-              are not able to let an account be deleted as a way of clearing its
-              own record.
-            </li>
+          <ul className="mt-2 list-disc space-y-1 pl-5 text-paper-muted">
+            <li>{t("settings.delete.stays.moderation")}</li>
+            <li>{t("settings.delete.stays.bans")}</li>
+            <li>{t("settings.delete.stays.reports")}</li>
           </ul>
-          <p className="mt-2 text-xs text-text-muted">
-            All of these are pruned on their own schedule. The privacy policy
-            explains them in full.
+          <p className="mt-2 text-xs text-paper-muted">
+            {t("settings.delete.staysNote")}
           </p>
         </div>
 
@@ -1068,21 +1607,23 @@ function DeleteAccountDialog({
             role="alert"
             className="rounded-md border border-warning/40 bg-warning/10 p-3"
           >
-            <p className="font-medium text-text">
-              Do one of these first, for each server you own
+            <p className="font-medium text-paper">
+              {t("settings.delete.ownedTitle")}
             </p>
-            <p className="mt-1 text-xs text-text-muted">
-              Other people are still in these servers, so we will not delete
-              them out from under them. In each server&apos;s settings, either
-              hand it to another member or delete the server yourself.
+            <p className="mt-1 text-xs text-paper-muted">
+              {t("settings.delete.ownedBody")}
             </p>
             <ul className="mt-2 space-y-1">
               {blockingServers.map((server) => (
-                <li key={server.id} className="text-sm text-text">
+                <li key={server.id} className="text-sm text-paper">
                   {server.name}{" "}
-                  <span className="text-xs text-text-muted">
-                    — {server.otherMemberCount} other{" "}
-                    {server.otherMemberCount === 1 ? "member" : "members"}
+                  <span className="text-xs text-paper-muted">
+                    {t(
+                      server.otherMemberCount === 1
+                        ? "settings.delete.ownedMember"
+                        : "settings.delete.ownedMembers",
+                      { count: server.otherMemberCount },
+                    )}
                   </span>
                 </li>
               ))}
@@ -1092,15 +1633,17 @@ function DeleteAccountDialog({
 
         <label className="block">
           <span className="mb-1 block text-xs uppercase tracking-wide text-paper-muted">
-            Type <span className="font-mono text-signal">{expected}</span> to
-            confirm
+            {t("settings.delete.typeLabel")}
+          </span>
+          <span className="mb-1 block font-mono text-sm text-signal">
+            {expected}
           </span>
           <Input
             value={typed}
             onChange={(event) => setTyped(event.target.value)}
             autoComplete="off"
             spellCheck={false}
-            aria-label={`Type ${expected} to confirm deletion`}
+            aria-label={t("settings.delete.typeAria", { handle: expected })}
           />
         </label>
 
@@ -1114,6 +1657,97 @@ function DeleteAccountDialog({
   );
 }
 
+/* ----------------------------------------------------------------- profile */
+
+/**
+ * Name, handle and avatar — the only part of settings that waits for Save.
+ *
+ * The avatar control is `AvatarPicker` rather than anything local, because
+ * onboarding renders the same one; a second picker is how the two lists of
+ * presets start to differ.
+ */
+function ProfileSection({
+  user,
+  displayName,
+  onDisplayName,
+  username,
+  onUsername,
+  avatarUrl,
+  onAvatarUrl,
+}: {
+  user: User | null;
+  displayName: string;
+  onDisplayName: (next: string) => void;
+  username: string;
+  onUsername: (next: string) => void;
+  avatarUrl: string;
+  onAvatarUrl: (next: string) => void;
+}) {
+  const { t } = useTranslation();
+
+  return (
+    <div className="space-y-5">
+      {user?.tag && (
+        <Field label={t("settings.profile.handle")}>
+          <p className="rounded-md border border-ink-4 bg-ink px-3 py-2 font-mono text-sm text-signal">
+            {user.tag}
+          </p>
+        </Field>
+      )}
+
+      <div>
+        <span className="mb-2 block text-xs uppercase tracking-wide text-paper-muted">
+          {t("settings.profile.avatar")}
+        </span>
+        <AvatarPicker
+          value={avatarUrl}
+          onChange={onAvatarUrl}
+          fallbackName={displayName}
+          labels={{
+            urlPlaceholder: t("settings.profile.avatar.urlPlaceholder"),
+            urlLabel: t("settings.profile.avatar.urlLabel"),
+            presetLabel: t("settings.profile.avatar.preset"),
+            clear: t("settings.profile.avatar.clear"),
+          }}
+        />
+      </div>
+
+      <label className="block">
+        <span className="mb-2 block text-xs uppercase tracking-wide text-paper-muted">
+          {t("settings.profile.displayName")}
+        </span>
+        <Input
+          value={displayName}
+          onChange={(e) => onDisplayName(e.target.value)}
+        />
+      </label>
+
+      <label className="block">
+        <span className="mb-2 block text-xs uppercase tracking-wide text-paper-muted">
+          {t("settings.profile.username")}
+        </span>
+        <Input
+          value={username}
+          onChange={(e) =>
+            onUsername(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ""))
+          }
+          placeholder={t("settings.profile.usernamePlaceholder")}
+        />
+        <span className="mt-1 block text-xs text-paper-muted">
+          {t("settings.profile.usernameHint")}
+        </span>
+      </label>
+
+      {/* Said once, here, because this section is the only one where Save means
+          anything — everywhere else a control has already taken effect by the
+          time the user looks away from it. */}
+      <p className="text-xs text-paper-muted">{t("settings.profile.saveNote")}</p>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------- modal */
+
 export function SettingsModal({
   open,
   user,
@@ -1126,6 +1760,7 @@ export function SettingsModal({
   onUnblockUser,
   onAudioSettingsLive,
 }: SettingsModalProps) {
+  const { t } = useTranslation();
   const [displayName, setDisplayName] = useState("");
   const [username, setUsername] = useState("");
   const [avatarUrl, setAvatarUrl] = useState("");
@@ -1139,18 +1774,24 @@ export function SettingsModal({
   const [outputs, setOutputs] = useState<MediaDeviceOption[]>([]);
   const [devicesError, setDevicesError] = useState<string | null>(null);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
-  const canSelectOutput = supportsAudioOutputSelection();
-  // Probed once: whether this machine has a keyboard worth binding does not
-  // change while the dialog is open, and re-evaluating it per render would run
-  // a media query on every keystroke in the display-name field.
-  const canBindKey = useMemo(() => supportsKeyBinding(), []);
+  // Which section is showing. Deliberately NOT reset when the dialog closes:
+  // somebody adjusting a level, listening, and coming back should land where
+  // they were rather than at the top of the tree every time.
+  const [section, setSection] = useState<SectionId>("profile");
   const settingsRef = useRef(localSettings);
+  const active = SECTIONS.find((entry) => entry.id === section) ?? SECTIONS[0]!;
+  const tabIdPrefix = "settings-tab";
+  const panelId = "settings-panel";
 
   // One dialog at a time rather than two stacked ones: `Dialog` installs a
   // focus trap and an Escape handler per instance, and two live traps fight
   // over which one Tab belongs to. Settings steps aside while the confirmation
   // is up and comes back if it is cancelled.
   const settingsOpen = open && !confirmingDelete;
+  // The microphone is only opened while the section that shows a level meter is
+  // actually on screen. Under the old single column, merely opening settings to
+  // change a display name prompted for the mic.
+  const voiceVisible = settingsOpen && section === "voice";
 
   useEffect(() => {
     if (!open) {
@@ -1181,7 +1822,7 @@ export function SettingsModal({
   }, [open]);
 
   useEffect(() => {
-    if (!open) {
+    if (!voiceVisible) {
       return;
     }
 
@@ -1192,9 +1833,7 @@ export function SettingsModal({
       const granted = await ensureMediaPermission();
       if (!granted) {
         if (!cancelled) {
-          setDevicesError(
-            "Microphone permission needed to list devices and show input level.",
-          );
+          setDevicesError(t("settings.voice.permissionNeeded"));
         }
         return;
       }
@@ -1221,7 +1860,9 @@ export function SettingsModal({
         onDeviceChange,
       );
     };
-  }, [open]);
+    // `t` is stable per locale and the locale cannot change without a reload.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [voiceVisible]);
 
   function patchLocal(partial: Partial<LocalSettings>) {
     // Composed off a ref rather than inside a `setDraftLocal` updater.
@@ -1258,7 +1899,7 @@ export function SettingsModal({
       }
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save");
+      setError(err instanceof Error ? err.message : t("settings.saveFailed"));
     } finally {
       setSaving(false);
     }
@@ -1268,328 +1909,96 @@ export function SettingsModal({
     <>
       <Dialog
         open={settingsOpen}
-        eyebrow="Account"
-        title="Settings"
-        size="sm"
+        eyebrow={t("settings.eyebrow")}
+        title={t("settings.title")}
+        size="xl"
+        fill
         onClose={onClose}
         footer={
           <>
             <Button variant="ghost" onClick={onClose}>
-              Cancel
+              {t("settings.cancel")}
             </Button>
             <Button onClick={() => void handleSave()} disabled={saving}>
-              {saving ? "Saving…" : "Save"}
+              {saving ? t("settings.saving") : t("settings.save")}
             </Button>
           </>
         }
       >
-        <div className="px-5 py-4">
-          {user?.tag && (
-            <p className="mb-4 rounded-md border border-ink-4 bg-ink px-3 py-2 font-mono text-sm text-signal">
-              {user.tag}
-            </p>
-          )}
+        <div className="flex h-full min-h-0 flex-col sm:flex-row">
+          <SectionRail
+            active={section}
+            onSelect={setSection}
+            idFor={(id) => `${tabIdPrefix}-${id}`}
+            panelId={panelId}
+          />
 
-          <div className="mb-4">
-            <span className="mb-2 block text-xs uppercase tracking-wide text-paper-muted">
-              Avatar
-            </span>
-            <AvatarPicker
-              value={avatarUrl}
-              onChange={setAvatarUrl}
-              fallbackName={displayName}
-              labels={{
-                urlPlaceholder: "https://… image URL",
-                urlLabel: "Avatar image URL",
-                presetLabel: "Use preset avatar",
-                clear: "Clear",
-              }}
-            />
-          </div>
+          <div
+            id={panelId}
+            role="tabpanel"
+            aria-labelledby={`${tabIdPrefix}-${section}`}
+            tabIndex={0}
+            className="min-w-0 flex-1 overflow-y-auto overscroll-contain px-5 py-5 focus-visible:outline-none"
+          >
+            <SectionHeader section={active} />
 
-          <label className="mb-3 block">
-            <span className="mb-1 block text-xs uppercase tracking-wide text-paper-muted">
-              Display name
-            </span>
-            <Input
-              value={displayName}
-              onChange={(e) => setDisplayName(e.target.value)}
-            />
-          </label>
-
-          <label className="mb-4 block">
-            <span className="mb-1 block text-xs uppercase tracking-wide text-paper-muted">
-              Username
-            </span>
-            <Input
-              value={username}
-              onChange={(e) =>
-                setUsername(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ""))
-              }
-              placeholder="cool_name"
-            />
-            <span className="mt-1 block text-xs text-paper-muted">
-              Becomes username#1234 — discriminator auto-assigned if taken.
-            </span>
-          </label>
-
-          <div className="border-t border-ink-4 pt-4">
-            <ThemePicker />
-          </div>
-
-          <div className="mt-4 border-t border-ink-4 pt-4">
-            <NotificationsSection />
-          </div>
-
-          <div className="mt-4 border-t border-ink-4 pt-4">
-            <PrivacySection
-              user={user}
-              blockedUsers={blockedUsers}
-              onUserUpdated={onUserUpdated}
-              onUnblockUser={onUnblockUser}
-            />
-          </div>
-
-          <div className="mt-4 border-t border-ink-4 pt-4">
-            <p className="text-xs uppercase tracking-wide text-paper-muted">
-              Chat
-            </p>
-            <label className="mt-2 flex cursor-pointer items-center gap-3">
-              <input
-                type="checkbox"
-                checked={draftLocal.showLinkEmbeds}
-                onChange={(e) => patchLocal({ showLinkEmbeds: e.target.checked })}
-                className="h-4 w-4 accent-[var(--color-signal)]"
+            {section === "profile" && (
+              <ProfileSection
+                user={user}
+                displayName={displayName}
+                onDisplayName={setDisplayName}
+                username={username}
+                onUsername={setUsername}
+                avatarUrl={avatarUrl}
+                onAvatarUrl={setAvatarUrl}
               />
-              <span className="text-sm">Show link previews</span>
-            </label>
-          </div>
-
-          <div className="mt-4 space-y-4 border-t border-ink-4 pt-4">
-            <div>
-              <p className="text-xs uppercase tracking-wide text-paper-muted">
-                Voice &amp; Video
-              </p>
-              <p className="mt-1 text-xs text-paper-muted">
-                Devices and levels apply when joining voice. Changes while
-                connected update live when possible.
-              </p>
-            </div>
-
-            {devicesError && (
-              <p className="text-xs text-warning" role="status">
-                {devicesError}
-              </p>
             )}
 
-            <label className="block">
-              <span className="mb-1 block text-xs uppercase tracking-wide text-paper-muted">
-                Input device
-              </span>
-              <select
-                value={draftLocal.inputDeviceId}
-                onChange={(e) => patchLocal({ inputDeviceId: e.target.value })}
-                className="h-10 w-full rounded-md border border-ink-4 bg-ink px-3 text-sm text-paper outline-none focus:border-signal"
-              >
-                <option value="">System default</option>
-                {inputs.map((device) => (
-                  <option key={device.deviceId} value={device.deviceId}>
-                    {device.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="block">
-              <span className="mb-1 block text-xs uppercase tracking-wide text-paper-muted">
-                Input volume
-              </span>
-              <input
-                type="range"
-                min={0}
-                max={200}
-                value={Math.round(draftLocal.inputVolume * 100)}
-                onChange={(e) =>
-                  patchLocal({ inputVolume: Number(e.target.value) / 100 })
-                }
-                className="w-full accent-[var(--color-signal)]"
+            {section === "voice" && (
+              <VoiceSection
+                draftLocal={draftLocal}
+                patchLocal={patchLocal}
+                inputs={inputs}
+                outputs={outputs}
+                devicesError={devicesError}
+                voiceAnalyser={voiceAnalyser}
+                metering={voiceVisible}
               />
-              <span className="mt-0.5 block text-xs text-paper-muted">
-                {Math.round(draftLocal.inputVolume * 100)}%
-              </span>
-            </label>
-
-            <MicLevelMeter
-              deviceId={draftLocal.inputDeviceId}
-              inputVolume={draftLocal.inputVolume}
-              liveAnalyser={voiceAnalyser}
-              active={open}
-            />
-
-            <fieldset className="space-y-2">
-              <legend className="mb-1 block text-xs uppercase tracking-wide text-paper-muted">
-                Input mode
-              </legend>
-              {INPUT_MODES.map((mode) => (
-                <label
-                  key={mode.value}
-                  className="flex cursor-pointer items-start gap-3"
-                >
-                  <input
-                    type="radio"
-                    name="input-mode"
-                    className="mt-1 h-4 w-4 accent-[var(--color-signal)]"
-                    checked={draftLocal.inputMode === mode.value}
-                    onChange={() => patchLocal({ inputMode: mode.value })}
-                  />
-                  <span className="min-w-0">
-                    <span className="block text-sm">{mode.label}</span>
-                    <span className="block text-xs text-paper-muted">
-                      {mode.description}
-                    </span>
-                  </span>
-                </label>
-              ))}
-            </fieldset>
-
-            {draftLocal.inputMode === "push-to-talk" &&
-              (canBindKey ? (
-                <div className="space-y-1.5">
-                  <KeyBindingField
-                    label="Push-to-talk key"
-                    binding={draftLocal.pushToTalkKey}
-                    onChange={(pushToTalkKey) => patchLocal({ pushToTalkKey })}
-                  />
-                  {/* The honest limit, stated where the binding is set rather
-                      than discovered later by talking to nobody. A web page
-                      cannot receive a key pressed while another window has
-                      focus; there is no global hotkey short of the desktop
-                      shell. */}
-                  <p className="text-xs text-paper-muted">
-                    {formatBinding(draftLocal.pushToTalkKey)} works while this
-                    window is focused and you are not typing. It cannot work
-                    while another app is in front — the voice panel has a
-                    hold-to-talk button for that.
-                  </p>
-                </div>
-              ) : (
-                <p className="text-xs text-paper-muted">
-                  This device has no keyboard to bind, so push-to-talk uses the
-                  hold-to-talk button in the voice panel.
-                </p>
-              ))}
-
-            <fieldset className="space-y-2">
-              <legend className="mb-1 block text-xs uppercase tracking-wide text-paper-muted">
-                Microphone processing
-              </legend>
-              {MIC_PROCESSING_OPTIONS.map((option) => (
-                <label
-                  key={option.key}
-                  className="flex cursor-pointer items-start gap-3"
-                >
-                  <input
-                    type="checkbox"
-                    className="mt-1 h-4 w-4 accent-[var(--color-signal)]"
-                    checked={draftLocal.micProcessing[option.key]}
-                    onChange={(e) =>
-                      patchLocal({
-                        micProcessing: {
-                          ...draftLocal.micProcessing,
-                          [option.key]: e.target.checked,
-                        },
-                      })
-                    }
-                  />
-                  <span className="min-w-0">
-                    <span className="block text-sm">{option.label}</span>
-                    <span className="block text-xs text-paper-muted">
-                      {option.description}
-                    </span>
-                  </span>
-                </label>
-              ))}
-              <p className="text-xs text-paper-muted">
-                Changing these re-opens the microphone. Nobody is dropped from
-                the call.
-              </p>
-            </fieldset>
-
-            {canSelectOutput ? (
-              <label className="block">
-                <span className="mb-1 block text-xs uppercase tracking-wide text-paper-muted">
-                  Output device
-                </span>
-                <select
-                  value={draftLocal.outputDeviceId}
-                  onChange={(e) => patchLocal({ outputDeviceId: e.target.value })}
-                  className="h-10 w-full rounded-md border border-ink-4 bg-ink px-3 text-sm text-paper outline-none focus:border-signal"
-                >
-                  <option value="">System default</option>
-                  {outputs.map((device) => (
-                    <option key={device.deviceId} value={device.deviceId}>
-                      {device.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            ) : (
-              <p className="text-xs text-paper-muted">
-                Output device selection is not supported in this browser.
-              </p>
             )}
 
-            <label className="block">
-              <span className="mb-1 block text-xs uppercase tracking-wide text-paper-muted">
-                Output volume
-              </span>
-              <input
-                type="range"
-                min={0}
-                max={100}
-                value={Math.round(draftLocal.outputVolume * 100)}
-                onChange={(e) =>
-                  patchLocal({ outputVolume: Number(e.target.value) / 100 })
+            {section === "notifications" && <NotificationsSection />}
+
+            {section === "appearance" && (
+              <AppearanceSection
+                showLinkEmbeds={draftLocal.showLinkEmbeds}
+                onShowLinkEmbeds={(showLinkEmbeds) =>
+                  patchLocal({ showLinkEmbeds })
                 }
-                className="w-full accent-[var(--color-signal)]"
               />
-              <span className="mt-0.5 block text-xs text-paper-muted">
-                {Math.round(draftLocal.outputVolume * 100)}%
-              </span>
-            </label>
+            )}
 
-            <label className="flex cursor-pointer items-center gap-3">
-              <input
-                type="checkbox"
-                checked={draftLocal.muteOnJoin}
-                onChange={(e) => patchLocal({ muteOnJoin: e.target.checked })}
-                className="h-4 w-4 accent-[var(--color-signal)]"
+            {section === "privacy" && (
+              <PrivacySection
+                user={user}
+                blockedUsers={blockedUsers}
+                onUserUpdated={onUserUpdated}
+                onUnblockUser={onUnblockUser}
               />
-              <span className="text-sm">Mute mic when joining voice</span>
-            </label>
-            <label className="flex cursor-pointer items-center gap-3">
-              <input
-                type="checkbox"
-                checked={draftLocal.compactPeers}
-                onChange={(e) => patchLocal({ compactPeers: e.target.checked })}
-                className="h-4 w-4 accent-[var(--color-signal)]"
+            )}
+
+            {section === "data" && (
+              <YourDataSection
+                user={user}
+                onRequestDelete={() => setConfirmingDelete(true)}
               />
-              <span className="text-sm">Compact peer list</span>
-            </label>
+            )}
+
+            {error && (
+              <p className="mt-4 text-sm text-danger" role="alert">
+                {error}
+              </p>
+            )}
           </div>
-
-          <div className="mt-4 border-t border-ink-4 pt-4">
-            <YourDataSection
-              user={user}
-              onRequestDelete={() => setConfirmingDelete(true)}
-            />
-          </div>
-
-          {error && (
-            <p className="mt-4 text-sm text-danger" role="alert">
-              {error}
-            </p>
-          )}
         </div>
       </Dialog>
 

@@ -74,6 +74,8 @@ test.describe("stage 2 — light and system", () => {
   }) => {
     await openApp(page);
     await page.getByRole("button", { name: "Open settings" }).click();
+    // The theme moved into its own section when settings was sectioned.
+    await page.getByRole("tab", { name: "Appearance & Language" }).click();
 
     const light = page.getByRole("radio", { name: /light/i });
     await expect(light).toBeVisible();
@@ -209,6 +211,7 @@ test.describe("stage 2 — light and system", () => {
 
     await openApp(page);
     await page.getByRole("button", { name: "Open settings" }).click();
+    await page.getByRole("tab", { name: "Appearance & Language" }).click();
     await page.getByRole("radio", { name: /light/i }).click();
     await page.getByRole("radio", { name: /dark/i }).click();
     await page.getByRole("radio", { name: /system/i }).click();

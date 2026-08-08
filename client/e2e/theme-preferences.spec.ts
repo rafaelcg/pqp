@@ -38,6 +38,7 @@ test.describe("stage 3 — preferences follow the user", () => {
   test("a theme chosen in the UI reaches the server", async ({ page }) => {
     await openApp(page);
     await page.getByRole("button", { name: "Open settings" }).click();
+    await page.getByRole("tab", { name: "Appearance & Language" }).click();
     await page.getByRole("radio", { name: /light/i }).click();
 
     // The write is debounced, so poll rather than assuming it has landed.

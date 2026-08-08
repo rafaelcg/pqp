@@ -502,4 +502,207 @@ export const ptBR: PartialMessages = {
   "thread.placeholder": "Responder na thread",
   "thread.loading": "Carregando a thread…",
   "thread.error.start": "Não deu pra criar a thread. Tenta de novo.",
+
+  // ---------------------------------------------------------------- settings
+  // Tudo em "você", nunca "tu" nem "o usuário". Termos que brasileiro fala em
+  // inglês continuam em inglês: push, push-to-talk, chat, link, JSON.
+  "settings.title": "Configurações",
+  "settings.eyebrow": "Sua conta",
+  "settings.nav.label": "Seções das configurações",
+  "settings.cancel": "Cancelar",
+  "settings.save": "Salvar",
+  "settings.saving": "Salvando…",
+  "settings.saveFailed": "Não deu pra salvar",
+
+  "settings.section.profile": "Perfil",
+  "settings.section.voice": "Voz e áudio",
+  "settings.section.notifications": "Notificações",
+  "settings.section.appearance": "Aparência e idioma",
+  "settings.section.privacy": "Privacidade",
+  "settings.section.data": "Seus dados",
+
+  // -- perfil
+  "settings.profile.description": "Como você aparece pra todo mundo.",
+  "settings.profile.handle": "Seu identificador",
+  "settings.profile.avatar": "Avatar",
+  "settings.profile.avatar.urlPlaceholder": "https://… link da imagem",
+  "settings.profile.avatar.urlLabel": "Link da imagem do avatar",
+  "settings.profile.avatar.preset": "Usar avatar pronto",
+  "settings.profile.avatar.clear": "Limpar",
+  "settings.profile.displayName": "Nome de exibição",
+  "settings.profile.username": "Nome de usuário",
+  "settings.profile.usernamePlaceholder": "nome_maneiro",
+  "settings.profile.usernameHint":
+    "Vira nome_de_usuario#1234 — o número sai automático se já estiver em uso.",
+  "settings.profile.saveNote":
+    "Esta seção só vale depois que você salvar. O resto vale na hora em que você muda.",
+
+  // -- voz e áudio
+  "settings.voice.description":
+    "Dispositivos e volumes valem ao entrar na voz. Mudanças com a call em andamento aplicam na hora quando dá.",
+  "settings.voice.permissionNeeded":
+    "Precisa liberar o microfone pra listar os dispositivos e mostrar o nível de entrada.",
+  "settings.voice.inputDevice": "Microfone",
+  "settings.voice.systemDefault": "Padrão do sistema",
+  "settings.voice.inputVolume": "Volume de entrada",
+  "settings.voice.inputLevel": "Nível de entrada",
+  "settings.voice.percent": "{percent}%",
+  "settings.voice.inputMode": "Modo de entrada",
+  "settings.voice.mode.activity": "Por voz",
+  "settings.voice.mode.activityHint":
+    "Seu microfone fica aberto sempre que você não estiver mutado.",
+  "settings.voice.mode.ptt": "Push-to-talk",
+  "settings.voice.mode.pttHint":
+    "Seu microfone fica fechado até você segurar a tecla ou o botão.",
+  "settings.voice.pttKey": "Tecla do push-to-talk",
+  "settings.voice.pttHint":
+    "{key} funciona com esta janela em foco e sem você estar digitando. Não funciona com outro app na frente — pra isso o painel de voz tem um botão de segurar pra falar.",
+  "settings.voice.pttNoKeyboard":
+    "Este aparelho não tem teclado pra vincular, então o push-to-talk usa o botão de segurar pra falar no painel de voz.",
+  "settings.voice.processing": "Processamento do microfone",
+  "settings.voice.processing.echo": "Cancelamento de eco",
+  "settings.voice.processing.echoHint":
+    "Evita que os outros ouçam a própria voz voltando pela sua caixa de som.",
+  "settings.voice.processing.noise": "Redução de ruído",
+  "settings.voice.processing.noiseHint":
+    "Tira ventilador e teclado — e algumas das suas consoantes junto.",
+  "settings.voice.processing.gain": "Controle automático de ganho",
+  "settings.voice.processing.gainHint":
+    "Nivela seu volume, e levanta o barulho da sala entre uma frase e outra.",
+  "settings.voice.processing.note":
+    "Mudar isso reabre o microfone. Ninguém cai da call.",
+  "settings.voice.outputDevice": "Saída de áudio",
+  "settings.voice.outputUnsupported":
+    "Escolher a saída de áudio não funciona neste navegador.",
+  "settings.voice.outputVolume": "Volume de saída",
+  "settings.voice.muteOnJoin": "Entrar na voz com o microfone mutado",
+  "settings.voice.compactPeers": "Lista de pessoas compacta",
+
+  // -- notificações
+  "settings.notifications.description":
+    "O que chega até você, e onde. O que estiver definido por servidor ou por canal ganha destas.",
+  "settings.notifications.unsupported":
+    "Este navegador não mostra notificações do sistema.",
+  "settings.notifications.denied":
+    "Bloqueado neste site. Libere as notificações nas configurações do site no seu navegador pra ligar de novo — a página não tem como perguntar outra vez.",
+  "settings.notifications.turnOff": "Desligar",
+  "settings.notifications.enable": "Ligar notificações no sistema",
+  "settings.notifications.on": "Ligado nesta conta.",
+  "settings.notifications.willAsk": "Seu navegador vai pedir permissão.",
+  "settings.notifications.levelLabel": "Nível padrão de notificação",
+  "settings.notifications.level.all": "Todas as mensagens",
+  "settings.notifications.level.mentions": "Só @menções",
+  "settings.notifications.level.none": "Nada",
+  "settings.notifications.levelHint":
+    "Vale onde o servidor ou o canal não tiver ajuste próprio. Clique com o botão direito num servidor ou canal pra mudar só aquele.",
+  "settings.push.title": "Push — com o app fechado",
+  "settings.push.needsInstall":
+    "No iPhone e no iPad, o push só funciona pelo app instalado: abra o pqp no Safari, toque em Compartilhar, depois em “Adicionar à Tela de Início”, e ligue o push de dentro do app instalado.",
+  "settings.push.unsupported": "Este navegador não recebe push.",
+  "settings.push.notConfigured": "O push não está configurado neste servidor.",
+  "settings.push.turnOff": "Desligar neste aparelho",
+  "settings.push.enable": "Ligar push neste aparelho",
+  "settings.push.on":
+    "Menções, respostas e DMs chegam neste aparelho mesmo com o app fechado.",
+  "settings.push.off":
+    "Só menções, respostas e mensagens diretas — nunca toda mensagem.",
+  "settings.push.denied":
+    "As notificações estão bloqueadas neste site. Libere primeiro nas configurações do navegador.",
+  "settings.push.failed":
+    "Não deu pra inscrever este aparelho. Tenta de novo depois de recarregar.",
+  "settings.push.unreachable":
+    "Não deu pra falar com o servidor. Sua inscrição não foi salva.",
+  "settings.push.dmDetails": "Mostrar quem mandou a mensagem direta",
+  "settings.push.dmDetailsHint":
+    "Desligado, o push de DM diz só “Nova mensagem direta”. O texto da mensagem nunca vai junto, de um jeito ou de outro.",
+
+  // -- aparência e idioma
+  "settings.appearance.description":
+    "Como o pqp fica na tela, e em que idioma ele fala.",
+  "settings.appearance.theme": "Tema",
+  "settings.appearance.theme.light": "Claro",
+  "settings.appearance.theme.dark": "Escuro",
+  "settings.appearance.theme.system": "Sistema",
+  "settings.appearance.resolved.light": "claro",
+  "settings.appearance.resolved.dark": "escuro",
+  "settings.appearance.themeFollowing":
+    "Seguindo seu sistema — agora {theme}.",
+  "settings.appearance.themeHint":
+    "Vale na hora, e acompanha sua conta nos outros aparelhos.",
+  "settings.appearance.language": "Idioma",
+  "settings.appearance.languageHint":
+    "A página recarrega pra trocar de idioma. Salve seu perfil antes, se estava mexendo nele.",
+  "settings.appearance.language.en": "English",
+  "settings.appearance.language.ptBR": "Português (Brasil)",
+  "settings.appearance.chat": "Chat",
+  "settings.appearance.linkPreviews": "Mostrar prévia dos links",
+
+  // -- privacidade
+  "settings.privacy.description":
+    "Quem consegue te achar. A regra vale no servidor, não só aqui.",
+  "settings.privacy.dmLabel": "Quem pode te mandar mensagem direta",
+  "settings.privacy.dm.everyone": "Qualquer pessoa",
+  "settings.privacy.dm.serverMembers": "Quem divide um servidor comigo",
+  "settings.privacy.dm.nobody": "Ninguém",
+  "settings.privacy.dmHint":
+    "Vale pras conversas novas. Quem já está falando com você continua chegando — apertar isso não é jeito de sumir no meio da frase.",
+  "settings.privacy.saveFailed": "Não deu pra salvar isso",
+  "settings.privacy.blocked": "Bloqueados",
+  "settings.privacy.blockedEmpty":
+    "Ninguém. Bloquear alguém impede as mensagens da pessoa de chegarem até você e esconde o que ela fala nos canais em comum atrás de um toque.",
+  "settings.privacy.unblock": "Desbloquear",
+
+  // -- seus dados
+  "settings.data.description":
+    "Leve tudo com você, ou encerre a conta de vez.",
+  "settings.data.export": "Baixar meus dados",
+  "settings.data.exporting": "Preparando…",
+  "settings.data.exportHint":
+    "Um arquivo JSON com tudo o que a gente guarda sobre você.",
+  "settings.data.exportBody":
+    "Vem com seu perfil, suas configurações, cada mensagem que você escreveu, os servidores em que você está e quem você bloqueou. Não vem com mensagens que outras pessoas escreveram — nem o lado delas nas suas mensagens diretas. Aquilo é o que elas falaram, não é seu dado, e você continua lendo tudo aqui no app.",
+  "settings.data.exportFailed": "Não deu pra montar sua exportação",
+  "settings.data.delete": "Apagar minha conta",
+  "settings.data.deleteHint":
+    "É pra sempre. Não tem como desfazer nem backup pra restaurar.",
+
+  // -- confirmação de exclusão
+  "settings.delete.eyebrow": "Conta",
+  "settings.delete.title": "Apagar sua conta",
+  "settings.delete.keep": "Manter minha conta",
+  "settings.delete.confirm": "Apagar pra sempre",
+  "settings.delete.deleting": "Apagando…",
+  "settings.delete.failed": "Não deu pra apagar sua conta",
+  "settings.delete.lead":
+    "Isso não tem volta. A gente não guarda backup pra te restaurar, e ninguém no pqp consegue trazer sua conta de volta.",
+  "settings.delete.whatGoes": "O que é apagado",
+  "settings.delete.goes.profile":
+    "Seu perfil, seu identificador, seu avatar e suas configurações.",
+  "settings.delete.goes.messages":
+    "Cada mensagem que você escreveu, em todo lugar — inclusive nas mensagens diretas. As outras pessoas vão ver buracos onde estavam suas mensagens.",
+  "settings.delete.goes.files":
+    "Seus arquivos e imagens, e as reações que você deixou.",
+  "settings.delete.goes.memberships":
+    "Suas participações em servidores, suas conversas e a lista de quem você bloqueou.",
+  "settings.delete.goes.signIn":
+    "Seu login. Você não vai conseguir entrar de novo.",
+  "settings.delete.goes.servers":
+    "Qualquer servidor que seja só seu, sem mais ninguém dentro.",
+  "settings.delete.whatStays": "O que fica, e por quê",
+  "settings.delete.stays.moderation":
+    "Registros de moderação do que você fez em servidores dos outros, sem o seu nome. Apagar uma conta não pode apagar o registro de como ela foi usada pra moderar outra pessoa.",
+  "settings.delete.stays.bans":
+    "Os bans que você deu. Tirar eles deixaria todo mundo que você baniu voltar pra servidores com os quais você não tem mais nada a ver.",
+  "settings.delete.stays.reports":
+    "Denúncias que outras pessoas fizeram sobre você, sem o seu nome. A gente não pode deixar apagar a conta virar um jeito de limpar a própria ficha.",
+  "settings.delete.staysNote":
+    "Tudo isso é descartado no prazo de cada um. A política de privacidade explica em detalhe.",
+  "settings.delete.ownedTitle":
+    "Faça uma destas primeiro, pra cada servidor que é seu",
+  "settings.delete.ownedBody":
+    "Ainda tem gente nesses servidores, então a gente não vai apagar eles por baixo das pessoas. Nas configurações de cada servidor, passe ele pra outro membro ou apague você mesmo.",
+  "settings.delete.ownedMember": "— mais {count} pessoa",
+  "settings.delete.ownedMembers": "— mais {count} pessoas",
+  "settings.delete.typeLabel": "Digite seu identificador pra confirmar",
+  "settings.delete.typeAria": "Digite {handle} pra confirmar a exclusão",
 };

@@ -192,19 +192,46 @@ for (const size of SIZES) {
       });
     }
 
-    test("a dialog taller than the screen scrolls its body, not its buttons", async ({
+    test("a dialog taller than the screen scrolls its section, not its buttons", async ({
       page,
     }) => {
       await openApp(page);
       await openDrawer(page);
       await page.getByRole("button", { name: "Open settings" }).first().click();
       await expect(page.getByRole("dialog")).toBeVisible();
+      // Voice & Audio is the longest section, and the one guaranteed to
+      // overflow a phone. Since settings was sectioned the overflow lives in
+      // the section pane rather than in the dialog body — the body holds the
+      // section rail beside it and must not move, or the rail scrolls off the
+      // top and the other five sections become unreachable.
+      await page.getByRole("tab", { name: "Voice & Audio" }).click();
       await page.waitForTimeout(800);
 
+      const panes = await page.evaluate(() => {
+        const panel = document.querySelector<HTMLElement>('[role="dialog"]')!;
+        const body = panel.children[1] as HTMLElement;
+        const pane = panel.querySelector<HTMLElement>('[role="tabpanel"]')!;
+        const rail = panel.querySelector<HTMLElement>('[role="tablist"]')!;
+        return {
+          bodyScrolls: body.scrollHeight > body.clientHeight + 1,
+          paneScrolls: pane.scrollHeight > pane.clientHeight + 1,
+          railTop: rail.getBoundingClientRect().top,
+          bodyTop: body.getBoundingClientRect().top,
+        };
+      });
+
+      expect(panes.paneScrolls, "the voice section no longer overflows a phone").toBe(
+        true,
+      );
+      expect(panes.bodyScrolls, "the whole dialog body scrolls, taking the rail with it").toBe(
+        false,
+      );
+      expect(
+        panes.railTop,
+        "the section rail has scrolled out of the dialog",
+      ).toBeGreaterThanOrEqual(panes.bodyTop - SLACK);
+
       const box = await measureDialog(page);
-      // Settings is long enough to overflow any phone; if it ever stops being,
-      // this assertion is what says so rather than quietly proving nothing.
-      expect(box.bodyScrollable, "settings no longer overflows a phone").toBe(true);
       expectInsideViewport(box, `settings @ ${size.label}`);
     });
 

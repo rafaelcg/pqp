@@ -563,6 +563,212 @@ export const en = {
   "thread.placeholder": "Reply in thread",
   "thread.loading": "Loading thread…",
   "thread.error.start": "Couldn't start the thread. Try again.",
+
+  // ---------------------------------------------------------------- settings
+  // The whole settings surface, section by section. It was hardcoded English
+  // until the redesign split it into sections — which is also what made the
+  // gap obvious, since a section heading nobody can read is a door nobody
+  // opens.
+  "settings.title": "Settings",
+  "settings.eyebrow": "Your account",
+  "settings.nav.label": "Settings sections",
+  "settings.cancel": "Cancel",
+  "settings.save": "Save",
+  "settings.saving": "Saving…",
+  "settings.saveFailed": "Failed to save",
+
+  "settings.section.profile": "Profile",
+  "settings.section.voice": "Voice & Audio",
+  "settings.section.notifications": "Notifications",
+  "settings.section.appearance": "Appearance & Language",
+  "settings.section.privacy": "Privacy",
+  "settings.section.data": "Your data",
+
+  // -- profile
+  "settings.profile.description": "How you show up to everybody else.",
+  "settings.profile.handle": "Your handle",
+  "settings.profile.avatar": "Avatar",
+  "settings.profile.avatar.urlPlaceholder": "https://… image URL",
+  "settings.profile.avatar.urlLabel": "Avatar image URL",
+  "settings.profile.avatar.preset": "Use preset avatar",
+  "settings.profile.avatar.clear": "Clear",
+  "settings.profile.displayName": "Display name",
+  "settings.profile.username": "Username",
+  "settings.profile.usernamePlaceholder": "cool_name",
+  "settings.profile.usernameHint":
+    "Becomes username#1234 — discriminator auto-assigned if taken.",
+  "settings.profile.saveNote":
+    "This section applies when you save. Everything else applies the moment you change it.",
+
+  // -- voice & audio
+  "settings.voice.description":
+    "Devices and levels apply when joining voice. Changes while connected update live when possible.",
+  "settings.voice.permissionNeeded":
+    "Microphone permission needed to list devices and show input level.",
+  "settings.voice.inputDevice": "Input device",
+  "settings.voice.systemDefault": "System default",
+  "settings.voice.inputVolume": "Input volume",
+  "settings.voice.inputLevel": "Input level",
+  "settings.voice.percent": "{percent}%",
+  "settings.voice.inputMode": "Input mode",
+  "settings.voice.mode.activity": "Voice activity",
+  "settings.voice.mode.activityHint":
+    "Your mic is open whenever you are not muted.",
+  "settings.voice.mode.ptt": "Push to talk",
+  "settings.voice.mode.pttHint":
+    "Your mic stays closed until you hold a key or the button.",
+  "settings.voice.pttKey": "Push-to-talk key",
+  "settings.voice.pttHint":
+    "{key} works while this window is focused and you are not typing. It cannot work while another app is in front — the voice panel has a hold-to-talk button for that.",
+  "settings.voice.pttNoKeyboard":
+    "This device has no keyboard to bind, so push-to-talk uses the hold-to-talk button in the voice panel.",
+  "settings.voice.processing": "Microphone processing",
+  "settings.voice.processing.echo": "Echo cancellation",
+  "settings.voice.processing.echoHint":
+    "Stops others hearing themselves back through your speakers.",
+  "settings.voice.processing.noise": "Noise suppression",
+  "settings.voice.processing.noiseHint":
+    "Removes fans and keyboards — and some of your consonants.",
+  "settings.voice.processing.gain": "Automatic gain control",
+  "settings.voice.processing.gainHint":
+    "Evens out your level, and raises the room between sentences.",
+  "settings.voice.processing.note":
+    "Changing these re-opens the microphone. Nobody is dropped from the call.",
+  "settings.voice.outputDevice": "Output device",
+  "settings.voice.outputUnsupported":
+    "Output device selection is not supported in this browser.",
+  "settings.voice.outputVolume": "Output volume",
+  "settings.voice.muteOnJoin": "Mute mic when joining voice",
+  "settings.voice.compactPeers": "Compact peer list",
+
+  // -- notifications
+  "settings.notifications.description":
+    "What reaches you, and where. Per-server and per-channel settings win over these.",
+  "settings.notifications.unsupported":
+    "This browser cannot show desktop notifications.",
+  "settings.notifications.denied":
+    "Blocked for this site. Allow notifications in your browser's site settings to turn them back on — the page cannot ask again.",
+  "settings.notifications.turnOff": "Turn off",
+  "settings.notifications.enable": "Enable desktop notifications",
+  "settings.notifications.on": "On for this account.",
+  "settings.notifications.willAsk": "Your browser will ask for permission.",
+  "settings.notifications.levelLabel": "Default notification level",
+  "settings.notifications.level.all": "All messages",
+  "settings.notifications.level.mentions": "Only @mentions",
+  "settings.notifications.level.none": "Nothing",
+  "settings.notifications.levelHint":
+    "Applies where a server or channel has no setting of its own. Right-click a server or channel to change just that one.",
+  "settings.push.title": "Push — when the app is closed",
+  "settings.push.needsInstall":
+    "On iPhone and iPad, push only works from the installed app: open pqp in Safari, tap Share, then “Add to Home Screen”, and enable push from inside the installed app.",
+  "settings.push.unsupported":
+    "This browser cannot receive push notifications.",
+  "settings.push.notConfigured": "Push is not configured on this server.",
+  "settings.push.turnOff": "Turn off on this device",
+  "settings.push.enable": "Enable push on this device",
+  "settings.push.on":
+    "Mentions, replies and DMs reach this device when the app is closed.",
+  "settings.push.off":
+    "Only mentions, replies and direct messages — never every message.",
+  "settings.push.denied":
+    "Notifications are blocked for this site. Allow them in your browser's settings first.",
+  "settings.push.failed":
+    "Could not subscribe this device. Try again after a reload.",
+  "settings.push.unreachable":
+    "Could not reach the server. Your subscription was not saved.",
+  "settings.push.dmDetails": "Show who sent a direct message",
+  "settings.push.dmDetailsHint":
+    "Off, a DM push says only “New direct message”. Message text is never included either way.",
+
+  // -- appearance & language
+  "settings.appearance.description":
+    "How pqp looks, and which language it speaks.",
+  "settings.appearance.theme": "Theme",
+  "settings.appearance.theme.light": "Light",
+  "settings.appearance.theme.dark": "Dark",
+  "settings.appearance.theme.system": "System",
+  // Lower case on purpose — these two only ever appear inside the sentence
+  // below, never on their own.
+  "settings.appearance.resolved.light": "light",
+  "settings.appearance.resolved.dark": "dark",
+  "settings.appearance.themeFollowing":
+    "Following your system — currently {theme}.",
+  "settings.appearance.themeHint":
+    "Applies immediately, and follows your account to other devices.",
+  "settings.appearance.language": "Language",
+  "settings.appearance.languageHint":
+    "The page reloads to switch language. Save your profile first if you were editing it.",
+  "settings.appearance.language.en": "English",
+  "settings.appearance.language.ptBR": "Português (Brasil)",
+  "settings.appearance.chat": "Chat",
+  "settings.appearance.linkPreviews": "Show link previews",
+
+  // -- privacy
+  "settings.privacy.description":
+    "Who can reach you. Enforced on the server, not just here.",
+  "settings.privacy.dmLabel": "Who can start a direct message with you",
+  "settings.privacy.dm.everyone": "Anyone",
+  "settings.privacy.dm.serverMembers": "People I share a server with",
+  "settings.privacy.dm.nobody": "No one",
+  "settings.privacy.dmHint":
+    "Applies to new conversations. Anyone you are already talking to can still reach you — tightening this is not a way to disappear on someone mid-sentence.",
+  "settings.privacy.saveFailed": "Could not save that",
+  "settings.privacy.blocked": "Blocked",
+  "settings.privacy.blockedEmpty":
+    "Nobody. Blocking someone stops their messages reaching you and hides what they say in shared channels behind a tap.",
+  "settings.privacy.unblock": "Unblock",
+
+  // -- your data
+  "settings.data.description":
+    "Take everything with you, or close the account for good.",
+  "settings.data.export": "Download my data",
+  "settings.data.exporting": "Preparing…",
+  "settings.data.exportHint": "A JSON file of everything we hold about you.",
+  "settings.data.exportBody":
+    "It includes your profile, your settings, every message you wrote, the servers you are in, and who you have blocked. It does not include messages other people wrote — including their side of your direct messages. Those are their words, not your data, and you can still read them here in the app.",
+  "settings.data.exportFailed": "Could not build your export",
+  "settings.data.delete": "Delete my account",
+  "settings.data.deleteHint":
+    "Permanent. There is no undo and no backup to restore from.",
+
+  // -- delete confirmation
+  "settings.delete.eyebrow": "Account",
+  "settings.delete.title": "Delete your account",
+  "settings.delete.keep": "Keep my account",
+  "settings.delete.confirm": "Delete for ever",
+  "settings.delete.deleting": "Deleting…",
+  "settings.delete.failed": "Could not delete your account",
+  "settings.delete.lead":
+    "This cannot be undone. We keep no backup you can be restored from, and nobody at pqp can bring your account back.",
+  "settings.delete.whatGoes": "What is deleted",
+  "settings.delete.goes.profile": "Your profile, handle, avatar and settings.",
+  "settings.delete.goes.messages":
+    "Every message you have written, everywhere — including in direct messages. Other people will see gaps where your messages were.",
+  "settings.delete.goes.files":
+    "Your files and images, and the reactions you left.",
+  "settings.delete.goes.memberships":
+    "Your memberships, your conversations, and the list of people you blocked.",
+  "settings.delete.goes.signIn":
+    "Your sign-in. You will not be able to log back in.",
+  "settings.delete.goes.servers":
+    "Any server you own on your own, with nobody else in it.",
+  "settings.delete.whatStays": "What is kept, and why",
+  "settings.delete.stays.moderation":
+    "Moderation records of actions you took in other people's servers, with your name removed. Deleting an account must not erase the record of how it was used to moderate somebody else.",
+  "settings.delete.stays.bans":
+    "Bans you issued. Removing them would let everybody you banned back into servers you no longer have anything to do with.",
+  "settings.delete.stays.reports":
+    "Reports other people filed about you, with your name removed. We are not able to let an account be deleted as a way of clearing its own record.",
+  "settings.delete.staysNote":
+    "All of these are pruned on their own schedule. The privacy policy explains them in full.",
+  "settings.delete.ownedTitle":
+    "Do one of these first, for each server you own",
+  "settings.delete.ownedBody":
+    "Other people are still in these servers, so we will not delete them out from under them. In each server's settings, either hand it to another member or delete the server yourself.",
+  "settings.delete.ownedMember": "— {count} other member",
+  "settings.delete.ownedMembers": "— {count} other members",
+  "settings.delete.typeLabel": "Type your handle to confirm",
+  "settings.delete.typeAria": "Type {handle} to confirm deletion",
 } as const;
 
 export type MessageKey = keyof typeof en;
