@@ -41,6 +41,42 @@ final class WireDecodingTests: XCTestCase {
         XCTAssertNil(notice.reason)
     }
 
+    // MARK: - friend-activity
+
+    /// The nudge that makes a friend request visible without a pull-to-refresh.
+    ///
+    /// Content-free by design: the frame names nobody, and the recipient learns
+    /// who from `GET /api/friends`. So the only thing to decode is `kind`, and
+    /// the only thing to get wrong is dropping the frame entirely — which is
+    /// exactly what happened for the whole life of the feature before it existed.
+    func testFriendActivityRequestDecodes() async throws {
+        let event = await firstEvent(from: #"{"type":"friend-activity","kind":"request"}"#)
+        guard case .friendActivity(let kind) = event else {
+            return XCTFail("Expected friendActivity, got \(String(describing: event))")
+        }
+        XCTAssertEqual(kind, .request)
+    }
+
+    func testFriendActivityAcceptedDecodes() async throws {
+        let event = await firstEvent(from: #"{"type":"friend-activity","kind":"accepted"}"#)
+        guard case .friendActivity(let kind) = event else {
+            return XCTFail("Expected friendActivity, got \(String(describing: event))")
+        }
+        XCTAssertEqual(kind, .accepted)
+    }
+
+    /// A `kind` outside the enum is dropped rather than defaulted. A nudge whose
+    /// reason we cannot name is a refresh with no story behind it — and the two
+    /// spellings the server will never send are `declined` and `cancelled`,
+    /// which are silent on purpose and must stay that way even if some future
+    /// build gets them wrong.
+    func testFriendActivityWithAnUnknownKindIsDropped() async throws {
+        let event = await firstEvent(from: #"{"type":"friend-activity","kind":"declined"}"#)
+        if case .friendActivity = event {
+            XCTFail("An unknown kind must not produce a nudge")
+        }
+    }
+
     /// The transport pin travels on `welcome`; losing it is how a client
     /// half-joins a LiveKit room over mesh and hears nobody.
     func testWelcomeCarriesTheTransportPin() async throws {

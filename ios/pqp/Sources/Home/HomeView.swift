@@ -201,8 +201,12 @@ final class HomeModel {
     var error: String?
     /// Friend requests waiting on this account — the badge on the Friends
     /// entry point. Only incoming ones count: a badge is a call to action, and
-    /// there is nothing to do about a request you sent. There is no friend WS
-    /// frame on the server, so this moves on refresh, not live.
+    /// there is nothing to do about a request you sent.
+    ///
+    /// LIVE now, not only on refresh: the server sends a `friend-activity` nudge
+    /// to the person who was asked, and the handler installed in `load` re-reads
+    /// this one number when it arrives. The hub is the screen a phone actually
+    /// sits on, so this is where the difference is felt.
     var pendingFriendRequests = 0
     /// How many friends this account has, for the first-run checklist's middle
     /// row. Read off the same fetch the badge above uses — one request answers
@@ -229,8 +233,17 @@ final class HomeModel {
         // activity in a DM (serverId is nil on those frames) bumps the row
         // immediately instead of waiting for a pull-to-refresh.
         session.eventHandlers[handlerKey] = { [weak self] event in
-            guard let self,
-                  case .activity(let channelId, let serverId, let mention) = event,
+            guard let self else { return }
+            // A friend request arrived, or one of ours was accepted. Re-reads
+            // only the badge — deliberately not the whole hub — because the two
+            // lists on this screen have nothing to do with friendships, and a
+            // nudge that reloaded them would make a stranger's tap visibly
+            // redraw somebody's servers.
+            if case .friendActivity = event {
+                Task { await self.refreshFriendBadge() }
+                return
+            }
+            guard case .activity(let channelId, let serverId, let mention) = event,
                   serverId == nil else { return }
             guard let index = self.conversations.firstIndex(where: { $0.channelId == channelId })
             else {
@@ -283,10 +296,7 @@ final class HomeModel {
             // the screen. Both keep their previous value on a failure rather
             // than resetting to zero — a dropped request must not un-tick a row
             // or spring the card back open.
-            if let friends = try? await session.api.friends() {
-                pendingFriendRequests = FriendsDigest.pendingActionCount(friends)
-                friendCount = friends.friends.count
-            }
+            await refreshFriendBadge()
             if let stored = try? await session.api.preferences() {
                 preferences = stored
             }
@@ -297,6 +307,7 @@ final class HomeModel {
         hasLoadedOnce = true
     }
 
+<<<<<<< HEAD
     /// Everything `FirstRun` needs, assembled from what the hub already holds.
     func firstRunInputs(session: SessionStore) -> FirstRun.Inputs {
         FirstRun.Inputs(
@@ -325,6 +336,20 @@ final class HomeModel {
             preferences = stored
         }
     }
+
+    /// The badge and the checklist's friend count in one read. Its own method
+    /// because the friend-activity nudge wants exactly this and nothing else,
+    /// and because a failure here must never surface as the hub's error line —
+    /// on a dropped request both numbers keep their previous value, since a
+    /// badge one behind is better than one that flickers to zero and a request
+    /// failure must not un-tick a checklist row.
+    func refreshFriendBadge() async {
+        guard let session else { return }
+        guard let friends = try? await session.api.friends() else { return }
+        pendingFriendRequests = FriendsDigest.pendingActionCount(friends)
+        friendCount = friends.friends.count
+    }
+
 
     func createServer(named name: String) async {
         guard let session else { return }

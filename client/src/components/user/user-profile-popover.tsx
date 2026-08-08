@@ -11,12 +11,23 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
-import type { DmSummary } from "@pqp/shared";
+import {
+  TIMEOUT_PRESET_MINUTES,
+  TIMEOUT_REASON_MAX_LENGTH,
+  type DmSummary,
+} from "@pqp/shared";
 import { Button } from "@/components/ui/button";
 import { StatusDot } from "@/components/user/status-dot";
 import { useFriends } from "@/components/friends/use-friends";
-import { ApiError, createConversation } from "@/lib/api";
-import { useTranslation } from "@/lib/i18n";
+import {
+  ApiError,
+  banMember,
+  createConversation,
+  kickMember,
+  liftTimeout,
+  timeoutMember,
+} from "@/lib/api";
+import { useTranslation, type Translator } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import {
   canBlock,
@@ -24,6 +35,8 @@ import {
   canRemoveFriend,
   canReport,
   friendsSince,
+  moderationActions,
+  moderationNeedsConfirmation,
   needsConfirmation,
   placeCard,
   primaryAction,
@@ -32,6 +45,8 @@ import {
   resolveFriendshipState,
   resolvePresence,
   type Placement,
+  type ProfileModerationAction,
+  type ProfileModerationContext,
   type ProfilePrimaryAction,
   type ProfileSubject,
 } from "./profile-relations";
@@ -81,6 +96,16 @@ interface ProfilePopoverProviderProps {
   currentUserId: string | null;
   /** The app already holds this list; the card must not fetch a second copy. */
   blockedUserIds: ReadonlySet<string>;
+  /**
+   * The server the card is being opened inside, when there is one, and what the
+   * viewer may do to people in it. Null in a conversation — a DM has no
+   * moderators, which is the same rule that keeps a server timeout out of one.
+   *
+   * The app holds this already: the roster it fetches for `@` autocomplete is
+   * the roster these roles come from, so the card's whole moderation menu costs
+   * zero extra requests.
+   */
+  moderation: ProfileModerationContext | null;
   /** Message: the conversation was opened or reused — the app navigates. */
   onOpenConversation: (conversation: DmSummary) => void;
   onBlockUser: (userId: string) => void;
@@ -97,6 +122,7 @@ interface OpenState {
 export function ProfilePopoverProvider({
   currentUserId,
   blockedUserIds,
+  moderation,
   onOpenConversation,
   onBlockUser,
   onUnblockUser,
@@ -130,6 +156,7 @@ export function ProfilePopoverProvider({
           anchor={state.anchor}
           currentUserId={currentUserId}
           blockedUserIds={blockedUserIds}
+          moderation={moderation}
           onClose={() => setState(null)}
           onOpenConversation={onOpenConversation}
           onBlockUser={onBlockUser}
@@ -150,6 +177,28 @@ export function ProfilePopoverProvider({
  */
 const CARD_WIDTH = 288;
 
+/**
+ * The preset the composer opens on — one hour, the second rung of
+ * `TIMEOUT_PRESET_MINUTES`. Long enough to interrupt whatever is happening,
+ * short enough that being wrong costs the person an hour.
+ */
+const DEFAULT_TIMEOUT_MINUTES = TIMEOUT_PRESET_MINUTES[1]!;
+
+/**
+ * A preset's label. Translated per unit rather than formatted from a number,
+ * because "1 day" and "7 days" pluralise differently in the languages this
+ * catalogue already carries, and the presets are a fixed list of four.
+ */
+function describeTimeoutMinutes(minutes: number, t: Translator["t"]): string {
+  if (minutes < 60) {
+    return t("profile.mod.duration.minutes", { count: minutes });
+  }
+  if (minutes < 60 * 24) {
+    return t("profile.mod.duration.hours", { count: minutes / 60 });
+  }
+  return t("profile.mod.duration.days", { count: minutes / (60 * 24) });
+}
+
 // --------------------------------------------------------------------- card
 
 interface UserProfileCardProps {
@@ -157,6 +206,7 @@ interface UserProfileCardProps {
   anchor: HTMLElement;
   currentUserId: string | null;
   blockedUserIds: ReadonlySet<string>;
+  moderation: ProfileModerationContext | null;
   onClose: () => void;
   onOpenConversation: (conversation: DmSummary) => void;
   onBlockUser: (userId: string) => void;
@@ -169,6 +219,7 @@ function UserProfileCard({
   anchor,
   currentUserId,
   blockedUserIds,
+  moderation,
   onClose,
   onOpenConversation,
   onBlockUser,
@@ -190,6 +241,13 @@ function UserProfileCard({
   const [confirming, setConfirming] = useState<ProfilePrimaryAction | null>(
     null,
   );
+  /** A kick or a ban held until confirmed; a ban collects its reason here. */
+  const [confirmingModeration, setConfirmingModeration] =
+    useState<ProfileModerationAction | null>(null);
+  const [banReason, setBanReason] = useState("");
+  /** The timeout composer's duration, once it is open. */
+  const [timeoutMinutes, setTimeoutMinutes] = useState<number | null>(null);
+  const [timeoutReason, setTimeoutReason] = useState("");
 
   const state = resolveFriendshipState(
     subject.id,
@@ -198,6 +256,12 @@ function UserProfileCard({
     blockedUserIds,
   );
   const action = primaryAction(state);
+  // Never against yourself, whatever the roster says — `canModerateMember`
+  // refuses it too, but "self" short-circuits before any of this is asked.
+  const modActions =
+    state === "self"
+      ? []
+      : moderationActions(subject.id, currentUserId, moderation);
   const presence = resolvePresence(subject.id, state, data, subject.status);
   const since = friendsSince(subject.id, data);
 
@@ -313,6 +377,70 @@ function UserProfileCard({
     });
   }
 
+  /**
+   * Run a rung of the ladder.
+   *
+   * `moderation` is re-checked here rather than trusted from the closure: the
+   * menu that opened this is derived from it, but a card that outlives a server
+   * switch would otherwise aim an action at the wrong server. The server would
+   * refuse it — this just means it is never sent.
+   */
+  function runModeration(which: ProfileModerationAction) {
+    if (!moderation) {
+      return;
+    }
+    const { serverId } = moderation;
+    setNotice(null);
+    void run(async () => {
+      switch (which) {
+        case "timeout": {
+          const minutes = timeoutMinutes ?? DEFAULT_TIMEOUT_MINUTES;
+          const { message } = await timeoutMember(
+            serverId,
+            subject.id,
+            minutes,
+            timeoutReason.trim() || null,
+          );
+          setTimeoutMinutes(null);
+          setTimeoutReason("");
+          moderation.onModerated();
+          // The server writes the whole sentence — when it ends, what it takes
+          // away — and it is the same one the sanctioned person reads. Showing
+          // it verbatim is how the two sides cannot disagree about the sentence.
+          setNotice(message);
+          return;
+        }
+        case "endTimeout":
+          await liftTimeout(serverId, subject.id);
+          moderation.onModerated();
+          setNotice(t("profile.mod.timeoutEnded", { name: subject.displayName }));
+          return;
+        case "kick":
+          await kickMember(serverId, subject.id);
+          moderation.onModerated();
+          setNotice(t("profile.mod.kicked", { name: subject.displayName }));
+          return;
+        case "ban":
+          // The reason the members panel drops on the floor. It is the only
+          // thing the ban list can show later about *why*, and a ban with no
+          // reason is a decision nobody — including the person who made it —
+          // can reconstruct in six months.
+          await banMember(serverId, subject.id, banReason.trim() || null);
+          setBanReason("");
+          moderation.onModerated();
+          setNotice(t("profile.mod.banned", { name: subject.displayName }));
+          return;
+      }
+    });
+  }
+
+  const modLabel: Record<ProfileModerationAction, string> = {
+    timeout: t("profile.mod.timeout"),
+    endTimeout: t("profile.mod.endTimeout"),
+    kick: t("profile.mod.kick"),
+    ban: t("profile.mod.ban"),
+  };
+
   const primaryLabel: Record<ProfilePrimaryAction, string> = {
     addFriend: t("profile.addFriend"),
     acceptRequest: t("profile.acceptRequest"),
@@ -326,6 +454,8 @@ function UserProfileCard({
     id: string;
     label: string;
     danger?: boolean;
+    /** Set on the moderation rungs, so a test can assert on the rung itself. */
+    moderation?: ProfileModerationAction;
     onSelect: () => void;
   }[] = [
     ...(canRemoveFriend(state)
@@ -379,6 +509,36 @@ function UserProfileCard({
           },
         ]
       : []),
+    // The ladder, last and in order: reversible first, then the two that end a
+    // membership. `moderationActions` returns [] for a conversation, for a
+    // non-manager and for anybody the rank rule protects — so a plain member
+    // reading this menu sees exactly what they saw before.
+    ...modActions.map((which) => ({
+      id: `mod-${which}`,
+      label: modLabel[which],
+      // Red is exactly the set that needs confirming — the two that end a
+      // membership. A timeout is the REVERSIBLE rung: it expires on its own and
+      // is lifted from this same menu, so painting it the same colour as "Ban
+      // from server" would teach a moderator the opposite of the ladder the
+      // order is trying to express. The members panel makes this argument at
+      // length on its own copy of these rows; sharing the predicate with
+      // `moderationNeedsConfirmation` is what keeps the two in step.
+      danger: moderationNeedsConfirmation(which),
+      moderation: which,
+      onSelect: () => {
+        setOverflowOpen(false);
+        if (moderationNeedsConfirmation(which)) {
+          setConfirmingModeration(which);
+          return;
+        }
+        if (which === "timeout") {
+          // A duration has to be chosen, so the composer IS the confirmation.
+          setTimeoutMinutes(DEFAULT_TIMEOUT_MINUTES);
+          return;
+        }
+        runModeration(which);
+      },
+    })),
   ];
 
   return createPortal(
@@ -394,12 +554,18 @@ function UserProfileCard({
         // Invisible until measured, so it never flashes at the top-left corner.
         visibility: placement ? "visible" : "hidden",
       }}
-      className="fixed z-[110] overflow-hidden rounded-xl border border-ink-4 bg-ink-2 shadow-[var(--shadow-popover)] animate-fade-in"
+      // NOT `overflow-hidden`, which it used to be. The overflow menu opens
+      // upward from a button near the bottom of the card, and once the ladder
+      // joined it the menu grew taller than the space above that button — so
+      // clipping the card silently ate the top item (Block). The banner does its
+      // own corner rounding below, which is the only thing the clip was for.
+      className="fixed z-[110] rounded-xl border border-ink-4 bg-ink-2 shadow-[var(--shadow-popover)] animate-fade-in"
     >
       {/* No banner image exists on the server, so the band is a flat tint of
           the same surface — enough to separate the identity block from the
-          actions without inventing a field to store one. */}
-      <div aria-hidden="true" className="h-14 bg-ink-3" />
+          actions without inventing a field to store one. Rounds its own top
+          corners now that the card no longer clips it. */}
+      <div aria-hidden="true" className="h-14 rounded-t-xl bg-ink-3" />
 
       <div className="px-4 pb-4">
         <div className="relative -mt-8 mb-2 w-fit">
@@ -532,13 +698,18 @@ function UserProfileCard({
                   <div
                     role="menu"
                     aria-label={t("profile.more")}
-                    className="absolute bottom-full right-0 z-10 mb-1 w-44 rounded-lg border border-ink-4 bg-ink-2 p-1 shadow-[var(--shadow-popover)]"
+                    // Capped and scrollable: the menu is as tall as the viewer's
+                    // authority makes it (two entries for a member, five for an
+                    // owner), and a cap is what keeps the tallest version from
+                    // reaching past the top of the window on a short screen.
+                    className="absolute bottom-full right-0 z-10 mb-1 max-h-[15rem] w-48 overflow-y-auto rounded-lg border border-ink-4 bg-ink-2 p-1 shadow-[var(--shadow-popover)]"
                   >
                     {overflowItems.map((item) => (
                       <button
                         key={item.id}
                         type="button"
                         role="menuitem"
+                        data-profile-mod={item.moderation}
                         className={cn(
                           "flex w-full items-center rounded-md px-2.5 py-1.5 text-left text-sm outline-none hover:bg-ink-3 focus-visible:bg-ink-3",
                           item.danger ? "text-danger" : "text-paper",
@@ -552,6 +723,146 @@ function UserProfileCard({
                 )}
               </div>
             )}
+          </div>
+        )}
+
+        {/* The timeout composer. Inline rather than a modal for the reason the
+            card exists: a moderator is looking at the message that prompted
+            this, and a dialog over the top of it takes the evidence away. */}
+        {timeoutMinutes !== null && (
+          <div
+            data-profile-timeout-composer=""
+            className="mt-3 rounded-md border border-ink-4 bg-ink-3/60 p-2"
+          >
+            <p className="text-xs font-semibold text-paper">
+              {t("profile.mod.timeout.title", { name: subject.displayName })}
+            </p>
+            <div
+              role="radiogroup"
+              aria-label={t("profile.mod.timeout.duration")}
+              className="mt-2 grid grid-cols-2 gap-1"
+            >
+              {TIMEOUT_PRESET_MINUTES.map((minutes) => (
+                <button
+                  key={minutes}
+                  type="button"
+                  role="radio"
+                  aria-checked={timeoutMinutes === minutes}
+                  data-timeout-minutes={minutes}
+                  className={cn(
+                    "rounded-md px-2 py-1 text-xs",
+                    timeoutMinutes === minutes
+                      ? "bg-signal font-semibold text-ink"
+                      : "bg-ink-4/60 text-paper hover:bg-ink-4",
+                  )}
+                  onClick={() => setTimeoutMinutes(minutes)}
+                >
+                  {describeTimeoutMinutes(minutes, t)}
+                </button>
+              ))}
+            </div>
+            <input
+              type="text"
+              value={timeoutReason}
+              maxLength={TIMEOUT_REASON_MAX_LENGTH}
+              placeholder={t("profile.mod.reason.placeholder")}
+              aria-label={t("profile.mod.reason")}
+              className="mt-2 w-full rounded-md border border-ink-4 bg-ink px-2 py-1 text-xs text-paper placeholder:text-paper-muted"
+              onChange={(event) => setTimeoutReason(event.target.value)}
+            />
+            <p className="mt-1.5 text-[11px] text-paper-muted">
+              {t("profile.mod.timeout.body")}
+            </p>
+            <div className="mt-2 flex gap-1.5">
+              <Button
+                size="sm"
+                variant="danger"
+                disabled={busy}
+                data-profile-timeout-apply=""
+                onClick={() => runModeration("timeout")}
+              >
+                {t("profile.mod.timeout.apply")}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={busy}
+                onClick={() => {
+                  setTimeoutMinutes(null);
+                  setTimeoutReason("");
+                }}
+              >
+                {t("profile.mod.cancel")}
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {/* Kick and ban: both end a membership, so both are confirmed. The ban's
+            reason is collected here and nowhere else on the web client today. */}
+        {confirmingModeration && (
+          <div
+            role="alertdialog"
+            aria-label={t(
+              confirmingModeration === "ban"
+                ? "profile.mod.ban.title"
+                : "profile.mod.kick.title",
+              { name: subject.displayName },
+            )}
+            data-profile-mod-confirm={confirmingModeration}
+            className="mt-3 rounded-md border border-ink-4 bg-ink-3/60 p-2"
+          >
+            <p className="text-xs font-semibold text-paper">
+              {t(
+                confirmingModeration === "ban"
+                  ? "profile.mod.ban.title"
+                  : "profile.mod.kick.title",
+                { name: subject.displayName },
+              )}
+            </p>
+            <p className="mt-1 text-[11px] text-paper-muted">
+              {t(
+                confirmingModeration === "ban"
+                  ? "profile.mod.ban.body"
+                  : "profile.mod.kick.body",
+              )}
+            </p>
+            {confirmingModeration === "ban" && (
+              <input
+                type="text"
+                value={banReason}
+                maxLength={TIMEOUT_REASON_MAX_LENGTH}
+                placeholder={t("profile.mod.reason.placeholder")}
+                aria-label={t("profile.mod.reason")}
+                className="mt-2 w-full rounded-md border border-ink-4 bg-ink px-2 py-1 text-xs text-paper placeholder:text-paper-muted"
+                onChange={(event) => setBanReason(event.target.value)}
+              />
+            )}
+            <div className="mt-2 flex gap-1.5">
+              <Button
+                size="sm"
+                variant="danger"
+                disabled={busy}
+                onClick={() => {
+                  const which = confirmingModeration;
+                  setConfirmingModeration(null);
+                  runModeration(which);
+                }}
+              >
+                {modLabel[confirmingModeration]}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={busy}
+                onClick={() => {
+                  setConfirmingModeration(null);
+                  setBanReason("");
+                }}
+              >
+                {t("profile.mod.cancel")}
+              </Button>
+            </div>
           </div>
         )}
 

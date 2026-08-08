@@ -14,6 +14,7 @@ import {
   serverNotificationControls,
   useNotificationState,
 } from "@/hooks/use-notifications";
+import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 interface ServerRailProps {
@@ -25,6 +26,17 @@ interface ServerRailProps {
   homeSelected: boolean;
   /** Unread across every conversation, which has no server icon to land on. */
   homeUnread: UnreadState;
+  /**
+   * Friend requests waiting on this account.
+   *
+   * Kept SEPARATE from `homeUnread` rather than added into its mention count,
+   * even though both mean "something is waiting on you behind this icon". They
+   * are different errands with different answers — one is read, one is answered
+   * — and folding them together would make the number lie in the direction that
+   * matters: "3" that turns out to be two messages and one request sends you
+   * looking for a third message that does not exist.
+   */
+  friendRequestCount?: number;
   onSelectHome: () => void;
   onSelectServer: (serverId: string) => void;
   onCreateServer: () => void;
@@ -42,6 +54,7 @@ export function ServerRail({
   channels,
   homeSelected,
   homeUnread,
+  friendRequestCount = 0,
   onSelectHome,
   onSelectServer,
   onCreateServer,
@@ -51,6 +64,7 @@ export function ServerRail({
   onOpenSettings,
   onLeaveServer,
 }: ServerRailProps) {
+  const { t } = useTranslation();
   // Subscribed once for the whole rail: hook rules forbid reading the store
   // inside the map below, and every icon needs the same snapshot anyway.
   const notifications = useNotificationState();
@@ -92,11 +106,34 @@ export function ServerRail({
           <span className="absolute -left-3 h-8 w-1 rounded-r bg-signal" />
         )}
         <MessageCircle className="h-5 w-5" />
-        {homeUnread.count > 0 && homeUnread.mentions === 0 && (
+        {/* Friend requests, in `signal` rather than `danger`, at the top corner
+            where the plain-unread dot would sit.
+            IT TAKES PRECEDENCE over that dot rather than sitting beside it:
+            72px of rail has room for one thing per corner, and a count is
+            strictly more informative than a dot. The mention badge keeps its own
+            bottom corner, so a request and a mention are both visible at once
+            and remain the two different colours they are. */}
+        {friendRequestCount > 0 ? (
           <span
             aria-hidden="true"
-            className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-paper ring-2 ring-rail"
-          />
+            data-friend-requests={friendRequestCount}
+            className="absolute -right-1 -top-1 min-w-[1.15rem] rounded-full bg-signal px-1 py-0.5 text-center text-[10px] font-bold leading-none text-ink ring-2 ring-rail"
+          >
+            {formatBadgeCount(friendRequestCount)}
+          </span>
+        ) : (
+          homeUnread.count > 0 &&
+          homeUnread.mentions === 0 && (
+            <span
+              aria-hidden="true"
+              className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-paper ring-2 ring-rail"
+            />
+          )
+        )}
+        {friendRequestCount > 0 && (
+          <span className="sr-only">
+            {t("friends.pendingBadge", { count: friendRequestCount })}
+          </span>
         )}
         {homeUnread.mentions > 0 && (
           <span className="absolute -bottom-0.5 -right-0.5 min-w-[1.15rem] rounded-full bg-danger px-1 py-0.5 text-[10px] font-bold leading-none text-paper ring-2 ring-rail">

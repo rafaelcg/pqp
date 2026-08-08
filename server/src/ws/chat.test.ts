@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
 import type { DbUser } from "../db.js";
 
@@ -67,8 +67,15 @@ vi.mock("../services/threads.js", () => ({
   getThreadInfo: async () => null,
 }));
 
-const { broadcastToChannel, handleChatMessage, resetChatRateLimits } =
-  await import("./chat.js");
+const {
+  broadcastToChannel,
+  handleChatMessage,
+  notifyFriendActivity,
+  resetChatRateLimits,
+} = await import("./chat.js");
+const { deleteAuthenticatedSocket, setAuthenticatedSocket } = await import(
+  "./sockets.js"
+);
 
 interface Recorder {
   socket: WebSocket;
@@ -246,5 +253,87 @@ describe("broadcastToChannel", () => {
     });
 
     expect(framesOfType(poster.received, "message-deleted")).toHaveLength(1);
+  });
+});
+
+/**
+ * The friend nudge — the frame that closes the "B is staring at the app and
+ * sees nothing" hole.
+ *
+ * Addressed to one PERSON rather than to a channel, so it is tested against the
+ * authenticated-socket registry directly: no join, no presence index, and
+ * therefore nothing about a channel that could accidentally widen it.
+ */
+describe("notifyFriendActivity", () => {
+  const asked = "11111111-1111-1111-1111-111111111111";
+  const bystander = "22222222-2222-2222-2222-222222222222";
+  const open: Recorder[] = [];
+
+  function connect(userId: string, readyState = 1): Recorder {
+    const recorder = recordingSocket(readyState);
+    setAuthenticatedSocket(recorder.socket, asUser(userId));
+    open.push(recorder);
+    return recorder;
+  }
+
+  afterEach(() => {
+    for (const recorder of open) {
+      deleteAuthenticatedSocket(recorder.socket);
+    }
+    open.length = 0;
+  });
+
+  it("reaches every socket the addressee holds — laptop and phone both", () => {
+    const laptop = connect(asked);
+    const phone = connect(asked);
+
+    notifyFriendActivity(asked, "request");
+
+    for (const recorder of [laptop, phone]) {
+      expect(framesOfType(recorder.received, "friend-activity")).toEqual([
+        { type: "friend-activity", kind: "request" },
+      ]);
+    }
+  });
+
+  /**
+   * THE ONE THAT MATTERS. A nudge that leaked would tell an uninvolved account
+   * that *somebody* somewhere has a friend request, which is both noise and a
+   * badge on a screen with nothing behind it. It is deliberately absent from
+   * `CHAT_SERVER_MESSAGE_TYPES` for the same reason; this is the other half of
+   * that guard, on the delivery side.
+   */
+  it("reaches nobody else", () => {
+    const target = connect(asked);
+    const other = connect(bystander);
+
+    notifyFriendActivity(asked, "accepted");
+
+    expect(framesOfType(target.received, "friend-activity")).toHaveLength(1);
+    expect(other.received).toHaveLength(0);
+  });
+
+  it("carries the kind, so an accept and a request are distinguishable", () => {
+    const target = connect(asked);
+
+    notifyFriendActivity(asked, "accepted");
+
+    expect(framesOfType(target.received, "friend-activity")).toEqual([
+      { type: "friend-activity", kind: "accepted" },
+    ]);
+  });
+
+  it("skips a socket that is not open rather than throwing at the route", () => {
+    const closing = connect(asked, 3 /* CLOSED */);
+
+    expect(() => notifyFriendActivity(asked, "request")).not.toThrow();
+    expect(closing.received).toHaveLength(0);
+  });
+
+  it("is a no-op when the addressee is connected nowhere", () => {
+    const other = connect(bystander);
+
+    expect(() => notifyFriendActivity(asked, "request")).not.toThrow();
+    expect(other.received).toHaveLength(0);
   });
 });

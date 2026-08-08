@@ -18,7 +18,17 @@ struct MessageActionsOverlay: View {
     let message: Message
     let quickReactions: [String]
     let canStartThreads: Bool
+    /// Gates EDITING only. Rewriting somebody else's words is not moderation at
+    /// any rank; removing them is, which is why deleting has its own flag.
     let isMine: Bool
+    /// Your own message, or anybody's when you manage the server it is in —
+    /// `Moderation.canDelete`. Defaulted to `isMine`'s old behaviour so a caller
+    /// that has no server to reason about keeps it.
+    var canDelete: Bool
+    /// Free in a conversation, manager-only in a server channel —
+    /// `Moderation.canPin`. It used to be offered to everybody, which meant a
+    /// plain member tapped Pin and got a 403 back.
+    var canPin: Bool
     /// Reporting your own message makes no sense, and neither does reporting a
     /// webhook — there is nobody to sanction.
     let canReport: Bool
@@ -154,11 +164,13 @@ struct MessageActionsOverlay: View {
                 onDismiss()
             }
 
-            divider
-            row(message.pinnedAt == nil ? "Pin" : "Unpin",
-                icon: message.pinnedAt == nil ? "pin" : "pin.slash") {
-                onTogglePin()
-                onDismiss()
+            if canPin {
+                divider
+                row(message.pinnedAt == nil ? "Pin" : "Unpin",
+                    icon: message.pinnedAt == nil ? "pin" : "pin.slash") {
+                    onTogglePin()
+                    onDismiss()
+                }
             }
 
             if isMine {
@@ -167,7 +179,14 @@ struct MessageActionsOverlay: View {
                     onEdit()
                     onDismiss()
                 }
+            }
+
+            if canDelete {
                 divider
+                // "Delete" whoever wrote it: a moderator removing a post is the
+                // same operation as an author retracting one, and the server
+                // treats it as one route. The confirmation the caller shows is
+                // what distinguishes them for the person tapping.
                 row("Delete", icon: "trash", tint: Palette.danger) {
                     onDelete()
                     onDismiss()

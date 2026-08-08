@@ -256,8 +256,16 @@ struct ChannelListView: View {
     /// channel is never recorded, since restoring one would join a call on
     /// launch.
     private func chat(for channel: Channel) -> some View {
-        ChatView(channelId: channel.id, title: "#\(channel.name)", canStartThreads: true)
-            .onAppear { LastVisited.record(channelId: channel.id, serverId: server.id) }
+        // `server` carries this account's rank, which is what lets the message
+        // menu and the profile sheet offer moderation from where the offence is
+        // rather than from a members screen two taps away.
+        ChatView(
+            channelId: channel.id,
+            title: "#\(channel.name)",
+            canStartThreads: true,
+            server: server
+        )
+        .onAppear { LastVisited.record(channelId: channel.id, serverId: server.id) }
     }
 
     private func refreshUnread() async {

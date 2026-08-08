@@ -47,6 +47,15 @@ struct FriendsView: View {
                         .foregroundStyle(Palette.danger)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, Metrics.hPadding)
+                } else if let live = model.liveNotice {
+                    Text(live == .accepted
+                         ? "Your friend request was accepted."
+                         : "Someone sent you a friend request.")
+                        .font(Typography.callout)
+                        .foregroundStyle(Palette.signal)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, Metrics.hPadding)
+                        .accessibilityIdentifier("friends.liveNotice")
                 } else if let notice = model.notice {
                     Text(notice)
                         .font(Typography.callout)
@@ -122,6 +131,7 @@ struct FriendsView: View {
             hasAutoOpenedAdd = true
             model.showingAdd = true
         }
+        .onDisappear { model.unload() }
     }
 
     private var tabBar: some View {
@@ -305,8 +315,14 @@ final class FriendsModel {
     var busyId: String?
     var showingAdd = false
     var confirming: Confirmation?
+    /// The last live nudge, so the screen can say what just happened. A row
+    /// quietly appearing in a list is easy to miss; "someone sent you a friend
+    /// request" is not. Never names the person — the frame carries no name, and
+    /// the row that just appeared already does.
+    var liveNotice: FriendActivityKind?
 
     private var session: SessionStore?
+    private let handlerKey = "friends-" + UUID().uuidString
 
     var pendingCount: Int { FriendsDigest.pendingActionCount(data) }
 
@@ -316,6 +332,16 @@ final class FriendsModel {
 
     func load(session: SessionStore) async {
         self.session = session
+        // A nudge while this screen is open moves the list itself, not only the
+        // hub's badge. Without it, the one surface a person opens *to answer a
+        // request* was the surface with no way to learn one had arrived: this
+        // model has never polled, so before the frame existed a request could
+        // only appear on a pull-to-refresh.
+        session.eventHandlers[handlerKey] = { [weak self] event in
+            guard let self, case .friendActivity(let kind) = event else { return }
+            self.liveNotice = kind
+            Task { await self.refresh() }
+        }
         await refresh()
         // An account with no friends at all opens on the wrong tab. Online says
         // "Nobody's around", which is true and useless — it reads as "your
@@ -326,6 +352,13 @@ final class FriendsModel {
         if data.friends.isEmpty, tab == .online {
             tab = .all
         }
+    }
+
+    /// Detach from the socket. Called from the view's `onDisappear`, because a
+    /// model that has gone away must not leave a closure behind refreshing a
+    /// screen nobody is looking at.
+    func unload() {
+        session?.eventHandlers.removeValue(forKey: handlerKey)
     }
 
     func refresh() async {
@@ -366,6 +399,7 @@ final class FriendsModel {
     func accept(_ userId: String) async {
         guard let session else { return }
         busyId = userId
+        liveNotice = nil
         defer { busyId = nil }
         do {
             try await session.api.acceptFriendRequest(userId: userId)
@@ -381,6 +415,7 @@ final class FriendsModel {
     func remove(_ userId: String) async {
         guard let session else { return }
         busyId = userId
+        liveNotice = nil
         defer { busyId = nil }
         do {
             try await session.api.removeFriendship(userId: userId)
@@ -396,6 +431,7 @@ final class FriendsModel {
         let userId = pending.person.id
         confirming = nil
         busyId = userId
+        liveNotice = nil
         defer { busyId = nil }
         do {
             switch pending {
@@ -419,6 +455,7 @@ final class FriendsModel {
     func openConversation(with userId: String) async -> DmSummary? {
         guard let session else { return nil }
         busyId = userId
+        liveNotice = nil
         defer { busyId = nil }
         do {
             return try await session.api.openConversation(userIds: [userId])

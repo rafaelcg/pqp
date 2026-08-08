@@ -2,9 +2,11 @@ import type { WebSocket } from "ws";
 import {
   chatClientMessageSchema,
   extractMentionUsernames,
+  friendActivitySchema,
   isChatServerMessage,
   profileUpdateSchema,
   type ChatServerMessage,
+  type FriendActivity,
   type ProfileUpdate,
 } from "@pqp/shared";
 import type { DbUser } from "../db.js";
@@ -88,6 +90,7 @@ const TYPING_TOPIC = "chat.typing";
 const ACTIVITY_TOPIC = "chat.activity";
 const EVICT_TOPIC = "chat.evict";
 const PROFILE_TOPIC = "chat.profile";
+const FRIEND_TOPIC = "chat.friend";
 
 interface PresenceUser {
   id: string;
@@ -436,6 +439,47 @@ function deliverProfileUpdate(update: ProfileUpdate): void {
   const payload = encode(update);
   forEachAuthenticatedSocket((socket) => {
     if (socket.readyState === 1) {
+      socket.send(payload);
+    }
+  });
+}
+
+/**
+ * Nudge ONE person: their friendships changed, so the badge and any open list
+ * should re-read.
+ *
+ * The opposite addressing to `broadcastProfileUpdate` directly above, and the
+ * same addressing as `sendSanctionNotice` below — every socket this account
+ * holds and no others. Which is why the frame can afford to carry nothing: the
+ * recipient is, by construction, somebody entitled to `GET /api/friends`, and
+ * that read is the payload.
+ *
+ * Fanned across the bus because a person's sockets are not all on this replica —
+ * an open laptop and a phone routinely land on different ones, and the whole
+ * complaint this fixes is "the app I am looking at did not update".
+ *
+ * Fire-and-forget on purpose: a friend request must not fail because a socket
+ * write did. The HTTP response is the acknowledgement; this is a nicety on top,
+ * and `WHICH SOCKETS ARE OPEN` is not something the route should wait to learn.
+ */
+export function notifyFriendActivity(
+  userId: string,
+  kind: FriendActivity["kind"],
+): void {
+  deliverFriendActivity(userId, kind);
+  if (isBusEnabled()) {
+    publishToCluster(FRIEND_TOPIC, { userId, kind });
+  }
+}
+
+/** The local half, and the only thing a bus frame may call. See above. */
+function deliverFriendActivity(
+  userId: string,
+  kind: FriendActivity["kind"],
+): void {
+  const payload = encode({ type: "friend-activity", kind } as const);
+  forEachAuthenticatedSocket((socket, user) => {
+    if (socket.readyState === 1 && user.id === userId) {
       socket.send(payload);
     }
   });
@@ -1249,6 +1293,35 @@ subscribeToCluster(PROFILE_TOPIC, (data) => {
     deliverProfileUpdate(parsed.data);
   }
 });
+
+/**
+ * A friend nudge raised on another instance, for somebody whose socket may be
+ * on this one.
+ *
+ * The bus frame is the wire frame plus the ADDRESSEE, which is the whole
+ * routing decision and cannot be recovered from a content-free payload. Both
+ * fields must survive validation: without a usable `userId` the only
+ * alternatives are guessing and broadcasting, and the second is how a badge
+ * shows up on a stranger's screen. `kind` is re-checked against the schema's own
+ * enum rather than trusted, so a future instance running a newer build cannot
+ * make this one emit a frame its clients would refuse.
+ */
+subscribeToCluster(FRIEND_TOPIC, (data) => {
+  const frame = asRecord(data);
+  const userId = asString(frame?.userId);
+  const kind = asString(frame?.kind);
+  if (!userId || !kind || !isFriendActivityKind(kind)) {
+    return;
+  }
+  deliverFriendActivity(userId, kind);
+});
+
+/** The enum, asked rather than restated — one list, in shared. */
+function isFriendActivityKind(
+  value: string,
+): value is FriendActivity["kind"] {
+  return friendActivitySchema.shape.kind.safeParse(value).success;
+}
 
 /**
  * Re-announce this instance's presence contributions, and forget contributions

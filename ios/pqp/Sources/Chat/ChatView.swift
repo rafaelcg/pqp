@@ -24,6 +24,16 @@ struct ChatView: View {
     /// server refuses the other cases with a 400; the call sites that can say
     /// yes pass it, so the action is not offered where it would always fail.
     var canStartThreads: Bool = false
+    /// The server this channel belongs to, and this account's rank in it. Nil in
+    /// a conversation, which has no moderators at all — the same rule
+    /// `requireServerChannel` enforces on the API.
+    ///
+    /// WHAT IT UNLOCKS. Deleting somebody else's message was gated on `isMine`
+    /// here, so an owner reading their own server on a phone could not remove
+    /// anything anybody else had posted — the most-used moderation action in the
+    /// product, and it had no iOS surface. Pinning had the mirror-image bug: it
+    /// was gated on nothing, so a plain member tapped Pin and got a 403.
+    var server: Server? = nil
 
     @State private var model = ChatModel()
     @State private var openedThread: ThreadSummary?
@@ -169,9 +179,16 @@ struct ChatView: View {
             ReportSheet(target: target)
         }
         .sheet(item: $profileSubject) { subject in
-            UserProfileSheet(subject: subject) { conversation in
-                openedConversation = OpenedConversation(summary: conversation)
-            }
+            // `server` is what turns a tap on a message author into a moderation
+            // surface — the ladder for somebody who may use it, and a report
+            // filed with this server's moderators instead of the instance.
+            UserProfileSheet(
+                subject: subject,
+                onOpenConversation: { conversation in
+                    openedConversation = OpenedConversation(summary: conversation)
+                },
+                server: server
+            )
         }
         .photosPicker(isPresented: $showingPicker, selection: $pickerItem, matching: .images)
         .onChange(of: pickerItem) { _, item in
@@ -266,16 +283,21 @@ struct ChatView: View {
         }
     }
 
-    /// The long-press menu. Edit and delete are offered only on your own
-    /// messages and reporting only on other people's — the server refuses the
-    /// rest anyway, and offering an action that always fails is worse than not
-    /// offering it.
+    /// The long-press menu. Editing is yours alone; deleting is yours OR
+    /// anybody's when you manage this server; pinning is free in a DM and
+    /// manager-only in a server channel; reporting is other people's only. Every
+    /// one of those is `Moderation`'s answer rather than this file's, so the menu
+    /// cannot offer what the API would refuse — or hide what it would allow.
     private func messageActions(for message: Message) -> some View {
         MessageActionsOverlay(
             message: message,
             quickReactions: ChatModel.quickReactions,
             canStartThreads: canStartThreads,
             isMine: model.isMine(message),
+            canDelete: Moderation.canDelete(
+                isMine: model.isMine(message), serverRole: server?.role
+            ),
+            canPin: Moderation.canPin(inServer: server != nil, serverRole: server?.role),
             canReport: !model.isMine(message) && !message.isWebhook,
             onReact: { emoji in
                 Task { await model.toggleReaction(emoji, on: message) }

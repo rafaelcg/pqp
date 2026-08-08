@@ -552,6 +552,12 @@ export const ptBR: PartialMessages = {
   "friends.retry": "Tentar de novo",
   "friends.onlineCount": "{count} online",
   "friends.pendingBadge": "{count} pendente(s)",
+  "friends.remove.confirm.title": "Remover {name} dos seus amigos?",
+  "friends.remove.confirm.body":
+    "A pessoa não vai ser avisada. Qualquer um dos dois pode chamar de novo depois.",
+  "friends.remove.keep": "Manter",
+  "friends.nudge.request": "Alguém te mandou uma solicitação de amizade.",
+  "friends.nudge.accepted": "Sua solicitação de amizade foi aceita.",
 
   // ----------------------------------------------------------------- profile
   // O cartão que abre ao clicar no nome ou na foto de alguém. Registro
@@ -576,6 +582,30 @@ export const ptBR: PartialMessages = {
   "profile.isYou": "Esse é você.",
   "profile.loading": "Carregando",
   "profile.friendsSince": "Amigos desde {date}",
+  "profile.mod.timeout": "Silenciar",
+  "profile.mod.endTimeout": "Tirar o silenciamento",
+  "profile.mod.kick": "Remover do servidor",
+  "profile.mod.ban": "Banir do servidor",
+  "profile.mod.cancel": "Cancelar",
+  "profile.mod.reason": "Motivo",
+  "profile.mod.reason.placeholder": "Motivo (opcional)",
+  "profile.mod.timeout.title": "Silenciar {name}",
+  "profile.mod.timeout.duration": "Por quanto tempo",
+  "profile.mod.timeout.body":
+    "A pessoa continua lendo. Não pode postar, reagir ou entrar na voz deste servidor até acabar.",
+  "profile.mod.timeout.apply": "Silenciar",
+  "profile.mod.duration.minutes": "{count} min",
+  "profile.mod.duration.hours": "{count} h",
+  "profile.mod.duration.days": "{count} d",
+  "profile.mod.kick.title": "Remover {name} deste servidor?",
+  "profile.mod.kick.body":
+    "Perde o acesso agora, mas pode voltar com qualquer convite.",
+  "profile.mod.ban.title": "Banir {name} deste servidor?",
+  "profile.mod.ban.body":
+    "Perde o acesso e não pode voltar. O motivo fica registrado na lista de banidos.",
+  "profile.mod.timeoutEnded": "{name} pode falar de novo.",
+  "profile.mod.kicked": "{name} foi removido do servidor.",
+  "profile.mod.banned": "{name} foi banido.",
   "profile.open": "Abrir o perfil de {name}",
   "profile.viewProfile": "Ver perfil",
 

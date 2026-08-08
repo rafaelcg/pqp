@@ -1,4 +1,9 @@
-import type { FriendsResponse, UserStatus } from "@pqp/shared";
+import {
+  canModerateMember,
+  type FriendsResponse,
+  type MemberRole,
+  type UserStatus,
+} from "@pqp/shared";
 
 /**
  * The profile card's logic, out of the component so the state machine is
@@ -190,6 +195,109 @@ export function friendsSince(
   friends: FriendsResponse,
 ): string | null {
   return friends.friends.find((one) => one.id === userId)?.friendsSince ?? null;
+}
+
+// --------------------------------------------------------------- moderation
+
+/**
+ * What the card knows about the server it was opened in — nothing when it was
+ * opened from a conversation, which has no moderators at all.
+ *
+ * WHY THE CARD MODERATES NOW. Every moderation action lived on the members
+ * panel: a moderator reading a message that needed acting on had to open the
+ * roster, find the person in it, and act at a distance from the thing they were
+ * reacting to. The person's name is right there in the transcript and it already
+ * opens a card. This puts the ladder where the evidence is.
+ *
+ * The card stays a profile card, not a console: these ride in the SAME overflow
+ * menu Block and Report already ride in, for the reason stated on that menu —
+ * a punitive button the size of "Add friend" makes a profile read as a charge
+ * sheet.
+ */
+export interface ProfileModerationContext {
+  serverId: string;
+  /** The viewer's role in THIS server. */
+  actorRole: MemberRole;
+  /**
+   * Roles of this server's members, by id. Handed in from the roster the app
+   * already fetches for mention autocomplete, so the card costs no request.
+   *
+   * A person MISSING from this map is a person whose rank is unknown, which is
+   * treated as "offer nothing" rather than as "not a member" — see below.
+   */
+  memberRoles: ReadonlyMap<string, MemberRole>;
+  /**
+   * Who currently has a live timeout in this server — ids only.
+   *
+   * Ids and not the timeouts themselves because the card asks one question of
+   * this ("is there one to end?") and the members panel asks all the others
+   * (who issued it, why, when it ends) from its own copy. Handing the card the
+   * full records would give it a second, staler source for the line the panel
+   * already draws well.
+   */
+  timedOutUserIds: ReadonlySet<string>;
+  /** Something was issued or lifted; the app re-reads the list. */
+  onModerated: () => void;
+}
+
+/** The three rungs the card offers, in ladder order. */
+export type ProfileModerationAction = "timeout" | "endTimeout" | "kick" | "ban";
+
+/**
+ * Which rungs to draw. Empty for a conversation, for a non-manager, and for
+ * anybody the rank rule protects — `canModerateMember` is the single judge of
+ * that last one, shared with iOS and mirroring the server's `requireOutranked`,
+ * so this surface cannot offer something the API will refuse.
+ *
+ * UNKNOWN RANK OFFERS NOTHING. `canModerateMember` deliberately allows a `null`
+ * target so a *pre-emptive ban* of a non-member stays possible, but that is not
+ * this surface: a card opened on a name in a server channel is about somebody in
+ * that server, and if the roster has not arrived yet the honest answer is to
+ * draw no menu rather than to offer a kick that would 404. The panel is where
+ * you ban somebody who is not here.
+ */
+export function moderationActions(
+  subjectId: string,
+  currentUserId: string | null,
+  context: ProfileModerationContext | null,
+): ProfileModerationAction[] {
+  if (!context) {
+    return [];
+  }
+  const targetRole = context.memberRoles.get(subjectId);
+  if (!targetRole) {
+    return [];
+  }
+  const allowed = canModerateMember("timeout", {
+    actorRole: context.actorRole,
+    actorId: currentUserId,
+    targetRole,
+    targetId: subjectId,
+  });
+  if (!allowed) {
+    return [];
+  }
+  // A live timeout replaces the offer to issue one: two rows that both say
+  // "timeout" is how a moderator double-sanctions somebody by accident. Lifting
+  // is not destructive, so it needs no confirmation and sits first.
+  return context.timedOutUserIds.has(subjectId)
+    ? ["endTimeout", "kick", "ban"]
+    : ["timeout", "kick", "ban"];
+}
+
+/**
+ * Whether an action takes something away that the person cannot get back by
+ * themselves — which is the whole test for "confirm this".
+ *
+ * A timeout expires on its own and can be lifted in one tap, so it is confirmed
+ * by the composer it needs anyway (a duration has to be chosen) rather than by a
+ * second "are you sure". Lifting one takes nothing away. A kick and a ban both
+ * end a membership.
+ */
+export function moderationNeedsConfirmation(
+  action: ProfileModerationAction,
+): boolean {
+  return action === "kick" || action === "ban";
 }
 
 // ---------------------------------------------------------------- placement

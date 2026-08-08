@@ -37,6 +37,12 @@ interface DmListProps {
   /** The Friends nav entry at the top — highlighted when the view is showing. */
   friendsSelected?: boolean;
   onOpenFriends?: () => void;
+  /**
+   * Friend requests waiting on this account. A prop rather than a `useFriends()`
+   * call so this list keeps its "renders from what it is handed" shape, and so
+   * the number cannot disagree with the one on the server rail.
+   */
+  friendRequestCount?: number;
   onHideConversation: (channelId: string) => void;
   onBlockUser: (user: PublicUser) => void;
   onUnblockUser: (userId: string) => void;
@@ -70,6 +76,7 @@ export function DmList({
   onStartConversation,
   friendsSelected = false,
   onOpenFriends,
+  friendRequestCount = 0,
   onHideConversation,
   onBlockUser,
   onUnblockUser,
@@ -134,6 +141,25 @@ export function DmList({
           >
             <Users aria-hidden="true" className="h-4 w-4 shrink-0" />
             <span className="truncate font-medium">{t("friends.title")}</span>
+            {/* Requests waiting on YOU, counted where the way in is. Before
+                this the number existed only on the Pending tab *inside* the
+                view, which is a badge you have to already be looking at the
+                thing to see. Outgoing requests are excluded for the reason
+                `pendingActionCount` gives: a badge is a call to action, and
+                there is nothing to do about one you sent. */}
+            {friendRequestCount > 0 && (
+              <span
+                data-friend-requests={friendRequestCount}
+                className="ml-auto min-w-[1.15rem] shrink-0 rounded-full bg-danger px-1 py-0.5 text-center text-[10px] font-bold leading-none text-paper"
+              >
+                {friendRequestCount}
+              </span>
+            )}
+            {friendRequestCount > 0 && (
+              <span className="sr-only">
+                {t("friends.pendingBadge", { count: friendRequestCount })}
+              </span>
+            )}
           </button>
         )}
         {isLoading ? (

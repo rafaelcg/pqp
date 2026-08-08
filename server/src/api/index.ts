@@ -3420,7 +3420,8 @@ router.patch("/api/push/settings", async ({ req, user }) => {
 // uses). Semantics — one row per pair, Discord's silent decline, block
 // dominance — are argued in packages/shared/src/friends.ts and on the
 // `friendships` table in schema.sql; enforcement is in services/friends.ts.
-import { friendRequestSchema } from "@pqp/shared";
+import { friendNudgeFor, friendRequestSchema } from "@pqp/shared";
+import { notifyFriendActivity } from "../ws/chat.js";
 import {
   acceptFriendRequest,
   FriendRequestFloodError,
@@ -3492,6 +3493,17 @@ router.post("/api/friends", async ({ req, user }) => {
   }
   try {
     const result = await sendFriendRequest(user.id, body.userId);
+    // The live half of "what does the other person SEE, and when". Which of the
+    // four outcomes earns a nudge is `friendNudgeFor`'s decision, in shared and
+    // under test, because the rule that matters is a NEGATIVE one:
+    // `already-pending` must stay silent or resending becomes a bell. The
+    // recipient is always the target here — for a fresh request they are the
+    // one being asked, and for an auto-accept they are the one who asked first
+    // and is still waiting to hear.
+    const nudge = friendNudgeFor(result);
+    if (nudge) {
+      notifyFriendActivity(body.userId, nudge);
+    }
     if (result === "pending") {
       return created({ state: "pending" });
     }
@@ -3518,6 +3530,11 @@ router.post("/api/friends/:userId/accept", async ({ user }, { userId }) => {
   if (!(await acceptFriendRequest(user.id, userId!))) {
     throw new NotFound("No pending friend request from this user");
   }
+  // The one place a friendship's *other* side is told something, and it is the
+  // side that asked for it: they sent a request and are owed the answer. Only
+  // sent after the UPDATE actually matched, so accepting a request that was
+  // already cancelled 404s and nudges nobody.
+  notifyFriendActivity(userId!, "accepted");
   return { ok: true };
 });
 

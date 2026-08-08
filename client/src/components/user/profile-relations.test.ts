@@ -13,7 +13,10 @@ import {
   primaryIsInert,
   resolveFriendshipState,
   resolvePresence,
+  moderationActions,
+  moderationNeedsConfirmation,
   type FriendshipState,
+  type ProfileModerationContext,
 } from "./profile-relations";
 
 const ME = "00000000-0000-4000-8000-000000000000";
@@ -261,5 +264,103 @@ describe("placeCard", () => {
       { width: 1280, height: 300 },
     );
     expect(at.top).toBe(8);
+  });
+});
+
+/**
+ * The card's moderation menu.
+ *
+ * The rank rule itself is proved in `packages/shared/src/friends.test.ts`; this
+ * covers what is specific to THIS surface — that a conversation offers nothing,
+ * that an unknown rank offers nothing, and that a live timeout swaps "issue" for
+ * "end" rather than showing both.
+ */
+describe("moderationActions", () => {
+  const OTHER = "22222222-2222-4222-8222-222222222222";
+
+  function context(
+    overrides: Partial<ProfileModerationContext> = {},
+  ): ProfileModerationContext {
+    return {
+      serverId: "33333333-3333-4333-8333-333333333333",
+      actorRole: "owner",
+      memberRoles: new Map([
+        [ME, "owner"],
+        [THEM, "member"],
+        [OTHER, "admin"],
+      ]),
+      timedOutUserIds: new Set<string>(),
+      onModerated: () => {},
+      ...overrides,
+    };
+  }
+
+  it("offers the whole ladder to an owner, reversible rung first", () => {
+    expect(moderationActions(THEM, ME, context())).toEqual([
+      "timeout",
+      "kick",
+      "ban",
+    ]);
+  });
+
+  /**
+   * A conversation has no moderators — the same rule that keeps a server
+   * timeout out of a DM. `null` is how the app says "not in a server", and it is
+   * the first thing this surface checks.
+   */
+  it("offers nothing when there is no server", () => {
+    expect(moderationActions(THEM, ME, null)).toEqual([]);
+  });
+
+  it("offers nothing to a plain member", () => {
+    expect(
+      moderationActions(THEM, ME, context({ actorRole: "member" })),
+    ).toEqual([]);
+  });
+
+  it("offers nothing against a peer admin", () => {
+    expect(
+      moderationActions(OTHER, ME, context({ actorRole: "admin" })),
+    ).toEqual([]);
+  });
+
+  it("offers nothing against the owner", () => {
+    expect(
+      moderationActions(ME, OTHER, context({ actorRole: "admin" })),
+    ).toEqual([]);
+  });
+
+  /**
+   * The pre-emptive ban lives on the members panel, not here: a card opened on a
+   * name in a channel is about somebody in this server, and if the roster has
+   * not arrived a kick offered against them would 404. Drawing nothing is the
+   * honest answer, and it is why this differs from `canModerateMember`, which
+   * allows a null target on purpose.
+   */
+  it("offers nothing when the person's rank is not known yet", () => {
+    expect(
+      moderationActions(THEM, ME, context({ memberRoles: new Map() })),
+    ).toEqual([]);
+  });
+
+  it("swaps issuing a timeout for ending one, never both", () => {
+    const actions = moderationActions(
+      THEM,
+      ME,
+      context({ timedOutUserIds: new Set([THEM]) }),
+    );
+    expect(actions).toEqual(["endTimeout", "kick", "ban"]);
+    expect(actions).not.toContain("timeout");
+  });
+});
+
+describe("moderationNeedsConfirmation", () => {
+  it("confirms only what ends a membership", () => {
+    expect(moderationNeedsConfirmation("kick")).toBe(true);
+    expect(moderationNeedsConfirmation("ban")).toBe(true);
+    // A timeout is confirmed by the composer it needs anyway — a duration has to
+    // be chosen — and lifting one takes nothing away at all.
+    expect(moderationNeedsConfirmation("timeout")).toBe(false);
+    expect(moderationNeedsConfirmation("endTimeout")).toBe(false);
   });
 });

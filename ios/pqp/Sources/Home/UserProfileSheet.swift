@@ -193,6 +193,73 @@ enum ProfileRelations {
     }
 }
 
+/// A rung of the enforcement ladder, as the profile sheet offers it.
+///
+/// Named cases rather than a closure per button so the prompt, the verb and the
+/// "does this need confirming" answer cannot drift apart — the same reason
+/// `FriendsModel.Confirmation` is a enum.
+enum ModerationRung: Identifiable {
+    case timeout
+    case endTimeout
+    case kick
+    case ban
+
+    var id: String { String(describing: self) }
+
+    var label: LocalizedStringKey {
+        switch self {
+        case .timeout: "Time out…"
+        case .endTimeout: "End timeout"
+        case .kick: "Remove from server"
+        case .ban: "Ban from server"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .timeout: "clock.badge.exclamationmark"
+        case .endTimeout: "clock.arrow.circlepath"
+        case .kick: "person.fill.xmark"
+        case .ban: "hand.raised.fill"
+        }
+    }
+
+    /// Ending a timeout gives something back; the other three take something
+    /// away. Colouring the whole block red would flatten the ladder that the
+    /// order is trying to express.
+    var isDestructive: Bool { self != .endTimeout }
+
+    /// Confirmed only when something is lost that the person cannot get back by
+    /// themselves. A timeout expires on its own and is lifted in one tap, and it
+    /// needs a duration picked anyway — that picker IS its confirmation.
+    var needsConfirmation: Bool { self == .kick || self == .ban }
+
+    func prompt(_ name: String) -> String {
+        switch self {
+        case .kick: String(localized: "Remove \(name) from this server?")
+        case .ban: String(localized: "Ban \(name) from this server?")
+        case .timeout, .endTimeout: ""
+        }
+    }
+
+    var explanation: LocalizedStringKey {
+        switch self {
+        case .kick: "They lose access now but can rejoin with any invite."
+        case .ban: "They lose access and can't rejoin. The reason is kept on the ban list."
+        case .timeout, .endTimeout: ""
+        }
+    }
+
+    var actionLabel: LocalizedStringKey {
+        switch self {
+        case .kick: "Remove"
+        case .ban: "Ban"
+        case .timeout: "Time out"
+        case .endTimeout: "End timeout"
+        }
+    }
+}
+
 // MARK: - The sheet
 
 /// A person, and everything you can do about them from wherever you tapped.
@@ -214,9 +281,30 @@ struct UserProfileSheet: View {
     /// button that opens a conversation you are not taken to is a button that
     /// looks broken.
     var onOpenConversation: ((DmSummary) -> Void)?
+    /// The server this sheet was opened inside, and this account's rank in it.
+    ///
+    /// Nil in a conversation, and nil for the callers that have no server to
+    /// name — a DM has no moderators at all. When it is set it does two things:
+    /// it files a report with that server's moderators instead of the instance
+    /// (the `serverId: nil` this sheet used to hardcode sent every report from a
+    /// server channel to the wrong queue), and it unlocks the enforcement ladder
+    /// behind the ellipsis for somebody who may use it.
+    var server: Server?
 
     @State private var friends = FriendsResponse()
     @State private var blockedIds: Set<String> = []
+    /// This person's rank in `server`, once known. `nil` means "not asked yet or
+    /// not a member", and either way the ladder is not drawn: a card opened on a
+    /// name in a channel is about somebody in that server, and a kick offered
+    /// against a non-member would come back 404.
+    @State private var targetRole: String?
+    /// Whether a timeout is already running on them, so the menu offers ending
+    /// one rather than a second.
+    @State private var isTimedOut = false
+    /// The rung awaiting confirmation, and the reason being typed for a ban.
+    @State private var confirmingModeration: ModerationRung?
+    @State private var banReason = ""
+    @State private var timeoutSheet = false
     /// The one-to-one conversation with this person, when there already is one.
     /// Reused by Message (so it does not create a second) and required by Call.
     @State private var existingDm: DmSummary?
@@ -236,6 +324,21 @@ struct UserProfileSheet: View {
     }
 
     private var action: FriendshipAction { ProfileRelations.action(for: state) }
+
+    /// Which rungs to draw. `Moderation.canModerate` is the single judge — the
+    /// same one `MembersView` now asks and the same rule
+    /// `packages/shared/src/moderation.ts` states for the web — so this surface
+    /// cannot offer an action the API will refuse on rank.
+    private var moderationRungs: [ModerationRung] {
+        guard state != .isSelf, let server, let role = targetRole else { return [] }
+        guard Moderation.canModerate(
+            actorRole: server.role,
+            actorId: session.currentUser?.id,
+            targetRole: role,
+            targetId: subject.id
+        ) else { return [] }
+        return isTimedOut ? [.endTimeout, .kick, .ban] : [.timeout, .kick, .ban]
+    }
 
     private var presence: String? {
         ProfileRelations.presence(
@@ -310,6 +413,37 @@ struct UserProfileSheet: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Blocking also ends the friendship and hides their messages.")
+        }
+        // Kick and ban: both end a membership, so both are confirmed. iOS fired
+        // them straight through before this — one long-press and a stray tap
+        // banned somebody, with nothing between.
+        .confirmationDialog(
+            confirmingModeration?.prompt(subject.displayName) ?? "",
+            isPresented: Binding(
+                get: { confirmingModeration != nil },
+                set: { if !$0 { confirmingModeration = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            if let rung = confirmingModeration {
+                Button(rung.actionLabel, role: .destructive) {
+                    confirmingModeration = nil
+                    Task { await apply(rung, minutes: nil) }
+                }
+            }
+            Button("Cancel", role: .cancel) { confirmingModeration = nil }
+        } message: {
+            Text(confirmingModeration?.explanation ?? "")
+        }
+        // The timeout picker. A sheet rather than a submenu of durations because
+        // it also collects the reason — the field iOS used to hardcode as nil,
+        // and the only record of *why* the sanction happened that a moderator
+        // sees later without opening the audit log.
+        .sheet(isPresented: $timeoutSheet) {
+            TimeoutComposer(name: subject.displayName, reason: $banReason) { minutes in
+                timeoutSheet = false
+                Task { await apply(.timeout, minutes: minutes) }
+            }
         }
         .task { await load() }
         .presentationDetents([.medium, .large])
@@ -447,7 +581,9 @@ struct UserProfileSheet: View {
                         }
                     }
 
-                    if ProfileRelations.canBlock(state) || ProfileRelations.canReport(state) {
+                    if ProfileRelations.canBlock(state)
+                        || ProfileRelations.canReport(state)
+                        || !moderationRungs.isEmpty {
                         Menu {
                             if ProfileRelations.canBlock(state) {
                                 Button(role: .destructive) {
@@ -461,10 +597,32 @@ struct UserProfileSheet: View {
                                     reportTarget = .user(
                                         id: subject.id,
                                         displayName: subject.displayName,
-                                        serverId: nil
+                                        // The server whose moderators should see
+                                        // this, when the sheet knows one. Nil
+                                        // sends it to the instance queue, which
+                                        // is right for a DM and was wrong for
+                                        // every report filed from a channel.
+                                        serverId: server?.id
                                     )
                                 } label: {
                                     Label("Report", systemImage: "flag")
+                                }
+                            }
+                            // The ladder, last and in order. Empty for a
+                            // conversation, for a plain member, and for anybody
+                            // the rank rule protects — so a member's menu is
+                            // exactly the two entries it has always been.
+                            ForEach(moderationRungs) { rung in
+                                Button(role: rung.isDestructive ? .destructive : nil) {
+                                    if rung == .timeout {
+                                        timeoutSheet = true
+                                    } else if rung.needsConfirmation {
+                                        confirmingModeration = rung
+                                    } else {
+                                        Task { await apply(rung, minutes: nil) }
+                                    }
+                                } label: {
+                                    Label(rung.label, systemImage: rung.icon)
                                 }
                             }
                         } label: {
@@ -539,6 +697,77 @@ struct UserProfileSheet: View {
                 && conversation.participants[0].id == subject.id
         }
         loading = false
+        await loadModeration()
+    }
+
+    /// This person's rank, and whether they are already timed out.
+    ///
+    /// AFTER the spinner clears, not inside it: the friend actions are the point
+    /// of this sheet and must not wait on two reads that only a moderator's menu
+    /// consumes. And only for a manager — a plain member is not allowed to ask
+    /// for either list and has nothing to draw with the answer, so they make no
+    /// request at all.
+    private func loadModeration() async {
+        guard let server, Moderation.isManager(server.role) else {
+            targetRole = nil
+            isTimedOut = false
+            return
+        }
+        let api = session.api
+        let serverId = server.id
+        async let roster = try? await api.members(serverId: serverId)
+        async let timeouts = try? await api.activeTimeouts(serverId: serverId)
+        targetRole = (await roster ?? []).first { $0.id == subject.id }?.role
+        isTimedOut = (await timeouts ?? []).contains { $0.userId == subject.id }
+    }
+
+    /// Run a rung. `minutes` is set only for `.timeout`.
+    ///
+    /// The server's own sentence is shown for a timeout — it names when the
+    /// sanction ends and what it takes away, and it is the same string the
+    /// sanctioned person reads, so the two sides cannot disagree about it.
+    private func apply(_ rung: ModerationRung, minutes: Int?) async {
+        guard let server else { return }
+        busy = true
+        defer { busy = false }
+        do {
+            switch rung {
+            case .timeout:
+                let issued = try await session.api.issueTimeout(
+                    serverId: server.id,
+                    userId: subject.id,
+                    minutes: minutes ?? Moderation.timeoutPresets[1].minutes,
+                    // The reason iOS used to hardcode as nil. It is the only
+                    // thing the members panel can show later about *why*.
+                    reason: banReason.isEmpty ? nil : banReason
+                )
+                banReason = ""
+                note(issued.message, failed: false)
+            case .endTimeout:
+                try await session.api.liftTimeout(serverId: server.id, userId: subject.id)
+                note(String(localized: "\(subject.displayName) can speak again."), failed: false)
+            case .kick:
+                // `ban: false` — a kick and a ban are one route server-side, and
+                // the ban case below deliberately takes the *other* route
+                // because only that one carries a reason.
+                try await session.api.removeMember(
+                    serverId: server.id, userId: subject.id, ban: false
+                )
+                note(String(localized: "\(subject.displayName) was removed from the server."),
+                     failed: false)
+            case .ban:
+                try await session.api.banMember(
+                    serverId: server.id, userId: subject.id,
+                    reason: banReason.isEmpty ? nil : banReason
+                )
+                banReason = ""
+                note(String(localized: "\(subject.displayName) was banned."), failed: false)
+            }
+            await loadModeration()
+        } catch {
+            note((error as? APIError)?.errorDescription ?? error.localizedDescription,
+                 failed: true)
+        }
     }
 
     private func run(_ action: FriendshipAction) async {
@@ -677,5 +906,86 @@ private struct ProfileIconButton: View {
         .disabled(isBusy)
         .accessibilityIdentifier(identifier)
         .accessibilityLabel(label)
+    }
+}
+
+// MARK: - Timeout composer
+
+/// Pick how long, and say why.
+///
+/// A sheet rather than four menu entries because of the second half: the reason.
+/// iOS shipped timeouts with `reason: nil` hardcoded, so every sanction issued
+/// from a phone became a row in the members panel with a blank explanation —
+/// precisely the field that panel draws to answer "why is this person silenced".
+/// A duration submenu is faster to build and leaves the record useless.
+///
+/// The durations are `Moderation.timeoutPresets`, which mirrors
+/// `TIMEOUT_PRESET_MINUTES` in shared, so both clients offer the same four.
+struct TimeoutComposer: View {
+    let name: String
+    @Binding var reason: String
+    let onApply: (Int) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var minutes = Moderation.timeoutPresets[1].minutes
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Palette.ink.ignoresSafeArea()
+
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("They can still read. They can't post, react or join voice in this server until it ends.")
+                        .font(Typography.caption)
+                        .foregroundStyle(Palette.paperMuted)
+
+                    Picker("How long", selection: $minutes) {
+                        ForEach(Moderation.timeoutPresets, id: \.minutes) { preset in
+                            Text(preset.label).tag(preset.minutes)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .accessibilityIdentifier("timeout.duration")
+
+                    TextField("Reason (optional)", text: $reason)
+                        .textFieldStyle(.plain)
+                        .foregroundStyle(Palette.paper)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 11)
+                        .pqpSurface(cornerRadius: 14)
+                        .accessibilityIdentifier("timeout.reason")
+
+                    Button {
+                        onApply(minutes)
+                    } label: {
+                        Text("Time out \(name)")
+                            .font(Typography.bodyMedium)
+                            .foregroundStyle(Palette.paper)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 50)
+                            .background(
+                                RoundedRectangle(
+                                    cornerRadius: Metrics.cornerRadiusSmall,
+                                    style: .continuous
+                                ).fill(Palette.danger)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("timeout.apply")
+
+                    Spacer()
+                }
+                .padding(.horizontal, Metrics.hPadding)
+                .padding(.top, 16)
+            }
+            .navigationTitle("Time out")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Cancel") { dismiss() }.tint(Palette.paperMuted)
+                }
+            }
+        }
+        .presentationDetents([.medium])
     }
 }

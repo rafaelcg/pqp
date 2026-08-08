@@ -19,6 +19,18 @@ struct MembersView: View {
     @State private var showingBans = false
     @State private var reportTarget: ReportTarget?
     @State private var profileSubject: ProfileSubject?
+    /// A kick or a ban held until it is confirmed. Both end a membership; a
+    /// timeout does not, which is why it is not in here.
+    @State private var pendingRemoval: PendingRemoval?
+
+    /// Who, and whether the door locks behind them. `Identifiable` so it can
+    /// drive the dialog directly instead of through a second boolean that can
+    /// disagree with it.
+    struct PendingRemoval: Identifiable {
+        let member: ServerMember
+        let ban: Bool
+        var id: String { member.id + (ban ? ":ban" : ":kick") }
+    }
 
     /// The same ladder the web offers; any value in range is legal, these are
     /// just the rungs worth a menu row.
@@ -29,8 +41,25 @@ struct MembersView: View {
         (60 * 24 * 7, "1 week"),
     ]
 
-    private var canModerate: Bool { server.role == "owner" || server.role == "admin" }
+    private var canModerate: Bool { Moderation.isManager(server.role) }
     private var isOwner: Bool { server.role == "owner" }
+
+    /// Whether the ladder may be aimed at this person.
+    ///
+    /// THE BUG THIS REPLACES. The gate was `canModerate && not-me && not-owner`,
+    /// which misses the rule that matters between equals: an admin was shown
+    /// Kick, Ban and Timeout against ANOTHER ADMIN and got a 403 from
+    /// `requireOutranked` every time. `Moderation.canModerate` is the same four
+    /// refusals the server applies, in the same order, and the same ones the web
+    /// client asks — so the three can no longer disagree.
+    private func canAct(on member: ServerMember) -> Bool {
+        Moderation.canModerate(
+            actorRole: server.role,
+            actorId: session.currentUser?.id,
+            targetRole: member.role,
+            targetId: member.id
+        )
+    }
 
     var body: some View {
         NavigationStack {
@@ -92,7 +121,34 @@ struct MembersView: View {
                 // dismisses itself either way, and the DM is one tap away in
                 // the Messages tab — offering a push that silently did nothing
                 // would be worse than not offering it here.
-                UserProfileSheet(subject: subject)
+                // `server` is passed so the sheet's own ladder is available here
+                // too, and so a report filed from the roster reaches this
+                // server's moderators rather than the instance queue.
+                UserProfileSheet(subject: subject, server: server)
+            }
+            .confirmationDialog(
+                pendingRemoval.map { pending in
+                    pending.ban
+                        ? String(localized: "Ban \(pending.member.displayName)?")
+                        : String(localized: "Remove \(pending.member.displayName)?")
+                } ?? "",
+                isPresented: Binding(
+                    get: { pendingRemoval != nil },
+                    set: { if !$0 { pendingRemoval = nil } }
+                ),
+                titleVisibility: .visible
+            ) {
+                if let pending = pendingRemoval {
+                    Button(pending.ban ? "Ban" : "Remove", role: .destructive) {
+                        pendingRemoval = nil
+                        Task { await remove(pending.member, ban: pending.ban) }
+                    }
+                }
+                Button("Cancel", role: .cancel) { pendingRemoval = nil }
+            } message: {
+                Text(pendingRemoval?.ban == true
+                     ? "They lose access and can't rejoin until you unban them."
+                     : "They lose access now but can rejoin with any invite.")
             }
             .task { await load() }
         }
@@ -110,8 +166,7 @@ struct MembersView: View {
             }
         }
 
-        // Acting on yourself, or on the owner, is always refused server-side.
-        if canModerate, member.id != session.currentUser?.id, member.role != "owner" {
+        if canAct(on: member) {
             if isOwner {
                 Button {
                     Task { await setRole(member, to: member.role == "admin" ? "member" : "admin") }
@@ -143,14 +198,19 @@ struct MembersView: View {
                 }
             }
 
+            // Confirmed, both of them. They fired straight through before this:
+            // one long-press and a stray tap on a scrolling list ended somebody's
+            // membership, and a ban had nothing between the tap and the door
+            // locking. A timeout still does not need one — it expires on its own
+            // and is lifted from the same menu.
             Button(role: .destructive) {
-                Task { await remove(member, ban: false) }
+                pendingRemoval = PendingRemoval(member: member, ban: false)
             } label: {
                 Label("Kick", systemImage: "person.fill.xmark")
             }
 
             Button(role: .destructive) {
-                Task { await remove(member, ban: true) }
+                pendingRemoval = PendingRemoval(member: member, ban: true)
             } label: {
                 Label("Ban", systemImage: "hand.raised.fill")
             }

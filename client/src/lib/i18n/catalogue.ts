@@ -633,6 +633,18 @@ export const en = {
   "friends.retry": "Try again",
   "friends.onlineCount": "{count} online",
   "friends.pendingBadge": "{count} pending",
+  // The ✕ on a friend row is small and unlabelled, and unfriending is silent —
+  // so the confirmation states the consequence rather than asking "are you
+  // sure?". Declining a request has no equivalent, on purpose: nothing is lost.
+  "friends.remove.confirm.title": "Remove {name} from your friends?",
+  "friends.remove.confirm.body":
+    "They won't be told. Either of you can ask again later.",
+  "friends.remove.keep": "Keep them",
+  // What a live `friend-activity` frame says when this view is already open.
+  // Never names the other person: the frame carries no name, and the row that
+  // just appeared already does.
+  "friends.nudge.request": "Someone sent you a friend request.",
+  "friends.nudge.accepted": "Your friend request was accepted.",
 
   // ----------------------------------------------------------------- profile
   // The card that opens on a left-click of somebody's avatar or name, wherever
@@ -658,6 +670,34 @@ export const en = {
   "profile.isYou": "This is you.",
   "profile.loading": "Loading",
   "profile.friendsSince": "Friends since {date}",
+  // ---- the enforcement ladder, on the card, for a moderator only ----
+  // Wording matches the members panel's, because they are the same three
+  // actions and a moderator should not have to learn two vocabularies for one
+  // ladder. "Time out" before the two red ones: the order IS the ladder.
+  "profile.mod.timeout": "Time out",
+  "profile.mod.endTimeout": "End timeout",
+  "profile.mod.kick": "Remove from server",
+  "profile.mod.ban": "Ban from server",
+  "profile.mod.cancel": "Cancel",
+  "profile.mod.reason": "Reason",
+  "profile.mod.reason.placeholder": "Reason (optional)",
+  "profile.mod.timeout.title": "Time out {name}",
+  "profile.mod.timeout.duration": "How long",
+  "profile.mod.timeout.body":
+    "They can still read. They can't post, react or join voice in this server until it ends.",
+  "profile.mod.timeout.apply": "Time them out",
+  "profile.mod.duration.minutes": "{count} min",
+  "profile.mod.duration.hours": "{count} h",
+  "profile.mod.duration.days": "{count} d",
+  "profile.mod.kick.title": "Remove {name} from this server?",
+  "profile.mod.kick.body":
+    "They lose access now but can rejoin with any invite.",
+  "profile.mod.ban.title": "Ban {name} from this server?",
+  "profile.mod.ban.body":
+    "They lose access and can't rejoin. The reason is kept on the ban list.",
+  "profile.mod.timeoutEnded": "{name} can speak again.",
+  "profile.mod.kicked": "{name} was removed from the server.",
+  "profile.mod.banned": "{name} was banned.",
   "profile.open": "Open {name}'s profile",
   "profile.viewProfile": "View profile",
 

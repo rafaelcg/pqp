@@ -8,6 +8,7 @@ import type {
   Channel,
   ChannelKind,
   DmSummary,
+  MemberRole,
   SanctionNotice,
   Server,
   ThreadSummary,
@@ -34,9 +35,14 @@ import { DmCallStage } from "@/components/dm/dm-call-stage";
 import { IncomingCallOverlay } from "@/components/dm/incoming-call-overlay";
 import { DmList } from "@/components/layout/dm-list";
 import { FriendsView } from "@/components/friends/friends-view";
+import {
+  FriendsContext,
+  useFriendsStore,
+} from "@/components/friends/use-friends";
 import { InvitePanel } from "@/components/layout/invite-panel";
 import { MembersPanel } from "@/components/layout/members-panel";
 import { ProfilePopoverProvider } from "@/components/user/user-profile-popover";
+import type { ProfileModerationContext } from "@/components/user/profile-relations";
 import { PinnedMessagesPanel } from "@/components/chat/pinned-messages-panel";
 import { ServerRail } from "@/components/layout/server-rail";
 import { AgeGateDialog } from "@/components/user/age-gate-dialog";
@@ -86,6 +92,7 @@ import {
   fetchIceServers,
   fetchMe,
   fetchMembers,
+  listTimeouts,
   fetchMessages,
   fetchServers,
   fetchUnread,
@@ -358,6 +365,19 @@ function MainAppContent({
   const [bootstrapError, setBootstrapError] = useState<string | null>(null);
   const [bootstrapAttempt, setBootstrapAttempt] = useState(0);
   /**
+   * The one friends snapshot, held here rather than by the friends view, for the
+   * two reasons `use-friends.ts` argues: the request badge has to be drawn on the
+   * app's front door — which the friends view cannot reach — and the shell is
+   * where socket frames arrive, so it is the only place a `friend-activity` nudge
+   * can be handed to.
+   *
+   * Declared HERE, below `bootstrapReady`, and that position is load-bearing: it
+   * is the gate that stops the store's first read racing ahead of the effect that
+   * installs the API's token provider. Moving this line above that state would
+   * bring back a 401 on every cold boot.
+   */
+  const friends = useFriendsStore(bootstrapReady);
+  /**
    * Non-null while the 18+ gate is standing between this account and the app.
    *
    * Held here rather than read off `user` because it is a bootstrap outcome,
@@ -383,6 +403,23 @@ function MainAppContent({
   const [mentionCandidates, setMentionCandidates] = useState<
     MentionCandidate[]
   >([]);
+  /**
+   * The selected server's roster as rank only — what the profile card needs to
+   * know whether it may offer a timeout, and to whom. Filled from the same fetch
+   * as `mentionCandidates`, so no surface pays a second request for it.
+   */
+  const [memberRoles, setMemberRoles] = useState<Map<string, MemberRole>>(
+    () => new Map(),
+  );
+  /**
+   * Who is currently timed out in the selected server — ids only, and only when
+   * this account can manage it, so a plain member never makes the request. It is
+   * what tells the profile card whether to offer "Time out" or "End timeout".
+   */
+  const [timedOutUserIds, setTimedOutUserIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [timeoutsEpoch, setTimeoutsEpoch] = useState(0);
   const [highlightMessageId, setHighlightMessageId] = useState<string | null>(
     null,
   );
@@ -451,6 +488,15 @@ function MainAppContent({
    */
   const conversationsRef = useRef<DmSummary[]>(conversations);
   conversationsRef.current = conversations;
+  /**
+   * The friends store, through a ref, for the same reason every other live
+   * value the socket handler touches goes through one: the handler is installed
+   * once per connection, and putting a value that changes on every friends
+   * refresh into its dependency list would tear the socket down and rebuild it
+   * each time somebody's status dot moved.
+   */
+  const friendsRef = useRef(friends);
+  friendsRef.current = friends;
   /** The server the sidebar is showing, or null in the conversation view. */
   const selectedServerId = selectionServerId(selection);
   /** Which server owns the active call — `channels` only holds the selected one. */
@@ -702,6 +748,13 @@ function MainAppContent({
       .then(({ members }) => {
         if (!cancelled) {
           setMentionCandidates(members);
+          // The same roster, kept a second time as rank only. This is what lets
+          // the profile card offer moderation from a *message author* without a
+          // request of its own: `MentionCandidate` narrows `role` away, and the
+          // card needs it to know whether the server would refuse the action.
+          setMemberRoles(
+            new Map(members.map((member) => [member.id, member.role])),
+          );
         }
       })
       .catch(() => {
@@ -711,6 +764,69 @@ function MainAppContent({
       cancelled = true;
     };
   }, [conversationParticipants, selectedServerId]);
+
+  /**
+   * The selected server, but only when this account can manage it — the one
+   * question every moderator affordance below starts from, resolved once so a
+   * component cannot answer it differently.
+   */
+  const manageableServer = useMemo(() => {
+    const server = servers.find((one) => one.id === selectedServerId);
+    return server?.role === "owner" || server?.role === "admin"
+      ? { id: server.id, role: server.role }
+      : null;
+  }, [servers, selectedServerId]);
+
+  /**
+   * What the profile card may do to somebody, in the server it was opened in.
+   *
+   * Null in a conversation — a DM has no moderators, the same rule the server's
+   * `requireServerChannel` enforces — and null for a plain member, which is why
+   * this account's role is checked here rather than inside the card: a member
+   * never even builds the object, so there is nothing for a bug in the card's
+   * own gating to leak past.
+   */
+  const cardModeration = useMemo<ProfileModerationContext | null>(
+    () =>
+      manageableServer && selection.kind === "server"
+        ? {
+            serverId: manageableServer.id,
+            actorRole: manageableServer.role,
+            memberRoles,
+            timedOutUserIds,
+            onModerated: () => setTimeoutsEpoch((n) => n + 1),
+          }
+        : null,
+    [manageableServer, selection.kind, memberRoles, timedOutUserIds],
+  );
+
+  /**
+   * Who is timed out here — read only for a manager, because only a manager is
+   * allowed to ask and only a manager has anything to draw with the answer.
+   * `timeoutsEpoch` is what a card bumps after issuing or lifting one, so the
+   * menu it offers next matches what it just did.
+   */
+  useEffect(() => {
+    if (!manageableServer) {
+      setTimedOutUserIds(new Set());
+      return;
+    }
+    let cancelled = false;
+    void listTimeouts(manageableServer.id)
+      .then(({ timeouts }) => {
+        if (!cancelled) {
+          setTimedOutUserIds(new Set(timeouts.map((one) => one.userId)));
+        }
+      })
+      .catch(() => {
+        // The card falls back to offering "Time out", which the server treats
+        // as a replacement of any existing row — so a failed read here costs a
+        // label, never a wrong action.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [manageableServer, timeoutsEpoch]);
 
   /**
    * Open a channel by id, whatever kind it is.
@@ -1051,6 +1167,16 @@ function MainAppContent({
             // keeps only its own channel's, so one frame can never render in
             // both views.
             threadChat.handleServerMessage(message);
+            return;
+          }
+
+          // Your friendships changed. Content-free by design, so the store's
+          // one job is to re-read — and because the store lives up here rather
+          // than inside the friends view, the badge on the front door moves
+          // whether or not that view has ever been opened. This frame is the
+          // whole answer to "B is looking at a channel; what do they see?".
+          if (message.type === "friend-activity") {
+            friendsRef.current.applyNudge(message.kind);
             return;
           }
 
@@ -1856,6 +1982,14 @@ function MainAppContent({
         // had said. Refetching is what settles it — the row itself stays, since
         // blocking somebody does not erase what was already said to you.
         await loadConversations({ trustSnapshot: true });
+        // A BLOCK ALSO ENDED A FRIENDSHIP, if there was one: the schema's
+        // trigger deletes the pair's row the moment the block lands, in both
+        // directions and including a pending request. Nothing tells us that
+        // happened, so every surface drawing the friends list — the badge, the
+        // list itself, any open profile card — kept showing a friendship the
+        // database no longer has. Re-reading here is what makes the trigger's
+        // effect visible everywhere at once.
+        await friendsRef.current.refresh();
       } catch (error) {
         setAppError(
           error instanceof Error ? error.message : "Failed to block that person",
@@ -2068,6 +2202,7 @@ function MainAppContent({
   const selectedServer = servers.find((s) => s.id === selectedServerId);
   const canManage =
     selectedServer?.role === "owner" || selectedServer?.role === "admin";
+
   const voiceChannel =
     voiceState.voiceChannelId
       ? channels.find((c) => c.id === voiceState.voiceChannelId) ?? null
@@ -2472,13 +2607,18 @@ function MainAppContent({
   ) : null;
 
   return (
-    // One provider for the whole app: the profile card is opened from the
-    // transcript, the members panel and the conversation list, and every one of
-    // them wants the same block list, the same "open this DM" navigation and
-    // the same report dialog that already live up here.
+    // The friends snapshot, published to everything that draws a relationship:
+    // the view, every profile card, and the two badges. Outside the popover
+    // provider because the card is one of its consumers.
+    <FriendsContext.Provider value={friends}>
+    {/* One provider for the whole app: the profile card is opened from the
+        transcript, the members panel and the conversation list, and every one of
+        them wants the same block list, the same "open this DM" navigation and
+        the same report dialog that already live up here. */}
     <ProfilePopoverProvider
       currentUserId={user?.id ?? null}
       blockedUserIds={blockedUserIds}
+      moderation={cardModeration}
       onOpenConversation={(conversation) => {
         setConversations((prev) => upsertConversation(prev, conversation));
         void selectConversation(conversation.channelId);
@@ -2537,6 +2677,7 @@ function MainAppContent({
         channels={channels}
         homeSelected={selection.kind === "dm"}
         homeUnread={conversationUnread}
+        friendRequestCount={friends.data.incoming.length}
         onSelectHome={() => {
           selectHome();
           setMobileNavOpen(true);
@@ -2571,6 +2712,7 @@ function MainAppContent({
           // Home-with-nothing-selected IS the Friends view, so "open friends"
           // is just deselecting the conversation.
           friendsSelected={!selectedChannelId}
+          friendRequestCount={friends.data.incoming.length}
           onOpenFriends={selectHome}
           onHideConversation={(id) => void handleHideConversation(id)}
           onBlockUser={(person) => void handleBlockUser(person.id)}
@@ -3048,5 +3190,6 @@ function MainAppContent({
       />
     </div>
     </ProfilePopoverProvider>
+    </FriendsContext.Provider>
   );
 }

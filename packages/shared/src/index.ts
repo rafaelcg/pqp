@@ -8,6 +8,7 @@ export * from "./dm.js";
 export * from "./embeds.js";
 export * from "./friends.js";
 export * from "./gifs.js";
+export * from "./moderation.js";
 export * from "./reports.js";
 export * from "./sanctions.js";
 export * from "./search.js";

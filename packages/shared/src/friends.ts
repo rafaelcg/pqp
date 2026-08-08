@@ -83,6 +83,72 @@ export const friendsResponseSchema = z.object({
 export type FriendsResponse = z.infer<typeof friendsResponseSchema>;
 
 /**
+ * "Something changed about your friendships — read them again."
+ *
+ * WHY THIS EXISTS. Until now there was no friend frame on the socket at all, so
+ * a request reached the person it was aimed at only when they next fetched: on
+ * a reload, or on the friends view's 15s poll, which runs only while that view
+ * is the thing on screen. Somebody sitting in a channel — which is where people
+ * sit — could be stared at by a pending request indefinitely and see nothing.
+ * That is not a cadence problem to tune; it is a missing edge, and one frame is
+ * the whole of it.
+ *
+ * CONTENT-FREE, ON PURPOSE. It names nobody and carries no list. The recipient
+ * re-reads `GET /api/friends`, which is a single bounded query they were
+ * entitled to make anyway, so this frame discloses *nothing they could not
+ * already ask for* — the property that lets it be added without re-arguing any
+ * of the privacy positions above. `channel-activity` makes the same trade for
+ * the same reason.
+ *
+ * WHEN IT IS SENT — and, much more importantly, when it is NOT:
+ *
+ * - `request`: a NEW pending row now exists, delivered to the person who was
+ *   asked. Re-sending an already-pending request does not send it, exactly as
+ *   re-sending does not touch `created_at`: if resending rang a bell, resending
+ *   would be a way to keep ringing one.
+ * - `accepted`: the handshake completed, delivered to the person who asked
+ *   first. They consented to hearing about this by asking.
+ *
+ * NOTHING is sent for a decline, a cancel, an unfriend, or a block. Those are
+ * silent by design — see the note at the top of this file — and a frame is
+ * exactly the kind of "louder" this product decided against. A client that
+ * refetches on a nudge and sees a name gone learned it only because it was
+ * already looking.
+ */
+export const friendActivitySchema = z.object({
+  type: z.literal("friend-activity"),
+  kind: z.enum(["request", "accepted"]),
+});
+
+export type FriendActivity = z.infer<typeof friendActivitySchema>;
+
+/**
+ * The nudge a `POST /api/friends` outcome earns, if any — the send route's four
+ * results mapped to the one decision that matters, as a pure function so the
+ * "resending is not a bell" rule is pinned by a test rather than by a comment
+ * beside an `if`.
+ *
+ * Returns who to nudge relative to the actor: `target` for a fresh request,
+ * `target` again for an auto-accept (they asked first, so they are the one
+ * waiting to hear), and `null` for the two outcomes where nothing changed.
+ */
+export function friendNudgeFor(
+  result: "pending" | "accepted" | "already-friends" | "already-pending",
+): FriendActivity["kind"] | null {
+  switch (result) {
+    case "pending":
+      return "request";
+    case "accepted":
+      return "accepted";
+    // Nothing changed, so nothing to hear about. `already-pending` in
+    // particular MUST stay silent.
+    case "already-friends":
+    case "already-pending":
+      return null;
+  }
+}
+
+/**
  * How many un-answered outgoing requests one account may have standing.
  *
  * This is the durable half of the abuse story (the API adds a token bucket on

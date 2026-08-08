@@ -484,8 +484,11 @@ final class ChatModel {
             Task { await reloadAfterReconnect() }
 
         // Voice frames arrive on the same socket and are none of this
-        // model's business.
-        case .presence, .activity, .other,
+        // model's business. Neither is a friend nudge: it is addressed to this
+        // account rather than to this channel, and the hub and the friends screen
+        // are the two places that draw anything from it.
+        case .friendActivity,
+             .presence, .activity, .other,
              .voiceWelcome, .voicePeerJoined, .voicePeerLeft, .voiceRoster,
              .voiceRoomFull, .voiceTransportUnsupported, .voiceScreenShareDenied,
              .voiceOffer, .voiceAnswer, .voiceCandidate,

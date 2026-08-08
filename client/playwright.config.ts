@@ -5,8 +5,23 @@ import { defineConfig, devices } from "@playwright/test";
  * tests never depend on Clerk's hosted flows. The suite needs a database:
  * `docker compose up -d postgres` first.
  */
-const CLIENT_PORT = 5273;
-const SERVER_PORT = 3101;
+/**
+ * Ports and database, all three overridable.
+ *
+ * `E2E_DATABASE_URL` was already env-driven; the two ports were not, and that
+ * asymmetry bites the moment two checkouts of this repo exist on one machine.
+ * `reuseExistingServer` is on outside CI, so a suite started in checkout B
+ * silently attaches to the server checkout A left running on 3101 — and then
+ * every assertion is made against somebody else's code and somebody else's
+ * database rows. It fails in the most misleading way available: the app works,
+ * so most specs pass, and only the ones testing the change under development
+ * fail. Overriding all three is what makes a second checkout an isolated run.
+ *
+ * `E2E_API_URL` (which the specs read for their own `fetch` calls) has to move
+ * with `E2E_SERVER_PORT`; the default below keeps the two in step.
+ */
+const CLIENT_PORT = Number(process.env.E2E_CLIENT_PORT ?? 5273);
+const SERVER_PORT = Number(process.env.E2E_SERVER_PORT ?? 3101);
 const DATABASE_URL =
   process.env.E2E_DATABASE_URL ??
   "postgresql://pqp:pqp@localhost:5432/pqp_test";

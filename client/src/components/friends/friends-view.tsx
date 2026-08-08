@@ -81,13 +81,50 @@ export function FriendsView({
   firstRun,
 }: FriendsViewProps) {
   const { t } = useTranslation();
-  const { data, loading, error, send, accept, remove } = useFriends();
+  const { data, loading, error, send, accept, remove, nudge, clearNudge } =
+    useFriends();
   const [tab, setTab] = useState<FriendsTab>("online");
   const [adding, setAdding] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  /**
+   * An unfriend held until it is confirmed.
+   *
+   * WHY THIS WAS THE BUG WORTH FIXING HERE. The row's remove control is an
+   * unlabelled ✕ at the end of a hover-highlighted line, and it used to fire
+   * straight through. Unfriending is silent — the other person is never told —
+   * so a mis-click is invisible to them *and* uncorrectable by them: they simply
+   * stop being in your list, and neither of you knows why. The profile card and
+   * iOS both already confirmed it; this surface, the one with the smallest and
+   * least-labelled trigger, was the one that did not.
+   *
+   * Declining a request stays unconfirmed on purpose. It is also silent, but
+   * nothing is lost — they can ask again — and the whole argument for silent
+   * declines is that declining must stay cheap.
+   */
+  const [confirmingRemoval, setConfirmingRemoval] = useState<Friend | null>(
+    null,
+  );
   const panelId = useId();
+
+  // What the live nudge says, shown once. This is the visible half of the
+  // `friend-activity` frame for somebody who already has this view open: the
+  // list re-reads itself either way, but a row quietly appearing is easy to
+  // miss, and "someone sent you a friend request" is not.
+  useEffect(() => {
+    if (!nudge) {
+      return;
+    }
+    setNotice(
+      t(
+        nudge.kind === "accepted"
+          ? "friends.nudge.accepted"
+          : "friends.nudge.request",
+      ),
+    );
+    clearNudge();
+  }, [nudge, clearNudge, t]);
 
   const online = onlineFriends(data.friends);
   const pending = pendingActionCount(data);
@@ -127,6 +164,10 @@ export function FriendsView({
   async function run(userId: string, action: () => Promise<void>) {
     setBusyId(userId);
     setActionError(null);
+    // Whatever the last line said is about to be out of date. It matters most
+    // for the live nudge: "someone sent you a friend request" left standing
+    // after you accepted it is a sentence about a request that no longer exists.
+    setNotice(null);
     try {
       await action();
     } catch (err) {
@@ -310,6 +351,48 @@ export function FriendsView({
                 {t("friends.onlineCount", { count: online.length })}
               </h2>
             )}
+            {confirmingRemoval && (
+              <div
+                role="alertdialog"
+                aria-label={t("friends.remove.confirm.title", {
+                  name: confirmingRemoval.displayName,
+                })}
+                data-remove-confirm=""
+                className="mb-3 max-w-2xl rounded-md border border-ink-4 bg-ink-3/60 p-3"
+              >
+                <p className="text-sm font-semibold text-paper">
+                  {t("friends.remove.confirm.title", {
+                    name: confirmingRemoval.displayName,
+                  })}
+                </p>
+                {/* States the surprising part rather than asking "are you
+                    sure?": what makes this worth confirming is that it is
+                    silent and that it is undoable only by asking again. */}
+                <p className="mt-1 text-xs text-paper-muted">
+                  {t("friends.remove.confirm.body")}
+                </p>
+                <div className="mt-2.5 flex gap-1.5">
+                  <Button
+                    size="sm"
+                    variant="danger"
+                    onClick={() => {
+                      const person = confirmingRemoval;
+                      setConfirmingRemoval(null);
+                      void run(person.id, () => remove(person.id));
+                    }}
+                  >
+                    {t("friends.remove")}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setConfirmingRemoval(null)}
+                  >
+                    {t("friends.remove.keep")}
+                  </Button>
+                </div>
+              </div>
+            )}
             <FriendRows
               friends={tab === "online" ? online : sortOnlineFirst(data.friends)}
               emptyState={
@@ -327,7 +410,7 @@ export function FriendsView({
               }
               busyId={busyId}
               onMessage={(id) => void handleMessage(id)}
-              onRemove={(id) => void run(id, () => remove(id))}
+              onRemove={setConfirmingRemoval}
             />
           </>
         )}
@@ -375,7 +458,8 @@ function FriendRows({
   emptyState: ReactNode;
   busyId: string | null;
   onMessage: (userId: string) => void;
-  onRemove: (userId: string) => void;
+  /** The whole person, not an id: the confirmation has to name them. */
+  onRemove: (friend: Friend) => void;
 }) {
   const { t } = useTranslation();
   if (friends.length === 0) {
@@ -414,7 +498,8 @@ function FriendRows({
               disabled={busyId === friend.id}
               aria-label={`${t("friends.remove")} — ${friend.displayName}`}
               title={t("friends.remove")}
-              onClick={() => onRemove(friend.id)}
+              data-remove-friend={friend.id}
+              onClick={() => onRemove(friend)}
             >
               <X aria-hidden="true" className="h-4 w-4" />
             </Button>

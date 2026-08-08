@@ -24,6 +24,19 @@ enum RealtimeEvent: Sendable {
     /// silent drop; this one is unicast to the person who tried, so the client
     /// can say why the send vanished instead of showing a bug-shaped nothing.
     case sanctionNotice(SanctionNotice)
+    /// Your friendships changed — re-read them.
+    ///
+    /// Unicast, like `sanctionNotice`, and CONTENT-FREE by design: it names
+    /// nobody, because the recipient learns who from `GET /api/friends`, which is
+    /// access-controlled. `kind` is `request` (somebody asked you) or `accepted`
+    /// (somebody said yes to you); nothing is sent for a decline, a cancel, an
+    /// unfriend or a block, all of which are silent on purpose.
+    ///
+    /// Before this frame existed, a request reached this app only on a cold
+    /// launch or a pull-to-refresh of the friends screen — there was no polling
+    /// at all — so somebody holding their phone could be sitting on a request
+    /// indefinitely and see nothing.
+    case friendActivity(kind: FriendActivityKind)
 
     // Voice signalling. The server is a pure relay for offer/answer/candidate;
     // everything else here is room membership.
@@ -53,6 +66,15 @@ enum RealtimeEvent: Sendable {
     /// Somebody we were waiting for said no; the call itself continues.
     case callDeclined(conversationId: String, userId: String)
     case other
+}
+
+/// `friendActivitySchema`'s `kind`. A closed set rather than a `String` so a
+/// spelling the server never sends cannot reach a `switch` — an unknown value is
+/// dropped at decode, which for a nudge means "do nothing" rather than
+/// "refresh for a reason we invented".
+enum FriendActivityKind: String, Sendable {
+    case request
+    case accepted
 }
 
 /// `sanctionNoticeSchema` — currently always a timeout. `message` is the whole
@@ -661,6 +683,13 @@ actor RealtimeClient {
             guard let channelId = envelope.channelId, let messageId = envelope.messageId,
                   let thread = envelope.thread else { return }
             event = .threadUpdate(channelId: channelId, messageId: messageId, thread: thread)
+        case "friend-activity":
+            // Reuses the envelope's `kind`, which the call frames already carry.
+            // A value outside the enum is dropped rather than defaulted: a nudge
+            // whose reason we cannot name is a refresh with no story behind it.
+            guard let raw = envelope.kind, let kind = FriendActivityKind(rawValue: raw)
+            else { return }
+            event = .friendActivity(kind: kind)
 
         case "welcome":
             guard let peerId = envelope.peerId,

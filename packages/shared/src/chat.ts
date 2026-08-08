@@ -13,6 +13,7 @@ import {
   MAX_ATTACHMENTS_PER_MESSAGE,
 } from "./attachments.js";
 import { embedSchema } from "./embeds.js";
+import { friendActivitySchema } from "./friends.js";
 import { sanctionNoticeSchema } from "./sanctions.js";
 import { setIdleMessageSchema } from "./status.js";
 // --- threads ---
@@ -250,6 +251,10 @@ export const chatServerMessageSchema = z.discriminatedUnion("type", [
   // and being in it is what lets `App.tsx` route it by name instead of letting
   // it fall through to the voice signaling handler.
   sanctionNoticeSchema,
+  // Addressed to one person, like `sanction-notice` and for the same reason —
+  // see the note on `friendActivitySchema`, and its absence from the list
+  // below.
+  friendActivitySchema,
 ]);
 
 /**
@@ -309,6 +314,12 @@ export const chatClientMessageSchema = z
  * and the server delivers it straight to that socket. Listing it here would
  * make the relay willing to hand one member's sanction to everyone in the
  * channel, which is a disclosure this guard is the last thing standing between.
+ *
+ * `friend-activity` is absent on the same grounds. It is addressed to one
+ * person, it names no channel, and it travels between instances on its own
+ * topic (`chat.friend`) keyed by user id. Listing it here would hand a "you
+ * have a friend request" nudge to a whole channel — content-free, so not a
+ * disclosure, but a badge appearing on strangers' screens is still a bug.
  */
 export const CHAT_SERVER_MESSAGE_TYPES = [
   "message-broadcast",

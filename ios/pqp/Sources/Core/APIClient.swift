@@ -694,6 +694,25 @@ extension APIClient {
         )
     }
 
+    /// Ban, WITH a reason.
+    ///
+    /// A different route from `removeMember(ban:)` on purpose: the members route
+    /// takes a `ban` flag and nothing else, so a ban placed through it can never
+    /// carry why. `POST /bans` does — and it is the reason the ban list can show
+    /// one later, which is the difference between a ban somebody can reconstruct
+    /// in six months and a name with a date beside it. Also the route that works
+    /// on somebody who is not a member yet, though no screen offers that today.
+    func banMember(serverId: String, userId: String, reason: String?) async throws {
+        struct Body: Encodable {
+            let userId: String
+            let reason: String?
+        }
+        let _: EmptyResponse = try await post(
+            "/api/servers/\(serverId)/bans",
+            body: Body(userId: userId, reason: reason)
+        )
+    }
+
     func unban(serverId: String, userId: String) async throws {
         let _: EmptyResponse = try await send(
             path: "/api/servers/\(serverId)/bans/\(userId)",
@@ -705,13 +724,22 @@ extension APIClient {
 
     /// Issue a timeout. Minutes, not an expiry instant — the server anchors
     /// the end time to its own clock, the one every read compares against.
-    func issueTimeout(serverId: String, userId: String, minutes: Int, reason: String?) async throws {
+    ///
+    /// Returns the server's own sentence. It names the end time and what the
+    /// sanction takes away, it is written by `describeTimeout` in shared, and it
+    /// is the SAME string the sanctioned person is shown — so a moderator who
+    /// reads it back knows exactly what the other side was told. Discardable for
+    /// the caller that only wants the side effect.
+    @discardableResult
+    func issueTimeout(
+        serverId: String, userId: String, minutes: Int, reason: String?
+    ) async throws -> IssuedTimeout {
         struct Body: Encodable {
             let userId: String
             let minutes: Int
             let reason: String?
         }
-        let _: EmptyResponse = try await post(
+        return try await post(
             "/api/servers/\(serverId)/timeouts",
             body: Body(userId: userId, minutes: minutes, reason: reason)
         )

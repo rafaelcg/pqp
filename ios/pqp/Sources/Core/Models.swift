@@ -356,6 +356,19 @@ struct MemberTimeout: Codable, Identifiable, Hashable, Sendable {
     var id: String { userId }
 }
 
+/// What `POST /api/servers/:id/timeouts` answers.
+///
+/// `message` is the whole sentence, already written by the server, and it is the
+/// same one the sanctioned person reads over their socket. A client that renders
+/// nothing but this string is a correct client — see `describeTimeout` in shared.
+struct IssuedTimeout: Decodable, Sendable {
+    struct Timeout: Decodable, Sendable {
+        let expiresAt: Date
+    }
+    let timeout: Timeout
+    let message: String
+}
+
 /// The report reasons, exactly as `REPORT_REASONS` orders them. The raw value
 /// is the wire string; the label is what a person reads.
 enum ReportReason: String, CaseIterable, Identifiable, Sendable {
