@@ -33,6 +33,15 @@ enum RealtimeEvent: Sendable {
     case voiceOffer(from: String, sdp: String)
     case voiceAnswer(from: String, sdp: String)
     case voiceCandidate(from: String, candidate: IceCandidatePayload?)
+
+    // Conversation calls. A DM "rings" where a server voice channel is
+    // join-when-you-want; these three frames are that whole lifecycle as the
+    // client sees it. Accepting a ring is not a frame — it is `join-voice-room`.
+    case callIncoming(IncomingCall)
+    /// Stop ringing. `reason` is `answered` | `declined` | `cancelled` | `timeout`.
+    case callRingCancelled(conversationId: String, reason: String)
+    /// Somebody we were waiting for said no; the call itself continues.
+    case callDeclined(conversationId: String, userId: String)
     case other
 }
 
@@ -54,11 +63,23 @@ struct VoiceParticipant: Codable, Identifiable, Hashable, Sendable {
     let avatarUrl: String?
     /// Defaulted: older servers predate screen share and omit the key.
     var sharingScreen: Bool = false
+    /// The sender-side MediaStream id of this participant's camera capture, or
+    /// nil when their camera is off.
+    ///
+    /// Load-bearing on the mesh receive path and nowhere else: an arriving video
+    /// track carries only its stream id, and one peer may legitimately be
+    /// sending two (camera *and* screen). This is what files each under the
+    /// right tile instead of guessing from arrival order.
+    var cameraStreamId: String?
+    /// Self-reported over `set-voice-state`; display only, never enforcement.
+    var muted: Bool = false
+    var deafened: Bool = false
 
     var id: String { peerId }
 
     enum CodingKeys: String, CodingKey {
         case peerId, userId, displayName, avatarUrl, sharingScreen
+        case cameraStreamId, muted, deafened
     }
 
     init(from decoder: Decoder) throws {
@@ -68,7 +89,17 @@ struct VoiceParticipant: Codable, Identifiable, Hashable, Sendable {
         displayName = try c.decodeIfPresent(String.self, forKey: .displayName) ?? "Someone"
         avatarUrl = try c.decodeIfPresent(String.self, forKey: .avatarUrl)
         sharingScreen = try c.decodeIfPresent(Bool.self, forKey: .sharingScreen) ?? false
+        cameraStreamId = try c.decodeIfPresent(String.self, forKey: .cameraStreamId)
+        muted = try c.decodeIfPresent(Bool.self, forKey: .muted) ?? false
+        deafened = try c.decodeIfPresent(Bool.self, forKey: .deafened) ?? false
     }
+}
+
+/// `callerSummarySchema` — who is ringing, as `call-incoming` carries them.
+struct CallerSummary: Codable, Hashable, Sendable {
+    let userId: String
+    let displayName: String
+    let avatarUrl: String?
 }
 
 /// Mirrors `iceCandidateInitSchema`. Every field is optional on the wire, and
@@ -323,6 +354,40 @@ actor RealtimeClient {
         ])
     }
 
+    // MARK: - Conversation calls
+
+    /// Ring the conversation's absent participants.
+    ///
+    /// Only ever sent *after* `welcome` for that same conversation: the server
+    /// refuses a ring from anyone who is not already a live peer of exactly this
+    /// room, which is what stops a forged ring from reaching a stranger.
+    func ringCall(conversationId: String) async {
+        await send(raw: ["type": "call-ring", "conversationId": conversationId])
+    }
+
+    /// Refuse a ring. There is no matching "accept" — accepting is joining.
+    func declineCall(conversationId: String) async {
+        await send(raw: ["type": "call-decline", "conversationId": conversationId])
+    }
+
+    /// Declare the camera to the room. `streamId` is our local capture's
+    /// MediaStream id, or nil for "camera off". Receivers cannot tell our camera
+    /// from a screen share without this.
+    func setCamera(streamId: String?) async {
+        // `NSNull`, not `nil as Any`: JSONSerialization rejects an Optional and
+        // `send` swallows the throw, so the "camera off" frame would simply
+        // never leave — and the far end would keep drawing a frozen face.
+        let value: Any = streamId ?? NSNull()
+        await send(raw: ["type": "set-camera", "streamId": value])
+    }
+
+    /// Mute/deafen, for the roster badges people outside the call see. Display
+    /// state — the actual silencing is local and already done by the time this
+    /// goes out.
+    func setVoiceState(muted: Bool, deafened: Bool) async {
+        await send(raw: ["type": "set-voice-state", "muted": muted, "deafened": deafened])
+    }
+
     func sendTyping(channelId: String) async {
         await send(raw: ["type": "typing", "channelId": channelId])
     }
@@ -369,12 +434,18 @@ actor RealtimeClient {
         let candidate: IceCandidatePayload?
         let limit: Int?
         let transport: String?
+        // Conversation calls
+        let conversationId: String?
+        let kind: String?
+        let caller: CallerSummary?
+        let reason: String?
 
         enum CodingKeys: String, CodingKey {
             case type, nonce, message, channelId, messageId, emoji, userId
             case displayName, added, users, serverId, mention
             case peerId, voiceChannelId, peers, participants, peer, sdp, from
             case candidate, limit, transport
+            case conversationId, kind, caller, reason
             // `self` is a Swift keyword, so the wire key is remapped.
             case selfPeer = "self"
         }
@@ -492,6 +563,27 @@ actor RealtimeClient {
         case "ice-candidate":
             guard let from = envelope.from else { return }
             event = .voiceCandidate(from: from, candidate: envelope.candidate)
+
+        case "call-incoming":
+            guard let conversationId = envelope.conversationId,
+                  let caller = envelope.caller else { return }
+            event = .callIncoming(IncomingCall(
+                conversationId: conversationId,
+                // Absent would be a server that predates group calls; a 1:1 is
+                // the safe read and the only shape iOS draws differently.
+                kind: envelope.kind ?? "dm",
+                callerUserId: caller.userId,
+                callerName: caller.displayName,
+                callerAvatarUrl: caller.avatarUrl
+            ))
+        case "call-ring-cancelled":
+            guard let conversationId = envelope.conversationId else { return }
+            event = .callRingCancelled(conversationId: conversationId,
+                                       reason: envelope.reason ?? "cancelled")
+        case "call-declined":
+            guard let conversationId = envelope.conversationId,
+                  let userId = envelope.userId else { return }
+            event = .callDeclined(conversationId: conversationId, userId: userId)
         default:
             event = .other
         }

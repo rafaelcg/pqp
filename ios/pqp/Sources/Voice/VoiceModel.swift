@@ -37,6 +37,9 @@ final class VoiceModel {
     /// The channel we intend to be in, kept across a socket drop so the call
     /// can be rebuilt rather than silently ending.
     private var intendedChannel: Channel?
+    /// Set when the server dropped our peer because this socket joined another
+    /// voice room. Suppresses the departing `leave-voice-room` — see `leave()`.
+    private var wasEvicted = false
     /// Keyed by *user* id, not peer id — a peer id is minted fresh on every
     /// join, so a peer-keyed level would reset whenever they reconnected.
     private var volumeByUser: [String: Double] = [:]
@@ -88,7 +91,12 @@ final class VoiceModel {
     func leave() async {
         intendedChannel = nil
         session?.eventHandlers.removeValue(forKey: handlerKey)
-        await session?.realtime.leaveVoice()
+        // Skipped when the server already took our peer: this socket's peer now
+        // belongs to whatever displaced us, so the frame would hang *that* up.
+        if !wasEvicted {
+            await session?.realtime.leaveVoice()
+        }
+        wasEvicted = false
         await voice.disconnectAll()
         status = .idle
         channelId = nil
@@ -149,7 +157,26 @@ final class VoiceModel {
             }
 
         case .voiceWelcome(let peerId, let voiceChannelId, let existing, _, let transport):
-            guard voiceChannelId == channelId else { return }
+            guard voiceChannelId == channelId else {
+                // A `welcome` for another room means this socket joined one —
+                // and the server keeps exactly one peer per socket, so ours is
+                // already gone and everyone here has watched us leave. Tearing
+                // down locally is the difference between an honest exit and a
+                // screen still claiming to be in a channel nobody can hear us
+                // in. Local only: no frame goes out, because the socket's peer
+                // now belongs to whatever displaced us.
+                if status != .idle {
+                    wasEvicted = true
+                    intendedChannel = nil
+                    peers = []
+                    selfPeerId = nil
+                    status = .failed(String(
+                        localized: "You joined another voice room, so this one was left."
+                    ))
+                    Task { await voice.disconnectAll() }
+                }
+                return
+            }
             // The room's transport is pinned by the server and binding. A
             // client that cannot speak it must refuse — joining anyway puts us
             // in the roster looking permanently muted to everyone else, which

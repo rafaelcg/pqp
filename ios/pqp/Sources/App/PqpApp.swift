@@ -4,6 +4,10 @@ import ClerkKit
 @main
 struct PqpApp: App {
     @State private var session = SessionStore()
+    /// App-wide because a ring is not tied to a screen: `call-incoming` can
+    /// arrive while the user is anywhere, and the stage has to outlive whatever
+    /// they navigate to mid-call.
+    @State private var call = CallModel()
 
     /// Non-nil only when a publishable key is configured. Held so it can be put
     /// into the SwiftUI environment, which Clerk's own views require.
@@ -24,6 +28,7 @@ struct PqpApp: App {
         WindowGroup {
             RootView()
                 .environment(session)
+                .environment(call)
                 // Clerk's views read `@Environment(Clerk.self)`. Configuring is
                 // not enough — without this injection, presenting `AuthView`
                 // traps inside SwiftUI's environment lookup with a stack that
@@ -59,10 +64,13 @@ private struct ClerkEnvironment: ViewModifier {
 /// exactly one view owns it.
 struct RootView: View {
     @Environment(SessionStore.self) private var session
+    @Environment(CallModel.self) private var call
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
-        ZStack {
+        @Bindable var call = call
+
+        return ZStack {
             Palette.ink.ignoresSafeArea()
 
             switch session.phase {
@@ -89,8 +97,29 @@ struct RootView: View {
                     ))
             }
         }
+        // The ring floats above whatever is on screen. Only ever while signed
+        // in — a call cannot reach an account that is not authenticated.
+        .overlay(alignment: .top) {
+            if session.phase == .ready, let incoming = call.incoming.first {
+                IncomingCallBanner(incoming: incoming)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .animation(Motion.standard, value: call.incoming)
+        // Presented from the root rather than from the chat screen: a call
+        // answered from the servers tab has to have somewhere to appear, and
+        // collapsing it must not depend on which screen started it.
+        .fullScreenCover(isPresented: Binding(
+            get: { call.phase.isLive && !call.isCollapsed },
+            // The only way this cover dismisses itself is the swipe/back path,
+            // which means "let me read something", not "hang up".
+            set: { if !$0 { call.isCollapsed = true } }
+        )) {
+            CallStageView()
+        }
         .animation(Motion.gentle, value: session.phase)
         .task { await session.restore() }
+        .task { call.attach(session: session) }
         // Idle is reported on transitions only, exactly as `set-idle` is
         // specified. Backgrounding is the phone's version of walking away.
         .onChange(of: scenePhase) { _, phase in

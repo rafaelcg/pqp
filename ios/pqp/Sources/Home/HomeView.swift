@@ -227,7 +227,8 @@ struct ConversationListView: View {
                             NavigationLink {
                                 ChatView(
                                     channelId: conversation.channelId,
-                                    title: conversation.title
+                                    title: conversation.title,
+                                    conversation: conversation
                                 )
                             } label: {
                                 ConversationRow(conversation: conversation)
@@ -261,7 +262,8 @@ struct ConversationListView: View {
             }
         }
         .navigationDestination(item: $openedConversation) { conversation in
-            ChatView(channelId: conversation.channelId, title: conversation.title)
+            ChatView(channelId: conversation.channelId, title: conversation.title,
+                     conversation: conversation)
         }
     }
 }

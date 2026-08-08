@@ -3,8 +3,14 @@ import PhotosUI
 
 struct ChatView: View {
     @Environment(SessionStore.self) private var session
+    @Environment(CallModel.self) private var call
     let channelId: String
     let title: String
+    /// Set only for a conversation (a channel with no server). Calls are a DM
+    /// affordance: a server voice channel is a room you walk into from the
+    /// channel list, and putting a call button on its text channel would ring
+    /// nobody. Nil here is what keeps the header identical for server channels.
+    var conversation: DmSummary? = nil
 
     @State private var model = ChatModel()
     @State private var showingPicker = false
@@ -44,12 +50,44 @@ struct ChatView: View {
         .animation(Motion.standard, value: model.replyingTo?.id)
         .animation(Motion.standard, value: model.editing?.id)
         .toolbar {
+            if let conversation {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button {
+                        Task { await call.start(conversation: conversation, withVideo: false) }
+                    } label: {
+                        Image(systemName: "phone.fill")
+                    }
+                    .tint(Palette.signal)
+                    .accessibilityIdentifier("chat.callVoice")
+                    .accessibilityLabel("Start a voice call")
+                    .disabled(call.phase.isLive)
+
+                    Button {
+                        Task { await call.start(conversation: conversation, withVideo: true) }
+                    } label: {
+                        Image(systemName: "video.fill")
+                    }
+                    .tint(Palette.signal)
+                    .accessibilityIdentifier("chat.callVideo")
+                    .accessibilityLabel("Start a video call")
+                    .disabled(call.phase.isLive)
+                }
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Button { showingPins = true } label: { Image(systemName: "pin") }
                     .tint(Palette.signal)
                     .accessibilityLabel("Pinned messages")
             }
         }
+        // A collapsed call keeps a strip at the top of the thread it belongs to,
+        // so "tuck the call away and read" does not mean losing it.
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if call.isCurrent(channelId), call.isCollapsed {
+                CallCollapsedBanner()
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .animation(Motion.standard, value: call.isCollapsed)
         .sheet(isPresented: $showingPins) { PinnedMessagesView(channelId: channelId) }
         .sheet(isPresented: $showingGifs) {
             GifPicker { gif in Task { await model.sendGif(gif) } }

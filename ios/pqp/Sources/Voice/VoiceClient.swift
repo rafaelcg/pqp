@@ -14,6 +14,27 @@ struct VoicePeerState: Identifiable, Hashable, Sendable {
     var id: String { peerId }
 }
 
+/// One peer's incoming video, already sorted into what it *shows*.
+///
+/// A video track on the wire says nothing about its subject; the roster does.
+/// See `classifyVideo` below — this is the answer that classification produces,
+/// and the only shape the UI ever sees.
+///
+/// `@unchecked Sendable` for the same reason `UncheckedBox` exists: `RTCVideoTrack`
+/// is an Objective-C class, the reference *is* the value (it is what a renderer
+/// attaches to), and it is handed from the actor to the main actor once and then
+/// only read there.
+struct PeerVideo: @unchecked Sendable, Equatable {
+    var camera: RTCVideoTrack?
+    var screen: RTCVideoTrack?
+
+    var isEmpty: Bool { camera == nil && screen == nil }
+
+    static func == (lhs: PeerVideo, rhs: PeerVideo) -> Bool {
+        lhs.camera === rhs.camera && lhs.screen === rhs.screen
+    }
+}
+
 /// Full-mesh WebRTC voice.
 ///
 /// The server's default backend is a peer mesh and its signalling is a pure
@@ -55,6 +76,36 @@ actor VoiceClient {
     private var peerUserIds: [String: String] = [:]
     private var peerConnectionState: [String: String] = [:]
 
+    // MARK: - Video (conversation calls)
+    //
+    // Voice channels never touch any of this: nothing below runs until
+    // `startCamera` is called, and no camera track is ever created for a server
+    // voice room. It lives here rather than in a second RTC stack because a
+    // camera is one more track on the same peer connections — a parallel
+    // manager would mean two meshes to the same peers.
+
+    /// Our own capture. The source outlives a camera flip; the capturer does not.
+    private var cameraSource: RTCVideoSource?
+    private var cameraCapturer: RTCCameraVideoCapturer?
+    private var localVideoTrack: RTCVideoTrack?
+    /// The MediaStream id our camera is published under. This is the value that
+    /// travels on `set-camera` and comes back on everyone's roster as
+    /// `cameraStreamId` — it is what lets receivers tell our face from a screen.
+    private var localCameraStreamId: String?
+    private var usesFrontCamera = true
+    /// Our outgoing camera sender per peer, kept by role rather than found by
+    /// `track.kind`: a screen share is also video.
+    private var cameraSenders: [String: RTCRtpSender] = [:]
+
+    /// Every video track a peer is sending, keyed by peer then by *sender-side*
+    /// stream id (`a=msid`, preserved across the wire).
+    private var remoteVideoTracks: [String: [String: RTCVideoTrack]] = [:]
+    /// The camera stream id each peer announced over the WS, or nil.
+    private var remoteCameraStreamIds: [String: String] = [:]
+    private var onVideoChange: (@Sendable ([String: PeerVideo]) -> Void)?
+    /// Re-offer retries in flight, so a teardown can cancel them.
+    private var renegotiationTasks: [String: Task<Void, Never>] = [:]
+
     enum VoiceSignal: Sendable {
         case offer(to: String, sdp: String)
         case answer(to: String, sdp: String)
@@ -75,11 +126,13 @@ actor VoiceClient {
         selfPeerId: String,
         iceServers: [IceServerConfig],
         onStateChange: @escaping @Sendable ([VoicePeerState]) -> Void,
-        signal: @escaping @Sendable (VoiceSignal) -> Void
+        signal: @escaping @Sendable (VoiceSignal) -> Void,
+        onVideoChange: (@Sendable ([String: PeerVideo]) -> Void)? = nil
     ) {
         self.selfPeerId = selfPeerId
         self.onStateChange = onStateChange
         self.signal = signal
+        self.onVideoChange = onVideoChange
         self.iceServers = iceServers.map { config in
             if let username = config.username, let credential = config.credential {
                 return RTCIceServer(urlStrings: config.urlList,
@@ -116,6 +169,19 @@ actor VoiceClient {
     /// so connecting before it is known would pick the wrong side.
     func setSelfPeerId(_ peerId: String) {
         selfPeerId = peerId
+    }
+
+    /// Switches the session between the voice-only and the with-video profile.
+    ///
+    /// `.videoChat` is not cosmetic: it is the mode iOS tunes for a call that is
+    /// *also* showing a face, and it keeps the far end audible when the speaker
+    /// is on and the phone is held at arm's length. `.voiceChat` is right for
+    /// audio-only and is what the room reverts to when the camera goes off.
+    func setVideoMode(_ on: Bool) {
+        let session = RTCAudioSession.sharedInstance()
+        session.lockForConfiguration()
+        defer { session.unlockForConfiguration() }
+        try? session.setMode(on ? .videoChat : .voiceChat)
     }
 
     func setMuted(_ muted: Bool) {
@@ -163,6 +229,173 @@ actor VoiceClient {
     func setVolume(_ volume: Double, for peerId: String) {
         volumes[peerId] = volume
         remoteTracks[peerId]?.source.volume = volume
+    }
+
+    // MARK: - Camera
+
+    /// Opens the camera and publishes it to every peer.
+    ///
+    /// Returns the local track (for the self preview) and the MediaStream id the
+    /// caller must announce over `set-camera` — receivers cannot classify the
+    /// arriving video without it. Announce *before* the track lands if possible;
+    /// the roster re-check covers the other ordering.
+    func startCamera() async -> (track: UncheckedBox<RTCVideoTrack>, streamId: String)? {
+        if let localVideoTrack, let localCameraStreamId {
+            return (UncheckedBox(localVideoTrack), localCameraStreamId)
+        }
+        guard let device = Self.captureDevice(front: usesFrontCamera),
+              let format = Self.bestFormat(for: device) else { return nil }
+
+        let source = factory.videoSource()
+        let capturer = RTCCameraVideoCapturer(delegate: source)
+        let fps = Int(min(30, format.videoSupportedFrameRateRanges
+            .map(\.maxFrameRate).max() ?? 30))
+        try? await capturer.startCapture(with: device, format: format, fps: fps)
+
+        // Unique per capture, not per app: the id is the receiver's whole basis
+        // for telling this stream from a screen share, and a constant would
+        // collide with a rejoin's stale entry on the other side.
+        let streamId = "pqp-camera-" + UUID().uuidString
+        let track = factory.videoTrack(with: source, trackId: "pqp-video-0")
+        cameraSource = source
+        cameraCapturer = capturer
+        localVideoTrack = track
+        localCameraStreamId = streamId
+
+        for (peerId, connection) in connections {
+            cameraSenders[peerId] = connection.add(track, streamIds: [streamId])
+        }
+        // Adding a track needs a new offer regardless of politeness — the same
+        // thing `setLocalCameraStream` does in the web client. Glare, if any, is
+        // resolved by perfect negotiation on whichever side receives it.
+        for peerId in connections.keys {
+            await negotiate(with: peerId)
+        }
+        return (UncheckedBox(track), streamId)
+    }
+
+    /// Stops the capture and unpublishes. The capture is released rather than
+    /// merely disabled: a camera light with nothing behind it is not acceptable.
+    func stopCamera() async {
+        guard localVideoTrack != nil else { return }
+        await cameraCapturer?.stopCapture()
+        for (peerId, sender) in cameraSenders {
+            connections[peerId]?.removeTrack(sender)
+        }
+        cameraSenders.removeAll()
+        cameraCapturer = nil
+        cameraSource = nil
+        localVideoTrack = nil
+        localCameraStreamId = nil
+        for peerId in connections.keys {
+            await negotiate(with: peerId)
+        }
+    }
+
+    /// Front ↔ back. The source and the track survive, so nothing renegotiates
+    /// and the far end sees the picture change rather than a stream restart.
+    func flipCamera() {
+        guard let capturer = cameraCapturer else {
+            usesFrontCamera.toggle()
+            return
+        }
+        usesFrontCamera.toggle()
+        guard let device = Self.captureDevice(front: usesFrontCamera),
+              let format = Self.bestFormat(for: device) else { return }
+        let fps = Int(min(30, format.videoSupportedFrameRateRanges
+            .map(\.maxFrameRate).max() ?? 30))
+        capturer.stopCapture()
+        capturer.startCapture(with: device, format: format, fps: fps)
+    }
+
+    var isCameraOn: Bool { localVideoTrack != nil }
+
+    private static func captureDevice(front: Bool) -> AVCaptureDevice? {
+        let devices = RTCCameraVideoCapturer.captureDevices()
+        return devices.first { $0.position == (front ? .front : .back) } ?? devices.first
+    }
+
+    /// The smallest format at or above 640×480.
+    ///
+    /// Deliberately not the best the camera can do: a mesh call encodes one
+    /// stream per peer on a battery, and 720p of a face in a phone-sized tile
+    /// buys nothing but heat.
+    private static func bestFormat(for device: AVCaptureDevice) -> AVCaptureDevice.Format? {
+        let formats = RTCCameraVideoCapturer.supportedFormats(for: device)
+        let sized = formats.map { format -> (AVCaptureDevice.Format, Int32) in
+            let dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+            return (format, dimensions.width * dimensions.height)
+        }
+        let target: Int32 = 640 * 480
+        return sized.filter { $0.1 >= target }.min { $0.1 < $1.1 }?.0
+            ?? sized.max { $0.1 < $1.1 }?.0
+    }
+
+    /// File a peer's announced camera stream id, from the roster.
+    ///
+    /// Mirrors `setPeerCameraStreamId` in `peer-connection-manager.ts`, including
+    /// the delete-on-null: a sender's `removeTrack` only *mutes* the receiving
+    /// track per spec, so without dropping the stream outright a switched-off
+    /// camera would be reclassified as a screen share and drawn as a frozen frame.
+    func setPeerCameraStreamId(_ streamId: String?, for peerId: String) {
+        let previous = remoteCameraStreamIds[peerId]
+        guard previous != streamId else { return }
+        remoteCameraStreamIds[peerId] = streamId
+        if streamId == nil, let previous {
+            remoteVideoTracks[peerId]?[previous] = nil
+        }
+        emitVideo()
+    }
+
+    fileprivate func addRemoteVideo(
+        _ box: UncheckedBox<RTCVideoTrack>,
+        streamIds: [String],
+        for peerId: String
+    ) {
+        // No stream id at all should not happen on this protocol, but a track
+        // filed under nothing is invisible — fall back to the track id so it at
+        // least renders (as a share, which is the safe classification).
+        let id = streamIds.first ?? box.value.trackId
+        remoteVideoTracks[peerId, default: [:]][id] = box.value
+        emitVideo()
+    }
+
+    fileprivate func removeRemoteVideo(trackId: String, for peerId: String) {
+        guard var streams = remoteVideoTracks[peerId] else { return }
+        let before = streams.count
+        streams = streams.filter { $0.value.trackId != trackId }
+        guard streams.count != before else { return }
+        remoteVideoTracks[peerId] = streams
+        emitVideo()
+    }
+
+    /// Re-derive which incoming video is a camera and which is a screen.
+    ///
+    /// Byte-for-byte the rule in `classifyVideo` on the web: the announced id
+    /// wins, anything else is a share — which is also exactly the behaviour for
+    /// a peer that never announces a camera at all. Run on both track arrival
+    /// and roster arrival, because the two race.
+    private func emitVideo() {
+        var result: [String: PeerVideo] = [:]
+        for (peerId, streams) in remoteVideoTracks {
+            var camera: RTCVideoTrack?
+            var screen: RTCVideoTrack?
+            let announced = remoteCameraStreamIds[peerId]
+            // Sorted so the choice among several shares is stable frame to
+            // frame rather than dictionary order.
+            for (id, track) in streams.sorted(by: { $0.key < $1.key }) {
+                if let announced, id == announced {
+                    camera = camera ?? track
+                } else {
+                    screen = screen ?? track
+                }
+            }
+            let video = PeerVideo(camera: camera, screen: screen)
+            if !video.isEmpty {
+                result[peerId] = video
+            }
+        }
+        onVideoChange?(result)
     }
 
     /// Polls each connection's audio level.
@@ -222,6 +455,8 @@ actor VoiceClient {
     }
 
     func remove(peerId: String) {
+        renegotiationTasks[peerId]?.cancel()
+        renegotiationTasks[peerId] = nil
         connections[peerId]?.close()
         connections[peerId] = nil
         remoteTracks[peerId] = nil
@@ -230,6 +465,11 @@ actor VoiceClient {
         peerNames[peerId] = nil
         peerUserIds[peerId] = nil
         peerConnectionState[peerId] = nil
+        cameraSenders[peerId] = nil
+        remoteVideoTracks[peerId] = nil
+        remoteCameraStreamIds[peerId] = nil
+        delegates[peerId] = nil
+        emitVideo()
         emit()
     }
 
@@ -239,12 +479,26 @@ actor VoiceClient {
         speaking.removeAll()
         remoteTracks.removeAll()
         isDeafened = false
+        for task in renegotiationTasks.values { task.cancel() }
+        renegotiationTasks.removeAll()
         for (_, connection) in connections { connection.close() }
         connections.removeAll()
+        delegates.removeAll()
         pendingCandidates.removeAll()
         peerNames.removeAll()
         peerUserIds.removeAll()
         peerConnectionState.removeAll()
+        // The camera is hardware: leaving the capturer running after a hang-up
+        // is a lit camera light on a call that ended.
+        cameraCapturer?.stopCapture()
+        cameraCapturer = nil
+        cameraSource = nil
+        localVideoTrack = nil
+        localCameraStreamId = nil
+        cameraSenders.removeAll()
+        remoteVideoTracks.removeAll()
+        remoteCameraStreamIds.removeAll()
+        emitVideo()
         localAudioTrack = nil
         localStream = nil
         let session = RTCAudioSession.sharedInstance()
@@ -279,7 +533,60 @@ actor VoiceClient {
         if let localAudioTrack {
             connection.add(localAudioTrack, streamIds: ["pqp-stream-0"])
         }
+        // A camera already running when this peer arrives has to be on their
+        // connection from the start, or they never see it: nothing renegotiates
+        // for a track that was added before the pair ever negotiated. The
+        // deferred re-offer in `handleOffer` is the other half of that story.
+        if let localVideoTrack, let localCameraStreamId {
+            cameraSenders[peerId] = connection.add(
+                localVideoTrack, streamIds: [localCameraStreamId]
+            )
+        }
         return connection
+    }
+
+    /// A local track that no negotiated m-line carries — invisible to the peer.
+    ///
+    /// `mid` is empty (not nil) on this SDK until the transceiver is associated.
+    private func hasUnnegotiatedSender(_ connection: RTCPeerConnection) -> Bool {
+        connection.transceivers.contains { transceiver in
+            transceiver.mid.isEmpty && transceiver.sender.track != nil
+        }
+    }
+
+    /// Offer an unnegotiated local track once the pair has settled.
+    ///
+    /// This is the iOS half of the deferred re-offer in
+    /// `peer-connection-manager.ts`. An answer can only cover the m-lines the
+    /// *offer* carried, so a camera that was already on when this peer joined
+    /// sits on a transceiver with no mid and no code path would ever offer it —
+    /// the polite side never initiates. Checked-and-retried rather than fired
+    /// once: an offer sent in the same breath as our answer reaches a remote
+    /// still applying that answer, reads as glare, and is dropped with nothing
+    /// left to retry. Every attempt re-checks, so the loop is a no-op the moment
+    /// the track has its m-line.
+    private func scheduleRenegotiation(with peerId: String) {
+        renegotiationTasks[peerId]?.cancel()
+        renegotiationTasks[peerId] = Task { [weak self] in
+            for attempt in 0..<5 {
+                try? await Task.sleep(for: .milliseconds(400 * (attempt + 1)))
+                guard !Task.isCancelled, let self else { return }
+                if await !self.reofferIfNeeded(with: peerId) { return }
+            }
+        }
+    }
+
+    /// One attempt. Returns false when there is nothing left to do — the track
+    /// got its m-line, or the peer is gone.
+    private func reofferIfNeeded(with peerId: String) async -> Bool {
+        guard let connection = connections[peerId] else { return false }
+        guard hasUnnegotiatedSender(connection) else { return false }
+        // Still unstable: leave it for the next attempt rather than producing
+        // the very glare this delay exists to avoid.
+        guard !makingOffer.contains(peerId),
+              connection.signalingState == .stable else { return true }
+        await negotiate(with: peerId)
+        return true
     }
 
     private var delegates: [String: PeerDelegate] = [:]
@@ -325,6 +632,11 @@ actor VoiceClient {
             try await connection.setLocalDescription(answer)
             signal?(.answer(to: peerId, sdp: answer.sdp))
             await drainCandidates(for: peerId)
+            // Follow our answer with our own offer when we are holding a track
+            // the answer could not carry. See `scheduleRenegotiation`.
+            if hasUnnegotiatedSender(connection) {
+                scheduleRenegotiation(with: peerId)
+            }
         } catch {
             // Same as above — surfaced through connection state, not thrown.
         }
@@ -476,18 +788,67 @@ private final class PeerDelegate: NSObject, RTCPeerConnectionDelegate, @unchecke
         }
     }
 
-    // Required by the protocol, unused for audio-only mesh.
     func peerConnection(_ peerConnection: RTCPeerConnection, didChange stateChanged: RTCSignalingState) {}
+
+    /// The Plan-B-shaped callback. Kept because it is what this app's audio has
+    /// always run on; `didAdd rtpReceiver:streams:` below is the unified-plan
+    /// one, and both filing the same track is harmless (the maps are keyed by
+    /// identity, so the second write is the first write).
     func peerConnection(_ peerConnection: RTCPeerConnection, didAdd stream: RTCMediaStream) {
-        guard let track = stream.audioTracks.first else { return }
-        // `RTCAudioTrack` is an Objective-C class and not Sendable, but unlike
-        // an ICE candidate its identity is the point — the reference is what
-        // deafening toggles. Boxed rather than copied, and only ever touched on
-        // the actor after this handoff.
-        let box = UncheckedBox(track)
-        Task { [owner, peerId] in await owner?.addRemoteTrack(box, for: peerId) }
+        if let track = stream.audioTracks.first {
+            // `RTCAudioTrack` is an Objective-C class and not Sendable, but unlike
+            // an ICE candidate its identity is the point — the reference is what
+            // deafening toggles. Boxed rather than copied, and only ever touched on
+            // the actor after this handoff.
+            let box = UncheckedBox(track)
+            Task { [owner, peerId] in await owner?.addRemoteTrack(box, for: peerId) }
+        }
+        let streamId = stream.streamId
+        for video in stream.videoTracks {
+            let box = UncheckedBox(video)
+            Task { [owner, peerId] in
+                await owner?.addRemoteVideo(box, streamIds: [streamId], for: peerId)
+            }
+        }
     }
-    func peerConnection(_ peerConnection: RTCPeerConnection, didRemove stream: RTCMediaStream) {}
+
+    func peerConnection(_ peerConnection: RTCPeerConnection, didRemove stream: RTCMediaStream) {
+        let trackIds = stream.videoTracks.map(\.trackId)
+        Task { [owner, peerId] in
+            for trackId in trackIds {
+                await owner?.removeRemoteVideo(trackId: trackId, for: peerId)
+            }
+        }
+    }
+
+    /// Unified plan's "a receiver and its track were created".
+    ///
+    /// This is the callback that carries the *stream ids* a track was published
+    /// under, which is the entire basis for telling a camera from a screen
+    /// share (`voiceParticipantSchema.cameraStreamId`).
+    func peerConnection(
+        _ peerConnection: RTCPeerConnection,
+        didAdd rtpReceiver: RTCRtpReceiver,
+        streams mediaStreams: [RTCMediaStream]
+    ) {
+        let streamIds = mediaStreams.map(\.streamId)
+        if let video = rtpReceiver.track as? RTCVideoTrack {
+            let box = UncheckedBox(video)
+            Task { [owner, peerId] in
+                await owner?.addRemoteVideo(box, streamIds: streamIds, for: peerId)
+            }
+        } else if let audio = rtpReceiver.track as? RTCAudioTrack {
+            let box = UncheckedBox(audio)
+            Task { [owner, peerId] in await owner?.addRemoteTrack(box, for: peerId) }
+        }
+    }
+
+    func peerConnection(_ peerConnection: RTCPeerConnection, didRemove rtpReceiver: RTCRtpReceiver) {
+        guard let trackId = rtpReceiver.track?.trackId else { return }
+        Task { [owner, peerId] in
+            await owner?.removeRemoteVideo(trackId: trackId, for: peerId)
+        }
+    }
     func peerConnectionShouldNegotiate(_ peerConnection: RTCPeerConnection) {}
     func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceConnectionState) {}
     func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceGatheringState) {}
