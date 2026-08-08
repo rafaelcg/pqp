@@ -1,4 +1,4 @@
-import { MessageCircle, Plus, UserPlus } from "lucide-react";
+import { Compass, MessageCircle, Plus, UserPlus } from "lucide-react";
 import type { Channel, Server } from "@pqp/shared";
 import {
   formatBadgeCount,
@@ -38,6 +38,16 @@ interface ServerRailProps {
    * looking for a third message that does not exist.
    */
   friendRequestCount?: number;
+  /** True while the directory is covering the app. */
+  communitiesSelected?: boolean;
+  /**
+   * Opens the Communities directory.
+   *
+   * ABSENT ENTIRELY on a deployment where `/api/communities/config` answered
+   * `enabled: false`, which is what makes the compass not exist rather than
+   * exist-and-refuse.
+   */
+  onOpenCommunities?: () => void;
   onSelectHome: () => void;
   onSelectServer: (serverId: string) => void;
   onCreateServer: () => void;
@@ -56,6 +66,8 @@ export function ServerRail({
   homeSelected,
   homeUnread,
   friendRequestCount = 0,
+  communitiesSelected = false,
+  onOpenCommunities,
   onSelectHome,
   onSelectServer,
   onCreateServer,
@@ -246,8 +258,8 @@ export function ServerRail({
         size="icon"
         className="h-12 w-12 rounded-2xl hover:rounded-xl"
         onClick={onCreateServer}
-        title="Create server"
-        aria-label="Create server"
+        title={t("empty.createServer")}
+        aria-label={t("empty.createServer")}
       >
         <Plus className="h-5 w-5" />
       </Button>
@@ -261,6 +273,46 @@ export function ServerRail({
       >
         <UserPlus className="h-5 w-5" />
       </Button>
+
+      {/* Communities, at the FOOT of the rail and separated from everything
+          above it.
+          The position is the point. Above this line the rail is the rooms you
+          are already in, in the order you put them; the compass is the only
+          thing here that leads somewhere you have not been, so it sits apart
+          and it sits still — `mt-auto` pins it to the bottom edge no matter how
+          many servers are stacked over it, which is what makes it findable
+          without being read. It is the same placement Discord gives discovery,
+          for the same reason.
+          NO BADGE, EVER. Every other icon on this rail earns its corner marks
+          by having something waiting for you; a directory has nothing waiting
+          for anybody, and a count here would be an invention. */}
+      {onOpenCommunities && (
+        <>
+          <span
+            aria-hidden="true"
+            className="mt-auto h-px w-8 shrink-0 rounded-full bg-ink-4/70"
+          />
+          <button
+            type="button"
+            data-communities-rail
+            onClick={onOpenCommunities}
+            title={t("communities.title")}
+            aria-label={t("communities.title")}
+            aria-current={communitiesSelected ? "page" : undefined}
+            className={cn(
+              "relative flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl transition-all duration-200 hover:rounded-xl",
+              communitiesSelected
+                ? "rounded-xl bg-signal text-ink"
+                : "bg-ink-3 text-paper hover:bg-signal hover:text-ink",
+            )}
+          >
+            {communitiesSelected && (
+              <span className="absolute -left-3 h-8 w-1 rounded-r bg-signal" />
+            )}
+            <Compass className="h-5 w-5" />
+          </button>
+        </>
+      )}
     </nav>
   );
 }

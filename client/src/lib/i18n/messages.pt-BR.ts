@@ -27,17 +27,17 @@ export const ptBR: PartialMessages = {
   // call site.
   "nav.selfHost": "Self-host",
   "nav.signIn": "Entrar",
-  "nav.signUp": "Criar um servidor",
+  "nav.signUp": "Criar uma comunidade",
   "nav.openApp": "Abrir o app",
 
   "landing.seo.title": "pqp — o chat em grupo é seu",
   "landing.seo.description":
-    "Chat em grupo com servidores, canais e voz que simplesmente funciona. Código aberto — hospede você mesmo ou use o pqp.gg.",
+    "Chat em grupo com comunidades, canais e voz que simplesmente funciona. Código aberto — hospede você mesmo ou use o pqp.gg.",
   // A piada do nome, feita uma vez e só aqui. O convite mais abaixo aponta pro
   // outro lado ("vai pra pqp") de propósito — não unifique os dois.
   "landing.hero.title": "Vem pra pqp.",
   "landing.hero.body":
-    "Voz, chat e tela compartilhada pra sua galera. Cria o servidor, manda o link. Só isso.",
+    "Voz, chat e tela compartilhada pra sua galera. Cria a comunidade, manda o link. Só isso.",
 
   "landing.trust.openSource": "Código aberto",
   "landing.trust.selfHostable": "Self-host",
@@ -49,11 +49,11 @@ export const ptBR: PartialMessages = {
   // does the same job: you are only there while somebody else allows it.
   "landing.pitch.title": "Cansado de morar de favor?",
   "landing.pitch.body":
-    "Os apps grandes mudam as regras quando querem, escondem os seus servidores e tratam a sua turma como estoque. O pqp é o contrário: cria um servidor, chama a galera, conversa. Fica com as chaves se quiser — ou usa as nossas e esquece a infra.",
+    "Os apps grandes mudam as regras quando querem, escondem as suas comunidades e tratam a sua turma como estoque. O pqp é o contrário: cria uma comunidade, chama a galera, conversa. Fica com as chaves se quiser — ou usa as nossas e esquece a infra.",
 
   "landing.how.title": "Três passos. Depois é só gritar.",
   "landing.how.body": "Sem labirinto de cadastro. Cria, chama, apronta.",
-  "landing.how.step1.title": "Cria um servidor",
+  "landing.how.step1.title": "Cria uma comunidade",
   "landing.how.step1.body":
     "Bota um nome ridículo. Os canais de texto e de voz já vêm prontos.",
   "landing.how.step2.title": "Manda o convite",
@@ -83,11 +83,11 @@ export const ptBR: PartialMessages = {
     "Markdown, resposta, reação, mensagem fixada e @menção. Colou um link, já vira preview.",
   "landing.features.search.title": "Acha o que foi dito",
   "landing.features.search.body":
-    "Busca por palavra no servidor inteiro e cai direto na mensagem, com o que veio antes e depois.",
+    "Busca por palavra na comunidade inteira e cai direto na mensagem, com o que veio antes e depois.",
   "landing.features.dms.title": "DM e grupo",
   "landing.features.dms.body":
     "Chama alguém no privado ou monta um grupo com até 10 pessoas.",
-  "landing.features.structure.title": "Servidor do seu jeito",
+  "landing.features.structure.title": "Comunidade do seu jeito",
   "landing.features.structure.body":
     "Categorias pra organizar, canais privados e três cargos: dono, admin e membro.",
   "landing.features.invites.title": "Convite é só um link",
@@ -108,10 +108,31 @@ export const ptBR: PartialMessages = {
 
   "landing.cta.title": "A sala tá vazia. Resolve isso.",
   "landing.cta.body":
-    "Cria um servidor em menos de um minuto. A bagunça você chama depois.",
+    "Cria uma comunidade em menos de um minuto. A bagunça você chama depois.",
   // O contraponto do "vem" lá de cima: aqui a ação é mandar alguém pra algum
   // lugar, que é onde a piada funciona de novo. A seta é desenhada no JSX.
   "landing.cta.action": "Vai pra pqp",
+
+  // ------------------------------------------------- comunidades (marketing)
+  //
+  // O diretório fica atrás do login, então esta seção é o único lugar na web
+  // aberta que diz que a coisa existe. Ela vende a ÚNICA diferença real —
+  // você entra e ninguém te aprova — em vez de listar o que uma comunidade
+  // "pode fazer", porque ela faz exatamente o que qualquer sala daqui faz.
+  "landing.communities.eyebrow": "Comunidades",
+  "landing.communities.title": "Salas em que você simplesmente entra",
+  "landing.communities.body":
+    "Nem tudo começa com convite. O diretório é cheio de sala sobre uma bobagem só — escolhe uma, toca em entrar, tá dentro. Ou cria a sua e deixa a galera te achar.",
+  "landing.communities.point1.title": "Sem convite, sem fila",
+  "landing.communities.point1.body":
+    "Um toque e você tá dentro. Ninguém precisa te aprovar antes.",
+  "landing.communities.point2.title": "Dividido como a gente fala",
+  "landing.communities.point2.body":
+    "Games, música, futebol, humor — dez categorias, sem aula de taxonomia.",
+  "landing.communities.point3.title": "A sua continua sua",
+  "landing.communities.point3.body":
+    "Lista quando quiser ser achado, tira da lista quando não quiser. A sala continua sendo sua.",
+  "landing.communities.action": "Encontre a sua turma",
 
   // ------------------------------------------------------- desktop downloads
   // "Baixar", nunca "fazer download". "Build", "app" e os nomes dos formatos
@@ -157,17 +178,17 @@ export const ptBR: PartialMessages = {
 
   // ------------------------------------------------------- app bootstrap shell
   "app.seo.title": "App — pqp",
-  "app.seo.description": "Abra o pqp — servidores, texto e voz.",
+  "app.seo.description": "Abra o pqp — comunidades, texto e voz.",
   "app.loading": "Carregando…",
   "app.loading.signingIn": "Entrando…",
-  "app.loading.servers": "Carregando servidores…",
+  "app.loading.servers": "Carregando comunidades…",
 
   "signedOut.title": "Entra pra conversar.",
-  "signedOut.body": "Cria uma conta ou entra para abrir os seus servidores.",
+  "signedOut.body": "Cria uma conta ou entra para abrir as suas comunidades.",
   "signedOut.createAccount": "Criar conta",
 
   "bootstrapError.title": "Não dá para falar com a API",
-  "bootstrapError.fallback": "Não foi possível carregar os servidores da API",
+  "bootstrapError.fallback": "Não foi possível carregar as comunidades da API",
   "bootstrapError.deploy.1":
     "O site institucional no Cloudflare Pages é estático. O login funciona pelo Clerk, mas os servidores precisam de uma API hospedada (Railway/Docker) com",
   "bootstrapError.deploy.2": "e",
@@ -176,23 +197,23 @@ export const ptBR: PartialMessages = {
   "bootstrapError.home": "Voltar para o início",
 
   // ------------------------------------------------------------- empty states
-  "empty.noServers.title": "Nenhum servidor ainda",
-  "empty.noServers.body": "Cria um servidor ou entra com um código de convite.",
+  "empty.noServers.title": "Nenhuma comunidade ainda",
+  "empty.noServers.body": "Cria uma comunidade ou entra com um código de convite.",
   "empty.pickChannel.title": "Escolha um canal",
   "empty.pickChannel.body": "Abra a barra lateral e escolha texto ou voz.",
   "empty.noConversation.title": "Nenhuma conversa aberta",
   "empty.noConversation.body":
     "Escolha alguém da lista ou chame qualquer pessoa pelo nome de usuário.",
-  "empty.createServer": "Criar servidor",
+  "empty.createServer": "Criar comunidade",
   "empty.joinInvite": "Entrar com convite",
   "empty.newMessage": "Nova mensagem",
   "empty.openNav": "Abrir navegação",
 
   "sso.title": "Liberados para você",
   "sso.body.one":
-    "O seu e-mail verificado deixa você entrar neste servidor sem convite.",
+    "O seu e-mail verificado deixa você entrar nesta comunidade sem convite.",
   "sso.body.many":
-    "O seu e-mail verificado deixa você entrar nestes servidores sem convite.",
+    "O seu e-mail verificado deixa você entrar nestas comunidades sem convite.",
   "sso.join": "Entrar",
   "sso.joining": "Entrando…",
   "sso.joinFailed": "Não foi possível entrar em {name}",
@@ -209,6 +230,13 @@ export const ptBR: PartialMessages = {
   // quem quiser).
   "communities.title": "Comunidades",
   "communities.subtitle": "Salas públicas. Entra quem quiser.",
+  // A manchete da tela cheia. "Encontre a sua turma" e não "descubra
+  // comunidades": o verbo é o que a pessoa vai fazer, e "turma" é a palavra
+  // que um brasileiro usa pro grupo que ele ainda não achou.
+  "communities.hero.title": "Encontre a sua turma",
+  "communities.hero.body":
+    "Salas abertas pra entrar sem pedir licença — sem convite e sem ninguém te aprovar. Escolhe uma categoria, ou procura direto pela piada que você já tem na cabeça.",
+  "communities.close": "Fechar as comunidades",
   "communities.search": "Buscar comunidades",
   "communities.searchPlaceholder": "Procura pelo nome…",
   "communities.category.all": "Tudo",
@@ -240,6 +268,15 @@ export const ptBR: PartialMessages = {
     "Comunidade recém-criada só aparece na busca até alguém entrar.",
   "communities.failed": "Não deu pra carregar as comunidades.",
   "communities.retry": "Tentar de novo",
+  "communities.joinedBadge": "Você está aqui",
+  // "Crie a sua" é a chamada, e ela é destino, não prêmio de consolação: o
+  // diretório que só sabe dar de ombros quando não acha nada ensina a pessoa
+  // a não voltar.
+  "communities.create.title": "Crie a sua",
+  "communities.create.body":
+    "Não achou nada que te sirva? Cria a sua comunidade, põe um nome ridículo e manda o link.",
+  "communities.create.action": "Criar comunidade",
+  "communities.create.placeholder": "Nome da comunidade",
   "communities.report": "Denunciar esta comunidade",
   "communities.reportTitle": "Denunciar comunidade",
   "communities.reportBody":
@@ -251,10 +288,10 @@ export const ptBR: PartialMessages = {
   // sem você aprovar" com todas as letras, em vez de "descoberta pública".
   "communities.settings.title": "Listagem pública",
   "communities.settings.explainer":
-    "Listar este servidor coloca ele no diretório público de Comunidades. Qualquer pessoa com conta no pqp acha ele pelo nome ou pela categoria, vê quantos membros tem e entra com um toque — sem convite e sem você aprovar.",
+    "Listar esta comunidade coloca ela no diretório público. Qualquer pessoa com conta no pqp acha ela pelo nome ou pela categoria, vê quantos membros tem e entra com um toque — sem convite e sem você aprovar.",
   "communities.settings.explainerModeration":
     "A sala continua sendo sua: expulsar, banir e canal privado funcionam igual. Mas denúncia sobre comunidade listada vai pra quem cuida do pqp, que pode tirar a listagem do ar.",
-  "communities.settings.toggle": "Listar este servidor publicamente",
+  "communities.settings.toggle": "Listar esta comunidade publicamente",
   "communities.settings.tagline": "Uma linha sobre ela",
   "communities.settings.taglinePlaceholder": "O que rola aqui?",
   "communities.settings.taglineHint": "faltam {count} caracteres",
@@ -264,7 +301,7 @@ export const ptBR: PartialMessages = {
   "communities.settings.saved": "Listagem atualizada.",
   "communities.settings.failed": "Não deu pra atualizar a listagem.",
   "communities.settings.suspended":
-    "Quem cuida do pqp tirou esta listagem do ar. O servidor em si não mudou e quem está dentro continua usando normal — ele só sumiu do diretório.",
+    "Quem cuida do pqp tirou esta listagem do ar. A comunidade em si não mudou e quem está dentro continua usando normal — ela só sumiu do diretório.",
 
   // ------------------------------------------------------- connection status
   "connection.reconnecting": "Conexão perdida — reconectando…",
@@ -381,8 +418,8 @@ export const ptBR: PartialMessages = {
   "onboarding.landing.eyebrow": "Última coisa",
   "onboarding.landing.title": "Ainda não tem ninguém aqui",
   "onboarding.landing.description":
-    "Cria um servidor e manda o link, ou cola o link que te mandaram.",
-  "onboarding.landing.createLabel": "Cria um servidor",
+    "Cria uma comunidade e manda o link, ou cola o link que te mandaram.",
+  "onboarding.landing.createLabel": "Cria uma comunidade",
   "onboarding.landing.createPlaceholder": "Bota um nome ridículo",
   "onboarding.landing.createAction": "Criar",
   "onboarding.landing.createHint":
@@ -404,9 +441,9 @@ export const ptBR: PartialMessages = {
   "firstRun.title": "Três coisas e aqui já funciona",
   "firstRun.dismiss": "Esconder isso",
   "firstRun.done": "Feito",
-  "firstRun.server.title": "Entra num servidor",
+  "firstRun.server.title": "Entra numa comunidade",
   "firstRun.server.body": "Cria um pra sua turma, ou cola um convite que te mandaram.",
-  "firstRun.server.create": "Criar servidor",
+  "firstRun.server.create": "Criar comunidade",
   "firstRun.server.join": "Usar convite",
   "firstRun.friend.title": "Acha sua gente",
   "firstRun.friend.body":
@@ -430,11 +467,11 @@ export const ptBR: PartialMessages = {
   "invite.create.eyebrow": "Chamar gente",
   "invite.create.description":
     "Qualquer pessoa com o link entra até ele expirar ou você revogar.",
-  "invite.create.serverFallback": "Servidor",
+  "invite.create.serverFallback": "Comunidade",
   "invite.create.notAllowed": "Só donos e admins podem criar convites.",
   "invite.create.activeTitle": "Convites ativos",
   "invite.create.loading": "Carregando convites…",
-  "invite.create.none": "Nenhum convite ainda. Cria um pra compartilhar esse servidor.",
+  "invite.create.none": "Nenhum convite ainda. Cria um pra compartilhar esta comunidade.",
   "invite.create.action": "Criar link de convite",
   "invite.create.creating": "Criando…",
   "invite.create.copyLink": "Copiar link do convite {code}",
@@ -448,7 +485,7 @@ export const ptBR: PartialMessages = {
   "invite.create.revokeFailed": "Não deu pra revogar.",
   "invite.create.loadFailed": "Não deu pra carregar os convites.",
   "invite.close": "Fechar",
-  "invite.join.eyebrow": "Entrar num servidor",
+  "invite.join.eyebrow": "Entrar numa comunidade",
   "invite.join.title": "Código do convite",
   "invite.join.description": "Cola o link do convite, ou digita o código que te deram.",
   "invite.join.label": "Código do convite",
@@ -654,27 +691,27 @@ export const ptBR: PartialMessages = {
   "profile.friendsSince": "Amigos desde {date}",
   "profile.mod.timeout": "Silenciar",
   "profile.mod.endTimeout": "Tirar o silenciamento",
-  "profile.mod.kick": "Remover do servidor",
-  "profile.mod.ban": "Banir do servidor",
+  "profile.mod.kick": "Remover da comunidade",
+  "profile.mod.ban": "Banir da comunidade",
   "profile.mod.cancel": "Cancelar",
   "profile.mod.reason": "Motivo",
   "profile.mod.reason.placeholder": "Motivo (opcional)",
   "profile.mod.timeout.title": "Silenciar {name}",
   "profile.mod.timeout.duration": "Por quanto tempo",
   "profile.mod.timeout.body":
-    "A pessoa continua lendo. Não pode postar, reagir ou entrar na voz deste servidor até acabar.",
+    "A pessoa continua lendo. Não pode postar, reagir ou entrar na voz desta comunidade até acabar.",
   "profile.mod.timeout.apply": "Silenciar",
   "profile.mod.duration.minutes": "{count} min",
   "profile.mod.duration.hours": "{count} h",
   "profile.mod.duration.days": "{count} d",
-  "profile.mod.kick.title": "Remover {name} deste servidor?",
+  "profile.mod.kick.title": "Remover {name} desta comunidade?",
   "profile.mod.kick.body":
     "Perde o acesso agora, mas pode voltar com qualquer convite.",
-  "profile.mod.ban.title": "Banir {name} deste servidor?",
+  "profile.mod.ban.title": "Banir {name} desta comunidade?",
   "profile.mod.ban.body":
     "Perde o acesso e não pode voltar. O motivo fica registrado na lista de banidos.",
   "profile.mod.timeoutEnded": "{name} pode falar de novo.",
-  "profile.mod.kicked": "{name} foi removido do servidor.",
+  "profile.mod.kicked": "{name} foi removido da comunidade.",
   "profile.mod.banned": "{name} foi banido.",
   "profile.open": "Abrir o perfil de {name}",
   "profile.viewProfile": "Ver perfil",
@@ -802,7 +839,7 @@ export const ptBR: PartialMessages = {
 
   // -- notificações
   "settings.notifications.description":
-    "O que chega até você, e onde. O que estiver definido por servidor ou por canal ganha destas.",
+    "O que chega até você, e onde. O que estiver definido por comunidade ou por canal ganha destas.",
   "settings.notifications.unsupported":
     "Este navegador não mostra notificações do sistema.",
   "settings.notifications.denied":
@@ -816,7 +853,7 @@ export const ptBR: PartialMessages = {
   "settings.notifications.level.mentions": "Só @menções",
   "settings.notifications.level.none": "Nada",
   "settings.notifications.levelHint":
-    "Vale onde o servidor ou o canal não tiver ajuste próprio. Clique com o botão direito num servidor ou canal pra mudar só aquele.",
+    "Vale onde a comunidade ou o canal não tiver ajuste próprio. Clique com o botão direito numa comunidade ou canal pra mudar só aquele.",
   "settings.push.title": "Push — com o app fechado",
   "settings.push.needsInstall":
     "No iPhone e no iPad, o push só funciona pelo app instalado: abra o pqp no Safari, toque em Compartilhar, depois em “Adicionar à Tela de Início”, e ligue o push de dentro do app instalado.",
@@ -864,7 +901,7 @@ export const ptBR: PartialMessages = {
     "Quem consegue te achar. A regra vale no servidor, não só aqui.",
   "settings.privacy.dmLabel": "Quem pode te mandar mensagem direta",
   "settings.privacy.dm.everyone": "Qualquer pessoa",
-  "settings.privacy.dm.serverMembers": "Quem divide um servidor comigo",
+  "settings.privacy.dm.serverMembers": "Quem divide uma comunidade comigo",
   "settings.privacy.dm.nobody": "Ninguém",
   "settings.privacy.dmHint":
     "Vale pras conversas novas. Quem já está falando com você continua chegando — apertar isso não é jeito de sumir no meio da frase.",
@@ -882,7 +919,7 @@ export const ptBR: PartialMessages = {
   "settings.data.exportHint":
     "Um arquivo JSON com tudo o que a gente guarda sobre você.",
   "settings.data.exportBody":
-    "Vem com seu perfil, suas configurações, cada mensagem que você escreveu, os servidores em que você está e quem você bloqueou. Não vem com mensagens que outras pessoas escreveram — nem o lado delas nas suas mensagens diretas. Aquilo é o que elas falaram, não é seu dado, e você continua lendo tudo aqui no app.",
+    "Vem com seu perfil, suas configurações, cada mensagem que você escreveu, as comunidades em que você está e quem você bloqueou. Não vem com mensagens que outras pessoas escreveram — nem o lado delas nas suas mensagens diretas. Aquilo é o que elas falaram, não é seu dado, e você continua lendo tudo aqui no app.",
   "settings.data.exportFailed": "Não deu pra montar sua exportação",
   "settings.data.delete": "Apagar minha conta",
   "settings.data.deleteHint":
@@ -905,24 +942,24 @@ export const ptBR: PartialMessages = {
   "settings.delete.goes.files":
     "Seus arquivos e imagens, e as reações que você deixou.",
   "settings.delete.goes.memberships":
-    "Suas participações em servidores, suas conversas e a lista de quem você bloqueou.",
+    "Suas participações em comunidades, suas conversas e a lista de quem você bloqueou.",
   "settings.delete.goes.signIn":
     "Seu login. Você não vai conseguir entrar de novo.",
   "settings.delete.goes.servers":
-    "Qualquer servidor que seja só seu, sem mais ninguém dentro.",
+    "Qualquer comunidade que seja só sua, sem mais ninguém dentro.",
   "settings.delete.whatStays": "O que fica, e por quê",
   "settings.delete.stays.moderation":
-    "Registros de moderação do que você fez em servidores dos outros, sem o seu nome. Apagar uma conta não pode apagar o registro de como ela foi usada pra moderar outra pessoa.",
+    "Registros de moderação do que você fez em comunidades dos outros, sem o seu nome. Apagar uma conta não pode apagar o registro de como ela foi usada pra moderar outra pessoa.",
   "settings.delete.stays.bans":
-    "Os bans que você deu. Tirar eles deixaria todo mundo que você baniu voltar pra servidores com os quais você não tem mais nada a ver.",
+    "Os bans que você deu. Tirar eles deixaria todo mundo que você baniu voltar pra comunidades com as quais você não tem mais nada a ver.",
   "settings.delete.stays.reports":
     "Denúncias que outras pessoas fizeram sobre você, sem o seu nome. A gente não pode deixar apagar a conta virar um jeito de limpar a própria ficha.",
   "settings.delete.staysNote":
     "Tudo isso é descartado no prazo de cada um. A política de privacidade explica em detalhe.",
   "settings.delete.ownedTitle":
-    "Faça uma destas primeiro, pra cada servidor que é seu",
+    "Faça uma destas primeiro, pra cada comunidade que é sua",
   "settings.delete.ownedBody":
-    "Ainda tem gente nesses servidores, então a gente não vai apagar eles por baixo das pessoas. Nas configurações de cada servidor, passe ele pra outro membro ou apague você mesmo.",
+    "Ainda tem gente nessas comunidades, então a gente não vai apagar elas por baixo das pessoas. Nas configurações de cada comunidade, passe ela pra outro membro ou apague você mesmo.",
   "settings.delete.ownedMember": "— mais {count} pessoa",
   "settings.delete.ownedMembers": "— mais {count} pessoas",
   "settings.delete.typeLabel": "Digite seu identificador pra confirmar",

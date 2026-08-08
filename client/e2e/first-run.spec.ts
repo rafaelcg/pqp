@@ -168,7 +168,7 @@ test("a brand-new account is walked through the wizard and lands on three real a
   for (const id of ["server", "friend", "avatar"]) {
     await expect(page.locator(task(id))).toHaveAttribute("data-done", "false");
   }
-  await expect(page.getByRole("button", { name: "Make a server" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Make a community" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Use an invite" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Add a friend" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Pick an avatar" })).toBeVisible();
@@ -249,8 +249,8 @@ test("making a server ticks the server row and leaves the other two", async ({
   await page.getByRole("button", { name: "I'll do this later" }).click();
   await expect(page.locator(card)).toBeVisible({ timeout: 20_000 });
 
-  await page.getByRole("button", { name: "Make a server" }).click();
-  await page.getByPlaceholder("Server name").fill("Panelinha");
+  await page.getByRole("button", { name: "Make a community" }).click();
+  await page.getByPlaceholder("Community name").fill("Panelinha");
   await page.getByRole("button", { name: "Create", exact: true }).click();
 
   // Creating opens the new server, so come back to the hub to read the card.
@@ -275,7 +275,7 @@ test("making a server ticks the server row and leaves the other two", async ({
   // A done row keeps its place and loses its buttons, rather than vanishing and
   // re-laying the card out under the cursor that just clicked.
   await expect(
-    page.locator(task("server")).getByRole("button", { name: "Make a server" }),
+    page.locator(task("server")).getByRole("button", { name: "Make a community" }),
   ).toHaveCount(0);
 });
 

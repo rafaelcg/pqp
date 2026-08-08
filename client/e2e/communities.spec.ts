@@ -122,22 +122,22 @@ async function clearDirectory(): Promise<void> {
 }
 
 /**
- * Home, then the directory.
+ * The directory, from wherever the app happens to be.
  *
- * `openApp` lands on `/app`, which auto-selects the first server — so the
- * sidebar showing is the channel list, not the conversation list the
- * Communities row lives in. The rail's "Direct messages" button is the way
- * back to home, and it is the same click a real user makes.
+ * The compass lives at the foot of the server rail, which is on screen in every
+ * selection — so unlike the old sidebar row, this needs no trip through home
+ * first. That is the whole point of the move, and driving it this way is what
+ * pins it: if the compass ever became conditional on the conversation view
+ * again, every test below would fail.
  */
-async function goHome(page: Page): Promise<void> {
-  await page.getByRole("button", { name: "Direct messages" }).click();
-  await expect(page.locator("[data-communities-nav]")).toBeVisible();
-}
-
 async function openDirectory(page: Page): Promise<void> {
   await openApp(page);
-  await goHome(page);
-  await page.locator("[data-communities-nav]").click();
+  await reopenDirectory(page);
+}
+
+/** The same click, for tests that come back after joining something. */
+async function reopenDirectory(page: Page): Promise<void> {
+  await page.locator("[data-communities-rail]").click();
   await expect(page.locator("[data-communities-view]")).toBeVisible();
 }
 
@@ -152,7 +152,7 @@ test.describe("Communities", () => {
     await clearDirectory();
   });
 
-  test("the sidebar offers the directory, and it opens", async ({ page }) => {
+  test("the rail's compass opens the directory", async ({ page }) => {
     await seedCommunity(
       "Eu odeio acordar cedo",
       "humor",
@@ -160,9 +160,17 @@ test.describe("Communities", () => {
     );
     await openDirectory(page);
 
+    // The headline, not the screen's name: the directory took the viewport
+    // and now leads with what the reader gets to do.
     await expect(
-      page.getByRole("heading", { name: "Communities" }),
+      page.getByRole("heading", { name: "Find your people" }),
     ).toBeVisible();
+    // …and it really is the whole viewport, not a pane beside the sidebars.
+    const view = page.locator("[data-communities-view]");
+    const box = await view.boundingBox();
+    const viewport = page.viewportSize()!;
+    expect(box!.width).toBe(viewport.width);
+    expect(box!.height).toBe(viewport.height);
     await expect(card(page, "Eu odeio acordar cedo")).toBeVisible();
     await expect(page.getByText("quem acorda cedo é herói")).toBeVisible();
     // The member count is the directory's only ordering key and the only thing
@@ -230,8 +238,7 @@ test.describe("Communities", () => {
 
     // Back to the directory: the card now offers "Open", not "Join", which is
     // the visible half of the server's per-viewer `joined` flag.
-    await goHome(page);
-    await page.locator("[data-communities-nav]").click();
+    await reopenDirectory(page);
     await expect(
       card(page, "Anão vestido de palhaço").getByRole("button", {
         name: "Open",
@@ -255,8 +262,7 @@ test.describe("Communities", () => {
     await expect(page.getByRole("button", { name: "Send" })).toBeVisible({
       timeout: 20_000,
     });
-    await goHome(page);
-    await page.locator("[data-communities-nav]").click();
+    await reopenDirectory(page);
     await expect(card(page, "Duas vezes")).toHaveCount(1);
     await expect(
       card(page, "Duas vezes").getByRole("button", { name: "Open" }),
@@ -281,8 +287,61 @@ test.describe("Communities", () => {
       /people who run pqp|quem cuida do pqp/i,
     );
     await expect(
-      section.getByRole("checkbox", { name: /List this server publicly/i }),
+      section.getByRole("checkbox", { name: /List this community publicly/i }),
     ).toBeVisible();
+  });
+
+  test("the create call to action hands you the make-a-community form", async ({
+    page,
+  }) => {
+    // The other half of the feature, and the reason it is above the grid rather
+    // than under it: a directory whose only answer to "none of these are mine"
+    // is a scroll teaches people that making one is an advanced move.
+    await seedCommunity("Nada a ver comigo", "geral", "não é pra você");
+    await openDirectory(page);
+
+    await page
+      .getByRole("button", { name: "Create a community", exact: true })
+      .click();
+
+    // The directory gets out of the way, and the form it handed you is the
+    // existing create flow — renamed, not rebuilt.
+    await expect(page.locator("[data-communities-view]")).toHaveCount(0);
+    await expect(page.getByPlaceholder("Community name")).toBeVisible();
+  });
+
+  test("escape and the close button both put the app back", async ({ page }) => {
+    await seedCommunity("Sai fora", "geral", "tchau");
+    await openDirectory(page);
+
+    await page.keyboard.press("Escape");
+    await expect(page.locator("[data-communities-view]")).toHaveCount(0);
+
+    await reopenDirectory(page);
+    await page.getByRole("button", { name: "Close the directory" }).click();
+    await expect(page.locator("[data-communities-view]")).toHaveCount(0);
+    // And what was underneath is still there — the directory is a mode, not a
+    // navigation, so closing it must not have moved anybody anywhere.
+    await expect(page.getByRole("button", { name: "Send" })).toBeVisible({
+      timeout: 20_000,
+    });
+  });
+
+  test("a joined community says so on the card", async ({ page }) => {
+    await seedCommunity("Já entrei", "geral", "tô dentro");
+    await openDirectory(page);
+
+    await card(page, "Já entrei")
+      .getByRole("button", { name: "Join", exact: true })
+      .click();
+    await expect(page.getByRole("button", { name: "Send" })).toBeVisible({
+      timeout: 20_000,
+    });
+
+    await reopenDirectory(page);
+    // The button already says "Open", but that is one word of difference
+    // between two cards side by side. The pill is what survives a glance.
+    await expect(card(page, "Já entrei")).toContainText("You're in");
   });
 
   test("with the flag off, nothing about Communities renders", async ({
@@ -303,8 +362,8 @@ test.describe("Communities", () => {
     await page.goto("/app/dm");
     await expect(page.getByRole("button", { name: "Friends" })).toBeVisible();
 
-    // No nav row…
-    await expect(page.locator("[data-communities-nav]")).toHaveCount(0);
+    // No compass on the rail…
+    await expect(page.locator("[data-communities-rail]")).toHaveCount(0);
     // …no view…
     await expect(page.locator("[data-communities-view]")).toHaveCount(0);
     // …and no opt-in section in Server settings.

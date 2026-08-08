@@ -33,19 +33,19 @@ export const en = {
   "nav.howItWorks": "How it works",
   "nav.selfHost": "Self-host",
   "nav.signIn": "Sign in",
-  "nav.signUp": "Spin up a server",
+  "nav.signUp": "Start a community",
   "nav.openApp": "Open the app",
 
   "landing.seo.title": "pqp — group chat you own",
   "landing.seo.description":
-    "Chaotic group chat with servers, channels, and voice that just works. Open source — self-host or use pqp.gg.",
+    "Chaotic group chat with communities, channels, and voice that just works. Open source — self-host or use pqp.gg.",
   // The Portuguese hero is a pun ("vem pra pqp") that does not survive
   // translation, so English carries the intent — an invitation — rather than
   // the joke. Both name the same three things the product actually has: voice,
   // text, screen share. There is no camera video; do not add one here.
   "landing.hero.title": "Come hang out at pqp.",
   "landing.hero.body":
-    "Voice, chat and screen sharing for your people. Make a server, share the link. That's it.",
+    "Voice, chat and screen sharing for your people. Make a community, share the link. That's it.",
 
   "landing.trust.openSource": "Open source",
   "landing.trust.selfHostable": "Self-hostable",
@@ -55,11 +55,11 @@ export const en = {
 
   "landing.pitch.title": "Tired of renting the room?",
   "landing.pitch.body":
-    "Big chat apps rewrite the house rules, bury your servers, and treat your crew like inventory. pqp is the opposite: make a server, invite people, talk. Keep the keys if you want — or use ours and skip the ops.",
+    "Big chat apps rewrite the house rules, bury your communities, and treat your crew like inventory. pqp is the opposite: make a community, invite people, talk. Keep the keys if you want — or use ours and skip the ops.",
 
   "landing.how.title": "Three moves. Then you're loud.",
   "landing.how.body": "No onboarding maze. Create, invite, cause problems.",
-  "landing.how.step1.title": "Make a server",
+  "landing.how.step1.title": "Make a community",
   "landing.how.step1.body":
     "Name it something stupid. Text and voice channels show up ready.",
   "landing.how.step2.title": "Drop an invite",
@@ -92,11 +92,11 @@ export const en = {
     "Markdown, replies, reactions, pinned messages and @mentions. Paste a link and it unfurls.",
   "landing.features.search.title": "Find what was said",
   "landing.features.search.body":
-    "Search a whole server by word and land on the message, with what came before and after.",
+    "Search a whole community by word and land on the message, with what came before and after.",
   "landing.features.dms.title": "DMs and group chats",
   "landing.features.dms.body":
     "Message someone privately, or put up to 10 people in the same group.",
-  "landing.features.structure.title": "Your server, your rules",
+  "landing.features.structure.title": "Your community, your rules",
   "landing.features.structure.body":
     "Categories to keep it tidy, private channels, and three roles: owner, admin, member.",
   "landing.features.invites.title": "An invite is just a link",
@@ -117,12 +117,34 @@ export const en = {
 
   "landing.cta.title": "The room's empty. Fix that.",
   "landing.cta.body":
-    "Spin up a server in under a minute. Invite the chaos later.",
+    "Spin up a community in under a minute. Invite the chaos later.",
   // The closing CTA and the share/invite copy point outward — "go to pqp" —
   // where the hero pointed inward ("come to pqp"). The contrast is deliberate.
   // The arrow is drawn in JSX and hidden from assistive tech, so it stays out
   // of the string a translator has to carry.
   "landing.cta.action": "Head to pqp",
+
+  // ------------------------------------------------- communities (marketing)
+  //
+  // The directory itself is behind sign-in, so this section is the only place
+  // on the open web that says the feature exists. It sells the ONE thing that
+  // is different about it — you walk in, nobody approves you — rather than
+  // listing what a community "can do", because a community can do exactly what
+  // any other room here can do.
+  "landing.communities.eyebrow": "Communities",
+  "landing.communities.title": "Rooms you can just walk into",
+  "landing.communities.body":
+    "Not everything starts with an invite. The directory is full of rooms about one stupid thing each — pick one, tap join, you're in. Or make yours and let people find it.",
+  "landing.communities.point1.title": "No invite, no queue",
+  "landing.communities.point1.body":
+    "One tap and you're inside. Nobody has to approve you first.",
+  "landing.communities.point2.title": "Sorted the way people talk",
+  "landing.communities.point2.body":
+    "Games, music, football, humour — ten categories, no taxonomy lecture.",
+  "landing.communities.point3.title": "Yours stays yours",
+  "landing.communities.point3.body":
+    "List it when you want to be found, unlist it when you don't. You still run the room.",
+  "landing.communities.action": "Find your people",
 
   // ------------------------------------------------------- desktop downloads
   // Secondary to the hero's real call to action on purpose: the web app is the
@@ -191,17 +213,17 @@ export const en = {
 
   // ------------------------------------------------------- app bootstrap shell
   "app.seo.title": "App — pqp",
-  "app.seo.description": "Open pqp — servers, text, and voice.",
+  "app.seo.description": "Open pqp — communities, text, and voice.",
   "app.loading": "Loading…",
   "app.loading.signingIn": "Signing in…",
-  "app.loading.servers": "Loading servers…",
+  "app.loading.servers": "Loading communities…",
 
   "signedOut.title": "Sign in to talk.",
-  "signedOut.body": "Create an account or sign in to open your servers.",
+  "signedOut.body": "Create an account or sign in to open your communities.",
   "signedOut.createAccount": "Create account",
 
   "bootstrapError.title": "Can't reach the API",
-  "bootstrapError.fallback": "Failed to load servers from the API",
+  "bootstrapError.fallback": "Failed to load communities from the API",
   // Split around the two <code> elements. This paragraph is aimed at whoever
   // deployed the site rather than at a visitor, which is why the identifiers
   // inside it stay verbatim while the prose around them translates.
@@ -213,23 +235,23 @@ export const en = {
   "bootstrapError.home": "Back to home",
 
   // ------------------------------------------------------------- empty states
-  "empty.noServers.title": "No servers yet",
-  "empty.noServers.body": "Create a server or join with an invite code.",
+  "empty.noServers.title": "No communities yet",
+  "empty.noServers.body": "Make a community or join with an invite code.",
   "empty.pickChannel.title": "Pick a channel",
   "empty.pickChannel.body": "Open the sidebar and choose text or voice.",
   "empty.noConversation.title": "No conversation open",
   "empty.noConversation.body":
     "Pick someone from the list, or message anyone by handle.",
-  "empty.createServer": "Create server",
+  "empty.createServer": "Create community",
   "empty.joinInvite": "Join invite",
   "empty.newMessage": "New message",
   "empty.openNav": "Open navigation",
 
   "sso.title": "Available to you",
   "sso.body.one":
-    "Your verified email lets you join this server without an invite.",
+    "Your verified email lets you join this community without an invite.",
   "sso.body.many":
-    "Your verified email lets you join these servers without an invite.",
+    "Your verified email lets you join these communities without an invite.",
   "sso.join": "Join",
   "sso.joining": "Joining…",
   "sso.joinFailed": "Could not join {name}",
@@ -246,6 +268,13 @@ export const en = {
   // beside the slugs on purpose — a new slug cannot ship without a label.
   "communities.title": "Communities",
   "communities.subtitle": "Public rooms anyone can join. Find your people.",
+  // The directory took over the whole viewport, so it now has a headline
+  // rather than a title bar — and a headline has to earn the space. It says
+  // what the reader gets to do, not what the screen is called.
+  "communities.hero.title": "Find your people",
+  "communities.hero.body":
+    "Open rooms you can walk straight into — no invite, nobody to approve you. Pick a category, or search for the joke you already have in mind.",
+  "communities.close": "Close the directory",
   "communities.search": "Search communities",
   "communities.searchPlaceholder": "Search by name…",
   "communities.category.all": "All",
@@ -274,6 +303,15 @@ export const en = {
     "Brand-new communities only show up in search until somebody else joins.",
   "communities.failed": "Could not load communities.",
   "communities.retry": "Try again",
+  "communities.joinedBadge": "You're in",
+  // The way out of an empty grid, and a first-class destination in its own
+  // right rather than a consolation prize — a directory whose only answer to
+  // "there is nothing for me here" is a shrug teaches people not to come back.
+  "communities.create.title": "Make your own",
+  "communities.create.body":
+    "Nothing here fits? Start a community, name it something stupid, and send the link.",
+  "communities.create.action": "Create a community",
+  "communities.create.placeholder": "Community name",
   "communities.report": "Report this community",
   "communities.reportTitle": "Report community",
   "communities.reportBody":
@@ -284,10 +322,10 @@ export const en = {
   // are publishing the room, not decorating it.
   "communities.settings.title": "Community listing",
   "communities.settings.explainer":
-    "Listing this server puts it in the public Communities directory. Anyone with a pqp account can find it by name or category, see how many members it has, and join with one tap — no invite, no approval from you.",
+    "Listing this community puts it in the public directory. Anyone with a pqp account can find it by name or category, see how many members it has, and join with one tap — no invite, no approval from you.",
   "communities.settings.explainerModeration":
     "You still run the room: kicks, bans and channel privacy all work the same. But reports about a listed community go to the people who run pqp, who can remove the listing.",
-  "communities.settings.toggle": "List this server publicly",
+  "communities.settings.toggle": "List this community publicly",
   "communities.settings.tagline": "One line about it",
   "communities.settings.taglinePlaceholder": "What is this place?",
   "communities.settings.taglineHint": "{count} characters left",
@@ -297,7 +335,7 @@ export const en = {
   "communities.settings.saved": "Listing updated.",
   "communities.settings.failed": "Could not update the listing.",
   "communities.settings.suspended":
-    "This listing was removed by the people who run pqp. The server itself is untouched and everyone in it can still use it — it is only hidden from the directory.",
+    "This listing was removed by the people who run pqp. The community itself is untouched and everyone in it can still use it — it is only hidden from the directory.",
 
   // ------------------------------------------------------- connection status
   "connection.reconnecting": "Connection lost — reconnecting…",
@@ -426,8 +464,8 @@ export const en = {
   "onboarding.landing.eyebrow": "Last thing",
   "onboarding.landing.title": "Nobody's here yet",
   "onboarding.landing.description":
-    "Make a server and send the link, or paste one somebody sent you.",
-  "onboarding.landing.createLabel": "Make a server",
+    "Make a community and send the link, or paste one somebody sent you.",
+  "onboarding.landing.createLabel": "Make a community",
   "onboarding.landing.createPlaceholder": "Name it something stupid",
   "onboarding.landing.createAction": "Create",
   "onboarding.landing.createHint":
@@ -457,9 +495,9 @@ export const en = {
   "firstRun.title": "Three things and this place works",
   "firstRun.dismiss": "Hide this",
   "firstRun.done": "Done",
-  "firstRun.server.title": "Get into a server",
+  "firstRun.server.title": "Get into a community",
   "firstRun.server.body": "Make one for your people, or paste an invite you were sent.",
-  "firstRun.server.create": "Make a server",
+  "firstRun.server.create": "Make a community",
   "firstRun.server.join": "Use an invite",
   // Prints the reader's own handle, because "add someone by their handle" is
   // useless advice until you know that you have one and what it is. The wizard
@@ -498,11 +536,11 @@ export const en = {
   "invite.create.eyebrow": "Invite people",
   "invite.create.description":
     "Anyone with the link can join until it expires or you revoke it.",
-  "invite.create.serverFallback": "Server",
+  "invite.create.serverFallback": "Community",
   "invite.create.notAllowed": "Only owners and admins can make invites.",
   "invite.create.activeTitle": "Live invites",
   "invite.create.loading": "Loading invites…",
-  "invite.create.none": "No invites yet. Make one to share this server.",
+  "invite.create.none": "No invites yet. Make one to share this community.",
   "invite.create.action": "Make an invite link",
   "invite.create.creating": "Making…",
   "invite.create.copyLink": "Copy invite link for code {code}",
@@ -516,7 +554,7 @@ export const en = {
   "invite.create.revokeFailed": "Couldn't revoke that.",
   "invite.create.loadFailed": "Couldn't load the invites.",
   "invite.close": "Close",
-  "invite.join.eyebrow": "Join a server",
+  "invite.join.eyebrow": "Join a community",
   "invite.join.title": "Invite code",
   "invite.join.description": "Paste an invite link, or type the code you were given.",
   "invite.join.label": "Invite code",
@@ -742,27 +780,27 @@ export const en = {
   // ladder. "Time out" before the two red ones: the order IS the ladder.
   "profile.mod.timeout": "Time out",
   "profile.mod.endTimeout": "End timeout",
-  "profile.mod.kick": "Remove from server",
-  "profile.mod.ban": "Ban from server",
+  "profile.mod.kick": "Remove from community",
+  "profile.mod.ban": "Ban from community",
   "profile.mod.cancel": "Cancel",
   "profile.mod.reason": "Reason",
   "profile.mod.reason.placeholder": "Reason (optional)",
   "profile.mod.timeout.title": "Time out {name}",
   "profile.mod.timeout.duration": "How long",
   "profile.mod.timeout.body":
-    "They can still read. They can't post, react or join voice in this server until it ends.",
+    "They can still read. They can't post, react or join voice in this community until it ends.",
   "profile.mod.timeout.apply": "Time them out",
   "profile.mod.duration.minutes": "{count} min",
   "profile.mod.duration.hours": "{count} h",
   "profile.mod.duration.days": "{count} d",
-  "profile.mod.kick.title": "Remove {name} from this server?",
+  "profile.mod.kick.title": "Remove {name} from this community?",
   "profile.mod.kick.body":
     "They lose access now but can rejoin with any invite.",
-  "profile.mod.ban.title": "Ban {name} from this server?",
+  "profile.mod.ban.title": "Ban {name} from this community?",
   "profile.mod.ban.body":
     "They lose access and can't rejoin. The reason is kept on the ban list.",
   "profile.mod.timeoutEnded": "{name} can speak again.",
-  "profile.mod.kicked": "{name} was removed from the server.",
+  "profile.mod.kicked": "{name} was removed from the community.",
   "profile.mod.banned": "{name} was banned.",
   "profile.open": "Open {name}'s profile",
   "profile.viewProfile": "View profile",
@@ -902,7 +940,7 @@ export const en = {
 
   // -- notifications
   "settings.notifications.description":
-    "What reaches you, and where. Per-server and per-channel settings win over these.",
+    "What reaches you, and where. Per-community and per-channel settings win over these.",
   "settings.notifications.unsupported":
     "This browser cannot show desktop notifications.",
   "settings.notifications.denied":
@@ -916,7 +954,7 @@ export const en = {
   "settings.notifications.level.mentions": "Only @mentions",
   "settings.notifications.level.none": "Nothing",
   "settings.notifications.levelHint":
-    "Applies where a server or channel has no setting of its own. Right-click a server or channel to change just that one.",
+    "Applies where a community or channel has no setting of its own. Right-click a community or channel to change just that one.",
   "settings.push.title": "Push — when the app is closed",
   "settings.push.needsInstall":
     "On iPhone and iPad, push only works from the installed app: open pqp in Safari, tap Share, then “Add to Home Screen”, and enable push from inside the installed app.",
@@ -967,7 +1005,7 @@ export const en = {
     "Who can reach you. Enforced on the server, not just here.",
   "settings.privacy.dmLabel": "Who can start a direct message with you",
   "settings.privacy.dm.everyone": "Anyone",
-  "settings.privacy.dm.serverMembers": "People I share a server with",
+  "settings.privacy.dm.serverMembers": "People I share a community with",
   "settings.privacy.dm.nobody": "No one",
   "settings.privacy.dmHint":
     "Applies to new conversations. Anyone you are already talking to can still reach you — tightening this is not a way to disappear on someone mid-sentence.",
@@ -984,7 +1022,7 @@ export const en = {
   "settings.data.exporting": "Preparing…",
   "settings.data.exportHint": "A JSON file of everything we hold about you.",
   "settings.data.exportBody":
-    "It includes your profile, your settings, every message you wrote, the servers you are in, and who you have blocked. It does not include messages other people wrote — including their side of your direct messages. Those are their words, not your data, and you can still read them here in the app.",
+    "It includes your profile, your settings, every message you wrote, the communities you are in, and who you have blocked. It does not include messages other people wrote — including their side of your direct messages. Those are their words, not your data, and you can still read them here in the app.",
   "settings.data.exportFailed": "Could not build your export",
   "settings.data.delete": "Delete my account",
   "settings.data.deleteHint":
@@ -1010,20 +1048,20 @@ export const en = {
   "settings.delete.goes.signIn":
     "Your sign-in. You will not be able to log back in.",
   "settings.delete.goes.servers":
-    "Any server you own on your own, with nobody else in it.",
+    "Any community you own on your own, with nobody else in it.",
   "settings.delete.whatStays": "What is kept, and why",
   "settings.delete.stays.moderation":
-    "Moderation records of actions you took in other people's servers, with your name removed. Deleting an account must not erase the record of how it was used to moderate somebody else.",
+    "Moderation records of actions you took in other people's communities, with your name removed. Deleting an account must not erase the record of how it was used to moderate somebody else.",
   "settings.delete.stays.bans":
-    "Bans you issued. Removing them would let everybody you banned back into servers you no longer have anything to do with.",
+    "Bans you issued. Removing them would let everybody you banned back into communities you no longer have anything to do with.",
   "settings.delete.stays.reports":
     "Reports other people filed about you, with your name removed. We are not able to let an account be deleted as a way of clearing its own record.",
   "settings.delete.staysNote":
     "All of these are pruned on their own schedule. The privacy policy explains them in full.",
   "settings.delete.ownedTitle":
-    "Do one of these first, for each server you own",
+    "Do one of these first, for each community you own",
   "settings.delete.ownedBody":
-    "Other people are still in these servers, so we will not delete them out from under them. In each server's settings, either hand it to another member or delete the server yourself.",
+    "Other people are still in these communities, so we will not delete them out from under them. In each community's settings, either hand it to another member or delete the community yourself.",
   "settings.delete.ownedMember": "— {count} other member",
   "settings.delete.ownedMembers": "— {count} other members",
   "settings.delete.typeLabel": "Type your handle to confirm",

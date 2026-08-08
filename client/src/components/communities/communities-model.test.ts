@@ -6,7 +6,9 @@ import {
   applyJoin,
   cardAction,
   categoryChips,
+  communityHue,
   emptyStateKeys,
+  formatMemberCount,
   memberCountKey,
   mergePages,
   monogram,
@@ -176,5 +178,73 @@ describe("the community strings", () => {
 
   it("tells a reporter their report does not reach the owner", () => {
     expect(ptBR["communities.reportBody"]).toContain("não pro dono");
+  });
+});
+
+describe("categoryChips emoji", () => {
+  it("gives every chip a glyph, including the sweep chip", () => {
+    // The glyph map is typed as a total record over the slugs, so a category
+    // added without one does not compile. This is the runtime half: the `all`
+    // chip has no slug to look up and would otherwise be the single hole.
+    for (const chip of categoryChips(null)) {
+      expect(chip.emoji.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("does not reuse a glyph between two categories", () => {
+    // Two categories sharing a glyph is worse than neither having one: the row
+    // then teaches that the picture means nothing.
+    const emojis = categoryChips(null).map((c) => c.emoji);
+    expect(new Set(emojis).size).toBe(emojis.length);
+  });
+});
+
+describe("formatMemberCount", () => {
+  it("leaves small counts exact, in both locales", () => {
+    // A directory of small rooms is the common case, and "842" abbreviated to
+    // anything is a number made worse.
+    expect(formatMemberCount(7, "pt-BR")).toBe("7");
+    expect(formatMemberCount(842, "en")).toBe("842");
+  });
+
+  it("abbreviates in the reader's own language", () => {
+    // The whole reason this goes through Intl: Portuguese says "1,2 mil", with
+    // a comma and a word, and every hand-rolled `k` suffix gets that wrong.
+    // The space before "mil" is U+00A0 — Intl's own, and the thing that keeps
+    // the number from wrapping away from its unit at the end of a card.
+    expect(formatMemberCount(1200, "pt-BR")).toBe("1,2\u00a0mil");
+    expect(formatMemberCount(1200, "en")).toBe("1.2K");
+  });
+
+  it("keeps a big count to one decimal rather than rounding it away", () => {
+    expect(formatMemberCount(128_734, "en")).toBe("128.7K");
+    expect(formatMemberCount(128_734, "pt-BR")).toBe("128,7\u00a0mil");
+  });
+});
+
+describe("communityHue", () => {
+  it("is stable for an id across calls", () => {
+    // The tint has to survive a reload, a second page and another device, or
+    // the card people learned to aim at changes colour under them.
+    const id = "00000000-0000-4000-8000-000000000abc";
+    expect(communityHue(id)).toBe(communityHue(id));
+  });
+
+  it("always lands inside the colour wheel", () => {
+    for (let i = 0; i < 200; i += 1) {
+      const hue = communityHue(`community-${i}-${"x".repeat(i % 17)}`);
+      expect(hue).toBeGreaterThanOrEqual(0);
+      expect(hue).toBeLessThan(360);
+      expect(Number.isInteger(hue)).toBe(true);
+    }
+  });
+
+  it("spreads ids across the wheel rather than clustering", () => {
+    // A hash that answers "40" for everything would compile, pass the two tests
+    // above, and produce a grid of identical cards.
+    const hues = new Set(
+      Array.from({ length: 60 }, (_, i) => communityHue(`server-${i}`)),
+    );
+    expect(hues.size).toBeGreaterThan(30);
   });
 });

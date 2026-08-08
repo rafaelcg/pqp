@@ -35,7 +35,9 @@ kill_signal = "SIGTERM"
 kill_timeout = 15
 
 [build]
-  dockerfile = "tools/ambient/Dockerfile"
+  # Relative to THIS file (flyctl rule), while the build context is the repo
+  # root the deploy runs from — the Dockerfile's COPYs need the workspace.
+  dockerfile = "Dockerfile"
 
 [env]
   # Where the cast posts. The runner derives the WebSocket URL from this, so

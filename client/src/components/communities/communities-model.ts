@@ -21,8 +21,42 @@ export type CategoryFilter = CommunityCategory | null;
 export interface CategoryChip {
   id: CategoryFilter;
   labelKey: MessageKey;
+  /** One glyph, drawn before the label. See `CATEGORY_EMOJI`. */
+  emoji: string;
   active: boolean;
 }
+
+/**
+ * One emoji per category, plus the sweep chip.
+ *
+ * WHY EMOJI RATHER THAN ICONS. A ten-chip row of lucide glyphs is ten strokes
+ * of the same weight in the same colour, which scans as texture rather than as
+ * ten different things — and half the categories here (humor, corre, futebol)
+ * have no icon in any set that reads as those words to a Brazilian. Emoji are
+ * already in the font stack, cost nothing, carry colour the palette does not
+ * have to spend, and are the register this directory is written in.
+ *
+ * TYPED AS A TOTAL RECORD on purpose: adding a slug to `COMMUNITY_CATEGORIES`
+ * without adding its glyph here is a compile error, which is the same
+ * guarantee the derived label keys give. They are `aria-hidden` everywhere they
+ * are drawn — the label beside them is the accessible name, and "🎮 Games"
+ * announced in full is worse than "Games".
+ */
+export const CATEGORY_EMOJI: Record<CommunityCategory, string> = {
+  games: "🎮",
+  musica: "🎧",
+  futebol: "⚽",
+  estudos: "📚",
+  anime: "🌸",
+  tech: "💻",
+  humor: "😂",
+  "series-filmes": "🍿",
+  corre: "💸",
+  geral: "🌎",
+};
+
+/** The "everything" chip's glyph, which has no slug to hang off. */
+export const ALL_CATEGORIES_EMOJI = "✨";
 
 /**
  * The chip row: "all", then every category in its declared order.
@@ -42,11 +76,13 @@ export function categoryChips(active: CategoryFilter): CategoryChip[] {
     {
       id: null,
       labelKey: "communities.category.all" as MessageKey,
+      emoji: ALL_CATEGORIES_EMOJI,
       active: active === null,
     },
     ...COMMUNITY_CATEGORIES.map((slug) => ({
       id: slug as CategoryFilter,
       labelKey: `communities.category.${slug}` as MessageKey,
+      emoji: CATEGORY_EMOJI[slug],
       active: active === slug,
     })),
   ];
@@ -160,4 +196,53 @@ export function applyJoin(
 /** Singular gets its own key — Portuguese does not tolerate "1 membros". */
 export function memberCountKey(count: number): MessageKey {
   return (count === 1 ? "communities.members.one" : "communities.members") as MessageKey;
+}
+
+/**
+ * The member count as it is printed on a card.
+ *
+ * COMPACT, AND LOCALE-CORRECT, because the alternative is worse in both
+ * directions: "12873" is a number nobody parses at a glance in a grid, and a
+ * hand-rolled "12.8k" is wrong in Portuguese, where the separator is a comma
+ * and the word is "mil" — `1,2 mil`, not `1.2K`. `Intl.NumberFormat` already
+ * knows all of that and costs no bytes, which is the same argument the
+ * catalogue makes for not shipping an i18n library.
+ *
+ * Below a thousand nothing is abbreviated in any locale, so the common case —
+ * a directory of small rooms — reads as the exact number it is.
+ *
+ * The formatter is rebuilt per call rather than memoised: this runs once per
+ * card per render, `Intl` caches its own internals, and a module-level cache
+ * keyed by locale would be a second source of truth for which language is on.
+ */
+export function formatMemberCount(count: number, locale: string): string {
+  return new Intl.NumberFormat(locale, {
+    notation: "compact",
+    compactDisplay: "short",
+    maximumFractionDigits: 1,
+  }).format(count);
+}
+
+/**
+ * A stable hue for a community that has no image yet.
+ *
+ * Cards need to be distinguishable from across a grid before any of them is
+ * read, and today there is nothing per-community to look at but a monogram.
+ * Hashing the id into a hue gives every card its own tint that does not move
+ * between loads, between pages, or between devices — and when real banner and
+ * icon fields land (they are coming), this becomes the fallback for the ones
+ * that never set an image rather than something to delete.
+ *
+ * Deliberately a hue only. Chroma and lightness stay fixed in the component so
+ * the tints sit at one depth and none of them can outshout the accent or fail
+ * contrast against the text on top.
+ */
+export function communityHue(id: string): number {
+  let hash = 0;
+  for (const char of id) {
+    // A classic 31-multiplier string hash; the mask keeps it inside 32 bits
+    // rather than drifting into float territory on a long id.
+    hash = (hash * 31 + (char.codePointAt(0) ?? 0)) & 0xffffffff;
+  }
+  return Math.abs(hash) % 360;
 }

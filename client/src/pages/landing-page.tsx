@@ -80,6 +80,33 @@ const FEATURES = [
 ] satisfies { title: MessageKey; body: MessageKey }[];
 
 /**
+ * The three things a community is, sold on the open web.
+ *
+ * The directory itself is behind sign-in — it reads auth on every route and
+ * hides rooms the viewer is banned from, so it is not and will not be an SEO
+ * surface. This section is therefore the only public statement that the
+ * feature exists, which is why it says what walking into one is like rather
+ * than listing what one contains.
+ */
+const COMMUNITY_POINTS = [
+  {
+    emoji: "🚪",
+    title: "landing.communities.point1.title",
+    body: "landing.communities.point1.body",
+  },
+  {
+    emoji: "🎧",
+    title: "landing.communities.point2.title",
+    body: "landing.communities.point2.body",
+  },
+  {
+    emoji: "🔑",
+    title: "landing.communities.point3.title",
+    body: "landing.communities.point3.body",
+  },
+] satisfies { emoji: string; title: MessageKey; body: MessageKey }[];
+
+/**
  * The closing call to action. The arrow is drawn here rather than typed into
  * the catalogue: it is decoration, so a translator never has to carry it and a
  * screen reader announces "Vai pra pqp" instead of "right arrow".
@@ -308,6 +335,64 @@ export function LandingPage() {
               </li>
             ))}
           </ol>
+        </div>
+      </section>
+
+      {/* Communities. Placed straight after "three moves", because the three
+          moves assume you have people to invite and this is the answer for
+          everybody who does not. The band is tinted rather than plain so it
+          reads as the one different thing on a page of equal sections. */}
+      <section
+        id="communities"
+        className="scroll-mt-8 border-b border-ink-4/40 bg-signal/[0.04] px-5 py-20 sm:px-8 sm:py-24"
+      >
+        <div className="mx-auto max-w-4xl">
+          <div className="mx-auto max-w-xl text-center">
+            <p className="font-display text-xs font-bold uppercase tracking-[0.22em] text-signal">
+              {t("landing.communities.eyebrow")}
+            </p>
+            <h2 className="mt-3 font-display text-3xl font-bold tracking-tight sm:text-4xl">
+              {t("landing.communities.title")}
+            </h2>
+            <p className="mt-4 text-lg text-paper-muted">
+              {t("landing.communities.body")}
+            </p>
+          </div>
+          <ul className="mt-14 grid gap-10 sm:grid-cols-3 sm:gap-8">
+            {COMMUNITY_POINTS.map((item) => (
+              <li key={item.title} className="text-left sm:text-center">
+                <span aria-hidden className="text-2xl">
+                  {item.emoji}
+                </span>
+                <h3 className="mt-2 font-display text-lg font-bold">
+                  {t(item.title)}
+                </h3>
+                <p className="mt-2 text-sm text-paper-muted">{t(item.body)}</p>
+              </li>
+            ))}
+          </ul>
+          <div className="mt-12 flex justify-center">
+            {bypass ? (
+              <Button asChild className="cta-lift h-11 px-6 text-base">
+                <Link to="/app">{t("landing.communities.action")}</Link>
+              </Button>
+            ) : (
+              <>
+                <SignedOut>
+                  <SignUpButton mode="modal" forceRedirectUrl="/app">
+                    <Button className="cta-lift h-11 px-6 text-base">
+                      {t("landing.communities.action")}
+                    </Button>
+                  </SignUpButton>
+                </SignedOut>
+                <SignedIn>
+                  <Button asChild className="cta-lift h-11 px-6 text-base">
+                    <Link to="/app">{t("landing.communities.action")}</Link>
+                  </Button>
+                </SignedIn>
+              </>
+            )}
+          </div>
         </div>
       </section>
 
