@@ -102,6 +102,9 @@ export interface DbServer {
   banner_url: string | null;
   icon_key?: string | null;
   banner_key?: string | null;
+  is_community?: boolean;
+  /** Only present on reads that join the viewer's `server_members` row. */
+  show_on_profile?: boolean;
   role?: "owner" | "admin" | "member";
 }
 

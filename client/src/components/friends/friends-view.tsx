@@ -1,4 +1,5 @@
 import type {
+  Depoimento,
   DmSummary,
   Friend,
   FriendRequestEntry,
@@ -7,6 +8,7 @@ import type {
 } from "@pqp/shared";
 import { Check, Menu, UserPlus, Users, X } from "lucide-react";
 import { useEffect, useId, useState, type ReactNode } from "react";
+import { PendingDepoimentos } from "@/components/depoimentos/pending-depoimentos";
 import { FirstRunCard } from "@/components/onboarding/first-run-card";
 import {
   shouldShowFirstRun,
@@ -81,8 +83,19 @@ export function FriendsView({
   firstRun,
 }: FriendsViewProps) {
   const { t } = useTranslation();
-  const { data, loading, error, send, accept, remove, nudge, clearNudge } =
-    useFriends();
+  const {
+    data,
+    pendingDepoimentos,
+    loading,
+    error,
+    send,
+    accept,
+    remove,
+    approveDepoimento,
+    removeDepoimento,
+    nudge,
+    clearNudge,
+  } = useFriends();
   const [tab, setTab] = useState<FriendsTab>("online");
   const [adding, setAdding] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -120,14 +133,21 @@ export function FriendsView({
       t(
         nudge.kind === "accepted"
           ? "friends.nudge.accepted"
-          : "friends.nudge.request",
+          : nudge.kind === "depoimento"
+            ? // Deliberately vague about direction. The frame is content-free
+              // and fires for both halves — somebody wrote you one, or somebody
+              // published yours — and the two lists it refreshed already say
+              // which. Naming a direction here would make the frame carry a
+              // fact it does not have.
+              "depoimentos.nudge"
+            : "friends.nudge.request",
       ),
     );
     clearNudge();
   }, [nudge, clearNudge, t]);
 
   const online = onlineFriends(data.friends);
-  const pending = pendingActionCount(data);
+  const pending = pendingActionCount(data, pendingDepoimentos);
 
   /**
    * The checklist's inputs, and the two questions asked of them.
@@ -340,9 +360,17 @@ export function FriendsView({
           <PendingLists
             incoming={data.incoming}
             outgoing={data.outgoing}
+            depoimentos={pendingDepoimentos}
             busyId={busyId}
             onAccept={(id) => void run(id, () => accept(id))}
             onRemove={(id) => void run(id, () => remove(id))}
+            onApproveDepoimento={(id) =>
+              void run(id, async () => {
+                await approveDepoimento(id);
+                setNotice(t("depoimentos.published"));
+              })
+            }
+            onRejectDepoimento={(id) => void run(id, () => removeDepoimento(id))}
           />
         ) : (
           <>
@@ -513,24 +541,43 @@ function FriendRows({
 function PendingLists({
   incoming,
   outgoing,
+  depoimentos,
   busyId,
   onAccept,
   onRemove,
+  onApproveDepoimento,
+  onRejectDepoimento,
 }: {
   incoming: FriendRequestEntry[];
   outgoing: FriendRequestEntry[];
+  depoimentos: Depoimento[];
   busyId: string | null;
   onAccept: (userId: string) => void;
   onRemove: (userId: string) => void;
+  onApproveDepoimento: (id: string) => void;
+  onRejectDepoimento: (id: string) => void;
 }) {
   const { t } = useTranslation();
-  if (incoming.length === 0 && outgoing.length === 0) {
+  if (
+    incoming.length === 0 &&
+    outgoing.length === 0 &&
+    depoimentos.length === 0
+  ) {
     return (
       <p className="text-sm text-paper-muted">{t("friends.empty.pending")}</p>
     );
   }
   return (
     <div className="max-w-2xl space-y-6">
+      {/* First, and above the friend requests, because it is the one errand
+          here with a warm payload — somebody wrote something about you and is
+          waiting to see whether you will show it. */}
+      <PendingDepoimentos
+        depoimentos={depoimentos}
+        busyId={busyId}
+        onApprove={onApproveDepoimento}
+        onReject={onRejectDepoimento}
+      />
       {incoming.length > 0 && (
         <section aria-label={t("friends.incoming")}>
           <h2 className="mb-2 text-xs font-semibold uppercase tracking-wider text-paper-muted">

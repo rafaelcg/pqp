@@ -14,11 +14,23 @@ import { createPortal } from "react-dom";
 import {
   TIMEOUT_PRESET_MINUTES,
   TIMEOUT_REASON_MAX_LENGTH,
+  type Depoimento,
   type DmSummary,
+  type ProfileCommunityList,
 } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
 import { StatusDot } from "@/components/user/status-dot";
 import { useFriends } from "@/components/friends/use-friends";
+import { DepoimentoComposer } from "@/components/depoimentos/depoimento-composer";
+import {
+  fetchDepoimentos,
+  fetchProfileCommunities,
+} from "@/components/depoimentos/depoimentos-api";
+import { canWriteDepoimento } from "@/components/depoimentos/depoimentos-model";
+import {
+  CommunityBadges,
+  DepoimentosSection,
+} from "@/components/depoimentos/depoimentos-section";
 import {
   ApiError,
   banMember,
@@ -108,6 +120,15 @@ interface ProfilePopoverProviderProps {
   moderation: ProfileModerationContext | null;
   /** Message: the conversation was opened or reused — the app navigates. */
   onOpenConversation: (conversation: DmSummary) => void;
+  /**
+   * Drop text into whatever composer the app has just navigated to.
+   *
+   * Exists for exactly one caller: the depoimento composer's "mandar por DM"
+   * fork. An escape hatch that makes somebody retype what they wrote is one
+   * nobody takes, and this is the escape hatch that has to be taken by the
+   * people who need it most — see the note on `DepoimentoComposer`.
+   */
+  onComposeDraft?: (text: string) => void;
   onBlockUser: (userId: string) => void;
   onUnblockUser: (userId: string) => void;
   onReportUser: (subject: ProfileSubject) => void;
@@ -124,6 +145,7 @@ export function ProfilePopoverProvider({
   blockedUserIds,
   moderation,
   onOpenConversation,
+  onComposeDraft,
   onBlockUser,
   onUnblockUser,
   onReportUser,
@@ -159,6 +181,7 @@ export function ProfilePopoverProvider({
           moderation={moderation}
           onClose={() => setState(null)}
           onOpenConversation={onOpenConversation}
+          onComposeDraft={onComposeDraft}
           onBlockUser={onBlockUser}
           onUnblockUser={onUnblockUser}
           onReportUser={onReportUser}
@@ -209,6 +232,7 @@ interface UserProfileCardProps {
   moderation: ProfileModerationContext | null;
   onClose: () => void;
   onOpenConversation: (conversation: DmSummary) => void;
+  onComposeDraft?: (text: string) => void;
   onBlockUser: (userId: string) => void;
   onUnblockUser: (userId: string) => void;
   onReportUser: (subject: ProfileSubject) => void;
@@ -222,6 +246,7 @@ function UserProfileCard({
   moderation,
   onClose,
   onOpenConversation,
+  onComposeDraft,
   onBlockUser,
   onUnblockUser,
   onReportUser,
@@ -231,7 +256,7 @@ function UserProfileCard({
   // same optimistic refresh, the same generation guard. Mounting it here (and
   // only while the card is open) is what keeps its 15s poll scoped to somebody
   // actually looking, which is the argument use-friends.ts makes for pull.
-  const { data, loading, send, accept, remove } = useFriends();
+  const { data, loading, send, accept, remove, removeDepoimento } = useFriends();
   const cardRef = useRef<HTMLDivElement>(null);
   const [placement, setPlacement] = useState<Placement | null>(null);
   const [busy, setBusy] = useState(false);
@@ -248,6 +273,23 @@ function UserProfileCard({
   /** The timeout composer's duration, once it is open. */
   const [timeoutMinutes, setTimeoutMinutes] = useState<number | null>(null);
   const [timeoutReason, setTimeoutReason] = useState("");
+  /**
+   * The profile's own content: the depoimentos this person chose to display and
+   * the communities they show. One fetch each, fired on open.
+   *
+   * NOT IN THE FRIENDS STORE, unlike the pending queue. These are facts about
+   * SOMEBODY ELSE and they are only ever wanted while their card is open — the
+   * card already remounts per subject (see the `key` on it), so holding them
+   * here is what makes closing the card forget them. The queue is the opposite:
+   * one list, about the account holder, needed by a badge on a door the card
+   * has nothing to do with.
+   */
+  const [depoimentos, setDepoimentos] = useState<Depoimento[] | null>(null);
+  const [communities, setCommunities] = useState<ProfileCommunityList | null>(
+    null,
+  );
+  /** Open while the composer is up. */
+  const [writing, setWriting] = useState(false);
 
   const state = resolveFriendshipState(
     subject.id,
@@ -293,6 +335,43 @@ function UserProfileCard({
       window.removeEventListener("scroll", onClose, true);
     };
   }, [anchor, onClose, state, loading]);
+
+  /**
+   * The card's own content, read once on open.
+   *
+   * Both requests are safe against every viewer: the depoimento read answers an
+   * empty list to somebody outside the audience rather than a 403, and the
+   * community read is already filtered to listed, unsuspended, opted-in rooms.
+   * So there is nothing to gate here — a failure just leaves the sections
+   * hidden, which is exactly what a card with nothing to show looks like.
+   */
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      try {
+        const [list, badges] = await Promise.all([
+          fetchDepoimentos(subject.id),
+          fetchProfileCommunities(subject.id),
+        ]);
+        if (!alive) {
+          return;
+        }
+        setDepoimentos(list.depoimentos);
+        setCommunities(badges);
+      } catch {
+        // Silent. Both sections hide themselves when empty, so a failed read
+        // degrades to "this person has none" — and neither is worth putting an
+        // error banner on somebody's profile card for.
+        if (alive) {
+          setDepoimentos([]);
+          setCommunities(null);
+        }
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [subject.id]);
 
   useEffect(() => {
     function onPointerDown(event: MouseEvent) {
@@ -373,6 +452,25 @@ function UserProfileCard({
     void run(async () => {
       const { conversation } = await createConversation([subject.id]);
       onOpenConversation(conversation);
+      onClose();
+    });
+  }
+
+  /**
+   * The fork out of the depoimento composer: open the DM instead, carrying what
+   * they had already typed.
+   *
+   * This is the same `createConversation` the Message button uses, deliberately
+   * — there is no second path and no special "private depoimento", because the
+   * whole point is that the private thing they are trying to say has a real,
+   * ordinary home. §02 is what happens when it does not.
+   */
+  function handleSendAsDm(body: string) {
+    void run(async () => {
+      const { conversation } = await createConversation([subject.id]);
+      onOpenConversation(conversation);
+      onComposeDraft?.(body);
+      setWriting(false);
       onClose();
     });
   }
@@ -725,6 +823,65 @@ function UserProfileCard({
             )}
           </div>
         )}
+
+        {/* "Escrever depoimento" — friends only, and its own row rather than a
+            fourth button squeezed into the one above. It is the warm action on
+            this card and every other control up there is either a relationship
+            or a punishment; putting it in that row would make it read as one of
+            them. `canWriteDepoimento` is the same gate the server enforces with
+            `areFriendsSql`, so this button is never drawn where it would 403. */}
+        {canWriteDepoimento(state) && !writing && (
+          <Button
+            size="sm"
+            variant="secondary"
+            className="mt-2 w-full"
+            disabled={busy}
+            data-depoimento-write=""
+            onClick={() => {
+              setNotice(null);
+              setWriting(true);
+            }}
+          >
+            {t("depoimentos.write")}
+          </Button>
+        )}
+
+        {writing && (
+          <DepoimentoComposer
+            subject={subject}
+            onWritten={() => {
+              setWriting(false);
+              setNotice(
+                t("depoimentos.written", { name: subject.displayName }),
+              );
+            }}
+            onSendAsDm={handleSendAsDm}
+            onCancel={() => setWriting(false)}
+          />
+        )}
+
+        {/* The profile's own content, below everything you can DO about this
+            person. Both hide themselves when empty — see the section's own
+            note on why there is no "0 depoimentos". The remove control appears
+            only on your own card: a published depoimento is yours to take down
+            at any time, without notice, and that is what makes publishing one
+            safe to do in the first place. */}
+        <DepoimentosSection
+          depoimentos={depoimentos ?? []}
+          busy={busy}
+          onRemove={
+            state === "self"
+              ? (id) =>
+                  void run(async () => {
+                    await removeDepoimento(id);
+                    setDepoimentos((current) =>
+                      (current ?? []).filter((one) => one.id !== id),
+                    );
+                  })
+              : undefined
+          }
+        />
+        {communities && <CommunityBadges communities={communities} />}
 
         {/* The timeout composer. Inline rather than a modal for the reason the
             card exists: a moderator is looking at the message that prompted

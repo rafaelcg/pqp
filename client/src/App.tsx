@@ -38,6 +38,8 @@ import { DmList } from "@/components/layout/dm-list";
 import { FriendsView } from "@/components/friends/friends-view";
 import { CommunitiesView } from "@/components/communities/communities-view";
 import { useCommunitiesEnabled } from "@/components/communities/use-communities-enabled";
+import { setProfileVisibility } from "@/components/depoimentos/depoimentos-api";
+import { waitingOnYou } from "@/components/depoimentos/depoimentos-model";
 import {
   FriendsContext,
   useFriendsStore,
@@ -1728,6 +1730,35 @@ function MainAppContent({
     }
   }
 
+  /**
+   * "Show this community on my profile", flipped from its own context menu.
+   *
+   * Written through to the server and then patched into the local list, rather
+   * than refetched: `GET /api/servers` is the app's boot read and re-running it
+   * to learn one boolean would repaint the whole rail. The switch is the
+   * member's own and cannot fail for a permission reason, so the only failure
+   * worth surfacing is the network one.
+   */
+  async function handleToggleProfileVisibility(
+    serverId: string,
+    showOnProfile: boolean,
+  ) {
+    try {
+      await setProfileVisibility(serverId, showOnProfile);
+      setServers((prev) =>
+        prev.map((one) =>
+          one.id === serverId ? { ...one, showOnProfile } : one,
+        ),
+      );
+    } catch (error) {
+      setAppError(
+        error instanceof Error
+          ? error.message
+          : "Failed to update profile visibility",
+      );
+    }
+  }
+
   async function handleJoinVoice(channelId: string) {
     voiceServerIdRef.current = selectedServerId;
     try {
@@ -2723,6 +2754,10 @@ function MainAppContent({
         setConversations((prev) => upsertConversation(prev, conversation));
         void selectConversation(conversation.channelId);
       }}
+      // The depoimento composer's DM fork lands here: the conversation has just
+      // been selected above, and the composer remounts per channel, so its
+      // insert effect picks this up on mount with the text already in it.
+      onComposeDraft={(text) => setComposerInsert(text)}
       onBlockUser={(userId) => void handleBlockUser(userId)}
       onUnblockUser={(userId) => void handleUnblockUser(userId)}
       onReportUser={(subject) =>
@@ -2815,7 +2850,12 @@ function MainAppContent({
         channels={channels}
         homeSelected={selection.kind === "dm"}
         homeUnread={conversationUnread}
-        friendRequestCount={friends.data.incoming.length}
+        // Requests AND depoimentos waiting to be answered — see `waitingOnYou`
+        // for why the two are one number on this badge and not two.
+        friendRequestCount={waitingOnYou({
+          friendRequests: friends.data.incoming.length,
+          pendingDepoimentos: friends.pendingDepoimentos.length,
+        })}
         communitiesSelected={directoryOpen}
         // Absent entirely with the flag off, which is what makes the compass
         // not exist rather than exist-and-refuse.
@@ -2840,6 +2880,9 @@ function MainAppContent({
           setServerSettingsOpen(true);
         }}
         onLeaveServer={(id) => void handleLeaveServer(id)}
+        onToggleProfileVisibility={(id, showOnProfile) =>
+          void handleToggleProfileVisibility(id, showOnProfile)
+        }
       />
 
       {selection.kind === "dm" ? (

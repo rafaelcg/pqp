@@ -6,7 +6,18 @@ import {
   useRef,
   useState,
 } from "react";
-import type { FriendActivity, FriendsResponse, PublicUser } from "@pqp/shared";
+import type {
+  Depoimento,
+  FriendActivity,
+  FriendsResponse,
+  PublicUser,
+} from "@pqp/shared";
+import {
+  approveDepoimento as approveDepoimentoRequest,
+  deleteDepoimento,
+  fetchPendingDepoimentos,
+} from "@/components/depoimentos/depoimentos-api";
+import { waitingOnYou } from "@/components/depoimentos/depoimentos-model";
 import { translateMessage } from "@/lib/i18n/catalogue";
 import {
   acceptFriendRequest,
@@ -61,6 +72,20 @@ export interface FriendNudge {
 
 export interface FriendsState {
   data: FriendsResponse;
+  /**
+   * Depoimentos waiting on the account holder to publish or refuse.
+   *
+   * HELD IN THIS STORE RATHER THAN ITS OWN, for the reason this store exists at
+   * all: it is the same errand as an incoming friend request — somebody is
+   * waiting for an answer — it is answered from the same screen, it badges the
+   * same door, and it is refreshed by the same `friend-activity` frame. A
+   * second store would mean a second poll, a second nudge handler and two
+   * badges that can disagree about how much is waiting.
+   *
+   * Never anybody else's queue. A pending depoimento is readable by its subject
+   * alone, so there is exactly one list of them a client can ever hold.
+   */
+  pendingDepoimentos: Depoimento[];
   /** True only before the first snapshot — refreshes are silent. */
   loading: boolean;
   error: string | null;
@@ -69,6 +94,14 @@ export interface FriendsState {
   send: (user: PublicUser) => Promise<"pending" | "accepted">;
   accept: (userId: string) => Promise<void>;
   remove: (userId: string) => Promise<void>;
+  /** Publish one from the queue. The author is told; nobody else is. */
+  approveDepoimento: (id: string) => Promise<void>;
+  /**
+   * Refuse a pending one, or take a published one of your own down. One call
+   * for both, because the server has one route for both — and both are silent
+   * to the author, which is what keeps refusing cheap enough to do.
+   */
+  removeDepoimento: (id: string) => Promise<void>;
   /**
    * A `friend-activity` frame arrived. Called by the app's socket handler, not
    * by a view — the shell owns the connection, the same way it owns
@@ -103,6 +136,7 @@ export interface FriendsState {
  */
 export function useFriendsStore(enabled: boolean): FriendsState {
   const [data, setData] = useState<FriendsResponse>(EMPTY);
+  const [pendingDepoimentos, setPendingDepoimentos] = useState<Depoimento[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [nudge, setNudge] = useState<FriendNudge | null>(null);
@@ -117,11 +151,23 @@ export function useFriendsStore(enabled: boolean): FriendsState {
   const refresh = useCallback(async () => {
     const generation = ++generationRef.current;
     try {
-      const response = await fetchFriends();
+      /**
+       * The two lists go out together. They are refreshed by the same events —
+       * the poll, and every `friend-activity` frame — so serialising them would
+       * double the latency of the nudge for nothing, and letting either fail
+       * independently would produce a badge that counts one and not the other.
+       * `Promise.all` rejects on the first failure, which is the behaviour
+       * wanted: the stale pair stays on screen, exactly as the note below says.
+       */
+      const [response, queue] = await Promise.all([
+        fetchFriends(),
+        fetchPendingDepoimentos(),
+      ]);
       if (!aliveRef.current || generation !== generationRef.current) {
         return;
       }
       setData(response);
+      setPendingDepoimentos(queue.depoimentos);
       setError(null);
     } catch {
       if (!aliveRef.current || generation !== generationRef.current) {
@@ -202,14 +248,33 @@ export function useFriendsStore(enabled: boolean): FriendsState {
     [refresh],
   );
 
+  const approveDepoimento = useCallback(
+    async (id: string) => {
+      await approveDepoimentoRequest(id);
+      await refresh();
+    },
+    [refresh],
+  );
+
+  const removeDepoimento = useCallback(
+    async (id: string) => {
+      await deleteDepoimento(id);
+      await refresh();
+    },
+    [refresh],
+  );
+
   return {
     data,
+    pendingDepoimentos,
     loading,
     error,
     refresh,
     send,
     accept,
     remove,
+    approveDepoimento,
+    removeDepoimento,
     applyNudge,
     nudge,
     clearNudge,
@@ -237,22 +302,36 @@ export function useFriends(): FriendsState {
 }
 
 /**
- * Requests waiting on you, for a badge — deliberately WITHOUT retaining the
- * presence timer. A count does not go stale when somebody steps away, and the
- * nudge already tells it when it does.
+ * Everything waiting on you, for the badge on the front door — deliberately
+ * WITHOUT retaining the presence timer. A count does not go stale when somebody
+ * steps away, and the nudge already tells it when it does.
+ *
+ * Friend requests and pending depoimentos, added together. `waitingOnYou`
+ * carries the argument for adding rather than splitting, and is where a test
+ * pins it.
  */
 export function useFriendRequestCount(): number {
-  return useContext(FriendsContext)?.data.incoming.length ?? 0;
+  const store = useContext(FriendsContext);
+  if (!store) {
+    return 0;
+  }
+  return waitingOnYou({
+    friendRequests: store.data.incoming.length,
+    pendingDepoimentos: store.pendingDepoimentos.length,
+  });
 }
 
 const INERT: FriendsState = {
   data: EMPTY,
+  pendingDepoimentos: [],
   loading: false,
   error: null,
   refresh: async () => {},
   send: async () => "pending",
   accept: async () => {},
   remove: async () => {},
+  approveDepoimento: async () => {},
+  removeDepoimento: async () => {},
   applyNudge: () => {},
   nudge: null,
   clearNudge: () => {},

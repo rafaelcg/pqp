@@ -19,14 +19,21 @@ export function onlineFriends(friends: readonly Friend[]): Friend[] {
 }
 
 /**
- * What the Pending tab's badge counts: requests waiting on YOU. Outgoing ones
- * are deliberately excluded — a badge is a call to action, and there is no
- * action to take on a request you already sent.
+ * What the Pending tab's badge counts: everything waiting on YOU.
+ *
+ * Outgoing requests are deliberately excluded — a badge is a call to action,
+ * and there is no action to take on a request you already sent.
+ *
+ * Depoimentos waiting to be published or refused ARE counted, because they are
+ * the same errand answered on the same tab with the same two buttons. See
+ * `waitingOnYou` in the depoimentos model, which is where that argument lives
+ * and where the front door's badge gets it from.
  */
 export function pendingActionCount(
   response: Pick<FriendsResponse, "incoming">,
+  pendingDepoimentos: readonly unknown[] = [],
 ): number {
-  return response.incoming.length;
+  return response.incoming.length + pendingDepoimentos.length;
 }
 
 /**

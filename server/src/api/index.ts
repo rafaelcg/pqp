@@ -429,6 +429,10 @@ export function resetApiRateLimits(): void {
   accountDeleteLimiter.reset();
   webhookExecuteLimiter.reset();
   reportLimiter.reset();
+  // Declared in the depoimentos section at the foot of this file. Safe to name
+  // here: this function only ever runs after module evaluation, so the `const`
+  // is out of its temporal dead zone by the time a test calls it.
+  depoimentoLimiter.reset();
 }
 
 class Forbidden extends HttpError {
@@ -4133,3 +4137,192 @@ router.delete("/api/friends/:userId", async ({ user }, { userId }) => {
   }
   return { ok: true };
 });
+
+// ============================================================== depoimentos
+//
+// Appended as a self-contained section, imports included (ESM hoists them; the
+// routes register on the same module-level `router` the rest of the file uses)
+// — the shape the friends section above established.
+//
+// The mechanic, the "Não aceita!" lesson and the delete-on-refusal rule are
+// argued in packages/shared/src/depoimentos.ts and on the `depoimentos` table
+// in schema.sql; enforcement is in services/depoimentos.ts. What lives here is
+// the HTTP surface, and the two things a route owns: which refusals are told
+// apart in a response body (none of them are) and who gets nudged.
+import {
+  depoimentoBodySchema,
+  updateProfileVisibilitySchema,
+  writeDepoimentoSchema,
+} from "@pqp/shared";
+import {
+  approveDepoimento,
+  deleteDepoimento,
+  DepoimentoFloodError,
+  DepoimentoRefusedError,
+  listApprovedDepoimentos,
+  listPendingDepoimentos,
+  listProfileCommunities,
+  setProfileVisibility,
+  writeDepoimento,
+} from "../services/depoimentos.js";
+
+/**
+ * The volatile half of the write budget; the durable half is
+ * `DEPOIMENTOS_PER_DAY`, counted in Postgres.
+ *
+ * Shaped like `reportLimiter` rather than like the message limiter, because
+ * writing a depoimento is the same kind of act filing a report is: rare,
+ * considered, and worth nothing in bulk. Five in a burst covers the evening
+ * somebody works down their friends list after remembering this feature exists;
+ * the refill makes a sustained run take all night and hit the daily cap first.
+ */
+const depoimentoLimiter = createRateLimiter({
+  capacity: 5,
+  refillPerSecond: 0.05,
+});
+
+/**
+ * Write one about somebody. 201, and it always lands PENDING.
+ *
+ * EVERY REFUSAL ANSWERS WITH ONE SENTENCE. "You are not friends", "they blocked
+ * you", "that is a character" — telling those apart would make this route an
+ * oracle for a relationship the caller is not entitled to read, the same probe
+ * `POST /api/friends` and `POST /api/dms` both refuse to be. There is no new
+ * discovery here either: the id in the path is one the caller could only have
+ * from the existing budgeted lookup or from a surface they already share.
+ *
+ * The body is validated by `depoimentoBodySchema` HERE rather than through the
+ * request schema, so an author who ran long reads "keep it to 500 characters"
+ * instead of the generic "Invalid request" the ZodError handler produces — the
+ * same split `communityTaglineSchema` uses one section up.
+ */
+router.post(
+  "/api/users/:userId/depoimentos",
+  async ({ req, user }, { userId }) => {
+    const body = writeDepoimentoSchema.parse(await readJsonBody(req));
+    const parsed = depoimentoBodySchema.safeParse(body.body);
+    if (!parsed.success) {
+      throw new HttpError(
+        400,
+        parsed.error.issues[0]?.message ?? "Invalid text",
+      );
+    }
+    if (!depoimentoLimiter.take(`user:${user.id}`)) {
+      throw new HttpError(429, "Too many depoimentos — slow down");
+    }
+    if (!(await getUserById(userId!))) {
+      throw new NotFound("User not found");
+    }
+    try {
+      const depoimento = await writeDepoimento(user.id, userId!, parsed.data);
+      // The subject's queue just grew, and that queue is the only place this
+      // exists. Content-free, on the friends frame, for the reason that frame
+      // gives: the recipient is by construction somebody entitled to
+      // `GET /api/me/depoimentos/pending`, and that read is the payload.
+      notifyFriendActivity(userId!, "depoimento");
+      return created({ depoimento });
+    } catch (error) {
+      if (error instanceof DepoimentoRefusedError) {
+        // One message for every reason — see the route comment.
+        throw new Forbidden("You can only write depoimentos for your friends");
+      }
+      if (error instanceof DepoimentoFloodError) {
+        throw new HttpError(429, error.message);
+      }
+      throw error;
+    }
+  },
+);
+
+/**
+ * A profile's published depoimentos, newest published first.
+ *
+ * Answers an EMPTY LIST rather than 403 for somebody outside the audience. The
+ * card hides the section when it is empty, so "this person has none" and "you
+ * may not read this person's" render identically — and a status code that told
+ * them apart would report on a relationship the caller cannot otherwise
+ * observe.
+ */
+router.get("/api/users/:userId/depoimentos", async ({ user }, { userId }) => {
+  return { depoimentos: await listApprovedDepoimentos(user.id, userId!) };
+});
+
+/**
+ * Your own queue — the ONLY place a pending depoimento is readable by anybody,
+ * its author after sending very much included.
+ */
+router.get("/api/me/depoimentos/pending", async ({ user }) => {
+  return { depoimentos: await listPendingDepoimentos(user.id) };
+});
+
+/**
+ * Publish one. Only the subject may, and the client makes it two deliberate
+ * taps over a preview of exactly what becomes public — §05 calls that the most
+ * important UI decision in the feature, and it is the half of the "Não aceita!"
+ * mitigation the server cannot enforce on its own.
+ */
+router.post(
+  "/api/depoimentos/:depoimentoId/approve",
+  async ({ user }, { depoimentoId }) => {
+    const authorId = await approveDepoimento(user.id, depoimentoId!);
+    if (!authorId) {
+      throw new NotFound("No depoimento waiting on you with that id");
+    }
+    // The one moment the author hears anything, and it is the warm one: their
+    // words are public now, which they are plainly entitled to know.
+    notifyFriendActivity(authorId, "depoimento");
+    return { ok: true };
+  },
+);
+
+/**
+ * Refuse a pending one, take a published one down, or withdraw your own —
+ * whichever of the three the caller is entitled to, silently, in one route.
+ *
+ * THE SILENCE IS THE MITIGATION, not politeness. A notification on refusal
+ * would tell the author "they read it and said no", which is the single fact
+ * deleting the row exists to withhold, and it would make refusing socially
+ * expensive in a feature whose entire safety rests on refusing staying cheap.
+ */
+router.delete(
+  "/api/depoimentos/:depoimentoId",
+  async ({ user }, { depoimentoId }) => {
+    if (!(await deleteDepoimento(user.id, depoimentoId!))) {
+      throw new NotFound("No depoimento with that id");
+    }
+    return { ok: true };
+  },
+);
+
+/**
+ * The community chips on somebody's profile card.
+ *
+ * NOT gated on `isCommunitiesEnabled()`, and that is not an oversight. On a
+ * deployment with the directory off, no server can be `is_community` — the only
+ * route that sets the column is itself gated — so this answers an empty list by
+ * construction. The flag is enforced by the data rather than by a 404 the card
+ * would have to special-case, and a card that must know about a feature flag
+ * before it can render is a card that renders late.
+ */
+router.get("/api/users/:userId/communities", async ({ user }, { userId }) => {
+  return await listProfileCommunities(user.id, userId!);
+});
+
+/**
+ * "Show this community on my profile", flipped by the member themselves.
+ *
+ * A separate route from the server PATCH, which is the OWNER's: this is a fact
+ * about the caller's own membership row and no owner has any business setting
+ * it for them. The mirror image of the separation `PATCH /api/servers/:id`
+ * already keeps for `updateCommunitySchema`.
+ */
+router.patch(
+  "/api/servers/:serverId/profile-visibility",
+  async ({ req, user }, { serverId }) => {
+    const body = updateProfileVisibilitySchema.parse(await readJsonBody(req));
+    if (!(await setProfileVisibility(user.id, serverId!, body.showOnProfile))) {
+      throw new NotFound("Server not found");
+    }
+    return { ok: true, showOnProfile: body.showOnProfile };
+  },
+);

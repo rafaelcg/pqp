@@ -1927,3 +1927,140 @@ ALTER TABLE servers ADD COLUMN IF NOT EXISTS icon_key TEXT;
 ALTER TABLE servers ADD COLUMN IF NOT EXISTS icon_url TEXT;
 ALTER TABLE servers ADD COLUMN IF NOT EXISTS banner_key TEXT;
 ALTER TABLE servers ADD COLUMN IF NOT EXISTS banner_url TEXT;
+-- ============================================================== depoimentos
+--
+-- Orkut's testimonials, and the one mechanic Brazilians name unprompted when
+-- asked what they miss. A friend writes a short thing about you; it is
+-- invisible to everyone — including them, after sending — until YOU publish it.
+-- `docs/research/communities-orkut.html` §05 is the argument; what follows is
+-- the part of it the storage layer has to hold up.
+--
+-- THE APPROVAL IS THE FEATURE, so `approved_at` is the whole state machine.
+-- NULL means pending and readable by the subject alone; non-NULL means the
+-- subject chose to display it. There is deliberately no third state and no
+-- `status` column: a boolean-plus-timestamp pair invites the classic drift
+-- where one says published and the other says nothing.
+--
+-- REJECTION DELETES THE ROW. No graveyard, no 'declined' state, nothing to
+-- mine later. This is not tidiness — it is the direct fix for §02's documented
+-- failure, "Não aceita!": because Orkut's unaccepted queue was readable by the
+-- recipient FOREVER, Brazilians discovered a depoimento was a private message,
+-- and the folklore is what happened when a recipient published one of those by
+-- accident. An approval queue that retains what it refuses IS a covert DM
+-- channel. The compose flow answers the same problem from the other end by
+-- offering a real DM as a first-class second option.
+--
+-- ONE STANDING DEPOIMENTO PER PAIR — `UNIQUE (author_id, subject_id)`. Writing
+-- again REPLACES what is there and returns it to pending, which is also how
+-- "editable by the author while pending" is spelled without an edit route.
+-- Replacing an already-approved one un-publishes it: the author could have
+-- achieved exactly that by withdrawing and rewriting, so refusing here would
+-- only add an error message to a sequence that stays possible.
+CREATE TABLE IF NOT EXISTS depoimentos (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  author_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  subject_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  body TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  approved_at TIMESTAMPTZ,
+  UNIQUE (author_id, subject_id),
+  -- Writing about yourself is not a testimonial. Refused here as well as in
+  -- the service so no future path can invent one.
+  CHECK (author_id <> subject_id)
+);
+
+-- The profile read: approved rows for one subject, newest published first.
+-- Partial, because the pending half is never in this order and is never shown
+-- to anybody but the subject.
+CREATE INDEX IF NOT EXISTS idx_depoimentos_subject_approved
+  ON depoimentos (subject_id, approved_at DESC)
+  WHERE approved_at IS NOT NULL;
+
+-- The inbox, and the badge that counts it. Also partial: pending rows are the
+-- small, hot set, and this index is read on every friends poll.
+CREATE INDEX IF NOT EXISTS idx_depoimentos_subject_pending
+  ON depoimentos (subject_id, created_at DESC)
+  WHERE approved_at IS NULL;
+
+-- The daily write cap counts `author_id` over a time window, and the author's
+-- own "what have I written" read uses the same index.
+CREATE INDEX IF NOT EXISTS idx_depoimentos_author
+  ON depoimentos (author_id, created_at DESC);
+
+-- A BLOCK DESTROYS THE DEPOIMENTO IN BOTH DIRECTIONS, published or not.
+--
+-- Same placement and the same argument as `friendships_end_on_block()` right
+-- above: enforced at the storage layer so it holds for every path that will
+-- ever write a block, without each one having to remember this table exists.
+-- Deleted rather than hidden, for the reason the whole feature deletes rather
+-- than archives — a surviving row is a thing to mine, and after an unblock it
+-- would also be a way to prove a block had happened.
+CREATE OR REPLACE FUNCTION depoimentos_end_on_block() RETURNS TRIGGER AS $$
+BEGIN
+  DELETE FROM depoimentos
+  WHERE (author_id = NEW.user_id AND subject_id = NEW.blocked_user_id)
+     OR (author_id = NEW.blocked_user_id AND subject_id = NEW.user_id);
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_depoimentos_end_on_block ON user_blocks;
+CREATE TRIGGER trg_depoimentos_end_on_block
+  AFTER INSERT ON user_blocks
+  FOR EACH ROW EXECUTE FUNCTION depoimentos_end_on_block();
+
+-- UNFRIENDING WITHDRAWS A PENDING DEPOIMENTO, AND ONLY A PENDING ONE.
+--
+-- The asymmetry is the point, and it is the answer to the one harassment shape
+-- the friends-only gate does not close: a stranger can never write, but an
+-- ex-friend can leave something sitting in your queue. Ending the friendship
+-- takes it away.
+--
+-- An APPROVED one survives, because by then it is not theirs. The subject
+-- published it, it is on the subject's profile as a thing the subject chose to
+-- display, and a falling-out should not silently rewrite somebody's profile.
+-- The subject can remove it from the same menu that approved it, whenever they
+-- like — which is the version of this where the person the depoimento is about
+-- is the one deciding.
+CREATE OR REPLACE FUNCTION depoimentos_withdraw_on_unfriend() RETURNS TRIGGER AS $$
+BEGIN
+  DELETE FROM depoimentos
+  WHERE approved_at IS NULL
+    AND ((author_id = OLD.low_user_id AND subject_id = OLD.high_user_id)
+      OR (author_id = OLD.high_user_id AND subject_id = OLD.low_user_id));
+  RETURN OLD;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_depoimentos_withdraw_on_unfriend ON friendships;
+CREATE TRIGGER trg_depoimentos_withdraw_on_unfriend
+  AFTER DELETE ON friendships
+  FOR EACH ROW EXECUTE FUNCTION depoimentos_withdraw_on_unfriend();
+
+-- ------------------------------------------- community badges on a profile
+--
+-- Which of your communities appear as chips on your profile card. TRUE by
+-- default, because a listed community is already public — it is in a directory
+-- anyone signed in can browse, and the member count on its card already counts
+-- you. The badge discloses no new fact; it only makes an existing one legible.
+--
+-- The opt-out exists anyway, per membership rather than per account, because
+-- "public" and "advertised on my profile" are different consents and the
+-- interesting cases are always one specific room: a support community, a
+-- fandom you are not out about at work, the server for the job you are quietly
+-- leaving. One switch for all of them would be no switch at all.
+--
+-- ONLY LISTED COMMUNITIES ARE EVER CHIPPED — the read path adds
+-- `is_community AND NOT is_community_suspended`. A private server is nobody
+-- else's business, so this column is inert on the overwhelming majority of
+-- rows, and a community the operator has unlisted stops appearing on every
+-- profile the moment they pull it, with no per-member fan-out.
+ALTER TABLE server_members ADD COLUMN IF NOT EXISTS show_on_profile BOOLEAN NOT NULL DEFAULT TRUE;
+
+-- The profile read: this person's memberships, joined to `servers` and filtered
+-- to the listed ones. Partial on the opt-in so an opted-out membership costs
+-- nothing to skip, and ordered by `server_id` only as a stable tiebreaker — the
+-- real order is by community size, which lives on the joined row.
+CREATE INDEX IF NOT EXISTS idx_server_members_profile
+  ON server_members (user_id, server_id)
+  WHERE show_on_profile;

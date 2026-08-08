@@ -336,6 +336,56 @@ export const en = {
   "communities.settings.failed": "Could not update the listing.",
   "communities.settings.suspended":
     "This listing was removed by the people who run pqp. The community itself is untouched and everyone in it can still use it — it is only hidden from the directory.",
+    "This listing was removed by the people who run pqp. The server itself is untouched and everyone in it can still use it — it is only hidden from the directory.",
+  // The member's own badge switch, on the community's context menu. Worded as
+  // the ACTION each state offers rather than as a state ("Shown on profile"),
+  // because a context-menu row that describes a state reads as a checkbox and
+  // this one is a button.
+  "communities.showOnProfile": "Show on my profile",
+  "communities.hideFromProfile": "Hide from my profile",
+
+  // -------------------------------------------------------------- depoimentos
+  // Orkut's testimonials. THE COPY IS PART OF THE FEATURE: this is nostalgia,
+  // and it has to sound like somebody wrote it rather than like a product
+  // shipped it. The Portuguese is the source of truth here — pt-BR is where
+  // "depoimento" is a word people already have feelings about — and English
+  // keeps the loan word rather than translating it to "testimonial", which is
+  // a word for an invoice. See client/src/lib/i18n/messages.pt-BR.ts.
+  "depoimentos.section": "Depoimentos",
+  "depoimentos.write": "Write a depoimento",
+  "depoimentos.written": "Sent to {name}. They decide whether to show it.",
+  "depoimentos.writeFailed": "Couldn't send it — try again.",
+  "depoimentos.remove": "Remove {name}'s depoimento",
+  "depoimentos.communities": "Communities",
+  "depoimentos.communities.more": "+{count}",
+  // ---- the compose sheet, and the DM fork ----
+  // `publicNotice` is the most important sentence in this feature. It states
+  // the consequence in the order it happens — they read it, they decide, and
+  // then it is on their profile for anyone who can see it.
+  "depoimentos.compose.title": "A depoimento for {name}",
+  "depoimentos.compose.placeholder":
+    "Say the thing you'd say out loud about them…",
+  "depoimentos.compose.publicNotice":
+    "This goes public on their profile if they accept it. Want to send it privately instead?",
+  "depoimentos.compose.send": "Send",
+  "depoimentos.compose.sendAsDm": "Send as a DM",
+  "depoimentos.compose.cancel": "Cancel",
+  // ---- the queue ----
+  "depoimentos.pending": "Depoimentos waiting on you",
+  "depoimentos.pending.hint":
+    "Only you can see these. Publish one and it goes on your profile; refuse it and it's gone — they're never told either way.",
+  "depoimentos.approve": "Publish",
+  "depoimentos.reject": "Refuse",
+  "depoimentos.approve.confirm.title": "Publish this on your profile?",
+  "depoimentos.approve.confirm.body":
+    "Everyone who can see your profile will read it, with {name}'s name on it. You can take it down whenever you like.",
+  "depoimentos.approve.confirm.publish": "Publish it",
+  "depoimentos.approve.confirm.wait": "Not yet",
+  "depoimentos.published": "It's on your profile.",
+  // The live nudge. Deliberately vague about direction — the frame is
+  // content-free and fires for both halves, and the lists it refreshed already
+  // say which one happened.
+  "depoimentos.nudge": "Something changed in your depoimentos.",
 
   // ------------------------------------------------------- connection status
   "connection.reconnecting": "Connection lost — reconnecting…",

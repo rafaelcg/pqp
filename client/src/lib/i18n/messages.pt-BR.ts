@@ -302,6 +302,46 @@ export const ptBR: PartialMessages = {
   "communities.settings.failed": "Não deu pra atualizar a listagem.",
   "communities.settings.suspended":
     "Quem cuida do pqp tirou esta listagem do ar. A comunidade em si não mudou e quem está dentro continua usando normal — ela só sumiu do diretório.",
+    "Quem cuida do pqp tirou esta listagem do ar. O servidor em si não mudou e quem está dentro continua usando normal — ele só sumiu do diretório.",
+  "communities.showOnProfile": "Mostrar no meu perfil",
+  "communities.hideFromProfile": "Não mostrar no meu perfil",
+
+  // -------------------------------------------------------------- depoimentos
+  // ESTA É A LÍNGUA DE ORIGEM DA FEATURE. "Depoimento" não é uma tradução de
+  // "testimonial" — é a palavra que essa geração já tem sentimento por, e o
+  // texto aqui é escrito primeiro, com o inglês seguindo atrás. Registro:
+  // informal, caloroso, do jeito que a galera fala. Nada de "usuário", nada de
+  // "conteúdo", nada de voz de produto. Quem lê tem que sentir 2007.
+  "depoimentos.section": "Depoimentos",
+  "depoimentos.write": "Escrever depoimento",
+  "depoimentos.written": "Mandado pra {name}. Agora é só esperar aceitar.",
+  "depoimentos.writeFailed": "Não deu pra mandar — tenta de novo.",
+  "depoimentos.remove": "Tirar o depoimento de {name}",
+  "depoimentos.communities": "Comunidades",
+  "depoimentos.communities.more": "+{count}",
+  // A frase mais importante da feature inteira. Diz o que vai acontecer, na
+  // ordem em que acontece, e oferece a saída na mesma respiração — é a resposta
+  // direta ao "Não aceita!" (ver §02 da pesquisa).
+  "depoimentos.compose.title": "Um depoimento pra {name}",
+  "depoimentos.compose.placeholder":
+    "Escreve aquilo que você falaria em voz alta sobre a pessoa…",
+  "depoimentos.compose.publicNotice":
+    "Isso vai ser público no perfil da pessoa se ela aceitar. Quer mandar por DM em vez disso?",
+  "depoimentos.compose.send": "Mandar",
+  "depoimentos.compose.sendAsDm": "Mandar por DM",
+  "depoimentos.compose.cancel": "Deixa pra lá",
+  "depoimentos.pending": "Depoimentos esperando você",
+  "depoimentos.pending.hint":
+    "Só você vê. Se publicar, vai pro seu perfil; se recusar, some — e a pessoa não fica sabendo de nada nos dois casos.",
+  "depoimentos.approve": "Publicar",
+  "depoimentos.reject": "Recusar",
+  "depoimentos.approve.confirm.title": "Publicar isso no seu perfil?",
+  "depoimentos.approve.confirm.body":
+    "Todo mundo que vê seu perfil vai ler, com o nome de {name} embaixo. Você pode tirar quando quiser.",
+  "depoimentos.approve.confirm.publish": "Publicar",
+  "depoimentos.approve.confirm.wait": "Agora não",
+  "depoimentos.published": "Tá no seu perfil.",
+  "depoimentos.nudge": "Mexeram nos seus depoimentos.",
 
   // ------------------------------------------------------- connection status
   "connection.reconnecting": "Conexão perdida — reconectando…",

@@ -329,6 +329,20 @@ export const serverSchema = z.object({
    */
   iconUrl: z.string().nullable().default(null),
   bannerUrl: z.string().nullable().default(null),
+   * Whether this server is listed in the public directory. Defaulted so a
+   * response from an API that predates communities still parses.
+   *
+   * On the member's own list rather than only in the directory because it is
+   * what decides whether the rail's context menu offers "show this on my
+   * profile" at all — a private server is never chipped onto anybody's card, so
+   * offering the switch there would be offering a no-op.
+   */
+  isCommunity: z.boolean().default(false),
+  /**
+   * This membership's profile-badge opt-out, TRUE by default. Meaningless
+   * unless `isCommunity`; see `server_members.show_on_profile` in schema.sql.
+   */
+  showOnProfile: z.boolean().default(true),
 });
 
 export const channelSchema = z.object({

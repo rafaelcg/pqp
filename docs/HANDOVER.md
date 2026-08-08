@@ -506,6 +506,59 @@ entirely when unset; the icon draws in the rail and the channel-list header (des
 the 390px drawer has one more control and the icon was what truncated the name). Cropping is
 client-side and reuses the avatar machinery — `centerCropRectForAspect` is the square crop
 generalised, and `cropImageToRect` is `cropImageToSquare` with two dimensions.
+## Depoimentos and community badges on profiles (2026-08-08)
+
+Concept 2 of `docs/research/communities-orkut.html` (§05), the one the doc recommends building
+first. A friend writes a short thing about you; it lands in **your** queue, invisible to everyone —
+its author after sending very much included — until **you** publish it. Published ones sit on your
+profile card newest-accepted first, and you can take any of them down at any time without notice.
+
+**The load-bearing decision is what happens to a refusal, and it is the "Não aceita!" fix.** §02
+documents the failure: because Orkut's pending queue was readable by the recipient *indefinitely*,
+Brazilians worked out that a depoimento was a private message and wrote confessions into it opening
+with "don't accept this" — and the canonical folklore is the recipient publishing one anyway. An
+approval queue that **retains** what it refuses is a covert DM channel with a publish button on it.
+So two things ship together: **refusing DELETES the row** (no `status`, no graveyard, nothing to
+mine or to publish later), and the compose sheet carries a **real DM fork** — "isso vai ser público
+no perfil — quer mandar por DM?" — that opens the conversation *carrying what was already typed*.
+An escape hatch that makes you retype is one nobody takes.
+
+**Schema** (`depoimentos`): `author_id`, `subject_id`, `body`, `created_at`, `approved_at` nullable,
+`UNIQUE (author_id, subject_id)`, `CHECK (author_id <> subject_id)`, both FKs cascading.
+`approved_at` **is** the state machine — NULL is pending — so there is no second column to disagree
+with it. Writing again replaces the standing row and returns it to pending, which is also how
+"editable while pending" is spelled without an edit route. Two triggers, both beside
+`friendships_end_on_block()` and for its reasons: a **block** deletes the pair's depoimentos in both
+directions, published or not; an **unfriend** withdraws only the **pending** one, because an
+approved one is the subject's — they published it, and a falling-out must not silently rewrite
+somebody's profile.
+
+**Gates.** Only FRIENDS write (`areFriendsSql` verbatim, and the predicate rides *inside* the
+INSERT so an unfriend cannot be raced); only the SUBJECT publishes; characters neither write nor
+receive. Every refusal answers one sentence, so the route is not an oracle for who has blocked you.
+Budgets: `depoimentoLimiter` (5, refill 0.05/s) plus `DEPOIMENTOS_PER_DAY = 10` counted in Postgres
+— a count of ROWS, which bounds *breadth* (ten people a day) and deliberately not depth, since
+anything stronger would need a log of depoimentos that no longer exist.
+
+**Routes.** `POST /api/users/:id/depoimentos` · `GET /api/users/:id/depoimentos` (approved only;
+**empty list, not 403**, for somebody outside the audience — friends or a shared server, matching
+the profile card's own visibility) · `GET /api/me/depoimentos/pending` · `POST
+/api/depoimentos/:id/approve` · `DELETE /api/depoimentos/:id` (refuse / take down / withdraw, one
+route, silent either way). Realtime rides the existing content-free friend frame with a new kind,
+`depoimento` — sent to the subject on a write and to the author on a publish, and **never** on a
+refusal, which would hand the author the one fact the deletion exists to withhold.
+
+**Community badges.** `server_members.show_on_profile` (default TRUE), `GET
+/api/users/:id/communities` and `PATCH /api/servers/:id/profile-visibility` — the member's own
+switch, deliberately not the owner's server PATCH. Only `is_community AND NOT
+is_community_suspended` memberships are ever chipped, so a private server can never leak through a
+profile and the operator's kill switch reaches every card at once. Capped at six with a "+N".
+
+**UI.** The profile popover grew both sections (hidden entirely when empty — §05's
+"auge ou ostracismo" note: never render a zero, and no count anywhere but the subject's own queue).
+The queue lives in the friends view's Pending tab and shares the friends store, so one badge on the
+front door counts both errands. Publishing is two taps over a preview of the exact text. pt-BR is
+the source language for this feature's copy; English follows it.
 
 ## Verification status
 
@@ -537,6 +590,9 @@ generalised, and `cropImageToRect` is `cropImageToSquare` with two dimensions.
 | Sectioned server settings: every section reachable, arrow keys, a setting that persists across close/reopen, Esc, 1440 and 390 layouts | 7 Playwright specs (`client/e2e/server-settings-sections.spec.ts`) |
 | **Server icon/banner against R2** | **Not verified** — same gap as attachments; signing is exercised on MinIO only |
 | **Universal links** | **Not verified** — Apple's CDN must fetch `/.well-known/apple-app-site-association` from `pqp.gg` first, so this cannot work until the web deploy lands. `pqp://invite/<code>` is testable now |
+| Depoimentos: friend gate, half-a-handshake, approve/refuse-deletes, replace-returns-to-pending, character exclusion, block both ways, unfriend withdraws only the pending one, audience, ordering, and the badge opt-out / suspended-community / ban / cap cases | 34 tests against real Postgres and the real router (`server/src/services/depoimentos.test.ts`), plus 16 contract tests in `packages/shared` and 14 client model tests |
+| Depoimentos in two real browsers | 3 Playwright specs (`client/e2e/depoimentos.spec.ts`): A writes from B's card → B's front door badges with no reload → B publishes from the two-tap preview → it renders on B's profile for A; the DM fork opens the conversation carrying the typed text *and writes no depoimento*; the community chip appears and the per-membership opt-out hides it. Screenshots at `/tmp/depo-*.png` |
+| **Depoimentos on iOS** | **Not verified** — `UserProfileSheet.swift` has no parity for either section yet |
 
 ## Suggested next work (priority)
 

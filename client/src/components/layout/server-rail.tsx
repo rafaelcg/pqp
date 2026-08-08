@@ -10,6 +10,7 @@ import {
   ContextMenu,
   type ContextMenuItemDef,
 } from "@/components/ui/context-menu";
+import { offersProfileVisibility } from "@/components/depoimentos/depoimentos-model";
 import {
   notificationLevelItems,
   serverNotificationControls,
@@ -56,6 +57,12 @@ interface ServerRailProps {
   onOpenMembers: (serverId: string) => void;
   onOpenSettings: (serverId: string) => void;
   onLeaveServer: (serverId: string) => void;
+  /**
+   * "Show this on my profile" — the member's own badge opt-out, offered only on
+   * a listed community because that is the only kind of server whose chip can
+   * ever appear on anybody's card. See `offersProfileVisibility`.
+   */
+  onToggleProfileVisibility?: (serverId: string, showOnProfile: boolean) => void;
 }
 
 export function ServerRail({
@@ -76,6 +83,7 @@ export function ServerRail({
   onOpenMembers,
   onOpenSettings,
   onLeaveServer,
+  onToggleProfileVisibility,
 }: ServerRailProps) {
   const { t } = useTranslation();
   // Subscribed once for the whole rail: hook rules forbid reading the store
@@ -192,6 +200,19 @@ export function ServerRail({
             onSelect: () => onOpenSettings(server.id),
           },
         ];
+        // Only for a listed community: a private server is never chipped onto
+        // anybody's profile, so the switch would be a no-op there — and worse,
+        // it would imply that private servers ARE advertised by default.
+        if (offersProfileVisibility(server) && onToggleProfileVisibility) {
+          items.push({
+            id: "profile-visibility",
+            label: server.showOnProfile
+              ? t("communities.hideFromProfile")
+              : t("communities.showOnProfile"),
+            onSelect: () =>
+              onToggleProfileVisibility(server.id, !server.showOnProfile),
+          });
+        }
         items.push(
           ...notificationLevelItems("notify", levels, "account"),
         );

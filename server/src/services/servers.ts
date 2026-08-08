@@ -29,16 +29,20 @@ const CHANNEL_COLUMNS = `id, server_id, name, type, position, is_private, kind, 
 /**
  * Every server read selects the same columns.
  *
- * Exported because `server-images.ts` writes this table too, and a picture
+* Exported because `server-images.ts` writes this table too, and a picture
  * upload has to hand the whole updated row back to the client for the same
  * reason a rename does. Threading the list through rather than restating it
  * there is what keeps a column added here from being invisible in that payload.
  *
  * `icon_key` / `banner_key` are deliberately NOT in it: the key is what the
  * bucket is asked about, never what a client is told. `mapServer` has no field
- * for either.
+ * for either. `is_community` rides along even though the directory is flagged
+ * off by default: it is what tells the member's own client whether the rail's
+ * context menu should offer "show this on my profile". `show_on_profile` is
+ * NOT here — it lives on `server_members`, so only reads that join a
+ * membership can select it.
  */
-export const SERVER_COLUMNS = `id, name, owner_id, created_at, message_retention_days, sso_email_domain, icon_url, banner_url`;
+export const SERVER_COLUMNS = `id, name, owner_id, created_at, message_retention_days, sso_email_domain, icon_url, banner_url, is_community`;
 
 /**
  * How many attachment objects one channel or server delete will clean up.
@@ -151,7 +155,7 @@ export async function listServersForUser(userId: string): Promise<DbServer[]> {
   const result = await getPool().query<DbServer>(
     `SELECT ${SERVER_COLUMNS.split(", ")
       .map((c) => `s.${c}`)
-      .join(", ")}, sm.role
+      .join(", ")}, sm.show_on_profile, sm.role
      FROM servers s
      JOIN server_members sm ON sm.server_id = s.id
      WHERE sm.user_id = $1
@@ -1277,5 +1281,10 @@ export function mapServer(s: DbServer) {
     // key — see the note on `SERVER_COLUMNS`.
     iconUrl: s.icon_url ?? null,
     bannerUrl: s.banner_url ?? null,
+    isCommunity: s.is_community ?? false,
+    // Only `listServersForUser` joins a membership, so every other caller —
+    // a create, a rename — has no row to read this from. TRUE is the column's
+    // own default and the honest answer for a membership just created.
+    showOnProfile: s.show_on_profile ?? true,
   };
 }

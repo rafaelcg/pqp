@@ -108,16 +108,26 @@ export type FriendsResponse = z.infer<typeof friendsResponseSchema>;
  *   would be a way to keep ringing one.
  * - `accepted`: the handshake completed, delivered to the person who asked
  *   first. They consented to hearing about this by asking.
+ * - `depoimento`: something changed in the depoimento relationship between two
+ *   FRIENDS — one of them wrote you one (delivered to the subject, whose queue
+ *   just grew) or the subject published yours (delivered to the author, whose
+ *   words are now public and who is entitled to know that). It rides this frame
+ *   rather than getting its own because the recipient's answer is identical:
+ *   re-read the two bounded lists you were already entitled to read. See
+ *   `packages/shared/src/depoimentos.ts`.
  *
- * NOTHING is sent for a decline, a cancel, an unfriend, or a block. Those are
- * silent by design — see the note at the top of this file — and a frame is
- * exactly the kind of "louder" this product decided against. A client that
- * refetches on a nudge and sees a name gone learned it only because it was
- * already looking.
+ * NOTHING is sent for a decline, a cancel, an unfriend, or a block — nor for a
+ * REFUSED or REMOVED depoimento, which is the same rule one step further in and
+ * matters more there. Refusing a depoimento deletes it, and a frame announcing
+ * that would hand the author the one signal the deletion exists to deny them:
+ * "they read it and said no". Those are silent by design — see the note at the
+ * top of this file — and a frame is exactly the kind of "louder" this product
+ * decided against. A client that refetches on a nudge and sees a name gone
+ * learned it only because it was already looking.
  */
 export const friendActivitySchema = z.object({
   type: z.literal("friend-activity"),
-  kind: z.enum(["request", "accepted"]),
+  kind: z.enum(["request", "accepted", "depoimento"]),
 });
 
 export type FriendActivity = z.infer<typeof friendActivitySchema>;
