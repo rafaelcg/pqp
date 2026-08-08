@@ -78,12 +78,30 @@ export function buildSystemPrompt(config, cast) {
  * language quietly loses a rule during an edit. Two whole prompts side by side
  * can be read against each other.
  *
- * The register is British English because the only English room this product
- * has is an English-football room; if a second one lands that is not, this line
- * is the thing to move into the community's own config.
+ * WHICH English is the community's decision, not this file's, and it is read
+ * from `defaults.locale` — the same field the Portuguese prompt already reads.
+ * That seam was predicted here when `the-away-end` was the only English room
+ * ("if a second one lands that is not English football, this line is the thing
+ * to move into the community's own config") and the English wing is that second
+ * room, four times over: a Seoul persona and a San Francisco persona ordered to
+ * write British English do not write British English, they write a British
+ * person doing an accent. `en-GB` keeps the old behaviour exactly, so the
+ * football room is untouched; an unqualified `en` hands the choice down to each
+ * character's register, which is where a spelling belongs.
+ *
+ * Unknown or non-English locales fall back to British English rather than
+ * throwing: the prompt is not the place to discover a typo, and the value is
+ * validated nowhere else either.
  */
+const ENGLISH_VARIETIES = {
+  "en-GB": "British English",
+  "en-US": "American English",
+  en: "English — American or British spelling, whichever each character's register describes",
+};
+
 function buildEnglishSystemPrompt(config, cast) {
-  const { community } = config;
+  const { community, defaults } = config;
+  const variety = ENGLISH_VARIETIES[defaults?.locale] ?? ENGLISH_VARIETIES["en-GB"];
   const roster = cast
     .map(
       (p) =>
@@ -104,7 +122,7 @@ function buildEnglishSystemPrompt(config, cast) {
     roster,
     ``,
     `RULES:`,
-    `- Write in British English, the way people type in a group chat — not narration.`,
+    `- Write in ${variety}, the way people type in a group chat — not narration.`,
     `- One line per message, in the exact format "Name: text".`,
     `- No quotation marks, asterisks, narration, excessive emoji or markdown.`,
     `- Each message is at most ${config.limits.maxMessageChars} characters.`,

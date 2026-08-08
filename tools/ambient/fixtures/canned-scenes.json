@@ -1,5 +1,5 @@
 {
-  "_note": "Fixture dialogue for --canned mode. Speakers are SLOT INDEXES, not persona ids, so these scenes cast onto whatever the scheduler picked and stay valid when personas.yaml changes. `neutral: true` marks a scene that fits ANY community, and it is the only kind a non-football room is ever handed: a football line in a music server's dry run reads as a bug rather than as a fixture, and canned mode now runs against fifteen communities. The football scenes are kept because they are the ones the spike was verified against, and `resenha-fc` still gets them. `ambientEn`/`repliesEn` are the same thing for a community whose `language` is `en` — canned mode is how the pipeline is exercised without an API key, and a dry run of an English room that prints Portuguese proves the wrong thing. This exists to prove the pipeline, not to be shipped content.",
+  "_note": "Fixture dialogue for --canned mode. Speakers are SLOT INDEXES, not persona ids, so these scenes cast onto whatever the scheduler picked and stay valid when personas.yaml changes. `neutral: true` marks a scene that fits ANY community, and it is the only kind a non-football room is ever handed: a football line in a music server's dry run reads as a bug rather than as a fixture, and canned mode now runs against nineteen communities. The football scenes are kept because they are the ones the spike was verified against, and `resenha-fc` still gets them. `ambientEn`/`repliesEn` are the same thing for a community whose `language` is `en` — canned mode is how the pipeline is exercised without an API key, and a dry run of an English room that prints Portuguese proves the wrong thing. This exists to prove the pipeline, not to be shipped content.",
   "ambient": [
     {
       "id": "chegando",
@@ -334,6 +334,66 @@
           "text": "No opinions, held firmly. Which is worse."
         }
       ]
+    },
+    {
+      "id": "late-shift",
+      "neutral": true,
+      "lines": [
+        {
+          "speaker": 0,
+          "text": "anyone about, or have i got the room to myself again"
+        },
+        {
+          "speaker": 1,
+          "text": "Half here. The other half is asleep on the sofa."
+        },
+        {
+          "speaker": 0,
+          "text": "that's the good half"
+        },
+        {
+          "speaker": 1,
+          "text": "It is. I meant to say something all day and lost the thread of it."
+        },
+        {
+          "speaker": 0,
+          "text": "say the half you remember, we'll work backwards"
+        },
+        {
+          "speaker": 1,
+          "text": "That is how most of the good conversations in here have started."
+        }
+      ]
+    },
+    {
+      "id": "changed-my-mind",
+      "neutral": true,
+      "lines": [
+        {
+          "speaker": 0,
+          "text": "right, i've changed my mind about the thing i was loud about last week"
+        },
+        {
+          "speaker": 1,
+          "text": "Go on. Nobody keeps score in here, whatever they tell you."
+        },
+        {
+          "speaker": 0,
+          "text": "gave it a second go and it's better than i said. still not great"
+        },
+        {
+          "speaker": 1,
+          "text": "Second goes are underrated. Most things are better on the second go."
+        },
+        {
+          "speaker": 0,
+          "text": "don't make it a whole philosophy, i just changed my mind"
+        },
+        {
+          "speaker": 1,
+          "text": "Too late. It is a philosophy now."
+        }
+      ]
     }
   ],
   "repliesEn": [
@@ -364,6 +424,36 @@
         {
           "speaker": 1,
           "text": "Start a conversation whenever. The place is yours."
+        }
+      ]
+    },
+    {
+      "id": "second-voice",
+      "neutral": true,
+      "lines": [
+        {
+          "speaker": 0,
+          "text": "{human} has a point and i don't love that"
+        },
+        {
+          "speaker": 1,
+          "text": "Say more, {human} — the first version was the interesting one."
+        },
+        {
+          "speaker": 0,
+          "text": "it is annoying when someone turns up and is just correct"
+        },
+        {
+          "speaker": 1,
+          "text": "It happens about once a month. We recover."
+        },
+        {
+          "speaker": 0,
+          "text": "give it a week and we'll be arguing about it again"
+        },
+        {
+          "speaker": 1,
+          "text": "We will. Stick around for that bit, {human}."
         }
       ]
     }
