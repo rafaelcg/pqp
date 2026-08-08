@@ -33,6 +33,10 @@ enum RealtimeEvent: Sendable {
     case voicePeerLeft(peerId: String)
     case voiceRoster(voiceChannelId: String, participants: [VoiceParticipant])
     case voiceRoomFull(limit: Int)
+    /// Somebody else is already presenting. The protocol allows exactly one
+    /// screen per room (`set-sharing-screen` in `server/src/ws/voice.ts`), and
+    /// this is the only refusal it explains — unicast to whoever tried.
+    case voiceScreenShareDenied(voiceChannelId: String)
     /// The server refused the join because this room is pinned to a transport
     /// we declared we cannot do. Nobody ever saw us in the roster.
     case voiceTransportUnsupported(voiceChannelId: String, transport: String)
@@ -152,6 +156,8 @@ actor RealtimeClient {
     private var isStopped = false
     private var pingTask: Task<Void, Never>?
     private var missedPongs = 0
+    /// One reconnect at a time — see `scheduleReconnect`.
+    private var isReconnecting = false
 
     /// Matches the web client (`PING_INTERVAL_MS` / `MAX_MISSED_PONGS`). The
     /// server answers `{"type":"ping"}` with `{"type":"pong"}`; two misses in a
@@ -168,7 +174,22 @@ actor RealtimeClient {
         // swallow the failure that drives reconnection, so the socket would
         // never retry on its own schedule.
         config.waitsForConnectivity = false
-        config.timeoutIntervalForResource = 30
+        // NOT `timeoutIntervalForResource`. That is a ceiling on the whole
+        // resource load, and a WebSocket *is* the resource — a 30s ceiling
+        // meant every socket was timed out by URLSession thirty seconds after
+        // it opened. The failure was invisible: already-buffered frames kept
+        // arriving through the pending `receive`, so presence, other people's
+        // messages and incoming call rings all worked, while every outgoing
+        // frame was silently dropped by the `.running` guard in `send`. That is
+        // why answering a DM call sat on "Connecting…" forever (the
+        // `join-voice-room` never left) and why a message sent after half a
+        // minute vanished. A long-lived socket gets no lifetime ceiling; the
+        // heartbeat below is what detects a link that has actually died.
+        //
+        // The per-request timeout is an *idle* timeout, so it has to be
+        // comfortably longer than the ping interval or the keepalive itself
+        // would trip it.
+        config.timeoutIntervalForRequest = 60
         self.session = URLSession(configuration: config)
     }
 
@@ -238,11 +259,13 @@ actor RealtimeClient {
     }
 
     private func beat() async {
-        guard !isStopped, let socket = task else { return }
+        guard !isStopped, task != nil else { return }
         if missedPongs >= Self.maxMissedPongs {
-            // Killing the socket makes the pending receive fail, which is the
-            // one path that already knows how to reconnect — no second one.
-            socket.cancel(with: .abnormalClosure, reason: nil)
+            // Rebuild rather than merely cancelling and trusting the pending
+            // receive to fail: a socket URLSession has already given up on can
+            // keep delivering buffered frames, so the failure that was supposed
+            // to drive the reconnect never arrives.
+            await scheduleReconnect()
             return
         }
         missedPongs += 1
@@ -270,30 +293,57 @@ actor RealtimeClient {
         }
     }
 
+    /// Tear the socket down and open a new one, once.
+    ///
+    /// Guarded because there are now three callers — a failed receive, a
+    /// heartbeat that ran out of pongs, and a send that could not leave — and
+    /// two of them can fire for the same dead socket. Without the flag that
+    /// opens two sockets, and the server keeps one peer per socket.
     private func scheduleReconnect() async {
+        guard !isStopped, !isReconnecting else { return }
+        isReconnecting = true
+        task?.cancel(with: .abnormalClosure, reason: nil)
         task = nil
+        missedPongs = 0
         statusHandler?(.reconnecting)
         reconnectAttempt += 1
         // Capped exponential backoff. Without the cap a long outage pushes the
         // next attempt hours out and the app never comes back on its own.
         let delay = min(pow(2, Double(reconnectAttempt)) * 0.5, 20)
         try? await Task.sleep(for: .seconds(delay))
+        isReconnecting = false
         await openSocket()
     }
 
     // MARK: - Sending
 
     private func send(raw: [String: Any]) async {
+        guard let data = try? JSONSerialization.data(withJSONObject: raw),
+              let text = String(data: data, encoding: .utf8) else { return }
         // `.running` is checked because sending on a task the OS tore down
         // while the app slept crashes inside CFNetwork itself (a null deref in
         // -[__NSURLSessionWebSocketTask _onqueue_sendMessage:], seen from
         // TestFlight on wake-from-lock). The state read races the teardown in
         // principle, but it closes the window that actually fired: a heartbeat
         // queued against a socket that died during suspension.
-        guard let task, task.state == .running,
-              let data = try? JSONSerialization.data(withJSONObject: raw),
-              let text = String(data: data, encoding: .utf8) else { return }
-        try? await task.send(.string(text))
+        //
+        // A frame that cannot leave is NOT swallowed. This connection is the
+        // only way to send anything, so a silent drop is a client that looks
+        // online and does nothing — messages that never send, calls that never
+        // answer, voice rooms that are never joined. Reconnecting is the only
+        // honest response.
+        guard let socket = task, socket.state == .running else {
+            await scheduleReconnect()
+            return
+        }
+        do {
+            try await socket.send(.string(text))
+        } catch {
+            // Only if this is still the live socket: a reconnect that already
+            // happened has made this failure history.
+            guard task === socket else { return }
+            await scheduleReconnect()
+        }
     }
 
     /// Called on scene-phase changes. Suspension kills sockets out from under
@@ -433,6 +483,17 @@ actor RealtimeClient {
         // never leave — and the far end would keep drawing a frozen face.
         let value: Any = streamId ?? NSNull()
         await send(raw: ["type": "set-camera", "streamId": value])
+    }
+
+    /// Declare a screen share to the room.
+    ///
+    /// Separate from the media: the track travels over WebRTC, this is what puts
+    /// `sharingScreen` on everyone's roster — which is what draws "X is
+    /// presenting", and what the server checks to keep the room to one presenter.
+    /// The web client sends exactly this (`use-voice.ts`), so a share announced
+    /// any other way is invisible to it.
+    func setSharingScreen(_ sharing: Bool) async {
+        await send(raw: ["type": "set-sharing-screen", "sharing": sharing])
     }
 
     /// Mute/deafen, for the roster badges people outside the call see. Display
@@ -620,6 +681,9 @@ actor RealtimeClient {
                                  participants: envelope.participants ?? [])
         case "voice-room-full":
             event = .voiceRoomFull(limit: envelope.limit ?? 0)
+        case "screen-share-denied":
+            guard let voiceChannelId = envelope.voiceChannelId else { return }
+            event = .voiceScreenShareDenied(voiceChannelId: voiceChannelId)
         case "voice-transport-unsupported":
             guard let voiceChannelId = envelope.voiceChannelId,
                   let transport = envelope.transport else { return }
