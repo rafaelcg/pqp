@@ -290,6 +290,11 @@ function UserProfileCard({
   );
   /** Open while the composer is up. */
   const [writing, setWriting] = useState(false);
+  /** The same fact, readable from listeners registered before it changes. */
+  const writingRef = useRef(false);
+  useEffect(() => {
+    writingRef.current = writing;
+  }, [writing]);
 
   const state = resolveFriendshipState(
     subject.id,
@@ -328,11 +333,24 @@ function UserProfileCard({
     reposition();
     window.addEventListener("resize", reposition);
     // A card left hanging over a scrolled-away message reads as a bug; close
-    // rather than chase, which is what every anchored surface here does.
-    window.addEventListener("scroll", onClose, true);
+    // rather than chase, which is what every anchored surface here does. Two
+    // exceptions: a scroll INSIDE the card (the composer opening grows the
+    // content, and that growth fires a capture-phase scroll — closing on it is
+    // the card closing itself), and any scroll while a depoimento is being
+    // written, for the same reason the pointer handler holds its fire.
+    function onScroll(event: Event) {
+      if (event.target instanceof Node && cardRef.current?.contains(event.target)) {
+        return;
+      }
+      if (writingRef.current) {
+        return;
+      }
+      onClose();
+    }
+    window.addEventListener("scroll", onScroll, true);
     return () => {
       window.removeEventListener("resize", reposition);
-      window.removeEventListener("scroll", onClose, true);
+      window.removeEventListener("scroll", onScroll, true);
     };
   }, [anchor, onClose, state, loading]);
 
@@ -377,6 +395,12 @@ function UserProfileCard({
     function onPointerDown(event: MouseEvent) {
       const target = event.target as Node;
       if (cardRef.current?.contains(target) || anchor.contains(target)) {
+        return;
+      }
+      // A depoimento mid-composition outranks the tap-away convention: the
+      // click probably meant "dismiss", but the cost of being wrong is a
+      // paragraph somebody typed about a friend. Cancel and Escape still work.
+      if (writingRef.current) {
         return;
       }
       onClose();
