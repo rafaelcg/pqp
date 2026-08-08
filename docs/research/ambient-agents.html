@@ -1,0 +1,660 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ambient life — agent-run communities for the pqp launch</title>
+<style>
+  :root {
+    --bg: #16181d;
+    --rail: #101216;
+    --panel: #1d2027;
+    --panel-2: #24272f;
+    --panel-3: #2c3038;
+    --border: #33373f;
+    --border-strong: #454a54;
+    --text: #e9e7e0;
+    --muted: #a3a29c;
+    --subtle: #c9c7c0;
+    --accent: #c4e848;
+    --accent-dim: #9dbb3a;
+    --danger: #ef6b58;
+    --warning: #e0b64a;
+    --success: #5fc98d;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Fira Code", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, Helvetica, Arial, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: var(--sans); font-size: 16px; line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 940px; margin: 0 auto; padding: 48px 24px 120px; }
+  header.doc { border-bottom: 1px solid var(--border); padding-bottom: 24px; margin-bottom: 40px; }
+  .kicker {
+    font-family: var(--mono); font-size: 12px; letter-spacing: 0.12em;
+    text-transform: uppercase; color: var(--accent-dim); margin: 0 0 10px;
+  }
+  h1 { font-size: 2.1rem; line-height: 1.2; margin: 0 0 12px; letter-spacing: -0.02em; }
+  .sub { color: var(--muted); font-size: 1.05rem; margin: 0; max-width: 68ch; }
+  .meta { font-family: var(--mono); font-size: 12px; color: var(--muted); margin-top: 18px; }
+  h2 {
+    font-size: 1.35rem; margin: 56px 0 4px; letter-spacing: -0.01em;
+    padding-top: 20px; border-top: 1px solid var(--border);
+  }
+  h2 .num { font-family: var(--mono); color: var(--accent-dim); font-size: 0.85em; margin-right: 10px; }
+  h3 { font-size: 1.05rem; margin: 32px 0 8px; }
+  h4 { font-size: 0.95rem; margin: 22px 0 6px; color: var(--subtle); }
+  p { margin: 0 0 14px; }
+  a { color: var(--accent); text-decoration: none; border-bottom: 1px solid rgba(196,232,72,0.3); }
+  a:hover { border-bottom-color: var(--accent); }
+  code {
+    font-family: var(--mono); font-size: 0.86em; background: var(--rail);
+    color: var(--accent); padding: 1px 5px; border-radius: 4px; border: 1px solid var(--border);
+    word-break: break-word;
+  }
+  pre {
+    font-family: var(--mono); font-size: 0.82rem; line-height: 1.55;
+    background: var(--rail); border: 1px solid var(--border); border-radius: 8px;
+    padding: 16px 18px; overflow-x: auto; margin: 0 0 18px;
+  }
+  pre code { background: none; border: none; padding: 0; color: var(--subtle); }
+  ul, ol { margin: 0 0 16px; padding-left: 24px; }
+  li { margin-bottom: 7px; }
+  li > ul, li > ol { margin-top: 7px; margin-bottom: 4px; }
+  .verdict {
+    border: 1px solid var(--accent-dim); border-left: 4px solid var(--accent);
+    background: linear-gradient(90deg, rgba(196,232,72,0.07), rgba(196,232,72,0.01));
+    border-radius: 8px; padding: 22px 24px; margin: 0 0 36px;
+  }
+  .verdict .label {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--accent); margin-bottom: 8px;
+  }
+  .verdict .headline { font-size: 1.22rem; font-weight: 600; line-height: 1.4; margin-bottom: 12px; }
+  .verdict p:last-child { margin-bottom: 0; }
+  .callout {
+    border: 1px solid var(--border-strong); border-left: 3px solid var(--border-strong);
+    background: var(--panel); border-radius: 6px; padding: 14px 18px; margin: 0 0 20px; font-size: 0.95rem;
+  }
+  .callout.warn { border-left-color: var(--warning); }
+  .callout.bad { border-left-color: var(--danger); }
+  .callout.good { border-left-color: var(--success); }
+  .callout .tag {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--muted); display: block; margin-bottom: 5px;
+  }
+  .callout.warn .tag { color: var(--warning); }
+  .callout.bad .tag { color: var(--danger); }
+  .callout.good .tag { color: var(--success); }
+  .callout p:last-child { margin-bottom: 0; }
+  .scroll { overflow-x: auto; margin: 0 0 22px; border: 1px solid var(--border); border-radius: 8px; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.88rem; min-width: 520px; }
+  th, td { text-align: left; padding: 9px 13px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th {
+    background: var(--panel-2); font-family: var(--mono); font-size: 11px;
+    letter-spacing: 0.08em; text-transform: uppercase; color: var(--subtle); font-weight: 600;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:nth-child(even) { background: rgba(255,255,255,0.014); }
+  .y { color: var(--success); font-weight: 600; }
+  .n { color: var(--danger); font-weight: 600; }
+  .m { color: var(--warning); font-weight: 600; }
+  .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); margin: 0 0 24px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 16px 18px; }
+  .card .big { font-family: var(--mono); font-size: 1.5rem; color: var(--accent); line-height: 1.2; }
+  .card .cap {
+    font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em;
+    color: var(--muted); margin-top: 6px;
+  }
+  .card .note { font-size: 0.84rem; color: var(--muted); margin-top: 8px; line-height: 1.5; }
+  .concept {
+    border: 1px solid var(--border-strong); border-radius: 10px; padding: 26px 28px;
+    margin: 0 0 30px; background: linear-gradient(180deg, rgba(255,255,255,0.018), transparent);
+  }
+  .concept > h3:first-child { margin-top: 0; }
+  .concept .tagline { color: var(--muted); font-style: italic; margin-bottom: 18px; }
+  .cnum {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--accent-dim); display: block; margin-bottom: 4px;
+  }
+  .pt { font-style: italic; color: var(--subtle); }
+  .mock {
+    font-family: var(--mono); font-size: 0.78rem; line-height: 1.7; background: var(--rail);
+    border: 1px solid var(--border); border-radius: 8px; padding: 16px 18px; margin: 0 0 20px;
+    color: var(--subtle); overflow-x: auto; white-space: pre;
+  }
+  .toc { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 18px 22px; margin: 0 0 44px; }
+  .toc ol { margin: 0; padding-left: 22px; font-size: 0.92rem; }
+  .toc li { margin-bottom: 4px; }
+  .toc .h { font-family: var(--mono); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); margin-bottom: 10px; }
+  .footnote { font-size: 0.85rem; color: var(--muted); }
+  .src { font-size: 0.82rem; color: var(--muted); font-family: var(--mono); }
+  ul.sources { font-size: 0.86rem; }
+  ul.sources li { margin-bottom: 5px; }
+  hr { border: none; border-top: 1px solid var(--border); margin: 40px 0; }
+  .pill {
+    display: inline-block; font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em;
+    text-transform: uppercase; padding: 2px 7px; border-radius: 999px;
+    border: 1px solid var(--border-strong); color: var(--muted); vertical-align: middle;
+  }
+  .pill.ok { border-color: var(--success); color: var(--success); }
+  .pill.no { border-color: var(--danger); color: var(--danger); }
+  .pill.mid { border-color: var(--warning); color: var(--warning); }
+  .conf { font-family: var(--mono); font-size: 10px; color: var(--muted); border: 1px solid var(--border); padding: 0 4px; border-radius: 3px; }
+  @media (max-width: 620px) {
+    .wrap { padding: 32px 16px 80px; }
+    h1 { font-size: 1.6rem; }
+    body { font-size: 15px; }
+    .concept { padding: 18px 18px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="doc">
+  <p class="kicker">pqp · research spike · ambient life</p>
+  <h1>Ambient life</h1>
+  <p class="sub">A maintainable, scalable system for running AI personas inside pqp servers, so the five communities we advertise at launch have people in them. Architecture, the production identity problem, a cost model in dollars, and the honesty question addressed rather than dodged.</p>
+  <p class="meta">2026-08-08 · grounded in <code>server/src/ws/chat.ts</code>, <code>server/src/services/webhooks.ts</code>, <code>server/src/auth/clerk.ts</code> · working prototype in <code>tools/ambient/</code></p>
+</header>
+
+<div class="verdict">
+  <div class="label">Recommendation</div>
+  <div class="headline">Build it as <b>framed characters</b> — <i>o elenco da casa</i> — not as undisclosed humans. Ship it as a standalone in-repo service (<code>tools/ambient/</code>) driving the <b>real</b> HTTP + WebSocket protocol with server-minted <b>character accounts</b>.</div>
+  <p>The money is not the constraint: five servers of believable chatter on Claude Haiku 4.5 costs <b>~$2.50/month</b>, and fifty costs <b>~$25</b>. The constraints are (1) production identity — <code>DEV_AUTH_BYPASS</code> is refused under <code>NODE_ENV=production</code>, so there is no account to post as until we build one; and (2) trust, which is spent once and cannot be re-earned. Undisclosed personas in servers we advertise as evidence of activity is a <i>prática enganosa</i> under CDC art. 37 and a policy violation on both app stores — for a benefit that framed characters deliver anyway, because Orkut-era Brazil already loved a cast.</p>
+  <p><b>The prototype makes the choice reversible on purpose.</b> Disclosure is a per-persona string in YAML; flipping it to <code>undisclosed</code> is a one-word diff. I am recommending against that word, not removing it.</p>
+</div>
+
+<div class="toc">
+  <div class="h">Contents</div>
+  <ol>
+    <li><a href="#have">What pqp already gives you — and the three things it doesn't</a></li>
+    <li><a href="#identity">Identity in production: the decision that blocks everything</a></li>
+    <li><a href="#arch">Architecture</a></li>
+    <li><a href="#honesty">The honesty question</a></li>
+    <li><a href="#cost">Cost model, in dollars</a></li>
+    <li><a href="#scale">5 servers → 50: what actually breaks</a></li>
+    <li><a href="#bootstrap">Bootstrap: the five launch communities</a></li>
+    <li><a href="#v1">v1 scope cut — prototype vs. this document</a></li>
+  </ol>
+</div>
+
+<h2 id="have"><span class="num">01</span>What pqp already gives you — and the three things it doesn't</h2>
+
+<p>Everything below was read out of the tree at <code>launch/p0-hardening</code>, not assumed. The good news is that the protocol a persona needs is already complete and already exercised by a raw-protocol harness (<code>scripts/chat-load.mjs</code>) — so a runner is a client, not a feature.</p>
+
+<div class="scroll"><table>
+  <thead><tr><th>Capability</th><th>Where</th><th>Usable by a persona?</th></tr></thead>
+  <tbody>
+    <tr><td>Post a message</td><td><code>message-create</code> WS frame → <code>ws/chat.ts</code></td><td class="y">Yes. 10 burst / 2 per second per user.</td></tr>
+    <tr><td>Typing indicator</td><td><code>typing</code> WS frame</td><td class="y">Yes. 5 burst / 1 per second per user — it is a heartbeat, so a long "typing…" needs re-sends.</td></tr>
+    <tr><td>Reactions</td><td><code>reaction-toggle</code> WS frame</td><td class="y">Yes. 20 burst / 5 per second.</td></tr>
+    <tr><td>Presence / member list</td><td><code>presence-update</code>, <code>join-channel</code></td><td class="y">Yes — a socket in a channel is a person in the roster.</td></tr>
+    <tr><td>Replies, threads, pins</td><td><code>replyToId</code>, thread frames</td><td class="y">Yes, all on the same socket.</td></tr>
+    <tr><td>Create servers, channels, invites</td><td><code>POST /api/servers</code>, <code>/channels</code>, <code>/invites</code></td><td class="y">Yes, with a Bearer token.</td></tr>
+    <tr><td><b>Backdated messages</b></td><td>—</td><td class="n">No. See below.</td></tr>
+    <tr><td><b>A production account</b></td><td>—</td><td class="n">No. See §02.</td></tr>
+    <tr><td><b>Avatars from a seed</b></td><td><code>services/avatars.ts</code></td><td class="m">Partly — profile avatars exist, but nothing generates one from a persona seed.</td></tr>
+  </tbody>
+</table></div>
+
+<h3>The backfill finding, stated plainly</h3>
+
+<div class="callout bad">
+  <span class="tag">Checked, and the answer is no</span>
+  <p><b>There is no way to set <code>created_at</code> through the API.</b> <code>createMessage()</code> takes <code>(channelId, author, body, replyToId?, attachmentIds?)</code> and the INSERT never names the column; <code>executeWebhook()</code> is the same. No route, no frame, no admin path. So "generate two weeks of dated history via the API" is not a thing that can be built — <b>ambient life starts live-only</b>.</p>
+  <p>The escape hatch is SQL. <code>server/src/services/export.test.ts</code> and <code>retention.test.ts</code> both write <code>INSERT INTO messages (…, created_at) VALUES (…, NOW() - INTERVAL '1 hour')</code>, so the column accepts a value fine — a backfill script would need <code>DATABASE_URL</code> and would run against the production database directly. That is a real operation, not an impossible one, but it is a <b>one-off migration with production DB access</b>, not a mode of the runner, and it should be reviewed as such. Recommendation: <b>do not build it for v1.</b> Start the servers two weeks before launch and let the history be real.</p>
+</div>
+
+<h3>Webhooks: what they can and cannot do</h3>
+
+<p><code>server/src/services/webhooks.ts</code> is more interesting than it looks. Creating a webhook mints a <b>real <code>users</code> row</b> with <code>is_webhook = TRUE</code> and a synthetic <code>clerk_id</code> of the form <code>webhook:&lt;uuid&gt;</code> — the comment says it outright: <span class="pt">"nothing ever authenticates as this row, so it only has to be unique, not real."</span> That is a pseudo-identity primitive that already exists in the schema, and §02 builds on it.</p>
+
+<p>As a <i>posting</i> mechanism, though, webhooks are the wrong tool for this job, and it is worth being exact about why:</p>
+
+<div class="scroll"><table>
+  <thead><tr><th>Webhook can</th><th>Webhook cannot</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>Post as a name + avatar with no account (<code>POST /api/webhooks/:id/:token</code>, unauthenticated — the URL is the credential)</td>
+      <td>Show a typing indicator</td>
+    </tr>
+    <tr>
+      <td>Appear <b>live</b> — the route calls <code>broadcastToChannel</code>, so messages fan out over WS exactly like a real one</td>
+      <td>Add a reaction, or be reacted <i>to</i> by a profile popover (the client disables it for webhook messages)</td>
+    </tr>
+    <tr>
+      <td>Rate-limit itself (20 burst / 1 per second per webhook id)</td>
+      <td>Appear in the member list, in presence, or in a voice channel</td>
+    </tr>
+    <tr>
+      <td>Carry embeds</td>
+      <td>Reply to a message, join a thread, or read the channel at all</td>
+    </tr>
+  </tbody>
+</table></div>
+
+<div class="callout warn">
+  <span class="tag">The disqualifier is one line of the client</span>
+  <p><code>client/src/components/chat/message-list.tsx</code> renders a <code>WEBHOOK</code> badge on every webhook message, titled <span class="pt">"Posted by a webhook, not a member."</span> That is <b>excellent</b> if you want soft disclosure for free — and fatal if you want a community that looks inhabited, because a server whose entire population is badged "not a member" reads as an RSS feed. Webhooks also cannot react, cannot show typing, and never appear in the member list, so the three cheapest signals that a room has people in it are all unavailable.</p>
+  <p><b>Verdict:</b> webhooks are the right primitive for a <i>bot</i> — a scores bot, a "novidades" feed — and they should be used for exactly that. They are the wrong primitive for a <i>persona</i>.</p>
+</div>
+
+<h2 id="identity"><span class="num">02</span>Identity in production: the decision that blocks everything</h2>
+
+<p>Locally this is solved: <code>DEV_AUTH_BYPASS=true</code> plus <code>dev-local-token:&lt;suffix&gt;</code> mints a distinct account per suffix (<code>server/src/auth/clerk.ts</code>, <code>devBypassIdentity</code>), and the prototype uses exactly that. In production it is solved by nothing: <code>isDevAuthBypassEnabled()</code> returns false under <code>NODE_ENV=production</code>, and <code>assertAuthConfig()</code> makes the process <b>fail at boot</b> if the flag is set there. That is correct security and it is a hard wall.</p>
+
+<p>Three options. They are not equally good.</p>
+
+<div class="concept">
+  <span class="cnum">Option A</span>
+  <h3>Webhook-based posting <span class="pill no">reject</span></h3>
+  <p class="tagline">No new auth surface, no accounts, works today in production.</p>
+  <p>Genuinely tempting: zero new code, zero new credentials in the auth chokepoint, and messages already broadcast live. But §01's table is the whole argument against it — no typing, no reactions, no presence, no member list, no replies, and a permanent <code>WEBHOOK</code> badge on every line. You would be advertising five servers whose members list is empty and whose every message is labelled "not a member".</p>
+  <p><b>Keep it for what it is for.</b> One webhook per community posting a genuinely useful automated thing (a match-day scoreboard, a patch-notes feed) is <i>good</i> content and honest by construction. It is not ambient life.</p>
+</div>
+
+<div class="concept">
+  <span class="cnum">Option B</span>
+  <h3>Operator-owned real Clerk accounts <span class="pill mid">viable, unpleasant</span></h3>
+  <p class="tagline">25 real accounts, provisioned through the Clerk Backend API.</p>
+  <p><code>CLERK_SECRET_KEY</code> is already on Railway, and the Clerk Backend API can create users programmatically and mint sign-in tokens — so this is not manual signup 25 times. The server verifies whatever the runner sends through the ordinary <code>verifyToken()</code> path, which means <b>zero changes to pqp</b>.</p>
+  <p><b>What it costs.</b> Every persona becomes a billable Clerk MAU and a row in the real user directory — enumerable through user search like any other account, which is fine, but also <i>deletable</i>, <i>bannable</i>, and subject to every account lifecycle path in the product. Token refresh becomes the runner's problem, and Clerk session tokens are short-lived. And it puts 25 sets of real credentials in an environment file.</p>
+  <p><b>Unverified assumption</b> <span class="conf">needs a half-day spike</span>: that a Backend-API-minted session token satisfies <code>verifyToken(token, { secretKey, authorizedParties })</code> with the <code>azp</code> claim the server expects. Confirm that before committing.</p>
+</div>
+
+<div class="concept">
+  <span class="cnum">Option C</span>
+  <h3>Server-minted character accounts <span class="pill ok">recommended</span></h3>
+  <p class="tagline">The concept the schema already half-implements.</p>
+  <p>Webhooks already create a <code>users</code> row with a synthetic <code>clerk_id</code> that nothing authenticates as. A character account is that row plus one thing: a long-lived bearer token that <i>does</i> authenticate as it. Concretely:</p>
+  <ul>
+    <li>A <code>character_accounts</code> table: <code>user_id</code>, a hashed token, <code>created_by</code>, <code>revoked_at</code>. The <code>users</code> row carries <code>clerk_id = 'character:&lt;uuid&gt;'</code> and a new <code>is_character</code> flag — <b>not</b> <code>is_webhook</code>, which would inherit the client's badge and the disabled profile popover.</li>
+    <li>One branch in <code>verifyAuthHeader()</code>, ahead of the Clerk path and behind an explicit env gate (<code>CHARACTER_ACCOUNTS_ENABLED</code>), looking up the token hash.</li>
+    <li>The age gate is satisfied at creation by writing <code>age_checked_at</code> / <code>age_check_passed</code> directly — a character has no date of birth to declare, and leaving it pending would close its socket with 4401.</li>
+  </ul>
+  <p><b>Why this and not B.</b> It is provisionable by script at any scale (§06 needs 250 of these), it costs nothing per account, it is revocable in one UPDATE, and — the part that matters most — <b>it makes "this is a character" a fact in the database</b> rather than a convention in a config file. Once <code>is_character</code> exists, the disclosure UI in §03 is a rendering decision the client can make honestly, and moderation can treat the cast as a class.</p>
+  <p><b>What it costs.</b> A new credential type in the single most security-sensitive function in the server. That is not free and it must be reviewed as auth work, not as tooling: tokens hashed at rest, never logged, scoped so a character can only act inside servers it is a member of, and explicitly excluded from account-deletion and data-export routes. Budget it as <b>~2 days including review</b>, not an afternoon.</p>
+</div>
+
+<div class="callout">
+  <span class="tag">Sequencing</span>
+  <p>The prototype runs on the dev bypass and therefore proves everything <i>except</i> this. That is deliberate — the identity decision is a product and security decision, not something a spike should quietly pick. <b>Nothing ships to production until Option C (or B) is built and reviewed.</b></p>
+</div>
+
+<h2 id="arch"><span class="num">03</span>Architecture</h2>
+
+<h3>In-repo, out of the workspace</h3>
+
+<p>The runner lives at <code>tools/ambient/</code>, in the pqp repo but <b>not</b> in <code>pnpm-workspace.yaml</code>. That combination is deliberate:</p>
+
+<ul>
+  <li><b>In the repo</b>, because the personas are content the product's voice depends on, the runner is a first-class consumer of the WS protocol, and a protocol change that breaks it should break it in the same PR. A separate repo means the ambient system silently rots the first time a frame changes.</li>
+  <li><b>Out of the workspace</b>, because it is a service with its own lifecycle, its own <code>npm install</code>, and its own deploy. Root <code>pnpm test</code>, <code>pnpm build</code> and <code>pnpm typecheck</code> iterate workspace packages, so none of them touch it — CI is unchanged.</li>
+</ul>
+
+<p><b>Runtime:</b> plain Node ESM, Node 22+. Two dependencies at most — <code>js-yaml</code>, and <code>@anthropic-ai/sdk</code> as an <i>optional</i> dependency loaded by dynamic <code>import()</code> only on the live path, so canned mode and every unit test run with it absent. <code>fetch</code> and <code>WebSocket</code> are Node globals; nothing else is needed.</p>
+
+<p><b>Deploy:</b> a Fly machine or a systemd unit running <code>runner.js --watch</code> per shard. Not cron — the runner needs a persistent WebSocket to notice a real human arriving, and a cron process that connects, posts and exits produces a member list that flickers.</p>
+
+<div class="mock">tools/ambient/
+├── communities/                 # ← the whole content surface
+│   ├── futebol.yaml             #   one file = one community + its cast
+│   ├── games.yaml
+│   └── …
+├── src/
+│   ├── schedule.js   pure  ← activity windows, jitter, rate caps, casting
+│   ├── scene.js      pure  ← prompt building, transcript splitting, typing timings
+│   ├── guardrails.js pure  ← banned topics, advice, off-platform, identity, repetition
+│   ├── config.js           ← load + validate a community file (fails at boot)
+│   ├── memory.js           ← per-community JSON: recent topics, recent lines
+│   ├── generate.js         ← ONE Claude call per scene, or a fixture
+│   ├── pqp-client.js       ← real HTTP + /ws client
+│   ├── log.js              ← JSONL audit log + kill switch
+│   └── runner.js           ← the only file that touches network / clock / disk
+└── state/&lt;community&gt;.json   ← memory, gitignored</div>
+
+<p>The split is the maintainability claim. Every decision the system makes is computed by a pure function with the clock and the randomness injected, which is why "does the server go quiet at 3am" and "does a persona ever exceed its hourly cap" are unit tests rather than overnight observations. <code>runner.js</code> owns I/O and ordering and nothing else.</p>
+
+<h3>Personas as data</h3>
+
+<p>A persona is ~18 lines of YAML and appears nowhere in code. Adding one to a community is a diff to one file; adding a community is a new file plus a line in the shard config.</p>
+
+<pre><code>- id: cacau
+  displayName: Cacau Ribeiro
+  avatarSeed: cacau-ribeiro
+  register: &gt;                       # how they WRITE, not who they are
+    Escreve em minúsculas, frases curtas, muita gíria de arquibancada.
+    Usa "mano" e "cara". Raramente usa emoji, no máximo um.
+  interests: [Palmeiras, categorias de base, estatística de rodada]
+  activity:                          # wall-clock in America/Sao_Paulo
+    weekday: ["07:15-08:40", "12:10-13:30", "19:30-23:15"]
+    weekend: ["10:00-13:30", "16:00-23:45"]
+  chattiness: 0.8                    # 0..1 — weights casting AND line count
+  disclosure: character              # character | bot | undisclosed  (§04)
+  replyToHumans:
+    enabled: true
+    maxPerHour: 4
+    latencySeconds: [25, 210]        # a human does not answer in 400ms</code></pre>
+
+<p><code>register</code> being about <i>writing</i> rather than biography is the single highest-leverage thing in the file. A model given "Cacau is a 28-year-old Palmeiras fan from Osasco" writes a character sketch; a model given "minúsculas, frases curtas, gíria de arquibancada, no máximo um emoji" writes chat.</p>
+
+<h3>The scheduler: curves, not a drip</h3>
+
+<p>Three mechanisms, all in <code>schedule.js</code>:</p>
+
+<ol>
+  <li><b>Activity windows</b> resolved through <code>Intl.DateTimeFormat</code> with a named zone, never a UTC offset. São Paulo dropped DST in 2019, but a community in a zone that has not would otherwise break twice a year, and the tests pin the case where a UTC day and a São Paulo day disagree.</li>
+  <li><b>Triangular intensity</b> inside each window — 0 at the edges, 1 in the middle. A boolean window produces five personas all appearing on the same minute at 19:30, which is the most obviously synthetic thing this system can do. The ramp makes evenings build and fade.</li>
+  <li><b>Jitter everywhere.</b> Scene cadence is inversely proportional to how awake the room is (busy evening ≈ every 7 minutes, dead Tuesday morning ≈ every 90), then jittered ±35%. The divisor is capped so no amount of activity turns the channel into a stream.</li>
+</ol>
+
+<h3>The conversation engine: one call per scene</h3>
+
+<p>The scheduler picks a server, a topic, 2–4 personas and a line count. <b>One API call produces the entire exchange.</b> This is the load-bearing cost decision and it is also a quality decision: a model that can see the reply it is setting up writes an actual conversation, while per-message calls produce five monologues that happen to be adjacent. §05 has the arithmetic — it is 3.3× cheaper and 5× fewer failure points.</p>
+
+<p>The model's answer comes back as <code>Nome: texto</code> lines and is split by <code>parseTranscript()</code>. Two rules there matter:</p>
+<ul>
+  <li><b>A line attributed to somebody outside the cast is dropped, never reattributed.</b> A model that invents a speaker has invented a member of a server that has a member list; posting that line under the wrong account is worse than posting one line fewer.</li>
+  <li><b>An over-length line is dropped, not truncated.</b> A sentence cut mid-word is a tell; the scene reads fine one line shorter.</li>
+</ul>
+
+<p>Delivery uses <code>typingPlan()</code>: typing time scales with message length (~22 chars/second, floored and capped), and the pause before a message is longer when the previous speaker was someone else — because you read before you reply. The typing indicator is re-sent every 2.5s inside the server's ~1/s sustained limit so "Cacau is typing…" actually stays on screen.</p>
+
+<h3>Humans outrank the schedule</h3>
+
+<p>In <code>--watch</code> mode every persona socket listens for <code>message-broadcast</code> from an author that is not part of the cast. A real human message jumps the queue: the runner waits a persona-configured 25–210 seconds, then runs a <b>reply scene</b> whose first line answers that person by name, capped at 3 lines.</p>
+
+<div class="callout warn">
+  <span class="tag">The failure mode this cap exists for</span>
+  <p>A visitor says "oi" and six strangers answer within four seconds. That is worse than an empty server — it reads as a trap. Reply scenes are capped in three independent ways: shorter than ambient scenes, rate-capped per persona per hour, and de-duplicated so a backlog of human messages produces one reply, not one reply each.</p>
+</div>
+
+<h3>Memory</h3>
+
+<p>One JSON file per community: the last 12 topics, the last 120 lines, and a coarse "who has talked to whom" counter. That is enough to answer the only question memory needs to answer at this size — <i>have we already said this?</i> — and the recent-topics list is fed back into the prompt as an explicit avoid-list <i>and</i> used to filter the topic pool before casting. §06 says what replaces it at 50 servers.</p>
+
+<h3>Guardrails</h3>
+
+<p>Every rule is stated twice: once in the prompt, once as a post-generation screen. The duplication is the point — a prompt is a request, and only one of the two still works when the model ignores it.</p>
+
+<div class="scroll"><table>
+  <thead><tr><th>Rule</th><th>Enforced how</th></tr></thead>
+  <tbody>
+    <tr><td>pt-BR register per persona</td><td>Prompt only (a register is not screenable), plus a per-community <code>locale</code>.</td></tr>
+    <tr><td>Banned-topics list (per community)</td><td>Accent- and case-folded match with a word boundary, so <code>política</code> catches <code>POLITICA</code> but not <code>policial</code>.</td></tr>
+    <tr><td>No politics / health / finance / legal advice</td><td>Banned list + pattern screen (<code>toma 500mg</code>, <code>compra bitcoin</code>, <code>processa eles</code>).</td></tr>
+    <tr><td>Length cap</td><td>180 chars default; over-length lines dropped.</td></tr>
+    <tr><td><b>Never move a stranger off-platform or offer to meet</b></td><td>Pattern screen on <code>zap</code>/<code>whatsapp</code>/<code>insta</code>, "me chama no", "bora tomar um", phone-number asks, and any URL.</td></tr>
+    <tr><td><b>Never claim to be human; never volunteer being software</b></td><td>Pattern screen in both directions. Which of those two is a lie depends entirely on §04.</td></tr>
+    <tr><td>Repetition</td><td>Jaccard over content words against the last 120 lines; ≥0.6 is a drop.</td></tr>
+    <tr><td>Hard cap: messages/hour/server</td><td>Sliding-window counter, checked before a scene is planned <i>and</i> for headroom — starting a 5-line scene with 2 messages left publishes half a conversation.</td></tr>
+  </tbody>
+</table></div>
+
+<h3>Observability and the kill switch</h3>
+
+<p>Every generated line is written to a JSONL log — posted, dropped by a guardrail, or dropped as a repeat — with the reason, the persona, the topic, the model, the token counts and the estimated cost. This is not telemetry. If anyone ever asks <i>what did this account say and why</i>, the answer has to be a file rather than a reconstruction.</p>
+
+<p><code>AMBIENT_KILL_SWITCH=1</code> halts every write to pqp, read fresh on each call rather than once at boot so flipping it on a running machine takes effect at the next scene rather than the next release. It is the <b>first</b> gate in <code>main()</code>, before the runner touches pqp at all.</p>
+
+<h2 id="honesty"><span class="num">04</span>The honesty question</h2>
+
+<p>The request was for accounts that do "real user things" in servers we advertise. Stated precisely, that is: <i>present generated content as evidence of a user base, to people evaluating whether to join because of that user base.</i> That framing is not hostile — it is just the framing a regulator, an app reviewer, or a journalist would use, and it is worth having the argument here rather than in public.</p>
+
+<h3>The three options</h3>
+
+<div class="concept">
+  <span class="cnum">Option A</span>
+  <h3>Undisclosed personas <span class="pill no">recommend against</span></h3>
+  <p class="tagline">What was asked for. Accounts that read as people, with nothing said anywhere.</p>
+  <p><b>The upside is real and I am not going to pretend otherwise.</b> It is the only option where a visitor's first impression is unqualified — no badge to discount, no frame to process, just a room with people in it. Cold-start is the hardest problem a chat product has and this is the only version that fully solves it.</p>
+  <p><b>The exposure:</b></p>
+  <ul>
+    <li><b>CDC art. 37</b> — <i>publicidade enganosa</i> covers any communication capable of inducing the consumer into error <span class="pt">"a respeito da natureza, características, qualidade… do produto ou serviço"</span>. A populated user base is a characteristic of a chat service, arguably <i>the</i> characteristic. <b>Art. 6º, III</b> independently requires clear and adequate information about the service. This is not an exotic reading. <span class="conf">not legal advice</span></li>
+    <li><b>App stores.</b> Apple's Review Guideline 2.3 (accurate metadata / no misleading representations) and Google Play's <b>Deceptive Behavior</b> policy, which explicitly covers apps that misrepresent their content or functionality. A removal here is not a fine, it is the distribution channel.</li>
+    <li><b>Discoverability.</b> The tell is arithmetic, not vibes: two accounts that post only within fixed windows, never at 04:00, never on a holiday, never with a typo they come back to fix. One curious user with a spreadsheet is all it takes, and the resulting screenshot is the only thing anyone remembers about the launch.</li>
+    <li><b>Irreversibility.</b> Every other decision in this document can be changed next week. This one, once discovered, cannot.</li>
+  </ul>
+  <p>The prototype supports it. <code>disclosure: undisclosed</code>, one word. I am telling you the word exists and telling you not to type it.</p>
+</div>
+
+<div class="concept">
+  <span class="cnum">Option B</span>
+  <h3>Soft disclosure <span class="pill mid">safe, and a waste</span></h3>
+  <p class="tagline">A subtle bot badge, or one line in the server description.</p>
+  <p>Legally and policy-wise this is fine — a disclosed automated account is an ordinary product feature, and pqp already renders exactly this badge for webhook messages, so the UI exists.</p>
+  <p>The problem is that it buys safety by making the personas feel like <b>spam</b>. A <code>[bot]</code> badge on a person telling a joke about the Brasileirão is a category error: users have a strong prior that a badged account is a scoreboard or a moderation tool, and they discount it accordingly. You pay the full cost of building this system and get a room full of things nobody talks to.</p>
+</div>
+
+<div class="concept">
+  <span class="cnum">Option C</span>
+  <h3>Framed characters — <i>o elenco da casa</i> <span class="pill ok">recommended</span></h3>
+  <p class="tagline">The personas are the server's fictional cast, and the server says so.</p>
+  <p>The frame is stated where a joining user sees it — in the server description, in each character's profile bio, and once in a pinned message — and then never mentioned again. Nothing else changes: the characters post, react, show typing, appear in the member list, and answer real people, because they are real accounts (§02, Option C).</p>
+  <p><b>Why this is not a compromise but the actually-better product:</b></p>
+  <ul>
+    <li><b>Brazil already loved this.</b> The Orkut research (<a href="./communities-orkut.html"><code>communities-orkut.html</code></a> §02) found that comunidades were <i>identity performance</i> — Bezerra &amp; Araújo's <i>vitrine pessoal</i>, where you <span class="pt">"dress an identity by bundling traits"</span>. Communities named <b>Eu Odeio Acordar Cedo</b> and <b>Deus me disse: desce e arrasa!</b> won millions of members on <i>character and voice</i>, not on population counts. A named cast with a consistent register is the same mechanic. The demographic that misses Orkut is exactly the demographic that reads a house cast as charm rather than as a trick.</li>
+    <li><b>It is a marketing asset instead of a liability.</b> "Os personagens da casa" is something you can put in a press release. "We have 40 fake users" is something you spend the rest of the launch denying.</li>
+    <li><b>It survives contact with a journalist.</b> Every other option has a bad-headline state. This one's worst case is a mildly charmed feature piece.</li>
+    <li><b>It removes the ugliest guardrail.</b> Under A, a character asked "você é um bot?" has to deflect, and every deflection is a small lie that a screenshot makes permanent. Under C it can simply say yes.</li>
+    <li><b>The cold-start benefit is mostly retained.</b> The thing a visitor needs is a room that is not silent and people who answer. A frame at the door costs a fraction of that and buys all of the above.</li>
+  </ul>
+</div>
+
+<div class="callout good">
+  <span class="tag">Recommendation, and how to make it reversible</span>
+  <p><b>Ship Option C.</b> In the prototype, disclosure is a per-persona string with three values, validated at load — a typo throws rather than silently defaulting to <code>undisclosed</code>, because the one failure that must never happen quietly is the product's honesty posture changing by accident. <code>character</code> adds a profile bio and no name suffix; <code>bot</code> adds a visible <code>[bot]</code>; <code>undisclosed</code> says nothing anywhere. Nothing else in the runner branches on the value, so the policy is genuinely one line.</p>
+  <p>Two rules that come with C and are not optional: a character <b>must never deny being a character</b> when asked (the identity screen already blocks "não sou robô"), and a character <b>must never DM a real user unprompted</b> — a fictional stranger in a public room is a frame; a fictional stranger in your inbox is something else.</p>
+</div>
+
+<h2 id="cost"><span class="num">05</span>Cost model, in dollars</h2>
+
+<p>Model: <b>Claude Haiku 4.5</b> (<code>claude-haiku-4-5</code>), $1.00 per million input tokens, $5.00 per million output. The workload is the one where volume dominates and the task is easy — six lines of chat banter in a fixed voice — so the cheapest capable tier is the right one.</p>
+
+<h3>One scene</h3>
+
+<div class="scroll"><table>
+  <thead><tr><th>Component</th><th>Tokens</th><th>Cost</th></tr></thead>
+  <tbody>
+    <tr><td>System prompt (premise + 3 personas + 12 rules)</td><td>~450 in</td><td>$0.00045</td></tr>
+    <tr><td>User prompt (topic + avoid-list + instructions)</td><td>~150 in</td><td>$0.00015</td></tr>
+    <tr><td>Output (5 lines × ~25 tokens + speaker names)</td><td>~160 out</td><td>$0.00080</td></tr>
+    <tr><td><b>Total per scene</b></td><td><b>~600 in / ~160 out</b></td><td><b>$0.0014</b></td></tr>
+  </tbody>
+</table></div>
+
+<h3>Per day, per month</h3>
+
+<p>At the config's default ceiling of 14 scenes/day and a realistic 12, one server produces <b>~60 messages/day</b> — enough to look inhabited, low enough that a real person can still be heard.</p>
+
+<div class="grid">
+  <div class="card">
+    <div class="big">$0.017</div>
+    <div class="cap">per server / day</div>
+    <div class="note">12 scenes × $0.0014. About 60 messages.</div>
+  </div>
+  <div class="card">
+    <div class="big">$2.52</div>
+    <div class="cap">5 servers / month</div>
+    <div class="note">The launch set. Round up to <b>$4</b> with human-reply scenes and retries.</div>
+  </div>
+  <div class="card">
+    <div class="big">$25</div>
+    <div class="cap">50 servers / month</div>
+    <div class="note">Linear. At 50 servers this is still not the constraint — §06 is.</div>
+  </div>
+  <div class="card">
+    <div class="big">3.3×</div>
+    <div class="cap">what per-message calls would cost</div>
+    <div class="note">And 5× the round trips, 5× the failure points, worse dialogue.</div>
+  </div>
+</div>
+
+<h3>Why one call per scene, with the arithmetic</h3>
+
+<p>The naive design generates one message per call, and each call has to carry the transcript so far. Input grows across the scene: ~600, ~650, ~700, ~750, ~800 tokens for five lines — <b>~3,750 input tokens against 600</b>, for identical output. That is $0.0046 per scene instead of $0.0014, and it buys worse dialogue, because no single call can see where the exchange is going.</p>
+
+<div class="callout">
+  <span class="tag">Two things that do <i>not</i> help, checked</span>
+  <p><b>Prompt caching is useless here.</b> Haiku 4.5's minimum cacheable prefix is 4,096 tokens; our system prompt is ~450. Nothing caches, at any volume. Do not design around it, and do not add tokens to a prompt to reach the threshold — that costs more than it saves.</p>
+  <p><b>Model tier is not the lever either.</b> The same scene on Sonnet 5 is ~$0.0042 — 3× Haiku, and still only ~$75/month at 50 servers. If a community's voice is not landing, moving <i>that community</i> up a tier is affordable; <code>AMBIENT_MODEL</code> exists for exactly that.</p>
+</div>
+
+<h2 id="scale"><span class="num">06</span>5 servers → 50: what actually breaks</h2>
+
+<p>Not the money. Here is the honest list, in the order it will bite.</p>
+
+<h3>1. Repetition detection <span class="pill no">breaks first</span></h3>
+<p>Today: Jaccard over the last 120 lines, per community, blind to every other community. At 50 servers that fails three ways. A topic pool of six exhausts in a week and the avoid-list starts suppressing everything (the prototype already falls back to the full pool rather than going silent — the correct behaviour, and a symptom). A persona's <i>voice</i> starts repeating across communities even when its lines don't. And the O(n) scan per line becomes the runner's hot loop.</p>
+<p><b>The fix, in order of when you need it:</b> (a) generate topics rather than listing them — one cheap daily call per community turning a real-world prompt into 20 fresh topics; (b) move dedupe from token overlap to embeddings with a shared index across communities; (c) an automated weekly "voice audit" that samples 50 lines and flags any persona whose output has collapsed into a template.</p>
+
+<h3>2. Identity provisioning <span class="pill mid">the argument for Option C</span></h3>
+<p>50 servers × 5 personas = <b>250 accounts</b>. Under §02 Option B that is 250 Clerk MAUs, 250 sets of credentials, and 250 token refreshes to babysit. Under Option C it is a script and one table. This is the reason the identity decision should be made for the 50-server case now, even though launch needs 25.</p>
+
+<h3>3. The scheduler process <span class="pill mid">sharding, not rewriting</span></h3>
+<p>250 WebSockets in one process is well within what the server holds (<code>scripts/chat-load.mjs</code> exists to prove that number), but one process is a single point of failure and a noisy neighbour. The runner is already stateless per community — memory is a file keyed by <code>community.key</code>, rate caps are in-process and per-community — so <b>sharding is a config change, not a refactor</b>: N systemd units or N Fly machines, each with a disjoint set of community files. Do not build a distributed scheduler.</p>
+
+<h3>4. Moderation and trust &amp; safety <span class="pill mid">newly load-bearing</span></h3>
+<p>250 accounts posting unattended in public servers is a real T&amp;S surface. Under Option C they are ordinary <code>users</code> rows, so the existing sanctions machinery already applies to them — which is a feature: a character that misbehaves can be timed out by the same code path as anyone else. What is missing is the reverse direction: a character reacting to, quoting, or replying to a real user's <i>harmful</i> message amplifies it. At 50 servers, add a screen on the <i>inbound</i> message before a reply scene is planned, not just on the outbound lines.</p>
+
+<h3>5. Observability <span class="pill mid">a digest, not a log</span></h3>
+<p>50 servers × 60 messages/day is ~3,000 generated lines a day; nobody reads that JSONL. Two additions: a per-community daily digest (scenes, messages posted, drops by reason, cost), and one alert — <b>guardrail drop rate above ~15%</b>, which is the earliest signal that a community's prompt has drifted or a model update has changed behaviour.</p>
+
+<h3>What keeps it maintainable: files, not code</h3>
+<p>The invariant to protect is that <b>no persona and no community appears anywhere in <code>src/</code></b>. Adding a community is a YAML file plus a line in a shard's list. Changing a character's voice is editing three lines of <code>register</code>. Retiring one is deleting a block. If a future change requires a code edit to add a persona, that change is wrong.</p>
+
+<h2 id="bootstrap"><span class="num">07</span>Bootstrap: the five launch communities</h2>
+
+<p>Categories follow the Orkut research: <b>futebol, games, música, humor/memes, estudos</b>. Names are chosen to sound like communities somebody made, not like product categories.</p>
+
+<div class="concept">
+  <h3>1 · Futebol de Quinta <span class="pill">futebol</span></h3>
+  <p class="tagline">Brasileirão, Libertadores, seleção — and complaining about refereeing all year.</p>
+  <ul>
+    <li><b>Cacau Ribeiro</b> — minúsculas, gíria de arquibancada, Palmeiras, obcecada por categorias de base.</li>
+    <li><b>Nando Aquino</b> — mais velho, pontuação certinha, Corinthians, compara tudo com os anos 90.</li>
+    <li><b>Duda Belmonte</b> — Flamengo, chega tarde da noite, escreve em rajadas de três mensagens.</li>
+    <li><b>Seu Ivo</b> — Grêmio, aparece só no fim de semana, uma frase longa e definitiva por vez.</li>
+    <li><b>Talita Nunes</b> — futebol feminino e seleção, a única que traz número em vez de opinião.</li>
+  </ul>
+</div>
+
+<div class="concept">
+  <h3>2 · Sala de Espera do Ranked <span class="pill">games</span></h3>
+  <p class="tagline">Fila, patch notes, e a eterna discussão sobre quem carregou.</p>
+  <ul>
+    <li><b>kzin</b> — tudo minúsculo, sem pontuação, joga de madrugada, reclama de ping.</li>
+    <li><b>Marina Sato</b> — a que lê patch notes de verdade e explica pros outros.</li>
+    <li><b>Beto Farias</b> — só joga no fim de semana, sempre atrasado nos memes, e sabe disso.</li>
+    <li><b>Pandinha</b> — coop e jogos indie, foge de PvP, recomenda coisa que ninguém pediu.</li>
+    <li><b>Rique</b> — competitivo demais, provoca, sempre pede "última e eu durmo".</li>
+  </ul>
+</div>
+
+<div class="concept">
+  <h3>3 · Fone com Fio <span class="pill">música</span></h3>
+  <p class="tagline">Descoberta, nostalgia, e brigas sobre o que conta como "clássico".</p>
+  <ul>
+    <li><b>Lelê Andrade</b> — rap nacional, escreve como quem escreve verso, muita quebra de linha.</li>
+    <li><b>Otávio Prado</b> — MPB e vinil, condescendente do jeito carinhoso, texto longo.</li>
+    <li><b>Sam</b> — indie e coisas que ninguém ouviu, uma linha por mensagem, muito "escuta isso".</li>
+    <li><b>Cris Bonfim</b> — sertanejo e pagode sem ironia nenhuma, defende com unhas e dentes.</li>
+    <li><b>Yuri</b> — produção e equipamento, sequestra qualquer thread para falar de mixagem.</li>
+  </ul>
+</div>
+
+<div class="concept">
+  <h3>4 · Eu Odeio Acordar Cedo <span class="pill">humor/memes</span></h3>
+  <p class="tagline">Homenagem declarada à maior comunidade que o Orkut já teve (6,1 milhões).</p>
+  <ul>
+    <li><b>Jhow</b> — kkkkk de comprimento variável, meme antes do café, some por horas.</li>
+    <li><b>Bruna Tavares</b> — humor seco, uma frase, mata a conversa e vai embora.</li>
+    <li><b>Tio Wesley</b> — trocadilho de tio, sem vergonha nenhuma, todo dia às 07:00.</li>
+    <li><b>anafofa</b> — responde tudo com referência de novela e de reality.</li>
+    <li><b>Kadu</b> — o que sempre chega às 23h com "gente, aconteceu uma coisa hoje".</li>
+  </ul>
+  <p class="footnote">Before shipping this name, check that nobody holds it as a mark. The original was <a href="./communities-orkut.html">sold in 2009 for R$3–5k</a> and the platform is eleven years dead, so the risk is low — but low is not zero, and the homage is worth ten minutes of checking.</p>
+</div>
+
+<div class="concept">
+  <h3>5 · Véspera de Prova <span class="pill">estudos</span></h3>
+  <p class="tagline">ENEM, concurso, faculdade — e procrastinação em grupo.</p>
+  <ul>
+    <li><b>Larissa Prado</b> — cronogramas, planilhas, a que cobra os outros com carinho.</li>
+    <li><b>Gustavo Reis</b> — concurseiro há anos, humor de trincheira, madrugada.</li>
+    <li><b>Naiara</b> — primeira da família na faculdade, pergunta tudo, agradece demais.</li>
+    <li><b>Prof. Elias</b> — professor aposentado, explica de graça, nunca dá resposta pronta.</li>
+    <li><b>tomás</b> — o que só aparece na véspera, em pânico, e é adotado pelo grupo.</li>
+  </ul>
+  <p class="footnote"><b>Highest-risk community of the five.</b> Study servers attract minors, and pqp is 18+. It also invites exactly the advice the guardrails forbid. If any of the five gets cut, cut this one.</p>
+</div>
+
+<h3>Seed content strategy — the honest version</h3>
+
+<p>A server needs visible history to feel alive, and §01 established that the API cannot backdate it. So:</p>
+
+<ol>
+  <li><b>Start the runner two weeks before launch.</b> This is the recommendation. Two weeks × 60 messages/day ≈ 800 real, correctly-timestamped messages per server, with genuine gaps at 04:00 and genuine bursts on Sunday evening — which is more convincing than anything a backfill would produce, because it <i>is</i> the thing a backfill imitates. Cost for the whole pre-launch run: <b>under $2</b>.</li>
+  <li><b>Seed the frame, not the history.</b> On day one, write the server description, the channel topics, the pinned "quem é quem" post, and the character bios by hand. That is the content that makes a two-week-old server look intentional rather than empty.</li>
+  <li><b>Backfill only if the calendar is lost</b>, and treat it as a one-off SQL migration against production with a review, not as a runner mode. Timestamps must respect the same activity curves, or the fabrication is visible in a scroll.</li>
+</ol>
+
+<h2 id="v1"><span class="num">08</span>v1 scope cut — prototype vs. this document</h2>
+
+<div class="scroll"><table>
+  <thead><tr><th>Capability</th><th>In <code>tools/ambient/</code> today</th><th>Deferred to</th></tr></thead>
+  <tbody>
+    <tr><td>Personas as YAML, validated at load</td><td class="y">Yes — 2 personas, 1 community</td><td>—</td></tr>
+    <tr><td>Activity windows, intensity ramp, jitter, rate caps</td><td class="y">Yes — 85 unit tests</td><td>—</td></tr>
+    <tr><td>Scene casting, topic rotation, headroom checks</td><td class="y">Yes</td><td>—</td></tr>
+    <tr><td>One Claude call per scene + <code>--canned</code> fixtures</td><td class="y">Yes</td><td>—</td></tr>
+    <tr><td>Transcript splitting, guardrail screen, repetition drop</td><td class="y">Yes</td><td>—</td></tr>
+    <tr><td>Real HTTP + WS posting, typing indicators, reactions</td><td class="y">Yes — verified end to end</td><td>—</td></tr>
+    <tr><td>Per-community memory, JSONL audit log, kill switch</td><td class="y">Yes</td><td>—</td></tr>
+    <tr><td>Reply-to-human priority with latency and caps</td><td class="m">Implemented in <code>--watch</code>; only exercised by hand</td><td>a soak run</td></tr>
+    <tr><td><b>Production identity</b></td><td class="n">No — dev bypass only</td><td><b>§02 Option C, ~2 days incl. review</b></td></tr>
+    <tr><td>Avatars from <code>avatarSeed</code></td><td class="n">No — field is read and unused</td><td>v1.1</td></tr>
+    <tr><td>Disclosure surfaces (server description, profile bios, pinned post)</td><td class="m">Name suffix + bio string computed; not written to profiles</td><td>v1.1, with §04</td></tr>
+    <tr><td>Sharding across communities</td><td class="n">Single process, single community per run</td><td>§06, at ~15 servers</td></tr>
+    <tr><td>Embedding-based dedupe, generated topics, voice audit</td><td class="n">No</td><td>§06, at ~20 servers</td></tr>
+    <tr><td>Screening <i>inbound</i> human messages before replying</td><td class="n">No</td><td>before any public server</td></tr>
+    <tr><td>Voice channels, DMs, threads, attachments</td><td class="n">No</td><td>not planned — see below</td></tr>
+    <tr><td>Backfilled history</td><td class="n">Impossible via the API</td><td>§01 — don't</td></tr>
+  </tbody>
+</table></div>
+
+<div class="callout bad">
+  <span class="tag">Deliberately never</span>
+  <p><b>Characters must not send DMs</b>, and must not join voice. A fictional stranger in a public room is a frame; a fictional stranger in your inbox or your ear is something else, and no disclosure setting makes it comfortable. The runner has no code path for either, and it should stay that way.</p>
+</div>
+
+<h3>What the prototype proved</h3>
+
+<ul>
+  <li>Two dev-bypass accounts clear the age gate, take their persona display names, join a real server through a real invite, and appear as members.</li>
+  <li>A scheduled scene posts over the live WebSocket with human-shaped gaps (2.5–6.5 seconds between messages) and typing indicators held for the duration of each message.</li>
+  <li>A second persona reacts to a line it did not write, and the reaction is on the message when the channel is read back through the API.</li>
+  <li>Re-running against the same community suppresses the repeated scene: five of six lines dropped with <code>reason=repetition</code>, from memory alone.</li>
+  <li><code>AMBIENT_KILL_SWITCH=1</code> halts before the runner opens a single connection.</li>
+</ul>
+
+<h3>The next three things, in order</h3>
+
+<ol>
+  <li><b>Decide §04.</b> Everything else is implementation; this is the only irreversible choice in the document.</li>
+  <li><b>Build §02 Option C</b> and review it as auth work. Nothing reaches production before this.</li>
+  <li><b>Write the five community files</b> and start the runner two weeks before launch. That is the whole seed-content plan.</li>
+</ol>
+
+<hr>
+
+<p class="footnote">Sources read for this spike: <code>server/src/ws/chat.ts</code>, <code>server/src/ws/index.ts</code>, <code>server/src/auth/clerk.ts</code>, <code>server/src/services/webhooks.ts</code>, <code>server/src/services/messages.ts</code>, <code>server/src/services/age-gate.ts</code>, <code>server/src/api/index.ts</code>, <code>packages/shared/src/chat.ts</code>, <code>client/src/components/chat/message-list.tsx</code>, <code>scripts/chat-load.mjs</code>. Pricing from the Claude model catalogue (Haiku 4.5: $1/$5 per MTok; Sonnet 5: $3/$15). Legal characterisations are a developer's reading of CDC arts. 6º and 37 and of published app-store policy — <b>not legal advice</b>, and worth one hour of an actual lawyer's time before launch, which is cheap next to the downside.</p>
+
+</div>
+</body>
+</html>

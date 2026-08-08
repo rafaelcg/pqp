@@ -1,0 +1,21 @@
+{
+  "name": "@pqp/ambient",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Ambient-life runner: scheduled AI personas that hold conversations in pqp servers.",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test \"test/*.test.js\"",
+    "start": "node src/runner.js",
+    "scene": "node src/runner.js --once"
+  },
+  "dependencies": {
+    "js-yaml": "^4.1.0"
+  },
+  "optionalDependencies": {
+    "@anthropic-ai/sdk": "^0.70.0"
+  }
+}

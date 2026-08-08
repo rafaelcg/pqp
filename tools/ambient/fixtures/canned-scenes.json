@@ -1,0 +1,51 @@
+{
+  "_note": "Fixture dialogue for --canned mode. Speakers are SLOT INDEXES, not persona ids, so these scenes cast onto whatever the scheduler picked and stay valid when personas.yaml changes. Kept deliberately generic (futebol register) — this exists to prove the pipeline, not to be shipped content.",
+  "ambient": [
+    {
+      "id": "rodada-ruim",
+      "lines": [
+        { "speaker": 0, "text": "gente que rodada sem graça hein" },
+        { "speaker": 1, "text": "Sem graça é apelido. Time nenhum quis jogar." },
+        { "speaker": 0, "text": "meu time entrou já pensando no ponto fora, dá raiva" },
+        { "speaker": 1, "text": "Melhor assim do que tomar de três em casa, vai por mim." },
+        { "speaker": 0, "text": "kkkk tá certo" },
+        { "speaker": 1, "text": "Semana que vem melhora. Sempre digo isso e sempre erro." }
+      ]
+    },
+    {
+      "id": "moleque-da-base",
+      "lines": [
+        { "speaker": 0, "text": "vcs viram o moleque que entrou no segundo tempo?" },
+        { "speaker": 1, "text": "Vi. Tem personalidade, pediu a bola desde o primeiro toque." },
+        { "speaker": 0, "text": "é isso que falta, gente com sangue no olho" },
+        { "speaker": 1, "text": "Só não pode queimar. Já vi essa história terminar mal umas dez vezes." },
+        { "speaker": 0, "text": "verdade, calma nele" },
+        { "speaker": 1, "text": "Se jogar mais uns dez jogos assim eu volto aqui pra falar bem." }
+      ]
+    },
+    {
+      "id": "tabela",
+      "lines": [
+        { "speaker": 0, "text": "olhei a tabela agora e passei mal" },
+        { "speaker": 1, "text": "A tabela é cruel mesmo. Mas ainda tem muito jogo pela frente." },
+        { "speaker": 0, "text": "muito jogo é o que todo mundo fala antes de cair" },
+        { "speaker": 1, "text": "Pessimista desse jeito não dá. Conta os pontos que ainda estão em disputa." },
+        { "speaker": 0, "text": "tá bom tá bom, vou contar e depois choro" },
+        { "speaker": 1, "text": "Combinado. Choro coletivo na quinta." }
+      ]
+    }
+  ],
+  "replies": [
+    {
+      "id": "boas-vindas",
+      "lines": [
+        { "speaker": 0, "text": "opa {human}, chegou junto! qual teu time?" },
+        { "speaker": 1, "text": "Bem-vindo, {human}. Aqui a gente discute muito e não briga, é a regra." },
+        { "speaker": 0, "text": "a regra é essa, e perder junto também" },
+        { "speaker": 1, "text": "Perder junto é o esporte principal deste servidor." },
+        { "speaker": 0, "text": "kkkkk fala a verdade" },
+        { "speaker": 1, "text": "Só falo a verdade, é meu problema." }
+      ]
+    }
+  ]
+}

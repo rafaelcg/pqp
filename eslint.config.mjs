@@ -82,8 +82,16 @@ export default tseslint.config(
   },
 
   {
-    // Standalone Node ESM tooling, run with `node scripts/…`.
-    files: ["scripts/**/*.mjs", "client/bench/**/*.mjs", "*.mjs"],
+    // Standalone Node ESM tooling, run with `node scripts/…`. `tools/**` is
+    // the same shape one directory over: services that live in the repo but
+    // outside the pnpm workspace, with their own install and their own entry
+    // point (see `tools/ambient`).
+    files: [
+      "scripts/**/*.mjs",
+      "client/bench/**/*.mjs",
+      "tools/**/*.{js,mjs}",
+      "*.mjs",
+    ],
     languageOptions: {
       // Benchmarks are Node scripts that also evaluate code inside a browser
       // page, so both sets of globals are legitimately in scope.
