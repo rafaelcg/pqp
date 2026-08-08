@@ -1,5 +1,6 @@
 import Foundation
 import AVFoundation
+import CoreVideo
 import WebRTC
 
 /// One remote participant's connection state, as the UI needs it.
@@ -100,6 +101,25 @@ actor VoiceClient {
     /// Our outgoing camera sender per peer, kept by role rather than found by
     /// `track.kind`: a screen share is also video.
     private var cameraSenders: [String: RTCRtpSender] = [:]
+
+    // MARK: - Screen share (outgoing)
+    //
+    // Frames come from a ReplayKit broadcast extension in another process, so
+    // there is no capturer here — `pushScreenFrame` is fed by
+    // `ScreenShareReceiver`. Otherwise this is the camera's story again: one
+    // source, one track, one sender per peer, published under its own stream id
+    // so the far end classifies it as a screen and not a face.
+
+    private var screenSource: RTCVideoSource?
+    /// WebRTC insists a frame arrive "from" a capturer. Nothing captures here, so
+    /// this is a bare instance that exists only to satisfy that signature.
+    private var screenCapturer: RTCVideoCapturer?
+    private var screenTrack: RTCVideoTrack?
+    private var localScreenStreamId: String?
+    private var screenSenders: [String: RTCRtpSender] = [:]
+    /// The last geometry `adaptOutputFormat` was told about, so a rotated phone
+    /// re-adapts and an unchanging screen does not.
+    private var screenAdaptedSize: (width: Int32, height: Int32) = (0, 0)
 
     /// Every video track a peer is sending, keyed by peer then by *sender-side*
     /// stream id (`a=msid`, preserved across the wire).
@@ -314,6 +334,97 @@ actor VoiceClient {
 
     var isCameraOn: Bool { localVideoTrack != nil }
 
+    // MARK: - Screen share
+
+    /// Publishes a screen-share track and returns the MediaStream id it went out
+    /// under, which is what the far end's classification keys off.
+    ///
+    /// Idempotent: a second call while a share is live returns the same id rather
+    /// than opening a second stream, because the protocol allows exactly one
+    /// presenter per room and the server enforces it.
+    func startScreenShare() async -> String? {
+        if let localScreenStreamId { return localScreenStreamId }
+        let source = factory.videoSource()
+        let capturer = RTCVideoCapturer(delegate: source)
+        // Distinct from `pqp-camera-…` and unique per share: the id IS the
+        // receiver's evidence that this is not a camera, and a reused one would
+        // collide with a previous share's stale entry on the other side.
+        let streamId = "pqp-screen-" + UUID().uuidString
+        let track = factory.videoTrack(with: source, trackId: "pqp-screen-0")
+        screenSource = source
+        screenCapturer = capturer
+        screenTrack = track
+        localScreenStreamId = streamId
+        screenAdaptedSize = (0, 0)
+
+        for (peerId, connection) in connections {
+            screenSenders[peerId] = connection.add(track, streamIds: [streamId])
+        }
+        for peerId in connections.keys {
+            await negotiate(with: peerId)
+        }
+        return streamId
+    }
+
+    func stopScreenShare() async {
+        guard screenTrack != nil else { return }
+        for (peerId, sender) in screenSenders {
+            connections[peerId]?.removeTrack(sender)
+        }
+        screenSenders.removeAll()
+        screenTrack = nil
+        screenSource = nil
+        screenCapturer = nil
+        localScreenStreamId = nil
+        screenAdaptedSize = (0, 0)
+        for peerId in connections.keys {
+            await negotiate(with: peerId)
+        }
+    }
+
+    var isSharingScreen: Bool { screenTrack != nil }
+
+    /// Hands one bridged frame to WebRTC.
+    ///
+    /// Dropped silently when no share is published: the bridge and the room have
+    /// independent lifetimes (a broadcast can outlive a call), and a frame with
+    /// nowhere to go is not an error.
+    func pushScreenFrame(
+        _ box: UncheckedBox<CVPixelBuffer>,
+        rotation: Int,
+        timeStampNs: Int64
+    ) {
+        guard let screenSource, let screenCapturer else { return }
+        let pixelBuffer = box.value
+        let width = Int32(CVPixelBufferGetWidth(pixelBuffer))
+        let height = Int32(CVPixelBufferGetHeight(pixelBuffer))
+        // Told the source its own size, so WebRTC's degradation logic scales from
+        // the truth rather than from the 0×0 it assumes for a manual source.
+        if screenAdaptedSize != (width, height) {
+            screenAdaptedSize = (width, height)
+            screenSource.adaptOutputFormat(
+                toWidth: width,
+                height: height,
+                fps: Int32(ScreenShareWire.defaultFrameRate)
+            )
+        }
+        let frame = RTCVideoFrame(
+            buffer: RTCCVPixelBuffer(pixelBuffer: pixelBuffer),
+            rotation: Self.rtcRotation(rotation),
+            timeStampNs: timeStampNs
+        )
+        screenSource.capturer(screenCapturer, didCapture: frame)
+    }
+
+    private static func rtcRotation(_ degrees: Int) -> RTCVideoRotation {
+        switch degrees {
+        case 90: ._90
+        case 180: ._180
+        case 270: ._270
+        default: ._0
+        }
+    }
+
     private static func captureDevice(front: Bool) -> AVCaptureDevice? {
         let devices = RTCCameraVideoCapturer.captureDevices()
         return devices.first { $0.position == (front ? .front : .back) } ?? devices.first
@@ -472,6 +583,7 @@ actor VoiceClient {
         peerAvatarUrls[peerId] = nil
         peerConnectionState[peerId] = nil
         cameraSenders[peerId] = nil
+        screenSenders[peerId] = nil
         remoteVideoTracks[peerId] = nil
         remoteCameraStreamIds[peerId] = nil
         delegates[peerId] = nil
@@ -503,6 +615,15 @@ actor VoiceClient {
         localVideoTrack = nil
         localCameraStreamId = nil
         cameraSenders.removeAll()
+        // The share dies with the room. The broadcast extension outlives this —
+        // it is a system recording, not ours to stop — but the track it feeds is
+        // gone, and `pushScreenFrame` drops its frames from here on.
+        screenTrack = nil
+        screenSource = nil
+        screenCapturer = nil
+        localScreenStreamId = nil
+        screenSenders.removeAll()
+        screenAdaptedSize = (0, 0)
         remoteVideoTracks.removeAll()
         remoteCameraStreamIds.removeAll()
         emitVideo()
@@ -547,6 +668,14 @@ actor VoiceClient {
         if let localVideoTrack, let localCameraStreamId {
             cameraSenders[peerId] = connection.add(
                 localVideoTrack, streamIds: [localCameraStreamId]
+            )
+        }
+        // Same for a share already in progress: someone joining a room mid-share
+        // has to see it, and nothing renegotiates a track added before the pair
+        // ever negotiated.
+        if let screenTrack, let localScreenStreamId {
+            screenSenders[peerId] = connection.add(
+                screenTrack, streamIds: [localScreenStreamId]
             )
         }
         return connection

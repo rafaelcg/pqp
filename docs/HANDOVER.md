@@ -351,6 +351,35 @@ Server-channel messages are **not** filtered server-side; that would corrupt the
 pagination counts. The payload carries `blocked: boolean` and the client collapses it behind a
 reveal affordance.
 
+## iOS screen sharing, both directions (2026-08-08)
+
+**Two bugs and one feature.** Reported as "you cannot see a screen share on iOS,
+and you cannot share your iPhone screen" against build 9.
+
+1. **Voice channels dropped every remote video track.** `VoiceView`/`VoiceModel`
+   predate video entirely: the model never passed `onVideoChange` to
+   `VoiceClient`, so `emitVideo` classified each arriving track and handed the
+   answer to nobody, and the screen had no surface to draw one on. Reproduced
+   with a simulator in a voice channel and a real Chrome peer sharing into it —
+   the peer showed `connected` and the screen showed a name and nothing else.
+   Fixed: the model now wires the callback, files `cameraStreamId` from
+   `welcome` / `peer-joined` / `voice-roster`, and the screen grows a share stage
+   (letterboxed, tap for fullscreen) with a presenter line and a per-peer badge.
+2. **Every WebSocket send was silently dropped ~30s after connecting.** The
+   socket's `URLSession` set `timeoutIntervalForResource = 30`, which is a
+   ceiling on the whole resource load — and a WebSocket *is* the resource.
+   Buffered frames kept arriving, so the app looked online while nothing it sent
+   ever left: answering a DM call sat on "Connecting…" forever because
+   `join-voice-room` never went out. Fixed by removing the lifetime ceiling and
+   by making an unsendable frame reconnect instead of returning quietly. This
+   affected messages, calls and voice equally, not just screen sharing.
+3. **Sending a screen** is now a ReplayKit broadcast upload extension
+   (`gg.pqp.app.broadcast`) bridged to the app over a Unix domain socket in the
+   `group.gg.pqp.app` container. See [`docs/IOS.md`](./IOS.md#screen-sharing).
+
+Verified on a simulator against the local server with a real Chrome peer, in both
+rooms and both directions; the extension itself needs a physical device.
+
 ## Verification status
 
 | Checked | How |
@@ -363,6 +392,9 @@ reveal affordance.
 | SigV4 signing + presigned round trip, signed `Content-Length` | 19 tests against a real MinIO (`server/src/lib/s3.test.ts`, opt in with `S3_TEST_*`) |
 | **Attachments against R2** | **Not verified** — signing is exercised on MinIO only; the CORS policy and the signed length are unconfirmed on Cloudflare's edge |
 | **Voice (mesh, deafen, per-peer volume)** | **Not verified** — no microphone was available |
+| iOS screen share, receiving | Simulator + a real Chrome peer sharing, in a voice channel and in a DM call: both drew live frames |
+| iOS screen share, sending (wire) | Chrome peer saw `a=msid:pqp-screen-…`, roster `sharingScreen: true`, and decoded 640×360 H.264 frames |
+| **iOS screen share, the extension itself** | **Not verified** — ReplayKit broadcast has no simulator equivalent; the extension, the App Group socket and the rotation mapping are device-only |
 | Image scanning: fail-closed paths | 36 provider tests (unreachable, timeout, 401, HTML body, unparseable scores, missing verdict) + 13 DB tests for quarantine, reports and the sweepers |
 | **Image scanning against a real provider** | **Not verified** — every provider call in the suite is a stubbed `fetch`. No live OpenAI / Sightengine / Worker round trip has been made |
 

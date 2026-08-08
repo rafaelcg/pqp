@@ -1,6 +1,9 @@
 import Foundation
 import Observation
 import AVFoundation
+import CoreVideo
+import QuartzCore
+import WebRTC
 
 enum VoiceStatus: Equatable, Sendable {
     case idle
@@ -18,6 +21,15 @@ final class VoiceModel {
     private(set) var channelName: String?
     private(set) var peers: [VoicePeerState] = []
     private(set) var selfPeerId: String?
+    /// Per-peer incoming video, already sorted into camera vs screen by
+    /// `VoiceClient`. A voice channel has no cameras — nobody publishes one into
+    /// a server voice room — so in practice this is screen shares, which is
+    /// exactly what a voice channel is used for.
+    private(set) var video: [String: PeerVideo] = [:]
+    /// The roster by peer id: who is muted, and who is presenting.
+    private(set) var roster: [String: VoiceParticipant] = [:]
+    /// Outgoing screen share, driven by the ReplayKit bridge.
+    let screenShare = ScreenShareController()
     var isMuted = false {
         didSet { Task { await voice.setMuted(isMuted) } }
     }
@@ -50,8 +62,30 @@ final class VoiceModel {
 
     var participantCount: Int { peers.count + (status == .connected ? 1 : 0) }
 
+    /// The one screen on the wire, if anybody is presenting.
+    ///
+    /// Only one is possible: the server refuses a second `set-sharing-screen`
+    /// (`screen-share-denied`), so taking the first is not a guess.
+    var remoteScreen: RTCVideoTrack? {
+        for peer in peers {
+            if let screen = video[peer.peerId]?.screen { return screen }
+        }
+        return nil
+    }
+
+    /// Who that screen belongs to, for the presenter line.
+    var presenterName: String? {
+        for peer in peers where video[peer.peerId]?.screen != nil {
+            return peer.displayName
+        }
+        return nil
+    }
+
+    func isMuted(_ peerId: String) -> Bool { roster[peerId]?.muted ?? false }
+
     func join(channel: Channel, session: SessionStore) async {
         self.session = session
+        configureScreenShare()
         channelId = channel.id
         channelName = channel.name
         intendedChannel = channel
@@ -80,6 +114,13 @@ final class VoiceModel {
                 },
                 signal: { [weak self] signal in
                     Task { @MainActor in await self?.relay(signal) }
+                },
+                // Passing this is the whole difference between a voice channel
+                // that can show a shared screen and one that silently discards
+                // every video track that arrives: `emitVideo` classifies them
+                // either way, then hands the answer to nobody.
+                onVideoChange: { [weak self] video in
+                    Task { @MainActor in self?.video = video }
                 }
             )
             await session.realtime.joinVoice(channelId: channel.id)
@@ -89,6 +130,7 @@ final class VoiceModel {
     }
 
     func leave() async {
+        await screenShare.disarm()
         intendedChannel = nil
         session?.eventHandlers.removeValue(forKey: handlerKey)
         // Skipped when the server already took our peer: this socket's peer now
@@ -102,9 +144,40 @@ final class VoiceModel {
         channelId = nil
         channelName = nil
         peers = []
+        video = [:]
+        roster = [:]
         selfPeerId = nil
         isMuted = false
         isDeafened = false
+    }
+
+    /// Wires the bridge to the mesh. Both directions are here rather than in the
+    /// controller so the controller stays about *when* to share, not how.
+    private func configureScreenShare() {
+        screenShare.configure(
+            onFrame: { [weak self] buffer, rotation in
+                guard let self else { return }
+                let timestamp = Int64(CACurrentMediaTime() * 1_000_000_000)
+                Task {
+                    await self.voice.pushScreenFrame(
+                        buffer, rotation: rotation, timeStampNs: timestamp
+                    )
+                }
+            },
+            onStart: { [weak self] in
+                guard let self else { return }
+                // Announced first, matching the web client: the roster flag is
+                // what draws "X is presenting", and the track behind it takes a
+                // renegotiation to arrive.
+                await self.session?.realtime.setSharingScreen(true)
+                _ = await self.voice.startScreenShare()
+            },
+            onStop: { [weak self] in
+                guard let self else { return }
+                await self.session?.realtime.setSharingScreen(false)
+                await self.voice.stopScreenShare()
+            }
+        )
     }
 
     func setVolume(_ volume: Double, for peer: VoicePeerState) {
@@ -173,7 +246,13 @@ final class VoiceModel {
                     status = .failed(String(
                         localized: "You joined another voice room, so this one was left."
                     ))
-                    Task { await voice.disconnectAll() }
+                    Task {
+                        // The bridge belongs to the room, and the room is gone —
+                        // leaving it armed would hold the App Group socket that
+                        // whichever room displaced us now needs.
+                        await screenShare.disarm()
+                        await voice.disconnectAll()
+                    }
                 }
                 return
             }
@@ -197,6 +276,9 @@ final class VoiceModel {
             }
             selfPeerId = peerId
             status = .connected
+            for participant in existing { roster[participant.peerId] = participant }
+            // The bridge only listens while there is a room to share into.
+            screenShare.arm()
             Task {
                 // The id only exists once the server has assigned it, and the
                 // politeness rule is derived from it — so it is set here rather
@@ -204,12 +286,23 @@ final class VoiceModel {
                 await voice.setSelfPeerId(peerId)
                 for participant in existing {
                     await voice.connect(to: participant)
+                    // Without this every arriving video track classifies as a
+                    // screen share. In a voice channel that happens to be right,
+                    // but it is right by accident — file the announcement so the
+                    // classification is the same one the web client makes.
+                    await voice.setPeerCameraStreamId(
+                        participant.cameraStreamId, for: participant.peerId
+                    )
                 }
             }
 
         case .voicePeerJoined(let participant):
+            roster[participant.peerId] = participant
             Task {
                 await voice.connect(to: participant)
+                await voice.setPeerCameraStreamId(
+                    participant.cameraStreamId, for: participant.peerId
+                )
                 // Re-apply a remembered level for this person straight away.
                 if let volume = volumeByUser[participant.userId] {
                     await voice.setVolume(volume, for: participant.peerId)
@@ -217,7 +310,29 @@ final class VoiceModel {
             }
 
         case .voicePeerLeft(let peerId):
+            roster[peerId] = nil
             Task { await voice.remove(peerId: peerId) }
+
+        // The roster is how a share announces itself: `sharingScreen` and
+        // `cameraStreamId` both arrive here, and both race the media.
+        case .voiceRoster(let voiceChannelId, let participants):
+            guard voiceChannelId == channelId, status == .connected else { return }
+            for participant in participants where participant.peerId != selfPeerId {
+                roster[participant.peerId] = participant
+                Task {
+                    await voice.setPeerCameraStreamId(
+                        participant.cameraStreamId, for: participant.peerId
+                    )
+                }
+            }
+
+        case .voiceScreenShareDenied(let voiceChannelId):
+            guard voiceChannelId == channelId else { return }
+            Task {
+                await screenShare.refuse(message: String(
+                    localized: "Someone else is already sharing their screen."
+                ))
+            }
 
         case .voiceRoomFull(let limit):
             status = .failed(String(localized: "This voice channel is full (max \(limit))."))

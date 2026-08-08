@@ -50,6 +50,11 @@ targets:
       # `resources:` block below was silently ignored, which shipped an app
       # with no icon and none of its localizations.
       - path: pqp/Resources
+      # The bridge's wire format and socket, shared verbatim with the broadcast
+      # extension below. Compiled into both targets rather than packaged as a
+      # framework: it is two files with no dependencies, and a framework would
+      # be one more thing to embed and sign for no benefit.
+      - path: pqp/ScreenShare
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: gg.pqp.app
@@ -87,6 +92,43 @@ targets:
         product: ClerkKitUI
       - package: WebRTC
         product: WebRTC
+      # Embedded into the app bundle. Without this the broadcast picker finds no
+      # extension and its sheet is empty.
+      - target: pqpBroadcast
+        embed: true
+    entitlements:
+      path: pqp/pqp.entitlements
+      properties:
+        # The app and the extension are separate processes; the group container
+        # is the only filesystem they share, and the frame socket lives in it.
+        com.apple.security.application-groups:
+          - group.gg.pqp.app
+
+  # ReplayKit broadcast upload extension — system-wide screen sharing, which is
+  # the only kind iOS offers. See pqp/Broadcast/SampleHandler.swift.
+  pqpBroadcast:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: pqp/Broadcast
+      - path: pqp/ScreenShare
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: gg.pqp.app.broadcast
+        PRODUCT_NAME: pqpBroadcast
+        INFOPLIST_FILE: pqp/Broadcast/Info.plist
+        # An extension is delivered inside its host app, never on its own.
+        SKIP_INSTALL: YES
+      configs:
+        Release:
+          DEVELOPMENT_TEAM: WXBFUF9WMA
+          CODE_SIGNING_REQUIRED: "YES"
+          CODE_SIGN_STYLE: Automatic
+    entitlements:
+      path: pqp/Broadcast/pqpBroadcast.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.gg.pqp.app
 
   pqpTests:
     type: bundle.unit-test
@@ -117,6 +159,7 @@ schemes:
     build:
       targets:
         pqp: all
+        pqpBroadcast: all
         pqpTests: [test]
         pqpUITests: [test]
     run:

@@ -1,0 +1,633 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Communities, from Orkut — three concepts for pqp in Brazil</title>
+<style>
+  :root {
+    --bg: #16181d;
+    --rail: #101216;
+    --panel: #1d2027;
+    --panel-2: #24272f;
+    --panel-3: #2c3038;
+    --border: #33373f;
+    --border-strong: #454a54;
+    --text: #e9e7e0;
+    --muted: #a3a29c;
+    --subtle: #c9c7c0;
+    --accent: #c4e848;
+    --accent-dim: #9dbb3a;
+    --danger: #ef6b58;
+    --warning: #e0b64a;
+    --success: #5fc98d;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Fira Code", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, Helvetica, Arial, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: var(--sans); font-size: 16px; line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 940px; margin: 0 auto; padding: 48px 24px 120px; }
+  header.doc { border-bottom: 1px solid var(--border); padding-bottom: 24px; margin-bottom: 40px; }
+  .kicker {
+    font-family: var(--mono); font-size: 12px; letter-spacing: 0.12em;
+    text-transform: uppercase; color: var(--accent-dim); margin: 0 0 10px;
+  }
+  h1 { font-size: 2.1rem; line-height: 1.2; margin: 0 0 12px; letter-spacing: -0.02em; }
+  .sub { color: var(--muted); font-size: 1.05rem; margin: 0; max-width: 68ch; }
+  .meta { font-family: var(--mono); font-size: 12px; color: var(--muted); margin-top: 18px; }
+  h2 {
+    font-size: 1.35rem; margin: 56px 0 4px; letter-spacing: -0.01em;
+    padding-top: 20px; border-top: 1px solid var(--border);
+  }
+  h2 .num { font-family: var(--mono); color: var(--accent-dim); font-size: 0.85em; margin-right: 10px; }
+  h3 { font-size: 1.05rem; margin: 32px 0 8px; }
+  h4 { font-size: 0.95rem; margin: 22px 0 6px; color: var(--subtle); }
+  p { margin: 0 0 14px; }
+  a { color: var(--accent); text-decoration: none; border-bottom: 1px solid rgba(196,232,72,0.3); }
+  a:hover { border-bottom-color: var(--accent); }
+  code {
+    font-family: var(--mono); font-size: 0.86em; background: var(--rail);
+    color: var(--accent); padding: 1px 5px; border-radius: 4px; border: 1px solid var(--border);
+    word-break: break-word;
+  }
+  pre {
+    font-family: var(--mono); font-size: 0.82rem; line-height: 1.55;
+    background: var(--rail); border: 1px solid var(--border); border-radius: 8px;
+    padding: 16px 18px; overflow-x: auto; margin: 0 0 18px;
+  }
+  pre code { background: none; border: none; padding: 0; color: var(--subtle); }
+  ul, ol { margin: 0 0 16px; padding-left: 24px; }
+  li { margin-bottom: 7px; }
+  li > ul, li > ol { margin-top: 7px; margin-bottom: 4px; }
+  .verdict {
+    border: 1px solid var(--accent-dim); border-left: 4px solid var(--accent);
+    background: linear-gradient(90deg, rgba(196,232,72,0.07), rgba(196,232,72,0.01));
+    border-radius: 8px; padding: 22px 24px; margin: 0 0 36px;
+  }
+  .verdict .label {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--accent); margin-bottom: 8px;
+  }
+  .verdict .headline { font-size: 1.22rem; font-weight: 600; line-height: 1.4; margin-bottom: 12px; }
+  .verdict p:last-child { margin-bottom: 0; }
+  .callout {
+    border: 1px solid var(--border-strong); border-left: 3px solid var(--border-strong);
+    background: var(--panel); border-radius: 6px; padding: 14px 18px; margin: 0 0 20px; font-size: 0.95rem;
+  }
+  .callout.warn { border-left-color: var(--warning); }
+  .callout.bad { border-left-color: var(--danger); }
+  .callout.good { border-left-color: var(--success); }
+  .callout .tag {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--muted); display: block; margin-bottom: 5px;
+  }
+  .callout.warn .tag { color: var(--warning); }
+  .callout.bad .tag { color: var(--danger); }
+  .callout.good .tag { color: var(--success); }
+  .callout p:last-child { margin-bottom: 0; }
+  .scroll { overflow-x: auto; margin: 0 0 22px; border: 1px solid var(--border); border-radius: 8px; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.88rem; min-width: 520px; }
+  th, td { text-align: left; padding: 9px 13px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th {
+    background: var(--panel-2); font-family: var(--mono); font-size: 11px;
+    letter-spacing: 0.08em; text-transform: uppercase; color: var(--subtle); font-weight: 600;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:nth-child(even) { background: rgba(255,255,255,0.014); }
+  .y { color: var(--success); font-weight: 600; }
+  .n { color: var(--danger); font-weight: 600; }
+  .m { color: var(--warning); font-weight: 600; }
+  .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); margin: 0 0 24px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 16px 18px; }
+  .card .big { font-family: var(--mono); font-size: 1.5rem; color: var(--accent); line-height: 1.2; }
+  .card .cap {
+    font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em;
+    color: var(--muted); margin-top: 6px;
+  }
+  .card .note { font-size: 0.84rem; color: var(--muted); margin-top: 8px; line-height: 1.5; }
+  .concept {
+    border: 1px solid var(--border-strong); border-radius: 10px; padding: 26px 28px;
+    margin: 0 0 30px; background: linear-gradient(180deg, rgba(255,255,255,0.018), transparent);
+  }
+  .concept > h3:first-child { margin-top: 0; }
+  .concept .tagline { color: var(--muted); font-style: italic; margin-bottom: 18px; }
+  .cnum {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--accent-dim); display: block; margin-bottom: 4px;
+  }
+  .pt { font-style: italic; color: var(--subtle); }
+  .mock {
+    font-family: var(--mono); font-size: 0.78rem; line-height: 1.7; background: var(--rail);
+    border: 1px solid var(--border); border-radius: 8px; padding: 16px 18px; margin: 0 0 20px;
+    color: var(--subtle); overflow-x: auto; white-space: pre;
+  }
+  .toc { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 18px 22px; margin: 0 0 44px; }
+  .toc ol { margin: 0; padding-left: 22px; font-size: 0.92rem; }
+  .toc li { margin-bottom: 4px; }
+  .toc .h { font-family: var(--mono); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); margin-bottom: 10px; }
+  .footnote { font-size: 0.85rem; color: var(--muted); }
+  .src { font-size: 0.82rem; color: var(--muted); font-family: var(--mono); }
+  ul.sources { font-size: 0.86rem; }
+  ul.sources li { margin-bottom: 5px; }
+  hr { border: none; border-top: 1px solid var(--border); margin: 40px 0; }
+  .pill {
+    display: inline-block; font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em;
+    text-transform: uppercase; padding: 2px 7px; border-radius: 999px;
+    border: 1px solid var(--border-strong); color: var(--muted); vertical-align: middle;
+  }
+  .pill.ok { border-color: var(--success); color: var(--success); }
+  .pill.no { border-color: var(--danger); color: var(--danger); }
+  .pill.mid { border-color: var(--warning); color: var(--warning); }
+  .conf { font-family: var(--mono); font-size: 10px; color: var(--muted); border: 1px solid var(--border); padding: 0 4px; border-radius: 3px; }
+  @media (max-width: 620px) {
+    .wrap { padding: 32px 16px 80px; }
+    h1 { font-size: 1.6rem; }
+    body { font-size: 15px; }
+    .concept { padding: 18px 18px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="doc">
+  <p class="kicker">pqp · research spike · doc 3 of 3</p>
+  <h1>Communities, from Orkut</h1>
+  <p class="sub">Three concepts lifted from the mechanics that made Orkut Brazil&rsquo;s social network — <i>comunidades</i>, <i>depoimentos</i>, <i>recados</i> — adapted to a real-time chat app rather than cloned, with the moderation and liability bill attached to each.</p>
+  <p class="meta">2026-08-08 · sourced from Brazilian press, SciELO, and Wikipedia pt/en · pqp surfaces read at <code>launch/p0-hardening</code></p>
+</header>
+
+<div class="verdict">
+  <div class="label">Recommendation</div>
+  <div class="headline">Build <b>Depoimentos</b> first. ~4 agent-days, zero new public surface, and it&rsquo;s the single feature Brazilians of this demographic name unprompted when asked what they miss.</div>
+  <p><b>Comunidades</b> is the bigger idea and the right second bet — but it moves pqp out of the &ldquo;private messaging&rdquo; bucket that Brazilian platform-liability law currently treats gently, and into the public-content bucket, while <code>CONTENT_SCAN_PROVIDER</code> is still empty. <b>Enquetes</b> (polls) is a cheap, genuinely-missing third. The <b>mural/scraps</b> wall I recommend against outright, and §07 says why with receipts.</p>
+</div>
+
+<div class="toc">
+  <div class="h">Contents</div>
+  <ol>
+    <li><a href="#why">Why Orkut, and why now</a></li>
+    <li><a href="#mechanics">What actually made these mechanics sticky</a></li>
+    <li><a href="#have">What pqp already has to build on</a></li>
+    <li><a href="#c1">Concept 1 — Comunidades</a></li>
+    <li><a href="#c2">Concept 2 — Depoimentos</a></li>
+    <li><a href="#c3">Concept 3 — Enquetes</a></li>
+    <li><a href="#mural">The mural (scraps): a deliberate no</a></li>
+    <li><a href="#moderation">The moderation and liability bill</a></li>
+    <li><a href="#pick">Which one to build first</a></li>
+  </ol>
+</div>
+
+<h2 id="why"><span class="num">01</span>Why Orkut, and why now</h2>
+
+<p>Not nostalgia bait. Orkut is the only social product that ever won Brazil outright, and the mechanics it won with are <b>structurally different from everything shipping in 2026</b> — which makes them cheap differentiation rather than table stakes.</p>
+
+<div class="grid">
+  <div class="card">
+    <div class="big">5 months</div>
+    <div class="cap">US → Brazil, 2004</div>
+    <div class="note">March 2004: US 51.4%, Brazil 5.2%. By <b>June 2004</b> Brazil had passed the US, 30.65% to 30.12%. Google shipped Portuguese in 2005 in response.</div>
+  </div>
+  <div class="card">
+    <div class="big">55.5%</div>
+    <div class="cap">Brazilian share at shutdown</div>
+    <div class="note">Of ~66M accounts at close (30 Sep 2014), ~34M were Brazilian. India was second at 18.4%; the US was 3.3%.</div>
+  </div>
+  <div class="card">
+    <div class="big">Aug 2008</div>
+    <div class="cap">Google moves Orkut to Brazil</div>
+    <div class="note">Global operation relocated to <b>Belo Horizonte</b> — driven by the user base <i>and</i> by mounting Brazilian legal exposure. See §08: the move and the moderation buildout were the same event.</div>
+  </div>
+  <div class="card">
+    <div class="big">no feed</div>
+    <div class="cap">ever, at any point</div>
+    <div class="note">No timeline, no status updates, no algorithmic distribution. Communities spread by being <b>visible on profiles</b>. That constraint is the whole design insight.</div>
+  </div>
+</div>
+
+<p>Facebook overtook Orkut in Brazil in <b>August 2011</b> (Ibope Nielsen: 30.9M vs 29M) and comScore confirmed it for <b>December 2011</b> (36.1M vs 34.4M). Orkut then lost more than 95% of regular users in three years and closed on <b>30 September 2014</b>. Nobody should reconstruct 2009. But the reason nostalgia for it is still press-friendly eleven years later is that <b>nothing replaced these specific mechanics</b> — Facebook, Instagram and Discord all won on feeds and real-time, and none of them ever shipped a friend-written, owner-approved testimonial or a public identity badge you collect for jokes.</p>
+
+<div class="callout">
+  <span class="tag">The demographic, stated plainly</span>
+  <p>Orkut nostalgia lands with Brazilians roughly 30&ndash;45. That's <b>not</b> Discord's centre of gravity, and that's the point: it's an audience Discord doesn't serve well, reachable by a mechanic Discord doesn't have. It's also an audience with disposable income and no current home for adult-friendship-group chat. But be honest that eleven years is a long gap and the nostalgia is now largely a <i>media</i> phenomenon — recurring listicles, anniversary coverage, a Threads trend in 2025. It converts attention, not necessarily retention (§06 has the receipts on that).</p>
+</div>
+
+<h2 id="mechanics"><span class="num">02</span>What actually made these mechanics sticky</h2>
+
+<h3>Comunidades were badges, not forums</h3>
+
+<p>Free to create, self-service, no approval. You picked a name, a category, a description and a <b>mandatory representative image</b>, chose <i>aberta</i> or <i>moderada</i>, and you were live. One <i>dono</i>, up to about ten <i>moderadores</i> <span class="conf">single-source</span>. Inside: a topic forum (<i>tópicos</i>), <i>enquetes</i>, a member list, events, and a <b>related-communities</b> module. Discovery was keyword search plus browsing by category — and, critically, <b>a dedicated section on your profile listing every community you were in</b>.</p>
+
+<p>That profile section is the mechanic. Brazilian retrospectives say it flatly: communities were <span class="pt">&ldquo;uma forma de mostrar do que gostavam ou o que pensavam, já que havia uma área do perfil destinada exclusivamente às comunidades das quais a pessoa era membro.&rdquo;</span> The academic framing is sharper still. Bezerra &amp; Araújo (2011, SciELO) call the Orkut profile a <b><i>vitrine pessoal</i></b> — a shop window — in which <span class="pt">&ldquo;se enfeixam traços (comunidades a que se pertence) para se vestir uma identidade&rdquo;</span>: you dress an identity by bundling traits, where the traits are your memberships.</p>
+
+<div class="callout good">
+  <span class="tag">The number that proves it</span>
+  <p>Google's shutdown archive preserved <b>51 million communities</b> and <b>120 million topics</b>. That's an average of <b>~2.35 topics per community across the platform's entire ten-year life</b>. <span class="src">(derivation, not a cited statistic)</span></p>
+  <p>The median Orkut community never hosted a conversation. <b>Joining was the entire product.</b> Any design that treats comunidades as &ldquo;forums we should make active&rdquo; has misread what people were doing — and will build engagement machinery for a feature whose value is delivered at the moment of the click.</p>
+</div>
+
+<p>Real ones, verbatim, with the counts that could be corroborated:</p>
+
+<div class="scroll"><table>
+  <thead><tr><th>Community</th><th>Members</th><th>Note</th></tr></thead>
+  <tbody>
+    <tr><td><b>Eu Odeio Acordar Cedo</b></td><td>6.1M at shutdown</td><td>Created 23 May 2004; 1,000 members in month one. The largest on the platform.</td></tr>
+    <tr><td><b>Eu amo a minha MÃE!</b></td><td>~4.5M</td><td>A counter-duplication bug briefly showed 9M — treat all big numbers as ±.</td></tr>
+    <tr><td><b>Deus me disse: desce e arrasa!</b></td><td>2.3M&ndash;5.4M</td><td>Count genuinely contested across sources. Cited in the SciELO paper at 2.3M+.</td></tr>
+    <tr><td><b>Só mais 5 minutinhos</b></td><td>~2.4M</td><td>Created May 2005.</td></tr>
+    <tr><td><b>Discografias</b></td><td>921,000+</td><td><b>Disabled 16 March 2009</b> for piracy. Communities get killed, not just moderated.</td></tr>
+    <tr><td><b>Eu AMO Floripa!!</b></td><td>~75,000 (Jan 2007)</td><td><b>Bought by Grupo RBS</b> — see below.</td></tr>
+    <tr><td colspan="3" class="src">Also verified to have existed, no reliable counts: <b>Eu odeio segunda-feira</b> · <b>Eu já dormi na aula</b> · <b>Sou legal, ñ tô te dando mole</b> (proto-friendzone) · <b>Anão vestido de Palhaço mata 8</b> · <b>Imagina se pega no olho?</b> · <b>Profiles de Gente Morta</b> · <b>Lênin, de três</b> · <b>Tenho medo da Véia(o) Quaker!</b></td></tr>
+  </tbody>
+</table></div>
+
+<div class="callout warn">
+  <span class="tag">A member count plus a single owner creates a market</span>
+  <p><b>Eu odeio acordar cedo</b> was <b>sold on 7 July 2009</b> by its creator for roughly <b>R$ 3,000&ndash;5,000</b>; the buyer used its millions of members to promote an airline-ticket site. <b>Eu AMO Floripa!!</b> was bought by <b>Grupo RBS</b>, handing the buyer a ~75,000-person audience — protest communities sprang up questioning the sale's legality, and the moderators deleted the criticism. There were cartels of large-community owners cross-promoting growth, with a <span class="pt">tabela de preços</span> for community sales <span class="conf">single-source</span>.</p>
+  <p>Design consequence, and it's not optional: any public group primitive with a visible member count and a transferable single owner <b>will</b> grow a secondary market in audiences that never consented to the transfer.</p>
+</div>
+
+<h3>Depoimentos were the approval, not the text</h3>
+
+<p>Mechanics, from a contemporary May 2011 how-to: open a friend's profile → <b>Depoimentos</b> in the left sidebar → write → <b>Postar</b>. Then <span class="pt">&ldquo;agora é só aguardar que seu amigo aceite seu depoimento.&rdquo;</span></p>
+
+<p><b>The recipient had to accept it, and until they did it was not public.</b> Depoimentos were private by default and publication was the subject's own affirmative act. That is the entire load-bearing difference from every review, endorsement and wall-post mechanic since. Rich formatting was supported — bold, colour, emoticons, embedded YouTube, photos, raw HTML.</p>
+
+<p>Culturally, accepted depoimentos were displayed <span class="pt">&ldquo;como um troféu no perfil,&rdquo;</span> and <span class="pt">&ldquo;quanto mais depoimentos uma pessoa recebia, mais popular ela era entre os amigos.&rdquo;</span> Friends competed over <b>o top</b> — who would stay longest as the most recent depoimento on a given profile. In August 2024, at Rio Innovation Week, <b>Büyükkökten himself named depoimentos as the feature people ask for most</b>. Brazilian tech press agrees by revealed preference: it's in the headline of nearly every retrospective.</p>
+
+<div class="callout bad">
+  <span class="tag">&ldquo;Não aceita!&rdquo; — the design lesson you must not skip</span>
+  <p>Because unaccepted depoimentos sat in a <b>pending queue readable only by the recipient, indefinitely</b>, Brazilians discovered that a depoimento was a <b>private message</b>. People wrote confessions and romantic declarations opening with the warning <b>&ldquo;Não aceita!&rdquo;</b> — <i>don't accept this.</i> And the failure mode — the recipient accepting it anyway, publishing an intimate message to their whole profile — became canonical Brazilian internet folklore.</p>
+  <p>Two things follow. First: <b>an approval queue that retains rejected items will be repurposed as a private channel</b>, so design for that on purpose. Second: <b>accidental publication of a private message is a real harm</b>, not just a funny story, and the UI is what decides which it is.</p>
+</div>
+
+<h3>Recados were public, unapproved, and a security disaster</h3>
+
+<p>The scrap wall accepted <b>HTML</b>, and at points Flash and JavaScript. Consequences, in order: an XSS exploit on <b>1 January 2005</b>; the <b>MW.Orc</b> banking-credential worm on <b>19 June 2006</b>; and <b>W32/KutWormer</b> on <b>19 December 2007</b>, which propagated through scraps and hit <b>700,000+ users in a day</b>. Separately, an entire Brazilian cottage industry of glitter-text and decorated-image sites existed purely to generate content that got hotlinked into scraps — the feature was extended by third parties because it accepted arbitrary image URLs. Over time <i>correntes</i> (chain letters) became the dominant genre.</p>
+
+<p>&ldquo;Scrap&rdquo; entered Brazilian Portuguese as a word. MTV Brasil named a show after it. The vocabulary penetration was total — and the feature was still a worm vector three times over. §07 is why I'm recommending against rebuilding it.</p>
+
+<h3>The rest, briefly, because two of these are better than they look</h3>
+<ul>
+  <li><b>The three ratings</b>, assigned by friends and shown as a percentage of them: <b>confiável</b> = smiley, <b>legal</b> = an ice cube <span class="src">(an English pun — cool = cold — which is why it reads as arbitrary in Portuguese)</span>, <b>sexy</b> = three hearts. Plus a <b>star</b> for <i>fãs</i> count. All three ratings were removed in the 2009 redesign; only the star survived. The Brazilian clone Orkuti brought them back as an <i>orkutímetro</i>.</li>
+  <li><b>&ldquo;Quem visitou meu perfil&rdquo;</b> (22 April 2006) — visit count plus recent visitors as clickable thumbnails, and <b>you could opt out, at the cost of not seeing others'</b>. That symmetric-consent design is genuinely good and is one of the most-cited nostalgia items. Not one of my three concepts, but worth remembering.</li>
+  <li><b>Crush list</b> — a mutual-crush notifier, years before Tinder. Also good. Also not now.</li>
+</ul>
+
+<h2 id="have"><span class="num">03</span>What pqp already has to build on</h2>
+
+<div class="scroll"><table>
+  <thead><tr><th>Surface</th><th>Where it lives</th><th>Ready for this?</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><b>Friend graph</b></td>
+      <td><code>friendships(low_user_id, high_user_id, status IN ('pending','accepted'), requested_by, accepted_at)</code>; <code>services/friends.ts</code> with <code>areFriends</code> / <code>areFriendsSql</code>; <code>GET/POST /api/friends</code></td>
+      <td><span class="y">Complete, and better than needed.</span> <code>areFriendsSql</code> is exactly the predicate a friends-only write gate wants. <code>user_blocks</code> has a trigger that deletes the friendship row on block.</td>
+    </tr>
+    <tr>
+      <td><b>Profile card / sheet</b></td>
+      <td><code>client/src/components/user/user-profile-popover.tsx</code>, the pure state machine in <code>profile-relations.ts</code>, and the iOS twin <code>ios/pqp/Sources/Home/UserProfileSheet.swift</code></td>
+      <td><span class="y">A real surface on both platforms</span> with a tested pure-logic layer. But see the row below.</td>
+    </tr>
+    <tr>
+      <td><b>Public user shape</b></td>
+      <td><code>publicUserSchema</code> in <code>packages/shared/src/api.ts:269</code> — exposes only <code>{id, displayName, username, tag, avatarUrl}</code>, with an explicit comment forbidding additions</td>
+      <td><span class="m">The deliberate constraint every concept here has to argue with.</span> No bio, no pronouns, no banner, no status text. That's a defensible privacy posture <i>and</i> the reason a pqp profile currently has nothing to look at.</td>
+    </tr>
+    <tr>
+      <td><b>Servers / channels / invites</b></td>
+      <td><code>servers</code>, <code>server_members(role IN ('owner','admin','member'))</code>, <code>channels(type IN ('text','voice','category','thread'))</code>, <code>server_invites</code> with <code>max_uses</code> / <code>expires_at</code></td>
+      <td><span class="y">A community <i>is</i> a server</span> with a different join rule and a directory in front of it. That's the cheap version of Concept 1.</td>
+    </tr>
+    <tr>
+      <td><b>Threads</b></td>
+      <td>A thread is a <code>channels</code> row: <code>type='thread'</code>, <code>parent_id</code>, <code>thread_root_message_id</code>; <code>POST /api/messages/:id/threads</code>; no nesting; archive computed at read time against <code>THREAD_AUTO_ARCHIVE_DAYS = 7</code></td>
+      <td><span class="y">This is <i>tópicos</i>,</span> already built. Concept 3 hangs off it directly.</td>
+    </tr>
+    <tr>
+      <td><b>Moderation</b></td>
+      <td><code>services/reports.ts</code> — <code>createReport</code>, <code>createAutomatedReport</code>, <code>listServerReports</code>, <code>listInstanceReports</code>, <code>resolveReport</code>, <code>isInstanceModerator</code>, <code>REPORTS_PER_HOUR = 10</code> counted <b>in Postgres</b>; <code>member_timeouts</code>; audit log with 90-day prune; <code>user_blocks</code>; <code>services/age-gate.ts</code> (an 18+ gate with a real DOB check, citing CC art. 132 §3)</td>
+      <td><span class="m">More than expected, and still not enough for public content.</span> There is an <i>instance</i> report queue already — that's the hook. But <code>CONTENT_SCAN_PROVIDER</code> is empty (<code>HANDOVER</code> priority #4).</td>
+    </tr>
+    <tr>
+      <td><b>Polls</b></td>
+      <td>—</td>
+      <td><span class="n">Nothing.</span> No table, no service, no client component. Not even on the <code>DISCORD_GAPS</code> list.</td>
+    </tr>
+    <tr>
+      <td><b>Custom emoji</b></td>
+      <td>—</td>
+      <td><span class="n">Nothing</span> (<code>DISCORD_GAPS</code> #26). Unicode only; <code>reactionEmojiSchema</code> caps at 32 chars.</td>
+    </tr>
+  </tbody>
+</table></div>
+
+<div class="callout warn">
+  <span class="tag">A stated decision this doc contradicts, on purpose</span>
+  <p><code>docs/DISCORD_GAPS.md</code> lists server discovery under &ldquo;deliberately not on this list&rdquo;: <i>&ldquo;Meaningless when every deployment is its own island; it only makes sense on a hosted pqp.gg with real network effects.&rdquo;</i></p>
+  <p>That reasoning is correct and it does not apply here. <b>Comunidades is a hosted-pqp.gg feature by definition</b> — it's the thing that <i>creates</i> the network effect the note says is missing, not a feature that assumes one. Self-hosters get it turned off by a flag, exactly like attachments are off without <code>S3_*</code>. Worth updating that line if Concept 1 ever gets built, so the reasoning isn't left looking violated.</p>
+</div>
+
+<h2 id="c1"><span class="num">04</span>Concept 1 — Comunidades</h2>
+
+<div class="concept">
+<span class="cnum">concept 01</span>
+<h3>Comunidades: public joinable servers, worn as badges</h3>
+<p class="tagline">&ldquo;Entra em qualquer uma. Aparece no teu perfil. É isso.&rdquo;</p>
+
+<p>A <b>comunidade</b> is a pqp server with three switches flipped: it's listed in a public directory, anyone can join with one tap and no invite, and <b>your membership is displayed on your profile card</b>. Anyone can create one in about fifteen seconds — a name, an emoji or image, a one-line description, done. There is no feed and no algorithm; discovery is search, a browsable category grid, and <b>the badges on the profiles of people you already know</b>. The names are the content: <i>Eu odeio acordar cedo</i> is a valid community name and a complete joke, and the fact that 6.1 million people once joined a joke is the whole business case. Crucially, nobody is expected to <i>talk</i> in most of them — the 2.35-topics-per-community derivation in §02 says the median community is a badge and always was. So the product is a <b>self-expression surface with a chat room attached</b>, not a chat room with a badge attached. That inversion is what stops you building engagement machinery for a feature whose value is delivered at the moment of the click.</p>
+
+<h4>Why it lands with BR users specifically</h4>
+<ul>
+  <li><b>The muscle memory exists.</b> Community-collecting as self-expression is a learned Brazilian internet behaviour with a decade of practice behind it. You are not teaching a mechanic; you are restoring one.</li>
+  <li><b>Humour-as-identity is the native register.</b> The canonical communities are all jokes — <i>Só mais 5 minutinhos</i>, <i>Imagina se pega no olho?</i>, <i>Anão vestido de Palhaço mata 8</i>. A directory whose top entries are jokes is legible to a Brazilian in one second and to a growth consultant in none, which is a competitive advantage.</li>
+  <li><b>It's a shape Discord structurally can't copy.</b> Discord servers are private-by-default rooms you're invited to; Discord killed public server-list discovery for most servers and has no concept of &ldquo;my memberships are my identity.&rdquo; Copying this would mean inverting their privacy model.</li>
+  <li><b>It's the answer to the empty-room problem.</b> A brand-new chat app's worst screen is a server with three people in it. A directory means a new user's first session has somewhere to go that already has people.</li>
+</ul>
+
+<h4>v1 scope</h4>
+<ul>
+  <li><code>servers.visibility TEXT CHECK (visibility IN ('private','public')) DEFAULT 'private'</code> — one column, one default, nothing else changes. Every existing server is untouched.</li>
+  <li>Public servers get <code>description</code> (140 chars), <code>category</code>, and an existing <code>image_url</code>-style icon field.</li>
+  <li><code>POST /api/servers/:id/join</code> — joins a public server directly, reusing <code>redeemInvite</code>'s ban check and <code>ON CONFLICT DO NOTHING</code> insert without needing an invite row.</li>
+  <li><code>GET /api/communities</code> — search by name, filter by category, sort by <b>member count</b> or <b>recently created</b>. No ranking model. Two sorts, both explainable.</li>
+  <li>Profile card: <b>up to 6 community badges</b>, user-chosen, plus a count. Requires extending <code>publicUserSchema</code> — a deliberate change to a schema whose comment forbids changes, so make it a considered decision and update the comment.</li>
+  <li>A per-user cap (<b>50</b>, not Orkut's rumoured 1,000) and a per-user creation cap (<b>3/day</b>) via a Postgres-counted limit copying the <code>REPORTS_PER_HOUR</code> pattern — <code>rate-limit.ts</code> is in-process and explicitly single-instance, so anything abuse-facing must be durable.</li>
+  <li><b>Owner transfer disabled for public communities.</b> One line of code that pre-empts the entire secondary-market problem from §02.</li>
+  <li>Every public server routes reports to the <b>instance</b> queue (<code>listInstanceReports</code>), not just the owner's. Non-negotiable — see §08.</li>
+</ul>
+
+<h4>Effort</h4>
+<p><b>Server + schema ~2 days · directory API ~1 day · client directory + join + badge picker ~3 days · profile-card work on web <i>and</i> iOS ~1.5 days · moderation wiring ~1.5 days · abuse caps and tests ~1.5 days ≈ 10&ndash;11 agent-days</b>, plus a permanent, non-zero, non-delegable daily moderation duty. That last part is not an estimate line item; it's a lifestyle change.</p>
+
+<h4>Risks</h4>
+<ul>
+  <li><b>Moderation load is the whole risk and it is enormous.</b> §08 has the numbers; they are worse than you expect.</li>
+  <li><b>The empty-directory cold start.</b> A directory with 9 communities looks worse than no directory. Seed 40&ndash;60 yourself, in Portuguese, funny, before anyone sees it — and be willing to hide the feature behind a flag until it's populated.</li>
+  <li><b>Name squatting</b> on the obvious jokes, within hours. Needs either first-come-with-a-report-path or no uniqueness constraint at all (Orkut had duplicates everywhere and nobody minded).</li>
+  <li><b>Badge-farming</b> — join 50 communities to decorate a profile, participate in none. This is fine. It was always fine. Don't build anti-farming machinery for the intended behaviour.</li>
+  <li><b>Dead communities as the visible default.</b> 90%+ will have zero messages. Design the community page so emptiness looks normal (member list first, a joined-count, a single pinned topic) rather than like a broken chat room.</li>
+  <li><b>It changes what pqp legally is.</b> §08.</li>
+</ul>
+</div>
+
+<h2 id="c2"><span class="num">05</span>Concept 2 — Depoimentos</h2>
+
+<div class="concept">
+<span class="cnum">concept 02</span>
+<h3>Depoimentos: friend-written, owner-approved testimonials</h3>
+<p class="tagline">&ldquo;Escreve um dep pra mim.&rdquo;</p>
+
+<p>A friend writes a short testimonial about you. It lands in <b>your</b> pending queue and is invisible to everyone — including them-after-sending — until you publish it. Published depoimentos appear on your profile card in the order you accepted them, newest first, and you can unpublish any of them at any time without notice. Only confirmed friends can write; one active depoimento per friend, editable by the author while pending; plain text plus emoji, no HTML, no images, no links <span class="src">(see §07 for why that list is short)</span>. The mechanic is not the text — it's the <b>approval</b>. A depoimento on your profile is a thing you chose to display about yourself, written by someone else: the only content on a profile that is simultaneously social proof and self-expression, and the reason Orkut users treated them <span class="pt">&ldquo;como um troféu.&rdquo;</span> The compose flow ships with a deliberate second option, <b>&ldquo;mandar como DM&rdquo;</b>, because §02 proves that if you don't give the private-message use a home, users will make one out of your pending queue and eventually publish it by accident.</p>
+
+<h4>Why it lands with BR users specifically</h4>
+<ul>
+  <li><b>It is the single most-named missing feature.</b> Not my inference — Orkut's own founder said so publicly in August 2024, and it's in the headline of nearly every Brazilian retrospective from the 2024 anniversary wave onward.</li>
+  <li><b>Public friendship declaration is a live Brazilian norm</b>, not a dead one. It just moved to Instagram Stories on birthdays, where it evaporates in 24 hours and can't be collected. A durable, curated version has no current home.</li>
+  <li><b>The reciprocity loop is the growth mechanic and it's free.</b> Orkut users competed over <i>o top</i>. Writing one creates social obligation to receive one, which pulls the recipient back to the app to approve it, which is a notification with a genuinely warm payload — the opposite of every re-engagement ping in 2026.</li>
+  <li><b>It fixes a real pqp weakness.</b> A pqp profile is currently five fields. That's a principled privacy stance <i>and</i> a retention hole. Depoimentos fill the profile with content <b>other people wrote and you chose</b> — the cheapest possible profile-depth mechanic, and one that requires collecting no new personal data from anyone.</li>
+</ul>
+
+<div class="mock">┌─ Marina Rocha ──────────── marina#4821 ──┐
+│  [avatar]   amiga desde mar 2026         │
+│                                          │
+│  DEPOIMENTOS (4)                         │
+│  ┌────────────────────────────────────┐  │
+│  │ "conheci essa mulher jogando valo   │  │
+│  │  às 3 da manhã e hoje ela é minha   │  │
+│  │  irmã. te amo, sua louca"            │  │
+│  │                    — bea#0192, jul   │  │
+│  └────────────────────────────────────┘  │
+│  ┌────────────────────────────────────┐  │
+│  │ "melhor call da minha vida."         │  │
+│  │                     — rafa#7710, jun │  │
+│  └────────────────────────────────────┘  │
+│                          ver todos (4) → │
+│                                          │
+│  [ escrever depoimento ]  [ mandar DM ]  │
+└──────────────────────────────────────────┘
+
+  1 pendente  ·  só você vê  ·  publicar / recusar</div>
+
+<h4>v1 scope</h4>
+<ul>
+  <li><code>testimonials(id UUID PK, subject_id UUID→users, author_id UUID→users, body TEXT, status TEXT CHECK (status IN ('pending','published')), created_at, published_at, UNIQUE(subject_id, author_id))</code> — plus <code>CHECK ((status='published') = (published_at IS NOT NULL))</code>, matching the invariant style <code>friendships</code> already uses.</li>
+  <li>Write gate: <code>areFriendsSql</code>, verbatim. If you're not friends, the endpoint 404s like <code>requireServerMember</code> does — don't leak the existence of a pending item.</li>
+  <li><code>POST /api/users/:id/testimonials</code> (write) · <code>GET /api/users/:id/testimonials</code> (published only, unless it's you) · <code>GET /api/me/testimonials/pending</code> · <code>POST /api/testimonials/:id/publish</code> · <code>DELETE /api/testimonials/:id</code> (subject unpublishes, or author withdraws while pending).</li>
+  <li><b>Body: 500 chars, plain text through the existing <code>safeTextSchema</code> control-char refusal.</b> No markdown, no links, no images.</li>
+  <li>Publish is <b>two deliberate taps with a preview</b> showing exactly what will become public. This is the &ldquo;Não aceita!&rdquo; mitigation and it is the most important UI decision in the feature.</li>
+  <li>Declining <b>deletes the row.</b> No graveyard, no &ldquo;declined&rdquo; state, nothing to mine later — which is also the answer to any LGPD question about it.</li>
+  <li>Blocking someone hides their published depoimento in both directions; hook the existing <code>friendships_end_on_block()</code> trigger.</li>
+  <li>Reportable through the existing <code>createReport</code> path, scoped to the instance queue. A published depoimento is public content the <i>subject</i> chose to publish, which is a genuinely useful thing to be able to say to a moderator.</li>
+  <li>Durable rate limit: <b>10 written per day per author</b>, Postgres-counted, copying <code>REPORTS_PER_HOUR</code>.</li>
+</ul>
+
+<h4>Effort</h4>
+<p><b>Schema + service + tests ~1 day · 5 routes ~0.75 day · web UI (profile card section, pending tray, compose sheet with the DM fork, publish preview) ~1.5 days · iOS <code>UserProfileSheet.swift</code> parity ~0.75 day · notification + moderation wiring ~0.5 day ≈ 4&ndash;4.5 agent-days.</b> Genuinely small, because it's built almost entirely from parts that exist.</p>
+
+<h4>Risks</h4>
+<ul>
+  <li><b>Harassment via the pending queue.</b> A stranger can't write one — friends-only closes most of it — but an ex-friend can. Mitigations: unfriending withdraws any pending item; blocking deletes it; the pending tray shows the author before the text so nobody is ambushed; and the queue is reportable while still private.</li>
+  <li><b>Accidental publication of something private</b> — the documented Orkut failure. Mitigated by the two-tap preview and by giving DMs a first-class door in the compose flow, not by hoping.</li>
+  <li><b>Empty-profile asymmetry.</b> People with zero depoimentos will feel it, and popularity-counting is exactly the dynamic Orkut's <span class="pt">&ldquo;auge ou ostracismo&rdquo;</span> reputation came from. Mitigation: hide the section entirely when empty (don't render &ldquo;0 depoimentos&rdquo;), and never show a count anywhere except the subject's own profile.</li>
+  <li><b>Very low.</b> No new public directory, no new content-at-scale, no bytes stored, no strangers writing to strangers. This is the whole reason it's my pick.</li>
+</ul>
+</div>
+
+<h2 id="c3"><span class="num">06</span>Concept 3 — Enquetes</h2>
+
+<div class="concept">
+<span class="cnum">concept 03</span>
+<h3>Enquetes: polls that become threads</h3>
+<p class="tagline">&ldquo;Vota aí.&rdquo;</p>
+
+<p>A message can be a poll: a question, 2&ndash;6 options, one vote per person, live results in the message itself. When a poll closes, <b>the poll message becomes a thread root</b> — one tap turns &ldquo;28 people voted&rdquo; into the argument about why they were wrong. That's the pqp-native adaptation: Orkut's <i>enquetes</i> and <i>tópicos</i> lived in separate tabs and mostly stayed empty, whereas pqp already has threads hanging off individual messages (<code>type='thread'</code>, <code>thread_root_message_id</code>), so a poll <i>is</i> already the ideal thread root and needs no new container. It's also the smallest concept here by a wide margin, it works identically in a private friends server and in a public comunidade, and it fills a gap so basic that <code>DISCORD_GAPS.md</code> — a 28-item ranked list of everything pqp lacks versus Discord — doesn't even mention it. Discord shipped polls in 2024. pqp has nothing.</p>
+
+<h4>Why it lands with BR users specifically</h4>
+<ul>
+  <li>Honestly: <b>less BR-specific than the other two.</b> Polls are universal, and I'd rather say so than manufacture a cultural story. Its case is that it's cheap, missing, and useful.</li>
+  <li>The one genuine cultural fit: <i>enquetes</i> were a documented part of the comunidade page, and the Brazilian register of the whole platform was low-effort, high-frequency participation — <b>voting is the smallest possible unit of participation</b>, which is exactly right for a population that joins 50 communities and posts in one.</li>
+  <li>It's the thing that makes a comunidade feel alive without requiring anyone to write a paragraph. If Concept 1 ever ships, this is what stops the median community page from being a member list and a tumbleweed.</li>
+</ul>
+
+<h4>v1 scope</h4>
+<ul>
+  <li><code>polls(id UUID PK, message_id UUID UNIQUE→messages ON DELETE CASCADE, question TEXT, closes_at TIMESTAMPTZ NULL, created_at)</code> · <code>poll_options(id, poll_id, position, label)</code> · <code>poll_votes(poll_id, option_id, user_id, created_at, PK(poll_id, user_id))</code> — the PK gives you one-vote-per-person for free, no application logic.</li>
+  <li>Create as part of message send over the existing WS <code>message-create</code> path; vote via a new WS message reusing <code>reactionLimiter</code>'s shape.</li>
+  <li>Results broadcast on the existing channel bus — polls are exactly the sort of thing the Postgres <code>LISTEN</code>/<code>NOTIFY</code> bus already does well.</li>
+  <li>Question 200 chars, 2&ndash;6 options of 80 chars, optional close time (1h / 1d / 1w / never).</li>
+  <li>&ldquo;Discutir&rdquo; on a closed poll calls the existing <code>POST /api/messages/:id/threads</code>. Zero new thread code.</li>
+  <li>Anonymous votes in v1 — store <code>user_id</code> for the uniqueness constraint, never expose it. Voter lists are a v2 with its own privacy conversation.</li>
+</ul>
+
+<h4>Effort</h4>
+<p><b>Schema + service + tests ~1 day · WS create/vote + broadcast ~0.75 day · client poll composer, poll card with live bars, closed state with the discutir affordance ~1.5 days · iOS render-only (vote in v1.1) ~0.5 day ≈ 3&ndash;3.75 agent-days.</b></p>
+
+<h4>Risks</h4>
+<ul>
+  <li><b>Genuinely low.</b> No new public surface, no new stored media, no new social dynamic.</li>
+  <li>Poll spam in a busy channel — covered by the existing per-user <code>messageLimiter</code> (capacity 10, refill 2/s); maybe cap open polls per channel.</li>
+  <li>Abusive poll <i>options</i> are a moderation surface, and a small nasty one (&ldquo;quem é mais feio?&rdquo;). Deleting the message must cascade the poll — the <code>ON DELETE CASCADE</code> above is doing real work.</li>
+  <li><b>Opportunity cost is the actual risk.</b> This is the concept most likely to get built because it's easy, and the one least likely to change anything about whether pqp wins.</li>
+</ul>
+</div>
+
+<h2 id="mural"><span class="num">07</span>The mural (scraps): a deliberate no</h2>
+
+<p>The brief offered a scraps-style public wall as an alternative to polls. I looked at it properly and I'd recommend against building it, for three reasons that compound.</p>
+
+<ol>
+  <li><b>pqp already has the capability; the wall only adds the exposure.</b> Scraps existed in 2004 because Orkut <i>had no private messaging</i> — public walls came first and DMs were the retrofit. pqp has DMs, group DMs, <code>dm_privacy</code> controls, and blocks. A public wall adds no new ability to talk to someone. It adds only the ability for <b>anyone to write, unapproved, to a surface the subject doesn't control</b> — which is a pure moderation-surface expansion with no capability gain.</li>
+  <li><b>The historical record on this exact feature is three worms.</b> XSS on 1 Jan 2005; MW.Orc stealing banking credentials on 19 Jun 2006; W32/KutWormer hitting 700,000+ users on 19 Dec 2007 — all through the scrap wall, all because it accepted rich content. You'd obviously build a plain-text version. But the reason the wall was culturally beloved was the <b>glitter images, the GIFs, the decorated <i>correntes</i></b> — an entire third-party Brazilian content economy hotlinked into it. A plain-text scrap wall is not the feature people are nostalgic for, and the feature people are nostalgic for is the one with the worm history.</li>
+  <li><b>Depoimentos dominate it on the same axis.</b> Both are &ldquo;friends write on your profile.&rdquo; One requires your approval and one doesn't. The approved version is the one Brazilians actually name when asked what they miss, the one that can't be used to harass a stranger, and the one that makes the subject a curator instead of a target. If you're going to build one profile-writing mechanic, build the one with consent designed in.</li>
+</ol>
+
+<p class="footnote">If you ever want the <i>volume</i> and warmth of a scrap wall, the cheaper move is a <b>birthday prompt</b> — on someone's birthday, offer their friends a one-tap way to write them a depoimento. Same ritual, same warmth, same seasonality, and it inherits the approval gate.</p>
+
+<h2 id="moderation"><span class="num">08</span>The moderation and liability bill</h2>
+
+<p>This section is about Concept 1 only. Concepts 2 and 3 barely move the needle, and that asymmetry is the recommendation.</p>
+
+<h3>What Orkut's public communities actually cost Google</h3>
+
+<div class="callout bad">
+  <span class="tag">Read this number twice</span>
+  <p><b>Roughly 90% of <i>all</i> human-rights-abuse reports that SaferNet Brasil received about the entire internet concerned content published on Orkut.</b> Of those, ~40% were child sexual abuse material. Not 90% of CSAM reports — 90% of all abuse reports about the whole internet, pointed at one platform.</p>
+</div>
+
+<p>The rest of the timeline, because it shows how a public group primitive escalates:</p>
+
+<div class="scroll"><table>
+  <thead><tr><th>Date</th><th>Event</th></tr></thead>
+  <tbody>
+    <tr><td>Jun 2005</td><td>Ministério Público opens an investigation into racial crimes on Orkut; at least <b>60 communities</b> dedicated to discrimination against Black people, gay people, <i>nordestinos</i> and Jewish people.</td></tr>
+    <tr><td>Aug 2006</td><td>Federal judge orders Google to disclose user data. <b>Google refuses</b>, arguing the servers are in the US and outside Brazilian jurisdiction. Requests had been going unanswered since 2005.</td></tr>
+    <tr><td>2 Apr 2008</td><td>SaferNet's president testifies in the Senate calling Orkut the <span class="pt">&ldquo;paraíso da pornografia infanto-juvenil.&rdquo;</span> The CPI da Pedofilia, MPF and Polícia Federal jointly investigate CSAM in <b>3,200 &ldquo;closed&rdquo; Orkut albums</b>.</td></tr>
+    <tr><td>1&ndash;2 Jul 2008</td><td><b>MPF-SP and Google Brasil sign a TAC</b>, during a CPI session. Google must auto-report every CSAM case to the MP, build filters, remove on request, and preserve identifying data. <b>Penalty: R$ 25,000 per day.</b></td></tr>
+    <tr><td>7 Aug 2008</td><td>Google moves Orkut's <b>global operation to Belo Horizonte</b> and staffs a Portuguese-speaking content team. One month after the TAC — the same event.</td></tr>
+    <tr><td>16 Mar 2009</td><td><b>Discografias</b> (921k members) disabled for piracy after repeated complaints and lawsuits.</td></tr>
+    <tr><td>25 Feb 2014</td><td><b>The MPF criminally charges two Google Brasil legal directors personally</b> with <i>desobediência</i> — alleging inexplicable delays since 2010 and that data essential to criminal investigation was deleted as soon as Google was notified. Six years after the TAC. Seven months before shutdown.</td></tr>
+  </tbody>
+</table></div>
+
+<p>Convictions followed from named communities — <b>Mate Um Negro, Ganhe Um Brinde</b> (two years, TRF-3) and the anti-<i>nordestino</i> communities. The lesson isn't &ldquo;Google was careless.&rdquo; It's that <b>a free, public, self-service, search-indexed group primitive with one owner and no default moderation is the exact shape that concentrates abuse</b> — and that Orkut's own <i>aberta</i>/<i>moderada</i> split existed, with the problem living entirely on the <i>aberta</i> side.</p>
+
+<h3>The 2026 Brazilian legal position, which is materially worse than 2008's</h3>
+
+<div class="callout bad">
+  <span class="tag">The finding that should shape the decision</span>
+  <p>On <b>26 June 2025</b>, by <b>8&ndash;3</b>, the STF held Art. 19 of the Marco Civil da Internet <b>partially unconstitutional</b>. Platforms can now be civilly liable for user content <b>without a prior court order</b>. And the exemption list — <b>e-mail providers, private video/voice meeting platforms, and instant messaging services</b> — is where pqp plausibly sits <i>today</i>.</p>
+  <p><b>Building a public community directory is the decision that moves pqp out of that bucket.</b> That's not a moderation-workload argument, it's a category argument, and it's the single most important thing in this document.</p>
+</div>
+
+<p>Concretely, what the tese establishes for a platform hosting public content:</p>
+<ul>
+  <li><b>Presumed liability</b>, with immediate removal expected, for paid/boosted content and content distributed by bot networks — escapable only by proving diligent, timely action.</li>
+  <li>A <b>duty of care</b> (&ldquo;systemic failure&rdquo; liability) for massively circulating grave content: anti-democratic acts, terrorism, incitement to suicide or self-harm, racial/religious/sexual/gender hate speech, misogyny, <b>child sexual abuse material and crimes against minors</b>, human trafficking.</li>
+  <li>Crimes against honour stay under Art. 19 — but <b>extrajudicial notification</b> now suffices to trigger removal duties.</li>
+  <li><b>Affirmative duties on all platforms</b>: mandatory self-regulation with notification and due process, an accessible user complaint channel, <b>a Brazilian legal representative with full authority</b>, and <b>annual transparency reports</b>.</li>
+  <li>Liability is subjective, not objective — negligence or systemic omission must be shown. That's the good news, and it's why the report queue and audit log you already have matter.</li>
+</ul>
+
+<p>Layered on top, and already in force:</p>
+
+<div class="callout warn">
+  <span class="tag">ECA Digital — this is live right now</span>
+  <p><b>Lei 15.211/2025</b> (Estatuto Digital da Criança e do Adolescente) was sanctioned 17 Sep 2025 and <b>came into force 17 March 2026</b>. It applies to <i>any</i> digital service accessed by children in Brazil regardless of where the company is, with <b>no small-provider exemption</b> found in the sources I could read. ANPD enforces, with fines, suspension, and prohibition from operating in the country available. ANPD published age-verification guidance in March 2026 and its <b>phase 2, extending to sectors beyond app stores, was scheduled for August 2026</b> — i.e. now.</p>
+  <p>Duties include <b>reliable age verification rather than self-declaration</b>, linking under-16 accounts to a guardian, privacy-by-design defaults, a ban on behavioural profiling and targeted advertising to minors, and prompt removal of content involving sexual exploitation, harassment, cyberbullying, hate speech or dangerous challenges. pqp's 18+ gate in <code>services/age-gate.ts</code> — with a real DOB check rather than a &ldquo;yes I am 18&rdquo; button — is a genuinely strong starting position here and worth understanding as a compliance asset, not just a feature.</p>
+</div>
+
+<h3>Minimum bar before Concept 1 ships</h3>
+<ol>
+  <li><b><code>CONTENT_SCAN_PROVIDER</code> configured and proven.</b> A public directory of joinable rooms where anyone can upload an image, with no scanning, is the Orkut failure mode reproduced with better latency. This is a gate, not a preference — and it's already <code>HANDOVER</code> priority #4.</li>
+  <li><b>The instance report queue as the primary destination</b> for anything in a public community, with a same-day SLA you actually keep. <code>listInstanceReports</code> and <code>isInstanceModerator</code> already exist; wire public content to them by default rather than to the community owner.</li>
+  <li><b>Server-side takedown that beats the owner.</b> A community owner must not be able to shelter content from you. Check what <code>requireManager</code>-gated report resolution implies here — a hostile owner resolving their own reports is a hole.</li>
+  <li><b>A published complaint channel and a removal-request path</b> that a non-user can use. The STF tese asks for it directly, and it's a day of work.</li>
+  <li><b>Durable, Postgres-counted abuse limits</b> on creation and joining. <code>rate-limit.ts</code> is in-process and single-instance by design; its own header explains how N replicas multiply every limit.</li>
+  <li><b>A rate of report arrival you can personally sustain.</b> One person cannot moderate an open directory indefinitely, and the honest options are: keep the directory small and curated (approval to be <i>listed</i>, free to <i>create</i>), or don't open it. Curated-listing is the version I'd ship.</li>
+</ol>
+
+<h2 id="pick"><span class="num">09</span>Which one to build first</h2>
+
+<div class="scroll"><table>
+  <thead><tr><th></th><th>Comunidades</th><th>Depoimentos</th><th>Enquetes</th></tr></thead>
+  <tbody>
+    <tr><td>Effort</td><td>10&ndash;11 agent-days</td><td class="y">4&ndash;4.5 agent-days</td><td>3&ndash;3.75 agent-days</td></tr>
+    <tr><td>New public content surface</td><td class="n">Large</td><td class="y">None — approval-gated, friends-only</td><td class="y">None</td></tr>
+    <tr><td>Ongoing moderation cost</td><td class="n">Permanent, daily, unbounded</td><td class="y">Negligible</td><td>Small</td></tr>
+    <tr><td>Changes pqp's legal category</td><td class="n">Yes — out of the STF exempt bucket</td><td class="y">No</td><td class="y">No</td></tr>
+    <tr><td>BR cultural specificity</td><td class="y">Very high</td><td class="y">Highest — named by the founder</td><td class="m">Low, and I won't pretend otherwise</td></tr>
+    <tr><td>Discord can copy it</td><td class="y">Not without inverting their privacy model</td><td class="y">Not without inventing the ritual</td><td class="n">Already shipped it in 2024</td></tr>
+    <tr><td>Blocked on something else</td><td class="n">Yes — content scanning</td><td class="y">No</td><td class="y">No</td></tr>
+    <tr><td>Fails gracefully if nobody uses it</td><td class="n">No — a dead directory is worse than none</td><td class="y">Yes — an empty section just doesn't render</td><td class="y">Yes</td></tr>
+  </tbody>
+</table></div>
+
+<div class="verdict">
+  <div class="label">Build first</div>
+  <div class="headline">Depoimentos. ~4 agent-days.</div>
+  <p>It is the cheapest of the three, the most culturally specific, the one Orkut's own founder identified as most-missed, and the only one that adds identity depth to pqp's deliberately-bare profile <b>without opening a public surface you'd then have to police</b>. It's built almost entirely from parts that already exist — <code>friendships</code>, <code>areFriendsSql</code>, <code>user-profile-popover.tsx</code>, <code>UserProfileSheet.swift</code>, <code>createReport</code>, the block trigger — and it fails silently and gracefully if nobody uses it: an empty section simply doesn't render. Nothing else on this list is that cheap to be wrong about.</p>
+</div>
+
+<h4>Then, in order</h4>
+<ol>
+  <li><b>Enquetes</b> (~3.5 days) — while it's cheap, because it's a real gap and because it's the thing that makes comunidades survivable later. Do it as a warm-up, not as a strategy.</li>
+  <li><b>Comunidades</b> — the actual bet, and the one worth 10 days. Gate it behind: content scanning live, the instance report queue wired for public content by default, a published complaint channel, a Brazilian legal-representative answer, and a decision that you personally want to be a public-content platform in Brazil in 2026. Ship it <b>curated-listing</b> (anyone creates, you approve what appears in the directory) and let that be a feature — a directory of 60 funny communities that a human vouched for is a better product than 6,000 unvetted ones, and it's the only version one person can run.</li>
+</ol>
+
+<h4>What would change the order</h4>
+<ul>
+  <li><b>Content scanning goes live for its own reasons</b> (it's <code>HANDOVER</code> #4 already) → Comunidades' hardest gate disappears and it's worth reconsidering immediately.</li>
+  <li><b>The &ldquo;new Orkut&rdquo; actually ships.</b> As of the most recent sources, <code>orkut.com</code> is an email-capture page and has been announced-but-unshipped since April 2022, with a 2024 interview recycled through 2025 coverage. If it ever launches with comunidades and depoimentos, the window on both concepts narrows sharply — and pqp's advantage becomes that it already has voice, which they'd have to build.</li>
+  <li><b>Depoimentos gets used more than expected</b> → that's the signal that this audience wants profile-as-identity, which is the thesis Comunidades rests on. Ship the cheap one first partly <i>because</i> it's a test of the expensive one.</li>
+</ul>
+
+<div class="callout warn">
+  <span class="tag">The cautionary pattern, stated once</span>
+  <p><b>Every Orkut clone rebuilt exactly these primitives, and every one died of distribution rather than design.</b> <b>Orkuti</b> (2014) rebuilt comunidades, depoimentos, recados and even the <i>orkutímetro</i>, crashed on launch from traffic, passed 500,000 Android downloads, then got removed from Google Play over the name and became orkut.one. <b>Orkutando</b> (Aug 2016) followed and is gone. Büyükkökten's own <b>Hello</b> (Jun 2016 &ndash; 2022) ported the community primitive as &ldquo;Personas&rdquo; and reached ~1 million users before shutting down. And Google's own community archive — 51M communities promised as a permanent time capsule — <b>was deleted on 15 May 2017 with about two weeks' notice and no export path</b>.</p>
+  <p>The nostalgia converts to signups, not to retention. So the concepts in this doc should be judged on whether they make pqp better at what it already does — group voice and chat for Brazilian friend groups — and not on whether they make it feel like 2009. <b>Depoimentos passes that test</b> (it makes the people in your calls more legible to each other). Comunidades passes it too, at ten times the price and with a liability change attached. A mural fails it.</p>
+</div>
+
+<hr>
+
+<h3>Sources</h3>
+
+<h4>Scale, timeline, culture</h4>
+<ul class="sources">
+  <li><a href="https://pt.wikipedia.org/wiki/Orkut">Wikipedia pt — Orkut</a> · <a href="https://en.wikipedia.org/wiki/Orkut">Wikipedia en — Orkut</a> — demographics tables (Mar 2004, Jun 2004, Jun 2012, Sep 2014), Belo Horizonte transfer (7 Aug 2008), shutdown, security incidents, hate-community investigations.</li>
+  <li><a href="https://olhardigital.com.br/2024/01/24/internet-e-redes-sociais/comunidades-depoimentos-e-scraps-os-20-anos-do-orkut/">Olhar Digital — &ldquo;Comunidades, depoimentos e scraps: os 20 anos do Orkut&rdquo; (24 Jan 2024)</a> — the 20th-anniversary retrospective; also notes the contested launch date.</li>
+  <li><a href="https://cienciahoje.org.br/artigo/a-invasao-brasileira-do-orkut/">Eisenberg &amp; Lyra — &ldquo;A invasão brasileira do Orkut&rdquo;, <i>Ciência Hoje</i> nº 226 (May 2006)</a> — the canonical academic framing of the 2004 takeover. <span class="src">Only the introduction is freely readable.</span></li>
+  <li><a href="https://www.scielo.br/j/pci/a/rjXn3xTMwnT6VbvQ96P4NXv/?lang=pt">Bezerra &amp; Araújo, <i>Perspectivas em Ciência da Informação</i> 16(2), 2011 (SciELO, open access)</a> — the <i>vitrine pessoal</i> analysis and the &ldquo;enfeixam traços&rdquo; quotation.</li>
+  <li><a href="https://www.techtudo.com.br/noticias/2012/01/numeros-da-comscore-confirmam-facebook-ultrapassa-orkut-no-brasil.ghtml">TechTudo — comScore confirms Facebook overtaking Orkut (Jan 2012)</a> · <a href="https://www.techtudo.com.br/noticias/2011/09/ibope-divulga-que-facebook-ultrapassou-orkut-no-brasil.ghtml">TechTudo — Ibope, Aug 2011</a>.</li>
+  <li><a href="https://manualdousuario.net/orkut-rede-social/">Manual do Usuário — &ldquo;5 coisas sobre o Orkut&rdquo;</a> — the decorative-vs-substantive community distinction and the &ldquo;Não aceita!&rdquo; genre.</li>
+  <li><a href="https://www.techtudo.com.br/noticias/2011/05/como-escrever-e-enviar-depoimentos-no-orkut.ghtml">TechTudo — how to write and send depoimentos (May 2011)</a> — contemporary primary-ish documentation of the accept flow.</li>
+  <li><a href="https://www.techtudo.com.br/noticias/2010/12/como-criar-uma-comunidade-no-orkut.ghtml">TechTudo — how to create a community (Dec 2010)</a> — the creation field list.</li>
+  <li><a href="https://www.techtudo.com.br/noticias/2014/01/lista-traz-funcoes-exclusivas-do-orkut-nos-dez-anos-da-rede-relembre.ghtml">TechTudo — Orkut's exclusive features at 10 years (Jan 2014)</a> — the rating icons (smiley / ice cube / three hearts / star) and their 2009 removal.</li>
+  <li><a href="https://pt.wikipedia.org/wiki/Eu_Odeio_Acordar_Cedo">Wikipedia pt — Eu Odeio Acordar Cedo</a> — creation date, member counts, the 2009 sale. <a href="https://coletiva.net/noticias/venda-de-comunidade-do-orkut-ainda-desperta-polemica/">Coletiva — community sales</a> — the RBS/Floripa purchase and the <i>tabela de preços</i>.</li>
+  <li><a href="https://www.techtudo.com.br/noticias/2014/09/google-libera-historico-publico-do-orkut-com-51-milhoes-de-comunidades.ghtml">TechTudo — the 51M-community archive (Sep 2014)</a> · <a href="https://www.opovo.com.br/noticias/tecnologia/2017/04/google-vai-apagar-definitivamente-arquivo-de-comunidades-do-orkut.html">O Povo — Google deletes the archive (2017)</a>.</li>
+  <li><a href="https://olhardigital.com.br/2024/08/14/internet-e-redes-sociais/orkut-de-volta-fundador-da-rede-social-revela-planos-de-retorno/">Olhar Digital — Büyükkökten on the return, Rio Innovation Week (14 Aug 2024)</a> — the depoimentos quotation. <a href="https://tecnoblog.net/noticias/2022/04/28/orkut-promete-nova-rede-social-site-oficial-e-atualizado-apos-quase-5-anos/">Tecnoblog — the orkut.com teaser (Apr 2022)</a>.</li>
+  <li><a href="https://www.techtudo.com.br/noticias/2015/06/orkuti-ganha-perfil-novo-orkutimetro-total-de-fas-e-comunidade-verificada.ghtml">TechTudo — Orkuti and the orkutímetro</a> · <a href="https://www.techtudo.com.br/noticias/2016/08/apos-polemica-com-orkuti-novo-clone-do-orkut-se-chama-orkutando.ghtml">TechTudo — Orkutando (Aug 2016)</a> · <a href="https://en.wikipedia.org/wiki/Hello_(social_network)">Wikipedia — Hello</a>.</li>
+</ul>
+
+<h4>Moderation history and 2026 law</h4>
+<ul class="sources">
+  <li><a href="https://www12.senado.leg.br/noticias/materias/2008/04/02/presidente-de-ong-aponta-orkut-como-paraiso-da-pornografia-infanto-juvenil">Senado Federal — SaferNet testimony (2 Apr 2008)</a> · <a href="http://www.safernet.org.br/site/jornalistas/pauta/total-den%C3%BAncias-pornografia-infantil-representa-62">SaferNet — report statistics</a>.</li>
+  <li><a href="https://www.conjur.com.br/2008-jul-01/google_mpf_fecham_acordo_combater_crime_web/">ConJur — the MPF/Google TAC (1 Jul 2008)</a> · <a href="https://www.migalhas.com.br/quentes/63887/acordo-poe-fim-a-disputa-judicial-entre-mpf-sp-e-google">Migalhas — the TAC ends the dispute</a> (R$ 25k/day clause).</li>
+  <li><a href="https://www.conjur.com.br/2014-fev-25/mpf-denuncia-diretores-juridico-google-brasil-desobediencia/">ConJur — MPF charges two Google Brasil legal directors (25 Feb 2014)</a> · <a href="https://agenciabrasil.ebc.com.br/direitos-humanos/noticia/2014-02/dois-diretores-do-google-brasil-sao-denunciados-por-desobediencia">Agência Brasil</a>.</li>
+  <li><a href="https://www.conjur.com.br/2005-jun-02/ministerio_publico_investiga_crimes_raciais_orkut/">ConJur — MP investigates racial crimes on Orkut (Jun 2005)</a> · <a href="https://conjur.com.br/2017-mai-28/homem-condenado-prisao-ofensas-nordestinos-orkut/">ConJur — conviction over anti-<i>nordestino</i> content</a>.</li>
+  <li><a href="https://www.migalhas.com.br/quentes/433462/stf-redes-respondem-por-posts-mesmo-sem-ordem-judicial-veja-tese">Migalhas — the STF tese on platform liability (26 Jun 2025, 8&ndash;3)</a> — presumed liability, the duty-of-care list, the exemptions (e-mail, private meetings, instant messaging), and the affirmative duties. Corroborated by <a href="https://conjur.com.br/2025-jun-26/supremo-fixa-tese-sobre-responsabilizacao-de-plataformas-por-conteudo-de-usuarios/">ConJur</a> and <a href="https://www.machadomeyer.com.br/pt/inteligencia-juridica/publicacoes-ij/direito-digital/stf-muda-regime-de-responsabilizacao-das-plataformas">Machado Meyer</a>. <span class="src">Both of the latter 403 to automated fetchers; read via search summaries.</span></li>
+  <li><a href="https://www.fadc.org.br/noticias/eca-digital-entenda-nova-lei">FADC — ECA Digital explained</a> — obligations, ANPD enforcement, sanctions, 17 Mar 2026 effective date. Corroborated by <a href="https://www.csmv.com.br/boletins/eca-digital-e-regulamentado-e-anpd-publica-orientacoes-sobre-verificacao-etaria">CSMV on the ANPD age-verification guidance</a> and <a href="https://site.mppr.mp.br/crianca/Noticia/Lei-no-152112025-Estatuto-Digital-da-Crianca-e-do-Adolescente-entra-em-vigor-no-dia">MPPR</a> <span class="src">(403 to fetchers)</span>.</li>
+  <li>pqp codebase at <code>launch/p0-hardening</code>: <code>server/src/schema.sql</code>, <code>server/src/services/{friends,reports,invites,threads,age-gate,content-scan}.ts</code>, <code>server/src/lib/rate-limit.ts</code>, <code>packages/shared/src/api.ts</code>, <code>client/src/components/user/{user-profile-popover.tsx,profile-relations.ts}</code>, <code>ios/pqp/Sources/Home/UserProfileSheet.swift</code>, <code>docs/{DISCORD_GAPS,HANDOVER,PLAN_STATUS}.md</code>.</li>
+</ul>
+
+<h4>Not verified — do not repeat these as fact</h4>
+<p class="footnote">Orkut's exact launch date (22 vs 24 Jan 2004 — contested by Brazilian press itself). The 1,000-communities-per-user cap <span class="conf">two consumer sources, never Google documentation</span> — the 1,000-<i>friend</i> cap is solid. Whether the profile community display was specifically an icon-badge grid, its sort order, and whether any reorder/pin affordance existed <span class="conf">the existence of a dedicated profile section is rock solid; the visual is not</span>. Whether depoimentos were restricted to confirmed friends, and whether the recipient could delete an already-accepted one. Editorially featured / front-page communities. Character limits on scraps or depoimentos. A displayed MySpace-style &ldquo;top friends&rdquo; grid. &ldquo;Eu sobrevivi ao…&rdquo; as a specific famous community. &ldquo;300 million users&rdquo; as a peak figure — almost certainly cumulative registrations over ten years, irreconcilable with 66M accounts at shutdown. Any platform-wide statistic on inactive communities — the ~2.35-topics-per-community figure in §02 is my arithmetic on the archive numbers, not a cited statistic. &ldquo;faz um dep pra mim&rdquo; as an attested idiom — the reciprocity <i>behaviour</i> is well documented, the phrase is not. Whether the announced &ldquo;new Orkut&rdquo; has shipped anything beyond an email-capture page. Whether ECA Digital has any small-provider exemption — none was found, which is not the same as none existing, and it is worth a lawyer's fifteen minutes before Concept 1.</p>
+
+</div>
+</body>
+</html>

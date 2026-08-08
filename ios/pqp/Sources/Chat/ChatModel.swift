@@ -479,7 +479,7 @@ final class ChatModel {
         // model's business.
         case .presence, .activity, .other,
              .voiceWelcome, .voicePeerJoined, .voicePeerLeft, .voiceRoster,
-             .voiceRoomFull, .voiceTransportUnsupported,
+             .voiceRoomFull, .voiceTransportUnsupported, .voiceScreenShareDenied,
              .voiceOffer, .voiceAnswer, .voiceCandidate,
              // Ringing is `CallModel`'s, and deliberately not this model's: a
              // call outlives the thread it was placed from.

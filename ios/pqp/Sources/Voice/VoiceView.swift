@@ -11,12 +11,28 @@ struct VoiceView: View {
         ZStack {
             Palette.ink.ignoresSafeArea()
 
-            VStack(spacing: 24) {
-                header
-                participants
+            VStack(spacing: 16) {
+                // A share IS the screen while it lasts: the header shrinks to a
+                // line and the people become a list under it. Discord makes the
+                // same trade, for the same reason — a shared screen is unreadable
+                // at thumbnail size and an avatar is not.
+                if let screen = model.remoteScreen {
+                    compactHeader
+                    ScreenShareStage(track: screen, presenterName: model.presenterName)
+                        .frame(maxHeight: 260)
+                    participants
+                } else {
+                    header
+                    participants
+                }
                 Spacer(minLength: 0)
+                ScreenSharePresenterBanner(
+                    isSharing: model.screenShare.isSharing,
+                    errorMessage: model.screenShare.errorMessage
+                )
                 controls
             }
+            .animation(Motion.standard, value: model.remoteScreen != nil)
             .padding(.horizontal, Metrics.hPadding)
             .padding(.top, 12)
             .padding(.bottom, 20)
@@ -25,6 +41,13 @@ struct VoiceView: View {
         .navigationBarTitleDisplayMode(.inline)
         .task { await model.join(channel: channel, session: session) }
         .onDisappear { Task { await model.leave() } }
+    }
+
+    /// What the header becomes once a shared screen owns the space.
+    private var compactHeader: some View {
+        Text(statusText)
+            .font(Typography.caption)
+            .foregroundStyle(statusColor)
     }
 
     private var header: some View {
@@ -88,7 +111,8 @@ struct VoiceView: View {
                 PeerRow(
                     peer: peer,
                     volume: model.volume(for: peer),
-                    onVolume: { model.setVolume($0, for: peer) }
+                    onVolume: { model.setVolume($0, for: peer) },
+                    isPresenting: model.video[peer.peerId]?.screen != nil
                 )
             }
         }
@@ -134,6 +158,19 @@ struct VoiceView: View {
             .accessibilityIdentifier("voice.speaker")
             .accessibilityLabel(model.isSpeakerOn ? "Switch to earpiece" : "Switch to speaker")
             .disabled(model.status != .connected)
+
+            // Only where a broadcast can actually happen. The extension cannot
+            // run in the simulator, and the bridge refuses to arm there, so a
+            // button that opened a sheet leading nowhere would be a lie.
+            if model.screenShare.isAvailable {
+                ScreenShareControlButton(
+                    isSharing: model.screenShare.isSharing,
+                    identifier: "voice.share"
+                )
+                .frame(width: 60, height: 60)
+                .opacity(model.status == .connected ? 1 : 0.4)
+                .allowsHitTesting(model.status == .connected)
+            }
 
             Button {
                 Task {
@@ -186,6 +223,7 @@ private struct PeerRow: View {
     let peer: VoicePeerState
     var volume: Double = 1
     var onVolume: (Double) -> Void = { _ in }
+    var isPresenting: Bool = false
     @State private var expanded = false
 
     private var stateColor: Color {
@@ -209,6 +247,12 @@ private struct PeerRow: View {
                 .font(Typography.bodyMedium)
                 .foregroundStyle(Palette.paper)
                 .lineLimit(1)
+            if isPresenting {
+                Image(systemName: "rectangle.on.rectangle")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Palette.signal)
+                    .accessibilityLabel("Sharing their screen")
+            }
             Spacer()
             // Connection state is shown per peer rather than as one overall
             // status: in a mesh one leg can fail while the rest are fine, and

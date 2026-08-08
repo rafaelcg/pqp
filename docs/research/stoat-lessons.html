@@ -1,0 +1,675 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>What stoat.chat teaches us — lessons for pqp</title>
+<style>
+  :root {
+    --bg: #16181d;
+    --rail: #101216;
+    --panel: #1d2027;
+    --panel-2: #24272f;
+    --panel-3: #2c3038;
+    --border: #33373f;
+    --border-strong: #454a54;
+    --text: #e9e7e0;
+    --muted: #a3a29c;
+    --subtle: #c9c7c0;
+    --accent: #c4e848;
+    --accent-dim: #9dbb3a;
+    --danger: #ef6b58;
+    --warning: #e0b64a;
+    --success: #5fc98d;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Fira Code", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, Helvetica, Arial, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: var(--sans); font-size: 16px; line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 940px; margin: 0 auto; padding: 48px 24px 120px; }
+  header.doc { border-bottom: 1px solid var(--border); padding-bottom: 24px; margin-bottom: 40px; }
+  .kicker {
+    font-family: var(--mono); font-size: 12px; letter-spacing: 0.12em;
+    text-transform: uppercase; color: var(--accent-dim); margin: 0 0 10px;
+  }
+  h1 { font-size: 2.1rem; line-height: 1.2; margin: 0 0 12px; letter-spacing: -0.02em; }
+  .sub { color: var(--muted); font-size: 1.05rem; margin: 0; max-width: 68ch; }
+  .meta { font-family: var(--mono); font-size: 12px; color: var(--muted); margin-top: 18px; }
+  h2 {
+    font-size: 1.35rem; margin: 56px 0 4px; letter-spacing: -0.01em;
+    padding-top: 20px; border-top: 1px solid var(--border);
+  }
+  h2 .num { font-family: var(--mono); color: var(--accent-dim); font-size: 0.85em; margin-right: 10px; }
+  h3 { font-size: 1.05rem; margin: 32px 0 8px; }
+  h4 { font-size: 0.95rem; margin: 22px 0 6px; color: var(--subtle); }
+  p { margin: 0 0 14px; }
+  a { color: var(--accent); text-decoration: none; border-bottom: 1px solid rgba(196,232,72,0.3); }
+  a:hover { border-bottom-color: var(--accent); }
+  code {
+    font-family: var(--mono); font-size: 0.86em; background: var(--rail);
+    color: var(--accent); padding: 1px 5px; border-radius: 4px; border: 1px solid var(--border);
+    word-break: break-word;
+  }
+  pre {
+    font-family: var(--mono); font-size: 0.82rem; line-height: 1.55;
+    background: var(--rail); border: 1px solid var(--border); border-radius: 8px;
+    padding: 16px 18px; overflow-x: auto; margin: 0 0 18px;
+  }
+  pre code { background: none; border: none; padding: 0; color: var(--subtle); }
+  ul, ol { margin: 0 0 16px; padding-left: 24px; }
+  li { margin-bottom: 7px; }
+  li > ul, li > ol { margin-top: 7px; margin-bottom: 4px; }
+  blockquote {
+    margin: 0 0 18px; padding: 12px 18px; border-left: 3px solid var(--accent-dim);
+    background: var(--panel); border-radius: 0 6px 6px 0; color: var(--subtle);
+    font-size: 0.95rem;
+  }
+  blockquote p:last-child { margin-bottom: 0; }
+  blockquote cite { display: block; margin-top: 8px; font-style: normal; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+  .verdict {
+    border: 1px solid var(--accent-dim); border-left: 4px solid var(--accent);
+    background: linear-gradient(90deg, rgba(196,232,72,0.07), rgba(196,232,72,0.01));
+    border-radius: 8px; padding: 22px 24px; margin: 0 0 36px;
+  }
+  .verdict .label {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--accent); margin-bottom: 8px;
+  }
+  .verdict .headline { font-size: 1.22rem; font-weight: 600; line-height: 1.4; margin-bottom: 12px; }
+  .verdict p:last-child { margin-bottom: 0; }
+  .callout {
+    border: 1px solid var(--border-strong); border-left: 3px solid var(--border-strong);
+    background: var(--panel); border-radius: 6px; padding: 14px 18px; margin: 0 0 20px; font-size: 0.95rem;
+  }
+  .callout.warn { border-left-color: var(--warning); }
+  .callout.bad { border-left-color: var(--danger); }
+  .callout.good { border-left-color: var(--success); }
+  .callout .tag {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--muted); display: block; margin-bottom: 5px;
+  }
+  .callout.warn .tag { color: var(--warning); }
+  .callout.bad .tag { color: var(--danger); }
+  .callout.good .tag { color: var(--success); }
+  .callout p:last-child { margin-bottom: 0; }
+  .scroll { overflow-x: auto; margin: 0 0 22px; border: 1px solid var(--border); border-radius: 8px; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.88rem; min-width: 540px; }
+  th, td { text-align: left; padding: 9px 13px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th {
+    background: var(--panel-2); font-family: var(--mono); font-size: 11px;
+    letter-spacing: 0.08em; text-transform: uppercase; color: var(--subtle); font-weight: 600;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:nth-child(even) { background: rgba(255,255,255,0.014); }
+  td.n-col { font-family: var(--mono); white-space: nowrap; }
+  .y { color: var(--success); font-weight: 600; }
+  .n { color: var(--danger); font-weight: 600; }
+  .m { color: var(--warning); font-weight: 600; }
+  .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); margin: 0 0 24px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 16px 18px; }
+  .card .big { font-family: var(--mono); font-size: 1.5rem; color: var(--accent); line-height: 1.2; }
+  .card .cap {
+    font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em;
+    color: var(--muted); margin-top: 6px;
+  }
+  .card .note { font-size: 0.84rem; color: var(--muted); margin-top: 8px; line-height: 1.5; }
+  .bars { margin: 0 0 24px; }
+  .bar-row { display: flex; align-items: center; gap: 12px; margin-bottom: 7px; font-size: 0.85rem; }
+  .bar-row .lbl { font-family: var(--mono); font-size: 11px; color: var(--muted); width: 78px; flex: none; text-align: right; }
+  .bar-row .track { flex: 1; background: var(--rail); border: 1px solid var(--border); border-radius: 3px; height: 18px; overflow: hidden; }
+  .bar-row .fill { height: 100%; background: var(--accent-dim); }
+  .bar-row .fill.hot { background: var(--accent); }
+  .bar-row .val { font-family: var(--mono); font-size: 11px; color: var(--subtle); width: 100px; flex: none; }
+  .lesson {
+    border: 1px solid var(--border); border-radius: 8px; padding: 16px 20px; margin: 0 0 14px;
+    background: var(--panel);
+  }
+  .lesson .rank {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em; color: var(--accent-dim);
+    display: block; margin-bottom: 4px;
+  }
+  .lesson .act { font-weight: 600; margin-bottom: 8px; }
+  .lesson .ev { font-size: 0.88rem; color: var(--muted); margin: 0; }
+  .lesson .ev b { color: var(--subtle); font-weight: 600; }
+  .toc { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 18px 22px; margin: 0 0 44px; }
+  .toc ol { margin: 0; padding-left: 22px; font-size: 0.92rem; }
+  .toc li { margin-bottom: 4px; }
+  .toc .h { font-family: var(--mono); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); margin-bottom: 10px; }
+  .footnote { font-size: 0.85rem; color: var(--muted); }
+  .src { font-size: 0.82rem; color: var(--muted); font-family: var(--mono); }
+  ul.sources { font-size: 0.86rem; }
+  ul.sources li { margin-bottom: 5px; }
+  hr { border: none; border-top: 1px solid var(--border); margin: 40px 0; }
+  .pill {
+    display: inline-block; font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em;
+    text-transform: uppercase; padding: 2px 7px; border-radius: 999px;
+    border: 1px solid var(--border-strong); color: var(--muted); vertical-align: middle;
+  }
+  .pill.ok { border-color: var(--success); color: var(--success); }
+  .pill.no { border-color: var(--danger); color: var(--danger); }
+  .pill.mid { border-color: var(--warning); color: var(--warning); }
+  @media (max-width: 620px) {
+    .wrap { padding: 32px 16px 80px; }
+    h1 { font-size: 1.6rem; }
+    body { font-size: 15px; }
+    .bar-row .lbl { width: 58px; }
+    .bar-row .val { width: 72px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="doc">
+  <p class="kicker">pqp · research spike · doc 2 of 3</p>
+  <h1>What stoat.chat teaches us</h1>
+  <p class="sub">Stoat — formerly Revolt — is the closest thing pqp has to a five-years-ahead version of itself: one developer, AGPL, self-hostable, a Discord lookalike, a million registered users. Their public record is unusually complete, and most of it is a warning.</p>
+  <p class="meta">2026-08-08 · primary sources read from their public GitHub org · see the method note below for what was and wasn't readable</p>
+</header>
+
+<div class="verdict">
+  <div class="label">Headline</div>
+  <div class="headline">Every growth spike Stoat has ever had came from a Discord crisis they didn't cause and couldn't absorb — and Brazil is the current crisis, with Stoat not even in the conversation.</div>
+  <p>They have run out of capacity at every wave (registrations gated, presence and typing indicators switched off, <i>&ldquo;the current architecture is unsustainable&rdquo;</i>), had video and screenshare code-complete but <b>switched off for cost</b> during their biggest-ever demand spike, designed a paid tier twice and launched it never, and refused to build a Discord importer on legal grounds — leaving the single largest adoption gap to third-party tools. The lesson for pqp is not a feature list. It is: <b>be ready to absorb a wave, have a payment rail before you need it, and be the obvious Portuguese-language answer while the slot is empty.</b></p>
+</div>
+
+<div class="callout warn">
+  <span class="tag">Method — what I could and couldn't read</span>
+  <p><b>stoat.chat blocks Claude's fetcher.</b> Their <code>robots.txt</code> carries <code>User-agent: ClaudeBot</code> / <code>Disallow: /</code> plus <code>Content-Signal: ai-train=no</code>, and <code>https://stoat.chat/updates</code> returns <b>HTTP 403</b> to automated requests. I did not spoof a browser User-Agent to get around that. The same block applies to <code>status.stoat.chat</code>, <code>translate.stoat.chat</code>, <code>api.stoat.chat</code>, <code>support.stoat.chat</code>, their internal wiki hosts, and the legacy <code>wiki.revolt.chat</code>.</p>
+  <p><b>It turned out not to matter.</b> The blog is an Astro site whose repository is public: every post lives as a committed markdown file in <a href="https://github.com/stoatchat/stoat.chat/tree/main/src/content/blog">stoatchat/stoat.chat</a>. So every first-party post quoted here is a <b>primary source read from GitHub</b> — a different host, openly published, no circumvention. Everything else comes from the GitHub API (commits, releases, issues, discussions, PR diffs, locale catalogues), UK Companies House, Bluesky's public API, Hacker News, and press.</p>
+  <p><b>Genuinely unread:</b> the rendered blog and changelog pages, the status-page incident history, the Weblate dashboard (percentages below are my own arithmetic over their <code>.po</code> and JSON catalogues), their internal roadmap and design-doc hosts, and Reddit (also blocks ClaudeBot). <b>Never published anywhere:</b> MAU/DAU, donation totals, any financials — their first Companies House accounts aren't due until November 2026.</p>
+  <p><b>A warning about secondary sources:</b> most of the 2026 &ldquo;Stoat review&rdquo; pages that surface in search (stoatboard.com, reviewnexa.com, pnmmedia.com and similar) carry fabricated user counts and claim Stoat has end-to-end encryption. <b>It does not</b> — E2EE has been an open issue since 30 Oct 2021. Even Xataka Brasil's article got this wrong. Nothing from those sources is used here.</p>
+</div>
+
+<div class="toc">
+  <div class="h">Contents</div>
+  <ol>
+    <li><a href="#who">Who they actually are</a></li>
+    <li><a href="#shipped">What they shipped, in what order</a></li>
+    <li><a href="#voice">The voice saga — read this one twice</a></li>
+    <li><a href="#growth">How they grew: harvesting other people's crises</a></li>
+    <li><a href="#problems">The problems they hit in public</a></li>
+    <li><a href="#importer">The importer they refused to build</a></li>
+    <li><a href="#unthought">Features pqp probably hasn't thought about</a></li>
+    <li><a href="#mobile">Mobile and app-store reality</a></li>
+    <li><a href="#brazil">Brazil: the read-across</a></li>
+    <li><a href="#sowhat">So what for pqp — ranked</a></li>
+  </ol>
+</div>
+
+<h2 id="who"><span class="num">01</span>Who they actually are</h2>
+
+<p>Identity first, since the brief asked me to verify rather than assume: <b>Stoat is Revolt, renamed.</b> Same codebase, same servers, same community, same founder. The rename was not a marketing decision.</p>
+
+<blockquote>
+  <p>&ldquo;Just to make this abundantly clear, we received a cease &amp; desist against our use of the name &lsquo;Revolt&rsquo;, we are not releasing any further details as this may cause harassment of the other party and may hurt negotiations. I apologise for the way this ended up being handled&hellip;&rdquo;</p>
+  <cite>insert (Paul Makles), addendum dated 2025-10-03 to the post <a href="https://github.com/stoatchat/stoat.chat/blob/main/src/content/blog/long-live-stoat.md">&ldquo;Here's a big change. Long Live Stoat!&rdquo;</a>, 2025-10-01</cite>
+</blockquote>
+
+<p>The sender has never been named. Team confirmation followed on GitHub on <a href="https://github.com/orgs/stoatchat/discussions/988">2025-10-06</a>. Mechanically it was fast and messy: the <code>stoatchat</code> org was created <b>2025-09-24</b>, the first rebrand commit went <b>direct to main on 2025-09-29</b>, signup email verification broke during the cutover, and invites moved to <code>stt.gg</code>.</p>
+
+<div class="grid">
+  <div class="card">
+    <div class="big">Jan 2020</div>
+    <div class="cap">first backend commit</div>
+    <div class="note">&ldquo;Initial Commit&rdquo;, Paul Makles, 19 Jan 2020. Public launch Jan 2021; public beta 11 Aug 2021. Six and a half years in.</div>
+  </div>
+  <div class="card">
+    <div class="big">75.8%</div>
+    <div class="cap">of backend commits, one person</div>
+    <div class="note">53 contributors on the backend monorepo; <code>insertish</code> authored 1,187 of 1,566 attributed commits. Same concentration on the web client. <b>This is the project's real risk.</b></div>
+  </div>
+  <div class="card">
+    <div class="big">Feb 2025</div>
+    <div class="cap">a legal entity, finally</div>
+    <div class="note">REVOLT PLATFORMS LTD, UK no. 16260658, incorporated 18 Feb 2025, one director. The product ran <b>~4 years with no company at all</b> — and the company still hasn't been renamed.</div>
+  </div>
+  <div class="card">
+    <div class="big">1M</div>
+    <div class="cap">registered users, Mar 2026</div>
+    <div class="note">100K (13 Jun 2023) → 500K (16 Oct 2024) → 1M (29 Mar 2026). All &ldquo;registered&rdquo;, never active. They have never published a MAU figure.</div>
+  </div>
+</div>
+
+<p>Licensing: the backend monorepo is <b>AGPL-3.0</b> with per-crate exceptions, clients AGPL-3.0, SDKs MIT. Two GitHub orgs now exist — <code>stoatchat</code> (40 repos, 2,560 followers) and the abandoned <code>revoltchat</code> (32 repos, 8 archived, 4,228 followers — <i>more</i> followers than the live one, which is its own small lesson about rebranding).</p>
+
+<div class="scroll"><table>
+  <thead><tr><th>Repo</th><th>Role</th><th>Lang</th><th class="n-col">Stars</th><th class="n-col">Open</th><th class="n-col">Last push</th></tr></thead>
+  <tbody>
+    <tr><td><code>stoatchat/stoatchat</code></td><td>backend monorepo — API, delta, autumn (files), january (embeds), gifbox, pushd, voice-ingress</td><td>Rust</td><td class="n-col">3,205</td><td class="n-col">135</td><td class="n-col">2026-08-08</td></tr>
+    <tr><td><code>stoatchat/self-hosted</code></td><td>docker deploy</td><td>JS</td><td class="n-col">2,572</td><td class="n-col">24</td><td class="n-col">2026-08-07</td></tr>
+    <tr><td><code>stoatchat/discussions</code></td><td>1,294 discussions, no code — <b>their town square</b></td><td>—</td><td class="n-col">2,322</td><td class="n-col">—</td><td class="n-col">active</td></tr>
+    <tr><td><code>stoatchat/for-legacy-web</code></td><td>legacy client (ex-<code>revite</code>), still in service</td><td>TS</td><td class="n-col">960</td><td class="n-col">176</td><td class="n-col">2026-06-23</td></tr>
+    <tr><td><code>stoatchat/for-web</code></td><td>new Solid.js client</td><td>TS</td><td class="n-col">736</td><td class="n-col">304</td><td class="n-col">2026-08-08</td></tr>
+    <tr><td><code>stoatchat/for-desktop</code></td><td>Electron — <b>fresh repo</b>; the old one (1,029 stars) was abandoned</td><td>TS</td><td class="n-col">346</td><td class="n-col">130</td><td class="n-col">2026-08-05</td></tr>
+    <tr><td><code>stoatchat/for-android</code></td><td>native Kotlin / Compose</td><td>Kotlin</td><td class="n-col">225</td><td class="n-col">83</td><td class="n-col">2026-08-04</td></tr>
+    <tr><td><code>stoatchat/for-ios</code></td><td>native Swift — <b>TestFlight only, &ldquo;not yet ready for production&rdquo;</b></td><td>Swift</td><td class="n-col">134</td><td class="n-col">27</td><td class="n-col">2026-06-14</td></tr>
+    <tr><td><code>revoltchat/vortex</code></td><td>original custom voice server — <b>deprecated</b></td><td>Rust</td><td class="n-col">120</td><td class="n-col">3</td><td class="n-col">2024-03-28</td></tr>
+  </tbody>
+</table></div>
+
+<h2 id="shipped"><span class="num">02</span>What they shipped, in what order</h2>
+
+<p>Reconstructed from commit archaeology, release tags and the blog. The ordering is the interesting part — note how late basic moderation and safety arrive, and how many years separate a feature request from its shipment.</p>
+
+<div class="scroll"><table>
+  <thead><tr><th class="n-col">Date</th><th>Shipped</th><th>Note</th></tr></thead>
+  <tbody>
+    <tr><td class="n-col">2020-04</td><td>Permissions, invites, bans</td><td>Three months in.</td></tr>
+    <tr><td class="n-col">2021-07 / 08</td><td>Search; bots API</td><td></td></tr>
+    <tr><td class="n-col">2021-11-04</td><td><b>Masquerade</b> — per-message name/avatar override</td><td>Built for plural systems and bridge bots. Discord has no equivalent. See §07.</td></tr>
+    <tr><td class="n-col">2022-01</td><td>Server discovery flags</td><td>Became &ldquo;Discover&rdquo; — a curated directory, and <b>proprietary</b>, so self-hosters never get it.</td></tr>
+    <tr><td class="n-col">2022-04</td><td>Voice reimplementation (attempt 1)</td><td>§03.</td></tr>
+    <tr><td class="n-col">2022-07</td><td>Custom emoji (07-07), reactions (07-15)</td><td>2½ years in. <span class="src">pqp has neither.</span></td></tr>
+    <tr><td class="n-col">2022-11</td><td>Webhooks</td><td>Including GitHub payload format.</td></tr>
+    <tr><td class="n-col">2023-02-23</td><td><b>Reports + admin panel + Authifier Shield anti-spam</b></td><td>Announced in <a href="https://github.com/stoatchat/stoat.chat/tree/main/src/content/blog">&ldquo;Three new ways Revolt will be improving user safety&rdquo;</a>. Shield had <i>already</i> stopped three registration-spam waves before the post. Unusually early for the size — and still not enough (§05).</td></tr>
+    <tr><td class="n-col">2023-06-11</td><td><b><code>username#discriminator</code> migration</b></td><td>The single most effective thing they ever did. §04.</td></tr>
+    <tr><td class="n-col">2023-12-01</td><td>New Solid.js client demo</td><td>Material 3, full theme engine.</td></tr>
+    <tr><td class="n-col">2024-09-30</td><td>File-server rewrite → Backblaze B2, AES-256-GCM at rest</td><td></td></tr>
+    <tr><td class="n-col">2024-11-03</td><td><b>Vortex deprecated</b> — &ldquo;rewriting completely to use LiveKit&rdquo;</td><td>§03.</td></tr>
+    <tr><td class="n-col">2024-11-28</td><td>Push notifications service (pushd, RabbitMQ)</td><td>Breaking release v0.8.0.</td></tr>
+    <tr><td class="n-col">2025-02-07</td><td>Android Early Access on Google Play</td><td>Four years after launch. §08.</td></tr>
+    <tr><td class="n-col">2025-10-01</td><td><b>Revolt → Stoat</b></td><td>§01.</td></tr>
+    <tr><td class="n-col">2026-01-10</td><td><b>v0.9.0 — voice chats v2 (LiveKit)</b>, Tenor GIFs, auth-required search</td><td>The end of the voice saga, 4½ years after it started.</td></tr>
+    <tr><td class="n-col">2026-02-10</td><td>v0.11.0 — including, verbatim in the release notes, <i>&ldquo;appeal to the almighty Spamhaus&rdquo;</i></td><td>Their own noreply address had landed on the Spamhaus blocklist.</td></tr>
+    <tr><td class="n-col">2026-03-29</td><td>v0.12.0 — <b>slowmode, transfer ownership, restrict server creation, message sweep on ban</b>, thumbhash</td><td>Read that list again: this is the <b>anti-abuse</b> release, shipped six weeks <i>after</i> the migration wave that needed it.</td></tr>
+    <tr><td class="n-col">2026-05-09</td><td>v0.13.0 — role icons, emoji rename, webhook edit/delete, ack rewrite, <b>SSRF blocklist</b></td><td>The SSRF blocklist arrives with the security advisory in §05.</td></tr>
+    <tr><td class="n-col">2026-06-30</td><td><b>Gifbox</b> — their own GIF platform</td><td>Because Tenor's API is shutting down. They shipped a Tenor-compatible API for other apps too.</td></tr>
+    <tr><td class="n-col">2026-07-15</td><td>v0.14.0 — <b>pronouns</b> (requested Aug 2021), <b>Audit Logs</b>, Tenor→Gifbox</td><td>A five-year-old request lands.</td></tr>
+    <tr><td class="n-col">2026-08-07/08</td><td>v0.15.x — approximate member counts, call events, <b>&ldquo;moderation API for pulling reported images&rdquo;</b></td><td>Shipping this week.</td></tr>
+  </tbody>
+</table></div>
+
+<h4>Abandoned or deprecated along the way</h4>
+<p>Vortex (§03). The original desktop repo (1,029 stars — replaced with a fresh one at the rebrand rather than renamed). A TWA build and a self-run F-Droid repo, orphaned in 2022 and <b>still serving a three-year-old build</b>. A CLI. A components library. Their CLA (dropped for DCO, May 2024). Tenor. And an internal premium-tier work package with an end date of 2025-10-31 that appears to have simply lapsed.</p>
+
+<div class="callout bad">
+  <span class="tag">Never shipped, despite being the top asks</span>
+  <p><b>Threads / forums</b> — open since 2022, 84 and 66 upvotes across two discussions. <b>E2EE</b> — open since 2021-10-30, 138 upvotes; MLS was chosen as the protocol in Feb 2026 and it is still, by a maintainer's own description, in the &ldquo;theorizing phase.&rdquo; <b>Automod.</b> <b>Federation</b> (refused — §05). <b>A Discord importer</b> (refused — §06). <b>iOS general availability.</b> <b>F-Droid / Flatpak / a plain APK.</b></p>
+  <p>pqp already has threads. That's worth noticing: a feature Stoat's users have wanted for four years is already built.</p>
+</div>
+
+<h2 id="voice"><span class="num">03</span>The voice saga — read this one twice</h2>
+
+<p>This is the most directly transferable thing in the whole document, because it is the exact decision pqp has already made differently.</p>
+
+<pre><code>2021-08   Vortex begins — custom SFU, Rust, mediasoup
+          ...never leaves "(in development)" status...
+2024-01   last substantive Vortex commit
+2024-04   LiveKit port attempt #1 (PR 318) — abandoned
+2024-11-03 Vortex formally deprecated: "rewriting completely to use LiveKit"
+2025-05-01 LiveKit port attempt #2 opened (PR #414, "voice chats v2")
+2025-11-12 ...merged. +3,349 / -659 across 102 commits
+2026-01-10 ships in backend v0.9.0
+2026-02-16 publicly confirmed generally available
+
+           elapsed: 4 years, 5 months
+</code></pre>
+
+<p>Three and a half years building a custom SFU that never shipped, then eighteen more months porting to LiveKit across two attempts. And it didn't end there: they now <b>maintain hard forks of <code>livekit-server</code> and <code>livekit-protocol</code></b> (created 2025-10-23, with patches through July 2026 adding mute/unmute webhooks, room telemetry and participant counts) — because a chat app needs presence signals an SFU doesn't natively emit.</p>
+
+<div class="callout good">
+  <span class="tag">What this validates, and what it warns about</span>
+  <p><b>Validates:</b> pqp's LiveKit decision is the ending of Stoat's story, reached at the start instead of after 4½ years. <code>docs/voice-backends.md</code>, the server-decides-and-pins-the-transport design, and &ldquo;a client that cannot use it is refused rather than silently split off&rdquo; are all the mature version of what Stoat arrived at the hard way.</p>
+  <p><b>Warns about two things.</b> First: the <code>cloudflare-sfu</code> stub in pqp is Vortex-shaped — a half-built alternate transport that falls back to mesh. Vortex sat in &ldquo;(in development)&rdquo; for three years and was never archived even after deprecation. Either finish it, delete it, or label it dead loudly enough that nobody mistakes it for a plan. Second: <b>expect to patch LiveKit.</b> Stoat needed participant counts and mute webhooks badly enough to fork the server. pqp keeps presence on <code>/ws</code> in both modes, which is a better answer to the same problem — but budget for the discovery that the SFU doesn't tell you something you need.</p>
+</div>
+
+<div class="callout bad">
+  <span class="tag">And the part that should genuinely alarm you</span>
+  <p>Video and screenshare were <b>code-complete but not enabled on the flagship instance, for bandwidth cost</b>. Self-hosters got it around March 2026; the hosted service — the one with a million registered users, during the largest migration wave in its history — did not, because there is no money. The <a href="https://github.com/stoatchat/for-web">for-web</a> repo shipped the screen-picker and screenshare-audio UI in May and June 2026 for a feature the flagship couldn't afford to turn on.</p>
+  <p><b>pqp's mesh voice has exactly this economics.</b> Mesh is free because peers pay; LiveKit and TURN are not. The moment pqp's voice is good enough to be the reason people come, its cost curve becomes the constraint — and Stoat is the proof that &ldquo;we'll monetise when we need to&rdquo; fails, because the moment you need to is the moment you have no time.</p>
+</div>
+
+<h2 id="growth"><span class="num">04</span>How they grew: harvesting other people's crises</h2>
+
+<p>Their own discussion volume, month by month, is the cleanest available proxy for attention. Baseline is roughly 10&ndash;20 per month:</p>
+
+<div class="bars">
+  <div class="bar-row"><span class="lbl">baseline</span><span class="track"><span class="fill" style="width:4%"></span></span><span class="val">~15/mo</span></div>
+  <div class="bar-row"><span class="lbl">2021-08/09</span><span class="track"><span class="fill" style="width:16%"></span></span><span class="val">55, 59</span></div>
+  <div class="bar-row"><span class="lbl">2023-06</span><span class="track"><span class="fill" style="width:11%"></span></span><span class="val">41</span></div>
+  <div class="bar-row"><span class="lbl">2024-10</span><span class="track"><span class="fill" style="width:20%"></span></span><span class="val">72</span></div>
+  <div class="bar-row"><span class="lbl">2026-02</span><span class="track"><span class="fill hot" style="width:100%"></span></span><span class="val">365 — 24&times;</span></div>
+</div>
+
+<p>Every one of those spikes has an external cause:</p>
+
+<div class="scroll"><table>
+  <thead><tr><th class="n-col">When</th><th>The exogenous event</th><th>What Stoat did</th></tr></thead>
+  <tbody>
+    <tr><td class="n-col">2021-09</td><td>Hacker News front page, 642 points</td><td>Nothing in particular. It just landed.</td></tr>
+    <tr><td class="n-col">2023-06</td><td><b>Discord kills discriminators</b> and forces unique usernames</td><td><b>Shipped <code>username#discriminator</code> in the same week</b> — deliberately the reverse of Discord's move — plus the 100K-users post. Three HN threads. Their single most effective act of positioning.</td></tr>
+    <tr><td class="n-col">2024-10</td><td>Discord banned in Turkey and Russia</td><td>Absorbed 2&ndash;3 dozen registrations per second, gated signups, ate two DDoS waves, hit 500K. See §05.</td></tr>
+    <tr><td class="n-col">2026-02</td><td><b>Discord announces age verification (2026-02-09)</b></td><td>&ldquo;+9,900% Stoat searches in 48h&rdquo; (Windows Central, 2026-02-10). Status page read <i>&ldquo;There's simply too many people&rdquo;</i> (TechRadar, 2026-02-15). Presence and typing indicators were switched off. Issue volume in <code>for-web</code> went from 8 in January to 259 in February.</td></tr>
+  </tbody>
+</table></div>
+
+<h4>The tactics that visibly worked</h4>
+<ul>
+  <li><b>Being the drop-in lookalike at the moment of a Discord crisis.</b> Not a strategy so much as a standing readiness — and the thing they were never quite ready for.</li>
+  <li><b>Counter-positioning on a specific subtraction.</b> Discord removed discriminators; Stoat added them and said so loudly. Cheap, legible, and it converted.</li>
+  <li><b>GitHub Discussions as the town square.</b> 1,294 discussions, upvote-ranked, maintainers answering in public. It doubles as a roadmap, a support channel and a legitimacy signal — and it costs nothing to run.</li>
+  <li><b>Bluesky as the outage channel.</b> Posting &ldquo;there's simply too many people&rdquo; in real time during a wave reads as authenticity rather than failure.</li>
+  <li><b>Transparency artefacts.</b> Public crisis logs, incident postmortems, milestone posts with self-deprecating humour, joke locales in Weblate (OwO, Pirate, Bottom, Enchantment Table), a Supporter badge at £3.</li>
+</ul>
+
+<h4>And what visibly didn't</h4>
+<ul>
+  <li><b>No announcements pipeline since October 2024.</b> The rebrand — the single biggest event in the project's history — was never announced in their own Discussions.</li>
+  <li><b>The tagline backlash.</b> &ldquo;Please don't brand stoat as &lsquo;a chat where you are the main character&rsquo;&rdquo; is the <b>second-most-upvoted discussion in the project's history (286 upvotes)</b>, posted 2026-02-10 — at the peak of the wave, by the new arrivals.</li>
+  <li><b>Losing a chunk of each wave to missing table stakes.</b> TechCrunch (2026-03-01) and other coverage listed the same gaps every time: mobile voice, threads, no importer.</li>
+</ul>
+
+<h2 id="problems"><span class="num">05</span>The problems they hit in public</h2>
+
+<h3>Scaling</h3>
+<p>Their October 2024 crisis log (<a href="https://github.com/orgs/stoatchat/discussions/789">discussion #789</a>, 131 upvotes, 95 comments) is worth reading in full: registrations arriving at 2&ndash;3 dozen per second, signup gating via <code>BlockedByShield</code>, two DDoS waves, a database migration performed solo across roughly nine-hour days, and an explicit note about <i>&ldquo;taking longer breaks away to avoid burnout.&rdquo;</i></p>
+
+<blockquote>
+  <p>&ldquo;The current architecture is unsustainable and is hitting bottlenecks&hellip; there's not enough bandwidth to go around.&rdquo;</p>
+  <cite>insertish, for-web issue #557, 2026-02-13</cite>
+</blockquote>
+
+<p>A read-replica fix during that wave silently dropped events and had to be reverted. StatusGator has recorded 48 outages since April 2026, including a multi-hour one on 2026-08-02.</p>
+
+<div class="callout warn">
+  <span class="tag">Direct hit on pqp</span>
+  <p><code>docs/HANDOVER.md</code> lists <i>&ldquo;move rate limiting + presence to Redis before running more than one API instance&rdquo;</i> as suggested-next-work item <b>8 of 10</b>. Stoat's history says that's the item that decides whether a wave becomes users or becomes a status page. <code>server/src/lib/rate-limit.ts</code> is in-process and its own header explains how N replicas multiply every limit — so today pqp cannot scale horizontally at all, which means a wave has exactly one failure mode. That item belongs near the top, and it belongs there <i>before</i> any marketing.</p>
+</div>
+
+<h3>Moderation and abuse</h3>
+<ul>
+  <li>A roughly <b>two-person</b> trust-and-safety function. The admin-panel README offers support only <i>&ldquo;if you contribute financially or via code, as we are currently very much resource constrained.&rdquo;</i></li>
+  <li>Parts of that admin panel are <b>closed-source inside an AGPLv3 repository</b> — an open licence-violation issue against themselves.</li>
+  <li><i>&ldquo;We simply don't have the bandwidth to manually handle such a plethora of spam accounts&rdquo;</i> (DeclanChidlow, 2026-01-18).</li>
+  <li>Their own no-reply address landed on the <b>Spamhaus</b> blocklist in January 2026.</li>
+  <li><b>No automod. No CSAM hash-matching in the codebase</b> — ClamAV only. A CSAM-policy clarification PR has sat unmerged since June 2025 in a now-archived legal repo. The first &ldquo;moderation API for pulling reported images&rdquo; shipped <b>this week</b>, August 2026.</li>
+  <li>Their approach to the UK Online Safety Act is a <b>geoblocking microservice created on 2025-07-25 — the day the OSA's children's duties took effect</b> — that does exactly one thing: flag <code>GB</code> via a Cloudflare header so the client can age-gate. A direct question about UK compliance in their discussions has no maintainer answer.</li>
+</ul>
+
+<div class="callout bad">
+  <span class="tag">The comparison that should be uncomfortable</span>
+  <p>pqp is <b>ahead</b> of a million-user competitor here, and that is not a compliment to either party. pqp has a real 18+ gate with a DOB check, an instance-level report queue, automated reports, member timeouts, an audit log with retention, blocks, and a fail-closed content-scan architecture with 36 provider tests. Stoat, at 1M registered users, has ClamAV and two people.</p>
+  <p>But pqp's <code>CONTENT_SCAN_PROVIDER</code> is empty, so the scanning is architecture without a provider — and <code>HANDOVER</code> item 4 notes the OSA illegal-content risk assessment was <b>due 16 March 2025</b> and the NCA CSEA-IRP registration went live 7 April 2026 with no size threshold. Stoat's answer to the same obligation was a geoblock and silence. <b>Don't benchmark against that.</b> Being better than the incumbent alternative is not the same as being compliant, and three of the four items on that list cost nothing.</p>
+</div>
+
+<h3>Funding — the sharpest lesson in the document</h3>
+<p>Donations only: Ko-fi, Boosty, a £3 Supporter badge. <i>&ldquo;Financial transparency reports coming soon™&rdquo;</i> has been promised since May 2024 and never delivered. And then this pattern:</p>
+
+<pre><code>2025-05   ToS subscription language drafted — unmerged branch adds Stripe
+          integration and a full "Section 8: Subscriptions"
+2025-10-20 A Mollie payments SDK is vendored into the repo
+           ...referenced by zero services...
+2026-02   Migration wave. Discussion threads full of "Let us pay you!"
+2026-04   Video/screenshare still off on the flagship, for bandwidth cost</code></pre>
+
+<p><b>A paid tier designed twice and launched never</b>, while the users were actively asking to pay and the product was rationing features for want of money. Maintainers state repeatedly that they volunteer around day jobs — <i>&ldquo;again, I have a day job&rdquo;</i> (insertish, 2025-11-18); <i>&ldquo;I don't have enough free time to fully maintain it anymore&rdquo;</i> (Zomatree, on iOS, 2026-02-10).</p>
+
+<h3>Federation — refused, consistently, since 2021</h3>
+<p>Worth correcting the record: <b>they never promised federation and then dropped it.</b> They have refused it since September 2021, and the clearest statement of why is from 2026-02-15 (<a href="https://github.com/orgs/stoatchat/discussions/1073">discussion #1073</a>, 212 upvotes): building it would be <i>&ldquo;a herculean effort&hellip; we'd rather put that time into features that appeal to more people (such as screen sharing, DM encryption).&rdquo;</i> The older FAQ put it more bluntly: <i>&ldquo;Matrix does federation well and we don't intend to compete with it.&rdquo;</i></p>
+<p>The recurring debates are largely a <b>documentation artefact</b>: the rebrand broke the FAQ links that answered the question, so the argument gets re-litigated every wave. That's a cheap, avoidable, self-inflicted cost.</p>
+
+<h3>Self-hosting</h3>
+<p>2,572 stars on the deploy repo, and a support burden with little return. Official clients still <b>cannot point at your own instance</b> (open since April 2025, blocked on a backend issue). Self-hosters get no admin panel, no Discover, no automod. The config file's documentation request was closed as not-planned with <i>&ldquo;the documentation is the root file.&rdquo;</i> And the honest summary, from the founder:</p>
+
+<blockquote>
+  <p>&ldquo;I don't believe we &lsquo;advertise&rsquo; self hosted support.&rdquo;</p>
+  <cite>insertish, self-hosted#141, 2025-11-18</cite>
+</blockquote>
+
+<p>They eventually made two community volunteers maintainers of that repo (2026-02-25) — the correct move, arrived at late.</p>
+
+<h3>Security advisories, for calibration</h3>
+<p>Unrestricted account creation (2024-06); a webhook token leak permitting full-history fetch (2025-02-10); and <b>an unauthenticated SSRF in their embed service plus a stored XSS in the web client, both 2026-05-17</b>. pqp has <code>server/src/lib/safe-fetch.ts</code> with SSRF guards and body caps, and 36 fail-closed scan tests — the shape of defence Stoat added after the advisory.</p>
+
+<h3>Trust incidents</h3>
+<ul>
+  <li><b>AI-code disclosure.</b> Three trivial Claude-authored commits triggered a disclosure demand; all three were reverted and the thread was locked (2026-01-08; it also made Hacker News). <span class="src">pqp is an agent-built codebase. This is worth a position before it's a controversy.</span></li>
+  <li><b>Branding backlash</b> as the second-most-upvoted discussion ever (§04).</li>
+  <li>Separately and to their credit: Makles publicly called out Andrew Tate's &ldquo;The Real World&rdquo; for AGPL-violating use of Revolt's code (2022-12-05).</li>
+</ul>
+
+<h2 id="importer"><span class="num">06</span>The importer they refused to build</h2>
+
+<p>This connects directly to <a href="./discord-transfer.html">Doc 1</a>, and it independently confirms the line that doc draws.</p>
+
+<blockquote>
+  <p>&ldquo;We won't be implementing message scraping from discord&hellip; Enabling others to do this on their own instances could still bring us under fire if discord wishes to do so.&rdquo;</p>
+  <cite>IAmTomahawkx, 2025-05-04, <a href="https://github.com/orgs/stoatchat/discussions/905">discussion #905</a>; restated 2026-02-22</cite>
+</blockquote>
+
+<p>Roughly fourteen import requests since 2021. The refusal is specifically about <b>message scraping</b> — and they explicitly left open the possibility of a data-export-based self-import, which nobody has built. Meanwhile the gap is filled by third-party tools (rambros3d's Discord Migrator, LazyCat2/discord-to-revolt) that do <b>structure only, no history</b>.</p>
+
+<div class="callout good">
+  <span class="tag">Convergent conclusion, arrived at independently</span>
+  <p>Doc 1 recommends a <b>structure-only</b> importer via Discord Guild Templates and recommends against message history. Stoat — with a million users, four years of requests, and every incentive to build it — reached the same split from the legal side: history is the part they won't touch, and structure is the part their community built for them.</p>
+  <p>Two things follow. <b>One:</b> the structure-only importer is an unclaimed wedge in this market, not a commodity — the leading open alternative has publicly declined to build it. <b>Two:</b> Doc 1's Guild Template route is <i>better</i> than what the third-party cloners do, because it needs no bot in the user's server and no privileged intents, which is precisely the exposure Stoat's maintainers were worried about.</p>
+</div>
+
+<h2 id="unthought"><span class="num">07</span>Features pqp probably hasn't thought about</h2>
+
+<div class="scroll"><table>
+  <thead><tr><th>Theirs</th><th>What it is</th><th>Worth it for pqp?</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><b>Masquerade</b><br><span class="src">2021-11-04</span></td>
+      <td>Per-message name and avatar override, with role colours. Built for plural systems and for bridge bots to relay other people's messages faithfully.</td>
+      <td><span class="y">pqp already has the mechanism</span> — <code>webhook_username</code> / <code>webhook_avatar_url</code> per message, plus <code>users.is_webhook</code>. It's currently webhook-only plumbing. Exposing it deliberately is nearly free, and it's the primitive that makes bridges look native.</td>
+    </tr>
+    <tr>
+      <td><b>Deep theming as identity</b><br><span class="src">custom CSS, then a Material-You engine</span></td>
+      <td>Full user CSS in the legacy client; dynamic colour in the new one; a community themes repo.</td>
+      <td><span class="y">Strongly aligned.</span> pqp already has an oklch token system and <code>docs/THEMING.md</code> scoping role tokens and synced preferences. Note the cautionary detail: <b>the new client dropped custom CSS and users are still mourning it</b> — theming is a feature you can't take back.</td>
+    </tr>
+    <tr>
+      <td><b>Own GIF platform</b><br><span class="src">Gifbox, 2026-06-30</span></td>
+      <td>They built and launched a GIF service because Tenor's API is shutting down — with a Tenor-compatible API so other apps can use it.</td>
+      <td><span class="m">Do not build this.</span> But do note the <i>fact</i>: pqp has <code>/api/gifs/config</code>. If it's Tenor-backed, that's a dependency with a published end date. Worth checking this week.</td>
+    </tr>
+    <tr>
+      <td><b>Joke locales</b><br><span class="src">OwO, Pirate, Bottom, Enchantment Table</span></td>
+      <td>Nonsense translations in their Weblate instance.</td>
+      <td><span class="y">Cheap delight, and culturally on-target</span> for a Brazilian audience that named a community <i>&ldquo;Anão vestido de Palhaço mata 8&rdquo;</i>. Costs an afternoon.</td>
+    </tr>
+    <tr>
+      <td><b>Supporter badge at £3</b></td>
+      <td>The smallest possible paid thing: a badge, not a feature gate.</td>
+      <td><span class="y">The right first monetisation</span> — no feature to build, no entitlement logic, no support burden. See lesson 1.</td>
+    </tr>
+    <tr>
+      <td><b>Curated discovery with listing guidelines and activity pruning</b></td>
+      <td>&ldquo;Discover&rdquo; — a human-curated server directory, deliberately not an algorithm.</td>
+      <td><span class="m">Directly relevant to <a href="./communities-orkut.html">Doc 3</a>'s Comunidades concept</span>, which independently recommends the curated-listing model. Note that Stoat kept it <b>proprietary</b> — the one feature they carved out of the AGPL, which tells you what they think its value is.</td>
+    </tr>
+    <tr>
+      <td><b>Bridges as community-supplied</b></td>
+      <td>revcord, Lightning, matrix-appservice-revolt — all third-party, listed in an awesome-list.</td>
+      <td><span class="y">The correct posture.</span> pqp's Discord-wire-compatible incoming webhooks already make this possible for someone else to build. Document that capability and let them.</td>
+    </tr>
+    <tr>
+      <td>KaTeX math, advanced markdown, pronouns, role icons, slowmode, transfer ownership, audit logs</td>
+      <td>The long tail.</td>
+      <td><span class="src">pqp has audit logs. Slowmode and transfer-ownership are cheap and were, for Stoat, abuse-response features. Worth pre-building rather than post-building.</span></td>
+    </tr>
+  </tbody>
+</table></div>
+
+<h2 id="mobile"><span class="num">08</span>Mobile and app-store reality</h2>
+
+<p>The brief asked specifically about app-store pain. The honest finding: <b>no documented Apple or Google rejection or removal, anywhere.</b> Their mobile problems are entirely self-inflicted, and that's more useful.</p>
+
+<div class="scroll"><table>
+  <thead><tr><th>Platform</th><th>State</th><th>Lesson</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><b>Android</b></td>
+      <td>Native Kotlin/Compose. Early Access on Google Play since <b>2025-02-07</b> — four years after launch. Google Play only, with Google's PairIP DRM applied. Unavailable in Russia and Belarus (open issue, unanswered — nobody knows if that's Google or a developer setting). The self-run F-Droid repo has been orphaned since 2022 and still serves a three-year-old build.</td>
+      <td><b>An orphaned distribution channel is worse than none.</b> A three-year-old build sitting on a live F-Droid repo actively damages trust.</td>
+    </tr>
+    <tr>
+      <td><b>iOS</b></td>
+      <td>Native Swift. <b>TestFlight only</b>, marked &ldquo;not yet ready for production,&rdquo; at tester capacity since ~June 2026, and its maintainer said in February 2026 he no longer has time. No evidence it was ever submitted for App Store review. Last push 2026-06-14.</td>
+      <td><b>The bottleneck was never Apple. It was one person's spare time.</b> A native iOS client is a permanent staffing commitment, not a project.</td>
+    </tr>
+    <tr>
+      <td><b>Desktop</b></td>
+      <td>Electron. The 1,029-star repo was abandoned at the rebrand and replaced with a fresh one — losing the stars, the issue history, and the search ranking.</td>
+      <td><b>Rename repos, don't replace them.</b> GitHub redirects renames for free.</td>
+    </tr>
+  </tbody>
+</table></div>
+
+<div class="callout warn">
+  <span class="tag">For pqp specifically</span>
+  <p>pqp is currently a PWA plus an Electron shell plus a <b>new native SwiftUI iOS client</b> in <code>ios/</code> — untracked in git as of this branch. Stoat's iOS story is what that becomes without a sustained owner: a TestFlight build at tester capacity, publicly marked not-production-ready, whose maintainer has run out of hours. <code>docs/PWA.md</code>'s reasoning (&ldquo;no separate mobile codebase — it is the same SPA&rdquo;) is the cheaper posture, and the native client is a deliberate bet against it. Worth being explicit about which one is the primary mobile story, because Stoat is what &ldquo;both&rdquo; looks like after five years.</p>
+</div>
+
+<h2 id="brazil"><span class="num">09</span>Brazil: the read-across</h2>
+
+<p>I went looking for Stoat's Brazilian presence expecting to find a competitor to beat. There isn't one.</p>
+
+<div class="grid">
+  <div class="card">
+    <div class="big">69.7%</div>
+    <div class="cap">pt-BR, their new client</div>
+    <div class="note">575 of 825 strings in <code>for-web</code>'s lingui catalogues (my count, 2026-08-08). pt-PT is 38.8%. The <i>legacy</i> client's pt-BR was 100% complete — so the translation regressed with the rewrite.</div>
+  </div>
+  <div class="card">
+    <div class="big">1</div>
+    <div class="cap">original pt-BR article, ever</div>
+    <div class="note">Xataka Brasil, 2026-02-13 (syndicated to Terra) — and it <b>falsely states Stoat has E2EE by default</b>. Nothing in TecMundo, Olhar Digital or Canaltech.</div>
+  </div>
+  <div class="card">
+    <div class="big">0</div>
+    <div class="cap">Brazilian community or organizer</div>
+    <div class="note">None found. Russian-language demand is visible in their tracker; Portuguese demand is not.</div>
+  </div>
+  <div class="card">
+    <div class="big">not named</div>
+    <div class="cap">in BR coverage of a Discord ban</div>
+    <div class="note">TechTudo, <b>2026-08-07</b> — yesterday — covered a possible Discord ban in Brazil and listed the alternatives as <b>TeamSpeak, Teams and Slack</b>. Stoat wasn't mentioned.</div>
+  </div>
+</div>
+
+<div class="callout good">
+  <span class="tag">The finding that matters most in this document</span>
+  <p><b>Brazil is a live, regulator-driven Discord crisis with no incumbent alternative holding mind-share, and the leading open-source alternative is half-translated and absent from the coverage.</b></p>
+  <p>The context, from Doc 3's legal research: ECA Digital (Lei 15.211/2025) has been in force since 17 March 2026 with ANPD enforcement extending beyond app stores this month; the STF's June 2025 ruling made platforms liable for user content without a court order. Yesterday's TechTudo piece reports the First Lady calling for Discord to be taken down after the Naviraí case, with an AGU civil action. This is the exact shape of every event that gave Stoat a 24&times; spike — except it's in Portuguese, and the slot is empty.</p>
+  <p>Two things pqp needs in order to be in that story: <b>a Portuguese-first landing page on a domain that exists</b> (<code>HANDOVER</code> item 6: <code>pqp.gg</code> is unregistered, and the canonical and OG tags already point at it, so shared links currently render broken previews), and <b>the capacity to survive being in it</b> (<code>HANDOVER</code> item 8). Neither is a feature.</p>
+</div>
+
+<h2 id="sowhat"><span class="num">10</span>So what for pqp — ranked</h2>
+
+<div class="lesson">
+  <span class="rank">01</span>
+  <p class="act">Register <code>pqp.gg</code> and ship a Portuguese-first landing page this month, because the Brazilian Discord crisis is happening now and the alternative slot is provably vacant.</p>
+  <p class="ev"><b>Evidence:</b> TechTudo covered a potential Discord ban in Brazil on 2026-08-07 and named TeamSpeak, Teams and Slack — not Stoat, whose new client is 69.7% translated to pt-BR and which has exactly one original Brazilian article, containing a false E2EE claim. <b>pqp side:</b> <code>HANDOVER</code> item 6 — the domain is unregistered while <code>client/index.html</code> canonical/OG tags already point at it.</p>
+</div>
+
+<div class="lesson">
+  <span class="rank">02</span>
+  <p class="act">Move &ldquo;Redis for rate limiting and presence&rdquo; from item 8 to item 1, because every Stoat growth event was exogenous, unpredictable, and larger than their capacity.</p>
+  <p class="ev"><b>Evidence:</b> discussion #789 (Oct 2024) — 2&ndash;3 dozen registrations/sec, signups gated, DDoS, solo 9-hour database migration; Feb 2026 — <i>&ldquo;the current architecture is unsustainable and is hitting bottlenecks&rdquo;</i> (issue #557), presence and typing disabled, status page reading <i>&ldquo;There's simply too many people.&rdquo;</i> <b>pqp side:</b> <code>server/src/lib/rate-limit.ts</code> is in-process and single-instance by its own documentation — pqp cannot add a second instance today, so a wave has exactly one outcome.</p>
+</div>
+
+<div class="lesson">
+  <span class="rank">03</span>
+  <p class="act">Ship the smallest possible paid thing — a supporter badge, not a feature gate — before you need the money, because Stoat designed a paid tier twice and launched it never while rationing features for want of funds.</p>
+  <p class="ev"><b>Evidence:</b> a Stripe-based subscriptions ToS section drafted May 2025 and never merged; a Mollie SDK vendored 2025-10-20 and referenced by zero services; video and screenshare code-complete but <b>disabled on the flagship for bandwidth cost</b> through the largest wave in their history; Feb 2026 threads full of <i>&ldquo;Let us pay you!&rdquo;</i>; a £3 Supporter badge is the only thing they ever actually shipped. <b>pqp side:</b> <code>docs/billing.md</code> exists and Clerk Billing is item 10 of 10 — and pqp's TURN/LiveKit costs behave exactly like Stoat's bandwidth costs.</p>
+</div>
+
+<div class="lesson">
+  <span class="rank">04</span>
+  <p class="act">Close the CSAM/OSA gap before any public surface ships, and do not take comfort from being ahead of Stoat here.</p>
+  <p class="ev"><b>Evidence:</b> at 1M registered users Stoat has <b>no automod and no CSAM hash-matching</b> (ClamAV only), a ~2-person T&amp;S function, a CSAM-policy PR unmerged since June 2025, a geoblocking microservice created on the exact day the UK OSA children's duties took effect, and an unanswered UK-compliance question in their own discussions. Their first &ldquo;moderation API for pulling reported images&rdquo; shipped in August 2026. <b>pqp side:</b> <code>HANDOVER</code> item 4 — <code>CONTENT_SCAN_PROVIDER</code> is empty, the OSA illegal-content risk assessment was due 16 Mar 2025, and three of the four required actions cost nothing.</p>
+</div>
+
+<div class="lesson">
+  <span class="rank">05</span>
+  <p class="act">Build the structure-only Discord importer, because the leading open alternative publicly refused to and their users have been asking for four years.</p>
+  <p class="ev"><b>Evidence:</b> <i>&ldquo;we won't be implementing message scraping from discord&hellip; Enabling others to do this on their own instances could still bring us under fire&rdquo;</i> (discussion #905, 2025-05-04, restated 2026-02-22); ~14 import requests since 2021; the gap filled by third-party structure-only cloners; TechCrunch's March 2026 coverage listing &ldquo;no importer&rdquo; among the reasons the wave leaked. <b>pqp side:</b> <a href="./discord-transfer.html">Doc 1</a> — ~4 agent-days via Guild Templates, needing no bot and no privileged intents, i.e. avoiding the exact exposure Stoat feared.</p>
+</div>
+
+<div class="lesson">
+  <span class="rank">06</span>
+  <p class="act">Pick the next thing Discord takes away and be loudly the opposite of it, because that is the only growth tactic Stoat ever executed rather than merely received.</p>
+  <p class="ev"><b>Evidence:</b> Discord killed discriminators in mid-2023; Stoat shipped <code>username#discriminator</code> on 2023-06-11 with a blog post explaining it as a deliberate reversal — 41 discussions that month, three HN threads, and the 100K milestone two days later. <b>pqp side:</b> pqp already uses <code>name#1234</code>. That's a positioning asset sitting unused in the schema.</p>
+</div>
+
+<div class="lesson">
+  <span class="rank">07</span>
+  <p class="act">Either finish the <code>cloudflare-sfu</code> adapter or declare it dead in writing, because Vortex spent three years in &ldquo;(in development)&rdquo; and was never archived even after being deprecated.</p>
+  <p class="ev"><b>Evidence:</b> Vortex begun Aug 2021, last substantive commit Jan 2024, formally deprecated 2024-11-03, repo still not archived; one abandoned LiveKit port (Apr 2024) before the one that worked (merged 2025-11-12, shipped 2026-01-10) — 4 years 5 months end to end. <b>pqp side:</b> <code>CLAUDE.md</code> and <code>voice-backends.md</code> describe <code>cloudflare-sfu</code> as a stub that falls back to mesh. LiveKit already covers the need; the stub is pure Vortex-shaped risk.</p>
+</div>
+
+<div class="lesson">
+  <span class="rank">08</span>
+  <p class="act">Write down what happens to pqp if you stop for a month, because bus-factor-one is Stoat's true existential risk and it is pqp's too.</p>
+  <p class="ev"><b>Evidence:</b> <code>insertish</code> authored 75.8% of 1,566 backend commits and a similar share of the web client; sole director of the sole legal entity; on record with <i>&ldquo;again, I have a day job&rdquo;</i> (2025-11-18) and <i>&ldquo;taking longer breaks away to avoid burnout&rdquo;</i> (Oct 2024); their iOS maintainer stepped back for the same reason (2026-02-10). <b>pqp side:</b> the <code>docs/</code> discipline and <code>HANDOVER.md</code> are already the right mitigation — the gap is that nothing states the succession or wind-down posture.</p>
+</div>
+
+<div class="lesson">
+  <span class="rank">09</span>
+  <p class="act">Open a public, upvote-ranked town square now and answer in it yourself, because that is what made a one-person project look like an institution.</p>
+  <p class="ev"><b>Evidence:</b> 1,294 discussions in a repo with no code and 2,322 stars; the monthly volume is a clean growth proxy; maintainers answer there, and the two most-upvoted threads (federation at 212, branding at 286) are both places where public argument substituted for a roadmap document. <b>Counter-evidence to heed:</b> no announcements pipeline since Oct 2024 meant their own rebrand was never announced there — a town square you abandon is worse than none.</p>
+</div>
+
+<div class="lesson">
+  <span class="rank">10</span>
+  <p class="act">Decide the AI-authorship disclosure posture and put it in <code>CONTRIBUTING</code> before someone asks, because Stoat's three trivial Claude commits ended in a full revert and a locked thread.</p>
+  <p class="ev"><b>Evidence:</b> discussion #1022, 2026-01-08 — an AI-code disclosure demand, all three commits reverted, thread locked; it also reached Hacker News. <b>pqp side:</b> pqp is an agent-built codebase with agent-authored commits and a <code>CLAUDE.md</code> at the root. That is either a stated, confident position or an eventual controversy; there is no third option.</p>
+</div>
+
+<div class="lesson">
+  <span class="rank">11</span>
+  <p class="act">Check today whether pqp's GIF integration depends on Tenor, because Stoat built and launched an entire GIF platform in response to Tenor's API shutting down.</p>
+  <p class="ev"><b>Evidence:</b> Gifbox launched 2026-06-30 specifically because Tenor's API is being discontinued; Stoat had only adopted Tenor in v0.9.0 six months earlier (Jan 2026) and had to replace it by v0.14.0 (Jul 2026). <b>pqp side:</b> <code>GET /api/gifs/config</code> exists — a five-minute check with a known end date attached.</p>
+</div>
+
+<div class="lesson">
+  <span class="rank">12</span>
+  <p class="act">State the self-hosting support posture in the README instead of letting it be inferred, because Stoat accumulated 2,572 stars of expectation and then had to say they never advertised support.</p>
+  <p class="ev"><b>Evidence:</b> <i>&ldquo;I don't believe we &lsquo;advertise&rsquo; self hosted support&rdquo;</i> (self-hosted#141, 2025-11-18); official clients still can't point at a custom instance (open since Apr 2025); the config-documentation request closed as not-planned with <i>&ldquo;the documentation is the root file&rdquo;</i>; self-hosters get no admin panel, no discovery, no automod; two community volunteers eventually made maintainers (2026-02-25). <b>pqp side:</b> pqp is self-hostable by design with <code>docs/DEPLOY.md</code> — one honest paragraph now prevents years of that friction.</p>
+</div>
+
+<div class="lesson">
+  <span class="rank">13</span>
+  <p class="act">Don't let a tagline promise a personality the product doesn't have, and rename repos rather than replacing them.</p>
+  <p class="ev"><b>Evidence:</b> <i>&ldquo;please don't brand stoat as &lsquo;a chat where you are the main character&rsquo;&rdquo;</i> is their second-most-upvoted discussion ever (286 upvotes, 2026-02-10), written by wave arrivals; the rebrand replaced a 1,029-star desktop repo with a fresh one, broke the FAQ links that had answered the federation question for four years, and left the company name, a config filename, the Play package id and the Weblate slug still saying &ldquo;revolt.&rdquo; <b>pqp side:</b> <b>trademark-search the name and secure <code>pqp.gg</code> before launch</b> — Revolt got its cease &amp; desist after 4½ years and 500,000 users, and &ldquo;pqp&rdquo; carries its own pt-BR connotations that deserve a deliberate decision rather than a discovered one.</p>
+</div>
+
+<hr>
+
+<h3>Sources</h3>
+
+<h4>First-party — read as markdown/JSON from their public GitHub org</h4>
+<ul class="sources">
+  <li><a href="https://github.com/stoatchat/stoat.chat/tree/main/src/content/blog">stoatchat/stoat.chat — blog content</a>: <code>long-live-stoat.md</code> (2025-10-01 + the 2025-10-03 C&amp;D addendum), <code>100K-users.md</code>, <code>500K-users.md</code>, <code>celebrating-one-million.md</code>, <code>evolving-usernames.md</code>, <code>improving-user-safety.md</code>, <code>refreshing-revolt-web.md</code>, <code>month-in-revolt-august-2024.md</code>, <code>android-early-access.md</code>, <code>introducing-gifbox.md</code>; plus <code>src/content/legal/imprint.mdx</code>.</li>
+  <li><a href="https://github.com/stoatchat/stoatchat">stoatchat/stoatchat</a> — backend monorepo: commit history to the 2020-01-19 initial commit, release notes v0.8.0&ndash;v0.15.1, <a href="https://github.com/stoatchat/stoatchat/pull/414">PR #414 &ldquo;voice chats v2&rdquo;</a>.</li>
+  <li><a href="https://github.com/revoltchat/vortex/issues/31">revoltchat/vortex#31</a> — the 2024-11-03 deprecation and the LiveKit decision.</li>
+  <li>Discussions: <a href="https://github.com/orgs/stoatchat/discussions/789">#789</a> (Oct 2024 crisis log) · <a href="https://github.com/orgs/stoatchat/discussions/988">#988</a> (rebrand confirmation) · <a href="https://github.com/orgs/stoatchat/discussions/905">#905</a> and #1355 (importer refusal) · <a href="https://github.com/orgs/stoatchat/discussions/1073">#1073</a> (federation, 212↑) · #1022 (AI-code disclosure) · #1002 (E2EE, 138↑) · #476, #997 (threads/forums) · #76 (masquerade) · #1100 (custom CSS regression).</li>
+  <li>Issues: <a href="https://github.com/stoatchat/for-web/issues/557">for-web#557</a> (&ldquo;unsustainable&rdquo;) · for-ios#14 (maintainer time) · for-android#98 (PairIP), #58 (Russia/Belarus) · self-hosted#141 (custom instances, &ldquo;day job&rdquo;).</li>
+  <li>Repo metadata, contributor counts, locale catalogues (<code>packages/client/components/i18n/catalogs/*/messages.po</code>) and org listings via the GitHub API, 2026-08-08.</li>
+</ul>
+
+<h4>Third-party</h4>
+<ul class="sources">
+  <li><a href="https://find-and-update.company-information.service.gov.uk/company/16260658">UK Companies House — REVOLT PLATFORMS LTD, no. 16260658</a> (incorporated 2025-02-18; one officer; first accounts due Nov 2026).</li>
+  <li><a href="https://en.wikipedia.org/wiki/Stoat_(software)">Wikipedia — Stoat (software)</a> — launch and beta dates.</li>
+  <li><a href="https://alternativeto.net/news/2025/10/chat-app-revolt-rebrands-to-stoat-keeps-all-services-features-and-core-values-unchanged/">AlternativeTo (Oct 2025)</a> — rebrand coverage.</li>
+  <li>Windows Central 2026-02-10 (&ldquo;+9,900% Stoat searches in 48h&rdquo;) · TechRadar 2026-02-15 (&ldquo;There's simply too many people&rdquo;) · TechCrunch 2026-03-01 (the gap list) · StatusGator (48 outages since Apr 2026).</li>
+  <li>Xataka Brasil 2026-02-13 — the only original pt-BR article; <b>contains a false E2EE claim</b>. TechTudo 2026-08-07 — Brazilian Discord-ban coverage naming TeamSpeak/Teams/Slack.</li>
+  <li>Hacker News: 2021-09-06 front page (642 points); the Jan 2026 AI-code thread.</li>
+</ul>
+
+<h4>Blocked, unread, or unknowable</h4>
+<p class="footnote"><b>Blocked to ClaudeBot and not fetched:</b> stoat.chat (including <code>/updates</code>, which 403s), <code>status.stoat.chat</code>, <code>translate.stoat.chat</code>, <code>api.stoat.chat</code>, <code>support.stoat.chat</code>, their internal Outline and OpenProject hosts, the legacy <code>wiki.revolt.chat</code>, and Reddit. <code>developers.stoat.chat</code> has no robots.txt and was read. <b>Substituted:</b> Weblate percentages are my own arithmetic over the repos' <code>.po</code> and JSON catalogues, not their dashboard. <b>Never published anywhere:</b> MAU/DAU, donation totals, any financial figure. <b>Deliberately withheld by them:</b> who sent the cease &amp; desist — Revolt TV and Revolut are community speculation only, and no filing was found. <b>Unresolved:</b> the exact flagship GA date for LiveKit voice (bounded: merged 2025-11-12, released 2026-01-10, confirmed GA in a comment edited 2026-02-16); whether flagship video/screenshare is enabled today (last statement, Apr 2026, was self-host only); whether the iOS app was ever submitted for App Store review; whether the Russia/Belarus Play absence is Google's decision or theirs; and their CSAM/NCMEC reporting practice, on which nothing is published. GitHub's search API had poor recall on some terms, so the absence-of-evidence claims here (no automod, no app-store rejection) are weaker than the presence claims.</p>
+
+</div>
+</body>
+</html>

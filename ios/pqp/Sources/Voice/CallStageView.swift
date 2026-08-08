@@ -6,9 +6,9 @@ import WebRTC
 /// Mirrors the web stage (`client/src/components/dm/dm-call-stage.tsx`): the
 /// remote person *is* the stage and the self-view is a corner preview; a live
 /// screen share takes the stage instead and pushes people into a rail; ringing
-/// out is one large pulsing identity. Controls are mute, camera, speaker and
-/// hang up — there is no share button, because sending a screen from iOS needs a
-/// ReplayKit broadcast extension that this app does not have.
+/// out is one large pulsing identity. Controls are mute, camera, share, speaker
+/// and hang up; sharing goes through the system broadcast picker, because a
+/// ReplayKit broadcast extension is the only way iOS lets an app send the screen.
 struct CallStageView: View {
     @Environment(CallModel.self) private var call
     @Environment(SessionStore.self) private var session
@@ -25,6 +25,11 @@ struct CallStageView: View {
             VStack(spacing: 0) {
                 topBar
                 Spacer(minLength: 0)
+                ScreenSharePresenterBanner(
+                    isSharing: call.screenShare.isSharing,
+                    errorMessage: call.screenShare.errorMessage
+                )
+                .padding(.bottom, 8)
                 if let message = call.errorMessage {
                     Text(message)
                         .font(Typography.caption)
@@ -56,9 +61,11 @@ struct CallStageView: View {
         switch call.layout {
         case .screen:
             VStack(spacing: 10) {
-                VideoTile(track: call.screenShare, contentMode: .scaleAspectFit)
-                    .clipShape(RoundedRectangle(cornerRadius: Metrics.cornerRadius,
-                                                style: .continuous))
+                ScreenShareStage(
+                    track: call.remoteScreen,
+                    presenterName: call.presenterName,
+                    identifier: "call.screenShare"
+                )
                 participantRail
                     .frame(height: 96)
             }
@@ -241,6 +248,13 @@ struct CallStageView: View {
             }
             .accessibilityIdentifier("call.camera")
             .accessibilityLabel(call.isCameraOn ? "Turn camera off" : "Turn camera on")
+
+            if call.screenShare.isAvailable {
+                ScreenShareControlButton(
+                    isSharing: call.screenShare.isSharing,
+                    identifier: "call.share"
+                )
+            }
 
             CallControlButton(
                 icon: call.isSpeakerOn ? "speaker.wave.3.fill" : "iphone.gen3",

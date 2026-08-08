@@ -1,0 +1,683 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>One-click Discord transfer — feasibility spike (pqp)</title>
+<style>
+  :root {
+    --bg: #16181d;
+    --rail: #101216;
+    --panel: #1d2027;
+    --panel-2: #24272f;
+    --panel-3: #2c3038;
+    --border: #33373f;
+    --border-strong: #454a54;
+    --text: #e9e7e0;
+    --muted: #a3a29c;
+    --subtle: #c9c7c0;
+    --accent: #c4e848;
+    --accent-dim: #9dbb3a;
+    --danger: #ef6b58;
+    --warning: #e0b64a;
+    --success: #5fc98d;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Fira Code", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, Helvetica, Arial, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 940px; margin: 0 auto; padding: 48px 24px 120px; }
+  header.doc { border-bottom: 1px solid var(--border); padding-bottom: 24px; margin-bottom: 40px; }
+  .kicker {
+    font-family: var(--mono); font-size: 12px; letter-spacing: 0.12em;
+    text-transform: uppercase; color: var(--accent-dim); margin: 0 0 10px;
+  }
+  h1 { font-size: 2.1rem; line-height: 1.2; margin: 0 0 12px; letter-spacing: -0.02em; }
+  .sub { color: var(--muted); font-size: 1.05rem; margin: 0; max-width: 68ch; }
+  .meta { font-family: var(--mono); font-size: 12px; color: var(--muted); margin-top: 18px; }
+  h2 {
+    font-size: 1.35rem; margin: 56px 0 4px; letter-spacing: -0.01em;
+    padding-top: 20px; border-top: 1px solid var(--border);
+  }
+  h2 .num { font-family: var(--mono); color: var(--accent-dim); font-size: 0.85em; margin-right: 10px; }
+  h3 { font-size: 1.05rem; margin: 32px 0 8px; color: var(--text); }
+  h4 { font-size: 0.95rem; margin: 22px 0 6px; color: var(--subtle); }
+  p { margin: 0 0 14px; }
+  a { color: var(--accent); text-decoration: none; border-bottom: 1px solid rgba(196,232,72,0.3); }
+  a:hover { border-bottom-color: var(--accent); }
+  code {
+    font-family: var(--mono); font-size: 0.86em; background: var(--rail);
+    color: var(--accent); padding: 1px 5px; border-radius: 4px; border: 1px solid var(--border);
+    word-break: break-word;
+  }
+  pre {
+    font-family: var(--mono); font-size: 0.82rem; line-height: 1.55;
+    background: var(--rail); border: 1px solid var(--border); border-radius: 8px;
+    padding: 16px 18px; overflow-x: auto; margin: 0 0 18px;
+  }
+  pre code { background: none; border: none; padding: 0; color: var(--subtle); }
+  ul, ol { margin: 0 0 16px; padding-left: 24px; }
+  li { margin-bottom: 7px; }
+  li > ul, li > ol { margin-top: 7px; margin-bottom: 4px; }
+  .verdict {
+    border: 1px solid var(--accent-dim); border-left: 4px solid var(--accent);
+    background: linear-gradient(90deg, rgba(196,232,72,0.07), rgba(196,232,72,0.01));
+    border-radius: 8px; padding: 22px 24px; margin: 0 0 36px;
+  }
+  .verdict .label {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--accent); margin-bottom: 8px;
+  }
+  .verdict .headline { font-size: 1.22rem; font-weight: 600; line-height: 1.4; margin-bottom: 12px; }
+  .verdict p:last-child { margin-bottom: 0; }
+  .callout {
+    border: 1px solid var(--border-strong); border-left: 3px solid var(--border-strong);
+    background: var(--panel); border-radius: 6px; padding: 14px 18px; margin: 0 0 20px;
+    font-size: 0.95rem;
+  }
+  .callout.warn { border-left-color: var(--warning); }
+  .callout.bad { border-left-color: var(--danger); }
+  .callout.good { border-left-color: var(--success); }
+  .callout .tag {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--muted); display: block; margin-bottom: 5px;
+  }
+  .callout.warn .tag { color: var(--warning); }
+  .callout.bad .tag { color: var(--danger); }
+  .callout.good .tag { color: var(--success); }
+  .callout p:last-child { margin-bottom: 0; }
+  .scroll { overflow-x: auto; margin: 0 0 22px; border: 1px solid var(--border); border-radius: 8px; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.88rem; min-width: 520px; }
+  th, td { text-align: left; padding: 9px 13px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th {
+    background: var(--panel-2); font-family: var(--mono); font-size: 11px;
+    letter-spacing: 0.08em; text-transform: uppercase; color: var(--subtle); font-weight: 600;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:nth-child(even) { background: rgba(255,255,255,0.014); }
+  td code { font-size: 0.85em; }
+  .y { color: var(--success); font-weight: 600; }
+  .n { color: var(--danger); font-weight: 600; }
+  .m { color: var(--warning); font-weight: 600; }
+  .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); margin: 0 0 24px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 16px 18px; }
+  .card .big { font-family: var(--mono); font-size: 1.5rem; color: var(--accent); line-height: 1.2; }
+  .card .cap {
+    font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em;
+    color: var(--muted); margin-top: 6px;
+  }
+  .card .note { font-size: 0.84rem; color: var(--muted); margin-top: 8px; line-height: 1.5; }
+  .journey { list-style: none; padding: 0; counter-reset: step; margin: 0 0 24px; }
+  .journey > li {
+    counter-increment: step; position: relative; padding: 0 0 20px 46px;
+    border-left: 1px solid var(--border); margin-left: 14px; margin-bottom: 0;
+  }
+  .journey > li:last-child { border-left-color: transparent; padding-bottom: 0; }
+  .journey > li::before {
+    content: counter(step); position: absolute; left: -14px; top: 0;
+    width: 28px; height: 28px; border-radius: 50%; background: var(--panel-2);
+    border: 1px solid var(--border-strong); color: var(--accent);
+    font-family: var(--mono); font-size: 12px; display: grid; place-items: center;
+  }
+  .journey .who {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--accent-dim); display: block; margin-bottom: 2px;
+  }
+  .toc { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 18px 22px; margin: 0 0 44px; }
+  .toc ol { margin: 0; padding-left: 22px; font-size: 0.92rem; }
+  .toc li { margin-bottom: 4px; }
+  .toc .h { font-family: var(--mono); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); margin-bottom: 10px; }
+  .footnote { font-size: 0.85rem; color: var(--muted); }
+  .src { font-size: 0.82rem; color: var(--muted); font-family: var(--mono); }
+  ul.sources { font-size: 0.86rem; }
+  ul.sources li { margin-bottom: 5px; }
+  hr { border: none; border-top: 1px solid var(--border); margin: 40px 0; }
+  .pill {
+    display: inline-block; font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em;
+    text-transform: uppercase; padding: 2px 7px; border-radius: 999px;
+    border: 1px solid var(--border-strong); color: var(--muted); vertical-align: middle;
+  }
+  .pill.ok { border-color: var(--success); color: var(--success); }
+  .pill.no { border-color: var(--danger); color: var(--danger); }
+  .pill.mid { border-color: var(--warning); color: var(--warning); }
+  @media (max-width: 620px) {
+    .wrap { padding: 32px 16px 80px; }
+    h1 { font-size: 1.6rem; }
+    body { font-size: 15px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="doc">
+  <p class="kicker">pqp · research spike · doc 1 of 3</p>
+  <h1>&ldquo;One-click Discord transfer&rdquo; — feasibility spike</h1>
+  <p class="sub">What is actually possible in August 2026 for moving a Discord server into pqp, what it costs, what it legally exposes you to, and the two-day version that captures most of the value.</p>
+  <p class="meta">2026-08-08 · researched against Discord's live developer docs and the pqp codebase at <code>launch/p0-hardening</code></p>
+</header>
+
+<div class="verdict">
+  <div class="label">Verdict</div>
+  <div class="headline">Build the structure-only importer now (~3 agent-days). Do not build message-history import — probably ever.</div>
+  <p>Copying <em>channels, categories and ordering</em> is cheap, legally clean, needs no bot and no Discord approvals, and it is the part that actually removes the &ldquo;ugh, I&rsquo;d have to rebuild everything&rdquo; friction. Copying <em>message history</em> costs 10&times; more, requires a privileged intent under annual re-review, forces you to break an invariant <code>s3.ts</code> deliberately documents, and makes you the LGPD controller for thousands of strangers&rsquo; messages and unscanned images — while <code>CONTENT_SCAN_PROVIDER</code> is still empty.</p>
+</div>
+
+<div class="toc">
+  <div class="h">Contents</div>
+  <ol>
+    <li><a href="#means">What &ldquo;one-click&rdquo; would have to mean</a></li>
+    <li><a href="#template">Route A — Guild Templates: structure with zero bot</a></li>
+    <li><a href="#bot">Route B — a user-authorized bot: what it can really read</a></li>
+    <li><a href="#ratelimits">Rate-limit math for a 10k-message server</a></li>
+    <li><a href="#attachments">Attachments: the signed-CDN-URL problem</a></li>
+    <li><a href="#datapackage">Route C — Discord's Data Package (and why it doesn't help)</a></li>
+    <li><a href="#selfbot">Route D — user tokens / self-bots: the ban route</a></li>
+    <li><a href="#legal">Legal reality, including Brazil</a></li>
+    <li><a href="#pqp">What pqp already has to receive an import</a></li>
+    <li><a href="#v1">The pragmatic v1 design</a></li>
+    <li><a href="#journey">User journey walkthrough</a></li>
+    <li><a href="#effort">Effort estimate</a></li>
+    <li><a href="#failures">Failure modes</a></li>
+    <li><a href="#decision">Decision, and what would change my mind</a></li>
+  </ol>
+</div>
+
+<h2 id="means"><span class="num">01</span>What &ldquo;one-click&rdquo; would have to mean</h2>
+
+<p>&ldquo;Transfer my Discord server&rdquo; is four separable products wearing one button. Ranked by value-per-unit-of-pain:</p>
+
+<div class="scroll"><table>
+  <thead><tr><th>Layer</th><th>What the user feels if it's missing</th><th>Cost to build</th><th>Verdict</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><b>Structure</b><br><span class="src">channels, categories, order, topics</span></td>
+      <td>&ldquo;I have to hand-rebuild 40 channels.&rdquo; The single biggest reason an admin never tries an alternative.</td>
+      <td>Low</td>
+      <td><span class="pill ok">build</span></td>
+    </tr>
+    <tr>
+      <td><b>People</b><br><span class="src">the member list</span></td>
+      <td>&ldquo;It's empty in here.&rdquo; The real churn killer — but not solvable by copying.</td>
+      <td>N/A</td>
+      <td><span class="pill mid">invite, not copy</span></td>
+    </tr>
+    <tr>
+      <td><b>History</b><br><span class="src">messages, attachments</span></td>
+      <td>&ldquo;Our old jokes are gone.&rdquo; Real, but people rarely scroll back. Discord stays readable anyway.</td>
+      <td>High</td>
+      <td><span class="pill no">skip</span></td>
+    </tr>
+    <tr>
+      <td><b>Identity</b><br><span class="src">roles, emoji, permissions</span></td>
+      <td>&ldquo;Where are our roles / our emoji?&rdquo; pqp structurally cannot receive most of this yet.</td>
+      <td>Blocked</td>
+      <td><span class="pill no">blocked upstream</span></td>
+    </tr>
+  </tbody>
+</table></div>
+
+<p>The rest of this doc is mostly about proving that the cheap row is genuinely cheap and the expensive rows are genuinely expensive.</p>
+
+<h2 id="template"><span class="num">02</span>Route A — Guild Templates: structure with zero bot</h2>
+
+<p>This is the finding that changes the shape of the whole project, and it is not what anyone expects when they hear &ldquo;Discord import.&rdquo;</p>
+
+<p>Discord has a first-class, supported <b>Guild Template</b> resource. A server admin with <code>MANAGE_GUILD</code> creates one from Server Settings and gets a link like <code>discord.new/AbCd1234</code>. Anyone can then read that snapshot:</p>
+
+<pre><code>GET https://discord.com/api/v10/guilds/templates/{template.code}</code></pre>
+
+<p>The response contains a <code>serialized_source_guild</code> object holding the entire structural skeleton of the server:</p>
+
+<div class="scroll"><table>
+  <thead><tr><th>In the template</th><th>Not in the template</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>
+        Guild name, description, icon hash, locale, verification level<br>
+        <b>All channels</b>: name, <code>type</code>, <code>position</code>, <code>topic</code>, <code>parent_id</code>, <code>nsfw</code>, <code>bitrate</code>, <code>rate_limit_per_user</code><br>
+        <b>All categories</b> (they are just <code>type: 4</code> channels)<br>
+        <b>All roles</b>: name, colour, <code>permissions</code> bitfield, hoist, mentionable<br>
+        <b>Per-channel <code>permission_overwrites</code></b>, referencing template-local role ids<br>
+        AFK / system channel wiring
+      </td>
+      <td>
+        Members — <span class="n">none at all</span><br>
+        Messages — <span class="n">none at all</span><br>
+        Attachments — <span class="n">none</span><br>
+        Custom emoji and stickers — <span class="n">not included</span><br>
+        Webhooks, integrations, bans, invites
+      </td>
+    </tr>
+  </tbody>
+</table></div>
+
+<div class="callout good">
+  <span class="tag">Why this is the right primitive</span>
+  <p>It is exactly the subset pqp can usefully receive, and it is a subset containing <b>zero third-party personal data</b>. No member names, no message bodies, no avatars. The only personal data involved is the admin's own act of pasting a link. Every LGPD, Developer-Policy and content-scanning problem in this document evaporates on this route.</p>
+</div>
+
+<p>Practical notes and caveats I'd want verified against the live API before shipping:</p>
+<ul>
+  <li><b>Auth:</b> Discord's docs list no auth requirement on <code>GET /guilds/templates/{code}</code>, and in practice it behaves as a public read. Assume you may still need a bot token in the <code>Authorization: Bot &hellip;</code> header — that's a token in Railway env, <i>not</i> a bot in the user's server, and requires no verification and no privileged intents. Test both before committing to the copy on the landing page.</li>
+  <li><b>Snapshots go stale.</b> A template is frozen at creation unless the admin hits &ldquo;Sync.&rdquo; Show the template's <code>updated_at</code> in the preview so nobody imports a six-month-old layout and blames you.</li>
+  <li><b>One template per guild</b> in the UI, and creating one requires <code>MANAGE_GUILD</code> — which is the correct authorization gate for &ldquo;copy my server's shape somewhere else.&rdquo; The permission check is done for you, by Discord, for free.</li>
+  <li><b>It's a paste, not an OAuth dance.</b> No redirect URIs, no client secret, no consent screen, no app review. The user pastes a URL. That is genuinely one click plus one paste.</li>
+</ul>
+
+<h2 id="bot"><span class="num">03</span>Route B — a user-authorized bot: what it can really read</h2>
+
+<p>The classic design: register a Discord application, send the admin to an OAuth2 URL with <code>scope=bot</code> and a <code>permissions</code> bitfield, they pick their server, the bot joins, you read via REST. Everything below is per-guild and requires the bot to actually be in the guild with <code>VIEW_CHANNEL</code>.</p>
+
+<div class="scroll"><table>
+  <thead><tr><th>What you want</th><th>Endpoint</th><th>Page size</th><th>Gate</th></tr></thead>
+  <tbody>
+    <tr><td>Channels &amp; categories</td><td><code>GET /guilds/{id}/channels</code></td><td>all in one call<br><span class="src">threads excluded</span></td><td><span class="y">none</span></td></tr>
+    <tr><td>Roles &amp; permission bitfields</td><td><code>GET /guilds/{id}/roles</code></td><td>all in one call</td><td><span class="y">none</span></td></tr>
+    <tr><td>Custom emoji</td><td><code>GET /guilds/{id}/emojis</code></td><td>all in one call</td><td><span class="m">per-guild emoji buckets are documented as unreliable — Discord warns these routes &ldquo;may return inaccurate quotas and unexpected 429s&rdquo;</span></td></tr>
+    <tr><td>Active threads</td><td><code>GET /guilds/{id}/threads/active</code></td><td>all active, id-desc<br><span class="src">archived need per-channel calls</span></td><td><span class="y">none</span></td></tr>
+    <tr><td>Member list</td><td><code>GET /guilds/{id}/members</code></td><td><b>1000</b>/req, <code>after</code> cursor</td><td><span class="n">GUILD_MEMBERS privileged intent</span></td></tr>
+    <tr><td>Message history</td><td><code>GET /channels/{id}/messages</code></td><td><b>100</b>/req (default 50), <code>before</code>/<code>after</code>/<code>around</code>, mutually exclusive</td><td><span class="n">MESSAGE_CONTENT privileged intent</span> + <code>READ_MESSAGE_HISTORY</code></td></tr>
+  </tbody>
+</table></div>
+
+<h3>The privileged-intent gate is the load-bearing constraint</h3>
+
+<p>Two of the three privileged intents are exactly the two you'd need, and one of them bites harder than most people realise:</p>
+
+<div class="callout bad">
+  <span class="tag">The trap</span>
+  <p><b><code>MESSAGE_CONTENT</code> gates REST responses, not just Gateway events.</b> Without it, <code>GET /channels/{id}/messages</code> returns message objects with <code>content</code>, <code>embeds</code>, <code>attachments</code> and <code>components</code> emptied out. This is a long-standing, well-documented behaviour — see <a href="https://github.com/Rapptz/discord.py/issues/7661">discord.py #7661</a>, where <code>channel.history()</code> returns contentless messages. You cannot sidestep the intent by &ldquo;just using REST.&rdquo;</p>
+</div>
+
+<p>The 2026 rules, which changed recently and in your favour:</p>
+
+<div class="grid">
+  <div class="card">
+    <div class="big">10,000</div>
+    <div class="cap">users, new review threshold</div>
+    <div class="note">As of <b>10 June 2026</b> the privileged-intent review trigger moved from &ldquo;100 servers&rdquo; to &ldquo;10,000 unique users reached.&rdquo; Below that you self-enable in the Developer Portal. A day-0 importer is comfortably under it.</div>
+  </div>
+  <div class="card">
+    <div class="big">90</div>
+    <div class="cap">days to submit, once notified</div>
+    <div class="note">You keep working while under review. Approval needs a specific use case, minimal intent requests, and a written data-retention story.</div>
+  </div>
+  <div class="card">
+    <div class="big">annual</div>
+    <div class="cap">re-application</div>
+    <div class="note">Existing access must be <b>reapplied for every year</b>. This is the part to hate: a launch feature whose continued existence depends on a yearly review of a data-retention policy you'd rather not have.</div>
+  </div>
+  <div class="card">
+    <div class="big">100</div>
+    <div class="cap">servers → bot verification</div>
+    <div class="note">A separate process from intent review, unchanged. If the importer succeeds at all, you cross this and inherit an ID-verification and review workflow.</div>
+  </div>
+</div>
+
+<p>Read that grid as a sentence: <i>message-history import is a feature that requires you to annually justify to Discord why you retain Discord message content, in order to help people leave Discord.</i> That is not a fight worth having for a hobby project, and it's not a fight you win by being clever about it.</p>
+
+<h2 id="ratelimits"><span class="num">04</span>Rate-limit math for a 10k-message server</h2>
+
+<p>The rate limits are real but they are <b>not the bottleneck</b>, and it's worth being precise because the internet assumes otherwise.</p>
+
+<p>Discord's published limits: <b>50 requests/second globally</b> per bot, plus per-route buckets keyed by top-level resource (so <code>/channels/A/messages</code> and <code>/channels/B/messages</code> have independent budgets). Responses carry <code>X-RateLimit-Limit</code>, <code>-Remaining</code>, <code>-Reset-After</code>, <code>-Bucket</code>, <code>-Scope</code>; a 429 carries <code>retry_after</code> in seconds (fractional) and a <code>global</code> flag. Separately, <b>10,000 invalid requests per 10 minutes per IP</b> (401/403/429) gets your IP temporarily blocked — but 429s tagged <code>X-RateLimit-Scope: shared</code> don't count against you.</p>
+
+<h3>The arithmetic</h3>
+
+<pre><code>Server:  40 channels, 10,000 messages total, ~250 members
+
+structure    GET /guilds/{id}/channels            1 request
+roles        GET /guilds/{id}/roles               1 request
+emoji        GET /guilds/{id}/emojis              1 request
+members      10,000 / 1000 per page              10 requests   (needs GUILD_MEMBERS)
+messages     10,000 / 100 per page              100 requests   (needs MESSAGE_CONTENT)
+                                                ------------
+                                                113 requests
+
+at the 50 rps global ceiling                      2.3 seconds
+paced politely at 5 rps                          ~23 seconds</code></pre>
+
+<div class="callout">
+  <span class="tag">So what</span>
+  <p>A 10k-message server is <b>113 API calls</b>. That is not a rate-limiting problem; it is a rounding error. Anyone who tells you Discord's rate limits make history import hard is wrong about <i>which</i> resource is scarce. The scarce resources are <b>bytes</b> (attachments) and <b>your own reliability</b> (a Railway redeploy mid-import, with no job table to resume from).</p>
+</div>
+
+<p>Where it does get uncomfortable: pagination is strictly sequential per channel (each page's oldest id becomes the next <code>before</code>), so a single 200k-message channel is 2,000 serial round-trips — maybe 7&ndash;10 minutes of wall clock with backoff. Fan out across channels, not within one.</p>
+
+<h2 id="attachments"><span class="num">05</span>Attachments: the signed-CDN-URL problem</h2>
+
+<p>Since December 2023, every Discord CDN attachment URL is signed:</p>
+
+<pre><code>https://cdn.discordapp.com/attachments/{channel}/{message}/file.png?ex=&lt;hex&gt;&amp;is=&lt;hex&gt;&amp;hm=&lt;hmac&gt;
+
+ex  hex unix timestamp — when this URL stops working
+is  hex unix timestamp — when it was issued
+hm  HMAC over the above</code></pre>
+
+<p>Strip the params, or let <code>ex</code> pass, and you get a 404 &ldquo;This content is no longer available.&rdquo; Signatures are short-lived (widely reported as ~24h from issue; Discord's docs decline to commit to a number). Discord refreshes them automatically for URLs it renders in its own client, and it will re-sign a bare CDN URL you pass into an embed or a webhook <code>avatar_url</code>.</p>
+
+<p><b>This kills hotlinking outright.</b> A pqp message whose image points at <code>cdn.discordapp.com</code> is a 404 by tomorrow. There is no &ldquo;just link to Discord's copy and save on storage&rdquo; option — the option people assume exists does not exist. You either copy the bytes or you show nothing.</p>
+
+<h3>And copying the bytes fights pqp's architecture</h3>
+
+<p>From <code>server/src/lib/s3.ts</code>, line 13, in the file's own header comment: <i>&ldquo;No object bytes ever pass through this process — the browser PUTs and GETs.&rdquo;</i> That is a deliberate, load-bearing invariant. The module exports <code>presignPut</code>, <code>presignGet</code>, <code>headObject</code>, <code>deleteObject</code> — and <b>no upload function at all</b>. Meanwhile <code>server/src/lib/safe-fetch.ts</code> caps response bodies at <code>MAX_BODY_BYTES = 512 * 1024</code> with a 5s timeout, because it exists to fetch OpenGraph tags, not media.</p>
+
+<p>So a history import needs you to: add a server-side <code>putObject</code>, add a large-body fetch path that bypasses the 512 KB cap, add <code>cdn.discordapp.com</code> to a host allowlist, and then hold hundreds of megabytes of streaming I/O inside the same process that serves the API and the WebSocket. Each of those is individually fine. Together they undo the thing that currently makes pqp's attachment story simple enough for one person to reason about.</p>
+
+<div class="callout bad">
+  <span class="tag">The one that should end the conversation</span>
+  <p><code>docs/HANDOVER.md</code> lists the CSAM / OSA compliance gap as priority #4, with <code>CONTENT_SCAN_PROVIDER</code> still empty. History import means <b>volunteering to permanently host several hundred megabytes of unreviewed images from a community you know nothing about</b>, in your R2 bucket, under your name, with no scanning. Structure-only import stores zero bytes. This asymmetry is not close.</p>
+</div>
+
+<h2 id="datapackage"><span class="num">06</span>Route C — Discord's Data Package (and why it doesn't help)</h2>
+
+<p>Discord's <b>Request all of my data</b> flow (Settings → Privacy &amp; Safety) emails a ZIP. It is a genuine, GDPR/LGPD-shaped export and it is completely wrong for this job.</p>
+
+<div class="scroll"><table>
+  <thead><tr><th>What's in it</th><th>Why that's not a server migration</th></tr></thead>
+  <tbody>
+    <tr><td>Your own messages, as JSON per channel</td><td><b>Only yours.</b> Nobody else's. A channel restored from your package is a monologue — you talking to yourself for three years. It reads as broken, not nostalgic.</td></tr>
+    <tr><td>A channel-id → channel-name map</td><td>Names only. No types, no categories, no ordering, no topics, no roles. You cannot reconstruct a server's shape from it.</td></tr>
+    <tr><td>The list of servers you're in (id + name)</td><td>Names, not contents.</td></tr>
+    <tr><td>CDN links to files you attached</td><td>Unsigned links to a CDN that now requires signatures. Mostly dead on arrival.</td></tr>
+    <tr><td>Activity folders + an analytics file</td><td>Irrelevant, and radioactive to ingest. Do not ask users to upload their Discord analytics to you.</td></tr>
+  </tbody>
+</table></div>
+
+<p>Plus the operational killer: <b>Discord states the request can take up to 30 days.</b> No onboarding flow survives &ldquo;come back in a month.&rdquo; The Data Package is the right tool for <i>a person archiving their own past</i>, and the wrong tool for <i>a community changing address</i>. Ignore it.</p>
+
+<h2 id="selfbot"><span class="num">07</span>Route D — user tokens / self-bots: the ban route</h2>
+
+<p>The technically-easiest path is to have the admin paste their own Discord user token. Their account already sees every channel; no bot, no intents, no OAuth, no review. Every &ldquo;server cloner&rdquo; on GitHub works this way.</p>
+
+<p>Do not do this. It is unambiguously prohibited: automating a normal user account outside the OAuth2/bot API is against Discord's ToS and API terms and results in account termination. Even <a href="https://github.com/Tyrrrz/DiscordChatExporter">DiscordChatExporter</a> — 11.7k stars, the most legitimate tool in this space — ships the warning in its README:</p>
+
+<pre><code>&gt; [!WARNING]
+&gt; While DiscordChatExporter allows it, automating user accounts is against
+&gt; Discord TOS and may result in you getting banned.
+&gt; If possible, use a bot to export chat logs from accessible channels.</code></pre>
+
+<p>The asymmetry is what matters: <b>the person who gets banned is your user, not you.</b> Shipping a feature whose failure mode is &ldquo;the community leader who championed pqp loses their Discord account&rdquo; is a launch-ending story in a market that runs on word of mouth. There is no version of this that is worth it.</p>
+
+<h2 id="legal"><span class="num">08</span>Legal reality, including Brazil</h2>
+
+<div class="scroll"><table>
+  <thead><tr><th>Approach</th><th>Standing with Discord</th><th>Who's exposed</th></tr></thead>
+  <tbody>
+    <tr><td><b>Guild Template read</b></td><td><span class="y">Sanctioned.</span> A first-party feature designed for exactly this: copying a server's shape. Gated on the admin's own <code>MANAGE_GUILD</code>.</td><td>Nobody</td></tr>
+    <tr><td><b>Bot, invited by admin</b></td><td><span class="y">Legitimate.</span> The intended integration path. Subject to the Developer ToS and Developer Policy, and to intent review at scale.</td><td>You (as data controller)</td></tr>
+    <tr><td><b>User token / self-bot</b></td><td><span class="n">Forbidden.</span> Account termination.</td><td>Your user</td></tr>
+  </tbody>
+</table></div>
+
+<div class="callout warn">
+  <span class="tag">Gap in this research — read before shipping Route B</span>
+  <p>I could not read the current <b>Discord Developer Policy</b> text: <code>discord.com/developers/docs/policies-and-agreements/developer-policy</code> now 301s to <code>docs.discord.com</code>, which 307s to <code>support-dev.discord.com</code>, which returns <b>403</b> to automated fetchers. So I cannot tell you what it currently says about retention limits, bulk collection, or using Discord data to move users to a competing service. If Route B ever gets serious, someone has to read that document with a human browser first. Do not let this doc stand in for it.</p>
+</div>
+
+<h3>Brazil / LGPD</h3>
+
+<p>Structure-only import processes no third-party personal data, so this section is entirely about Route B. If you import message history:</p>
+
+<ul>
+  <li><b>You become the controller of other people's data on someone else's say-so.</b> The consent you collected came from the server admin. The data subjects are the 250 members whose messages, usernames and avatars you just copied. The admin cannot consent for them. Legitimate interest (<i>legítimo interesse</i>) is arguable but it is an argument you'd have to be prepared to make.</li>
+  <li><b>Concrete obligations attach immediately:</b> LGPD data-subject requests answered within 15 days, breach notification to the ANPD within 72 hours, and a lawful basis documented per processing activity — for a dataset you neither generated nor understand.</li>
+  <li><b>The enforcement climate got worse.</b> The ANPD moved from guidance-issuing to active enforcement across 2024&ndash;2025; 2026 is a materially more demanding environment than 2023 was.</li>
+  <li><b>Portability doesn't rescue you.</b> LGPD does grant portability, but it's the <i>subject's</i> right over <i>their own</i> data, and the ANPD hasn't finished regulating it. It is not a licence to bulk-copy a community.</li>
+</ul>
+
+<p>Per <code>MEMORY.md</code>: this is a solo hobby project at day-0 scale, so size this down — nobody is auditing pqp next quarter. But the point isn't fine risk. It's that Route B is the one feature that turns a hobby project into a data controller for strangers, and it does so <i>at launch</i>, for a feature users will barely scroll through.</p>
+
+<h2 id="pqp"><span class="num">09</span>What pqp already has to receive an import</h2>
+
+<h3>Already there, and better than expected</h3>
+
+<div class="scroll"><table>
+  <thead><tr><th>Piece</th><th>Where</th><th>Import-readiness</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><b>A finished export format</b></td>
+      <td><code>server/src/services/export.ts</code> — <code>buildServerExport</code>, <code>ServerExport</code> / <code>ExportChannel</code> / <code>ExportMessage</code> / <code>ExportMember</code></td>
+      <td><span class="y">This is the biggest freebie in the repo.</span> It already carries <code>createdAt</code>, <code>editedAt</code>, <code>authorId</code>, <code>replyToId</code>, <code>pinnedAt</code>, <code>storageKey</code>. Make the Discord adapter emit <i>this</i> shape and the importer becomes format-agnostic — pqp→pqp migration and Discord import become the same code path.</td>
+    </tr>
+    <tr>
+      <td><b>Discord-wire-compatible webhook ingest</b></td>
+      <td><code>POST /api/webhooks/:id/:token</code> (unauthenticated, token-in-URL, matched pre-auth at <code>api/index.ts:3139</code>); <code>services/webhooks.ts</code>; snake_case <code>executeWebhookSchema</code> in <code>packages/shared/src/webhooks.ts</code></td>
+      <td><span class="m">Genuinely useful — for <i>bridging</i>, not importing.</span> It cannot set <code>created_at</code> (every message lands at <code>NOW()</code>), takes no attachments, no <code>reply_to_id</code>, and mints one pseudo-user per webhook rather than per Discord author. It accepts <code>embeds[].timestamp</code> and stores it in <code>webhook_embeds</code> JSONB but never applies it.</td>
+    </tr>
+    <tr>
+      <td><b>Channels, categories, ordering</b></td>
+      <td><code>channels</code> table: <code>type IN ('text','voice','category','thread')</code>, <code>parent_id</code>, <code>position</code>, <code>topic</code>, <code>is_private</code></td>
+      <td><span class="y">Directly maps</span> to what a Guild Template contains. Watch the ordering rule: <code>position</code> is scoped by <code>(parent_id, type)</code> at top level and by <code>parent_id</code> inside a category — <i>not</i> globally like Discord's.</td>
+    </tr>
+    <tr>
+      <td><b>Invites</b></td>
+      <td><code>server_invites</code>; <code>services/invites.ts</code>; <code>POST /api/servers/:id/invites</code>, 8-char codes, optional <code>max_uses</code> / <code>expires_at</code></td>
+      <td><span class="y">Complete.</span> This is how members &ldquo;transfer.&rdquo;</td>
+    </tr>
+    <tr>
+      <td><b>Author spoofing</b></td>
+      <td><code>users.is_webhook</code>, synthetic <code>clerk_id = 'webhook:&lt;uuid&gt;'</code>, per-message <code>webhook_username</code> / <code>webhook_avatar_url</code></td>
+      <td><span class="y">The mechanism exists</span> and is already excluded from user search and mention resolution. Historical authors would ride on this.</td>
+    </tr>
+    <tr>
+      <td><b>Attachment plumbing</b></td>
+      <td><code>services/attachments.ts</code> — presign PUT → browser PUT → <code>headObject</code> verify → claim in the message txn</td>
+      <td><span class="m">Browser-PUT only.</span> Fine for a client-driven import; blocking for a server-side one.</td>
+    </tr>
+  </tbody>
+</table></div>
+
+<h3>Missing, and each one is a real build</h3>
+
+<ol>
+  <li><b>A bulk-insert path.</b> There is no batch create route anywhere. <code>createServer</code> hard-codes exactly two channels in one transaction; everything else is one <code>POST /api/servers/:id/channels</code> at a time against <code>writeLimiter</code> (capacity 30, refill 2/s) — so a 40-channel import driven through public routes takes ~20 seconds of self-inflicted throttling. The importer needs its own service function doing one multi-row insert in one transaction.</li>
+  <li><b>Historical timestamps.</b> Nothing in the codebase passes <code>created_at</code>. Both insert paths (<code>createMessage</code> in <code>services/messages.ts:446</code>, reachable only from the WS <code>message-create</code> branch, and <code>executeWebhook</code>) stamp <code>NOW()</code>. There is no HTTP POST route for messages at all.</li>
+  <li><b>Server-side byte upload.</b> <code>putObject</code> does not exist, by design (§05).</li>
+  <li><b>A job with a memory.</b> There is no queue, no worker, no job table — only unref'd <code>setInterval</code> sweepers inside the API process. A Railway redeploy mid-import strands it with no resume. The closest precedent to copy is <code>sweepPendingAccountDeletions</code>: a durable marker column plus a 5-minute claim loop that finishes interrupted work.</li>
+</ol>
+
+<div class="callout good">
+  <span class="tag">The shape of the answer</span>
+  <p>Structure-only import needs exactly <b>one</b> of those four (bulk insert). History import needs all four, plus the intent, plus the scanner. That 1-vs-4 split is the whole recommendation.</p>
+</div>
+
+<h2 id="v1"><span class="num">10</span>The pragmatic v1 design</h2>
+
+<p><b>Name it honestly.</b> Not &ldquo;Import your Discord server&rdquo; — that promises history and people. Call it <b>&ldquo;Copy your Discord layout&rdquo;</b> / <i>&ldquo;Copie a estrutura do seu Discord&rdquo;</i>. Under-promise in the button, over-deliver in the 20 seconds it takes.</p>
+
+<h3>Flow</h3>
+<ol>
+  <li>Admin pastes a <code>discord.new/&lt;code&gt;</code> template link (with inline instructions for creating one: Server Settings → Templates → Copy Link).</li>
+  <li><code>POST /api/import/discord/preview</code> — server fetches the template, parses it with a Zod schema in <code>@pqp/shared</code>, maps it, returns a tree plus a <b>plain-language list of what will be dropped</b>. No writes.</li>
+  <li>User unchecks whatever they don't want and confirms.</li>
+  <li><code>POST /api/import/discord/apply</code> — one transaction, one multi-row insert, done in under a second. Then hand back an invite link and pre-written text to paste in Discord.</li>
+</ol>
+
+<h3>Mapping table — this <i>is</i> the spec</h3>
+
+<div class="scroll"><table>
+  <thead><tr><th>Discord</th><th>pqp</th><th>Rule</th></tr></thead>
+  <tbody>
+    <tr><td>Category <code>type: 4</code></td><td><code>type: 'category'</code></td><td>1:1.</td></tr>
+    <tr><td>Text <code>0</code>, Announcement <code>5</code></td><td><code>type: 'text'</code></td><td>Announcement flattens to text. Note it in the preview.</td></tr>
+    <tr><td>Voice <code>2</code>, Stage <code>13</code></td><td><code>type: 'voice'</code></td><td>Stage flattens to voice. pqp has no stage concept and shouldn't grow one for this.</td></tr>
+    <tr><td>Forum <code>15</code>, Media <code>16</code></td><td><code>type: 'text'</code></td><td>Flatten, and <b>say so out loud</b> — forums are common in real 2026 servers and a silent flatten is the kind of thing that makes an admin distrust the whole import. pqp's threads (<code>type: 'thread'</code> hanging off a root message) are close in spirit but need a root message that doesn't exist yet.</td></tr>
+    <tr><td>Directory <code>14</code></td><td>— dropped</td><td>Hub-server-only. Silent drop is fine.</td></tr>
+    <tr><td><code>position</code></td><td><code>position</code></td><td><b>Recompute, don't copy.</b> Sort Discord's positions, then renumber contiguously per <code>(parent_id, type)</code> group to match pqp's convention. A naive copy scrambles the sidebar.</td></tr>
+    <tr><td><code>topic</code></td><td><code>topic</code></td><td>Truncate to 200 chars (pqp's <code>updateChannelSchema</code> limit) and mark truncation in the preview.</td></tr>
+    <tr><td><code>name</code></td><td><code>name</code></td><td>Cap 100. Keep emoji in names — <code>📢-anúncios</code> is the aesthetic, don't sanitise the personality out.</td></tr>
+    <tr><td>Deny <code>VIEW_CHANNEL</code> for <code>@everyone</code></td><td><code>is_private = TRUE</code> + importer alone in <code>channel_members</code></td><td><b>Security-critical, fail closed.</b> Any channel not visible to <code>@everyone</code> imports private-and-empty, flagged in the preview as &ldquo;private — you'll need to re-add people.&rdquo; Never resolve ambiguity toward public.</td></tr>
+    <tr><td>Roles (up to 250, with bitfields)</td><td><code>owner</code> / <code>admin</code> / <code>member</code></td><td><b>Do not import roles.</b> Show them read-only in the preview as &ldquo;pqp has three roles; here's what we'd lose&rdquo; and let the admin promote people by hand after. See below.</td></tr>
+    <tr><td>Custom emoji</td><td>—</td><td>Not in templates anyway, and pqp has no custom emoji (<code>DISCORD_GAPS</code> #26). Nothing to decide.</td></tr>
+    <tr><td>Members</td><td>invite link</td><td>See below.</td></tr>
+  </tbody>
+</table></div>
+
+<h3>Why roles are shown, not mapped</h3>
+<p>Discord's model is 250 additive permission bitfields with per-channel overwrites. pqp's is a three-value TEXT enum on <code>server_members.role</code>, with no roles table and no overwrites (<code>DISCORD_GAPS</code> #22 is the unbuilt design, and it's flagged as the largest open item). Any automatic mapping is a lossy privilege decision made by an importer: a <code>Muted</code> role becomes a full member; a <code>Trial Mod</code> with two permissions becomes either a nobody or a full admin. <b>Silently changing who can do what is the worst possible first impression.</b> Show the role list, map nothing, let the human choose. This costs half a day and saves you the one bug class that would make an admin quit.</p>
+
+<h3>Why members are not copied — the honest version</h3>
+<p>Not &ldquo;we chose not to.&rdquo; <b>It is not possible, and it wouldn't work if it were.</b></p>
+<ul>
+  <li>The API gives you Discord user ids, usernames and avatar hashes. It does <b>not</b> give you email addresses. There is no mechanism by which a Discord user becomes a pqp user without that user showing up and authenticating with Clerk.</li>
+  <li>Minting 250 shell accounts produces a member list of ghosts who can't log in, can't be DM'd, and make the server look emptier than an honest empty server. It also means processing 250 people's names and faces because a third party clicked a button.</li>
+  <li>The thing that actually moves people is one message in the old server from someone they trust. So make <i>that</i> the product: after import, hand the admin an invite (<code>server_invites</code>, already built) plus copy-pasteable pt-BR text, and track redemptions. That's your conversion funnel, and it's measurable in a way &ldquo;we copied a member list&rdquo; never is.</li>
+</ul>
+
+<h3>Attachments: neither. Recommend showing nothing.</h3>
+<p>You asked re-upload vs hotlink. The honest answer for v1 is <b>neither, because there are no messages to attach to</b> — and if there were: <b>re-upload, never hotlink.</b> Hotlinking <code>cdn.discordapp.com</code> is a guaranteed 404 within a day (§05), so it isn't a cheaper option, it's a broken one. Re-uploading is correct and unaffordable: it needs <code>putObject</code>, a large-body fetch path, a CDN-expiry race, and content scanning you don't have.</p>
+
+<h3>The v1.5 worth more than history import</h3>
+<div class="callout good">
+  <span class="tag">Bridge mode — flagged, not recommended yet</span>
+  <p>pqp's incoming webhooks are already Discord-wire-compatible with <code>username</code> / <code>avatar_url</code> per-message override. A small bot that relays <i>new</i> Discord messages into pqp via <code>POST /api/webhooks/:id/:token</code> would make a freshly imported pqp server <b>look alive on day one</b>, and let a community drift over instead of jumping. It reuses the existing ingest endpoint with <b>zero new ingest code</b>, and it never stores history — only live traffic, forward-only. That's a much better use of the same effort than backfilling 2019.</p>
+  <p>The catch is the same catch: relaying message content needs <code>MESSAGE_CONTENT</code>. Ship structure-only first, see whether anyone even asks, and only then decide whether bridging is worth taking on a Discord app with an annual review.</p>
+</div>
+
+<h2 id="journey"><span class="num">11</span>User journey walkthrough (v1, realistic)</h2>
+
+<p><b>Marina</b> runs <i>Cafofo Gamer</i> — 380 members, 22 channels across 5 categories, 3 voice rooms, two staff-only channels. She found pqp on Twitter and is curious but not committed.</p>
+
+<ol class="journey">
+  <li><span class="who">pqp · /app, empty state</span>
+    Alongside &ldquo;Create a server&rdquo; there's a second, quieter option: <b>&ldquo;Copiar a estrutura do meu Discord&rdquo;</b>, with the subtitle <i>&ldquo;canais e categorias — sem mensagens, sem membros&rdquo;</i>. The subtitle is the whole trust strategy. She knows exactly what she's getting before she clicks.</li>
+
+  <li><span class="who">pqp · import dialog</span>
+    One field, and a three-step instruction with a screenshot: <i>Discord → Server Settings → Templates → Create Template → Copy Link.</i> No OAuth screen, no &ldquo;pqp wants to read your messages,&rdquo; no bot to approve. She pastes <code>discord.new/kR2mF9xQ</code>.</li>
+
+  <li><span class="who">Discord</span>
+    Creating the template required her <code>MANAGE_GUILD</code> permission — Discord did the authorization check, so pqp never has to ask &ldquo;are you really the admin?&rdquo;</li>
+
+  <li><span class="who">pqp server · preview, ~400ms</span>
+    <code>POST /api/import/discord/preview</code>. She sees her sidebar, rendered as her sidebar: 5 categories, 22 channels, right order, emoji intact in the names. Checkboxes on everything. Two channels carry a <span class="pill mid">privado</span> chip. Above the tree, a snapshot date: <i>template created 3 days ago.</i>
+    <br><br>Below it, a plainly-worded <b>&ldquo;o que não vem&rdquo;</b> panel — messages, members, the 14 roles (listed by name, greyed out), custom emoji, and one line noting <code>#duvidas</code> is a forum channel that will land as a normal text channel. Nothing hidden, nothing spun.</li>
+
+  <li><span class="who">Marina</span>
+    She unchecks <code>#bots-spam</code> and a dead 2023 event category. Hits <b>Criar servidor</b>.</li>
+
+  <li><span class="who">pqp server · apply, one transaction</span>
+    <code>POST /api/import/discord/apply</code>: one <code>servers</code> row, one <code>server_members</code> row (her, <code>owner</code>), one multi-row insert of 18 channels with recomputed contiguous <code>position</code> per <code>(parent_id, type)</code> group, and <code>channel_members</code> rows putting her alone in the two private channels. Under a second. No job table needed because there is no job — it's one write.</li>
+
+  <li><span class="who">pqp · done screen</span>
+    Her server, looking like her server. Then the actual ask, which is the point of the whole feature: an invite link, a <b>Copiar convite</b> button, and pre-written Portuguese to paste in Discord — <i>&ldquo;galera, montei nosso espaço no pqp, tá tudo igual aqui: {link}&rdquo;</i>. Plus one honest line: <i>&ldquo;seu Discord continua lá — nada foi alterado nem apagado.&rdquo;</i></li>
+
+  <li><span class="who">Discord → pqp</span>
+    She pastes it in <code>#geral</code>. Over two days 40 people join. She keeps both open for three weeks. Whether pqp wins is now about voice quality and whether her friends stay — which is the right thing for it to be about, and is exactly what a history importer would have obscured.</li>
+</ol>
+
+<p class="footnote">Note what didn't happen: no consent screen, no bot in her server, no 30-day wait, no privileged intent, no bytes copied, no strangers' data in your database, and no support ticket titled &ldquo;the import stopped at 60%.&rdquo;</p>
+
+<h2 id="effort"><span class="num">12</span>Effort estimate</h2>
+
+<h3>Route A — structure-only <span class="pill ok">recommended</span></h3>
+<div class="scroll"><table>
+  <thead><tr><th>Work</th><th>Where</th><th>Agent-days</th></tr></thead>
+  <tbody>
+    <tr><td>Zod schema for <code>serialized_source_guild</code> + mapping rules (types, position recompute, private-channel inference) as a pure, unit-tested function</td><td><code>packages/shared/src/discord-import.ts</code></td><td>0.75</td></tr>
+    <tr><td>Template fetch (bot token in env, timeout, cache, sane errors for bad/expired/unknown codes)</td><td><code>server/src/services/discord-import.ts</code></td><td>0.5</td></tr>
+    <tr><td><code>createServerFromImport</code> — one txn, one multi-row channel insert, <code>channel_members</code> for privates, caps on channel count</td><td>same</td><td>0.75</td></tr>
+    <tr><td><code>POST /api/import/discord/preview</code> + <code>/apply</code>, a dedicated durable-ish limiter (copy the <code>exportLimiter</code> pattern), audit entries</td><td><code>server/src/api/index.ts</code></td><td>0.5</td></tr>
+    <tr><td>Dialog: paste field, preview tree with checkboxes, &ldquo;what's not coming&rdquo; panel, done screen with invite + pt-BR copy</td><td><code>client/src/components/&hellip;</code></td><td>1.0</td></tr>
+    <tr><td>Tests: mapping fixtures from 3&ndash;4 real templates, private-channel fail-closed test, position-recompute test</td><td></td><td>0.5</td></tr>
+    <tr><td><b>Total</b></td><td></td><td><b>~4 agent-days</b></td></tr>
+  </tbody>
+</table></div>
+<p class="footnote">Call it 3 if you skip the checkbox UI in v0 and import everything. The mapping function and the fail-closed private-channel rule are the parts that must not be rushed.</p>
+
+<h3>Route B — add message history <span class="pill no">not recommended</span></h3>
+<div class="scroll"><table>
+  <thead><tr><th>Work</th><th>Agent-days</th></tr></thead>
+  <tbody>
+    <tr><td>Discord app registration, OAuth2 bot-install flow, bot process/lifecycle, token handling</td><td>2</td></tr>
+    <tr><td>Job table + claim loop + resume-after-restart + progress over WS + cancel</td><td>3</td></tr>
+    <tr><td><code>putObject</code> in <code>s3.ts</code> + large-body fetch path + <code>cdn.discordapp.com</code> allowlisting + streaming, all against an explicit existing invariant</td><td>2</td></tr>
+    <tr><td>Author mapping: pseudo-users per Discord author, <code>created_at</code> on a new insert path, <code>reply_to_id</code> resolution, mention/emoji token rewriting</td><td>2.5</td></tr>
+    <tr><td>Attachment pipeline: CDN expiry handling, MIME allowlist, size caps, quarantine + content-scan integration</td><td>2.5</td></tr>
+    <tr><td>Retention policy, deletion endpoint, LGPD paperwork, privileged-intent application</td><td>1.5 + ongoing</td></tr>
+    <tr><td><b>Total on top of Route A</b></td><td><b>~13.5 agent-days + an annual Discord review + a permanent storage bill + a scanning obligation</b></td></tr>
+  </tbody>
+</table></div>
+
+<h2 id="failures"><span class="num">13</span>Failure modes</h2>
+
+<h4>Route A can actually hit these</h4>
+<ul>
+  <li><b>Template is stale.</b> Snapshot from months ago; admin blames pqp for &ldquo;losing&rdquo; channels. <i>Mitigation: show the template's date prominently in the preview.</i></li>
+  <li><b>Template doesn't exist / was deleted / code typo.</b> Discord returns 404 for a code that was valid yesterday. <i>Mitigation: distinct copy for each of unknown-code, network-failure, and malformed-URL. A generic &ldquo;something went wrong&rdquo; here loses the user permanently.</i></li>
+  <li><b>Hostile template.</b> Nothing stops someone crafting a template with 400 channels, 100-char names, and 4KB topics, then feeding it to your unauthenticated-ish preview endpoint. pqp has <b>no channel-count cap</b> of its own. <i>Mitigation: hard caps in the mapper (say 200 channels, 30 categories), reject above with a clear message, and rate-limit preview per user.</i></li>
+  <li><b>Private-channel misclassification.</b> The one that matters. Discord's overwrite model is richer than a boolean, and an ambiguous case resolved toward <i>public</i> leaks a staff channel's existence and future contents. <i>Mitigation: fail closed, always; unit-test the ambiguous cases; say &ldquo;private&rdquo; in the preview so a human can catch it.</i></li>
+  <li><b>Position scrambling.</b> Copying Discord's global positions into pqp's per-<code>(parent_id, type)</code> scheme produces a sidebar in the wrong order — subtle, and it silently undermines &ldquo;it looks just like your Discord.&rdquo; <i>Mitigation: sort-then-renumber, with a test.</i></li>
+  <li><b>Discord changes or removes the template API.</b> Low probability, total feature loss, zero warning. <i>Mitigation: none available. Accept it — this is a 4-day feature, not a 20-day one, which is part of why 4 days is the right number.</i></li>
+</ul>
+
+<h4>Route B's, for the record</h4>
+<ul>
+  <li><b>Process restart mid-import.</b> A Railway redeploy at 60% leaves a half-populated server and no way to resume. This is <i>far</i> more likely than rate limiting and there is no infrastructure to catch it.</li>
+  <li><b>Rate limiting mid-import</b> is real but survivable — honour <code>retry_after</code> and <code>X-RateLimit-Reset-After</code>, back off per bucket, and remember 429s with <code>Scope: shared</code> don't count toward the 10k invalid-requests ban. The failure mode isn't the 429; it's a naive client that retries into an IP block.</li>
+  <li><b>Huge servers.</b> Discord permits 500 channels. A 2M-message server is ~20,000 serial paginated calls and tens of gigabytes. There is no graceful version of this; you'd need a hard message budget (<code>MAX_EXPORT_MESSAGES = 50_000</code> in <code>export.ts</code> is the existing precedent) and to be blunt about it in the UI.</li>
+  <li><b>Emoji.</b> pqp has no custom emoji at all. Every <code>&lt;:pepehands:123&gt;</code> in imported text renders as literal garbage, and custom-emoji reactions can't be represented — <code>reactionEmojiSchema</code> caps at 32 chars and rejects the token form. An imported history is visibly <i>mangled</i>, not merely incomplete, which is worse than not having it.</li>
+  <li><b>Mentions and Discord-only markup.</b> <code>&lt;@123&gt;</code>, <code>&lt;#456&gt;</code>, <code>&lt;t:1700000000:R&gt;</code>, <code>||spoilers||</code> — all need rewriting or they leak raw tokens into the transcript.</li>
+  <li><b>Attachment expiry race.</b> Long imports outlive their signed URLs. Mid-import 404s on files that existed when you enumerated them.</li>
+  <li><b>Unscanned media at rest.</b> Covered in §05. This is the real one.</li>
+</ul>
+
+<h2 id="decision"><span class="num">14</span>Decision, and what would change my mind</h2>
+
+<div class="verdict">
+  <div class="label">Build now</div>
+  <div class="headline">Structure-only import via Guild Templates. ~4 agent-days.</div>
+  <p>Because it removes the single largest reason an admin won't try pqp, needs no bot, no OAuth, no privileged intent, no Discord review, no bytes, and no strangers' personal data — and because it converts into the thing you actually want, which is an invite link pasted into a live Discord channel by someone people trust.</p>
+</div>
+
+<div class="verdict" style="border-color:#ef6b58; border-left-color:#ef6b58; background:linear-gradient(90deg, rgba(239,107,88,0.07), rgba(239,107,88,0.01));">
+  <div class="label" style="color:#ef6b58">Build never (as currently specified)</div>
+  <div class="headline">Message-history import.</div>
+  <p>Because it costs ~13 more agent-days, undoes <code>s3.ts</code>'s no-bytes-in-process invariant, requires a job system pqp doesn't have, needs a privileged intent renewed annually, makes you the LGPD controller for hundreds of strangers, obliges you to permanently host hundreds of megabytes of unscanned images while <code>CONTENT_SCAN_PROVIDER</code> is empty — and delivers a transcript visibly broken by missing custom emoji and unresolvable mentions, which nobody will scroll.</p>
+</div>
+
+<h3>What would change my mind on history</h3>
+<ul>
+  <li><b>Real demand, counted.</b> Ten admins who completed a structure import asking unprompted for history. Not one loud request — ten.</li>
+  <li><b>Content scanning live.</b> <code>CONTENT_SCAN_PROVIDER</code> configured and proven. This is a hard gate, not a preference.</li>
+  <li><b>Custom emoji shipped</b> (<code>DISCORD_GAPS</code> #26). Without it an imported history is disfigured, and a disfigured history is worse marketing than no history.</li>
+  <li><b>A real job system.</b> Which <code>PLAN_STATUS</code> open item 5 already wants for scaling past one instance — so if that lands for its own reasons, one of history import's four blockers disappears for free.</li>
+</ul>
+
+<p>Even then, I'd build <b>bridge mode</b> (§10) before backfill. Making a new server look alive today beats making it look old.</p>
+
+<hr>
+
+<h3>Sources</h3>
+<ul class="sources">
+  <li><a href="https://docs.discord.com/developers/topics/rate-limits">Discord — Rate Limits</a> — 50 rps global, per-route buckets, <code>X-RateLimit-*</code> headers, 429 body, 10k invalid requests / 10 min per IP, the emoji-route caveat.</li>
+  <li><a href="https://docs.discord.com/developers/resources/message">Discord — Message resource</a> — <code>GET /channels/{id}/messages</code>, limit 1&ndash;100 (default 50), <code>before</code>/<code>after</code>/<code>around</code>, required permissions, attachment object fields.</li>
+  <li><a href="https://docs.discord.com/developers/resources/guild">Discord — Guild resource</a> — channel-type enum (0,2,4,5,10,11,12,13,14,15,16), <code>GET /guilds/{id}/members</code> limit 1&ndash;1000 + <code>GUILD_MEMBERS</code> requirement, active-threads endpoint.</li>
+  <li><a href="https://docs.discord.com/developers/resources/guild-template">Discord — Guild Template resource</a> — <code>POST /guilds/{id}/templates</code> requires <code>MANAGE_GUILD</code>; <code>GET /guilds/templates/{code}</code>; contents of <code>serialized_source_guild</code>; no members / messages / emoji.</li>
+  <li><a href="https://docs.discord.com/developers/reference">Discord — API Reference</a> — CDN signed-URL params <code>ex</code> / <code>is</code> / <code>hm</code>, auto-refresh behaviour, no documented refresh endpoint; snowflake layout and the 1420070400000 epoch.</li>
+  <li><a href="https://docs.discord.com/developers/gateway/getting-started-with-privileged-intent-review">Discord — Getting Started with Privileged Intent Review</a> — the three privileged intents; June 2026 move to a 10,000-user threshold; 90 days to submit; annual reapplication.</li>
+  <li><a href="https://support-dev.discord.com/hc/en-us/articles/40281523410967-Changes-to-Privileged-Intent-Access-for-Discord-Apps">Discord — Changes to Privileged Intent Access</a> — the 10,000-user change, effective 10 June 2026. <span class="src">Referenced via search results; the page itself 403s to automated fetchers.</span></li>
+  <li><a href="https://github.com/Rapptz/discord.py/issues/7661">discord.py #7661 — Empty message content for <code>channel.history()</code></a> — evidence that <code>MESSAGE_CONTENT</code> gates REST history, not only Gateway events.</li>
+  <li><a href="https://support.discord.com/hc/en-us/articles/115002192352-Automated-User-Accounts-Self-Bots">Discord — Automated User Accounts (Self-Bots)</a> — prohibition and termination consequence.</li>
+  <li><a href="https://github.com/Tyrrrz/DiscordChatExporter">Tyrrrz/DiscordChatExporter</a> — 11.7k stars, last push 2026-08-07; the user-token ban warning quoted in §07.</li>
+  <li><a href="https://support.discord.com/hc/en-us/articles/360004957991-Your-Discord-Data-Package">Discord — Your Discord Data Package</a> and <a href="https://support.discord.com/hc/en-us/articles/360004027692-Requesting-a-Copy-of-your-Data">Requesting a Copy of your Data</a> — contents, own-messages-only scope, up-to-30-day turnaround.</li>
+  <li><a href="https://www.bleepingcomputer.com/news/security/discord-will-switch-to-temporary-file-links-to-block-malware-delivery/">BleepingComputer (Oct 2023)</a> — the switch to expiring attachment links and the reason behind it.</li>
+  <li><a href="https://iclg.com/practice-areas/data-protection-laws-and-regulations/brazil/">ICLG — Brazil data protection 2025&ndash;2026</a> and <a href="https://iapp.org/news/a/brazil-s-new-regulation-on-international-data-transfers">IAPP — Brazil's international data transfer rules</a> — LGPD bases, subject rights, portability still pending ANPD regulation, enforcement posture.</li>
+  <li>pqp codebase at <code>launch/p0-hardening</code>: <code>server/src/schema.sql</code>, <code>server/src/api/index.ts</code>, <code>server/src/services/{export,webhooks,attachments,messages,invites,servers,threads}.ts</code>, <code>server/src/lib/{s3,safe-fetch,rate-limit}.ts</code>, <code>packages/shared/src/{api,webhooks}.ts</code>, <code>docs/{DISCORD_GAPS,PLAN_STATUS,HANDOVER}.md</code>.</li>
+</ul>
+
+<p class="footnote"><b>Not verified:</b> the current Discord Developer Policy text (403 to automated fetchers — see §08); whether <code>GET /guilds/templates/{code}</code> truly needs no <code>Authorization</code> header; exact CDN signature lifetime (Discord doesn't publish it; ~24h is community-reported); and per-route bucket sizes for <code>GET /channels/{id}/messages</code>, which Discord deliberately does not document — the §04 arithmetic uses the documented global ceiling and a conservative paced figure.</p>
+
+</div>
+</body>
+</html>

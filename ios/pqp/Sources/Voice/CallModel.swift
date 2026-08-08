@@ -1,6 +1,8 @@
 import Foundation
 import Observation
 import AVFoundation
+import CoreVideo
+import QuartzCore
 import WebRTC
 
 /// Owns the one DM call this device can be in.
@@ -43,6 +45,8 @@ final class CallModel {
     private(set) var isCameraOn = false
     /// The roster, by peer id: mute badges and the screen-share flag.
     private(set) var roster: [String: VoiceParticipant] = [:]
+    /// Outgoing screen share, driven by the ReplayKit bridge.
+    let screenShare = ScreenShareController()
 
     var isMuted = false {
         didSet {
@@ -88,6 +92,7 @@ final class CallModel {
     /// view's `task`, which re-runs on every re-entry into the signed-in shell.
     func attach(session: SessionStore) {
         self.session = session
+        configureScreenShare()
         session.eventHandlers[Self.handlerKey] = { [weak self] event in
             self?.apply(event)
         }
@@ -153,6 +158,10 @@ final class CallModel {
         if isCameraOn {
             await session?.realtime.setCamera(streamId: nil)
         }
+        // Unpublishes and stops listening. The *broadcast* is not ours to stop —
+        // it is a system recording — but the track it feeds dies with the call,
+        // and iOS keeps showing its own red indicator either way.
+        await screenShare.disarm()
         await session?.realtime.leaveVoice()
         await voice.disconnectAll()
         clearCallState()
@@ -220,18 +229,27 @@ final class CallModel {
         conversationId == channelId && phase.isLive
     }
 
-    /// The one screen share on the stage, if anybody is presenting. Sending a
-    /// share from iOS needs a ReplayKit broadcast extension and is not built;
-    /// receiving one is.
-    var screenShare: RTCVideoTrack? {
+    /// The one screen share on the stage, if anybody is presenting.
+    ///
+    /// Only one is possible — the server refuses a second `set-sharing-screen` —
+    /// so taking the first is not a guess.
+    var remoteScreen: RTCVideoTrack? {
         for peerId in peers.map(\.peerId) {
             if let screen = video[peerId]?.screen { return screen }
         }
         return nil
     }
 
+    /// Whose screen it is, for the presenter line.
+    var presenterName: String? {
+        for peer in peers where video[peer.peerId]?.screen != nil {
+            return peer.displayName
+        }
+        return nil
+    }
+
     var layout: CallStageLayout {
-        callStageLayout(remoteCount: peers.count, hasScreenShare: screenShare != nil)
+        callStageLayout(remoteCount: peers.count, hasScreenShare: remoteScreen != nil)
     }
 
     var title: String {
@@ -279,6 +297,32 @@ final class CallModel {
         } catch {
             fail((error as? APIError)?.errorDescription ?? error.localizedDescription)
         }
+    }
+
+    /// Wires the ReplayKit bridge to the mesh. See `VoiceModel` for the twin —
+    /// the two rooms differ in everything but this.
+    private func configureScreenShare() {
+        screenShare.configure(
+            onFrame: { [weak self] buffer, rotation in
+                guard let self else { return }
+                let timestamp = Int64(CACurrentMediaTime() * 1_000_000_000)
+                Task {
+                    await self.voice.pushScreenFrame(
+                        buffer, rotation: rotation, timeStampNs: timestamp
+                    )
+                }
+            },
+            onStart: { [weak self] in
+                guard let self else { return }
+                await self.session?.realtime.setSharingScreen(true)
+                _ = await self.voice.startScreenShare()
+            },
+            onStop: { [weak self] in
+                guard let self else { return }
+                await self.session?.realtime.setSharingScreen(false)
+                await self.voice.stopScreenShare()
+            }
+        )
     }
 
     private func relay(_ signal: VoiceClient.VoiceSignal) async {
@@ -366,6 +410,7 @@ final class CallModel {
                 return
             }
             selfPeerId = peerId
+            screenShare.arm()
             knownPeerIds = Set(existing.map(\.peerId))
             for participant in existing { roster[participant.peerId] = participant }
             if existing.isEmpty {
@@ -436,6 +481,14 @@ final class CallModel {
         case .voiceRoomFull(let limit):
             guard phase.isLive else { return }
             fail(String(localized: "This call is full (max \(limit))."))
+
+        case .voiceScreenShareDenied(let voiceChannelId):
+            guard voiceChannelId == conversationId else { return }
+            Task {
+                await screenShare.refuse(message: String(
+                    localized: "Someone else is already sharing their screen."
+                ))
+            }
 
         case .voiceTransportUnsupported(let voiceChannelId, let transport):
             guard voiceChannelId == conversationId else { return }

@@ -182,7 +182,72 @@ A call survives a socket drop by being **rebuilt, not resumed**. The server
 drops the voice peer when the socket closes and a reconnect mints a *new* peer
 id, so the old mesh is unusable; `ready` tears everything down and rejoins.
 
-Not yet done here: per-peer volume and screen share (the web client has both).
+### The socket that looked online and was not
+
+`RealtimeClient` used `URLSessionConfiguration.timeoutIntervalForResource = 30`.
+That is a ceiling on the *whole* resource load, and a WebSocket **is** the
+resource — so URLSession timed out every socket thirty seconds after it opened.
+The failure was invisible: frames already buffered kept arriving through the
+pending `receive`, so presence, other people's messages and incoming call rings
+all still worked, while every outgoing frame was dropped by the `.running` guard
+in `send`. Answering a DM call therefore sat on "Connecting…" forever (the
+`join-voice-room` never left the phone) and a message typed after half a minute
+simply vanished.
+
+Two things changed. A long-lived socket gets **no lifetime ceiling** — only an
+idle timeout comfortably longer than the ping interval — and a send that cannot
+leave now **reconnects instead of returning quietly**. This connection is the
+only way the app can say anything, so a swallowed frame is a client that looks
+online and does nothing.
+
+## Screen sharing
+
+Both directions work. Receiving is the mesh's ordinary video path; **sending
+needs a ReplayKit broadcast upload extension**, because that is the only way iOS
+lets an app capture the system screen rather than its own window.
+
+| Piece | Where |
+|---|---|
+| Extension (`gg.pqp.app.broadcast`) | `pqp/Broadcast/SampleHandler.swift` |
+| Wire format, downscale, frame clock | `pqp/ScreenShare/ScreenShareWire.swift` |
+| Socket, both ends | `pqp/ScreenShare/ScreenShareSocket.swift` |
+| App-side receive → `CVPixelBuffer` | `Sources/Voice/ScreenShareReceiver.swift` |
+| "Am I sharing" state machine | `Sources/Voice/ScreenShareController.swift` |
+| Picker, share stage, fullscreen | `Sources/Voice/ScreenShareViews.swift` |
+
+The extension is a **separate process**, and the WebRTC peer connections live in
+the app, so frames cross an App Group (`group.gg.pqp.app`) over a **Unix domain
+socket** carrying tightly packed NV12 at ≤720p / 12fps. The reasoning for both
+choices is in the header comment of `ScreenShareWire.swift`; the short version is
+that a socket gives ordering and backpressure for free and a failed write tells
+the extension the app is gone, and that raw NV12 avoids an encode/decode round
+trip across what is local memory.
+
+Things iOS makes awkward, and how they are handled:
+
+- **Starting is the system's decision.** `RPSystemBroadcastPickerView` is the only
+  door, and it must be tapped by the user — so the real control is laid over ours
+  at an alpha UIKit still hit-tests, rather than reaching in for the private
+  button. Nothing changes state until a frame actually arrives, so a picker that
+  is opened and dismissed leaves no trace.
+- **Stopping is the system's decision too**, from the status-bar indicator, and
+  iOS tells the app *nothing* — frames simply stop. Going quiet is the only stop
+  signal that exists, hence the two-second watchdog in `ScreenShareController`.
+- **The socket path must fit `sockaddr_un`** (104 bytes). A device's App Group
+  container path plus `s.sock` fits; the *simulator's* does not, which is one
+  reason the share affordance hides itself there (`isAvailable == false`).
+
+`-pqp.fakeScreenShare` feeds a synthetic moving pattern through the same publish
+path, which is how the wire half is verified without a device: the far end must
+see a stream id of `pqp-screen-…`, a roster with `sharingScreen: true`, and real
+decoded frames.
+
+**Device-only.** ReplayKit broadcast has no simulator equivalent, so the
+extension itself, the App Group container socket, and the `.left`/`.right` ↔
+90°/270° rotation mapping can only be confirmed on hardware.
+
+Per-peer volume is done; screen share is done. Camera-in-voice-channels is not
+(neither client offers it).
 
 ## Writing UI tests here
 
