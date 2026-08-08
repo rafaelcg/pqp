@@ -109,7 +109,7 @@ test.describe("server settings sections", () => {
     ).toBeVisible();
     await expect(panel.getByText("Transfer ownership")).toBeVisible();
     await expect(
-      panel.getByRole("button", { name: "Delete server" }),
+      panel.getByRole("button", { name: "Delete community" }),
     ).toBeVisible();
 
     await page.keyboard.press("Escape");

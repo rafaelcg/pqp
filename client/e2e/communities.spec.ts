@@ -372,7 +372,7 @@ test.describe("Communities", () => {
       timeout: 20_000,
     });
     await page.getByRole("button", { name: "Community settings" }).click();
-    await expect(page.getByText(/Server name/i).first()).toBeVisible();
+    await expect(page.getByText(/Community name/i).first()).toBeVisible();
     await expect(page.locator("[data-community-settings]")).toHaveCount(0);
   });
 });
