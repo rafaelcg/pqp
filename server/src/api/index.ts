@@ -46,10 +46,17 @@ import {
   REPORT_PAGE_SIZE,
   createReportSchema,
   createThreadSchema,
+  claimUserBannerSchema,
   COMMUNITY_PAGE_MAX,
   COMMUNITY_PAGE_SIZE,
+  COMMUNITY_SLUG_PATTERN,
   communityCategorySchema,
   communitySearchQuerySchema,
+  communitySlugSchema,
+  createUserBannerUploadSchema,
+  MAX_USER_BANNER_BYTES,
+  USER_BANNER_HEIGHT,
+  USER_BANNER_WIDTH,
   communityTaglineSchema,
   updateCommunitySchema,
   reportStatusSchema,
@@ -135,9 +142,16 @@ import { listAuditLog, logAudit } from "../services/audit.js";
 import {
   avatarUrlForKey,
   createAvatarUpload,
+  createUserBannerUpload,
+  discardBannerObject,
   isAvatarUploadConfigured,
+  isUserBannerUploadConfigured,
   presignAvatarRead,
+  presignUserBannerRead,
+  setUserBanner,
+  userBannerUrlForKey,
   verifyAvatarObject,
+  verifyUserBannerObject,
 } from "../services/avatars.js";
 import {
   createServerImageUpload,
@@ -150,8 +164,11 @@ import {
 } from "../services/server-images.js";
 import { buildServerExport } from "../services/export.js";
 import {
+  CommunitySlugError,
+  findCommunityIdBySlug,
   getCommunity,
   getCommunitySettings,
+  getPublicCommunity,
   isCommunitiesEnabled,
   joinCommunity,
   listCommunities,
@@ -432,6 +449,19 @@ const publicProfileLimiter = createRateLimiter({
   capacity: 60,
   refillPerSecond: 2,
 });
+/**
+ * The public community page's read. Same posture as `publicProfileLimiter` and
+ * deliberately its OWN bucket rather than a share of it: the two are reached
+ * from different pages by different traffic, and a crawler walking profiles
+ * must not be able to spend the budget a community link going around WhatsApp
+ * needs. No debounce feeds this one — nothing types a slug the way the claim
+ * landing types a handle — so the capacity is the same and the refill is not
+ * asked to cover a burst it will never see.
+ */
+const publicCommunityLimiter = createRateLimiter({
+  capacity: 60,
+  refillPerSecond: 2,
+});
 
 export function resetApiRateLimits(): void {
   apiLimiter.reset();
@@ -451,6 +481,7 @@ export function resetApiRateLimits(): void {
   // is out of its temporal dead zone by the time a test calls it.
   depoimentoLimiter.reset();
   publicProfileLimiter.reset();
+  publicCommunityLimiter.reset();
 }
 
 class Forbidden extends HttpError {
@@ -792,6 +823,105 @@ router.delete("/api/me/avatar", async ({ user }) => {
   invalidateUserCache(updated.clerk_id);
   announceProfile(updated);
   return { user: await toPublicUser(updated) };
+});
+
+// ------------------------------------------------------------- user banners
+//
+// The strip across the top of `pqp.gg/@rafa`. Structurally the avatar routes
+// above with three differences and no fourth: a bigger cap, a different pair of
+// columns, and NO `announceProfile` — nothing in the app draws somebody else's
+// banner, so broadcasting one to every open socket on the instance would be a
+// frame no client has a use for.
+
+/**
+ * Mirrors `GET /api/avatars/config`, limits in both states so the picker can
+ * refuse an over-size file against this deployment's own cap rather than
+ * discovering it on a 413. `enabled: false` is a whole deployment shape and not
+ * an error: with no `S3_*` there is no banner, and the page draws its generated
+ * gradient, which is a design rather than a placeholder.
+ */
+router.get("/api/me/banner/config", async () => ({
+  enabled: isUserBannerUploadConfigured(),
+  maxBytes: MAX_USER_BANNER_BYTES,
+  width: USER_BANNER_WIDTH,
+  height: USER_BANNER_HEIGHT,
+}));
+
+router.post("/api/me/banner", async ({ req, res, user }) => {
+  if (!isUserBannerUploadConfigured()) {
+    throw new HttpError(503, "Banner uploads are not configured on this server");
+  }
+  const key = `banner:${user.id}`;
+  if (!uploadLimiter.take(key)) {
+    res.setHeader("Retry-After", String(uploadLimiter.retryAfter(key)));
+    throw new HttpError(429, "Slow down");
+  }
+
+  const body = createUserBannerUploadSchema.parse(await readJsonBody(req));
+  // The storage key is generated from the SESSION's user id, never from
+  // anything on the request — which is also what makes the claim below able to
+  // trust a key the client hands back.
+  return created(
+    createUserBannerUpload({
+      userId: user.id,
+      contentType: body.contentType,
+      byteSize: body.byteSize,
+    }),
+  );
+});
+
+/**
+ * The bytes are up: make them the banner.
+ *
+ * The HEAD happens here and not at mint time for the reason `docs/ATTACHMENTS.md`
+ * spells out — it is the only thing that tells "never uploaded" apart from
+ * "uploaded", and it catches an object stored as something other than the type
+ * that was signed. A failure is a 400: the request named an object that is not
+ * there or is not what it claimed, which is something the caller got wrong.
+ */
+router.post("/api/me/banner/claim", async ({ req, user }) => {
+  if (!isUserBannerUploadConfigured()) {
+    throw new HttpError(503, "Banner uploads are not configured on this server");
+  }
+  const body = claimUserBannerSchema.parse(await readJsonBody(req));
+  const byteSize = await verifyUserBannerObject(user.id, body.key);
+  if (byteSize === null) {
+    throw new HttpError(400, "That upload could not be verified. Try again.");
+  }
+
+  const updated = await setUserBanner(user.id, {
+    url: userBannerUrlForKey(user.id, body.key),
+    key: body.key,
+  });
+  if (!updated) {
+    throw new NotFound("User not found");
+  }
+  // AFTER the write commits, never before: an object deleted first and then
+  // rolled back is a picture that renders as a broken frame forever.
+  if (updated.previousKey && updated.previousKey !== body.key) {
+    void discardBannerObject(updated.previousKey);
+  }
+  return { user: await toPublicUser(updated.user) };
+});
+
+/**
+ * Back to the gradient.
+ *
+ * Not gated on storage being configured, for the reason the avatar delete is
+ * not: an account that uploaded a banner and then lost its bucket must still be
+ * able to stop pointing at it. Clearing the columns is a database write and
+ * succeeds either way; only the object deletion needs storage, and
+ * `discardBannerObject` is best-effort.
+ */
+router.delete("/api/me/banner", async ({ user }) => {
+  const updated = await setUserBanner(user.id, null);
+  if (!updated) {
+    throw new NotFound("User not found");
+  }
+  if (updated.previousKey) {
+    void discardBannerObject(updated.previousKey);
+  }
+  return { user: await toPublicUser(updated.user) };
 });
 
 /**
@@ -1955,6 +2085,46 @@ router.post(
   },
 );
 
+/**
+ * Resolve a public slug to the listing behind it — for signed-in callers.
+ *
+ * THE OTHER HALF OF `?join=<slug>`, and the exact counterpart of
+ * `/api/users/lookup`'s role in `?add=<handle>`. Somebody clicks "Entrar na
+ * comunidade" on `pqp.gg/c/valorant`, signs up, lands in the app holding a
+ * slug and nothing else — the public page deliberately never gave them an id.
+ * This turns the slug into the listing, and the client then posts the ordinary
+ * join, which re-checks everything under a lock the way it always has.
+ *
+ * ONE ROUTE RATHER THAN A JOIN-BY-SLUG. Splitting resolve from join keeps
+ * exactly one code path that admits a member (`joinCommunity`), with one ban
+ * check, one audit entry and one idempotency story. A second door into the same
+ * room is a second door to remember to lock.
+ *
+ * Behind the flag and the router's auth like everything else here. The 404
+ * covers "no such slug", "not a community" and "suspended" identically —
+ * `findCommunityIdBySlug` cannot tell them apart on purpose.
+ */
+router.get("/api/communities/by-slug/:slug", async ({ user }, { slug }) => {
+  requireCommunities();
+  const parsed = communitySlugSchema.safeParse(slug ?? "");
+  if (!parsed.success) {
+    throw new NotFound("Community not found");
+  }
+  const serverId = await findCommunityIdBySlug(parsed.data);
+  if (!serverId) {
+    throw new NotFound("Community not found");
+  }
+  const community = await getCommunity(user.id, serverId);
+  if (!community) {
+    // Listed and unsuspended, but the viewer is banned from it. Same 404 a
+    // stranger's unknown slug gets — see rule 3 in services/communities.ts: a
+    // ban is invisibility, and a 403 here would confirm where they are
+    // unwelcome and hand them a page to hammer.
+    throw new NotFound("Community not found");
+  }
+  return { community };
+});
+
 /** The owner's own view of their listing. */
 router.get(
   "/api/servers/:serverId/community",
@@ -2013,11 +2183,60 @@ router.patch(
       }
     }
 
-    const updated = await updateCommunitySettings(serverId!, {
-      ...(body.isCommunity !== undefined ? { isCommunity: body.isCommunity } : {}),
-      ...(tagline !== undefined ? { tagline } : {}),
-      ...(body.category !== undefined ? { category: body.category } : {}),
-    });
+    /**
+     * The address, validated here rather than in the schema for the tagline's
+     * reason and one sharper one.
+     *
+     * THE STATUS CODE IS THE FIELD NAME. This route can refuse for exactly one
+     * reason that is not "invalid request": the address. So 400, 409 and 422
+     * from here always mean the address and never anything else, and the
+     * settings form attaches all three to the address input rather than to the
+     * form as a whole. That is a contract worth stating out loud, because the
+     * day a second field can refuse, this stops being true and the form starts
+     * pointing at the wrong box.
+     *
+     * `communitySlugSchema` slugifies first, so an owner who types "Valorant
+     * Brasil" is answered with `valorant-brasil` rather than told off for
+     * typing a space.
+     */
+    let slug: string | undefined;
+    if (body.slug !== undefined) {
+      const parsed = communitySlugSchema.safeParse(body.slug);
+      if (!parsed.success) {
+        throw new HttpError(
+          400,
+          parsed.error.issues[0]?.message ?? "That address cannot be used",
+        );
+      }
+      slug = parsed.data;
+    }
+
+    let updated;
+    try {
+      updated = await updateCommunitySettings(serverId!, {
+        ...(body.isCommunity !== undefined
+          ? { isCommunity: body.isCommunity }
+          : {}),
+        ...(tagline !== undefined ? { tagline } : {}),
+        ...(body.category !== undefined ? { category: body.category } : {}),
+        ...(slug !== undefined ? { slug } : {}),
+      });
+    } catch (error) {
+      // 409 for a collision — the status `HandleTakenError` answers, for the
+      // same reason: the request was well formed and lost a race, and a retry
+      // with a different value works. 422 for a name that cannot become an
+      // address, because nothing about *this* request will be different on a
+      // retry; the owner has to supply something.
+      if (error instanceof CommunitySlugError) {
+        throw new HttpError(
+          error.reason === "taken" ? 409 : 422,
+          error.reason === "taken"
+            ? "That address is already taken. Pick another."
+            : "That name cannot become a web address. Pick one.",
+        );
+      }
+      throw error;
+    }
     if (!updated) {
       throw new NotFound("Server not found");
     }
@@ -2053,6 +2272,20 @@ router.patch(
               key: "communityCategory",
               old: updated.previous.category,
               new: updated.settings.category,
+            },
+          ]
+        : []),
+      // Logged whether or not the owner asked for it, unlike every entry above:
+      // the first opt-in DERIVES a slug from the name, so the most common way
+      // this field moves is one nobody typed. An audit trail that only recorded
+      // deliberate changes would have no record of how a room got the public
+      // URL it is now known by.
+      ...(updated.previous.slug !== updated.settings.slug
+        ? [
+            {
+              key: "communitySlug",
+              old: updated.previous.slug,
+              new: updated.settings.slug,
             },
           ]
         : []),
@@ -3678,6 +3911,54 @@ async function serveAvatarObject(
   res.end();
 }
 
+const USER_BANNER_OBJECT_PATH =
+  /^\/api\/users\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/banner$/;
+
+/**
+ * Somebody's uploaded banner, as a redirect to the object store.
+ *
+ * UNAUTHENTICATED FOR THE REASON `serveAvatarObject` IS, and with a stronger
+ * case: a browser cannot attach a Bearer token to an `<img src>`, and the one
+ * page that draws this is served to people with no account at all. What it
+ * discloses is one image about an account whose id the caller already has — and
+ * the only way to have that id is to be inside the instance, because the public
+ * profile deliberately does not carry one.
+ *
+ * A redirect rather than a proxy, exactly as avatars are: the bytes are in our
+ * own bucket, and streaming eight megabytes per banner per viewer through the
+ * API is the egress bill the presigned-URL design exists to avoid.
+ *
+ * The 404 covers "no such user", "no uploaded banner" and "storage is
+ * unconfigured" identically, so this cannot be used to probe which ids exist.
+ */
+async function serveUserBannerObject(
+  req: IncomingMessage,
+  res: ServerResponse,
+  userId: string,
+): Promise<void> {
+  let url: string | null;
+  try {
+    url = await presignUserBannerRead(userId);
+  } catch (error) {
+    console.error(`[banners] could not resolve ${userId}:`, error);
+    sendError(res, 404, "Not found", req);
+    return;
+  }
+  if (!url) {
+    sendError(res, 404, "Not found", req);
+    return;
+  }
+  // Cacheable because the URL carries `?v=<hash of the key>`: a new banner is a
+  // new address, so nothing here can serve a stale picture. The window stays
+  // under the presigned target's own hour so a cached redirect cannot outlive
+  // the URL it points at.
+  res.writeHead(302, {
+    location: url,
+    "cache-control": "public, max-age=300",
+  });
+  res.end();
+}
+
 const SERVER_IMAGE_OBJECT_PATH =
   /^\/api\/servers\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/(icon|banner)$/;
 
@@ -3823,6 +4104,104 @@ async function servePublicProfile(
   res.end(JSON.stringify({ profile }));
 }
 
+const PUBLIC_COMMUNITY_PATH = /^\/api\/public\/communities\/([^/]{1,64})$/;
+
+/**
+ * One community's public page, by slug.
+ *
+ * THE FIFTH UNAUTHENTICATED ROUTE IN THIS FILE and the second that answers with
+ * something other than bytes. It exists for the reason `servePublicProfile`
+ * does: `pqp.gg/c/valorant-brasil` is a link somebody puts in a Twitch bio, and
+ * a link that demands a login before it renders is a link nobody clicks. The
+ * Pages middleware that injects Open Graph tags calls it too, from an edge
+ * worker that has no session to offer and never will.
+ *
+ * WHAT MAKES THAT SAFE IS THE SHAPE, not the gate. `getPublicCommunity` returns
+ * `publicCommunitySchema` and nothing wider: the name, the address, the pitch,
+ * the category, a member COUNT, the two pictures, and a month. No member list —
+ * that is a disclosure of who talks to whom and is the single worst thing this
+ * page could do — no messages, no channels, no owner, and no id. The id in
+ * particular is withheld so the join intent has to travel as a slug and be
+ * resolved behind auth.
+ *
+ * NOT A BROWSE, WHICH IS WHY IT DOES NOT ROUTE AROUND THE 18+ GATE. There is no
+ * list route and no prefix route; the caller must already hold the exact slug,
+ * which means somebody sent them the link. Reading the poster is not walking
+ * in, and the CTA leads to sign-up and the age check like every other door.
+ *
+ * BEHIND `COMMUNITIES_ENABLED`, and the 404 it answers with when the flag is
+ * off is indistinguishable from an unknown slug. A deployment without the
+ * directory has no public community pages, and a probe cannot learn that a
+ * future version of pqp does.
+ *
+ * Shares `publicProfileLimiter`'s posture but not its bucket: the two are
+ * different traffic shapes reached from different pages, and one budget spent
+ * by a crawler walking profiles must not close the door on a community link
+ * going around WhatsApp.
+ */
+async function servePublicCommunity(
+  req: IncomingMessage,
+  res: ServerResponse,
+  slug: string,
+): Promise<void> {
+  const address = clientAddress(req as never);
+  if (!publicCommunityLimiter.take(`community:${address}`)) {
+    res.setHeader(
+      "Retry-After",
+      String(publicCommunityLimiter.retryAfter(`community:${address}`)),
+    );
+    sendError(res, 429, "Too many requests", req);
+    return;
+  }
+
+  if (!isCommunitiesEnabled()) {
+    sendError(res, 404, "Not found", req);
+    return;
+  }
+
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(slug).toLowerCase();
+  } catch {
+    sendError(res, 404, "Not found", req);
+    return;
+  }
+  // Shape-checked before it reaches Postgres. A slug is a path segment from the
+  // open internet, and the alternative is one query per junk string a scanner
+  // throws at us.
+  if (!COMMUNITY_SLUG_PATTERN.test(decoded)) {
+    sendError(res, 404, "Not found", req);
+    return;
+  }
+
+  let community;
+  try {
+    community = await getPublicCommunity(decoded);
+  } catch (error) {
+    console.error(`[communities] could not resolve ${decoded}:`, error);
+    sendError(res, 503, "Communities temporarily unavailable", req);
+    return;
+  }
+
+  if (!community) {
+    sendError(res, 404, "Not found", req);
+    return;
+  }
+
+  // Cacheable for the same minute the public profile gets, and for the same
+  // three reasons: identical for every caller by construction, obtained with no
+  // credential, and shaped like a link going around a group chat. The 404 above
+  // stays `no-store` — a community can be listed at any moment, and a cached
+  // "no such page" would outlive the decision to publish it.
+  res.writeHead(200, {
+    "Content-Type": "application/json",
+    "Cache-Control": "public, max-age=60",
+    ...SECURITY_HEADERS,
+    ...corsHeaders(req),
+  });
+  res.end(JSON.stringify({ community }));
+}
+
 const WEBHOOK_EXECUTE_PATH =
   /^\/api\/webhooks\/([0-9a-f-]{36})\/([A-Za-z0-9_-]+)$/;
 
@@ -3902,6 +4281,13 @@ export async function handleApi(
     return;
   }
 
+  const userBannerMatch =
+    req.method === "GET" ? USER_BANNER_OBJECT_PATH.exec(pathname) : null;
+  if (userBannerMatch) {
+    await serveUserBannerObject(req, res, userBannerMatch[1]!);
+    return;
+  }
+
   const serverImageMatch =
     req.method === "GET" ? SERVER_IMAGE_OBJECT_PATH.exec(pathname) : null;
   if (serverImageMatch) {
@@ -3918,6 +4304,13 @@ export async function handleApi(
     req.method === "GET" ? PUBLIC_PROFILE_PATH.exec(pathname) : null;
   if (profileMatch) {
     await servePublicProfile(req, res, profileMatch[1]!);
+    return;
+  }
+
+  const publicCommunityMatch =
+    req.method === "GET" ? PUBLIC_COMMUNITY_PATH.exec(pathname) : null;
+  if (publicCommunityMatch) {
+    await servePublicCommunity(req, res, publicCommunityMatch[1]!);
     return;
   }
 

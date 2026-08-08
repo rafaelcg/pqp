@@ -178,8 +178,13 @@ export const ptBR: PartialMessages = {
   "publicProfile.seo.title": "{name} (@{handle}) no pqp",
   "publicProfile.seo.description": "{name} tá no pqp. Me adiciona.",
   "publicProfile.communities": "Comunidades",
+  "publicProfile.communities.count": "membro de {count} comunidades",
+  "publicProfile.communities.count.one": "membro de 1 comunidade",
   "publicProfile.depoimentos": "{count} depoimentos",
   "publicProfile.depoimentos.one": "1 depoimento",
+  "publicProfile.depoimentos.title": "Depoimentos",
+  "publicProfile.depoimentos.more": "e mais {count}",
+  "publicProfile.memberSince": "no pqp desde {date}",
   "publicProfile.cta.add": "Me adiciona no pqp",
   "publicProfile.cta.open": "Abrir no pqp",
   "publicProfile.copy": "Copiar link",
@@ -200,6 +205,33 @@ export const ptBR: PartialMessages = {
   "handle.add.sent": "Pedido de amizade enviado pra {name}.",
   "handle.add.accepted": "Agora vocês são amigos, você e {name}.",
   "handle.add.failed": "Não deu pra adicionar essa pessoa.",
+  "handle.join.done": "Você entrou em {name}.",
+  "handle.join.already": "Você já estava em {name}.",
+  "handle.join.failed": "Não deu pra entrar nessa comunidade.",
+
+  "publicCommunity.seo.title": "{name} — comunidade no pqp",
+  "publicCommunity.seo.description":
+    "{name} é uma comunidade no pqp. Entra aí.",
+  "publicCommunity.members": "{count} membros",
+  "publicCommunity.members.one": "1 membro",
+  "publicCommunity.membersLabel": "gente aqui dentro",
+  "publicCommunity.since": "aqui desde {date}",
+  "publicCommunity.cta.join": "Entrar na comunidade",
+  "publicCommunity.cta.open": "Abrir no pqp",
+  "publicCommunity.copy": "Copiar link",
+  "publicCommunity.copied": "Copiado",
+  "publicCommunity.footer.cta": "Criar a sua comunidade",
+  "publicCommunity.missing.title": "Essa comunidade não tá aqui.",
+  "publicCommunity.missing.body":
+    "Ou o link tá errado, ou a comunidade saiu do ar. Dá uma olhada nas outras.",
+  "publicCommunity.missing.cta": "Ver o que mais tem por aí",
+  "publicCommunity.unavailable.title": "Não deu pra carregar essa comunidade",
+  "publicCommunity.unavailable.body":
+    "Deu ruim do nosso lado. Tenta de novo daqui a pouco.",
+  "publicCommunity.retry": "Tentar de novo",
+  "publicCommunity.whatIsPqp.title": "O que é pqp?",
+  "publicCommunity.whatIsPqp.body":
+    "Voz, chat e compartilhamento de tela pra sua turma. De graça, open source, e seu.",
 
   // ------------------------------------------------------- desktop downloads
   // "Baixar", nunca "fazer download". "Build", "app" e os nomes dos formatos
@@ -344,6 +376,8 @@ export const ptBR: PartialMessages = {
     "Não achou nada que te sirva? Cria a sua comunidade, põe um nome ridículo e manda o link.",
   "communities.create.action": "Criar comunidade",
   "communities.create.placeholder": "Nome da comunidade",
+  "communities.share": "Copiar o link público",
+  "communities.shared": "Link copiado",
   "communities.report": "Denunciar esta comunidade",
   "communities.reportTitle": "Denunciar comunidade",
   "communities.reportBody":
@@ -363,6 +397,14 @@ export const ptBR: PartialMessages = {
   "communities.settings.taglinePlaceholder": "O que rola aqui?",
   "communities.settings.taglineHint": "faltam {count} caracteres",
   "communities.settings.category": "Categoria",
+  "communities.settings.slug": "Endereço público",
+  "communities.settings.slugHint":
+    "Feito a partir do nome quando você lista. Dá pra mudar aqui — os links antigos param de funcionar.",
+  "communities.settings.slugPlaceholder": "sua-comunidade",
+  "communities.settings.slugTaken":
+    "Esse endereço já é de outra comunidade. Escolhe outro.",
+  "communities.settings.slugUnderivable":
+    "Esse nome não vira endereço. Digita um aí embaixo.",
   "communities.settings.save": "Salvar",
   "communities.settings.saving": "Salvando…",
   "communities.settings.saved": "Listagem atualizada.",
@@ -894,6 +936,19 @@ export const ptBR: PartialMessages = {
   "settings.profile.avatar.clear": "Limpar",
   "settings.profile.avatar.upload": "Enviar uma foto",
   "settings.profile.avatar.uploading": "Enviando…",
+  "settings.profile.banner": "Capa do perfil",
+  "settings.profile.banner.hint":
+    "A faixa no topo da sua página pública. {width}×{height} fica melhor.",
+  "settings.profile.banner.empty": "Sem capa — sua página desenha a dela.",
+  "settings.profile.banner.upload": "Enviar uma capa",
+  "settings.profile.banner.replace": "Trocar",
+  "settings.profile.banner.uploading": "Enviando…",
+  "settings.profile.banner.remove": "Remover",
+  "settings.profile.banner.removing": "Removendo…",
+  "settings.profile.banner.unconfigured":
+    "Este servidor não tem armazenamento de arquivos, então não dá pra enviar capa aqui.",
+  "settings.profile.banner.failed": "Não deu pra enviar essa capa.",
+  "settings.profile.banner.removeFailed": "Não deu pra remover a capa.",
   "settings.profile.displayName": "Nome de exibição",
   "settings.profile.username": "Nome de usuário",
   "settings.profile.usernamePlaceholder": "nome_maneiro",

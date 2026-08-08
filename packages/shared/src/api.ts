@@ -294,6 +294,16 @@ export const userSchema = z.object({
    * without a second round trip. Null means never — the first claim is free.
    */
   handleChangedAt: z.string().nullable().default(null),
+  /**
+   * The banner across the top of this account's public page, or null.
+   *
+   * On `userSchema` and deliberately NOT on `publicUserSchema`, exactly as
+   * `handle` is: nothing in the app draws somebody else's banner, and the one
+   * surface that does — `pqp.gg/@rafa` — reads it from the public profile
+   * endpoint keyed by handle rather than from any user payload. Defaulted so a
+   * response from an API that predates banners still parses.
+   */
+  bannerUrl: z.string().nullable().default(null),
 });
 
 /**

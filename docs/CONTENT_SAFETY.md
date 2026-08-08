@@ -580,6 +580,7 @@ failure mode reproduced with better latency.
 | Affordance | Where |
 |---|---|
 | Every directory read requires auth | the router's own gate; there is no anonymous browsing, so the 18+ gate cannot be routed around |
+| The one public page — `pqp.gg/c/<slug>` — is a **poster, not a window** | `publicCommunitySchema`: name, address, tagline, category, member **count**, the two pictures, a month. No member list, no messages, no channels, no owner, no id |
 | A server you are banned from is **invisible**, not merely un-joinable | `LISTED_SQL` in `server/src/services/communities.ts` — grid, search and direct-id lookup alike |
 | Report a whole community from its card | `subjectType: "server"` on `POST /api/reports` |
 | Community reports go to the **instance** queue, never to that community's owner | `resolveServerSubject` writes `context_kind = 'none'` and a NULL `server_id`; the subject lives in `reported_server_id` |
@@ -604,6 +605,16 @@ and its history carry on exactly as a private server would. What stops is being
 findable and being joinable without an invite. That asymmetry is the point:
 pulling a listing is a reversible, low-evidence act you should be willing to take
 within the hour, and deleting a room full of people is not.
+
+**It also takes the public page down**, which is the half that matters most for
+a report that arrived from outside the instance: `pqp.gg/c/<slug>` answers the
+byte-identical 404 an unknown slug gets, so a link already circulating stops
+resolving and nobody can read the suspension off the response. The address stays
+on the row — an owner who is later cleared keeps the URL that is in screenshots
+— but no read path will serve it. Note that the Pages middleware caches a
+rendered page for **60 seconds** at the edge, so a pulled listing can unfurl from
+a crawler's cache for up to a minute after the UPDATE; the page itself is gone
+immediately.
 
 ```sql
 -- Pull one listing. Takes effect on the next request; nothing is cached.

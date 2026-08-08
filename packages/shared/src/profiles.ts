@@ -414,29 +414,131 @@ export const profileBadgeSchema = z.object({
 export type ProfileBadge = z.infer<typeof profileBadgeSchema>;
 
 /**
+ * One approved depoimento, as a stranger reads it.
+ *
+ * WHY THIS IS ON THE PUBLIC PAGE AT ALL, having previously been a count.
+ *
+ * The count was the cautious answer to a question nobody had asked yet: "may
+ * user-generated text about a third party be served without a login?" The
+ * answer turns out to be yes, and it is yes because of what a depoimento IS —
+ * the only feature in this product whose mechanic is an act of approval. The
+ * subject read it, in full, in a preview that said what publishing means, and
+ * pressed publish; the author wrote it knowing that is where it was going. Two
+ * people consented to exactly this. Withholding it from the page they consented
+ * to put it on protected nobody and made the page a worse advertisement for the
+ * one feature that is genuinely the product's own.
+ *
+ * WHAT IS NOT HERE IS STILL THE POINT. The author travels as a NAME and a
+ * PICTURE, never as an id — and their handle only if they have one, because a
+ * handle is a page they chose to have and a `name#1234` tag is contact details.
+ * `createdAt` is deliberately absent too: a depoimento's date is the subject's
+ * activity log rendered on a public page, and the order is already the whole
+ * story the ordering tells.
+ */
+export const publicDepoimentoSchema = z.object({
+  id: z.string().uuid(),
+  body: z.string(),
+  author: z.object({
+    displayName: z.string(),
+    /** Null unless the author claimed one. Never a tag, never an id. */
+    handle: z.string().nullable(),
+    avatarUrl: z.string().nullable(),
+  }),
+});
+
+export type PublicDepoimento = z.infer<typeof publicDepoimentoSchema>;
+
+/**
+ * How many depoimentos the public page carries.
+ *
+ * Six, matching `PROFILE_COMMUNITY_LIMIT` and for the same reason: enough that
+ * the wall reads as a wall, few enough that the identity block above it is
+ * still the thing you see first. The page is a screenshot, and a screenshot has
+ * a fold.
+ */
+export const PUBLIC_PROFILE_DEPOIMENTO_LIMIT = 6;
+
+/**
  * A public profile, and the whole of it.
  *
  * WHAT IS NOT HERE IS THE FEATURE. No id, no email, no tag (`name#1234` is the
  * thing you need to add somebody, and handing it to an unauthenticated crawler
  * would turn every profile page into a contact-details dump), no presence, no
- * messages, no server list beyond public communities, no join date. This is
- * served to anybody on the internet with no token at all, so every field here
- * had to argue its way in, and the argument was "a screenshot of this page is
- * the product's advertisement".
+ * messages, no server list beyond public communities. This is served to anybody
+ * on the internet with no token at all, so every field here had to argue its
+ * way in, and the argument was "a screenshot of this page is the product's
+ * advertisement".
  *
- * `depoimentoCount` is a NUMBER and never the depoimentos themselves — the count
- * is social proof, the contents are user-generated text about a third party and
- * belong behind a login.
+ * `memberSince` is MONTH GRANULARITY and the truncation is the whole reason it
+ * is allowed on the page. "no pqp desde julho de 2026" is a badge; a date is a
+ * timestamp, and a timestamp on a public page is a fact about when somebody was
+ * at a computer. The server truncates before serialising — see
+ * `monthStamp` — so the day never leaves the process.
+ *
+ * `depoimentoCount` stays alongside the rendered ones because they are not the
+ * same number: the array is capped at `PUBLIC_PROFILE_DEPOIMENTO_LIMIT` and the
+ * count is not, which is what lets the page say "and N more" honestly.
  */
 export const publicProfileSchema = z.object({
   handle: z.string(),
   displayName: z.string(),
   avatarUrl: z.string().nullable(),
+  /**
+   * The full-bleed image across the top of the page, or null.
+   *
+   * Root-relative like `avatarUrl`, resolved against the API base by whichever
+   * client renders it. Null is the common case and is not a hole: the page
+   * generates a gradient from the display name's own hue instead, so a profile
+   * with no banner is still a composition rather than a grey band.
+   */
+  bannerUrl: z.string().nullable().default(null),
   badges: z.array(profileBadgeSchema),
   depoimentoCount: z.number().int().nonnegative(),
+  depoimentos: z.array(publicDepoimentoSchema).default([]),
+  /** `YYYY-MM`, or null on a row with no creation stamp. Month, never a day. */
+  memberSince: z.string().regex(/^\d{4}-\d{2}$/).nullable().default(null),
 });
 
 export type PublicProfile = z.infer<typeof publicProfileSchema>;
+
+/**
+ * A `Date` as `YYYY-MM`, which is the only granularity a public page gets.
+ *
+ * Here rather than in the server because the clients parse it back for display
+ * and a second implementation of "what does this string mean" is how a page
+ * ends up a month out in one locale. UTC deliberately: the alternative is that
+ * an account created at 23:30 on the 31st reads as a different month depending
+ * on who is looking at the page.
+ */
+export function monthStamp(value: Date | string | null | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+/**
+ * `2026-07` as a `Date` pinned to that month, for a client that wants to format
+ * it with `Intl`. Null for anything that is not a month stamp.
+ *
+ * Day 1 at UTC noon, not midnight: midnight in UTC is the previous day in
+ * Brazil, and a "member since" that reads one month early for the entire
+ * audience is the exact bug this helper exists to prevent.
+ */
+export function monthStampToDate(stamp: string | null | undefined): Date | null {
+  if (!stamp || !/^\d{4}-\d{2}$/.test(stamp)) {
+    return null;
+  }
+  const [year, month] = stamp.split("-").map(Number) as [number, number];
+  if (month < 1 || month > 12) {
+    return null;
+  }
+  return new Date(Date.UTC(year, month - 1, 1, 12));
+}
 
 /** The path a handle lives at. One definition, so the `@` cannot drift. */
 export function publicProfilePath(handle: string): string {

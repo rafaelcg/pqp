@@ -2,10 +2,13 @@ import {
   canRenameHandle,
   handleRenameAvailableAt,
   HANDLE_RENAME_COOLDOWN_DAYS,
+  monthStamp,
   normalizeHandle,
+  PUBLIC_PROFILE_DEPOIMENTO_LIMIT,
   validateHandle,
   type HandleRejection,
   type ProfileBadge,
+  type PublicDepoimento,
   type PublicProfile,
 } from "@pqp/shared";
 import { getPool } from "../db.js";
@@ -239,6 +242,66 @@ async function listProfileBadges(userId: string): Promise<ProfileBadge[]> {
 }
 
 /**
+ * The approved depoimentos this profile shows, newest published first.
+ *
+ * WHY THIS IS ALLOWED TO BE UNAUTHENTICATED, when `listApprovedDepoimentos` in
+ * depoimentos.ts is scoped to people who share a server or a friendship.
+ *
+ * That scoping answers a different question. There, the subject is any account
+ * on the instance and the viewer is a logged-in stranger, so the rule is "no
+ * wider than what the profile card already shows you". Here, the subject is
+ * somebody who claimed a PUBLIC HANDLE — an opt-in whose entire purpose is a
+ * page on the open internet — and every row returned was published by that
+ * person from a preview that said so. The consent is per-row and it was given
+ * twice: the author wrote it for a profile, the subject put it on one.
+ *
+ * WHAT STILL DOES NOT TRAVEL. The author's id, tag, and (unless they claimed
+ * one) handle. A depoimento must never become a way to enumerate the people who
+ * know somebody — so the author is a face and a name, which is exactly what
+ * a screenshot of the page would have shown anyway.
+ *
+ * BLOCKS ARE NOT CONSULTED, and cannot be: there is no viewer to have blocked
+ * anybody. The rows that a block would have hidden are already gone — the
+ * block trigger deletes any depoimento between the pair — and a third party's
+ * block is not a fact about this page.
+ *
+ * A WEBHOOK OR CHARACTER AUTHOR IS DROPPED. Neither can be friends with
+ * anybody, so neither can have written one; the predicate is here so that stays
+ * true if some future seeding path forgets it.
+ */
+async function listPublicDepoimentos(
+  subjectId: string,
+): Promise<PublicDepoimento[]> {
+  const result = await getPool().query<{
+    id: string;
+    body: string;
+    display_name: string;
+    handle: string | null;
+    avatar_url: string | null;
+  }>(
+    `SELECT d.id, d.body, u.display_name, u.handle, u.avatar_url
+       FROM depoimentos d
+       JOIN users u ON u.id = d.author_id
+      WHERE d.subject_id = $1
+        AND d.approved_at IS NOT NULL
+        AND COALESCE(u.is_character, FALSE) = FALSE
+        AND COALESCE(u.is_webhook, FALSE) = FALSE
+      ORDER BY d.approved_at DESC, d.id DESC
+      LIMIT $2`,
+    [subjectId, PUBLIC_PROFILE_DEPOIMENTO_LIMIT],
+  );
+  return result.rows.map((row) => ({
+    id: row.id,
+    body: row.body,
+    author: {
+      displayName: row.display_name,
+      handle: row.handle ?? null,
+      avatarUrl: row.avatar_url,
+    },
+  }));
+}
+
+/**
  * One public profile, by handle, for anybody on the internet.
  *
  * NULL COVERS EVERYTHING and that is deliberate: no such handle, a handle on a
@@ -264,8 +327,10 @@ export async function getPublicProfileByHandle(
     handle: string;
     display_name: string;
     avatar_url: string | null;
+    banner_url: string | null;
+    created_at: Date | null;
   }>(
-    `SELECT id, handle, display_name, avatar_url
+    `SELECT id, handle, display_name, avatar_url, banner_url, created_at
        FROM users
       WHERE handle = $1
         AND COALESCE(is_character, FALSE) = FALSE
@@ -277,17 +342,25 @@ export async function getPublicProfileByHandle(
     return null;
   }
 
-  const [badges, depoimentoCount] = await Promise.all([
+  const [badges, depoimentoCount, depoimentos] = await Promise.all([
     listProfileBadges(row.id),
     countApprovedDepoimentos(row.id),
+    listPublicDepoimentos(row.id),
   ]);
 
   return {
     handle: row.handle,
     displayName: row.display_name,
     avatarUrl: row.avatar_url,
+    bannerUrl: row.banner_url,
     badges,
     depoimentoCount,
+    depoimentos,
+    // MONTH, NEVER A DAY, and the truncation happens here rather than in the
+    // client so the day never leaves this process. "no pqp desde julho de 2026"
+    // is a badge; a date is a timestamp, and a timestamp on a page served to
+    // the open internet is a fact about when somebody was at a computer.
+    memberSince: monthStamp(row.created_at),
   };
 }
 

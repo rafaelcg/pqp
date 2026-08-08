@@ -1,5 +1,5 @@
 /**
- * Two intentions that have to survive a sign-up.
+ * Three intentions that have to survive a sign-up.
  *
  * THIS IS THE INVITE BUG AGAIN, in two new shapes. `signedOutRedirectPath`
  * already fixed the version where somebody clicks an invite link, signs up, and
@@ -15,6 +15,19 @@
  *    no account. After signing up they should end up connected to Rafa, which is
  *    the entire reason Rafa shared the link — and the reason this feature can
  *    grow at all.
+ *  - JOIN. Somebody opens `pqp.gg/c/valorant-brasil` and hits "Entrar na
+ *    comunidade". Same shape as ADD one level up: the thing they came for is a
+ *    room, and landing them in an empty hub after they asked to walk into a
+ *    specific one is the exact failure `signedOutRedirectPath` was written to
+ *    fix for invites. A community slug cannot ride in the path — `/app/c/<slug>`
+ *    is not a route this build has, and inventing one would put a public
+ *    identifier into the app's own URL space — so it travels the same way the
+ *    other two do.
+ *
+ * A SLUG IS NOT A HANDLE, and the storage does not care. All three values are
+ * short opaque strings whose validity only the API can rule on; the TTL, the
+ * consume-on-read and the storage-denied behaviour are identical, so they share
+ * the machinery and differ only in their key.
  *
  * WHY LOCALSTORAGE. `sessionStorage` survives a same-tab redirect, but not every
  * Clerk configuration is a same-tab redirect: a modal is one tab, a hosted page
@@ -34,6 +47,7 @@
 
 const CLAIM_KEY = "pqp:pending-handle-claim";
 const ADD_KEY = "pqp:pending-handle-add";
+const JOIN_KEY = "pqp:pending-community-join";
 
 /** Long enough for a slow signup, short enough not to be a surprise later. */
 export const HANDLE_INTENT_TTL_MS = 60 * 60 * 1000;
@@ -136,6 +150,30 @@ export function takeAddIntent(
   now: number = Date.now(),
 ): string | null {
   return take(storage, ADD_KEY, now);
+}
+
+/**
+ * The community somebody asked to walk into, stashed before Clerk takes over.
+ *
+ * The value is a SLUG and never an id — the public page deliberately never had
+ * one to give (see `publicCommunitySchema`), so the app resolves it behind auth
+ * through `lookupCommunityBySlug` before it can join anything. That is not an
+ * extra hop to optimise away later: it is what keeps a stranger from ever
+ * holding an identifier the API would accept.
+ */
+export function stashJoinIntent(
+  storage: WritableStorage | null,
+  slug: string,
+  now: number = Date.now(),
+): void {
+  write(storage, JOIN_KEY, slug, now);
+}
+
+export function takeJoinIntent(
+  storage: WritableStorage | null,
+  now: number = Date.now(),
+): string | null {
+  return take(storage, JOIN_KEY, now);
 }
 
 /**

@@ -315,10 +315,24 @@ describeDb("public handles and profiles", () => {
     expect(Object.keys(response.body.profile).sort()).toEqual([
       "avatarUrl",
       "badges",
+      "bannerUrl",
       "depoimentoCount",
+      "depoimentos",
       "displayName",
       "handle",
+      "memberSince",
     ]);
+  });
+
+  it("truncates the join date to a month before it leaves the process", async () => {
+    // MONTH GRANULARITY IS WHY THIS FIELD IS ALLOWED ON THE PAGE AT ALL. A
+    // timestamp on a surface served to the open internet is a fact about when
+    // somebody was at a computer; "no pqp desde julho de 2026" is a badge.
+    await call(alice, "PATCH", "/api/me", { handle: "rafa" });
+    const response = await anonymous<{
+      profile: { memberSince: string };
+    }>("/api/public/profiles/rafa");
+    expect(response.body.profile.memberSince).toMatch(/^\d{4}-\d{2}$/);
   });
 
   it("never discloses the id, the tag, the email or the presence", async () => {
@@ -438,6 +452,139 @@ describeDb("public handles and profiles", () => {
       "/api/public/profiles/rafa",
     );
     expect(response.body.profile.badges).toEqual([]);
+  });
+
+  /**
+   * The depoimento wall, rendered rather than counted.
+   *
+   * WHAT CHANGED AND WHY. This used to be a number, on the cautious reading
+   * that user-generated text about a third party belongs behind a login. It
+   * does not, for a depoimento specifically, and the reason is the approval:
+   * the author wrote it for a profile, and the subject published it from a
+   * preview that said exactly where it would go. Two people consented to this
+   * page. What is asserted below is that everything ELSE stays refused — the
+   * author's id and tag above all, because a depoimento must never become a way
+   * to enumerate the people who know somebody.
+   */
+  describe("rendered depoimentos", () => {
+    /** Approved unless told otherwise; the state machine is `approved_at`. */
+    async function writeDepoimento(
+      author: Actor,
+      subject: Actor,
+      body: string,
+      options: { approved?: boolean } = {},
+    ): Promise<void> {
+      await getPool().query(
+        `INSERT INTO depoimentos (author_id, subject_id, body, approved_at)
+         VALUES ($1, $2, $3, ${options.approved === false ? "NULL" : "NOW()"})`,
+        [author.id, subject.id, body],
+      );
+    }
+
+    it("renders what the subject published, newest first", async () => {
+      await call(alice, "PATCH", "/api/me", { handle: "rafa" });
+      await writeDepoimento(bob, alice, "primeira");
+      await writeDepoimento(
+        await upsertUser({
+          clerkId: "clerk_carol",
+          displayName: "Carol",
+          avatarUrl: null,
+        }),
+        alice,
+        "segunda",
+      );
+      const response = await anonymous<{
+        profile: { depoimentos: { body: string }[]; depoimentoCount: number };
+      }>("/api/public/profiles/rafa");
+      expect(response.body.profile.depoimentos.map((d) => d.body)).toEqual([
+        "segunda",
+        "primeira",
+      ]);
+      expect(response.body.profile.depoimentoCount).toBe(2);
+    });
+
+    it("never renders one the subject has not published", async () => {
+      // `approved_at IS NULL` is the whole state machine, and pending is
+      // readable by the subject alone. A pending depoimento on a public page
+      // would be the "Não aceita!" failure with a URL attached.
+      await call(alice, "PATCH", "/api/me", { handle: "rafa" });
+      await writeDepoimento(bob, alice, "não aceita", { approved: false });
+      const response = await anonymous<{
+        profile: { depoimentos: unknown[]; depoimentoCount: number };
+      }>("/api/public/profiles/rafa");
+      expect(response.body.profile.depoimentos).toEqual([]);
+      expect(response.body.profile.depoimentoCount).toBe(0);
+    });
+
+    it("carries the author as a name and a face and nothing else", async () => {
+      await call(alice, "PATCH", "/api/me", { handle: "rafa" });
+      await writeDepoimento(bob, alice, "meu irmão");
+      const response = await anonymous<{
+        profile: { depoimentos: { author: Record<string, unknown> }[] };
+      }>("/api/public/profiles/rafa");
+      const author = response.body.profile.depoimentos[0]!.author;
+      expect(Object.keys(author).sort()).toEqual([
+        "avatarUrl",
+        "displayName",
+        "handle",
+      ]);
+      // The author has claimed no handle, so there is no page to link to and
+      // nothing stands in for one — least of all their `name#1234` tag, which
+      // is contact details a third party never opted into publishing.
+      expect(author.handle).toBeNull();
+      const serialised = JSON.stringify(response.body);
+      expect(serialised).not.toContain(bob.id);
+      expect(serialised).not.toContain(bob.clerk_id);
+    });
+
+    it("carries the author's handle when they have one", async () => {
+      await call(bob, "PATCH", "/api/me", { handle: "bia" });
+      await call(alice, "PATCH", "/api/me", { handle: "rafa" });
+      await writeDepoimento(bob, alice, "meu irmão");
+      const response = await anonymous<{
+        profile: { depoimentos: { author: { handle: string | null } }[] };
+      }>("/api/public/profiles/rafa");
+      expect(response.body.profile.depoimentos[0]!.author.handle).toBe("bia");
+    });
+
+    it("shows at most six and says how many more there are", async () => {
+      await call(alice, "PATCH", "/api/me", { handle: "rafa" });
+      for (let i = 0; i < 8; i++) {
+        const author = await upsertUser({
+          clerkId: `clerk_friend_${i}`,
+          displayName: `Friend ${i}`,
+          avatarUrl: null,
+        });
+        await writeDepoimento(author, alice, `depoimento ${i}`);
+      }
+      const response = await anonymous<{
+        profile: { depoimentos: unknown[]; depoimentoCount: number };
+      }>("/api/public/profiles/rafa");
+      // The array is capped and the count is not, which is what lets the page
+      // say "e mais 2" honestly.
+      expect(response.body.profile.depoimentos).toHaveLength(6);
+      expect(response.body.profile.depoimentoCount).toBe(8);
+    });
+  });
+
+  it("carries the banner the account uploaded, and null when it has none", async () => {
+    await call(alice, "PATCH", "/api/me", { handle: "rafa" });
+    const before = await anonymous<{
+      profile: { bannerUrl: string | null };
+    }>("/api/public/profiles/rafa");
+    expect(before.body.profile.bannerUrl).toBeNull();
+
+    await getPool().query(
+      `UPDATE users SET banner_url = $2, banner_key = $3 WHERE id = $1`,
+      [alice.id, "/api/users/x/banner?v=abcd1234", "banners/x/y.jpg"],
+    );
+    const after = await anonymous<{
+      profile: { bannerUrl: string | null };
+    }>("/api/public/profiles/rafa");
+    expect(after.body.profile.bannerUrl).toBe("/api/users/x/banner?v=abcd1234");
+    // The STORAGE KEY must never travel. It is the one string that names an
+    // object in the bucket, and this page is served to the open internet.
+    expect(JSON.stringify(after.body)).not.toContain("banners/x/y.jpg");
   });
 
   it("is rate limited even though it takes no token", async () => {

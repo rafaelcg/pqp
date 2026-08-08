@@ -3,6 +3,7 @@ import { Lock, Menu, Phone, Users, Video, WifiOff } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
+  joinIntentFromSearch,
   normalizeHandle,
   publicProfileDisplayUrl,
   validateHandle,
@@ -109,8 +110,10 @@ import {
   fetchUnread,
   fetchVoiceBackend,
   hideConversation,
+  joinCommunity as joinCommunityApi,
   joinInvite,
   leaveServer,
+  lookupCommunityBySlug,
   lookupUserByHandle,
   markChannelRead,
   moveChannel,
@@ -125,6 +128,7 @@ import {
   addIntentFromSearch,
   takeAddIntent,
   takeHandleClaim,
+  takeJoinIntent,
 } from "@/lib/handle-intent";
 import { sendFriendRequest } from "@/components/friends/friends-api";
 import { shouldRunOnboarding } from "@/lib/onboarding";
@@ -2073,12 +2077,13 @@ function MainAppContent({
   }, [bootstrapReady, location.pathname]);
 
   /**
-   * The two intentions somebody arrived with, acted on exactly once.
+   * The three intentions somebody arrived with, acted on exactly once.
    *
-   * WHAT THIS FINISHES. `pqp.gg/garanta` and `pqp.gg/@rafa` both end in a
-   * sign-up, and both carry something the sign-up cannot: a name somebody chose,
-   * and a person somebody meant to add. Neither is expressible as a path the way
-   * an invite code is (see `signedOutRedirectPath`), so they travel as a query
+   * WHAT THIS FINISHES. `pqp.gg/garanta`, `pqp.gg/@rafa` and
+   * `pqp.gg/c/valorant` all end in a sign-up, and all three carry something the
+   * sign-up cannot: a name somebody chose, a person somebody meant to add, and
+   * a room somebody meant to walk into. None is expressible as a path the way an
+   * invite code is (see `signedOutRedirectPath`), so they travel as a query
    * parameter with a `localStorage` stash behind it — `lib/handle-intent.ts` has
    * the argument for the belt and the braces.
    *
@@ -2108,12 +2113,15 @@ function MainAppContent({
     // the value: leaving one behind is how an intent fires on a later visit.
     const stashedClaim = takeHandleClaim(storage);
     const stashedAdd = takeAddIntent(storage);
+    const stashedJoin = takeJoinIntent(storage);
     const claim = normalizeHandle(params.get("claim") ?? "") || stashedClaim;
     const add = addIntentFromSearch(location.search) ?? stashedAdd;
+    const join = joinIntentFromSearch(location.search) ?? stashedJoin;
 
-    if (params.has("claim") || params.has("add")) {
+    if (params.has("claim") || params.has("add") || params.has("join")) {
       params.delete("claim");
       params.delete("add");
+      params.delete("join");
       const rest = params.toString();
       navigate(`${location.pathname}${rest ? `?${rest}` : ""}`, {
         replace: true,
@@ -2166,6 +2174,52 @@ function MainAppContent({
           // server's refusals here are deliberately indistinguishable (see the
           // route), so this says one thing for all of them.
           setAppError(t("handle.add.failed"));
+        }
+      }
+
+      /**
+       * The community somebody came here to walk into.
+       *
+       * TWO REQUESTS, NOT ONE, and the split is the point: the public page
+       * never had an id to give (see `publicCommunitySchema`), so the slug is
+       * resolved behind auth and then the ORDINARY join is posted against the
+       * id — the same call the directory card makes, with the same ban check,
+       * the same audit entry and the same idempotency. There is deliberately no
+       * join-by-slug route; a second door into the same room is a second door
+       * to remember to lock.
+       *
+       * LANDS THEM IN THE ROOM, which is the whole reason this exists. Being
+       * dropped at an empty hub after asking to enter a specific community is
+       * the exact failure `signedOutRedirectPath` was written to fix for
+       * invites.
+       *
+       * THE ARRIVAL BANNER IS ARMED for a real join and not for a re-entry, the
+       * same rule the directory card follows: opening a community you were
+       * already in is not an arrival.
+       */
+      if (join) {
+        try {
+          const { community } = await lookupCommunityBySlug(join);
+          const result = await joinCommunityApi(community.id);
+          if (result.joinedNow) {
+            const storage = browserStorage();
+            if (!hasArrived(storage, community.id)) {
+              rememberArrival(storage, community.id);
+              setArrivalServerId(community.id);
+            }
+          }
+          setAppNotice(
+            t(result.joinedNow ? "handle.join.done" : "handle.join.already", {
+              name: result.serverName,
+            }),
+          );
+          await refreshAfterJoin(community.id);
+        } catch {
+          // Unknown slug, unlisted, suspended, banned, or the deployment has
+          // communities off. The server answers all of them identically on
+          // purpose — see rule 3 in services/communities.ts — so this says one
+          // thing for all of them.
+          setAppError(t("handle.join.failed"));
         }
       }
     })();

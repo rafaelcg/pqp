@@ -123,10 +123,14 @@ export function profileCardText(
   } else if (profile.badges.length === 2) {
     parts.push(`${profile.badges[0]!.name}, ${profile.badges[1]!.name}`);
   } else if (profile.badges.length > 2) {
+    // "membro de 5 comunidades", not a bare "5 comunidades". The page now
+    // renders the badges as a proud grid rather than a chip row, and the card
+    // is the one-line trailer for it: the interesting fact is BELONGING, and
+    // the number on its own reads like a statistic about the account.
     parts.push(
       pt
-        ? `${profile.badges.length} comunidades`
-        : `${profile.badges.length} communities`,
+        ? `membro de ${profile.badges.length} comunidades`
+        : `member of ${profile.badges.length} communities`,
     );
   }
   if (profile.depoimentoCount > 0) {

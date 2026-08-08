@@ -1,8 +1,11 @@
 import {
   COMMUNITY_MEMBER_FLOOR,
+  deriveCommunitySlug,
+  monthStamp,
   type CommunityCategory,
   type CommunitySettings,
   type CommunitySummary,
+  type PublicCommunity,
 } from "@pqp/shared";
 import { getPool } from "../db.js";
 import { invalidateServerAudience } from "./servers.js";
@@ -87,8 +90,8 @@ const LISTED_SQL = `s.is_community
  * `communitySummarySchema`: this is the public projection of a server and
  * nothing that is not already visible to anyone who joined belongs in it.
  */
-const DIRECTORY_COLUMNS = `s.id, s.name, s.community_tagline, s.community_category,
-  s.member_count, s.created_at, s.icon_url, s.banner_url,
+const DIRECTORY_COLUMNS = `s.id, s.name, s.community_slug, s.community_tagline,
+  s.community_category, s.member_count, s.created_at, s.icon_url, s.banner_url,
   EXISTS (
     SELECT 1 FROM server_members m WHERE m.server_id = s.id AND m.user_id = $1
   ) AS joined`;
@@ -96,6 +99,7 @@ const DIRECTORY_COLUMNS = `s.id, s.name, s.community_tagline, s.community_catego
 interface DirectoryRow {
   id: string;
   name: string;
+  community_slug: string | null;
   community_tagline: string | null;
   community_category: CommunityCategory;
   member_count: number;
@@ -109,6 +113,10 @@ function toSummary(row: DirectoryRow): CommunitySummary {
   return {
     id: row.id,
     name: row.name,
+    // Null on a listing that predates slugs and whose name could not be folded
+    // into one. The card hides its share button rather than offering a URL that
+    // 404s — see `deriveCommunitySlug` and the backfill in schema.sql.
+    slug: row.community_slug,
     tagline: row.community_tagline,
     category: row.community_category,
     memberCount: row.member_count,
@@ -325,17 +333,103 @@ export async function joinCommunity(
   }
 }
 
+/**
+ * One community, by its public slug, for anybody on the internet.
+ *
+ * THE THIRD UNAUTHENTICATED READ IN THE PRODUCT, and the first that answers
+ * with a room. Rule 2 at the top of this file — "nobody browses anonymously" —
+ * is deliberately NOT weakened by it, and the distinction is the whole design:
+ * this is not a browse. There is no list route, no prefix route and no search
+ * here; the caller must already hold the exact slug, which means somebody sent
+ * them the link. The 18+ gate that rule 2 protects still stands in front of
+ * every door — reading a poster is not walking in, and the CTA on this page
+ * leads to sign-up and the age gate like every other door does.
+ *
+ * SUSPENDED AND UNLISTED ARE THE SAME 404 AS UNKNOWN. `LISTED_SQL` cannot be
+ * reused because it takes a viewer for the ban check and there is none here, so
+ * the two predicates it does carry are restated: a suspended community and a
+ * private server both answer exactly as a slug nobody holds does. Answering
+ * them apart would publish the operator's moderation decisions to anybody with
+ * a URL, and would turn this into a probe for which rooms exist.
+ *
+ * NO BAN CHECK, and none is possible or wanted. There is no viewer to be banned;
+ * the page carries nothing a banned person could not read off the directory
+ * before they were banned, and the join behind the CTA re-checks the ban under
+ * a lock the way it always has.
+ */
+export async function getPublicCommunity(
+  slug: string,
+): Promise<PublicCommunity | null> {
+  const result = await getPool().query<{
+    name: string;
+    community_slug: string;
+    community_tagline: string | null;
+    community_category: CommunityCategory;
+    member_count: number;
+    icon_url: string | null;
+    banner_url: string | null;
+    created_at: Date;
+  }>(
+    `SELECT s.name, s.community_slug, s.community_tagline, s.community_category,
+            s.member_count, s.icon_url, s.banner_url, s.created_at
+       FROM servers s
+      WHERE s.community_slug = $1
+        AND s.is_community
+        AND NOT s.is_community_suspended`,
+    [slug],
+  );
+  const row = result.rows[0];
+  if (!row) {
+    return null;
+  }
+  return {
+    slug: row.community_slug,
+    name: row.name,
+    tagline: row.community_tagline,
+    category: row.community_category,
+    memberCount: row.member_count,
+    iconUrl: row.icon_url,
+    bannerUrl: row.banner_url,
+    // Month granularity, the rule the public profile already follows: a room's
+    // exact creation second is nobody's business and "desde julho de 2026" is
+    // the whole of what a stranger gets from it anyway.
+    createdMonth: monthStamp(row.created_at),
+  };
+}
+
+/**
+ * Resolve a public slug to the server id behind it — for SIGNED-IN callers.
+ *
+ * The other half of `?join=<slug>`, and the exact counterpart of
+ * `findUserIdByHandle`: the public page deliberately carries no id, because a
+ * stranger needs a poster and has no business with an identifier they could
+ * feed to another endpoint. Somebody who has signed in does, and the join this
+ * feeds re-checks the listing, the suspension and the ban under a lock anyway.
+ */
+export async function findCommunityIdBySlug(
+  slug: string,
+): Promise<string | null> {
+  const result = await getPool().query<{ id: string }>(
+    `SELECT id FROM servers
+      WHERE community_slug = $1 AND is_community AND NOT is_community_suspended`,
+    [slug],
+  );
+  return result.rows[0]?.id ?? null;
+}
+
 /** The owner's own view of their server's listing. */
 export async function getCommunitySettings(
   serverId: string,
 ): Promise<CommunitySettings | null> {
   const result = await getPool().query<{
     is_community: boolean;
+    community_slug: string | null;
     community_tagline: string | null;
     community_category: CommunityCategory;
     is_community_suspended: boolean;
   }>(
-    `SELECT is_community, community_tagline, community_category, is_community_suspended
+    `SELECT is_community, community_slug, community_tagline, community_category,
+            is_community_suspended
      FROM servers WHERE id = $1`,
     [serverId],
   );
@@ -345,6 +439,7 @@ export async function getCommunitySettings(
   }
   return {
     isCommunity: row.is_community,
+    slug: row.community_slug,
     tagline: row.community_tagline,
     category: row.community_category,
     suspended: row.is_community_suspended,
@@ -356,6 +451,41 @@ export interface CommunityUpdate {
   /** Explicit null clears; absent leaves it. */
   tagline?: string | null;
   category?: CommunityCategory;
+  /**
+   * The address the owner typed. Absent means "derive one if this listing has
+   * none yet, otherwise leave it alone" — see `updateCommunitySettings`.
+   */
+  slug?: string;
+}
+
+/** Postgres' unique-violation SQLSTATE. Same arbiter `claimHandle` leans on. */
+const UNIQUE_VIOLATION = "23505";
+
+/**
+ * Why a listing could not take an address. Never a sentence — the route turns
+ * it into one, in the language it answers in.
+ *
+ *  - `taken`: another LISTED community already holds it. The unique index said
+ *    so, which is the only thing that can.
+ *  - `underivable`: no slug was sent and the name folds to nothing usable
+ *    (pure emoji, two characters). Not the owner's fault and not a bad name —
+ *    the answer is a field, not a rejection of the name.
+ */
+export type CommunitySlugRefusal = "taken" | "underivable";
+
+export class CommunitySlugError extends Error {
+  constructor(readonly reason: CommunitySlugRefusal) {
+    super("That community address cannot be used");
+    this.name = "CommunitySlugError";
+  }
+}
+
+function isUniqueViolation(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { code?: string }).code === UNIQUE_VIOLATION
+  );
 }
 
 /**
@@ -372,6 +502,24 @@ export interface CommunityUpdate {
  * changes nothing — `is_community_suspended` still keeps it out of every read
  * path. That is the intended behaviour, not an oversight: the operator's
  * decision has to outrank the owner's or it is not a moderation tool.
+ *
+ * THE SLUG IS THE ONE FIELD THAT CAN REFUSE THE WHOLE PATCH. Three rules:
+ *
+ *  1. An explicit `slug` always wins, and always for a listing that is on or
+ *     going on. Nothing derives over the top of a choice somebody typed.
+ *  2. With no explicit slug, one is DERIVED FROM THE NAME on the transition
+ *     into listed — and only when the row has none. A listing that already has
+ *     an address keeps it through a rename, because the address is in
+ *     screenshots and the name is not.
+ *  3. A collision is `taken` and an underivable name is `underivable`, and both
+ *     roll the transaction back. Listing a community at no address, or at a
+ *     machine-suffixed `valorant-2` nobody chose, are both worse than asking
+ *     one question.
+ *
+ * THE UNIQUE INDEX DECIDES, not a pre-check — the same argument `claimHandle`
+ * makes at length. Two owners opting in with the same name in the same second
+ * both see "free"; there is no arrangement of SELECT-then-UPDATE that closes
+ * that window, so this attempts the write and converts the 23505.
  */
 export async function updateCommunitySettings(
   serverId: string,
@@ -381,12 +529,15 @@ export async function updateCommunitySettings(
   try {
     await client.query("BEGIN");
     const before = await client.query<{
+      name: string;
       is_community: boolean;
+      community_slug: string | null;
       community_tagline: string | null;
       community_category: CommunityCategory;
       is_community_suspended: boolean;
     }>(
-      `SELECT is_community, community_tagline, community_category, is_community_suspended
+      `SELECT name, is_community, community_slug, community_tagline,
+              community_category, is_community_suspended
        FROM servers WHERE id = $1 FOR UPDATE`,
       [serverId],
     );
@@ -396,13 +547,32 @@ export async function updateCommunitySettings(
       return null;
     }
 
+    const willBeListed = update.isCommunity ?? previousRow.is_community;
+    let nextSlug = previousRow.community_slug;
+    if (update.slug !== undefined) {
+      nextSlug = update.slug;
+    } else if (willBeListed && !previousRow.community_slug) {
+      nextSlug = deriveCommunitySlug(previousRow.name);
+      if (!nextSlug) {
+        // The name cannot become an address — pure emoji, or two characters.
+        // Refused rather than listed at no address, because a listing with no
+        // public page is a share button that is silently missing and an owner
+        // who cannot tell why.
+        await client.query("ROLLBACK");
+        throw new CommunitySlugError("underivable");
+      }
+    }
+
     // Absent means "not changing this", which is why each field is coalesced
     // against the row rather than defaulted to anything. Turning the listing
-    // OFF deliberately leaves the tagline and category behind: an owner who
-    // unlists and relists a week later should not have to retype the pitch, and
-    // an unlisted row is invisible to every read path anyway.
+    // OFF deliberately leaves the tagline, category and SLUG behind: an owner
+    // who unlists and relists a week later should not have to retype the pitch
+    // or lose the URL, and an unlisted row is invisible to every read path
+    // anyway. The unique index is partial on `is_community` precisely so an
+    // unlisted holder does not squat the address against a live claimant.
     const result = await client.query<{
       is_community: boolean;
+      community_slug: string | null;
       community_tagline: string | null;
       community_category: CommunityCategory;
       is_community_suspended: boolean;
@@ -410,15 +580,18 @@ export async function updateCommunitySettings(
       `UPDATE servers SET
          is_community = COALESCE($2, is_community),
          community_tagline = CASE WHEN $3::boolean THEN $4 ELSE community_tagline END,
-         community_category = COALESCE($5, community_category)
+         community_category = COALESCE($5, community_category),
+         community_slug = $6
        WHERE id = $1
-       RETURNING is_community, community_tagline, community_category, is_community_suspended`,
+       RETURNING is_community, community_slug, community_tagline,
+                 community_category, is_community_suspended`,
       [
         serverId,
         update.isCommunity ?? null,
         update.tagline !== undefined,
         update.tagline ?? null,
         update.category ?? null,
+        nextSlug,
       ],
     );
     await client.query("COMMIT");
@@ -427,19 +600,29 @@ export async function updateCommunitySettings(
     return {
       settings: {
         isCommunity: row.is_community,
+        slug: row.community_slug,
         tagline: row.community_tagline,
         category: row.community_category,
         suspended: row.is_community_suspended,
       },
       previous: {
         isCommunity: previousRow.is_community,
+        slug: previousRow.community_slug,
         tagline: previousRow.community_tagline,
         category: previousRow.community_category,
         suspended: previousRow.is_community_suspended,
       },
     };
   } catch (error) {
-    await client.query("ROLLBACK");
+    // A `CommunitySlugError` has already rolled back and must travel unchanged;
+    // rolling back twice is harmless but converting it here would lose the
+    // reason the route needs to name the field.
+    if (!(error instanceof CommunitySlugError)) {
+      await client.query("ROLLBACK");
+    }
+    if (isUniqueViolation(error)) {
+      throw new CommunitySlugError("taken");
+    }
     throw error;
   } finally {
     client.release();

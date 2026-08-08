@@ -7,7 +7,10 @@ import {
   HANDLE_PATTERN,
   HANDLE_PATTERN_SQL,
   HANDLE_RENAME_COOLDOWN_DAYS,
+  monthStamp,
+  monthStampToDate,
   normalizeHandle,
+  publicDepoimentoSchema,
   publicProfileDisplayUrl,
   publicProfilePath,
   publicProfileSchema,
@@ -240,13 +243,105 @@ describe("publicProfileSchema", () => {
   it("has no field that identifies the account behind it", () => {
     // The point of the shape. If somebody adds `id`, `tag` or `email` here,
     // this is the test that should stop them and make them argue for it.
+    //
+    // Four fields have been added since, and each had to argue: `bannerUrl` is
+    // an image the account holder uploaded for this page, `depoimentos` are
+    // words two people published to it (see `publicDepoimentoSchema`), and
+    // `memberSince` is a MONTH — never a date, which is why the regex is on the
+    // schema and not merely in the server.
     const keys = Object.keys(publicProfileSchema.shape).sort();
     expect(keys).toEqual([
       "avatarUrl",
       "badges",
+      "bannerUrl",
       "depoimentoCount",
+      "depoimentos",
       "displayName",
       "handle",
+      "memberSince",
     ]);
+  });
+
+  it("defaults every field a payload from an older API omits", () => {
+    // The three new fields are `.default()`ed rather than required, so a client
+    // built against this schema still parses a response from a deployment that
+    // predates banners, rendered depoimentos and the join month. That is not
+    // politeness — Cloudflare Pages and Railway deploy independently, so an
+    // older API answering a newer bundle is an ordinary Tuesday.
+    const parsed = publicProfileSchema.parse({
+      handle: "rafa",
+      displayName: "Rafa",
+      avatarUrl: null,
+      badges: [],
+      depoimentoCount: 0,
+    });
+    expect(parsed.bannerUrl).toBeNull();
+    expect(parsed.depoimentos).toEqual([]);
+    expect(parsed.memberSince).toBeNull();
+  });
+
+  it("refuses a memberSince carrying a day", () => {
+    // Month granularity is the whole reason this field was allowed onto a page
+    // served to the open internet. A schema that accepted `2026-07-14` would
+    // make that a server-side convention rather than a contract.
+    expect(() =>
+      publicProfileSchema.parse({
+        handle: "rafa",
+        displayName: "Rafa",
+        avatarUrl: null,
+        badges: [],
+        depoimentoCount: 0,
+        memberSince: "2026-07-14",
+      }),
+    ).toThrow();
+  });
+});
+
+describe("publicDepoimentoSchema", () => {
+  it("carries the author as a name and a face, never as an identity", () => {
+    // A depoimento must not become a way to enumerate the people who know
+    // somebody. No id, no tag — and the handle only when the author claimed
+    // one, which is a page they chose to have.
+    const keys = Object.keys(publicDepoimentoSchema.shape).sort();
+    expect(keys).toEqual(["author", "body", "id"]);
+    const parsed = publicDepoimentoSchema.parse({
+      id: "11111111-1111-4111-8111-111111111111",
+      body: "conheci essa mulher jogando valorant às 3 da manhã",
+      author: { displayName: "Bia", handle: null, avatarUrl: null },
+    });
+    expect(parsed.author.handle).toBeNull();
+  });
+});
+
+describe("month stamps", () => {
+  it("truncates to the month in UTC", () => {
+    // UTC deliberately: an account created at 23:30 on the 31st must not read
+    // as a different month depending on who is looking at the page.
+    expect(monthStamp(new Date("2026-07-31T23:30:00.000Z"))).toBe("2026-07");
+    expect(monthStamp("2026-01-01T00:00:00.000Z")).toBe("2026-01");
+    expect(monthStamp(null)).toBeNull();
+    expect(monthStamp("not a date")).toBeNull();
+  });
+
+  it("round-trips into a Date pinned inside that month", () => {
+    // Noon rather than midnight, because midnight UTC is the previous day in
+    // Brazil and a "member since" a month early for the whole audience is the
+    // exact bug this helper exists to prevent.
+    const date = monthStampToDate("2026-07")!;
+    expect(date.getUTCFullYear()).toBe(2026);
+    expect(date.getUTCMonth()).toBe(6);
+    expect(
+      date.toLocaleDateString("pt-BR", {
+        month: "long",
+        year: "numeric",
+        timeZone: "America/Sao_Paulo",
+      }),
+    ).toContain("julho");
+  });
+
+  it("refuses anything that is not a month stamp", () => {
+    expect(monthStampToDate("2026")).toBeNull();
+    expect(monthStampToDate("2026-13")).toBeNull();
+    expect(monthStampToDate(null)).toBeNull();
   });
 });

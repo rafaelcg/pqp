@@ -1,6 +1,6 @@
-import type { CommunitySummary } from "@pqp/shared";
-import { Check, Flag, Users } from "lucide-react";
-import type { CSSProperties } from "react";
+import { publicCommunityUrl, type CommunitySummary } from "@pqp/shared";
+import { Check, Flag, Link2, Users } from "lucide-react";
+import { useCallback, useEffect, useState, type CSSProperties } from "react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useTranslation } from "@/lib/i18n";
@@ -80,6 +80,42 @@ export function CommunityCard({
   const { t, locale } = useTranslation();
   const action = cardAction(community);
   const hue = communityHue(community.id);
+  const [shared, setShared] = useState(false);
+
+  /**
+   * The share button, and the reason this card grew one.
+   *
+   * A directory is a discovery surface for people who are ALREADY INSIDE the
+   * product; the growth loop needs the other direction, which is somebody in
+   * here sending a link to somebody who is not. Before `pqp.gg/c/<slug>` the
+   * only shareable address a community had was an invite code, which says
+   * nothing about where it leads and expires. This copies the public page.
+   *
+   * ABSENT WHEN THERE IS NO SLUG rather than disabled: a community listed
+   * before slugs existed whose name could not be folded into one has no public
+   * page, and a greyed-out button is a promise the product cannot keep. The
+   * owner gets an address by typing one in settings.
+   *
+   * `navigator.clipboard` is absent over plain http and refused in some
+   * embedded webviews. The failure is silent — there is no URL bar to fall back
+   * to here, but a card that flashes an error for a clipboard permission is
+   * worse than one where a button quietly did nothing.
+   */
+  const share = useCallback(() => {
+    if (!community.slug) {
+      return;
+    }
+    void navigator.clipboard
+      ?.writeText(publicCommunityUrl(community.slug))
+      .then(() => setShared(true))
+      .catch(() => {});
+  }, [community.slug]);
+
+  useEffect(() => {
+    if (!shared) return;
+    const timer = window.setTimeout(() => setShared(false), 2000);
+    return () => window.clearTimeout(timer);
+  }, [shared]);
 
   return (
     <li
@@ -115,20 +151,42 @@ export function CommunityCard({
           <span>{CATEGORY_EMOJI[community.category]}</span>
           {t(`communities.category.${community.category}` as never)}
         </span>
-        {/* Quiet until you reach for it — but reachable by keyboard always,
-            and drawn permanently on anything without a pointer. A moderation
-            affordance that only exists for people with a mouse is not a
-            moderation affordance, and "hover" on a phone is a state that never
-            arrives. */}
-        <button
-          type="button"
-          title={t("communities.report")}
-          aria-label={`${t("communities.report")}: ${community.name}`}
-          className="absolute right-2 top-2 rounded-lg bg-ink/50 p-1.5 text-paper-muted opacity-0 backdrop-blur-sm transition hover:text-danger focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60 group-hover:opacity-100 [@media(hover:none)]:opacity-100"
-          onClick={onReport}
-        >
-          <Flag aria-hidden="true" className="h-3.5 w-3.5" />
-        </button>
+        {/* Both corner affordances share one hover group. Quiet until you reach
+            for them — but reachable by keyboard always, and drawn permanently
+            on anything without a pointer. A moderation affordance that only
+            exists for people with a mouse is not a moderation affordance, and
+            "hover" on a phone is a state that never arrives. */}
+        <div className="absolute right-2 top-2 flex items-center gap-1 opacity-0 transition focus-within:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100">
+          {community.slug && (
+            <button
+              type="button"
+              title={t("communities.share")}
+              aria-label={`${t("communities.share")}: ${community.name}`}
+              className={cn(
+                "rounded-lg bg-ink/50 p-1.5 backdrop-blur-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60",
+                shared
+                  ? "text-success"
+                  : "text-paper-muted hover:text-signal",
+              )}
+              onClick={share}
+            >
+              {shared ? (
+                <Check aria-hidden="true" className="h-3.5 w-3.5" />
+              ) : (
+                <Link2 aria-hidden="true" className="h-3.5 w-3.5" />
+              )}
+            </button>
+          )}
+          <button
+            type="button"
+            title={t("communities.report")}
+            aria-label={`${t("communities.report")}: ${community.name}`}
+            className="rounded-lg bg-ink/50 p-1.5 text-paper-muted backdrop-blur-sm transition hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
+            onClick={onReport}
+          >
+            <Flag aria-hidden="true" className="h-3.5 w-3.5" />
+          </button>
+        </div>
       </div>
 
       <div className="flex min-w-0 flex-1 flex-col px-4 pb-4">

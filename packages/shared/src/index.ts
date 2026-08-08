@@ -20,5 +20,6 @@ export * from "./signaling.js";
 export * from "./sso.js";
 export * from "./status.js";
 export * from "./threads.js";
+export * from "./user-banners.js";
 export * from "./voice-backend.js";
 export * from "./webhooks.js";

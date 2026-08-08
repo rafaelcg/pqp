@@ -560,10 +560,69 @@ The queue lives in the friends view's Pending tab and shares the friends store, 
 front door counts both errands. Publishing is two taps over a preview of the exact text. pt-BR is
 the source language for this feature's copy; English follows it.
 
+## The public pages: `/@handle` redesigned, and `/c/<slug>` (2026-08-08)
+
+The two surfaces this product serves to people with **no account**, treated as pages rather than as
+cards. The brief was "profile pages need to look rad — think MySpace, Orkut, Twitter" plus a new
+address for discovery.
+
+**`/@rafa` is now a page, not a card.** Full-bleed hero (an uploaded banner, or a gradient generated
+from the *handle's* hue — seeded from the handle rather than the display name so a rename does not
+recolour a page already in screenshots), a large overlapping avatar, the name at headline size, a
+quiet "no pqp desde julho de 2026", one CTA, then the two things that make somebody that person: the
+**community badges as a proud grid** under the sentence "membro de 5 comunidades", and the
+**depoimentos rendered** — the words, not a count.
+
+**Why rendering depoimentos publicly is safe**, having previously been a deliberate refusal: a
+depoimento is the one feature here whose mechanic is an act of approval. The author wrote it *for a
+profile*; the subject published it from a preview that said exactly where it would go. Two people
+consented to this page. What still does not travel is the author's id or tag — a name, a picture,
+and a handle only if they claimed one, because a depoimento must never become a way to enumerate the
+people who know somebody. Pending ones are, of course, still invisible to everyone but the subject.
+
+**New columns.** `users.banner_key` / `banner_url` (the avatar machinery, self-scoped key, its own
+`banners/<id>/` prefix so the 5 MiB avatar cap cannot be spent through the 8 MiB banner signature),
+uploadable in Settings → Profile above the avatar. `servers.community_slug`, **unique among LISTED
+communities** (partial on `is_community`, so unlisting frees the address rather than squatting it),
+derived from the name on opt-in by `slugifyCommunityName` (accent-folding, hyphenating, capped at
+40). A collision **refuses the listing** with a 409 and a field to pick another; a name that cannot
+fold into a slug refuses with 422. Nothing is ever auto-suffixed — `valorant-2` is a URL nobody
+chose and nobody would share. Existing listings get a one-shot backfill in schema.sql; collisions
+there are left NULL (the card simply has no share button) rather than suffixed.
+
+**`/c/<slug>` is a poster, not a window.** Name, address, tagline, category pill, member count big,
+the two pictures, a month, and one button. **No member list** — who is in a room is a fact about
+those people — no messages, no channels, no owner, and **no id**: withholding the id is what forces
+the join intent to travel as a slug and be resolved behind auth. Suspended, unlisted, unknown and
+"communities are off on this deployment" are one byte-identical 404.
+
+**The intent flow**, reusing `?add=<handle>`'s machinery exactly: the CTA is `/app?join=<slug>` for
+somebody signed in, and for somebody signed out the slug is stashed in `localStorage` *before* Clerk
+takes over (a modal is a navigation the component does not survive) with the same URL as
+`forceRedirectUrl`. At `bootstrapReady` — after the account exists and after the 18+ gate — the app
+resolves the slug through `GET /api/communities/by-slug/:slug` and posts the **ordinary** join.
+There is deliberately no join-by-slug route: a second door into the same room is a second door to
+remember to lock.
+
+**Edge SEO.** `client/src/lib/community-meta.ts` is the `/c/` half of the Pages middleware, a
+separate head builder rather than a parameterised one because the cards genuinely differ — a profile
+image is a square avatar and gets `summary`, a community banner is 3:1 and gets
+`summary_large_image`. The directory card in-app grew a share button that copies `pqp.gg/c/<slug>`.
+
+**Tokens.** `--hero-tint-near` / `--hero-tint-far`, `--scrim-hero`, `--shadow-hero-avatar`,
+`--shadow-testimonial`, `--glow-accent-soft`, with light-mode overrides. Every colour literal stays
+in the token layer; `client/src/lib/hero-tint.ts` emits custom properties and a gradient and never
+names a colour, which is what keeps `BENCH_MAX_LEAKS=0` at zero.
+
 ## Verification status
 
 | Checked | How |
 |---|---|
+| Public profile + `/c/<slug>`: payload key sets, month truncation, pending depoimentos never rendered, author identity withheld, the six-plus-remainder cap, banner reaching `/api/me` but not `publicUserSchema`, slug derivation / collision / reserved / unlisting-frees-the-address, the audit entry for a slug nobody typed, suspended-equals-unknown, cacheability, and the by-slug lookup 404ing for a banned viewer | 58 tests in `server/src/services/communities.test.ts`, 32 in `server/src/api/profiles.test.ts`, 39 in `server/src/api/avatars.test.ts`, all against real Postgres and the real router; plus 30 contract tests in `packages/shared` |
+| The public pages in a real browser, signed out | 8 Playwright specs (`client/e2e/public-pages.spec.ts`): depoimentos rendered to a fresh context with no storage/cookie/token; a pending one absent from the same page; the badge grid and the tenure line; `/c/<slug>` rendering with no session and deriving its address; the join CTA carrying the intent through to an actual membership; a collision refused and the retry accepted; a pulled listing 404ing byte-identically to an unknown slug. Screenshots at `/tmp/rad-{profile,community}-{1440,390}.png` |
+| The `/c/` edge SEO | 24 unit tests (`client/src/lib/community-meta.test.ts`) against the real `index.html`, including the `summary_large_image`-only-with-a-banner rule, escaping, and the JSON-LD that must not imply a member list |
+| **The public pages against a hosted deploy** | **Not verified** — the Pages middleware's `/c/*` branch has only been exercised as its pure half; no wrangler runtime has run it, exactly as was true of the `/@` branch when it shipped |
+| **A user banner against R2** | **Not verified** — same gap as attachments and server images; signing is exercised on MinIO only |
 | Authorization matrix | 24 integration tests against real Postgres (`server/src/api/api.test.ts`) |
 | DM access + blocking lifecycle | 25 conversation tests + 20 route tests; the two critical guards are mutation-checked (revert the fix, exactly those tests fail) |
 | DMs in a browser | Home view, `/app/dm/:id` routing, opening a 1:1, sending, and switching Home ↔ server both ways — no console errors. Group DMs and two simultaneous clients were not driven |

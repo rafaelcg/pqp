@@ -21,6 +21,7 @@ function makeUser(overrides: Partial<User> = {}): User {
     discriminator: "0417",
     tag: "joao_example_com#0417",
     avatarUrl: null,
+    bannerUrl: null,
     handle: null,
     handleChangedAt: null,
     preferences: {},

@@ -140,8 +140,12 @@ describeDb("avatars", () => {
     await initDb();
     stubs.load = async (clerkId) => {
       const result = await getPool().query(
+        // `banner_url` rides along because `/api/me` renders the SESSION's row
+        // and `toPublicUser` reads it off that object. A stub selecting a
+        // narrower list would show every banner write as having done nothing —
+        // the same trap the note on `load` above describes for avatars.
         `SELECT id, clerk_id, display_name, username, discriminator,
-                avatar_url, avatar_key
+                avatar_url, avatar_key, banner_url, banner_key
          FROM users WHERE clerk_id = $1`,
         [clerkId],
       );
@@ -546,6 +550,201 @@ describeDb("avatars", () => {
       ]) {
         const response = await fetchImage(path);
         expect(response.status).not.toBe(302);
+      }
+    });
+  });
+
+  // ------------------------------------------------------------- banners
+  //
+  // The strip across the top of `pqp.gg/@rafa`, riding the same machinery one
+  // section down: same bucket, same signer, same presign-then-HEAD, and the
+  // same self-scoped key that makes "is this mine" answerable from the string
+  // alone. What is asserted here is only what DIFFERS — the prefix, the cap,
+  // and the columns — plus the one property the shared prefix would have
+  // quietly broken.
+
+  /** Mint, "upload", and claim — the whole dance a client does. */
+  async function setBanner(
+    as: Actor,
+    options: { contentType?: string; bytes?: number } = {},
+  ): Promise<string> {
+    const contentType = options.contentType ?? "image/jpeg";
+    const bytes = options.bytes ?? 200_000;
+    const mint = await call<{ key: string }>(as, "POST", "/api/me/banner", {
+      contentType,
+      byteSize: bytes,
+    });
+    expect(mint.status).toBe(201);
+    storage.objects.set(mint.body.key, { contentLength: bytes, contentType });
+    const claimed = await call(as, "POST", "/api/me/banner/claim", {
+      key: mint.body.key,
+    });
+    expect(claimed.status).toBe(200);
+    return mint.body.key;
+  }
+
+  describe("banners", () => {
+    it("namespaces the key under the session's account and its own prefix", async () => {
+      const mint = await call<{ key: string }>(bob, "POST", "/api/me/banner", {
+        contentType: "image/jpeg",
+        byteSize: 200_000,
+      });
+      // A SEPARATE PREFIX FROM `avatars/`, and not a folder inside it. The two
+      // have different byte caps, and one shared prefix would let the smaller
+      // cap be spent through the larger one's signature.
+      expect(mint.body.key.startsWith(`banners/${bob.id}/`)).toBe(true);
+    });
+
+    it("refuses an avatar's object even though the account owns it", async () => {
+      // The thing the separate prefix buys, stated as a test: a 5 MiB avatar
+      // key cannot be installed through the 8 MiB banner claim, or the reverse.
+      const avatarKey = await setAvatar(alice);
+      const response = await call(alice, "POST", "/api/me/banner/claim", {
+        key: avatarKey,
+      });
+      expect(response.status).toBe(400);
+    });
+
+    it("refuses somebody else's key even when the object is perfect", async () => {
+      const bobsKey = await setBanner(bob);
+      const response = await call(alice, "POST", "/api/me/banner/claim", {
+        key: bobsKey,
+      });
+      expect(response.status).toBe(400);
+    });
+
+    it("refuses a traversal that starts with the caller's own prefix", async () => {
+      const key = `banners/${alice.id}/../${bob.id}/x.jpg`;
+      storage.objects.set(key, {
+        contentLength: 1000,
+        contentType: "image/jpeg",
+      });
+      const response = await call(alice, "POST", "/api/me/banner/claim", {
+        key,
+      });
+      expect(response.status).toBe(400);
+    });
+
+    it("refuses an object bigger than the banner cap", async () => {
+      const mint = await call<{ key: string }>(alice, "POST", "/api/me/banner", {
+        contentType: "image/jpeg",
+        byteSize: 200_000,
+      });
+      // The PUT was signed for 200 KB and the store kept nine megabytes. The
+      // HEAD is what catches a store that ignores the signed Content-Length.
+      storage.objects.set(mint.body.key, {
+        contentLength: 9 * 1024 * 1024,
+        contentType: "image/jpeg",
+      });
+      const claimed = await call(alice, "POST", "/api/me/banner/claim", {
+        key: mint.body.key,
+      });
+      expect(claimed.status).toBe(400);
+    });
+
+    it("answers 503 on a deployment with no storage", async () => {
+      storage.configured = false;
+      const response = await call(alice, "POST", "/api/me/banner", {
+        contentType: "image/jpeg",
+        byteSize: 200_000,
+      });
+      expect(response.status).toBe(503);
+    });
+
+    it("reaches /api/me and nothing that describes somebody else", async () => {
+      await setBanner(alice);
+      const me = await call<{ bannerUrl: string | null }>(
+        alice,
+        "GET",
+        "/api/me",
+      );
+      expect(me.body.bannerUrl).toMatch(
+        new RegExp(`^/api/users/${alice.id}/banner\\?v=`),
+      );
+      // `publicUserSchema` must not grow a banner: nothing in the app draws
+      // somebody else's, and the one page that does reads it by handle from
+      // the public profile endpoint.
+      const search = await call<{ users: Record<string, unknown>[] }>(
+        bob,
+        "GET",
+        "/api/users/search?q=Alice",
+      );
+      expect(JSON.stringify(search.body)).not.toContain("bannerUrl");
+    });
+
+    it("drops the object the account stops pointing at", async () => {
+      const first = await setBanner(alice);
+      await setBanner(alice);
+      expect(storage.deletedKeys).toContain(first);
+    });
+
+    it("clears the banner and the object on DELETE", async () => {
+      const key = await setBanner(alice);
+      const response = await call<{ user: { bannerUrl: string | null } }>(
+        alice,
+        "DELETE",
+        "/api/me/banner",
+      );
+      expect(response.status).toBe(200);
+      expect(response.body.user.bannerUrl).toBeNull();
+      expect(storage.deletedKeys).toContain(key);
+    });
+
+    it("stays clearable after storage is gone", async () => {
+      // Clearing the columns is a database write and succeeds either way; only
+      // the object deletion needs storage, and that is best-effort.
+      await setBanner(alice);
+      storage.configured = false;
+      const response = await call(alice, "DELETE", "/api/me/banner");
+      expect(response.status).toBe(200);
+    });
+
+    it("survives an unrelated profile save", async () => {
+      // `updateProfile` knows nothing about banners, which is the point of
+      // `setUserBanner` being its own transaction — a settings form that
+      // re-sends every field must not clear a picture it never mentioned.
+      await setBanner(alice);
+      await call(alice, "PATCH", "/api/me", { displayName: "Alice again" });
+      const me = await call<{ bannerUrl: string | null }>(
+        alice,
+        "GET",
+        "/api/me",
+      );
+      expect(me.body.bannerUrl).not.toBeNull();
+    });
+
+    it("serves the image without a token — a browser cannot send one", async () => {
+      await setBanner(alice);
+      const response = await fetchImage(`/api/users/${alice.id}/banner`);
+      expect(response.status).toBe(302);
+      expect(response.headers.get("location")).toContain("storage.test");
+    });
+
+    it("404s for an account with no banner, an unknown id, and no storage", async () => {
+      expect((await fetchImage(`/api/users/${alice.id}/banner`)).status).toBe(
+        404,
+      );
+      expect(
+        (
+          await fetchImage(
+            "/api/users/99999999-9999-4999-8999-999999999999/banner",
+          )
+        ).status,
+      ).toBe(404);
+      await setBanner(alice);
+      storage.configured = false;
+      expect((await fetchImage(`/api/users/${alice.id}/banner`)).status).toBe(
+        404,
+      );
+    });
+
+    it("cannot be aimed at an arbitrary object in the bucket", async () => {
+      await setBanner(alice);
+      for (const path of [
+        "/api/users/banners%2Fsomeone%2Fsecret.jpg/banner",
+        `/api/users/${alice.id}/banner/raw`,
+      ]) {
+        expect((await fetchImage(path)).status).not.toBe(302);
       }
     });
   });

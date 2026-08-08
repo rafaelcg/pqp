@@ -46,21 +46,40 @@ loser. Do not add a pre-check — it would look safer and be exactly as racy.
 
 | Path | Auth | What |
 |---|---|---|
-| `GET /api/public/profiles/:handle` | **none** | the thin profile; 404 = free |
+| `GET /api/public/profiles/:handle` | **none** | the profile; 404 = free |
+| `GET /api/users/:userId/banner` | **none** | the banner bytes, as a redirect |
 | `GET /api/users/by-handle/:handle` | session | handle → `publicUserSchema`, for "add me" |
 | `PATCH /api/me` `{ handle }` | session | claim or rename |
+| `POST /api/me/banner` → `…/claim`, `DELETE /api/me/banner` | session | the banner, mint / claim / clear |
 
-The public route is the fourth deliberately-unauthenticated route in
-`server/src/api/index.ts` (after the embed-image proxy, avatars, and webhook
-execution — see CLAUDE.md pitfall #8). It carries **only**: `handle`,
-`displayName`, `avatarUrl`, public-community badges, and an approved
-`depoimentoCount`. No id, no `name#1234` tag, no email, no presence, no message
-content, no private servers. Characters and webhook rows 404.
+The public profile route is one of the deliberately-unauthenticated routes in
+`server/src/api/index.ts` (see CLAUDE.md pitfall #8). It carries **only**:
+`handle`, `displayName`, `avatarUrl`, `bannerUrl`, public-community badges, an
+approved `depoimentoCount`, the newest six approved `depoimentos`, and
+`memberSince` as `YYYY-MM`. No id, no `name#1234` tag, no email, no presence, no
+message content, no private servers. Characters and webhook rows 404.
 
-`depoimentoCount` is feature-detected (`to_regclass`) because the depoimentos
-table is being written on another branch — see the `TODO(coordinator)` markers in
-`server/src/services/profiles.ts`, which also flag where a per-membership
-`show_on_profile` opt-out has to be added to the badge query when it lands.
+**Why depoimentos are rendered rather than counted.** A depoimento is the one
+feature in this product whose mechanic is an act of approval: a friend wrote it
+for a profile, and the subject published it from a preview that said exactly
+where it would go. Two people consented to this page. What still does not travel
+is the author's id or tag — they appear as a name, a picture, and (only if they
+claimed one) a handle, because a depoimento must never become a way to enumerate
+the people who know somebody.
+
+**Why the join date is a month.** `memberSince` is truncated to `YYYY-MM` on the
+server, before it is serialised. A timestamp on a surface served to the open
+internet is a fact about when somebody was at a computer; "no pqp desde julho de
+2026" is a badge. `monthStamp` / `monthStampToDate` in `@pqp/shared` are the one
+definition, so the two ends cannot disagree about what the string means.
+
+**The banner** rides the avatar machinery — same bucket, same signer, same
+presign-then-HEAD — because its key carries the owning account's id and is
+therefore self-authorising, exactly as an avatar key is. It uses its own
+`banners/<id>/` prefix rather than a folder inside `avatars/`, so the smaller
+avatar cap cannot be spent through the larger banner signature. With no `S3_*`
+there is no upload and the page draws a gradient generated from the handle's own
+hue (`client/src/lib/hero-tint.ts`), which is a design rather than a placeholder.
 
 ## SEO on a static SPA
 
@@ -89,10 +108,17 @@ Two things make it work with no new configuration:
 Every failure path (no API origin, API down, 404, timeout, malformed body)
 serves the page unchanged.
 
-`robots.txt` allows `/@`, `/garanta` and `/claim`. The sitemap lists static
-pages only — generating one from the database would be a public, complete,
-machine-readable list of everybody on the service, which is exactly the
-enumeration surface the profile endpoint refuses to be.
+The same middleware also handles `/c/<slug>` through
+`client/src/lib/community-meta.ts` — a separate head builder rather than one
+parameterised function, because the two cards differ where it matters: a
+profile's image is a square avatar and gets `summary`, a community's is a 3:1
+banner and gets `summary_large_image`. See `docs/CONTENT_SAFETY.md` §Communities
+for what that page may and may not carry.
+
+`robots.txt` allows `/@`, `/c/`, `/garanta` and `/claim`. The sitemap lists
+static pages only — generating one from the database would be a public,
+complete, machine-readable list of everybody on the service, which is exactly
+the enumeration surface the profile endpoint refuses to be.
 
 ## The claim flow, end to end
 

@@ -1,4 +1,9 @@
 import {
+  communitySlugFromMetaPath,
+  injectCommunityHead,
+  type CommunityMeta,
+} from "../src/lib/community-meta";
+import {
   handleFromMetaPath,
   injectProfileHead,
   preferredLocale,
@@ -6,7 +11,7 @@ import {
 } from "../src/lib/profile-meta";
 
 /**
- * Cloudflare Pages middleware: real Open Graph tags for `/@handle`.
+ * Cloudflare Pages middleware: real Open Graph tags for `/@handle` and `/c/…`.
  *
  * WHY THIS FILE EXISTS. The site is a static SPA — every route is the same
  * `index.html`, and the head is fixed up in the browser by `Seo`. Crawlers and
@@ -15,17 +20,26 @@ import {
  * whose entire growth loop is somebody sharing their own page. This runs at the
  * edge, in front of the asset, and rewrites the bytes.
  *
- * WHAT IT DOES NOT DO. It does not render the page. The SPA still fetches the
- * profile and draws it; this only fixes the head. Two fetches of the same JSON
- * (one at the edge, one in the browser) is the deliberate trade against
- * server-rendering a React tree in a Worker — the endpoint is cached for a
- * minute and the payload is a few hundred bytes.
+ * TWO SURFACES, ONE MIDDLEWARE. `/@rafa` is a person and `/c/valorant` is a
+ * room, and they get different cards — a square avatar with `summary` for the
+ * one, a 3:1 banner with `summary_large_image` for the other. The two head
+ * builders live in `src/lib/profile-meta.ts` and `src/lib/community-meta.ts`
+ * and are deliberately not one parameterised builder; see the file comment on
+ * the second for the argument. What is shared is everything below: the API
+ * origin, the timeout, the locale, and the rule that every failure path serves
+ * the page unchanged.
+ *
+ * WHAT IT DOES NOT DO. It does not render the page. The SPA still fetches and
+ * draws it; this only fixes the head. Two fetches of the same JSON (one at the
+ * edge, one in the browser) is the deliberate trade against server-rendering a
+ * React tree in a Worker — both endpoints are cached for a minute and the
+ * payloads are a few hundred bytes.
  *
  * EVERY FAILURE PATH SERVES THE PAGE UNCHANGED. No API origin configured, the
  * API down, a 404, a timeout, a malformed body, an asset with no `<head>`: all
- * of them fall through to `context.next()`. A profile that unfurls badly is a
- * bad day; a profile that 500s at the edge is a dead link, and this middleware
- * sits in front of the whole site.
+ * of them fall through to `context.next()`. A page that unfurls badly is a bad
+ * day; a page that 500s at the edge is a dead link, and this middleware sits in
+ * front of the whole site.
  */
 
 interface PagesContext {
@@ -128,12 +142,85 @@ async function fetchProfile(
   }
 }
 
+/**
+ * The community behind a slug, or null.
+ *
+ * Shape-checked rather than trusted, exactly as `fetchProfile` is: these
+ * strings are interpolated into a document, `injectCommunityHead` escapes them,
+ * but a missing field would put "undefined" on the card. `memberCount` is
+ * coerced to a number rather than defaulted, because a card that says "NaN
+ * membros" is worse than one that says zero.
+ */
+async function fetchCommunity(
+  apiOrigin: string,
+  slug: string,
+): Promise<CommunityMeta | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+  try {
+    const response = await fetch(
+      `${apiOrigin}/api/public/communities/${encodeURIComponent(slug)}`,
+      { signal: controller.signal, headers: { accept: "application/json" } },
+    );
+    if (!response.ok) {
+      return null;
+    }
+    const body = (await response.json()) as { community?: CommunityMeta };
+    const community = body.community;
+    if (
+      !community ||
+      typeof community.slug !== "string" ||
+      typeof community.name !== "string"
+    ) {
+      return null;
+    }
+    return {
+      slug: community.slug,
+      name: community.name,
+      tagline:
+        typeof community.tagline === "string" ? community.tagline : null,
+      category:
+        typeof community.category === "string" ? community.category : "geral",
+      memberCount:
+        typeof community.memberCount === "number" &&
+        Number.isFinite(community.memberCount)
+          ? community.memberCount
+          : 0,
+      iconUrl: typeof community.iconUrl === "string" ? community.iconUrl : null,
+      bannerUrl:
+        typeof community.bannerUrl === "string" ? community.bannerUrl : null,
+    };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * The rewritten response, with the caching a per-URL, per-language document
+ * needs. Shared by both surfaces because the answer is the same for both:
+ * anything in front of this must not reuse one page's bytes for another's URL.
+ */
+function rewritten(response: Response, html: string): Response {
+  const headers = new Headers(response.headers);
+  headers.set("cache-control", "public, max-age=60");
+  headers.append("vary", "accept-language");
+  headers.delete("content-length");
+  return new Response(html, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
 export async function onRequest(context: PagesContext): Promise<Response> {
   const url = new URL(context.request.url);
   const handle = handleFromMetaPath(url.pathname);
+  const slug = handle ? null : communitySlugFromMetaPath(url.pathname);
   // The overwhelmingly common case, and it must cost nothing: this middleware
   // is in front of every request the site serves, including every hashed asset.
-  if (!handle || context.request.method !== "GET") {
+  if ((!handle && !slug) || context.request.method !== "GET") {
     return context.next();
   }
 
@@ -148,7 +235,33 @@ export async function onRequest(context: PagesContext): Promise<Response> {
     return response;
   }
 
-  const profile = await fetchProfile(apiOrigin, handle);
+  const locale = preferredLocale(
+    url.search,
+    context.request.headers.get("accept-language"),
+  );
+
+  if (slug) {
+    const community = await fetchCommunity(apiOrigin, slug);
+    if (!community) {
+      // Unknown, unlisted, suspended, or the flag is off — the API answers all
+      // four identically and so does this. The SPA draws its own "essa
+      // comunidade não existe" page and the head stays the product's generic
+      // card, which is correct: at that point the page really is about the
+      // product.
+      return response;
+    }
+    const html = await response.text();
+    return rewritten(
+      response,
+      injectCommunityHead(html, community, {
+        siteOrigin: url.origin,
+        apiOrigin,
+        locale,
+      }),
+    );
+  }
+
+  const profile = await fetchProfile(apiOrigin, handle!);
   if (!profile) {
     // An unclaimed handle. The SPA draws its own "this @ is free — claim it"
     // page, which is a better landing than a 404 and is a growth surface in its
@@ -158,24 +271,12 @@ export async function onRequest(context: PagesContext): Promise<Response> {
   }
 
   const html = await response.text();
-  const rewritten = injectProfileHead(html, profile, {
-    siteOrigin: url.origin,
-    apiOrigin,
-    locale: preferredLocale(
-      url.search,
-      context.request.headers.get("accept-language"),
-    ),
-  });
-
-  const headers = new Headers(response.headers);
-  // The document now varies by handle and by language, so anything in front of
-  // this must not reuse one profile's bytes for another's URL.
-  headers.set("cache-control", "public, max-age=60");
-  headers.append("vary", "accept-language");
-  headers.delete("content-length");
-  return new Response(rewritten, {
-    status: response.status,
-    statusText: response.statusText,
-    headers,
-  });
+  return rewritten(
+    response,
+    injectProfileHead(html, profile, {
+      siteOrigin: url.origin,
+      apiOrigin,
+      locale,
+    }),
+  );
 }

@@ -4,15 +4,18 @@ import {
   HANDLE_INTENT_TTL_MS,
   stashAddIntent,
   stashHandleClaim,
+  stashJoinIntent,
   takeAddIntent,
   takeHandleClaim,
+  takeJoinIntent,
 } from "./handle-intent";
 
 /**
- * The two intentions that have to survive a sign-up. What is actually being
+ * The three intentions that have to survive a sign-up. What is actually being
  * pinned here is that each of them fires EXACTLY ONCE — a claim that repeats
- * spends the 30-day rename cooldown on a name the person already has, and an add
- * that repeats sends a stranger a friend request every time they reload.
+ * spends the 30-day rename cooldown on a name the person already has, an add
+ * that repeats sends a stranger a friend request every time they reload, and a
+ * join that repeats re-enters a community somebody may have left.
  */
 
 function memoryStorage(): Storage & { map: Map<string, string> } {
@@ -90,6 +93,40 @@ describe("the handle claim intent", () => {
     expect(takeHandleClaim(hostileStorage)).toBeNull();
     expect(takeHandleClaim(null)).toBeNull();
     expect(() => stashHandleClaim(null, "rafa")).not.toThrow();
+  });
+});
+
+describe("the community join intent", () => {
+  let storage: ReturnType<typeof memoryStorage>;
+
+  beforeEach(() => {
+    storage = memoryStorage();
+  });
+
+  it("survives the trip through sign-up and is consumed on arrival", () => {
+    stashJoinIntent(storage, "valorant-brasil");
+    expect(takeJoinIntent(storage)).toBe("valorant-brasil");
+    // A join that fires twice re-enters a community somebody may have left in
+    // between, which is a membership nobody asked for the second time.
+    expect(takeJoinIntent(storage)).toBeNull();
+  });
+
+  it("expires rather than acting on a signup abandoned in March", () => {
+    stashJoinIntent(storage, "valorant-brasil", 0);
+    expect(takeJoinIntent(storage, HANDLE_INTENT_TTL_MS + 1)).toBeNull();
+  });
+
+  it("keeps its own key, so one intent cannot consume another's", () => {
+    stashAddIntent(storage, "rafa");
+    stashJoinIntent(storage, "valorant-brasil");
+    expect(takeAddIntent(storage)).toBe("rafa");
+    expect(takeJoinIntent(storage)).toBe("valorant-brasil");
+  });
+
+  it("does nothing at all when storage is denied", () => {
+    expect(() => stashJoinIntent(hostileStorage, "valorant")).not.toThrow();
+    expect(takeJoinIntent(hostileStorage)).toBeNull();
+    expect(takeJoinIntent(null)).toBeNull();
   });
 });
 

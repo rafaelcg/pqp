@@ -93,6 +93,38 @@
   --community-tint-far: color-mix(in oklab, oklch(0.62 0.16 var(--community-hue-far, 188)) var(--community-tint-strength-far, 18%), var(--color-surface-1));
   --scrim-media: rgba(0, 0, 0, 0.42);
 
+  /*
+   * The public pages' hero.
+   *
+   * SAME SPLIT --community-tint-* ESTABLISHED, and for the same reason: the
+   * per-subject hue is arithmetic and belongs with the component that derives
+   * it, the colour literals are colour and belong here. A page sets
+   * --hero-hue inline and reads these; nothing outside the token layer ever
+   * names a colour, which is what keeps the bench's leak gate at zero.
+   *
+   * Deliberately more saturated than the community card's tint. A directory
+   * card is one of twenty-four on a grid and has to recede; a profile banner is
+   * the top third of a page somebody is going to screenshot, and a wash so
+   * polite it reads as grey is a page nobody shares.
+   */
+  --hero-tint-near: color-mix(in oklab, oklch(0.72 0.19 var(--hero-hue, 125)) var(--hero-tint-strength, 45%), var(--color-surface-2));
+  --hero-tint-far: color-mix(in oklab, oklch(0.58 0.17 var(--hero-hue-far, 265)) var(--hero-tint-strength-far, 32%), var(--color-surface-0));
+  /*
+   * What the name sits on when the hero is somebody's uploaded photograph.
+   *
+   * Bottom-anchored and in the SURFACE colour rather than in black, so the
+   * banner dissolves into the page instead of ending in a bar. Black would be
+   * a band across the foot of every banner in light mode.
+   */
+  --scrim-hero: linear-gradient(to top, var(--color-surface-0) 0%, color-mix(in oklab, var(--color-surface-0) 62%, transparent) 42%, color-mix(in oklab, var(--color-surface-0) 12%, transparent) 78%, transparent 100%);
+  /* The avatar overlapping the hero needs to read as ON TOP of it, and a ring
+     alone does not do that over a busy photograph. */
+  --shadow-hero-avatar: 0 20px 44px -20px oklch(0 0 0 / 0.7);
+  --shadow-testimonial: 0 10px 30px -18px oklch(0 0 0 / 0.55);
+  /* A barely-there accent wash behind a section, for the depoimento wall and
+     the community stat block. Weaker than --glow-accent, which is a spotlight. */
+  --glow-accent-soft: oklch(0.88 0.19 125 / 0.07);
+
   --gradient-app-1: oklch(0.22 0.04 125 / 0.35);
   --gradient-app-2: oklch(0.22 0.03 250 / 0.4);
 
@@ -153,6 +185,16 @@
 
   --gradient-app-1: oklch(0.85 0.06 125 / 0.25);
   --gradient-app-2: oklch(0.85 0.04 250 / 0.3);
+
+  /* The hero tint has to sit on a white page without turning fluorescent, and
+     the two shadows have to stop being black smears on it. `--scrim-hero`
+     needs no override: it is written in terms of `--color-surface-0`, which
+     this block has already inverted. */
+  --hero-tint-near: color-mix(in oklab, oklch(0.62 0.16 var(--hero-hue, 125)) var(--hero-tint-strength, 30%), var(--color-surface-2));
+  --hero-tint-far: color-mix(in oklab, oklch(0.55 0.14 var(--hero-hue-far, 265)) var(--hero-tint-strength-far, 22%), var(--color-surface-0));
+  --shadow-hero-avatar: 0 20px 44px -20px oklch(0.4 0.02 250 / 0.28);
+  --shadow-testimonial: 0 10px 30px -18px oklch(0.4 0.02 250 / 0.22);
+  --glow-accent-soft: oklch(0.52 0.16 135 / 0.06);
 
   --rgb-picker-background: 250, 249, 245;
   --rgb-picker-input: 240, 238, 232;

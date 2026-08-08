@@ -2,9 +2,12 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   avatarPath,
   MAX_AVATAR_BYTES,
+  MAX_USER_BANNER_BYTES,
+  userBannerPath,
   type AvatarContentType,
+  type UserBannerContentType,
 } from "@pqp/shared";
-import { getPool } from "../db.js";
+import { getPool, type DbUser } from "../db.js";
 import {
   deleteObject,
   headObject,
@@ -244,6 +247,233 @@ export async function presignAvatarRead(userId: string): Promise<string | null> 
     [userId],
   );
   const key = result.rows[0]?.avatar_key;
+  if (!key) {
+    return null;
+  }
+  return presignGet(key, { ttlSeconds: READ_URL_TTL_SECONDS });
+}
+
+// ------------------------------------------------------------- user banners
+
+/**
+ * The strip across the top of `pqp.gg/@rafa`.
+ *
+ * IN THIS FILE RATHER THAN IN A THIRD ONE, and the choice is the same one
+ * `server-images.ts` explains from the other side. What decides where an image
+ * contract lives is not the shape of the picture, it is what makes a claim
+ * safe: an avatar key carries the claiming account's own id, so "is this mine"
+ * is answerable from the string alone and the route needs no permission check
+ * beyond having a session. A banner key carries the same id and is safe for the
+ * same reason, so it belongs beside the avatar and not beside the server image,
+ * whose key names a room many people are in and which is therefore owner-gated
+ * at the route.
+ *
+ * Everything below is the avatar's own code with a different prefix, a
+ * different cap and a different pair of columns. That is not duplication to
+ * factor out later — it is the second instance of a pattern whose whole value
+ * is that each instance states its own authorisation story in full.
+ */
+
+const BANNER_EXTENSION_BY_CONTENT_TYPE: Record<UserBannerContentType, string> = {
+  "image/jpeg": ".jpg",
+  "image/png": ".png",
+  "image/webp": ".webp",
+};
+
+/** Mirrors `isAvatarUploadConfigured`: no storage, no upload, no button. */
+export function isUserBannerUploadConfigured(): boolean {
+  return isStorageConfigured();
+}
+
+/**
+ * A separate prefix from `avatars/<id>/`, not a folder inside it.
+ *
+ * The prefix is what `isOwnBannerKey` checks, and a banner claim must not be
+ * able to install an object that was uploaded as an avatar, nor the reverse:
+ * the two have different byte caps, and one shared prefix would let the smaller
+ * cap be spent through the larger one's signature. Two prefixes make that a
+ * property of the string rather than a rule somebody has to remember.
+ */
+function bannerPrefix(userId: string): string {
+  return `banners/${userId}/`;
+}
+
+export function bannerObjectKey(
+  userId: string,
+  contentType: UserBannerContentType,
+): string {
+  return `${bannerPrefix(userId)}${randomUUID()}${
+    BANNER_EXTENSION_BY_CONTENT_TYPE[contentType]
+  }`;
+}
+
+/** Does this key belong to this account? `..` refused outright — see `isOwnAvatarKey`. */
+export function isOwnBannerKey(userId: string, key: string): boolean {
+  const prefix = bannerPrefix(userId);
+  return (
+    key.startsWith(prefix) && !key.includes("..") && key.length > prefix.length
+  );
+}
+
+export interface UserBannerUpload {
+  key: string;
+  uploadUrl: string;
+  /** ISO 8601. */
+  expiresAt: string;
+}
+
+/** Hand back somewhere to put the bytes. Writes nothing — the claim does that. */
+export function createUserBannerUpload(input: {
+  userId: string;
+  contentType: UserBannerContentType;
+  byteSize: number;
+}): UserBannerUpload {
+  const key = bannerObjectKey(input.userId, input.contentType);
+  return {
+    key,
+    uploadUrl: presignPut(
+      key,
+      input.contentType,
+      input.byteSize,
+      UPLOAD_URL_TTL_SECONDS,
+    ),
+    expiresAt: new Date(
+      Date.now() + UPLOAD_URL_TTL_SECONDS * 1000,
+    ).toISOString(),
+  };
+}
+
+/**
+ * Confirm the bytes are really there, and are what was signed for. The same
+ * HEAD an avatar claim runs, earning its keep for the same three reasons — see
+ * `verifyAvatarObject`. Null is always "do not make this the banner".
+ */
+export async function verifyUserBannerObject(
+  userId: string,
+  key: string,
+): Promise<number | null> {
+  if (!isStorageConfigured() || !isOwnBannerKey(userId, key)) {
+    return null;
+  }
+
+  let head;
+  try {
+    head = await headObject(key);
+  } catch (error) {
+    console.error(
+      `[banners] HEAD failed for ${key}:`,
+      error instanceof Error ? error.message : error,
+    );
+    return null;
+  }
+
+  if (!head) {
+    return null;
+  }
+  if (head.contentLength <= 0 || head.contentLength > MAX_USER_BANNER_BYTES) {
+    return null;
+  }
+  const expected = Object.entries(BANNER_EXTENSION_BY_CONTENT_TYPE).find(
+    ([, suffix]) => key.endsWith(suffix),
+  )?.[0];
+  if (!expected || head.contentType !== expected) {
+    return null;
+  }
+  return head.contentLength;
+}
+
+/** The URL that goes in `users.banner_url`. Root-relative — see `avatarUrlForKey`. */
+export function userBannerUrlForKey(userId: string, key: string): string {
+  return userBannerPath(
+    userId,
+    createHash("sha256").update(key).digest("hex").slice(0, 8),
+  );
+}
+
+/** Drop an object nothing points at any more. Best effort — see `discardAvatarObject`. */
+export async function discardBannerObject(key: string): Promise<void> {
+  if (!isStorageConfigured()) {
+    return;
+  }
+  try {
+    await deleteObject(key);
+  } catch (error) {
+    console.error(
+      `[banners] could not delete ${key}:`,
+      error instanceof Error ? error.message : error,
+    );
+  }
+}
+
+/**
+ * Point the row at a new object, or at nothing.
+ *
+ * NOT FOLDED INTO `updateProfile`, deliberately, and the reason is the one
+ * `setServerImage` gives: between a bare read of the old key and a bare write
+ * of the new one a second upload can land, and deleting the key the first read
+ * saw would delete the picture the second one just installed. So the read is
+ * `FOR UPDATE` inside the same transaction as the write, and the previous key
+ * comes back with the row so the caller can orphan exactly what it replaced.
+ *
+ * It is also not a profile change in the sense `updateProfile` means. Nothing
+ * about a banner is announced over the socket: no member list, message row,
+ * roster or conversation draws one, so `announceProfile` would be a broadcast
+ * to every client on the instance carrying a field none of them render.
+ */
+export async function setUserBanner(
+  userId: string,
+  next: { url: string; key: string } | null,
+): Promise<{ user: DbUser; previousKey: string | null } | null> {
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    const before = await client.query<{ banner_key: string | null }>(
+      `SELECT banner_key FROM users WHERE id = $1 FOR UPDATE`,
+      [userId],
+    );
+    if (before.rows.length === 0) {
+      await client.query("ROLLBACK");
+      return null;
+    }
+    const result = await client.query<DbUser>(
+      `UPDATE users SET banner_url = $2, banner_key = $3 WHERE id = $1
+       RETURNING id, clerk_id, display_name, username, discriminator,
+                 avatar_url, avatar_key, is_character, handle, handle_changed_at,
+                 banner_url, banner_key`,
+      [userId, next?.url ?? null, next?.key ?? null],
+    );
+    await client.query("COMMIT");
+    return {
+      user: result.rows[0]!,
+      previousKey: before.rows[0]!.banner_key ?? null,
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Where the bytes for this account's banner actually are, presigned.
+ *
+ * Null for "no banner", "no such user" and "storage is unconfigured" alike —
+ * all three are a 404 to the caller, which draws the generated gradient. Its
+ * own query rather than a join, because the one caller is an unauthenticated
+ * image request with no session row to ride on.
+ */
+export async function presignUserBannerRead(
+  userId: string,
+): Promise<string | null> {
+  if (!isStorageConfigured()) {
+    return null;
+  }
+  const result = await getPool().query<{ banner_key: string | null }>(
+    `SELECT banner_key FROM users WHERE id = $1`,
+    [userId],
+  );
+  const key = result.rows[0]?.banner_key;
   if (!key) {
     return null;
   }

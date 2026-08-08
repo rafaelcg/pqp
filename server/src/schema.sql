@@ -2115,3 +2115,176 @@ END $$;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_handle
   ON users (handle)
   WHERE handle IS NOT NULL;
+
+-- ---------------------------------------------------------------------------
+-- A person's banner: the strip across the top of `pqp.gg/@rafa`
+-- ---------------------------------------------------------------------------
+--
+-- TWO COLUMNS AND NO TABLE, the third time this product has made that choice
+-- and for the third time the same reason: an attachment needs a row because it
+-- exists in a pending state before anything refers to it and unclaimed rows
+-- must be swept, and a banner's whole lifecycle is "the key of the object we
+-- hold, and the URL everything else already reads". `users.avatar_key` /
+-- `avatar_url` above is the pattern; `servers.banner_key` / `banner_url` is the
+-- other copy.
+--
+-- WHY IT RIDES THE AVATAR MACHINERY RATHER THAN THE SERVER-IMAGE MACHINERY.
+-- The storage key contains the owning ACCOUNT's id, so "is this object mine" is
+-- answerable from the string alone and the claim needs no permission check
+-- beyond having a session. A server image key names a server that many people
+-- are members of, which is why that path is owner-gated at the route. Same
+-- bucket, same signer, different authorisation shape — see the file comment on
+-- server/src/services/server-images.ts for why the two were never merged.
+--
+-- Nullable and staying nullable. Almost nobody will upload one, and the profile
+-- page draws a gradient generated from the display name's own hue instead — a
+-- real design rather than a placeholder, the same deal the avatar monogram gets.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS banner_key TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS banner_url TEXT;
+
+-- ---------------------------------------------------------------------------
+-- Community slugs: the `pqp.gg/c/valorant-brasil` half of a listing
+-- ---------------------------------------------------------------------------
+--
+-- WHY A SECOND IDENTIFIER FOR A ROW THAT ALREADY HAS ONE. `servers.id` is a
+-- uuid, which is exactly right for the thing the API talks about and exactly
+-- wrong for the thing a person says out loud, prints on a poster, or types from
+-- memory. The public page exists so discovery is easy; `/c/3f2a1c9e-…` is not
+-- easy. Same argument `users.handle` makes against `users.id`, one level up.
+--
+-- NULLABLE, and the nullability is load-bearing rather than lazy. A private
+-- server has no public address and must not carry one; a community listed
+-- before this column existed gets its slug from the one-shot backfill below,
+-- and a name that cannot produce a valid slug (pure emoji, two characters) is
+-- refused at the route with a field to type one in — never silently given
+-- `server-4f2a`, which is a URL nobody would share.
+ALTER TABLE servers ADD COLUMN IF NOT EXISTS community_slug TEXT;
+
+-- The format, duplicated from `COMMUNITY_SLUG_PATTERN` in @pqp/shared on
+-- purpose — the third instance of the argument the handle CHECK and the
+-- category CHECK both make. `communities.test.ts` pins the two expressions as
+-- equal so a change to one fails the suite rather than the users.
+DO $$
+BEGIN
+  ALTER TABLE servers DROP CONSTRAINT IF EXISTS servers_community_slug_format;
+  ALTER TABLE servers
+    ADD CONSTRAINT servers_community_slug_format
+    CHECK (community_slug IS NULL
+           OR community_slug ~ '^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$');
+EXCEPTION
+  WHEN others THEN NULL;
+END $$;
+
+-- THE ARBITER OF "FIRST COME, FIRST SERVED" FOR SLUGS, exactly as
+-- `idx_users_handle` is for handles: two owners opting in at the same second
+-- both see the availability check answer "free", because a read cannot reserve
+-- anything. `updateCommunitySettings` attempts the write and converts the 23505
+-- into a refusal naming the `slug` field; this index is what decides who won.
+--
+-- PARTIAL ON `is_community`, which is a narrower predicate than "not null" and
+-- the difference matters. Unlisting a community deliberately LEAVES its slug on
+-- the row — the same way it leaves the tagline and the category, so relisting a
+-- week later needs no retyping — and an unlisted row must not go on holding a
+-- public address against everybody else. So the constraint is "no two LISTED
+-- communities share an address", which is the only sentence that is actually
+-- true of the URL space, and an unlisted holder loses the race to a live
+-- claimant rather than squatting from a room nobody can see.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_servers_community_slug
+  ON servers (community_slug)
+  WHERE is_community AND community_slug IS NOT NULL;
+
+-- The public page's read: one listed, unsuspended community by slug. Its own
+-- index rather than a share of the directory's, because the directory's leading
+-- column is the category and this query has no category to give it.
+CREATE INDEX IF NOT EXISTS idx_servers_community_slug_public
+  ON servers (community_slug)
+  WHERE is_community AND NOT is_community_suspended;
+
+-- ONE-SHOT BACKFILL for communities listed before slugs existed.
+--
+-- Runs on every boot and is a no-op after the first, because it only touches
+-- rows whose slug is still NULL. The derivation is the SQL twin of
+-- `slugifyCommunityName`: lowercase, strip accents through `unaccent`-free
+-- ASCII folding (`translate` over the vowels a Brazilian keyboard actually
+-- produces, which is what `normalize('NFD')` buys the TypeScript version),
+-- collapse everything else to single hyphens, trim the ends, cap at forty.
+--
+-- COLLISIONS ARE LEFT UNRESOLVED ON PURPOSE, and this is the interesting part.
+-- The window function picks one winner per derived slug — oldest listing first,
+-- which is the same "first come" rule the live path enforces — and every loser
+-- keeps a NULL slug. A loser is then a listed community with no public page,
+-- which the directory renders exactly as it renders a community listed before
+-- this change: everything works, the share button is simply absent, and its
+-- owner picks an address in settings whenever they get round to it. The
+-- alternative — appending `-2` — mints URLs nobody chose, nobody would share,
+-- and nobody can tell apart.
+--
+-- Anything that fails the CHECK (a name that folds to nothing, or to two
+-- characters) is filtered out by the length test rather than written and
+-- rejected, so this block can never abort a boot.
+DO $$
+DECLARE
+  filled INTEGER;
+BEGIN
+  WITH derived AS (
+    SELECT
+      s.id,
+      s.created_at,
+      NULLIF(
+        LEFT(
+          TRIM(BOTH '-' FROM
+            REGEXP_REPLACE(
+              TRANSLATE(
+                LOWER(s.name),
+                'áàâãäéèêëíìîïóòôõöúùûüçñ',
+                'aaaaaeeeeiiiiooooouuuucn'
+              ),
+              '[^a-z0-9]+', '-', 'g'
+            )
+          ),
+          40
+        ),
+        ''
+      ) AS slug
+    FROM servers s
+    WHERE s.is_community AND s.community_slug IS NULL
+  ),
+  ranked AS (
+    SELECT id, TRIM(BOTH '-' FROM slug) AS slug,
+           ROW_NUMBER() OVER (
+             PARTITION BY TRIM(BOTH '-' FROM slug)
+             ORDER BY created_at ASC, id ASC
+           ) AS rank
+    FROM derived
+    WHERE slug IS NOT NULL
+  )
+  UPDATE servers s
+     SET community_slug = r.slug
+    FROM ranked r
+   WHERE s.id = r.id
+     AND r.rank = 1
+     AND LENGTH(r.slug) BETWEEN 3 AND 40
+     AND r.slug ~ '^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$'
+     -- Reserved words are refused here too, so the backfill cannot hand out an
+     -- address the live claim path would never allow. Kept short deliberately:
+     -- this list only has to agree with RESERVED_COMMUNITY_SLUGS on the words
+     -- a real community name could plausibly fold to.
+     AND r.slug NOT IN ('new', 'nova', 'novo', 'all', 'todas', 'todos',
+                        'search', 'busca', 'explore', 'explorar', 'admin',
+                        'staff', 'equipe', 'moderacao', 'suporte', 'support',
+                        'oficial', 'official', 'pqp', 'api', 'app', 'www',
+                        'null', 'undefined')
+     -- The unique index is the real arbiter; this only keeps the statement from
+     -- colliding with a slug some other boot (or a live claim) already wrote.
+     AND NOT EXISTS (
+       SELECT 1 FROM servers other
+        WHERE other.community_slug = r.slug
+          AND other.is_community
+          AND other.id <> s.id
+     );
+
+  GET DIAGNOSTICS filled = ROW_COUNT;
+  IF filled > 0 THEN
+    RAISE NOTICE 'pqp: derived community slugs for % listing(s)', filled;
+  END IF;
+END $$;

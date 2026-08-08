@@ -95,6 +95,20 @@ export interface DbUser {
   handle?: string | null;
   /** When the handle last moved; drives the 30-day rename cooldown. */
   handle_changed_at?: Date | string | null;
+  /**
+   * The strip across the top of `pqp.gg/@rafa`. `banner_url` is what the public
+   * profile payload carries; `banner_key` is the storage key and is read only
+   * by the banner routes and by the swap that has to orphan the old object.
+   *
+   * Optional for the same reason every field above it is: several reads select
+   * a narrower column list, and an absent value must read as "unknown" rather
+   * than as "this account has none" — a null written from an absent value is
+   * how a picture disappears on an unrelated save.
+   */
+  banner_url?: string | null;
+  banner_key?: string | null;
+  /** When the account was created. Month-truncated before it reaches a page. */
+  created_at?: Date | string | null;
 }
 
 export interface DbServer {

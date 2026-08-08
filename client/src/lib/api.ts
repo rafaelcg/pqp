@@ -10,12 +10,15 @@ import type {
   CommunityConfig,
   CommunityPage,
   CommunitySettings,
+  CommunitySummary,
   UpdateCommunityRequest,
   CreateAttachmentRequest,
   CreateAvatarUploadRequest,
   CreateAvatarUploadResponse,
   CreateGifAttachmentRequest,
   CreateAttachmentResponse,
+  CreateUserBannerUploadRequest,
+  CreateUserBannerUploadResponse,
   DmListResponse,
   DmPrivacy,
   DmSummary,
@@ -25,6 +28,7 @@ import type {
   Message,
   MessageSearchResponse,
   CreateReportRequest,
+  PublicCommunity,
   PublicProfile,
   PublicUser,
   Report,
@@ -39,6 +43,7 @@ import type {
   CreateServerImageUploadResponse,
   ThreadSummary,
   User,
+  UserBannerConfig,
   UserPreferences,
   UserSearchResponse,
   UserStatus,
@@ -235,6 +240,37 @@ export async function fetchPublicProfile(
 }
 
 /**
+ * A community's public page, by slug — the second read in this file that works
+ * with no session at all.
+ *
+ * `null` means 404, and the 404 covers four things on purpose: no such slug,
+ * not a community, suspended, and "this deployment has communities off". The
+ * page renders one "não existe" for all four, which is the whole point of the
+ * server answering them identically.
+ *
+ * Every other failure still throws, for `fetchPublicProfile`'s reason: a
+ * network drop is emphatically not "there is no such community", and rendering
+ * it as one would tell somebody their friend's link is dead when it is not.
+ */
+export async function fetchPublicCommunity(
+  slug: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<PublicCommunity | null> {
+  try {
+    const { community } = await apiFetch<{ community: PublicCommunity }>(
+      `/api/public/communities/${encodeURIComponent(slug)}`,
+      { signal: options.signal },
+    );
+    return community;
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+/**
  * The signed-in half of `?add=<handle>`: turn a handle into somebody a friend
  * request can be sent to. Deliberately not on the public endpoint — see the
  * route comment on the server.
@@ -300,6 +336,37 @@ export const claimAvatar = (key: string, signal?: AbortSignal) =>
 /** Back to the monogram, and the object is dropped from the bucket. */
 export const deleteAvatar = () =>
   apiFetch<{ user: User }>("/api/me/avatar", { method: "DELETE" });
+
+// -------------------------------------------------------------- banner upload
+//
+// The strip across the top of `pqp.gg/@rafa`, through the same mint / PUT /
+// claim dance and self-scoped exactly as an avatar is — the key carries the
+// session's own user id, so nothing about the destination is negotiable here.
+
+export const fetchUserBannerConfig = () =>
+  apiFetch<UserBannerConfig>("/api/me/banner/config");
+
+export const createUserBannerUpload = (
+  body: CreateUserBannerUploadRequest,
+  signal?: AbortSignal,
+) =>
+  apiFetch<CreateUserBannerUploadResponse>("/api/me/banner", {
+    method: "POST",
+    body: JSON.stringify(body),
+    ...(signal ? { signal } : {}),
+  });
+
+/** The bytes are up: HEAD them server-side and make them the banner. */
+export const claimUserBanner = (key: string, signal?: AbortSignal) =>
+  apiFetch<{ user: User }>("/api/me/banner/claim", {
+    method: "POST",
+    body: JSON.stringify({ key }),
+    ...(signal ? { signal } : {}),
+  });
+
+/** Back to the generated gradient; the object is dropped from the bucket. */
+export const deleteUserBanner = () =>
+  apiFetch<{ user: User }>("/api/me/banner", { method: "DELETE" });
 
 // ------------------------------------------------------- server identity
 //
@@ -598,6 +665,19 @@ export const joinCommunity = (serverId: string) =>
     serverName: string;
     joinedNow: boolean;
   }>(`/api/communities/${serverId}/join`, {});
+
+/**
+ * Resolve a public slug to the listing behind it, for a signed-in caller.
+ *
+ * The signed-in half of `?join=<slug>` — what turns the intent somebody carried
+ * through sign-up into a community the ordinary join can be posted against.
+ * Deliberately not on the public endpoint: that one carries no id at all, which
+ * is what keeps a stranger from ever holding one.
+ */
+export const lookupCommunityBySlug = (slug: string) =>
+  apiFetch<{ community: CommunitySummary }>(
+    `/api/communities/by-slug/${encodeURIComponent(slug)}`,
+  );
 
 /** The owner's own view of their server's listing. */
 export const fetchCommunitySettings = (serverId: string) =>

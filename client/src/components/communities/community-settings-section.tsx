@@ -1,6 +1,8 @@
 import {
   COMMUNITY_CATEGORIES,
+  COMMUNITY_SLUG_MAX_LENGTH,
   COMMUNITY_TAGLINE_MAX_LENGTH,
+  slugifyCommunityName,
   type CommunityCategory,
   type CommunitySettings,
 } from "@pqp/shared";
@@ -43,14 +45,26 @@ export function CommunitySettingsSection({
   const [settings, setSettings] = useState<CommunitySettings | null>(null);
   const [tagline, setTagline] = useState("");
   const [category, setCategory] = useState<CommunityCategory>("geral");
+  const [slug, setSlug] = useState("");
   const [listed, setListed] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * The address's own refusal, held apart from `error`.
+   *
+   * A collision is not a failure of the form, it is a failure of one field, and
+   * a sentence at the bottom of the panel about a box halfway up it is a
+   * sentence people re-read three times. The server makes this possible by
+   * being explicit about it: on this route 400, 409 and 422 always mean the
+   * address and never anything else — see the note on the PATCH handler.
+   */
+  const [slugError, setSlugError] = useState<string | null>(null);
   const toggleId = useId();
   const taglineId = useId();
   const categoryId = useId();
+  const slugId = useId();
 
   useEffect(() => {
     let cancelled = false;
@@ -64,6 +78,7 @@ export function CommunitySettingsSection({
         setListed(res.community.isCommunity);
         setTagline(res.community.tagline ?? "");
         setCategory(res.community.category);
+        setSlug(res.community.slug ?? "");
       })
       .catch((err: unknown) => {
         if (!cancelled) {
@@ -85,7 +100,9 @@ export function CommunitySettingsSection({
   async function save() {
     setSaving(true);
     setError(null);
+    setSlugError(null);
     setSaved(false);
+    const typedSlug = slug.trim();
     try {
       const res = await updateCommunitySettings(serverId, {
         isCommunity: listed,
@@ -93,16 +110,37 @@ export function CommunitySettingsSection({
         // null — sending "" would store a blank line the card reserves space for.
         tagline: tagline.trim() === "" ? null : tagline.trim(),
         category,
+        // ABSENT WHEN THE BOX IS EMPTY, which is what asks the server to derive
+        // one from the name on the first opt-in. Sending `""` would be a
+        // request to set an empty address, and the schema would refuse it —
+        // turning "I have not chosen one" into an error about a field the owner
+        // never touched.
+        ...(typedSlug ? { slug: typedSlug } : {}),
       });
       setSettings(res.community);
       setListed(res.community.isCommunity);
       setTagline(res.community.tagline ?? "");
       setCategory(res.community.category);
+      // The server may have DERIVED one; reading it back is what puts the
+      // address the owner now owns into the box they left empty.
+      setSlug(res.community.slug ?? "");
       setSaved(true);
     } catch (err) {
-      setError(
-        err instanceof ApiError ? err.message : t("communities.settings.failed"),
-      );
+      if (err instanceof ApiError && err.status === 409) {
+        setSlugError(t("communities.settings.slugTaken"));
+      } else if (err instanceof ApiError && err.status === 422) {
+        setSlugError(t("communities.settings.slugUnderivable"));
+      } else if (err instanceof ApiError && err.status === 400 && typedSlug) {
+        // 400 on this route with a slug in the body is the schema refusing the
+        // string's shape, and its message already says how.
+        setSlugError(err.message);
+      } else {
+        setError(
+          err instanceof ApiError
+            ? err.message
+            : t("communities.settings.failed"),
+        );
+      }
     } finally {
       setSaving(false);
     }
@@ -113,7 +151,8 @@ export function CommunitySettingsSection({
     settings !== null &&
     (listed !== settings.isCommunity ||
       (tagline.trim() || null) !== settings.tagline ||
-      category !== settings.category);
+      category !== settings.category ||
+      (slug.trim() || null) !== settings.slug);
 
   return (
     <section
@@ -210,6 +249,54 @@ export function CommunitySettingsSection({
                 </option>
               ))}
             </select>
+          </div>
+
+          {/* The public address. Rendered as the URL it becomes, prefix and
+              all, rather than as a bare text field labelled "slug": the owner
+              is choosing the thing they will paste into a group chat, and the
+              only honest way to show that is to show the whole string. Same
+              construction the handle field in Settings → Profile uses. */}
+          <div className="space-y-1">
+            <label
+              className="block text-xs font-semibold uppercase tracking-wide text-paper-muted"
+              htmlFor={slugId}
+            >
+              {t("communities.settings.slug")}
+            </label>
+            <div className="flex items-stretch rounded-md border border-ink-4 bg-ink focus-within:ring-2 focus-within:ring-signal/50">
+              <span className="flex select-none items-center pl-3 font-mono text-sm text-paper-muted">
+                pqp.gg/c/
+              </span>
+              <input
+                id={slugId}
+                value={slug}
+                maxLength={COMMUNITY_SLUG_MAX_LENGTH}
+                autoComplete="off"
+                autoCapitalize="none"
+                spellCheck={false}
+                disabled={saving}
+                placeholder={t("communities.settings.slugPlaceholder")}
+                // Slugified on every keystroke rather than validated on blur.
+                // The server slugifies the body anyway, so a field that let
+                // somebody type "Valorant Brasil" and then silently stored
+                // something else would be lying about what it holds; this way
+                // the box always shows the address that will exist.
+                onChange={(e) => {
+                  setSlug(slugifyCommunityName(e.target.value));
+                  setSaved(false);
+                  setSlugError(null);
+                }}
+                className="min-w-0 flex-1 bg-transparent px-1 py-2 font-mono text-sm text-paper outline-none placeholder:text-paper-muted/60 disabled:opacity-50"
+              />
+            </div>
+            <p className="text-xs text-paper-muted">
+              {t("communities.settings.slugHint")}
+            </p>
+            {slugError && (
+              <p role="alert" className="text-xs text-danger">
+                {slugError}
+              </p>
+            )}
           </div>
 
           <Button disabled={saving || !dirty} onClick={() => void save()}>

@@ -21,12 +21,17 @@ import {
   expectedDeleteConfirmation,
   HANDLE_MAX_LENGTH,
   handleRenameAvailableAt,
+  MAX_USER_BANNER_BYTES,
   normalizeHandle,
   publicProfileDisplayUrl,
   publicProfilePath,
+  USER_BANNER_HEIGHT,
+  USER_BANNER_MIME_ALLOWLIST,
+  USER_BANNER_WIDTH,
   type BlockedUser,
   type DmPrivacy,
   type User,
+  type UserBannerConfig,
   type UserPreferences,
 } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
@@ -73,12 +78,17 @@ import {
 } from "@/lib/push";
 import type { ThemePreference } from "@/lib/theme";
 import {
+  ApiError,
   deleteMyAccount,
+  deleteUserBanner,
   exportMyData,
+  fetchUserBannerConfig,
   updateMe,
   OwnedServersError,
   type BlockingOwnedServer,
 } from "@/lib/api";
+import { resolveUploadedImageUrl } from "@/lib/avatar";
+import { uploadUserBanner } from "@/lib/banner-upload";
 import { queuePreferenceSync } from "@/lib/preferences";
 import { cn } from "@/lib/utils";
 
@@ -1803,6 +1813,12 @@ function ProfileSection({
         )}
       </Field>
 
+      {/* Above the avatar, matching the page it feeds: on `pqp.gg/@you` the
+          banner is the first thing anybody sees and the avatar overlaps it.
+          A settings form whose order contradicts the thing it edits is a form
+          people scroll past looking for the control they can already picture. */}
+      <BannerField user={user} onUserUpdated={onUserUpdated} />
+
       <div>
         <span className="mb-2 block text-xs uppercase tracking-wide text-paper-muted">
           {t("settings.profile.avatar")}
@@ -1857,6 +1873,187 @@ function ProfileSection({
           anything — everywhere else a control has already taken effect by the
           time the user looks away from it. */}
       <p className="text-xs text-paper-muted">{t("settings.profile.saveNote")}</p>
+    </div>
+  );
+}
+
+/**
+ * The profile banner, uploaded and claimed the moment it is picked.
+ *
+ * NOT A DRAFT, unlike the three fields under it, and the asymmetry is the same
+ * one `ServerIdentitySection` lives with: the bytes are already in the bucket
+ * and the row already points at them, so there is nothing a later Save could
+ * apply and nothing Cancel could take back. The control therefore reports what
+ * HAPPENED rather than what is pending, and hands the updated account upward so
+ * the preview here changes while the dialog is still open.
+ *
+ * The config is memoised for the life of the tab, exactly as the avatar picker
+ * and the server identity section memoise theirs: storage is either configured
+ * on this deployment or it is not, and re-asking every time the dialog opens is
+ * a round trip somebody spends looking at a blank slot.
+ */
+let bannerConfigPromise: Promise<UserBannerConfig> | null = null;
+
+function bannerUploadConfig(): Promise<UserBannerConfig> {
+  bannerConfigPromise ??= fetchUserBannerConfig().catch(() => ({
+    enabled: false,
+    maxBytes: MAX_USER_BANNER_BYTES,
+    width: USER_BANNER_WIDTH,
+    height: USER_BANNER_HEIGHT,
+  }));
+  return bannerConfigPromise;
+}
+
+function BannerField({
+  user,
+  onUserUpdated,
+}: {
+  user: User | null;
+  onUserUpdated: (user: User) => void;
+}) {
+  const { t } = useTranslation();
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [enabled, setEnabled] = useState(false);
+  const [busy, setBusy] = useState<"upload" | "remove" | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void bannerUploadConfig().then((config) => {
+      if (!cancelled) {
+        setEnabled(config.enabled);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const bannerUrl = resolveUploadedImageUrl(user?.bannerUrl ?? null);
+
+  async function handleFile(file: File) {
+    setBusy("upload");
+    setError(null);
+    try {
+      onUserUpdated(await uploadUserBanner(file));
+    } catch (failure) {
+      setError(
+        failure instanceof ApiError || failure instanceof Error
+          ? failure.message
+          : t("settings.profile.banner.failed"),
+      );
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function handleRemove() {
+    setBusy("remove");
+    setError(null);
+    try {
+      const res = await deleteUserBanner();
+      onUserUpdated(res.user);
+    } catch (failure) {
+      setError(
+        failure instanceof ApiError || failure instanceof Error
+          ? failure.message
+          : t("settings.profile.banner.removeFailed"),
+      );
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <div className="space-y-2" data-profile-banner>
+      <span className="block text-xs uppercase tracking-wide text-paper-muted">
+        {t("settings.profile.banner")}
+      </span>
+
+      {/* The preview is a 3:1 strip rather than a thumbnail, because that is
+          the crop the upload will apply — a square preview would show a photo
+          that is not the photo the page ends up with. */}
+      <div className="aspect-[3/1] w-full overflow-hidden rounded-lg border border-ink-4 bg-ink">
+        {bannerUrl ? (
+          <img
+            src={bannerUrl}
+            alt=""
+            className="h-full w-full object-cover"
+            decoding="async"
+          />
+        ) : (
+          <div className="flex h-full w-full items-center justify-center px-3 text-center text-xs text-paper-muted">
+            {t("settings.profile.banner.empty")}
+          </div>
+        )}
+      </div>
+
+      {!enabled ? (
+        <p className="text-xs text-paper-muted">
+          {t("settings.profile.banner.unconfigured")}
+        </p>
+      ) : (
+        <>
+          <p className="text-xs text-paper-muted">
+            {t("settings.profile.banner.hint", {
+              width: USER_BANNER_WIDTH,
+              height: USER_BANNER_HEIGHT,
+            })}
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              disabled={busy !== null}
+              className="rounded-md border border-ink-4 px-2.5 py-1.5 text-xs text-paper hover:border-signal/50 disabled:opacity-60"
+              onClick={() => fileRef.current?.click()}
+            >
+              {busy === "upload"
+                ? t("settings.profile.banner.uploading")
+                : bannerUrl
+                  ? t("settings.profile.banner.replace")
+                  : t("settings.profile.banner.upload")}
+            </button>
+            {bannerUrl && (
+              <button
+                type="button"
+                disabled={busy !== null}
+                className="rounded-md border border-ink-4 px-2.5 py-1.5 text-xs text-paper-muted hover:border-danger/50 hover:text-danger disabled:opacity-60"
+                onClick={() => void handleRemove()}
+              >
+                {busy === "remove"
+                  ? t("settings.profile.banner.removing")
+                  : t("settings.profile.banner.remove")}
+              </button>
+            )}
+            <input
+              ref={fileRef}
+              type="file"
+              aria-label={t("settings.profile.banner")}
+              // A hint to the picker, never a check: the real gate is that
+              // `createImageBitmap` refuses to decode anything that is not an
+              // image, and what is uploaded is a JPEG this browser produced
+              // rather than the bytes that were chosen.
+              accept={USER_BANNER_MIME_ALLOWLIST.join(",")}
+              className="hidden"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                // Cleared before the upload, so picking the same file twice
+                // after a failure still fires a change event.
+                event.target.value = "";
+                if (file) {
+                  void handleFile(file);
+                }
+              }}
+            />
+          </div>
+        </>
+      )}
+
+      {error && (
+        <p role="alert" className="text-xs text-danger">
+          {error}
+        </p>
+      )}
     </div>
   );
 }

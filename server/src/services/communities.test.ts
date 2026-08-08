@@ -68,6 +68,9 @@ const { createServer: createChatServer } = await import("./servers.js");
 const { isCommunitiesEnabled, listCommunities } = await import(
   "./communities.js"
 );
+const { COMMUNITY_SLUG_PATTERN_SQL, slugifyCommunityName } = await import(
+  "@pqp/shared"
+);
 
 let httpServer: Server;
 let baseUrl: string;
@@ -77,21 +80,40 @@ interface ApiResult<T = Record<string, unknown>> {
   body: T;
 }
 
+/**
+ * The raw `Response`, for the assertions that are about headers rather than
+ * about a body — the public page's cacheability, above all, which is the one
+ * JSON response in this API that is not `no-store` and is therefore the one
+ * whose headers can be wrong in a way no body assertion would notice.
+ *
+ * `as: null` sends NO Authorization header at all rather than a dummy one, so
+ * "this route needs no session" is actually being tested and not merely
+ * asserted against a stub that would have answered anyway.
+ */
+async function callRaw(
+  as: { id: string; clerk_id: string } | null,
+  method: string,
+  path: string,
+  body?: unknown,
+): Promise<Response> {
+  actor = as;
+  return fetch(`${baseUrl}${path}`, {
+    method,
+    headers: {
+      "Content-Type": "application/json",
+      ...(as ? { Authorization: "Bearer test" } : {}),
+    },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+}
+
 async function call<T = Record<string, unknown>>(
   as: { id: string; clerk_id: string } | null,
   method: string,
   path: string,
   body?: unknown,
 ): Promise<ApiResult<T>> {
-  actor = as;
-  const response = await fetch(`${baseUrl}${path}`, {
-    method,
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: "Bearer test",
-    },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-  });
+  const response = await callRaw(as, method, path, body);
   const text = await response.text();
   return { status: response.status, body: (text ? JSON.parse(text) : {}) as T };
 }
@@ -167,6 +189,13 @@ describeDb("communities", () => {
       listed?: boolean;
       suspended?: boolean;
       extraMembers?: { id: string }[];
+      /**
+       * The public address. Written straight in rather than derived, because
+       * these rows bypass `updateCommunitySettings` — which is itself under
+       * test and must not be the thing that sets up its own fixtures. Null
+       * models a listing made before slugs existed.
+       */
+      slug?: string | null;
     } = {},
   ): Promise<string> {
     const created = await createChatServer(name, owner.id);
@@ -180,7 +209,8 @@ describeDb("communities", () => {
     }
     await getPool().query(
       `UPDATE servers SET is_community = $2, community_category = $3,
-              community_tagline = $4, is_community_suspended = $5
+              community_tagline = $4, is_community_suspended = $5,
+              community_slug = $6
        WHERE id = $1`,
       [
         serverId,
@@ -188,6 +218,9 @@ describeDb("communities", () => {
         options.category ?? "geral",
         options.tagline ?? null,
         options.suspended ?? false,
+        options.slug === undefined
+          ? slugifyCommunityName(name) || null
+          : options.slug,
       ],
     );
     return serverId;
@@ -461,7 +494,9 @@ describeDb("communities", () => {
       // added to `DIRECTORY_COLUMNS` has to be a deliberate decision to show a
       // stranger, not something that arrived because it was already selected
       // somewhere else. `iconUrl` / `bannerUrl` are here because a community
-      // asked to be found and its picture is what a card is for.
+      // asked to be found and its picture is what a card is for; `slug` is here
+      // because the card's share button copies `pqp.gg/c/<slug>`, which is the
+      // one address a member can hand to somebody outside the product.
       expect(Object.keys(card).sort()).toEqual([
         "bannerUrl",
         "category",
@@ -471,6 +506,7 @@ describeDb("communities", () => {
         "joined",
         "memberCount",
         "name",
+        "slug",
         "tagline",
       ]);
     });
@@ -689,6 +725,9 @@ describeDb("communities", () => {
       expect(res.status).toBe(200);
       expect(res.body.community).toEqual({
         isCommunity: true,
+        // Derived from the name by the opt-in itself — nothing in this request
+        // asked for it. See the `communitySlug` audit entry below.
+        slug: "vira-comunidade",
         tagline: "acorda cedo não",
         category: "humor",
         suspended: false,
@@ -910,12 +949,351 @@ describeDb("communities", () => {
     });
   });
 
+  // ------------------------------------------------------- slugs and /c/…
+
+  /**
+   * The public address, and the page it addresses.
+   *
+   * What is pinned here is the same list of ways a public surface can be wider
+   * than intended that the rest of this file pins, applied to the one route in
+   * the feature that answers with no session at all:
+   *
+   *   * SUSPENDED, UNLISTED AND UNKNOWN ARE ONE ANSWER. Any difference between
+   *     them publishes the operator's moderation decisions to anybody holding a
+   *     URL, and turns the route into a probe for which rooms exist.
+   *   * THE FLAG STILL COVERS IT. A deployment without the directory has no
+   *     public community pages, and 404 is what an unbuilt feature answers.
+   *   * THE PAYLOAD CARRIES NO DOOR. No member list, no channels, no owner, and
+   *     no id — the id in particular, because withholding it is what forces the
+   *     join intent to travel as a slug and be resolved behind auth.
+   *   * ONE ADDRESS, ONE LISTED COMMUNITY. Decided by the unique index and not
+   *     by a pre-check, so the loser of a race gets a refusal naming the field.
+   */
+  describe("community slugs", () => {
+    it("derives one from the name on the first opt-in", async () => {
+      const created = await createChatServer("Valorant Brasil", owner.id);
+      const res = await call<{ community: { slug: string | null } }>(
+        owner,
+        "PATCH",
+        `/api/servers/${created.server.id}/community`,
+        { isCommunity: true },
+      );
+      expect(res.status).toBe(200);
+      expect(res.body.community.slug).toBe("valorant-brasil");
+    });
+
+    it("keeps the derived address through a later edit", async () => {
+      // The address is in screenshots and the name is not, so a rename must not
+      // move the URL under a link somebody already shared.
+      const created = await createChatServer("Valorant Brasil", owner.id);
+      await call(owner, "PATCH", `/api/servers/${created.server.id}/community`, {
+        isCommunity: true,
+      });
+      const res = await call<{ community: { slug: string | null } }>(
+        owner,
+        "PATCH",
+        `/api/servers/${created.server.id}/community`,
+        { tagline: "a gente perde junto" },
+      );
+      expect(res.body.community.slug).toBe("valorant-brasil");
+    });
+
+    it("refuses the listing when the address collides", async () => {
+      await makeCommunity("Valorant Brasil");
+      const second = await createChatServer("valorant brasil", owner.id);
+      const res = await call<{ error: string }>(
+        owner,
+        "PATCH",
+        `/api/servers/${second.server.id}/community`,
+        { isCommunity: true },
+      );
+      // 409, the status a lost race gets — the request was well formed and a
+      // retry with a different value works. The row is NOT listed: half-listing
+      // a community at no address is a share button that is silently missing.
+      expect(res.status).toBe(409);
+      const settings = await call<{ community: { isCommunity: boolean } }>(
+        owner,
+        "GET",
+        `/api/servers/${second.server.id}/community`,
+      );
+      expect(settings.body.community.isCommunity).toBe(false);
+    });
+
+    it("refuses a name that cannot become an address, with a different status", async () => {
+      // 422 rather than 409: nothing about *this* request will be different on
+      // a retry, so the form has to ask for something rather than say "again".
+      const created = await createChatServer("🔥🔥🔥", owner.id);
+      const res = await call(
+        owner,
+        "PATCH",
+        `/api/servers/${created.server.id}/community`,
+        { isCommunity: true },
+      );
+      expect(res.status).toBe(422);
+    });
+
+    it("takes an address the owner typed, slugifying it on the way in", async () => {
+      const created = await createChatServer("🔥🔥🔥", owner.id);
+      const res = await call<{ community: { slug: string | null } }>(
+        owner,
+        "PATCH",
+        `/api/servers/${created.server.id}/community`,
+        { isCommunity: true, slug: "Fogo Fogo Fogo" },
+      );
+      expect(res.status).toBe(200);
+      expect(res.body.community.slug).toBe("fogo-fogo-fogo");
+    });
+
+    it("refuses a reserved address", async () => {
+      const created = await createChatServer("Suporte", owner.id);
+      const res = await call(
+        owner,
+        "PATCH",
+        `/api/servers/${created.server.id}/community`,
+        { isCommunity: true, slug: "suporte" },
+      );
+      // "pqp.gg/c/suporte pediu sua senha" is a working attack that costs one
+      // free signup, so the word never becomes an address.
+      expect(res.status).toBe(400);
+    });
+
+    it("frees the address when a community is unlisted", async () => {
+      // The unique index is partial on `is_community` precisely so an unlisted
+      // holder cannot squat an address against a live claimant — while still
+      // keeping its own, so relisting a week later needs no retyping.
+      const first = await makeCommunity("Valorant Brasil");
+      await call(owner, "PATCH", `/api/servers/${first}/community`, {
+        isCommunity: false,
+      });
+      const second = await createChatServer("valorant brasil", owner.id);
+      const res = await call<{ community: { slug: string | null } }>(
+        owner,
+        "PATCH",
+        `/api/servers/${second.server.id}/community`,
+        { isCommunity: true },
+      );
+      expect(res.status).toBe(200);
+      expect(res.body.community.slug).toBe("valorant-brasil");
+    });
+
+    it("records the address in the audit trail even when nobody typed it", async () => {
+      // The most common way this field moves is a derivation nobody asked for,
+      // so a trail that only logged deliberate changes would have no record of
+      // how a room got the URL it is now known by.
+      const created = await createChatServer("Valorant Brasil", owner.id);
+      await call(owner, "PATCH", `/api/servers/${created.server.id}/community`, {
+        isCommunity: true,
+      });
+      const log = await call<{
+        entries: { action: string; changes: { key: string }[] }[];
+      }>(owner, "GET", `/api/servers/${created.server.id}/audit-log`);
+      const entry = log.body.entries.find(
+        (one) => one.action === "server.community_update",
+      );
+      expect(entry?.changes.map((c) => c.key)).toContain("communitySlug");
+    });
+
+    it("carries the slug on every directory card", async () => {
+      await makeCommunity("Valorant Brasil");
+      const res = await call<{ communities: { slug: string | null }[] }>(
+        joiner,
+        "GET",
+        "/api/communities",
+      );
+      expect(res.body.communities[0]!.slug).toBe("valorant-brasil");
+    });
+  });
+
+  describe("GET /api/public/communities/:slug", () => {
+    it("answers a listed community to somebody with no session at all", async () => {
+      await makeCommunity("Valorant Brasil", {
+        category: "games",
+        tagline: "a gente perde junto",
+      });
+      // `null` actor: no Bearer header is sent at all. This is the assertion
+      // the whole surface rests on.
+      const res = await call<{ community: Record<string, unknown> }>(
+        null,
+        "GET",
+        "/api/public/communities/valorant-brasil",
+      );
+      expect(res.status).toBe(200);
+      expect(res.body.community.name).toBe("Valorant Brasil");
+      expect(res.body.community.tagline).toBe("a gente perde junto");
+      expect(res.body.community.category).toBe("games");
+      expect(res.body.community.memberCount).toBe(2);
+      expect(res.body.community.createdMonth).toMatch(/^\d{4}-\d{2}$/);
+    });
+
+    it("carries no id, no member list and no owner", async () => {
+      await makeCommunity("Valorant Brasil");
+      const res = await call<{ community: Record<string, unknown> }>(
+        null,
+        "GET",
+        "/api/public/communities/valorant-brasil",
+      );
+      expect(Object.keys(res.body.community).sort()).toEqual([
+        "bannerUrl",
+        "category",
+        "createdMonth",
+        "iconUrl",
+        "memberCount",
+        "name",
+        "slug",
+        "tagline",
+      ]);
+    });
+
+    it("404s a suspended community exactly as it 404s an unknown slug", async () => {
+      await makeCommunity("Pulled", { slug: "pulled", suspended: true });
+      const suspended = await call(
+        null,
+        "GET",
+        "/api/public/communities/pulled",
+      );
+      const unknown = await call(
+        null,
+        "GET",
+        "/api/public/communities/never-existed",
+      );
+      expect(suspended.status).toBe(404);
+      expect(unknown.status).toBe(404);
+      expect(suspended.body).toEqual(unknown.body);
+    });
+
+    it("404s an unlisted server that still holds a slug", async () => {
+      await makeCommunity("Private", { slug: "private", listed: false });
+      const res = await call(null, "GET", "/api/public/communities/private");
+      expect(res.status).toBe(404);
+    });
+
+    it("404s with the flag off", async () => {
+      await makeCommunity("Valorant Brasil");
+      delete process.env.COMMUNITIES_ENABLED;
+      const res = await call(
+        null,
+        "GET",
+        "/api/public/communities/valorant-brasil",
+      );
+      expect(res.status).toBe(404);
+    });
+
+    it("does not reach the database for a slug that could never exist", async () => {
+      // A path segment from the open internet. The alternative is one query per
+      // junk string a scanner throws at us.
+      for (const junk of ["ab", "-x", "valorant.br", "VALORANT.br"]) {
+        const res = await call(
+          null,
+          "GET",
+          `/api/public/communities/${encodeURIComponent(junk)}`,
+        );
+        expect(res.status).toBe(404);
+      }
+    });
+
+    it("does not even match the route for an absurdly long segment", async () => {
+      // The dispatch regex caps the segment at 64 characters, exactly as the
+      // public profile's does, so an over-long path never reaches the public
+      // handler at all and falls through to the ordinary authenticated router —
+      // which refuses it. A 401 here is the correct answer and the assertion
+      // exists so that stays a decision rather than an accident.
+      const res = await call(
+        null,
+        "GET",
+        `/api/public/communities/${"a".repeat(200)}`,
+      );
+      expect(res.status).toBe(401);
+    });
+
+    it("is cacheable, unlike every other JSON this API answers", async () => {
+      await makeCommunity("Valorant Brasil");
+      const res = await callRaw(
+        null,
+        "GET",
+        "/api/public/communities/valorant-brasil",
+      );
+      expect(res.headers.get("cache-control")).toBe("public, max-age=60");
+      // The 404 stays no-store: a community can be listed at any moment, and a
+      // cached "no such page" would outlive the decision to publish it.
+      const missing = await callRaw(
+        null,
+        "GET",
+        "/api/public/communities/never-existed",
+      );
+      expect(missing.headers.get("cache-control")).toBe("no-store");
+    });
+  });
+
+  describe("GET /api/communities/by-slug/:slug", () => {
+    it("resolves the slug a join intent carried through sign-up", async () => {
+      const serverId = await makeCommunity("Valorant Brasil");
+      const res = await call<{ community: { id: string } }>(
+        joiner,
+        "GET",
+        "/api/communities/by-slug/valorant-brasil",
+      );
+      expect(res.status).toBe(200);
+      expect(res.body.community.id).toBe(serverId);
+    });
+
+    it("404s for somebody banned from it, rather than 403", async () => {
+      // A ban is invisibility. A 403 confirms where they are unwelcome and
+      // hands them a page to hammer.
+      const serverId = await makeCommunity("Valorant Brasil");
+      await getPool().query(
+        `INSERT INTO server_bans (server_id, user_id, banned_by)
+         VALUES ($1, $2, $3)`,
+        [serverId, banned.id, owner.id],
+      );
+      const res = await call(
+        banned,
+        "GET",
+        "/api/communities/by-slug/valorant-brasil",
+      );
+      expect(res.status).toBe(404);
+    });
+
+    it("needs a session, unlike the public page", async () => {
+      await makeCommunity("Valorant Brasil");
+      const res = await call(
+        null,
+        "GET",
+        "/api/communities/by-slug/valorant-brasil",
+      );
+      expect(res.status).toBe(401);
+    });
+  });
+
   // --------------------------------------------------------- service layer
 
   describe("listCommunities, called directly", () => {
     it("returns an empty page rather than throwing when nothing is listed", async () => {
       const page = await listCommunities(joiner.id, { limit: 10, offset: 0 });
       expect(page).toEqual({ communities: [], hasMore: false });
+    });
+  });
+
+  describe("the schema's slug CHECK", () => {
+    it("carries the same expression @pqp/shared does", async () => {
+      // The schema is the last line of defence for a value the API is supposed
+      // to have validated. A constraint that has drifted defends something
+      // other than what the application believes.
+      const res = await getPool().query<{ definition: string }>(
+        `SELECT pg_get_constraintdef(oid) AS definition
+           FROM pg_constraint
+          WHERE conname = 'servers_community_slug_format'`,
+      );
+      expect(res.rows[0]?.definition).toContain(COMMUNITY_SLUG_PATTERN_SQL);
+    });
+
+    it("refuses a malformed slug at the database, not merely at the route", async () => {
+      const created = await createChatServer("Guard", owner.id);
+      await expect(
+        getPool().query(
+          `UPDATE servers SET community_slug = $2 WHERE id = $1`,
+          [created.server.id, "-nope-"],
+        ),
+      ).rejects.toThrow();
     });
   });
 });

@@ -58,6 +58,11 @@ const PublicProfilePage = lazy(() =>
     default: m.PublicProfilePage,
   })),
 );
+const PublicCommunityPage = lazy(() =>
+  import("./pages/public-community-page").then((m) => ({
+    default: m.PublicCommunityPage,
+  })),
+);
 
 const publishableKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY;
 
@@ -100,6 +105,29 @@ function PublicProfileRoute() {
   return <PublicProfilePage handle={handleSegment.slice(1).toLowerCase()} />;
 }
 
+/**
+ * `pqp.gg/c/valorant-brasil`.
+ *
+ * A `/c/` PREFIX RATHER THAN A BARE SLUG, and rather than sharing the `@`
+ * namespace with handles. Two reasons, and the second is the one that decided
+ * it. First, the same argument the `@` makes for profiles: a bare `/valorant`
+ * competes with every route this product will ever add. Second — and this is
+ * why communities did not simply get `@` too — a person and a community must be
+ * able to hold the same word. `pqp.gg/@rafa` and `pqp.gg/c/rafa` are two pages
+ * that never fight, and folding them into one namespace would mean the day
+ * somebody's community shares a name with somebody's handle, one of the two
+ * loses a URL that is already in screenshots.
+ *
+ * Unlike the profile route this is a real nested path, so React Router's
+ * whole-segment parameter rule is satisfied and the slug needs no unwrapping.
+ * Lowercased here so `/c/Valorant` and `/c/valorant` are one page rather than
+ * two, one of which 404s.
+ */
+function PublicCommunityRoute() {
+  const { slug = "" } = useParams();
+  return <PublicCommunityPage slug={slug.toLowerCase()} />;
+}
+
 function AppRoutes({ devBypass = false }: { devBypass?: boolean }) {
   const { t } = useTranslation();
   return (
@@ -119,6 +147,12 @@ function AppRoutes({ devBypass = false }: { devBypass?: boolean }) {
               click, and both are canonicalised to `/garanta` by `Seo`. */}
           <Route path="/garanta" element={<ClaimPage />} />
           <Route path="/claim" element={<ClaimPage />} />
+          {/* Above the single-segment handle route below, though again the
+              order does not decide it — `/c/:slug` is two segments and cannot
+              collide with a one-segment pattern. Written here because a reader
+              looking for "where do the public pages live" should find both in
+              the same place. */}
+          <Route path="/c/:slug" element={<PublicCommunityRoute />} />
           {/* LAST among the single-segment routes, though the order does not
               actually decide it: React Router ranks a static segment above a
               dynamic one, so `/privacy` still wins even from here. Written last

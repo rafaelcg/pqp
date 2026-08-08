@@ -22,7 +22,7 @@ import { getPreferences } from "./preferences.js";
 import { invalidateServerAudience } from "./servers.js";
 
 /** Every column of `DbUser`, single-sourced so the reads cannot drift apart. */
-const DB_USER_COLUMNS = `id, clerk_id, display_name, username, discriminator, avatar_url, avatar_key, email_domains, is_character, handle, handle_changed_at`;
+const DB_USER_COLUMNS = `id, clerk_id, display_name, username, discriminator, avatar_url, avatar_key, email_domains, is_character, handle, handle_changed_at, banner_url, banner_key`;
 
 const DISCRIMINATOR_MAX = 9999;
 /** Random probes tried before falling back to a sweep that cannot miss. */
@@ -259,6 +259,12 @@ export async function toPublicUser(user: DbUser) {
     handleChangedAt: user.handle_changed_at
       ? new Date(user.handle_changed_at).toISOString()
       : null,
+    // Rides down with the account's own view of itself and nowhere else, the
+    // same deal `handle` gets. Settings needs it to draw what is currently
+    // installed; nothing else in the app renders somebody else's banner, and
+    // the one surface that does — the public profile — reads it by handle from
+    // its own endpoint rather than from any user payload.
+    bannerUrl: user.banner_url ?? null,
     preferences: await getPreferences(user.id),
     dmPrivacy: await getDmPrivacy(user.id),
   };

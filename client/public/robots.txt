@@ -7,6 +7,11 @@ Allow: /
 # `@` is what keeps them out of the route namespace — see the router.
 Allow: /@
 
+# Public community pages. Same argument as `/@` above, and the same reason to
+# state it: `pqp.gg/c/<slug>` is a poster, it exists to be found, and it is the
+# only address a community has that a stranger can act on.
+Allow: /c/
+
 # The claim landing, in both languages it is reachable under.
 Allow: /garanta
 Allow: /claim

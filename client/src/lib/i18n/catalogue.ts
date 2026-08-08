@@ -189,8 +189,16 @@ export const en = {
   "publicProfile.seo.title": "{name} (@{handle}) on pqp",
   "publicProfile.seo.description": "{name} is on pqp. Add them.",
   "publicProfile.communities": "Communities",
+  // The Orkut sentence, and the one string on this page worth arguing about:
+  // it is "member of N communities", not "N communities". The fact being shown
+  // is belonging, not inventory.
+  "publicProfile.communities.count": "member of {count} communities",
+  "publicProfile.communities.count.one": "member of 1 community",
   "publicProfile.depoimentos": "{count} testimonials",
   "publicProfile.depoimentos.one": "1 testimonial",
+  "publicProfile.depoimentos.title": "Testimonials",
+  "publicProfile.depoimentos.more": "and {count} more",
+  "publicProfile.memberSince": "on pqp since {date}",
   "publicProfile.cta.add": "Add me on pqp",
   "publicProfile.cta.open": "Open in pqp",
   "publicProfile.copy": "Copy link",
@@ -211,6 +219,34 @@ export const en = {
   "handle.add.sent": "Friend request sent to {name}.",
   "handle.add.accepted": "You and {name} are friends now.",
   "handle.add.failed": "Could not add that person.",
+  "handle.join.done": "You're in {name}.",
+  "handle.join.already": "You were already in {name}.",
+  "handle.join.failed": "Could not join that community.",
+
+  // ------------------------------------------------- public community pages
+  "publicCommunity.seo.title": "{name} — a community on pqp",
+  "publicCommunity.seo.description":
+    "{name} is a community on pqp. Come in.",
+  "publicCommunity.members": "{count} members",
+  "publicCommunity.members.one": "1 member",
+  "publicCommunity.membersLabel": "people in here",
+  "publicCommunity.since": "here since {date}",
+  "publicCommunity.cta.join": "Join the community",
+  "publicCommunity.cta.open": "Open in pqp",
+  "publicCommunity.copy": "Copy link",
+  "publicCommunity.copied": "Copied",
+  "publicCommunity.footer.cta": "Make your own community",
+  "publicCommunity.missing.title": "This community is not here.",
+  "publicCommunity.missing.body":
+    "The link may be wrong, or the community may have been taken down. Have a look at the others.",
+  "publicCommunity.missing.cta": "See what else is out there",
+  "publicCommunity.unavailable.title": "Could not load that community",
+  "publicCommunity.unavailable.body":
+    "Something went wrong on our end. Try again in a moment.",
+  "publicCommunity.retry": "Try again",
+  "publicCommunity.whatIsPqp.title": "What is pqp?",
+  "publicCommunity.whatIsPqp.body":
+    "Voice, chat and screen sharing for your people. Free, open source, and yours to keep.",
 
   // ------------------------------------------------------- desktop downloads
   // Secondary to the hero's real call to action on purpose: the web app is the
@@ -378,6 +414,8 @@ export const en = {
     "Nothing here fits? Start a community, name it something stupid, and send the link.",
   "communities.create.action": "Create a community",
   "communities.create.placeholder": "Community name",
+  "communities.share": "Copy the public link",
+  "communities.shared": "Link copied",
   "communities.report": "Report this community",
   "communities.reportTitle": "Report community",
   "communities.reportBody":
@@ -396,6 +434,17 @@ export const en = {
   "communities.settings.taglinePlaceholder": "What is this place?",
   "communities.settings.taglineHint": "{count} characters left",
   "communities.settings.category": "Category",
+  // The public address. Worded as a URL rather than as a "slug", because the
+  // owner is choosing the thing they will paste into a group chat and nobody
+  // outside this repo has ever called that a slug.
+  "communities.settings.slug": "Public address",
+  "communities.settings.slugHint":
+    "Made from the name when you list it. Change it here — old links stop working.",
+  "communities.settings.slugPlaceholder": "your-community",
+  "communities.settings.slugTaken":
+    "That address is taken. Try another one.",
+  "communities.settings.slugUnderivable":
+    "This name cannot become a web address. Type one below.",
   "communities.settings.save": "Save",
   "communities.settings.saving": "Saving…",
   "communities.settings.saved": "Listing updated.",
@@ -1004,6 +1053,22 @@ export const en = {
   "settings.profile.avatar.clear": "Clear",
   "settings.profile.avatar.upload": "Upload a photo",
   "settings.profile.avatar.uploading": "Uploading…",
+  // The banner. Its hint names the one page it appears on, because that is the
+  // only place it is drawn and an owner who cannot find their own change will
+  // reasonably conclude the upload failed.
+  "settings.profile.banner": "Profile banner",
+  "settings.profile.banner.hint":
+    "The strip across the top of your public page. {width}×{height} works best.",
+  "settings.profile.banner.empty": "No banner — your page draws its own.",
+  "settings.profile.banner.upload": "Upload a banner",
+  "settings.profile.banner.replace": "Replace",
+  "settings.profile.banner.uploading": "Uploading…",
+  "settings.profile.banner.remove": "Remove",
+  "settings.profile.banner.removing": "Removing…",
+  "settings.profile.banner.unconfigured":
+    "This server has no file storage set up, so banners cannot be uploaded here.",
+  "settings.profile.banner.failed": "Could not upload that banner.",
+  "settings.profile.banner.removeFailed": "Could not remove the banner.",
   "settings.profile.displayName": "Display name",
   "settings.profile.username": "Username",
   "settings.profile.usernamePlaceholder": "cool_name",

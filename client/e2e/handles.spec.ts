@@ -258,9 +258,12 @@ test.describe("public handles", () => {
     expect(Object.keys(body.profile).sort()).toEqual([
       "avatarUrl",
       "badges",
+      "bannerUrl",
       "depoimentoCount",
+      "depoimentos",
       "displayName",
       "handle",
+      "memberSince",
     ]);
 
     const missing = await fetch(`${API}/api/public/profiles/ninguem_aqui`);
