@@ -441,6 +441,7 @@ export const en = {
   "invite.create.action": "Make an invite link",
   "invite.create.creating": "Making…",
   "invite.create.copyLink": "Copy invite link for code {code}",
+  "invite.create.share": "Share invite link for code {code}",
   "invite.create.copyCode": "Copy invite code {code}",
   "invite.create.revoke": "Revoke invite {code}",
   "invite.create.copied": "Copied",

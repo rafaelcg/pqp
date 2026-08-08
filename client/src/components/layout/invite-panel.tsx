@@ -1,4 +1,4 @@
-import { Check, Copy, Link2, Trash2 } from "lucide-react";
+import { Check, Copy, Link2, Share2, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Invite } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
@@ -323,6 +323,27 @@ export function InvitePanel({
                       <p className="min-w-0 flex-1 truncate font-mono text-sm text-signal">
                         {inviteLink(invite.code)}
                       </p>
+                      {/* The system share sheet where one exists (phones,
+                          mostly) — straight into WhatsApp, same journey as
+                          the iOS app. Desktop browsers lack the API and get
+                          copy-the-link, which is the desktop journey anyway. */}
+                      {typeof navigator.share === "function" && (
+                        <Button
+                          size="icon"
+                          variant="secondary"
+                          className="h-8 w-8 shrink-0"
+                          aria-label={t("invite.create.share", {
+                            code: invite.code,
+                          })}
+                          onClick={() =>
+                            void navigator
+                              .share({ url: inviteLink(invite.code) })
+                              .catch(() => {})
+                          }
+                        >
+                          <Share2 className="h-4 w-4" />
+                        </Button>
+                      )}
                       <Button
                         size="icon"
                         variant="secondary"

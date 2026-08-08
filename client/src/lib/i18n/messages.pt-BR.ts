@@ -369,6 +369,7 @@ export const ptBR: PartialMessages = {
   "invite.create.action": "Criar link de convite",
   "invite.create.creating": "Criando…",
   "invite.create.copyLink": "Copiar link do convite {code}",
+  "invite.create.share": "Compartilhar o convite {code}",
   "invite.create.copyCode": "Copiar código do convite {code}",
   "invite.create.revoke": "Revogar convite {code}",
   "invite.create.copied": "Copiado",
