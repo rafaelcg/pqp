@@ -22,7 +22,7 @@ import { getPreferences } from "./preferences.js";
 import { invalidateServerAudience } from "./servers.js";
 
 /** Every column of `DbUser`, single-sourced so the reads cannot drift apart. */
-const DB_USER_COLUMNS = `id, clerk_id, display_name, username, discriminator, avatar_url, avatar_key, email_domains, is_character`;
+const DB_USER_COLUMNS = `id, clerk_id, display_name, username, discriminator, avatar_url, avatar_key, email_domains, is_character, handle, handle_changed_at`;
 
 const DISCRIMINATOR_MAX = 9999;
 /** Random probes tried before falling back to a sweep that cannot miss. */
@@ -252,6 +252,13 @@ export async function toPublicUser(user: DbUser) {
     discriminator: user.discriminator,
     tag: formatUserTag(user.username, user.discriminator),
     avatarUrl: user.avatar_url,
+    // The public handle rides down with the account's own view of itself and
+    // nowhere else — see the note on `userSchema.handle`. Null for almost
+    // everybody: claiming one is opt-in and nothing in the product needs it.
+    handle: user.handle ?? null,
+    handleChangedAt: user.handle_changed_at
+      ? new Date(user.handle_changed_at).toISOString()
+      : null,
     preferences: await getPreferences(user.id),
     dmPrivacy: await getDmPrivacy(user.id),
   };
@@ -350,6 +357,32 @@ export async function findUserByTag(
      WHERE username = $1 AND discriminator = $2
        AND ${discoverableSql("$3::uuid")}`,
     [username, discriminator, viewerId],
+  );
+  const row = result.rows[0];
+  return row ? toPublicUserSummary(row) : null;
+}
+
+/**
+ * One user by id, in the shape a stranger may see, subject to the same
+ * discoverability rule as the two lookups around it.
+ *
+ * Exists for the handle route: `/api/users/by-handle/:handle` resolves the
+ * handle to an id and then needs the public shape for it. Going through
+ * `getUserById` and `toPublicUserSummary` by hand would work and would ALSO
+ * skip `discoverableSql`, which is exactly the kind of shortcut that makes a
+ * character enumerable — so the query lives here, beside the rule, rather than
+ * being reassembled at the call site.
+ */
+export async function findUserById(
+  userId: string,
+  viewerId: string,
+): Promise<PublicUser | null> {
+  const result = await getPool().query<PublicUserRow>(
+    `SELECT ${PUBLIC_USER_COLUMNS} FROM users
+     WHERE users.id = $1
+       AND COALESCE(users.is_webhook, FALSE) = FALSE
+       AND ${discoverableSql("$2::uuid")}`,
+    [userId, viewerId],
   );
   const row = result.rows[0];
   return row ? toPublicUserSummary(row) : null;

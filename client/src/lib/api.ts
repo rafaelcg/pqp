@@ -25,6 +25,7 @@ import type {
   Message,
   MessageSearchResponse,
   CreateReportRequest,
+  PublicProfile,
   PublicUser,
   Report,
   ReportPage,
@@ -196,7 +197,52 @@ export const updateMe = (body: {
   username?: string;
   avatarUrl?: string | null;
   dmPrivacy?: DmPrivacy;
+  handle?: string;
 }) => patch<User>("/api/me", body);
+
+// ---------------------------------------------------------- public profiles
+
+/**
+ * Somebody's public page, by handle — the one read in this file that works with
+ * no session at all.
+ *
+ * `null` means 404, and 404 means two different things depending on who is
+ * asking: "there is no page here" to the profile route, and "this @ is FREE" to
+ * the claim landing. Both want the same call, so the absence is returned as a
+ * value rather than thrown — a `try/catch` around an expected outcome is how
+ * "available" ends up rendered as an error somewhere.
+ *
+ * Every other failure (429 from the debounced availability check, a network
+ * drop, the API being down) still throws, because those are emphatically not
+ * "available" and must never be shown as such.
+ */
+export async function fetchPublicProfile(
+  handle: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<PublicProfile | null> {
+  try {
+    const { profile } = await apiFetch<{ profile: PublicProfile }>(
+      `/api/public/profiles/${encodeURIComponent(handle)}`,
+      { signal: options.signal },
+    );
+    return profile;
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+/**
+ * The signed-in half of `?add=<handle>`: turn a handle into somebody a friend
+ * request can be sent to. Deliberately not on the public endpoint — see the
+ * route comment on the server.
+ */
+export const lookupUserByHandle = (handle: string) =>
+  apiFetch<{ user: PublicUser }>(
+    `/api/users/by-handle/${encodeURIComponent(handle)}`,
+  );
 
 /** Patch of changed keys in, whole merged object out. */
 export const updatePreferences = (body: UserPreferences) =>

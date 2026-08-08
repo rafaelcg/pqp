@@ -58,9 +58,18 @@
               ? "dark"
               : "light"
             : preference;
-        // Marketing routes are compositions over a hero photograph and stay dark.
+        // Marketing routes are compositions over a hero photograph and stay
+        // dark. `/@handle` and the claim landing belong to the same set: they
+        // are `DarkRoutes` in the router, and without them here a light-mode
+        // visitor gets one white frame before the layout effect pins it — on
+        // the two pages most likely to be somebody's first impression.
         const path = location.pathname.replace(/\/+$/, "") || "/";
-        if (["/", "/privacy", "/terms", "/cookies"].includes(path)) {
+        if (
+          ["/", "/privacy", "/terms", "/cookies", "/garanta", "/claim"].includes(
+            path,
+          ) ||
+          path.startsWith("/@")
+        ) {
           theme = "dark";
         }
         document.documentElement.dataset.theme = theme;

@@ -1,9 +1,30 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Static pages only.
+
+  Profile pages are deliberately ABSENT and should stay that way until there is
+  a reason to change it. Listing them means either generating this file from the
+  database on every deploy (a build step that reaches into production) or serving
+  it dynamically from the API (a public, complete, machine-readable list of every
+  person on the service — which is precisely the enumeration surface the profile
+  endpoint refuses to be). Profiles get found the way they are meant to: somebody
+  shares one, and the Pages middleware makes that share unfurl.
+-->
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
     <loc>https://pqp.gg/</loc>
     <changefreq>weekly</changefreq>
     <priority>1.0</priority>
+  </url>
+  <url>
+    <loc>https://pqp.gg/garanta</loc>
+    <changefreq>weekly</changefreq>
+    <priority>0.9</priority>
+  </url>
+  <url>
+    <loc>https://pqp.gg/claim</loc>
+    <changefreq>weekly</changefreq>
+    <priority>0.5</priority>
   </url>
   <url>
     <loc>https://pqp.gg/privacy</loc>

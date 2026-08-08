@@ -263,6 +263,11 @@ import {
   ReportTargetNotVisibleError,
   resolveReport,
 } from "../services/reports.js";
+import {
+  claimHandle,
+  findUserIdByHandle,
+  getPublicProfileByHandle,
+} from "../services/profiles.js";
 import { decodeSearchCursor, searchMessages } from "../services/search.js";
 // --- threads ---
 import {
@@ -288,6 +293,7 @@ import {
 import {
   canAccessChannel,
   canManageServer,
+  findUserById,
   findUserByTag,
   getMemberRole,
   getUserById,
@@ -415,6 +421,17 @@ const webhookExecuteLimiter = createRateLimiter({
  * survives both a restart and a second replica. See the comment there.
  */
 const reportLimiter = createRateLimiter({ capacity: 5, refillPerSecond: 0.05 });
+/**
+ * The one public, unauthenticated read that answers with a person — see
+ * `servePublicProfile`. Its own bucket rather than a share of `anonLimiter`
+ * because the claim landing calls it on a debounce while somebody types a
+ * handle, so legitimate traffic here is bursty in a way no other public route
+ * is. Keyed by address, which is the only key available before auth.
+ */
+const publicProfileLimiter = createRateLimiter({
+  capacity: 60,
+  refillPerSecond: 2,
+});
 
 export function resetApiRateLimits(): void {
   apiLimiter.reset();
@@ -433,6 +450,7 @@ export function resetApiRateLimits(): void {
   // here: this function only ever runs after module evaluation, so the `const`
   // is out of its temporal dead zone by the time a test calls it.
   depoimentoLimiter.reset();
+  publicProfileLimiter.reset();
 }
 
 class Forbidden extends HttpError {
@@ -647,6 +665,28 @@ router.post("/api/me/age-check", async ({ req, user }) => {
 
 router.patch("/api/me", async ({ req, user, ageGate }) => {
   const body = updateProfileSchema.parse(await readJsonBody(req));
+  // BEFORE the profile write, and in its own statement.
+  //
+  // A handle is the one field on this form that can fail for a reason nothing
+  // about this request got wrong — somebody else claimed the word half a second
+  // ago. Doing it first means that refusal arrives before the display name and
+  // avatar have been written, so the 409 the user sees is a form that did not
+  // save rather than a form that half saved. It cannot be folded into
+  // `updateProfile` either: that function owns the (username, discriminator)
+  // retry loop, and a handle collision must NOT be retried — the whole point of
+  // first-come-first-served is that the loser is told, not quietly given
+  // `neymar2`.
+  //
+  // The other order is asymmetric and accepted: a handle that succeeds followed
+  // by a `updateProfile` that fails leaves the handle written. That is the
+  // cheaper failure by a distance — a claimed handle with an unchanged display
+  // name is a working profile, whereas the reverse is a name change that
+  // silently discarded the thing the user actually came to do. Making both
+  // atomic means one transaction across two services for a form that is saved a
+  // handful of times per account, ever.
+  if (body.handle !== undefined) {
+    await claimHandle(user.id, body.handle);
+  }
   const updated = await updateProfile(user.id, {
     displayName: body.displayName,
     username: body.username,
@@ -1050,6 +1090,34 @@ router.get("/api/users/lookup", async (ctx) => {
     parsed.discriminator,
     ctx.user.id,
   );
+  if (!found) {
+    throw new NotFound("User not found");
+  }
+  return { user: found };
+});
+
+/**
+ * Resolve a public handle to the account behind it. SIGNED-IN CALLERS ONLY.
+ *
+ * This is the second half of `pqp.gg/@rafa` → "Me adiciona no pqp". The public
+ * profile endpoint deliberately carries no user id — a stranger needs a name and
+ * a picture, not an identifier they can feed to `POST /api/friends` — so the
+ * add-intent stashed through the Clerk round trip arrives holding a handle and
+ * nothing else. This is where it becomes somebody.
+ *
+ * It adds NO discovery surface: same `userSearchLimiter` bucket as the tag
+ * lookup and the prefix search (they are one surface — see
+ * `requireDiscoveryBudget`), same narrow `publicUserSchema` body, and the same
+ * `discoverableSql` rule, which is what keeps a character account from being
+ * reachable by anyone who read its handle off a screenshot.
+ */
+router.get("/api/users/by-handle/:handle", async (ctx, { handle }) => {
+  requireDiscoveryBudget(ctx);
+  const userId = await findUserIdByHandle(handle!);
+  if (!userId) {
+    throw new NotFound("User not found");
+  }
+  const found = await findUserById(userId, ctx.user.id);
   if (!found) {
     throw new NotFound("User not found");
   }
@@ -3662,6 +3730,99 @@ async function serveServerImageObject(
   res.end();
 }
 
+const PUBLIC_PROFILE_PATH = /^\/api\/public\/profiles\/([^/]{1,64})$/;
+
+/**
+ * One person's public profile, by handle.
+ *
+ * DELIBERATELY UNAUTHENTICATED — the fourth route in this file that is, and the
+ * only one that answers with a person rather than with bytes. It has to be:
+ * `pqp.gg/@rafa` is a link somebody puts in an Instagram bio, and a link that
+ * demands a login before it will render is a link nobody clicks. The Cloudflare
+ * Pages middleware that injects Open Graph tags calls this too, from an edge
+ * worker that has no session to offer and never will.
+ *
+ * WHAT MAKES THAT SAFE IS THE SHAPE, not the gate. `getPublicProfileByHandle`
+ * returns `publicProfileSchema` and nothing wider: a handle the person chose to
+ * publish, the display name and picture every member of every shared server can
+ * already see, the public communities they are in, and a count. No id, no
+ * `name#1234` tag, no email, no presence, no message content, no private
+ * servers. Everything here is already public *about somebody who claimed a
+ * public handle*, and claiming one is opt-in.
+ *
+ * NOT ENUMERABLE. There is no list route and no prefix route — the caller must
+ * already know the handle, the same way `/api/users/lookup` requires the four
+ * digits. The 404 covers "no such handle", "that handle is a character", and
+ * "that handle is a webhook row" identically, so this cannot be used to sort
+ * accounts into kinds. It is also, deliberately, the exact answer the claim
+ * landing reads as "this handle is free".
+ *
+ * Rate limited on its own bucket rather than sharing `anonLimiter`: the claim
+ * landing calls it on a debounce while somebody types, so the shape of legitimate
+ * traffic here is bursty in a way no other public route is. Keyed by address,
+ * which is the only key available before auth.
+ */
+async function servePublicProfile(
+  req: IncomingMessage,
+  res: ServerResponse,
+  handle: string,
+): Promise<void> {
+  const address = clientAddress(req as never);
+  if (!publicProfileLimiter.take(`profile:${address}`)) {
+    res.setHeader(
+      "Retry-After",
+      String(publicProfileLimiter.retryAfter(`profile:${address}`)),
+    );
+    sendError(res, 429, "Too many requests", req);
+    return;
+  }
+
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(handle);
+  } catch {
+    sendError(res, 404, "Not found", req);
+    return;
+  }
+
+  let profile;
+  try {
+    profile = await getPublicProfileByHandle(decoded);
+  } catch (error) {
+    console.error(`[profiles] could not resolve ${decoded}:`, error);
+    sendError(res, 503, "Profiles temporarily unavailable", req);
+    return;
+  }
+
+  if (!profile) {
+    sendError(res, 404, "Not found", req);
+    return;
+  }
+
+  // THE ONE JSON RESPONSE IN THIS FILE THAT IS NOT `no-store`, which is why it
+  // is written by hand instead of through `sendJson`.
+  //
+  // Everything else here is per-viewer and Bearer-authed, so a shared cache
+  // holding one would be handing one user's data to the next caller — hence the
+  // blanket `no-store` in lib/http.ts. This body is the exact opposite: it is
+  // identical for every caller by construction, it required no credential to
+  // obtain, and the traffic shape is a link going around WhatsApp. A minute is
+  // long enough that a thousand recipients are not a thousand queries, and short
+  // enough that changing your avatar is visible before you have finished telling
+  // people to look.
+  //
+  // The 404 above stays `no-store` deliberately — it is what the claim landing
+  // reads as "this handle is free", and a cached "free" is a cached wrong answer
+  // the moment somebody claims it.
+  res.writeHead(200, {
+    "Content-Type": "application/json",
+    "Cache-Control": "public, max-age=60",
+    ...SECURITY_HEADERS,
+    ...corsHeaders(req),
+  });
+  res.end(JSON.stringify({ profile }));
+}
+
 const WEBHOOK_EXECUTE_PATH =
   /^\/api\/webhooks\/([0-9a-f-]{36})\/([A-Za-z0-9_-]+)$/;
 
@@ -3750,6 +3911,13 @@ export async function handleApi(
       serverImageMatch[1]!,
       serverImageMatch[2] as ServerImageKind,
     );
+    return;
+  }
+
+  const profileMatch =
+    req.method === "GET" ? PUBLIC_PROFILE_PATH.exec(pathname) : null;
+  if (profileMatch) {
+    await servePublicProfile(req, res, profileMatch[1]!);
     return;
   }
 

@@ -641,7 +641,7 @@ export function MembersPanel({
       // Listed before kick and ban, and not marked `danger`, because the order
       // and the colour of this menu are the enforcement ladder as a moderator
       // experiences it. A timeout is the reversible one; putting it in the red
-      // block next to "Ban from server" would teach the opposite.
+      // block next to "Ban from community" would teach the opposite.
       const active = timeoutByUser.get(member.id);
       actions.push(
         active
@@ -711,14 +711,14 @@ export function MembersPanel({
       actions.push(
         {
           id: "kick",
-          label: "Remove from server",
+          label: "Remove from community",
           icon: UserMinus,
           onSelect: () => setPending({ member, ban: false }),
           danger: true,
         },
         {
           id: "ban",
-          label: "Ban from server",
+          label: "Ban from community",
           icon: Ban,
           onSelect: () => setPending({ member, ban: true }),
           danger: true,

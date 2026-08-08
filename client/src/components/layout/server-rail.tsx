@@ -196,7 +196,7 @@ export function ServerRail({
           },
           {
             id: "settings",
-            label: "Server settings",
+            label: "Community settings",
             onSelect: () => onOpenSettings(server.id),
           },
         ];
@@ -221,7 +221,7 @@ export function ServerRail({
             { id: "sep", label: "", separator: true },
             {
               id: "leave",
-              label: "Leave server",
+              label: "Leave community",
               danger: true,
               onSelect: () => onLeaveServer(server.id),
             },

@@ -1,5 +1,18 @@
 User-agent: *
 Allow: /
+
+# Public profile pages. Explicit rather than merely implied by `Allow: /`,
+# because they are the one part of this site that exists to be indexed and the
+# rule above is one careless edit away from stopping being true for them. The
+# `@` is what keeps them out of the route namespace — see the router.
+Allow: /@
+
+# The claim landing, in both languages it is reachable under.
+Allow: /garanta
+Allow: /claim
+
+# The app itself has nothing an index can use: every URL under it is per-account
+# and behind a login, and a crawler following one gets a sign-in screen.
 Disallow: /app
 
 Sitemap: https://pqp.gg/sitemap.xml

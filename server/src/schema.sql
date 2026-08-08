@@ -2064,3 +2064,54 @@ ALTER TABLE server_members ADD COLUMN IF NOT EXISTS show_on_profile BOOLEAN NOT 
 CREATE INDEX IF NOT EXISTS idx_server_members_profile
   ON server_members (user_id, server_id)
   WHERE show_on_profile;
+-- Public handles: the `pqp.gg/@rafa` half of an account
+-- ---------------------------------------------------------------------------
+--
+-- WHY THIS IS NOT `username`. `username` is not unique — uniqueness lives on the
+-- pair (`username`, `discriminator`), which is what `idx_users_username_discrim`
+-- above enforces and what `name#1234` exists to express. A dozen accounts can be
+-- `rafa`, so `pqp.gg/rafa` has no answer that does not invent a winner. A handle
+-- is therefore a second name that IS unique, claimed first-come, and NULL for
+-- almost everybody: nothing in the product requires one, and the only thing it
+-- unlocks is a public URL. See packages/shared/src/profiles.ts for the rules.
+--
+-- The column is nullable and stays nullable. An account with no handle has no
+-- public page, which is the correct default for a product whose public surface
+-- is deliberately thin.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS handle TEXT;
+
+-- When the handle last moved. NULL means "never claimed one", which is the
+-- state the 30-day rename cooldown treats as free — see `canRenameHandle`.
+-- The cooldown is anti-squatting, not punishment: without it one account can
+-- rotate through every desirable name, screenshotting each.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS handle_changed_at TIMESTAMPTZ;
+
+-- The format, duplicated from `HANDLE_PATTERN` in @pqp/shared on purpose — same
+-- argument as the community-category CHECK above. This is the last line of
+-- defence for a value the API is supposed to have validated, and a constraint
+-- that only says "some text" defends nothing. `profiles.test.ts` pins the two
+-- expressions as equal so a change to one fails the suite rather than the users.
+DO $$
+BEGIN
+  ALTER TABLE users DROP CONSTRAINT IF EXISTS users_handle_format;
+  ALTER TABLE users
+    ADD CONSTRAINT users_handle_format
+    CHECK (handle IS NULL OR handle ~ '^[a-z0-9][a-z0-9_.-]{1,18}[a-z0-9]$');
+EXCEPTION
+  WHEN others THEN NULL;
+END $$;
+
+-- THE ARBITER OF "FIRST COME, FIRST SERVED", and the only one.
+--
+-- Two people typing `neymar` into the claim landing at the same second both see
+-- the availability check answer "free" — that check is a read, and a read cannot
+-- reserve anything. The application layer's job is to attempt the write and let
+-- exactly one of them win; this index is what decides which, and the loser gets
+-- a 409 from the 23505 it raises. `claimHandle` in services/profiles.ts is built
+-- around that and never tries to pre-check its way out of the race.
+--
+-- Partial, because NULL is the overwhelmingly common value and a full unique
+-- index over a mostly-NULL column is index no query will ever use.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_handle
+  ON users (handle)
+  WHERE handle IS NOT NULL;

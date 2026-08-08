@@ -18,6 +18,8 @@ const SERVER: Server = {
   createdAt: "2026-07-01T00:00:00.000Z",
   messageRetentionDays: null,
   ssoEmailDomain: null,
+  iconUrl: null,
+  bannerUrl: null,
   isCommunity: true,
   showOnProfile: true,
 };

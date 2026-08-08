@@ -133,6 +133,73 @@ export const ptBR: PartialMessages = {
   "landing.communities.point3.body":
     "Lista quando quiser ser achado, tira da lista quando não quiser. A sala continua sendo sua.",
   "landing.communities.action": "Encontre a sua turma",
+  // ------------------------------------------------------- @ e perfil público
+  //
+  // Esta é a página que existe pro Brasil. "Garanta seu @" é a promessa e o
+  // Orkut é a memória que a gente tá cutucando de propósito — sem nunca dizer
+  // "Orkut", porque quem lembra já entendeu e quem não lembra não precisa.
+  // "Me adiciona" é a frase exata que se dizia, e ela vale mais do que qualquer
+  // tradução de "add friend".
+  "claim.seo.title": "Garanta seu @ no pqp",
+  "claim.seo.description":
+    "pqp.gg/@você — um nome só, quem chegar primeiro leva. De graça, e é seu.",
+  "claim.eyebrow": "Um nome. O seu.",
+  "claim.title": "Garanta seu @ no pqp",
+  "claim.body":
+    "Sua página, seu link, sua galera. Digita um nome e vê se ainda tá livre.",
+  "claim.input.label": "O @ que você quer",
+  "claim.input.placeholder": "seunome",
+  "claim.checking": "Vendo aqui…",
+  "claim.available": "{handle} tá livre. Pega logo.",
+  "claim.taken": "{handle} já foi. Tenta outro.",
+  "claim.reserved": "Esse é reservado.",
+  "claim.blocked": "Escolhe outro.",
+  "claim.tooShort": "No mínimo 3 caracteres.",
+  "claim.format": "Letras, números e . _ - no meio.",
+  "claim.error": "Não deu pra checar agora. Tenta de novo.",
+  "claim.cta": "Garantir {handle}",
+  "claim.cta.signedIn": "Garantir",
+  "claim.claiming": "Garantindo…",
+  "claim.claimed": "Pronto. Seu link é {url}",
+  "claim.rules":
+    "Um @ por conta. Dá pra trocar uma vez a cada 30 dias, então escolhe direito.",
+  "claim.why.1.title": "Um link que dá pra falar em voz alta",
+  "claim.why.1.body":
+    "Bota na bio. Funciona de qualquer lugar, logado ou não.",
+  "claim.why.2.title": "As pessoas te acham, não um número",
+  "claim.why.2.body":
+    "Chega de soletrar quatro dígitos. Um nome, e é o que você escolheu.",
+  "claim.why.3.title": "Quem chegar primeiro leva",
+  "claim.why.3.body":
+    "Só existe um de cada. Os bons vão cedo — é assim que funciona.",
+  "claim.existing": "Você já tem o seu: {url}",
+
+  "publicProfile.loading": "Carregando…",
+  "publicProfile.seo.title": "{name} (@{handle}) no pqp",
+  "publicProfile.seo.description": "{name} tá no pqp. Me adiciona.",
+  "publicProfile.communities": "Comunidades",
+  "publicProfile.depoimentos": "{count} depoimentos",
+  "publicProfile.depoimentos.one": "1 depoimento",
+  "publicProfile.cta.add": "Me adiciona no pqp",
+  "publicProfile.cta.open": "Abrir no pqp",
+  "publicProfile.copy": "Copiar link",
+  "publicProfile.copied": "Copiado",
+  "publicProfile.footer": "pqp.gg — o chat em grupo é seu",
+  "publicProfile.footer.cta": "Garanta o seu @",
+  "publicProfile.free.title": "@{handle} tá livre.",
+  "publicProfile.free.body":
+    "Ninguém pegou esse ainda. Dá pra ser seu em uns dez segundos.",
+  "publicProfile.free.cta": "Garantir @{handle}",
+  "publicProfile.unavailable.title": "Não deu pra carregar esse perfil",
+  "publicProfile.unavailable.body":
+    "Deu ruim aqui do nosso lado. Tenta de novo daqui a pouco.",
+  "publicProfile.retry": "Tentar de novo",
+
+  "handle.claimed.notice": "Seu link é {url} — copia e vai mostrar pra galera.",
+  "handle.claim.failed": "Não deu pra salvar esse @: {reason}",
+  "handle.add.sent": "Pedido de amizade enviado pra {name}.",
+  "handle.add.accepted": "Agora vocês são amigos, você e {name}.",
+  "handle.add.failed": "Não deu pra adicionar essa pessoa.",
 
   // ------------------------------------------------------- desktop downloads
   // "Baixar", nunca "fazer download". "Build", "app" e os nomes dos formatos
@@ -302,7 +369,6 @@ export const ptBR: PartialMessages = {
   "communities.settings.failed": "Não deu pra atualizar a listagem.",
   "communities.settings.suspended":
     "Quem cuida do pqp tirou esta listagem do ar. A comunidade em si não mudou e quem está dentro continua usando normal — ela só sumiu do diretório.",
-    "Quem cuida do pqp tirou esta listagem do ar. O servidor em si não mudou e quem está dentro continua usando normal — ele só sumiu do diretório.",
   "communities.showOnProfile": "Mostrar no meu perfil",
   "communities.hideFromProfile": "Não mostrar no meu perfil",
 
@@ -835,6 +901,15 @@ export const ptBR: PartialMessages = {
     "Vira nome_de_usuario#1234 — o número sai automático se já estiver em uso.",
   "settings.profile.saveNote":
     "Esta seção só vale depois que você salvar. O resto vale na hora em que você muda.",
+  "settings.profile.publicHandle": "Seu link público",
+  "settings.profile.publicHandle.placeholder": "seunome",
+  "settings.profile.publicHandle.hint":
+    "Uma página que qualquer um abre, mesmo sem conta. É diferente do seu username#1234, e só existe um de cada.",
+  "settings.profile.publicHandle.cooldown":
+    "Você pode trocar de novo em {date}.",
+  "settings.profile.publicHandle.copy": "Copiar link",
+  "settings.profile.publicHandle.copied": "Copiado",
+  "settings.profile.publicHandle.view": "Abrir",
 
   // -- voz e áudio
   "settings.voice.description":
@@ -1031,8 +1106,8 @@ export const ptBR: PartialMessages = {
   "serverSettings.readOnly.member":
     "Só dono e admin mexem nas configurações. Fale com alguém se precisar mudar algo aqui.",
 
-  "serverSettings.name.title": "Nome do servidor",
-  "serverSettings.name.label": "Nome do servidor",
+  "serverSettings.name.title": "Nome da comunidade",
+  "serverSettings.name.label": "Nome da comunidade",
   "serverSettings.name.save": "Salvar",
   "serverSettings.name.saving": "Salvando…",
   "serverSettings.name.saved": "Servidor renomeado.",

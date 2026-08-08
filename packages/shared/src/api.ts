@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { attachmentSchema } from "./attachments.js";
 import { embedSchema } from "./embeds.js";
+import { handleSchema } from "./profiles.js";
 import { manualStatusSchema } from "./status.js";
 // --- threads ---
 import { threadSummarySchema } from "./threads.js";
@@ -276,6 +277,23 @@ export const userSchema = z.object({
    * not as "passed" — the client only *skips* the gate on an explicit `passed`.
    */
   ageGate: ageGateStatusSchema.optional(),
+  /**
+   * The account's public handle — `pqp.gg/@rafa` — or null when it has never
+   * claimed one, which is most accounts.
+   *
+   * On `userSchema` and deliberately NOT on `publicUserSchema`. A handle is
+   * public by definition, so hiding it is not the point; the point is that
+   * nothing in the app needs somebody else's handle to render a message row or
+   * a member list, and the shape that reaches strangers should carry only what
+   * its call sites use. The public *profile* endpoint is where a handle is read
+   * about somebody else, and it is keyed BY the handle.
+   */
+  handle: z.string().nullable().default(null),
+  /**
+   * When the handle last moved, so Settings can say when it may move again
+   * without a second round trip. Null means never — the first claim is free.
+   */
+  handleChangedAt: z.string().nullable().default(null),
 });
 
 /**
@@ -329,6 +347,7 @@ export const serverSchema = z.object({
    */
   iconUrl: z.string().nullable().default(null),
   bannerUrl: z.string().nullable().default(null),
+  /**
    * Whether this server is listed in the public directory. Defaulted so a
    * response from an API that predates communities still parses.
    *
@@ -627,6 +646,17 @@ export const updateProfileSchema = z.object({
       "Avatar must be an image URL",
     ),
   dmPrivacy: dmPrivacySchema.optional(),
+  /**
+   * Claim or change the public handle. Optional like everything else here, and
+   * absent means "leave it alone" — the settings form sends every field on
+   * save, and a handle that arrives unchanged must not spend the rename
+   * cooldown. `claimHandle` on the server owns that rule.
+   *
+   * Validated by `handleSchema`, which normalises first: a body carrying
+   * `@Rafa` is a valid claim for `rafa` rather than a 400 about our character
+   * set.
+   */
+  handle: handleSchema.optional(),
 });
 
 /**

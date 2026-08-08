@@ -71,6 +71,14 @@ jobs:
         run: pnpm --filter @pqp/client build
 
       # Install wrangler outside the pnpm workspace (npm + workspace:* fails in client/)
+      #
+      # RUN IT FROM `client/`, not from the temp directory. `wrangler pages
+      # deploy` picks up a `functions/` directory relative to the CURRENT WORKING
+      # DIRECTORY, and `client/functions/_middleware.ts` is what puts real Open
+      # Graph tags on `/@handle` — deploying from anywhere else silently ships
+      # the site with no middleware at all, which looks exactly like a working
+      # deploy until somebody pastes a profile link into WhatsApp. The binary is
+      # invoked by absolute path so the install can stay outside the workspace.
       - name: Deploy to Cloudflare Pages
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -85,7 +93,19 @@ jobs:
             exit 1
           fi
           TMP="$(mktemp -d)"
-          cd "$TMP"
-          npm init -y >/dev/null
-          npm install wrangler@4 --no-fund --no-audit
-          npx wrangler pages deploy "$GITHUB_WORKSPACE/client/dist" --project-name=pqp --commit-dirty=true
+          (cd "$TMP" && npm init -y >/dev/null && npm install wrangler@4 --no-fund --no-audit)
+          cd "$GITHUB_WORKSPACE/client"
+          "$TMP/node_modules/.bin/wrangler" pages deploy dist \
+            --project-name=pqp --commit-dirty=true
+
+      # The middleware is only useful if it is actually in the bundle. A grep is
+      # a poor test and a fine tripwire: it fails the deploy on the one mistake
+      # that has no other symptom.
+      - name: Verify the profile middleware shipped
+        run: |
+          test -f "$GITHUB_WORKSPACE/client/functions/_middleware.ts" \
+            || { echo "::error::client/functions/_middleware.ts is missing — /@handle will not unfurl"; exit 1; }
+          test -f "$GITHUB_WORKSPACE/client/dist/edge-config.json" \
+            || { echo "::error::dist/edge-config.json was not emitted — the middleware cannot find the API"; exit 1; }
+          grep -q '"apiUrl":"http' "$GITHUB_WORKSPACE/client/dist/edge-config.json" \
+            || { echo "::error::edge-config.json has no apiUrl — VITE_API_URL was empty at build time"; exit 1; }

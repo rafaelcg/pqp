@@ -145,6 +145,72 @@ export const en = {
   "landing.communities.point3.body":
     "List it when you want to be found, unlist it when you don't. You still run the room.",
   "landing.communities.action": "Find your people",
+  // ------------------------------------------------------- handles & profiles
+  //
+  // The Orkut-throwback surfaces: `pqp.gg/garanta` (where you claim an @) and
+  // `pqp.gg/@you` (what you get for it). English exists so the pages are not
+  // broken outside Brazil; pt-BR is the one that was written first and the one
+  // that carries the joke. See `messages.pt-BR.ts`.
+  "claim.seo.title": "Claim your @ on pqp",
+  "claim.seo.description":
+    "pqp.gg/@you — one name, first come, first served. Free, and yours.",
+  "claim.eyebrow": "One name. Yours.",
+  "claim.title": "Claim your @ on pqp",
+  "claim.body":
+    "Your page, your link, your people. Type a name and see if it is still free.",
+  "claim.input.label": "The @ you want",
+  "claim.input.placeholder": "yourname",
+  "claim.checking": "Checking…",
+  "claim.available": "{handle} is free. Take it.",
+  "claim.taken": "{handle} is taken. Try another.",
+  "claim.reserved": "That one is reserved.",
+  "claim.blocked": "Pick another one.",
+  "claim.tooShort": "At least 3 characters.",
+  "claim.format": "Letters, numbers, and . _ - between them.",
+  "claim.error": "Could not check that right now. Try again.",
+  "claim.cta": "Claim {handle}",
+  "claim.cta.signedIn": "Claim it",
+  "claim.claiming": "Claiming…",
+  "claim.claimed": "Done. Your link is {url}",
+  "claim.rules":
+    "One @ per account. You can change it once every 30 days, so pick well.",
+  "claim.why.1.title": "A link you can say out loud",
+  "claim.why.1.body":
+    "Put it in your bio. It works from anywhere, signed in or not.",
+  "claim.why.2.title": "People find you, not a number",
+  "claim.why.2.body":
+    "No more spelling out four digits. One name, and it is the one you chose.",
+  "claim.why.3.title": "First come, first served",
+  "claim.why.3.body":
+    "There is exactly one of each. The good ones go early — that is how this works.",
+  "claim.existing": "You already have one: {url}",
+
+  "publicProfile.loading": "Loading…",
+  "publicProfile.seo.title": "{name} (@{handle}) on pqp",
+  "publicProfile.seo.description": "{name} is on pqp. Add them.",
+  "publicProfile.communities": "Communities",
+  "publicProfile.depoimentos": "{count} testimonials",
+  "publicProfile.depoimentos.one": "1 testimonial",
+  "publicProfile.cta.add": "Add me on pqp",
+  "publicProfile.cta.open": "Open in pqp",
+  "publicProfile.copy": "Copy link",
+  "publicProfile.copied": "Copied",
+  "publicProfile.footer": "pqp.gg — group chat you own",
+  "publicProfile.footer.cta": "Claim your @",
+  "publicProfile.free.title": "@{handle} is free.",
+  "publicProfile.free.body":
+    "Nobody has taken this one yet. It could be yours in about ten seconds.",
+  "publicProfile.free.cta": "Claim @{handle}",
+  "publicProfile.unavailable.title": "Could not load that profile",
+  "publicProfile.unavailable.body":
+    "Something went wrong on our end. Try again in a moment.",
+  "publicProfile.retry": "Try again",
+
+  "handle.claimed.notice": "Your link is {url} — copy it and go show off.",
+  "handle.claim.failed": "Could not save that @: {reason}",
+  "handle.add.sent": "Friend request sent to {name}.",
+  "handle.add.accepted": "You and {name} are friends now.",
+  "handle.add.failed": "Could not add that person.",
 
   // ------------------------------------------------------- desktop downloads
   // Secondary to the hero's real call to action on purpose: the web app is the
@@ -336,7 +402,6 @@ export const en = {
   "communities.settings.failed": "Could not update the listing.",
   "communities.settings.suspended":
     "This listing was removed by the people who run pqp. The community itself is untouched and everyone in it can still use it — it is only hidden from the directory.",
-    "This listing was removed by the people who run pqp. The server itself is untouched and everyone in it can still use it — it is only hidden from the directory.",
   // The member's own badge switch, on the community's context menu. Worded as
   // the ACTION each state offers rather than as a state ("Shown on profile"),
   // because a context-menu row that describes a state reads as a checkbox and
@@ -946,6 +1011,18 @@ export const en = {
     "Becomes username#1234 — discriminator auto-assigned if taken.",
   "settings.profile.saveNote":
     "This section applies when you save. Everything else applies the moment you change it.",
+  // The public handle. A second name field next to `username`, which reads as
+  // redundant until you know why — so the hint says why, in one line, rather
+  // than leaving people to guess which of the two is "the real one".
+  "settings.profile.publicHandle": "Your public link",
+  "settings.profile.publicHandle.placeholder": "yourname",
+  "settings.profile.publicHandle.hint":
+    "A page anyone can open, even without an account. Different from your username#1234, and there is only one of each.",
+  "settings.profile.publicHandle.cooldown":
+    "You can change this again on {date}.",
+  "settings.profile.publicHandle.copy": "Copy link",
+  "settings.profile.publicHandle.copied": "Copied",
+  "settings.profile.publicHandle.view": "Open",
 
   // -- voice & audio
   "settings.voice.description":
@@ -1125,13 +1202,13 @@ export const en = {
   // the button that destroys the server all past each other, with scrolling as
   // the only navigation. The section names are the whole fix — a person looking
   // for "how do I stop strangers walking in" should be able to see the door.
-  "serverSettings.eyebrow": "Server settings",
-  "serverSettings.nav.label": "Server settings sections",
+  "serverSettings.eyebrow": "Community settings",
+  "serverSettings.nav.label": "Community settings sections",
   "serverSettings.close": "Close",
 
   "serverSettings.section.overview": "Overview",
   "serverSettings.overview.description":
-    "What this server is called and what it looks like.",
+    "What this community is called and what it looks like.",
   "serverSettings.section.access": "Access",
   "serverSettings.access.description":
     "Who can walk in, and how they find their way here.",
@@ -1152,8 +1229,8 @@ export const en = {
     "Only owners and admins can change server settings. Ask one if something here needs to change.",
 
   // -- overview: name
-  "serverSettings.name.title": "Server name",
-  "serverSettings.name.label": "Server name",
+  "serverSettings.name.title": "Community name",
+  "serverSettings.name.label": "Community name",
   "serverSettings.name.save": "Save",
   "serverSettings.name.saving": "Saving…",
   "serverSettings.name.saved": "Server renamed.",
@@ -1276,10 +1353,10 @@ export const en = {
   "serverSettings.transfer.failed": "Failed to transfer ownership",
   "serverSettings.transfer.membersFailed": "Failed to load members",
 
-  "serverSettings.delete.title": "Delete server",
+  "serverSettings.delete.title": "Delete community",
   "serverSettings.delete.description":
     "Every channel, message, and invite in {server} is deleted for everyone. This cannot be undone.",
-  "serverSettings.delete.action": "Delete server",
+  "serverSettings.delete.action": "Delete community",
   "serverSettings.delete.typeLabel": "Type {server} to confirm.",
   "serverSettings.delete.typeAria": "Type {server} to confirm deletion",
   "serverSettings.delete.confirm": "Delete forever",

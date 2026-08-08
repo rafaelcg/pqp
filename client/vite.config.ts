@@ -1,12 +1,43 @@
-import { defineConfig } from "vite";
+import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { VitePWA } from "vite-plugin-pwa";
 import path from "node:path";
 
+/**
+ * `/edge-config.json` — the only thing the Cloudflare Pages middleware needs to
+ * know, written by the build that already knows it.
+ *
+ * The middleware in `client/functions/` fetches a profile from the API so it can
+ * put real Open Graph tags on `/@handle`. It runs at the edge, so it cannot read
+ * `import.meta.env`, and asking an operator to also set `PQP_API_URL` in the
+ * Pages dashboard is a second place for the API URL to live and therefore a
+ * second place for it to be wrong. Emitting it as an asset means the middleware
+ * and the SPA are pointed at the same API by construction, with no new secret
+ * and no dashboard step.
+ *
+ * Empty when `VITE_API_URL` is unset (a self-host serving the SPA from the API's
+ * own origin, or a local build). The middleware treats that as "no unfurl" and
+ * serves the page unchanged, which is what it did before this existed.
+ */
+function edgeConfig(): Plugin {
+  return {
+    name: "pqp-edge-config",
+    apply: "build",
+    generateBundle() {
+      this.emitFile({
+        type: "asset",
+        fileName: "edge-config.json",
+        source: JSON.stringify({ apiUrl: process.env.VITE_API_URL ?? "" }),
+      });
+    },
+  };
+}
+
 export default defineConfig({
   plugins: [
     react(),
+    edgeConfig(),
     tailwindcss(),
     VitePWA({
       // `prompt`, never `autoUpdate`. This client holds live WebSocket state and

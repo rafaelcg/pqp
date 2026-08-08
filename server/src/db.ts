@@ -83,6 +83,18 @@ export interface DbUser {
    * for a character.
    */
   is_character?: boolean;
+  /**
+   * The account's public handle — the `rafa` in `pqp.gg/@rafa` — or null.
+   *
+   * A SECOND name, and not a replacement for `username`: `username` is unique
+   * only when paired with `discriminator`, so it can never address a URL on its
+   * own. See the `users.handle` block in schema.sql. Optional here for the same
+   * reason as `is_character`: several reads select a narrower column list, and
+   * an absent value must read as "unknown", never as "this account has none".
+   */
+  handle?: string | null;
+  /** When the handle last moved; drives the 30-day rename cooldown. */
+  handle_changed_at?: Date | string | null;
 }
 
 export interface DbServer {

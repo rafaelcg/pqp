@@ -18,6 +18,7 @@ import {
   Outlet,
   Route,
   Routes,
+  useParams,
 } from "react-router-dom";
 import { AppLoadingShell } from "./components/layout/app-loading-shell";
 import { DesktopDeepLinkBridge } from "./components/desktop-bridge";
@@ -49,6 +50,14 @@ const CookiesPage = lazy(() =>
 const StatusPage = lazy(() =>
   import("./pages/status-page").then((m) => ({ default: m.StatusPage })),
 );
+const ClaimPage = lazy(() =>
+  import("./pages/claim-page").then((m) => ({ default: m.ClaimPage })),
+);
+const PublicProfilePage = lazy(() =>
+  import("./pages/public-profile-page").then((m) => ({
+    default: m.PublicProfilePage,
+  })),
+);
 
 const publishableKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY;
 
@@ -63,6 +72,34 @@ function DarkRoutes() {
   return <Outlet />;
 }
 
+/**
+ * `pqp.gg/@rafa`.
+ *
+ * WHY `/:handleSegment` AND NOT `/@:handle`. React Router's path compiler only
+ * accepts a parameter that occupies a WHOLE segment — its pattern is
+ * `/\/:([\w-]+)/`, anchored on the slash — so `/@:handle` is read as the literal
+ * string `/@:handle` and matches nothing. The `@` therefore has to live inside
+ * the parameter's value and be stripped here.
+ *
+ * WHY THE `@` PREFIX AT ALL, given that. Because the alternative is `/rafa`, and
+ * that puts every handle in the same namespace as every route this product will
+ * ever add: `/privacy` and `/status` are already taken, `/pricing` and `/blog`
+ * are one product decision away, and the day one of them collides with a claimed
+ * handle somebody's page disappears with no migration available. The `@` makes
+ * the two namespaces disjoint forever, at the cost of one character.
+ *
+ * A segment that is not a handle keeps the behaviour the catch-all had before
+ * this route existed — `/` on the web, `/app` in the desktop shell — so no URL
+ * that used to redirect now renders a profile page instead.
+ */
+function PublicProfileRoute() {
+  const { handleSegment = "" } = useParams();
+  if (!handleSegment.startsWith("@")) {
+    return <Navigate to={isDesktopApp() ? "/app" : "/"} replace />;
+  }
+  return <PublicProfilePage handle={handleSegment.slice(1).toLowerCase()} />;
+}
+
 function AppRoutes({ devBypass = false }: { devBypass?: boolean }) {
   const { t } = useTranslation();
   return (
@@ -75,6 +112,19 @@ function AppRoutes({ devBypass = false }: { devBypass?: boolean }) {
           <Route path="/terms" element={<TermsPage />} />
           <Route path="/cookies" element={<CookiesPage />} />
           <Route path="/status" element={<StatusPage />} />
+          {/* Two paths, one page. `/garanta` is the one that gets shared in
+              Brazil and the one every CTA points at; `/claim` exists so an
+              English-speaking visitor guessing at a URL is not wrong. Neither
+              redirects to the other — a redirect on a landing page is a lost
+              click, and both are canonicalised to `/garanta` by `Seo`. */}
+          <Route path="/garanta" element={<ClaimPage />} />
+          <Route path="/claim" element={<ClaimPage />} />
+          {/* LAST among the single-segment routes, though the order does not
+              actually decide it: React Router ranks a static segment above a
+              dynamic one, so `/privacy` still wins even from here. Written last
+              anyway, because a reader should not have to know that rule to
+              believe the file. */}
+          <Route path="/:handleSegment" element={<PublicProfileRoute />} />
         </Route>
         <Route path="/app/*" element={<App devBypass={devBypass} />} />
         <Route

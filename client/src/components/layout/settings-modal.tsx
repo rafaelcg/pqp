@@ -16,8 +16,14 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import {
+  canRenameHandle,
   deleteConfirmationMatches,
   expectedDeleteConfirmation,
+  HANDLE_MAX_LENGTH,
+  handleRenameAvailableAt,
+  normalizeHandle,
+  publicProfileDisplayUrl,
+  publicProfilePath,
   type BlockedUser,
   type DmPrivacy,
   type User,
@@ -1672,6 +1678,8 @@ function ProfileSection({
   onDisplayName,
   username,
   onUsername,
+  handle,
+  onHandle,
   avatarUrl,
   onAvatarUrl,
   onUserUpdated,
@@ -1681,11 +1689,38 @@ function ProfileSection({
   onDisplayName: (next: string) => void;
   username: string;
   onUsername: (next: string) => void;
+  handle: string;
+  onHandle: (next: string) => void;
   avatarUrl: string;
   onAvatarUrl: (next: string) => void;
   onUserUpdated: (user: User) => void;
 }) {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
+  const [copied, setCopied] = useState(false);
+
+  // Null while the account has never claimed one, or once the window is over.
+  const renameAvailableAt = canRenameHandle(user?.handleChangedAt, user?.handle)
+    ? null
+    : handleRenameAvailableAt(user?.handleChangedAt, user?.handle);
+
+  const publicUrl = user?.handle ? publicProfileDisplayUrl(user.handle) : null;
+
+  function copyPublicUrl() {
+    if (!publicUrl) return;
+    void navigator.clipboard
+      ?.writeText(`https://${publicUrl}`)
+      .then(() => setCopied(true))
+      .catch(() => {
+        // No clipboard (plain http, an embedded webview). The link is right
+        // there in plain text, which is the fallback.
+      });
+  }
+
+  useEffect(() => {
+    if (!copied) return;
+    const timer = window.setTimeout(() => setCopied(false), 2000);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
 
   return (
     <div className="space-y-5">
@@ -1696,6 +1731,77 @@ function ProfileSection({
           </p>
         </Field>
       )}
+
+      {/*
+        The public link, immediately under the tag it is constantly confused
+        with. Two name fields in one form is a design smell, so the two are put
+        side by side and each says what it is for: `name#1234` is how somebody
+        adds you inside the app, `pqp.gg/@name` is a page you can hand to
+        somebody who has never heard of pqp.
+
+        The claimed link is rendered as TEXT WITH A COPY BUTTON rather than as
+        the input's value, because the two are different objects: the input is a
+        thing you are editing and can abandon with Cancel, and the link is a
+        thing you own and want on your clipboard. Collapsing them would mean the
+        copy button copies a draft.
+      */}
+      <Field
+        label={t("settings.profile.publicHandle")}
+        hint={t("settings.profile.publicHandle.hint")}
+      >
+        <div className="flex items-stretch gap-0 rounded-md border border-ink-4 bg-ink focus-within:ring-2 focus-within:ring-signal/50">
+          <span className="flex select-none items-center pl-3 font-mono text-sm text-paper-muted">
+            pqp.gg/@
+          </span>
+          <input
+            value={handle}
+            maxLength={HANDLE_MAX_LENGTH}
+            autoComplete="off"
+            autoCapitalize="none"
+            spellCheck={false}
+            disabled={renameAvailableAt !== null}
+            placeholder={t("settings.profile.publicHandle.placeholder")}
+            onChange={(event) => onHandle(normalizeHandle(event.target.value))}
+            className="min-w-0 flex-1 bg-transparent px-1 py-2 font-mono text-sm text-paper outline-none placeholder:text-paper-muted/60 disabled:opacity-60"
+          />
+        </div>
+
+        {renameAvailableAt && (
+          <p className="mt-1.5 text-xs text-warning">
+            {t("settings.profile.publicHandle.cooldown", {
+              date: renameAvailableAt.toLocaleDateString(
+                locale === "pt-BR" ? "pt-BR" : "en",
+                { day: "numeric", month: "long", year: "numeric" },
+              ),
+            })}
+          </p>
+        )}
+
+        {publicUrl && (
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <code className="rounded bg-ink-3 px-2 py-1 font-mono text-xs text-signal">
+              {publicUrl}
+            </code>
+            <button
+              type="button"
+              onClick={copyPublicUrl}
+              className="inline-flex items-center gap-1 text-xs text-paper-muted underline underline-offset-2 hover:text-paper"
+            >
+              {copied
+                ? t("settings.profile.publicHandle.copied")
+                : t("settings.profile.publicHandle.copy")}
+            </button>
+            <a
+              href={publicProfilePath(user!.handle!)}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1 text-xs text-paper-muted underline underline-offset-2 hover:text-paper"
+            >
+              {t("settings.profile.publicHandle.view")}
+            </a>
+          </div>
+        )}
+      </Field>
 
       <div>
         <span className="mb-2 block text-xs uppercase tracking-wide text-paper-muted">
@@ -1772,6 +1878,7 @@ export function SettingsModal({
   const { t } = useTranslation();
   const [displayName, setDisplayName] = useState("");
   const [username, setUsername] = useState("");
+  const [handle, setHandle] = useState("");
   const [avatarUrl, setAvatarUrl] = useState("");
   const [draftLocal, setDraftLocal] = useState(localSettings);
   // Mirrors `draftLocal` so `patchLocal` can compose off the latest values
@@ -1816,6 +1923,7 @@ export function SettingsModal({
     if (open && user) {
       setDisplayName(user.displayName);
       setUsername(user.username ?? "");
+      setHandle(user.handle ?? "");
       setAvatarUrl(user.avatarUrl ?? "");
     }
   }, [open, user]);
@@ -1903,6 +2011,11 @@ export function SettingsModal({
           displayName: displayName.trim() || undefined,
           username: username.trim() || undefined,
           avatarUrl: avatarUrl.trim() || null,
+          // Omitted rather than sent empty when the field is blank. An absent
+          // key means "leave it alone"; there is deliberately no way to
+          // RELEASE a handle from this form, because releasing one hands
+          // somebody else a URL that is already in a hundred screenshots.
+          ...(handle ? { handle } : {}),
         });
         onUserUpdated(updated);
       }
@@ -1958,6 +2071,8 @@ export function SettingsModal({
                 onDisplayName={setDisplayName}
                 username={username}
                 onUsername={setUsername}
+                handle={handle}
+                onHandle={setHandle}
                 avatarUrl={avatarUrl}
                 onAvatarUrl={setAvatarUrl}
                 onUserUpdated={onUserUpdated}

@@ -2,6 +2,11 @@ import { SignInButton, SignUpButton, useAuth } from "@clerk/clerk-react";
 import { Lock, Menu, Phone, Users, Video, WifiOff } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
+import {
+  normalizeHandle,
+  publicProfileDisplayUrl,
+  validateHandle,
+} from "@pqp/shared";
 import type {
   AgeGateStatus,
   BlockedUser,
@@ -106,6 +111,7 @@ import {
   hideConversation,
   joinInvite,
   leaveServer,
+  lookupUserByHandle,
   markChannelRead,
   moveChannel,
   setAuthTokenProvider,
@@ -115,6 +121,12 @@ import {
   updatePreferences,
 } from "@/lib/api";
 import { parseAppRoute, signedOutRedirectPath } from "@/lib/app-route";
+import {
+  addIntentFromSearch,
+  takeAddIntent,
+  takeHandleClaim,
+} from "@/lib/handle-intent";
+import { sendFriendRequest } from "@/components/friends/friends-api";
 import { shouldRunOnboarding } from "@/lib/onboarding";
 import { firstRunDismissedPatch } from "@/lib/first-run";
 import { browserStorage, hasArrived, rememberArrival } from "@/lib/arrival";
@@ -309,6 +321,17 @@ function MainAppContent({
   const [newServerName, setNewServerName] = useState("");
   const [creatingServer, setCreatingServer] = useState(false);
   const [appError, setAppError] = useState<string | null>(null);
+  /**
+   * The good-news counterpart of `appError`, in the same slot.
+   *
+   * Exists because the two arrival intents (see the effect below) both succeed
+   * silently otherwise: a handle is claimed and nothing says so, a friend
+   * request is sent and nothing says to whom. Both are the reason the person
+   * came, so both are worth one line. Transient app state — nothing persists it
+   * and nothing reconstructs it, which is correct for a sentence about
+   * something that just happened.
+   */
+  const [appNotice, setAppNotice] = useState<string | null>(null);
   /**
    * The last refusal a timeout produced, shown against the composer it belongs
    * to. Transient app state rather than anything persisted: a timeout is
@@ -2049,6 +2072,109 @@ function MainAppContent({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bootstrapReady, location.pathname]);
 
+  /**
+   * The two intentions somebody arrived with, acted on exactly once.
+   *
+   * WHAT THIS FINISHES. `pqp.gg/garanta` and `pqp.gg/@rafa` both end in a
+   * sign-up, and both carry something the sign-up cannot: a name somebody chose,
+   * and a person somebody meant to add. Neither is expressible as a path the way
+   * an invite code is (see `signedOutRedirectPath`), so they travel as a query
+   * parameter with a `localStorage` stash behind it — `lib/handle-intent.ts` has
+   * the argument for the belt and the braces.
+   *
+   * WHY HERE AND NOT EARLIER. `bootstrapReady` is the first moment the account
+   * exists, has cleared the 18+ gate, and has a working token — all three are
+   * required. A claim written before the gate would squat a name for an account
+   * that may never be let in, and a friend request sent before it would be a
+   * refused account contacting a person.
+   *
+   * WHY IT CANNOT REPEAT. The stash is consumed on read, and the query string is
+   * wiped from the address bar the moment it is read — otherwise a reload would
+   * re-send the friend request, and a refresh a month later would spend the
+   * handle rename cooldown on a name the person had already changed away from.
+   * The ref is the third belt: React 19 StrictMode runs this effect twice in
+   * development, and without it the second run would race the first.
+   */
+  const arrivalIntentsHandled = useRef(false);
+  useEffect(() => {
+    if (!bootstrapReady || arrivalIntentsHandled.current) {
+      return;
+    }
+    arrivalIntentsHandled.current = true;
+
+    const storage = browserStorage();
+    const params = new URLSearchParams(location.search);
+    // Both stashes are consumed unconditionally, even when the URL also carries
+    // the value: leaving one behind is how an intent fires on a later visit.
+    const stashedClaim = takeHandleClaim(storage);
+    const stashedAdd = takeAddIntent(storage);
+    const claim = normalizeHandle(params.get("claim") ?? "") || stashedClaim;
+    const add = addIntentFromSearch(location.search) ?? stashedAdd;
+
+    if (params.has("claim") || params.has("add")) {
+      params.delete("claim");
+      params.delete("add");
+      const rest = params.toString();
+      navigate(`${location.pathname}${rest ? `?${rest}` : ""}`, {
+        replace: true,
+      });
+    }
+
+    void (async () => {
+      if (claim && validateHandle(claim) === null) {
+        try {
+          const updated = await updateMe({ handle: claim });
+          setUser(updated);
+          chat.setCurrentUser(updated);
+          setAppNotice(
+            t("handle.claimed.notice", {
+              url: publicProfileDisplayUrl(updated.handle ?? claim),
+            }),
+          );
+        } catch (error) {
+          // The most likely reason by far is that somebody else took it in the
+          // seconds between the availability check and the sign-up, which is
+          // exactly the race the unique index exists to decide. Say so and move
+          // on — the account is fine, it just has no handle yet.
+          setAppNotice(null);
+          setAppError(
+            t("handle.claim.failed", {
+              reason:
+                error instanceof ApiError
+                  ? error.message
+                  : t("friends.requestFailed"),
+            }),
+          );
+        }
+      }
+
+      if (add) {
+        try {
+          const { user: target } = await lookupUserByHandle(add);
+          const result = await sendFriendRequest(target.id);
+          setAppNotice(
+            t(
+              result.state === "accepted"
+                ? "handle.add.accepted"
+                : "handle.add.sent",
+              { name: target.displayName },
+            ),
+          );
+          await friendsRef.current.refresh();
+        } catch {
+          // Deleted account, a block in either direction, a rate limit. The
+          // server's refusals here are deliberately indistinguishable (see the
+          // route), so this says one thing for all of them.
+          setAppError(t("handle.add.failed"));
+        }
+      }
+    })();
+    // Runs once, on the transition into a ready app. `user`, `t` and the
+    // callbacks it closes over are all stable by then, and adding them would
+    // re-arm an effect whose whole contract is that it fires exactly once.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bootstrapReady]);
+
   function openInviteForServer(serverId: string) {
     setSelection({ kind: "server", serverId });
     void loadChannels(serverId);
@@ -2969,6 +3095,20 @@ function MainAppContent({
               type="button"
               className="shrink-0 text-xs underline underline-offset-2"
               onClick={() => setAppError(null)}
+            >
+              {t("connection.dismiss")}
+            </button>
+          </div>
+        )}
+
+        {/* Same slot, same shape, opposite tone — see `appNotice`. */}
+        {appNotice && (
+          <div className="flex items-start gap-3 border-b border-success/40 bg-success/10 px-4 py-2 text-sm text-success">
+            <span className="flex-1">{appNotice}</span>
+            <button
+              type="button"
+              className="shrink-0 text-xs underline underline-offset-2"
+              onClick={() => setAppNotice(null)}
             >
               {t("connection.dismiss")}
             </button>

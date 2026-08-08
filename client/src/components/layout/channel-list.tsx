@@ -341,7 +341,7 @@ export function ChannelList({
               { id: "sep", label: "", separator: true },
               {
                 id: "settings",
-                label: "Server settings",
+                label: "Community settings",
                 onSelect: onOpenServerSettings,
               },
             ]
@@ -395,8 +395,8 @@ export function ChannelList({
                   <button
                     type="button"
                     className="rounded-md p-1.5 text-paper-muted hover:bg-ink-3 hover:text-paper"
-                    title="Server settings"
-                    aria-label="Server settings"
+                    title="Community settings"
+                    aria-label="Community settings"
                     onClick={onOpenServerSettings}
                   >
                     <Settings className="h-4 w-4" />
