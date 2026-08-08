@@ -572,14 +572,53 @@ struct AttachmentChip: View {
     let attachment: Attachment
     @Environment(SessionStore.self) private var session
     @State private var playing = false
+    @State private var viewingFullscreen = false
     /// Set when the original presigned URL failed and a fresh one was fetched.
     @State private var refreshedUrl: URL?
     @State private var refetched = false
 
     var body: some View {
-        // Images are shown, not described. A filename chip for a photo is the
-        // one case where the chip is strictly worse than the thing itself.
-        if attachment.isImage, let url = refreshedUrl ?? URL(string: attachment.url) {
+        // Images (and GIFs) are shown, not described, and tap open the same
+        // fullscreen viewer the web client's lightbox is for — a filename
+        // chip for a photo is the one case where the chip is strictly worse
+        // than the thing itself.
+        if attachment.isImage {
+            Button { viewingFullscreen = true } label: { inlineImage }
+                .buttonStyle(.plain)
+                .fullScreenCover(isPresented: $viewingFullscreen) {
+                    MediaFullscreenView(attachment: attachment)
+                }
+        } else if attachment.isVideo {
+            // Tap-to-open rather than autoplay, matching the web client: a
+            // chat log that starts making noise on scroll is hostile.
+            Button { viewingFullscreen = true } label: { fileChip }
+                .buttonStyle(.plain)
+                .fullScreenCover(isPresented: $viewingFullscreen) {
+                    MediaFullscreenView(attachment: attachment)
+                }
+        } else if attachment.isPlayable {
+            // Audio has no fullscreen visual to show — the existing
+            // AVPlayer-backed sheet is exactly right for it.
+            Button { playing = true } label: { fileChip }
+                .buttonStyle(.plain)
+                .fullScreenCover(isPresented: $playing) {
+                    MediaPlayerView(attachment: attachment)
+                }
+        } else {
+            fileChip
+        }
+    }
+
+    @ViewBuilder
+    private var inlineImage: some View {
+        if attachment.isGif {
+            AnimatedImageView(
+                url: refreshedUrl ?? URL(string: attachment.url),
+                onFailure: { Task { await refreshUrlOnce() } }
+            )
+            .frame(maxWidth: 260, maxHeight: 260)
+            .clipShape(RoundedRectangle(cornerRadius: Metrics.cornerRadiusSmall, style: .continuous))
+        } else if let url = refreshedUrl ?? URL(string: attachment.url) {
             AsyncImage(url: url) { phase in
                 switch phase {
                 case .success(let image):
@@ -591,12 +630,7 @@ struct AttachmentChip: View {
                     if refetched {
                         fileChip
                     } else {
-                        placeholder.task {
-                            refetched = true
-                            if let fresh = try? await session.api.attachmentUrl(id: attachment.id) {
-                                refreshedUrl = URL(string: fresh)
-                            }
-                        }
+                        placeholder.task { await refreshUrlOnce() }
                     }
                 default:
                     placeholder
@@ -604,16 +638,14 @@ struct AttachmentChip: View {
             }
             .frame(maxWidth: 260, maxHeight: 260)
             .clipShape(RoundedRectangle(cornerRadius: Metrics.cornerRadiusSmall, style: .continuous))
-        } else if attachment.isPlayable {
-            // Tap-to-play rather than autoplay, matching the web client: a
-            // chat log that starts making noise on scroll is hostile.
-            Button { playing = true } label: { fileChip }
-                .buttonStyle(.plain)
-                .fullScreenCover(isPresented: $playing) {
-                    MediaPlayerView(attachment: attachment)
-                }
-        } else {
-            fileChip
+        }
+    }
+
+    private func refreshUrlOnce() async {
+        guard !refetched else { return }
+        refetched = true
+        if let fresh = try? await session.api.attachmentUrl(id: attachment.id) {
+            refreshedUrl = URL(string: fresh)
         }
     }
 

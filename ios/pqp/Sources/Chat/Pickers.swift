@@ -119,11 +119,15 @@ struct GifPicker: View {
                                     onPick(gif)
                                     dismiss()
                                 } label: {
-                                    AsyncImage(url: URL(string: gif.previewUrl)) { image in
-                                        image.resizable().scaledToFill()
-                                    } placeholder: {
-                                        Rectangle().fill(Palette.surface)
-                                    }
+                                    // The preview is itself a GIF (the server
+                                    // only ever hands back `.gif` preview
+                                    // URLs), so a static `AsyncImage` would
+                                    // show one frozen frame here — exactly
+                                    // the bug this view exists to avoid.
+                                    AnimatedImageView(
+                                        url: URL(string: gif.previewUrl),
+                                        contentMode: .scaleAspectFill
+                                    )
                                     .frame(height: 110)
                                     .clipped()
                                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))

@@ -87,6 +87,11 @@ struct Attachment: Codable, Identifiable, Hashable, Sendable {
     var isAudio: Bool { contentType.hasPrefix("audio/") }
     /// Playable in place rather than shown or listed.
     var isPlayable: Bool { isVideo || isAudio }
+    /// GIF is still `isImage` (the content type is `image/*` either way) —
+    /// this narrows to the case that needs a frame decoder and an animating
+    /// view instead of a single bitmap, matching how the web client decides
+    /// the same thing purely from `contentType`.
+    var isGif: Bool { contentType.lowercased() == "image/gif" }
 }
 
 struct Embed: Codable, Hashable, Sendable {
