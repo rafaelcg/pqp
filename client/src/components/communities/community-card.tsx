@@ -56,9 +56,17 @@ interface CommunityCardProps {
  * of the two themes.
  */
 function tintStyle(hue: number, strength: number): CSSProperties {
-  const near = `color-mix(in oklab, oklch(0.72 0.17 ${hue}) ${strength}%, var(--color-surface-2))`;
-  const far = `color-mix(in oklab, oklch(0.62 0.16 ${(hue + 48) % 360}) ${Math.round(strength * 0.6)}%, var(--color-surface-1))`;
-  return { backgroundImage: `linear-gradient(135deg, ${near}, ${far})` };
+  // The colour literals live in the token layer (--community-tint-near/far in
+  // index.css); this only supplies the per-community numbers they read. That
+  // split is what keeps the bench's leak gate honest about where colour lives.
+  return {
+    "--community-hue": String(hue),
+    "--community-hue-far": String((hue + 48) % 360),
+    "--community-tint-strength": `${strength}%`,
+    "--community-tint-strength-far": `${Math.round(strength * 0.6)}%`,
+    backgroundImage:
+      "linear-gradient(135deg, var(--community-tint-near), var(--community-tint-far))",
+  } as CSSProperties;
 }
 
 export function CommunityCard({

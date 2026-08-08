@@ -82,6 +82,15 @@
   --glow-accent: oklch(0.35 0.12 125 / 0.25);
   --glow-danger: oklch(0.35 0.12 25 / 0.2);
   --glow-success: oklch(0.72 0.14 150 / 0.7);
+  /* Text legibility over an arbitrary banner image — black regardless of
+     theme, because the image underneath is not themed either. */
+  --shadow-banner-text: 0 1px 3px oklch(0 0 0 / 0.6);
+  --shadow-profile-card: 0 24px 80px -24px oklch(0 0 0 / 0.8);
+  /* The community tint pair: a per-community hue (set inline as
+     --community-hue) mixed into the surfaces, so the literals live here and
+     the hue math lives with the card. */
+  --community-tint-near: color-mix(in oklab, oklch(0.72 0.17 var(--community-hue, 140)) var(--community-tint-strength, 30%), var(--color-surface-2));
+  --community-tint-far: color-mix(in oklab, oklch(0.62 0.16 var(--community-hue-far, 188)) var(--community-tint-strength-far, 18%), var(--color-surface-1));
   --scrim-media: rgba(0, 0, 0, 0.42);
 
   --gradient-app-1: oklch(0.22 0.04 125 / 0.35);

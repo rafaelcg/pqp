@@ -133,7 +133,7 @@ export function ServerBanner({
           server by name, and a screen reader should not hear it twice. */}
       <p
         aria-hidden="true"
-        className="absolute inset-x-0 bottom-0 truncate px-4 pb-3 font-display text-xl font-bold leading-tight text-paper drop-shadow-[0_1px_3px_rgba(0,0,0,0.6)]"
+        className="absolute inset-x-0 bottom-0 truncate px-4 pb-3 font-display text-xl font-bold leading-tight text-paper drop-shadow-[var(--shadow-banner-text)]"
       >
         {name}
       </p>

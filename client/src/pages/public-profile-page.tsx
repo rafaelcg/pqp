@@ -172,7 +172,7 @@ function ClaimedProfile({ profile }: { profile: PublicProfile }) {
 
   return (
     <ProfileShell>
-      <article className="animate-rise overflow-hidden rounded-3xl border border-ink-4 bg-ink-2/80 shadow-[0_24px_80px_-24px_rgba(0,0,0,0.8)] backdrop-blur-sm">
+      <article className="animate-rise overflow-hidden rounded-3xl border border-ink-4 bg-ink-2/80 shadow-[var(--shadow-profile-card)] backdrop-blur-sm">
         <div className="flex flex-col items-center px-6 pb-7 pt-9 text-center sm:px-8">
           <UserAvatar
             name={profile.displayName}
