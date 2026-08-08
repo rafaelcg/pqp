@@ -83,6 +83,10 @@ struct FriendsView: View {
         }
         .navigationDestination(item: $opened) { conversation in
             ChatView(channelId: conversation.channelId, title: conversation.title)
+                // A DM reached from here is as much "where I was" as one
+                // reached from the hub; recording it in only one of the two
+                // places would make the restore look random.
+                .onAppear { LastVisited.record(conversationId: conversation.channelId) }
         }
         .confirmationDialog(
             model.confirming?.prompt ?? "",

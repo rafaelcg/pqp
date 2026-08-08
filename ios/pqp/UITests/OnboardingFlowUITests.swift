@@ -20,11 +20,15 @@ final class OnboardingFlowUITests: XCTestCase {
         let app = XCUIApplication()
         // Resets `hasCompletedOnboarding`, so every run starts at beat one.
         app.launchArguments += ["-pqp.hasCompletedOnboarding", "NO"]
+        // …and forgets where the last run was reading, so these tests land on
+        // the hub rather than in whichever channel a previous test opened.
+        // "none" is not a valid encoding, so it reads as no destination.
+        app.launchArguments += ["-pqp.lastVisited", "none"]
         app.launch()
         return app
     }
 
-    func testOnboardingRunsThroughToTheServerList() {
+    func testOnboardingRunsThroughToTheHub() {
         let app = launchFresh()
 
         XCTAssertTrue(
@@ -43,8 +47,8 @@ final class OnboardingFlowUITests: XCTestCase {
         getStarted.tap()
 
         XCTAssertTrue(
-            app.navigationBars["Servers"].waitForExistence(timeout: 10),
-            "Completing onboarding should land on the server list"
+            app.buttons["hub.profile"].waitForExistence(timeout: 10),
+            "Completing onboarding should land on the hub"
         )
     }
 
@@ -54,9 +58,86 @@ final class OnboardingFlowUITests: XCTestCase {
         app.buttons["Skip"].tap()
 
         XCTAssertTrue(
-            app.navigationBars["Servers"].waitForExistence(timeout: 10),
+            app.buttons["hub.profile"].waitForExistence(timeout: 10),
             "Skip should sign in immediately"
         )
+    }
+
+    /// The hub is one screen, not three tabs: servers, direct messages and the
+    /// profile/friends dock are all reachable without a mode switch. Asserting
+    /// on all four anchors is what stops one of them quietly disappearing
+    /// behind a redesign.
+    func testTheHubShowsServersConversationsAndYouAtOnce() {
+        let server = TestSeed.createServer(self)
+        defer { TestSeed.deleteServer(self, id: server.id) }
+        let app = launchFresh()
+        app.buttons["Skip"].tap()
+
+        XCTAssertTrue(app.buttons["hub.profile"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["hub.friends"].exists, "Friends keeps an entry point on the hub")
+        XCTAssertTrue(app.buttons["hub.newConversation"].exists)
+        XCTAssertTrue(
+            app.buttons["hub.server.\(server.id)"].waitForExistence(timeout: 10),
+            "Servers are on the hub, not behind a tab"
+        )
+        // There is no tab bar any more; if one comes back, this fails.
+        XCTAssertEqual(app.tabBars.count, 0, "The hub must not reintroduce a tab bar")
+    }
+
+    /// The profile lives on the hub and must not follow you into a channel —
+    /// the whole point of dropping the tab bar.
+    func testTheProfileDockDoesNotFollowYouIntoAChannel() {
+        let server = TestSeed.createServer(self)
+        defer { TestSeed.deleteServer(self, id: server.id) }
+        let app = launchFresh()
+        app.buttons["Skip"].tap()
+
+        app.openServerFromHub(server.id)
+        XCTAssertTrue(app.staticTexts["general"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["hub.profile"].exists,
+                       "The profile dock belongs to the hub only")
+
+        app.staticTexts["general"].tap()
+        XCTAssertTrue(app.textFields["composer.input"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["hub.profile"].exists)
+
+        // Back out the way a person would, one push at a time.
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.staticTexts["general"].waitForExistence(timeout: 5))
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.buttons["hub.profile"].waitForExistence(timeout: 5),
+                      "Back from a channel returns to the hub")
+    }
+
+    /// Launch lands you where you left off. Written as two launches on purpose:
+    /// the pointer is only worth anything if it survives the process.
+    func testTheLastChannelIsReopenedOnTheNextLaunch() {
+        let server = TestSeed.createServer(self)
+        defer { TestSeed.deleteServer(self, id: server.id) }
+        let app = launchFresh()
+        app.buttons["Skip"].tap()
+
+        app.openServerFromHub(server.id)
+        XCTAssertTrue(app.staticTexts["general"].waitForExistence(timeout: 5))
+        app.staticTexts["general"].tap()
+        XCTAssertTrue(app.textFields["composer.input"].waitForExistence(timeout: 5))
+        app.terminate()
+
+        // No reset argument this time, so the recorded channel is on file.
+        let relaunched = XCUIApplication()
+        relaunched.launchArguments += ["-pqp.hasCompletedOnboarding", "YES"]
+        relaunched.launch()
+
+        XCTAssertTrue(
+            relaunched.navigationBars["#general"].waitForExistence(timeout: 15),
+            "The last channel read should be where the app opens"
+        )
+        // And the way back is still obvious: the channel list, then the hub.
+        relaunched.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(relaunched.staticTexts["general"].waitForExistence(timeout: 5))
+        relaunched.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(relaunched.buttons["hub.profile"].waitForExistence(timeout: 5),
+                      "A restored channel must still have the hub underneath it")
     }
 
     /// The one that proves the wire contract: real servers, fetched over HTTP,
@@ -68,8 +149,8 @@ final class OnboardingFlowUITests: XCTestCase {
         let app = launchFresh()
         app.buttons["Skip"].tap()
 
-        XCTAssertTrue(app.navigationBars["Servers"].waitForExistence(timeout: 10))
-        // If decoding broke, the list is empty and this fails rather than
+        XCTAssertTrue(app.buttons["hub.profile"].waitForExistence(timeout: 10))
+        // If decoding broke, the rail is empty and this fails rather than
         // quietly showing an empty state.
         XCTAssertTrue(
             app.staticTexts[name].waitForExistence(timeout: 10),
@@ -82,12 +163,10 @@ final class OnboardingFlowUITests: XCTestCase {
         // test slower every run until XCUITest timed out snapshotting the tree.
         let server = TestSeed.createServer(self)
         defer { TestSeed.deleteServer(self, id: server.id) }
-        let name = server.name
         let app = launchFresh()
         app.buttons["Skip"].tap()
 
-        XCTAssertTrue(app.staticTexts[name].waitForExistence(timeout: 10))
-        app.staticTexts[name].tap()
+        app.openServerFromHub(server.id)
 
         XCTAssertTrue(app.staticTexts["general"].waitForExistence(timeout: 5),
                       "The default #general channel should be listed")
@@ -158,7 +237,7 @@ final class LaunchResilienceUITests: XCTestCase {
 final class MessageActionUITests: XCTestCase {
     // `createServer` passes the age gate itself, so no extra setup here.
     private var seeded: TestSeed.SeededServer?
-    private var serverName: String { seeded?.name ?? "" }
+    private var serverId: String { seeded?.id ?? "" }
 
     override func tearDown() {
         if let seeded { TestSeed.deleteServer(self, id: seeded.id) }
@@ -180,11 +259,12 @@ final class MessageActionUITests: XCTestCase {
     private func openGeneral() -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments += ["-pqp.hasCompletedOnboarding", "NO"]
+        // Start on the hub, not in whatever channel the last run restored.
+        app.launchArguments += ["-pqp.lastVisited", "none"]
         app.launch()
         XCTAssertTrue(app.buttons["Skip"].waitForExistence(timeout: 5))
         app.buttons["Skip"].tap()
-        XCTAssertTrue(app.staticTexts[serverName].waitForExistence(timeout: 10))
-        app.staticTexts[serverName].tap()
+        app.openServerFromHub(serverId)
         XCTAssertTrue(app.staticTexts["general"].waitForExistence(timeout: 5))
         app.staticTexts["general"].tap()
         return app

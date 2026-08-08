@@ -2,32 +2,101 @@ import SwiftUI
 
 /// The signed-in shell.
 ///
-/// Deliberately a `NavigationStack` per tab rather than the web app's
-/// three-pane layout. A phone has room for one thing at a time, and porting the
-/// desktop rail would spend a third of a 390pt screen on navigation chrome.
+/// One stack, one hub. There is no tab bar: the two things a chat app is made
+/// of — the servers you are in and the people you talk to — are both on the hub
+/// at once, so switching between them is a glance rather than a mode. Everything
+/// else (you, friends) is a push off the hub, which is what keeps it out of the
+/// way once you are reading a channel: a phone screen inside a conversation
+/// should be the conversation.
+///
+/// Launch does not necessarily land here. `LastVisited` remembers the last
+/// channel or DM and this stack opens onto it, validated against what the
+/// server still says exists — see `restoreLastVisited`.
 struct HomeView: View {
     @Environment(SessionStore.self) private var session
     @State private var model = HomeModel()
 
+    /// The restored destination, seeded once at launch. `navigationDestination`
+    /// rather than a bound path so every plain `NavigationLink` in the tree
+    /// keeps working unchanged — a typed path would have made this the only
+    /// legal way to push anything, anywhere.
+    ///
+    /// A conversation is pushed through the hub's own binding rather than a
+    /// second one here: two `navigationDestination(item:)` for the same type in
+    /// one stack is one destination too many, and which of them wins is not
+    /// something to find out in production.
+    @State private var restoredChannel: RestoredChannel?
+    @State private var openedConversation: DmSummary?
+    @State private var hasAttemptedRestore = false
+
+    /// Server and channel as ONE value.
+    ///
+    /// They were two `@State`s once, and the channel silently arrived as nil:
+    /// the destination closure SwiftUI runs on a push is the one it captured
+    /// before the update, so only the state driving the push is reliably fresh.
+    /// A single item cannot be half-applied.
+    struct RestoredChannel: Hashable {
+        let server: Server
+        let channel: Channel
+    }
+
     var body: some View {
-        TabView {
-            NavigationStack {
-                ServerListView(model: model)
-            }
-            .tabItem { Label("Servers", systemImage: "bubble.left.and.bubble.right.fill") }
-
-            NavigationStack {
-                ConversationListView(model: model)
-            }
-            .tabItem { Label("Messages", systemImage: "envelope.fill") }
-
-            NavigationStack {
-                ProfileView()
-            }
-            .tabItem { Label("You", systemImage: "person.fill") }
+        NavigationStack {
+            HubView(model: model, openedConversation: $openedConversation)
+                .navigationDestination(item: $restoredChannel) { restored in
+                    ChannelListView(server: restored.server, initialChannel: restored.channel)
+                }
         }
         .tint(Palette.signal)
-        .task { await model.load(session: session) }
+        .task {
+            await model.load(session: session)
+            await restoreLastVisited()
+        }
+    }
+
+    /// Reopens where the user left off, or does nothing.
+    ///
+    /// Every restore is validated against the lists that were just fetched: a
+    /// server you were removed from, a channel someone deleted, a DM that is no
+    /// longer yours. A stale pointer is dropped rather than pushed, because the
+    /// failure mode of guessing is landing on a screen that can only show an
+    /// error — worse than the hub, which is the fallback.
+    private func restoreLastVisited() async {
+        guard !hasAttemptedRestore else { return }
+        hasAttemptedRestore = true
+        guard let target = LastVisited.load() else { return }
+
+        switch target.kind {
+        case .conversation:
+            guard let conversation = model.conversations
+                .first(where: { $0.channelId == target.channelId })
+            else {
+                LastVisited.clear()
+                return
+            }
+            push { openedConversation = conversation }
+
+        case .channel:
+            guard let serverId = target.serverId,
+                  let server = model.servers.first(where: { $0.id == serverId }),
+                  let channels = try? await session.api.channels(serverId: serverId),
+                  let channel = channels.first(where: { $0.id == target.channelId && $0.isText })
+            else {
+                LastVisited.clear()
+                return
+            }
+            push {
+                restoredChannel = RestoredChannel(server: server, channel: channel)
+            }
+        }
+    }
+
+    /// Seeds the stack without animating. The restored screen is where the app
+    /// *starts*; sliding it in would stage a navigation the user did not make.
+    private func push(_ body: () -> Void) {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction, body)
     }
 }
 
@@ -43,15 +112,19 @@ final class HomeModel {
     /// there is nothing to do about a request you sent. There is no friend WS
     /// frame on the server, so this moves on refresh, not live.
     var pendingFriendRequests = 0
+    /// Whether the first load has happened. The hub re-reads on every appear so
+    /// coming back from a thread clears its badge; without this, launch would
+    /// fetch everything twice before the first frame.
+    private(set) var hasLoadedOnce = false
 
     private var session: SessionStore?
     private let handlerKey = "home-" + UUID().uuidString
 
     func load(session: SessionStore) async {
         self.session = session
-        // Keeps the Messages tab honest while it is not on screen: activity in
-        // a DM (serverId is nil on those frames) bumps the row immediately
-        // instead of waiting for a pull-to-refresh.
+        // Keeps the conversation list honest while the user is elsewhere:
+        // activity in a DM (serverId is nil on those frames) bumps the row
+        // immediately instead of waiting for a pull-to-refresh.
         session.eventHandlers[handlerKey] = { [weak self] event in
             guard let self,
                   case .activity(let channelId, let serverId, let mention) = event,
@@ -87,8 +160,8 @@ final class HomeModel {
         isLoading = true
         error = nil
         do {
-            // Both lists feed the two main tabs; fetching them together means
-            // switching tabs never shows a second loading state.
+            // Both lists are the hub, side by side — fetching them together
+            // means it never assembles in two visible stages.
             async let servers = session.api.servers()
             async let conversations = session.api.conversations()
             self.servers = try await servers
@@ -102,6 +175,7 @@ final class HomeModel {
             self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
         }
         isLoading = false
+        hasLoadedOnce = true
     }
 
     func createServer(named name: String) async {
@@ -115,61 +189,77 @@ final class HomeModel {
     }
 }
 
-struct ServerListView: View {
+/// The hub: servers across the top, conversations below, you at the bottom.
+///
+/// The server rail is horizontal on purpose. Servers are picked by recognition
+/// — a shape and a colour you already know — while conversations are read, so
+/// they get the vertical space where names and timestamps are legible. That
+/// division is what lets both fit above the fold instead of one pushing the
+/// other onto a second screen.
+struct HubView: View {
     @Environment(SessionStore.self) private var session
     @Bindable var model: HomeModel
-    @State private var showingCreate = false
+    /// Owned by `HomeView` so a restored DM and a freshly created one push
+    /// through the same, single destination.
+    @Binding var openedConversation: DmSummary?
+
+    @State private var showingCreateServer = false
     @State private var newServerName = ""
+    @State private var showingNewConversation = false
 
     var body: some View {
         ZStack {
             Palette.ink.ignoresSafeArea()
 
-            if model.isLoading && model.servers.isEmpty {
+            if model.isLoading && model.servers.isEmpty && model.conversations.isEmpty {
                 ProgressView().tint(Palette.signal)
-            } else if model.servers.isEmpty {
-                EmptyState(
-                    icon: "bubble.left.and.bubble.right",
-                    title: "No servers yet",
-                    message: "Create one for your group, or join with an invite code.",
-                    actionTitle: "Create a server",
-                    action: { showingCreate = true }
-                )
             } else {
                 ScrollView {
-                    LazyVStack(spacing: 10) {
-                        ForEach(Array(model.servers.enumerated()), id: \.element.id) { index, server in
-                            NavigationLink {
-                                ChannelListView(server: server)
-                            } label: {
-                                ServerRow(server: server)
-                            }
-                            .buttonStyle(.plain)
-                            .transition(.opacity)
-                            // Staggered entrance so the list assembles rather
-                            // than snapping in as one block.
-                            .animation(
-                                Motion.standard.delay(Motion.stagger(index)),
-                                value: model.servers.count
-                            )
+                    VStack(alignment: .leading, spacing: 22) {
+                        if let error = model.error {
+                            errorNote(error)
                         }
+                        serverSection
+                        conversationSection
                     }
-                    .padding(.horizontal, Metrics.hPadding)
-                    .padding(.top, 8)
+                    .padding(.top, 6)
+                    .padding(.bottom, 24)
                 }
                 .refreshable { await model.refresh() }
             }
         }
-        .navigationTitle("Servers")
+        .safeAreaInset(edge: .bottom, spacing: 0) { profileDock }
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItem(placement: .principal) { wordmark }
             ToolbarItem(placement: .topBarTrailing) {
-                Button { showingCreate = true } label: {
+                Menu {
+                    Button {
+                        showingNewConversation = true
+                    } label: {
+                        Label("New message", systemImage: "square.and.pencil")
+                    }
+                    Button {
+                        showingCreateServer = true
+                    } label: {
+                        Label("New server", systemImage: "plus.square.on.square")
+                    }
+                } label: {
                     Image(systemName: "plus")
                 }
                 .tint(Palette.signal)
+                .accessibilityIdentifier("hub.new")
+                .accessibilityLabel("New")
             }
         }
-        .alert("New server", isPresented: $showingCreate) {
+        // Coming back from a channel or a thread re-reads the lists — the
+        // screen behind marked itself read server-side and this is what clears
+        // the badge here.
+        .onAppear {
+            guard model.hasLoadedOnce else { return }
+            Task { await model.refresh() }
+        }
+        .alert("New server", isPresented: $showingCreateServer) {
             TextField("Server name", text: $newServerName)
             Button("Cancel", role: .cancel) { newServerName = "" }
             Button("Create") {
@@ -179,114 +269,7 @@ struct ServerListView: View {
                 Task { await model.createServer(named: name) }
             }
         }
-    }
-}
-
-struct ServerRow: View {
-    let server: Server
-
-    var body: some View {
-        HStack(spacing: 14) {
-            Avatar(name: server.name, seed: server.id, size: 46)
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(server.name)
-                    .font(Typography.bodyMedium)
-                    .foregroundStyle(Palette.paper)
-                    .lineLimit(1)
-                if let role = server.role {
-                    Text(role.uppercased())
-                        .font(Typography.label)
-                        .tracking(1)
-                        .foregroundStyle(Palette.paperMuted)
-                }
-            }
-
-            Spacer()
-
-            Image(systemName: "chevron.right")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(Palette.paperMuted)
-        }
-        .padding(14)
-        .pqpSurface()
-    }
-}
-
-struct ConversationListView: View {
-    @Bindable var model: HomeModel
-    @State private var showingNew = false
-    @State private var openedConversation: DmSummary?
-
-    var body: some View {
-        ZStack {
-            Palette.ink.ignoresSafeArea()
-
-            if model.conversations.isEmpty {
-                EmptyState(
-                    icon: "envelope",
-                    title: "No conversations",
-                    message: "Direct messages you start will show up here.",
-                    actionTitle: "New message",
-                    action: { showingNew = true }
-                )
-            } else {
-                ScrollView {
-                    LazyVStack(spacing: 10) {
-                        ForEach(model.conversations) { conversation in
-                            NavigationLink {
-                                ChatView(
-                                    channelId: conversation.channelId,
-                                    title: conversation.title,
-                                    conversation: conversation
-                                )
-                            } label: {
-                                ConversationRow(conversation: conversation)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    .padding(.horizontal, Metrics.hPadding)
-                    .padding(.top, 8)
-                }
-                .refreshable { await model.refresh() }
-            }
-        }
-        // Coming back from a thread re-reads the list — the thread marked
-        // itself read server-side and this clears its badge here.
-        .onAppear { Task { await model.refresh() } }
-        .navigationTitle("Messages")
-        .toolbar {
-            // Friends live beside DMs rather than in a fourth tab: on the web
-            // they are the same pane, and the thing you do with a friend is
-            // message them.
-            ToolbarItem(placement: .topBarLeading) {
-                NavigationLink {
-                    FriendsView()
-                } label: {
-                    Image(systemName: "person.2.fill")
-                        .overlay(alignment: .topTrailing) {
-                            if model.pendingFriendRequests > 0 {
-                                Circle()
-                                    .fill(Palette.signal)
-                                    .frame(width: 8, height: 8)
-                                    .offset(x: 5, y: -3)
-                            }
-                        }
-                }
-                .tint(Palette.signal)
-                .accessibilityLabel(
-                    model.pendingFriendRequests > 0
-                        ? Text("Friends, \(model.pendingFriendRequests) requests waiting")
-                        : Text("Friends")
-                )
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button { showingNew = true } label: { Image(systemName: "square.and.pencil") }
-                    .tint(Palette.signal)
-            }
-        }
-        .sheet(isPresented: $showingNew) {
+        .sheet(isPresented: $showingNewConversation) {
             NewConversationView { conversation in
                 // Refresh so the new thread is in the list behind the sheet,
                 // then open it — otherwise dismissing lands on a list that does
@@ -296,9 +279,306 @@ struct ConversationListView: View {
             }
         }
         .navigationDestination(item: $openedConversation) { conversation in
-            ChatView(channelId: conversation.channelId, title: conversation.title,
-                     conversation: conversation)
+            chat(for: conversation)
         }
+    }
+
+    // MARK: - Chrome
+
+    private var wordmark: some View {
+        HStack(spacing: 7) {
+            SpeechMark(size: 17)
+            Text("pqp")
+                .font(Typography.display(19))
+                .foregroundStyle(Palette.paper)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("pqp")
+    }
+
+    private func errorNote(_ error: String) -> some View {
+        Text(error)
+            .font(Typography.callout)
+            .foregroundStyle(Palette.danger)
+            .padding(.horizontal, Metrics.hPadding)
+    }
+
+    /// You, docked. Present on the hub and nowhere else — a profile chip that
+    /// followed you into a channel would be a tab bar wearing a hat.
+    ///
+    /// Two floating capsules rather than one full-width bar, for exactly that
+    /// reason: an edge-to-edge strip pinned to the bottom of a phone reads as
+    /// navigation chrome no matter what is in it. It still goes in as a safe
+    /// area inset, so the list can be scrolled clear of it instead of ending
+    /// underneath it.
+    private var profileDock: some View {
+        HStack(spacing: 10) {
+            NavigationLink {
+                ProfileView()
+            } label: {
+                HStack(spacing: 9) {
+                    Avatar(
+                        name: session.currentUser?.displayName ?? "?",
+                        seed: session.currentUser?.id ?? "anon",
+                        size: 30,
+                        url: session.currentUser?.avatarUrl
+                    )
+                    .overlay(alignment: .bottomTrailing) {
+                        StatusDot(status: connectionDotStatus, size: 10)
+                            .offset(x: 2, y: 2)
+                    }
+
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(session.currentUser?.displayName ?? String(localized: "You"))
+                            .font(Typography.caption)
+                            .foregroundStyle(Palette.paper)
+                            .lineLimit(1)
+                        Text(dockSubtitle)
+                            .font(Typography.label)
+                            .foregroundStyle(Palette.paperMuted)
+                            .lineLimit(1)
+                    }
+                    .padding(.trailing, 4)
+                }
+                .padding(6)
+                .background(Capsule().fill(Palette.surfaceRaised))
+                .overlay(Capsule().strokeBorder(Palette.border, lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("hub.profile")
+            .accessibilityLabel("You, profile and settings")
+
+            Spacer(minLength: 8)
+
+            NavigationLink {
+                FriendsView()
+            } label: {
+                Image(systemName: "person.2.fill")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Palette.paper)
+                    .frame(width: 44, height: 44)
+                    .background(Circle().fill(Palette.surfaceRaised))
+                    .overlay(Circle().strokeBorder(Palette.border, lineWidth: 1))
+                    .overlay(alignment: .topTrailing) {
+                        if model.pendingFriendRequests > 0 {
+                            Circle()
+                                .fill(Palette.signal)
+                                .frame(width: 10, height: 10)
+                                .overlay(Circle().strokeBorder(Palette.ink, lineWidth: 1.5))
+                                .offset(x: -1, y: 1)
+                        }
+                    }
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("hub.friends")
+            .accessibilityLabel(
+                model.pendingFriendRequests > 0
+                    ? Text("Friends, \(model.pendingFriendRequests) requests waiting")
+                    : Text("Friends")
+            )
+        }
+        .padding(.horizontal, Metrics.hPadding)
+        .padding(.top, 10)
+        .padding(.bottom, 6)
+        // A fade rather than a hard edge, so a long conversation list passes
+        // under the pills instead of colliding with them.
+        .background {
+            LinearGradient(
+                colors: [Palette.ink.opacity(0), Palette.ink, Palette.ink],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea(edges: .bottom)
+        }
+        .animation(Motion.standard, value: model.pendingFriendRequests)
+    }
+
+    /// The dock says "you"; when the socket is down it says that instead,
+    /// because a chat app that hides its own disconnection just looks broken.
+    private var dockSubtitle: String {
+        switch session.realtimeStatus {
+        case .online: session.currentUser?.tag ?? String(localized: "Connected")
+        default: RealtimeStatusText.label(session.realtimeStatus)
+        }
+    }
+
+    private var connectionDotStatus: String {
+        switch session.realtimeStatus {
+        case .online: "online"
+        case .connecting, .reconnecting: "idle"
+        case .unauthorized, .idle: "offline"
+        }
+    }
+
+    // MARK: - Servers
+
+    @ViewBuilder
+    private var serverSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            SectionLabel(text: String(localized: "Servers"))
+                .padding(.horizontal, Metrics.hPadding)
+
+            if model.servers.isEmpty {
+                Button { showingCreateServer = true } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "plus.circle")
+                            .font(.system(size: 20, weight: .light))
+                            .foregroundStyle(Palette.signal)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Create a server")
+                                .font(Typography.bodyMedium)
+                                .foregroundStyle(Palette.paper)
+                            Text("Or join one with an invite code.")
+                                .font(Typography.caption)
+                                .foregroundStyle(Palette.paperMuted)
+                        }
+                        Spacer()
+                    }
+                    .padding(14)
+                    .pqpSurface()
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, Metrics.hPadding)
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(alignment: .top, spacing: 12) {
+                        ForEach(Array(model.servers.enumerated()), id: \.element.id) { index, server in
+                            NavigationLink {
+                                ChannelListView(server: server)
+                            } label: {
+                                ServerTile(server: server)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("hub.server.\(server.id)")
+                            // Staggered entrance so the rail assembles rather
+                            // than snapping in as one block.
+                            .animation(
+                                Motion.standard.delay(Motion.stagger(index)),
+                                value: model.servers.count
+                            )
+                        }
+
+                        Button { showingCreateServer = true } label: {
+                            AddServerTile()
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("hub.addServer")
+                        .accessibilityLabel("Create a server")
+                    }
+                    .padding(.horizontal, Metrics.hPadding)
+                }
+                .accessibilityIdentifier("hub.serverRail")
+            }
+        }
+    }
+
+    // MARK: - Conversations
+
+    @ViewBuilder
+    private var conversationSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                SectionLabel(text: String(localized: "Direct messages"))
+                Spacer()
+                Button { showingNewConversation = true } label: {
+                    Image(systemName: "square.and.pencil")
+                        .font(.system(size: 14, weight: .semibold))
+                }
+                .tint(Palette.signal)
+                .accessibilityIdentifier("hub.newConversation")
+                .accessibilityLabel("New message")
+            }
+            .padding(.horizontal, Metrics.hPadding)
+
+            if model.conversations.isEmpty {
+                Button { showingNewConversation = true } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "envelope")
+                            .font(.system(size: 20, weight: .light))
+                            .foregroundStyle(Palette.paperMuted)
+                        Text("Start a conversation")
+                            .font(Typography.bodyMedium)
+                            .foregroundStyle(Palette.paper)
+                        Spacer()
+                    }
+                    .padding(14)
+                    .pqpSurface()
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, Metrics.hPadding)
+            } else {
+                LazyVStack(spacing: 10) {
+                    ForEach(model.conversations) { conversation in
+                        NavigationLink {
+                            chat(for: conversation)
+                        } label: {
+                            ConversationRow(conversation: conversation)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("hub.conversation.\(conversation.channelId)")
+                    }
+                }
+                .padding(.horizontal, Metrics.hPadding)
+            }
+        }
+    }
+
+    /// One place builds a conversation's chat screen, so "opened a DM" and
+    /// "remember this DM" cannot drift apart.
+    private func chat(for conversation: DmSummary) -> some View {
+        ChatView(
+            channelId: conversation.channelId,
+            title: conversation.title,
+            conversation: conversation
+        )
+        .onAppear { LastVisited.record(conversationId: conversation.channelId) }
+    }
+}
+
+/// A server in the rail: the mark, then the name under it.
+///
+/// The name is not decoration. Monograms collide (two servers starting with the
+/// same letter are the same shape), and a rail you have to hover to read is a
+/// desktop pattern that a phone cannot support.
+struct ServerTile: View {
+    let server: Server
+
+    var body: some View {
+        VStack(spacing: 7) {
+            Avatar(name: server.name, seed: server.id, size: 58)
+
+            Text(server.name)
+                .font(Typography.caption)
+                .foregroundStyle(Palette.paperSubtle)
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
+                .frame(width: 74)
+        }
+        .frame(width: 74)
+    }
+}
+
+struct AddServerTile: View {
+    var body: some View {
+        VStack(spacing: 7) {
+            Image(systemName: "plus")
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(Palette.signal)
+                .frame(width: 58, height: 58)
+                .background(Circle().fill(Palette.surface))
+                .overlay(
+                    Circle().strokeBorder(
+                        Palette.border,
+                        style: StrokeStyle(lineWidth: 1, dash: [4, 4])
+                    )
+                )
+
+            Text("New")
+                .font(Typography.caption)
+                .foregroundStyle(Palette.paperMuted)
+                .frame(width: 74)
+        }
+        .frame(width: 74)
     }
 }
 
@@ -408,6 +688,7 @@ struct ProfileView: View {
             }
         }
         .navigationTitle("You")
+        .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showingSettings) { AccountSettingsView() }
         .task {
             manualStatus = (try? await session.api.preferences())?.status ?? "online"
@@ -450,12 +731,10 @@ struct ProfileView: View {
     }
 }
 
-/// Connection state, shown as a fact rather than an alert. A chat app that
-/// hides its own disconnection just looks broken.
-struct ConnectionPill: View {
-    let status: RealtimeStatus
-
-    private var label: String {
+/// How connection state is worded, in one place: the hub dock and the profile
+/// pill are the same fact shown at two sizes, and they must not disagree.
+enum RealtimeStatusText {
+    static func label(_ status: RealtimeStatus) -> String {
         switch status {
         case .online: String(localized: "Connected")
         case .connecting: String(localized: "Connecting…")
@@ -465,18 +744,24 @@ struct ConnectionPill: View {
         }
     }
 
-    private var color: Color {
+    static func color(_ status: RealtimeStatus) -> Color {
         switch status {
         case .online: Palette.success
         case .connecting, .reconnecting: Palette.warning
         case .unauthorized, .idle: Palette.paperMuted
         }
     }
+}
+
+/// Connection state, shown as a fact rather than an alert. A chat app that
+/// hides its own disconnection just looks broken.
+struct ConnectionPill: View {
+    let status: RealtimeStatus
 
     var body: some View {
         HStack(spacing: 6) {
-            Circle().fill(color).frame(width: 7, height: 7)
-            Text(label)
+            Circle().fill(RealtimeStatusText.color(status)).frame(width: 7, height: 7)
+            Text(RealtimeStatusText.label(status))
                 .font(Typography.caption)
                 .foregroundStyle(Palette.paperMuted)
         }

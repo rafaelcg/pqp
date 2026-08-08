@@ -216,6 +216,13 @@
     "Delete %@?" : { "localizations" : { "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Excluir %@?" } } } },
     "Nobody else is in this server." : { "localizations" : { "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Não tem mais ninguém neste servidor." } } } },
     "No webhooks yet. Anything that can POST JSON can post here." : { "localizations" : { "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Nenhum webhook ainda. Qualquer coisa que faça POST de JSON pode postar aqui." } } } },
-    "Search GIFs" : { "localizations" : { "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Buscar GIFs" } } } }
+    "Search GIFs" : { "localizations" : { "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Buscar GIFs" } } } },
+    "Direct messages" : { "localizations" : { "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Mensagens diretas" } } } },
+    "New" : { "localizations" : { "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Novo" } } } },
+    "Or join one with an invite code." : { "localizations" : { "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Ou entre em um com um código de convite." } } } },
+    "Start a conversation" : { "localizations" : { "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Iniciar uma conversa" } } } },
+    "You, profile and settings" : { "localizations" : { "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Você, perfil e ajustes" } } } },
+    "Friends" : { "localizations" : { "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Amigos" } } } },
+    "Friends, %lld requests waiting" : { "localizations" : { "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Amigos, %lld pedidos aguardando" } } } }
   }
 }

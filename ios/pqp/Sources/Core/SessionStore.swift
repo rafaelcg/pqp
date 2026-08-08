@@ -280,6 +280,9 @@ final class SessionStore {
         // back to a first-run state, and on a dev build that is how the intro
         // gets exercised.
         hasOnboarded = false
+        // The next account to use this device must not be dropped into the
+        // previous one's conversation.
+        LastVisited.clear()
         if authMode == .clerk {
             await purgeClerkSession()
         }

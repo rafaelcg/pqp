@@ -5,8 +5,14 @@ struct ChannelListView: View {
     @Environment(\.dismiss) private var dismiss
     let server: Server
 
-    init(server: Server) {
+    /// Set only when the app is restoring where the user left off: this list is
+    /// built and the channel is pushed on top of it, so the back button lands
+    /// somewhere real instead of on an empty stack.
+    let initialChannel: Channel?
+
+    init(server: Server, initialChannel: Channel? = nil) {
         self.server = server
+        self.initialChannel = initialChannel
         _current = State(initialValue: server)
     }
 
@@ -29,6 +35,10 @@ struct ChannelListView: View {
     @State private var threadsFor: Channel?
     @State private var current: Server
     @State private var handlerKey = UUID().uuidString
+    /// Only ever driven by a restored launch — taps push through plain
+    /// `NavigationLink`s, which do not need a binding.
+    @State private var openedChannel: Channel?
+    @State private var hasSeededInitialChannel = false
 
     private var categories: [Channel] {
         channels.filter(\.isCategory).sorted { $0.position < $1.position }
@@ -70,8 +80,7 @@ struct ChannelListView: View {
                                 .padding(.top, 4)
                             ForEach(textChannels) { channel in
                                 NavigationLink {
-                                    ChatView(channelId: channel.id, title: "#\(channel.name)",
-                                             canStartThreads: true)
+                                    chat(for: channel)
                                 } label: {
                                     ChannelRow(channel: channel, unread: unread[channel.id])
                                 }
@@ -94,8 +103,7 @@ struct ChannelListView: View {
                                     .contextMenu { channelActions(for: channel) }
                                 } else {
                                     NavigationLink {
-                                        ChatView(channelId: channel.id, title: "#\(channel.name)",
-                                                 canStartThreads: true)
+                                        chat(for: channel)
                                     } label: {
                                         ChannelRow(channel: channel, unread: unread[channel.id])
                                     }
@@ -163,6 +171,22 @@ struct ChannelListView: View {
                 .tint(Palette.signal)
             }
         }
+        .navigationDestination(item: $openedChannel) { channel in chat(for: channel) }
+        // Deferred by one appearance on purpose. A `navigationDestination` can
+        // only serve a push once the view carrying it is *in* the stack, and on
+        // a restored launch this view is itself being pushed in the same
+        // update — set the binding any earlier and SwiftUI drops it, leaving
+        // the app parked on the channel list. Guarded so swiping back from the
+        // channel does not immediately push it again.
+        .onAppear {
+            guard let initialChannel, !hasSeededInitialChannel else { return }
+            hasSeededInitialChannel = true
+            var transaction = Transaction()
+            // The restored screen is where the app starts; sliding it in would
+            // stage a navigation the user did not make.
+            transaction.disablesAnimations = true
+            withTransaction(transaction) { openedChannel = initialChannel }
+        }
         .sheet(isPresented: $showingInvites) { InviteView(server: server) }
         .sheet(isPresented: $showingSearch) { SearchView(server: server) }
         .sheet(isPresented: $showingMembers) { MembersView(server: current) }
@@ -224,6 +248,16 @@ struct ChannelListView: View {
         // Coming back from a chat re-reads the counts: the chat marked itself
         // read on the server, and this is what clears its badge locally.
         .onAppear { Task { await refreshUnread() } }
+    }
+
+    /// A text channel's chat screen, plus the note that this is now where the
+    /// app was last reading. Recorded from the shell rather than from inside
+    /// `ChatView`, so "where am I" stays a navigation fact — and so a voice
+    /// channel is never recorded, since restoring one would join a call on
+    /// launch.
+    private func chat(for channel: Channel) -> some View {
+        ChatView(channelId: channel.id, title: "#\(channel.name)", canStartThreads: true)
+            .onAppear { LastVisited.record(channelId: channel.id, serverId: server.id) }
     }
 
     private func refreshUnread() async {

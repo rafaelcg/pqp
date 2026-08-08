@@ -9,6 +9,44 @@ import XCTest
 /// tree on every query, so the suite degraded from 20s to over three minutes
 /// and then began failing with "Timed out while evaluating UI query" — a
 /// message that says nothing about the actual cause.
+extension XCUIApplication {
+    /// Opens a server from the hub's rail.
+    ///
+    /// The rail scrolls horizontally, and XCUITest only auto-scrolls to reach a
+    /// tap in the *vertical* direction — a seeded server sitting past the right
+    /// edge is found by a query but cannot be tapped. The dev database holds
+    /// whatever previous runs left in it, so which side of the edge it lands on
+    /// is not something a test can assume.
+    @discardableResult
+    func openServerFromHub(
+        _ id: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) -> Bool {
+        let tile = buttons["hub.server.\(id)"]
+        guard tile.waitForExistence(timeout: 10) else {
+            XCTFail("Server \(id) never appeared on the hub", file: file, line: line)
+            return false
+        }
+        // Swiped on the rail itself, which is why it carries an identifier.
+        // The loop compares frames rather than asking `isHittable` — that
+        // property *throws* for an element outside the screen ("Activation
+        // point invalid"), which is precisely the case being scrolled into.
+        let rail = scrollViews["hub.serverRail"]
+        var attempts = 0
+        while !frame.contains(tile.frame) && attempts < 10 && rail.exists {
+            rail.swipeLeft()
+            attempts += 1
+        }
+        guard frame.contains(tile.frame) else {
+            XCTFail("Server \(id) never scrolled into reach on the rail", file: file, line: line)
+            return false
+        }
+        tile.tap()
+        return true
+    }
+}
+
 enum TestSeed {
     static let apiBase = "http://localhost:3001"
 
