@@ -4,6 +4,8 @@ import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { ReportsSection } from "@/components/layout/reports-section";
+import { CommunitySettingsSection } from "@/components/communities/community-settings-section";
+import { useCommunitiesEnabled } from "@/components/communities/use-communities-enabled";
 import {
   ApiError,
   deleteServer,
@@ -36,6 +38,8 @@ const AUDIT_ACTION_LABELS: Record<string, string> = {
   "invite.delete": "revoked an invite",
   "server.sso_domain_update": "changed the SSO email domain",
   "member.sso_join": "joined via SSO email domain",
+  "server.community_update": "changed the public community listing",
+  "member.community_join": "joined from the community directory",
   "webhook.create": "created a webhook",
   "webhook.delete": "deleted a webhook",
   "report.resolve": "closed a report",
@@ -209,6 +213,9 @@ export function ServerSettingsDialog({
 
   const [exportError, setExportError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
+  // False on every deployment that has not turned the directory on, which is
+  // all of them today — the opt-in section is then never rendered at all.
+  const communitiesEnabled = useCommunitiesEnabled();
 
   const serverId = server?.id ?? null;
   const isOwner = server?.role === "owner";
@@ -736,6 +743,14 @@ export function ServerSettingsDialog({
             </p>
           )}
         </section>
+
+        {/* Owner-only, and only where the deployment has a directory. Placed
+            after the SSO domain because the two are the same kind of decision —
+            "who can walk in without an invite" — and this is the wider of the
+            two by a long way. */}
+        {serverId && communitiesEnabled && (
+          <CommunitySettingsSection serverId={serverId} />
+        )}
 
         {serverId && isManager && <ReportsSection serverId={serverId} />}
 

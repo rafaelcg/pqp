@@ -1546,3 +1546,210 @@ END $$;
 -- index-only lookup on idx_messages_channel_created), so a thread un-archives
 -- itself by receiving a message and nothing can ever be late to flip a flag.
 -- See THREAD_AUTO_ARCHIVE_DAYS in @pqp/shared.
+
+-- ---------------------------------------------------------------------------
+-- Communities: the public, joinable half of a server
+-- ---------------------------------------------------------------------------
+--
+-- A community is not a new kind of row. It is a `servers` row with `is_community`
+-- set, which puts it in a directory anyone signed in can browse and lets anyone
+-- browsing join without an invite. Channels, messages, roles, bans and invites
+-- are untouched — the whole feature is a listing plus a join path.
+--
+-- WHY THESE COLUMNS EXIST BEHIND A FLAG. `COMMUNITIES_ENABLED` gates every route
+-- that reads or writes them; with it unset (the default, and the only value
+-- production has today) these columns are dead weight and nothing can set them.
+-- That is on purpose, and the reason is legal rather than aesthetic. See
+-- docs/research/communities-orkut.html §08: the STF's 26 June 2025 ruling left
+-- e-mail, private meetings and instant messaging inside Art. 19's shelter, and
+-- a public directory of joinable rooms is precisely what moves an instance out
+-- of it. The schema can land ahead of that decision; the routes must not.
+
+ALTER TABLE servers ADD COLUMN IF NOT EXISTS is_community BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- One line, owner-written. NULL is legal and common — half of Orkut's own
+-- directory was a name and nothing else, and a card falls back to the name.
+ALTER TABLE servers ADD COLUMN IF NOT EXISTS community_tagline TEXT;
+
+-- A slug from COMMUNITY_CATEGORIES in @pqp/shared, defaulted rather than
+-- nullable so the directory's category filter never has to model "uncategorised"
+-- as a fourth state alongside "all", "this one" and "none of these".
+ALTER TABLE servers ADD COLUMN IF NOT EXISTS community_category TEXT NOT NULL DEFAULT 'geral';
+
+-- The list is duplicated from @pqp/shared on purpose: the schema is the last
+-- line of defence for a value the API layer is supposed to have validated, and
+-- a CHECK that merely says "some text" defends nothing. Adding a slug means
+-- editing both; that friction is the feature. REMOVING one would fail this block
+-- (rows already carry it), leave the previous constraint standing, and strand
+-- those servers — retire a category by hiding its chip in the client instead.
+DO $$
+BEGIN
+  ALTER TABLE servers DROP CONSTRAINT IF EXISTS servers_community_category_check;
+  ALTER TABLE servers
+    ADD CONSTRAINT servers_community_category_check
+    CHECK (community_category IN (
+      'games', 'musica', 'futebol', 'estudos', 'anime',
+      'tech', 'humor', 'series-filmes', 'corre', 'geral'
+    ));
+EXCEPTION
+  WHEN others THEN NULL;
+END $$;
+
+-- THE OPERATOR'S KILL SWITCH, AND IT IS NOT THE OWNER'S.
+--
+-- Set by whoever holds the DATABASE_URL, with one UPDATE, and reachable by no
+-- in-app write path at all — there is deliberately no route, no role and no
+-- setting that flips it. It exists because a community owner must not be able to
+-- shelter their own listing from the person answering for the instance: the
+-- research doc's §08 timeline is what happens when the only remedy available is
+-- asking the owner nicely, and "Mate Um Negro, Ganhe Um Brinde" is what the
+-- owner does with that remedy.
+--
+-- Suspending UNLISTS, it does not delete. The server, its members and its
+-- messages carry on exactly as a private server would; what stops is being
+-- findable by strangers and joinable without an invite. That asymmetry is
+-- deliberate — pulling a listing is a reversible, low-evidence act an operator
+-- should be willing to take within the hour, and deleting a room full of people
+-- is not. See docs/CONTENT_SAFETY.md for the runbook and the exact SQL.
+ALTER TABLE servers ADD COLUMN IF NOT EXISTS is_community_suspended BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- The member count the directory renders, maintained rather than counted.
+--
+-- WHY A COLUMN. The directory's default order is "biggest first", so a COUNT(*)
+-- over `server_members` per row would run once per card per page — the exact
+-- N+1 that makes a listing page slow in a way no index fixes, because the work
+-- is proportional to the members of every server shown and not to the page.
+-- One integer read off the row the query already has costs nothing.
+--
+-- IT IS APPROXIMATE AND NOTHING IS AUTHORISED BY IT. Access is always
+-- `server_members`; this column decorates a card. A drift shows a wrong number
+-- to a browser, never a wrong permission to anyone.
+ALTER TABLE servers ADD COLUMN IF NOT EXISTS member_count INTEGER NOT NULL DEFAULT 0;
+
+-- Maintained by a trigger and not by the join/leave paths, because there are
+-- six of them and counting: createServer, redeemInvite, joinServerBySso,
+-- joinCommunity, leaveServer, the kick/ban route, plus two ON DELETE CASCADEs
+-- (a deleted account, a deleted server) that no application code ever sees. A
+-- counter kept in application code is a counter that is wrong the first time
+-- somebody adds a seventh path — and the cascades mean it would already be
+-- wrong today.
+--
+-- Statement-level would be cheaper under a bulk insert; row-level is used
+-- because every real write here is a single membership. A cascading server
+-- delete makes this UPDATE match zero rows (the parent is already gone in this
+-- transaction), which is correct and silent.
+CREATE OR REPLACE FUNCTION pqp_sync_server_member_count() RETURNS TRIGGER AS $$
+BEGIN
+  IF (TG_OP = 'INSERT') THEN
+    UPDATE servers SET member_count = member_count + 1 WHERE id = NEW.server_id;
+  ELSIF (TG_OP = 'DELETE') THEN
+    -- GREATEST, not a bare subtraction: a count that has somehow drifted low
+    -- must not go negative and start rendering "-1 membros" forever.
+    UPDATE servers SET member_count = GREATEST(member_count - 1, 0)
+    WHERE id = OLD.server_id;
+  END IF;
+  RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_server_member_count ON server_members;
+CREATE TRIGGER trg_server_member_count
+  AFTER INSERT OR DELETE ON server_members
+  FOR EACH ROW EXECUTE FUNCTION pqp_sync_server_member_count();
+
+-- Seed the counter for every server that existed before the column did.
+--
+-- A one-shot, for the reason `data_migrations` exists: the trigger above keeps
+-- the number true from the moment it is installed, so this only has to answer
+-- for history. Replaying it on every boot would be a full scan of
+-- `server_members` at startup forever, to fix a drift the trigger makes
+-- impossible.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM data_migrations WHERE name = 'server_member_count_backfill_2026_08'
+  ) THEN
+    UPDATE servers s
+    SET member_count = counted.n
+    FROM (
+      SELECT server_id, COUNT(*)::int AS n FROM server_members GROUP BY server_id
+    ) counted
+    WHERE counted.server_id = s.id AND s.member_count <> counted.n;
+
+    INSERT INTO data_migrations (name) VALUES ('server_member_count_backfill_2026_08');
+  END IF;
+END $$;
+
+-- The directory's one index, and it carries the whole default query: filter to
+-- listed-and-not-suspended, optionally narrow by category, order by size.
+--
+-- Partial on the listing predicate because the overwhelming majority of servers
+-- on any instance are private and must never be walked. `id` is the tiebreaker
+-- so keyset pagination over (member_count, id) is a total order — without it two
+-- communities of equal size can swap places between pages and one of them is
+-- never shown.
+CREATE INDEX IF NOT EXISTS idx_servers_community_directory
+  ON servers (community_category, member_count DESC, id DESC)
+  WHERE is_community AND NOT is_community_suspended;
+
+-- Name/tagline search is a plain ILIKE with no index behind it, and that is a
+-- considered choice rather than an oversight: it scans only the partial set
+-- above (listed communities), which is orders of magnitude smaller than
+-- `servers` and is expected to stay in the hundreds while this is flagged off in
+-- production. `pg_trgm` is the answer when it stops being — one extension and
+-- one GIN index away, with no change to the query shape.
+
+-- Community reports: `subject_type = 'server'`.
+--
+-- A report about a whole community, filed from the directory by somebody who
+-- may never have gone inside. The subject is the LISTING — its name and its
+-- stated purpose — which is the one thing a message report cannot reach: the
+-- communities that got Orkut's operators criminally charged were rooms whose
+-- names were the offence, and most of them never hosted a conversation at all.
+DO $$
+BEGIN
+  ALTER TABLE reports DROP CONSTRAINT IF EXISTS reports_subject_type_check;
+  ALTER TABLE reports
+    ADD CONSTRAINT reports_subject_type_check
+    CHECK (subject_type IN ('message', 'user', 'server'));
+EXCEPTION
+  WHEN others THEN NULL;
+END $$;
+
+-- The reported community. A SEPARATE COLUMN FROM `server_id`, and the separation
+-- is the entire routing decision.
+--
+-- `server_id` means "file this in that server's own queue", and the table's
+-- CHECK ties it to `context_kind = 'server'`. A report ABOUT a community must
+-- never land there: it would be readable, and resolvable, by the very owner it
+-- accuses. So a community report carries `context_kind = 'none'` and a NULL
+-- `server_id` — which is exactly what `idx_reports_instance_status` selects —
+-- and names its subject here instead. The owner sees nothing; the instance
+-- moderator sees it in the queue they already read.
+--
+-- SET NULL rather than CASCADE, same reasoning as `reported_message_id`: an
+-- owner deleting the community must not delete the open report about it. The
+-- name survives in `subject_label`, which is the evidence.
+ALTER TABLE reports ADD COLUMN IF NOT EXISTS reported_server_id UUID
+  REFERENCES servers(id) ON DELETE SET NULL;
+
+DO $$
+BEGIN
+  ALTER TABLE reports DROP CONSTRAINT IF EXISTS reports_server_subject_check;
+  ALTER TABLE reports
+    ADD CONSTRAINT reports_server_subject_check
+    -- One-directional, not an equality: the SET NULL above means a community
+    -- report legitimately outlives the community, so
+    -- `subject_type = 'server' AND reported_server_id IS NULL` must stay legal.
+    CHECK (subject_type = 'server' OR reported_server_id IS NULL);
+EXCEPTION
+  WHEN others THEN NULL;
+END $$;
+
+-- Same duplicate suppression every other subject gets, scoped to open reports
+-- so a repeat offence after a resolution is a new row rather than a silent
+-- no-op. No COALESCE needed: both columns are NOT NULL for the rows this
+-- predicate selects.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_reports_open_server_dedupe
+  ON reports (reporter_id, reported_server_id)
+  WHERE status = 'open' AND subject_type = 'server';

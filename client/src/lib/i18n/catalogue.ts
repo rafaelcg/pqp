@@ -234,6 +234,71 @@ export const en = {
   "sso.joining": "Joining…",
   "sso.joinFailed": "Could not join {name}",
 
+  // ----------------------------------------------------------- communities
+  //
+  // The whole surface is dark unless the server answers `enabled` on
+  // `/api/communities/config`, so none of these strings render on a
+  // deployment that has not turned the directory on.
+  //
+  // The English here is the fallback and the source of truth for the keys; the
+  // register that matters is the pt-BR in messages.pt-BR.ts, because this is a
+  // feature built for Brazil and the copy is the product. Category labels live
+  // beside the slugs on purpose — a new slug cannot ship without a label.
+  "communities.title": "Communities",
+  "communities.subtitle": "Public rooms anyone can join. Find your people.",
+  "communities.search": "Search communities",
+  "communities.searchPlaceholder": "Search by name…",
+  "communities.category.all": "All",
+  "communities.category.games": "Games",
+  "communities.category.musica": "Music",
+  "communities.category.futebol": "Football",
+  "communities.category.estudos": "Study",
+  "communities.category.anime": "Anime",
+  "communities.category.tech": "Tech",
+  "communities.category.humor": "Humour",
+  "communities.category.series-filmes": "Series & film",
+  "communities.category.corre": "Hustle",
+  "communities.category.geral": "General",
+  "communities.members": "{count} members",
+  "communities.members.one": "1 member",
+  "communities.join": "Join",
+  "communities.joining": "Joining…",
+  "communities.open": "Open",
+  "communities.joinFailed": "Could not join {name}",
+  "communities.loading": "Loading…",
+  "communities.loadMore": "Show more",
+  "communities.empty.title": "Nothing here yet",
+  "communities.empty.body":
+    "No community matches that. Try another category, or make one yourself.",
+  "communities.empty.searchHint":
+    "Brand-new communities only show up in search until somebody else joins.",
+  "communities.failed": "Could not load communities.",
+  "communities.retry": "Try again",
+  "communities.report": "Report this community",
+  "communities.reportTitle": "Report community",
+  "communities.reportBody":
+    "This goes to the people who run pqp — not to this community's owner. Tell us what is wrong with it.",
+
+  // The owner's opt-in. Every line here is doing legal work as much as
+  // product work: somebody flipping this switch has to understand that they
+  // are publishing the room, not decorating it.
+  "communities.settings.title": "Community listing",
+  "communities.settings.explainer":
+    "Listing this server puts it in the public Communities directory. Anyone with a pqp account can find it by name or category, see how many members it has, and join with one tap — no invite, no approval from you.",
+  "communities.settings.explainerModeration":
+    "You still run the room: kicks, bans and channel privacy all work the same. But reports about a listed community go to the people who run pqp, who can remove the listing.",
+  "communities.settings.toggle": "List this server publicly",
+  "communities.settings.tagline": "One line about it",
+  "communities.settings.taglinePlaceholder": "What is this place?",
+  "communities.settings.taglineHint": "{count} characters left",
+  "communities.settings.category": "Category",
+  "communities.settings.save": "Save",
+  "communities.settings.saving": "Saving…",
+  "communities.settings.saved": "Listing updated.",
+  "communities.settings.failed": "Could not update the listing.",
+  "communities.settings.suspended":
+    "This listing was removed by the people who run pqp. The server itself is untouched and everyone in it can still use it — it is only hidden from the directory.",
+
   // ------------------------------------------------------- connection status
   "connection.reconnecting": "Connection lost — reconnecting…",
   "connection.unauthorized": "Session expired — reconnecting…",

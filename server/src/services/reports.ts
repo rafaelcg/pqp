@@ -73,9 +73,20 @@ export interface CreateUserReportInput extends CreateReportInput {
   serverId?: string | null;
 }
 
+/**
+ * A whole community, reported from the directory. Membership is deliberately
+ * NOT required — the point of the report is that you saw the listing and did
+ * not want to go in.
+ */
+export interface CreateServerReportInput extends CreateReportInput {
+  subjectType: "server";
+  serverId: string;
+}
+
 export type CreateReportInputs =
   | CreateMessageReportInput
-  | CreateUserReportInput;
+  | CreateUserReportInput
+  | CreateServerReportInput;
 
 /**
  * The reporter cannot see the thing they are reporting, or there is nothing
@@ -99,7 +110,7 @@ export class ReportFloodError extends Error {
 
 interface ReportRow {
   id: string;
-  subject_type: "message" | "user";
+  subject_type: "message" | "user" | "server";
   context_kind: ReportContextKind;
   reason: ReportReason;
   details: string | null;
@@ -210,6 +221,13 @@ interface ResolvedSubject {
   contentSnapshot: string | null;
   reportedUserId: string;
   subjectLabel: string;
+  /**
+   * The reported community, for a `server` subject only. Distinct from
+   * `serverId`, which decides ROUTING — see the column comment in schema.sql.
+   * These two are never both set: a community report is filed to the instance
+   * queue precisely so its own owner cannot read or close it.
+   */
+  reportedServerId?: string | null;
 }
 
 /**
@@ -356,6 +374,75 @@ async function resolveUserSubject(
   };
 }
 
+/**
+ * A report about a whole community.
+ *
+ * ROUTED TO THE INSTANCE QUEUE, ALWAYS, AND THAT IS THE ENTIRE DESIGN. The
+ * obvious implementation — set `server_id` to the reported server, so it lands
+ * in that server's queue — hands the accusation to the person being accused:
+ * `listServerReports` is readable by owners and admins, and `resolveReport`
+ * lets them close it. A community owner who can dismiss reports about their own
+ * community is not moderated at all. So this writes `context_kind = 'none'` and
+ * a NULL `server_id`, which is exactly the set `idx_reports_instance_status`
+ * selects, and names the subject in `reported_server_id` instead.
+ *
+ * This is the concrete form of the research doc's §08 requirement: "server-side
+ * takedown that beats the owner. A community owner must not be able to shelter
+ * content from you." The other half of it is `is_community_suspended`, which no
+ * in-app path can write.
+ *
+ * THE SUBJECT IS THE LISTING, and `subject_label` therefore holds the
+ * COMMUNITY'S NAME rather than a person's. `reported_user_id` still names the
+ * owner, so the queue's existing "close this and time that account out" action
+ * works unchanged — which is the whole reason this rides the reports table
+ * instead of getting a second queue nobody would read.
+ *
+ * ONLY LISTED COMMUNITIES MAY BE REPORTED, checked here and not by the route.
+ * A private server is not public content and there is no directory listing to
+ * judge; accepting a report about one would turn this endpoint into a probe for
+ * which server ids exist. Not-a-community, does-not-exist and already-suspended
+ * are one indistinguishable answer for the same reason.
+ *
+ * NO MEMBERSHIP AND NO BAN CHECK, deliberately, and it is the one visibility
+ * rule this file relaxes. Rule 1 at the top ("you cannot report what you cannot
+ * see") is satisfied by the listing itself: a public directory entry is by
+ * definition something the reporter could see, which is why the check is
+ * `is_community` rather than `server_members`. Requiring membership would mean
+ * the only people who can report a community are the people who joined it, and
+ * requiring a ban check would mean the person a hate-speech community banned
+ * for objecting is the one person forbidden to report it.
+ */
+async function resolveServerSubject(
+  input: CreateServerReportInput,
+): Promise<ResolvedSubject> {
+  const result = await getPool().query<{
+    id: string;
+    name: string;
+    owner_id: string;
+  }>(
+    `SELECT id, name, owner_id FROM servers
+     WHERE id = $1 AND is_community AND NOT is_community_suspended`,
+    [input.serverId],
+  );
+  const server = result.rows[0];
+  if (!server) {
+    throw new ReportTargetNotVisibleError();
+  }
+  return {
+    contextKind: "none",
+    serverId: null,
+    channelId: null,
+    channelLabel: null,
+    messageId: null,
+    // No message body, no channel, no member list. A community report copies
+    // the name of a room and nothing anybody said inside it.
+    contentSnapshot: null,
+    reportedUserId: server.owner_id,
+    subjectLabel: server.name,
+    reportedServerId: server.id,
+  };
+}
+
 export interface CreateReportResult {
   report: Report;
   /**
@@ -382,7 +469,9 @@ export async function createReport(
   const subject =
     input.subjectType === "message"
       ? await resolveMessageSubject(input.messageId, input.reporterId)
-      : await resolveUserSubject(input);
+      : input.subjectType === "server"
+        ? await resolveServerSubject(input)
+        : await resolveUserSubject(input);
 
   const params = [
     input.reporterId,
@@ -397,6 +486,7 @@ export async function createReport(
     subject.channelLabel,
     input.reason,
     input.details?.trim() || null,
+    subject.reportedServerId ?? null,
   ];
 
   try {
@@ -404,8 +494,8 @@ export async function createReport(
       `INSERT INTO reports (
          reporter_id, subject_type, context_kind, reported_message_id,
          reported_user_id, server_id, channel_id, content_snapshot,
-         subject_label, channel_label, reason, details
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+         subject_label, channel_label, reason, details, reported_server_id
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
        RETURNING id::text AS id`,
       params,
     );
@@ -439,20 +529,33 @@ async function findOpenDuplicate(
   input: CreateReportInputs,
   subject: ResolvedSubject,
 ): Promise<Report | null> {
-  const result = await getPool().query<ReportRow>(
+  const [sql, params]: [string, unknown[]] =
     input.subjectType === "message"
-      ? `SELECT ${REPORT_COLUMNS} FROM reports r ${REPORT_JOINS}
-         WHERE r.status = 'open' AND r.reporter_id = $1
-           AND r.reported_message_id = $2`
-      : `SELECT ${REPORT_COLUMNS} FROM reports r ${REPORT_JOINS}
-         WHERE r.status = 'open' AND r.subject_type = 'user'
-           AND r.reporter_id = $1 AND r.reported_user_id = $2
-           AND COALESCE(r.server_id, '00000000-0000-0000-0000-000000000000'::uuid)
-             = COALESCE($3::uuid, '00000000-0000-0000-0000-000000000000'::uuid)`,
-    input.subjectType === "message"
-      ? [input.reporterId, subject.messageId]
-      : [input.reporterId, subject.reportedUserId, subject.serverId],
-  );
+      ? [
+          `SELECT ${REPORT_COLUMNS} FROM reports r ${REPORT_JOINS}
+           WHERE r.status = 'open' AND r.reporter_id = $1
+             AND r.reported_message_id = $2`,
+          [input.reporterId, subject.messageId],
+        ]
+      : input.subjectType === "server"
+        ? [
+            // Mirrors `idx_reports_open_server_dedupe`. No COALESCE: both
+            // columns are non-null for every row the index covers.
+            `SELECT ${REPORT_COLUMNS} FROM reports r ${REPORT_JOINS}
+             WHERE r.status = 'open' AND r.subject_type = 'server'
+               AND r.reporter_id = $1 AND r.reported_server_id = $2`,
+            [input.reporterId, subject.reportedServerId],
+          ]
+        : [
+            `SELECT ${REPORT_COLUMNS} FROM reports r ${REPORT_JOINS}
+             WHERE r.status = 'open' AND r.subject_type = 'user'
+               AND r.reporter_id = $1 AND r.reported_user_id = $2
+               AND COALESCE(r.server_id, '00000000-0000-0000-0000-000000000000'::uuid)
+                 = COALESCE($3::uuid, '00000000-0000-0000-0000-000000000000'::uuid)`,
+            [input.reporterId, subject.reportedUserId, subject.serverId],
+          ];
+
+  const result = await getPool().query<ReportRow>(sql, params);
   const row = result.rows[0];
   return row ? toReport(row) : null;
 }

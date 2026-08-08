@@ -197,6 +197,75 @@ export const ptBR: PartialMessages = {
   "sso.joining": "Entrando…",
   "sso.joinFailed": "Não foi possível entrar em {name}",
 
+  // ----------------------------------------------------------- communities
+  //
+  // Esta é a tela pensada em português primeiro — o inglês em catalogue.ts é
+  // que é a tradução. O registro é o de quem entrava em comunidade do Orkut
+  // por piada: informal, curto, sem "explore" nem "descubra" de consultoria.
+  //
+  // "Comunidades" é a palavra, e é a única possível. Quem tem 30 e poucos anos
+  // no Brasil já sabe o que isso significa e não precisa de subtítulo
+  // explicando o conceito — o subtítulo só diz a regra nova (é público, entra
+  // quem quiser).
+  "communities.title": "Comunidades",
+  "communities.subtitle": "Salas públicas. Entra quem quiser.",
+  "communities.search": "Buscar comunidades",
+  "communities.searchPlaceholder": "Procura pelo nome…",
+  "communities.category.all": "Tudo",
+  // Categorias no rótulo que o brasileiro usa, não no dicionário. "Games" e
+  // "tech" ficam em inglês porque é assim que se fala. "Corre" é gíria de
+  // trampo/negócio e é muito melhor que "empreendedorismo", que ninguém clica.
+  "communities.category.games": "Games",
+  "communities.category.musica": "Música",
+  "communities.category.futebol": "Futebol",
+  "communities.category.estudos": "Estudos",
+  "communities.category.anime": "Anime",
+  "communities.category.tech": "Tech",
+  "communities.category.humor": "Humor",
+  "communities.category.series-filmes": "Séries e filmes",
+  "communities.category.corre": "Corre",
+  "communities.category.geral": "Geral",
+  "communities.members": "{count} membros",
+  "communities.members.one": "1 membro",
+  "communities.join": "Entrar",
+  "communities.joining": "Entrando…",
+  "communities.open": "Abrir",
+  "communities.joinFailed": "Não deu pra entrar em {name}",
+  "communities.loading": "Carregando…",
+  "communities.loadMore": "Ver mais",
+  "communities.empty.title": "Não tem nada aqui ainda",
+  "communities.empty.body":
+    "Nenhuma comunidade bate com isso. Tenta outra categoria — ou cria a sua.",
+  "communities.empty.searchHint":
+    "Comunidade recém-criada só aparece na busca até alguém entrar.",
+  "communities.failed": "Não deu pra carregar as comunidades.",
+  "communities.retry": "Tentar de novo",
+  "communities.report": "Denunciar esta comunidade",
+  "communities.reportTitle": "Denunciar comunidade",
+  "communities.reportBody":
+    "Isso vai pra quem cuida do pqp — não pro dono da comunidade. Conta o que tem de errado.",
+
+  // O opt-in do dono. Cada linha aqui faz trabalho jurídico tanto quanto
+  // trabalho de produto: quem liga essa chave precisa entender que está
+  // publicando a sala, não enfeitando ela. Por isso a frase diz "sem convite e
+  // sem você aprovar" com todas as letras, em vez de "descoberta pública".
+  "communities.settings.title": "Listagem pública",
+  "communities.settings.explainer":
+    "Listar este servidor coloca ele no diretório público de Comunidades. Qualquer pessoa com conta no pqp acha ele pelo nome ou pela categoria, vê quantos membros tem e entra com um toque — sem convite e sem você aprovar.",
+  "communities.settings.explainerModeration":
+    "A sala continua sendo sua: expulsar, banir e canal privado funcionam igual. Mas denúncia sobre comunidade listada vai pra quem cuida do pqp, que pode tirar a listagem do ar.",
+  "communities.settings.toggle": "Listar este servidor publicamente",
+  "communities.settings.tagline": "Uma linha sobre ela",
+  "communities.settings.taglinePlaceholder": "O que rola aqui?",
+  "communities.settings.taglineHint": "faltam {count} caracteres",
+  "communities.settings.category": "Categoria",
+  "communities.settings.save": "Salvar",
+  "communities.settings.saving": "Salvando…",
+  "communities.settings.saved": "Listagem atualizada.",
+  "communities.settings.failed": "Não deu pra atualizar a listagem.",
+  "communities.settings.suspended":
+    "Quem cuida do pqp tirou esta listagem do ar. O servidor em si não mudou e quem está dentro continua usando normal — ele só sumiu do diretório.",
+
   // ------------------------------------------------------- connection status
   "connection.reconnecting": "Conexão perdida — reconectando…",
   "connection.unauthorized": "Sessão expirada — reconectando…",

@@ -8,6 +8,7 @@ import {
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
+import { useTranslation } from "@/lib/i18n";
 import { ApiError, createReport } from "@/lib/api";
 
 /**
@@ -24,7 +25,18 @@ export type ReportTarget =
       subjectName: string | null;
       /** The server this is being reported from, when there is one. */
       serverId?: string | null;
-    };
+    }
+  /**
+   * A whole community, from the directory. The subject is the LISTING — its
+   * name and its stated purpose — not anything anybody said inside it, which is
+   * why nothing about a channel or a message travels with it.
+   *
+   * The server routes this to the INSTANCE queue and never to the community's
+   * own owner (see `resolveServerSubject`), which is what the dialog's copy has
+   * to convey: somebody reporting a community is usually reporting the person
+   * who would otherwise be reading the report.
+   */
+  | { kind: "community"; serverId: string; subjectName: string | null };
 
 interface ReportDialogProps {
   target: ReportTarget | null;
@@ -33,22 +45,25 @@ interface ReportDialogProps {
 
 /**
  * Every user-facing string in this file is a plain sentence held at the top
- * level of its element rather than assembled inside a branch, so the day this
- * app grows a string catalogue they can be lifted out without untangling
- * logic. `client/src/lib/locale.ts` exists but carries no app strings yet.
+ * level of its element rather than assembled inside a branch, so they can be
+ * lifted into the catalogue without untangling logic. The `community` kind's
+ * two strings already live there (`communities.reportTitle` /
+ * `communities.reportBody`) because that surface shipped translated; these two
+ * kinds predate the catalogue and are left alone rather than half-migrated.
  */
-const TITLES: Record<ReportTarget["kind"], string> = {
+const TITLES: Record<"message" | "user", string> = {
   message: "Report message",
   user: "Report user",
 };
 
-const DESCRIPTIONS: Record<ReportTarget["kind"], string> = {
+const DESCRIPTIONS: Record<"message" | "user", string> = {
   message:
     "Moderators will see a copy of this message, who sent it, and anything you add below.",
   user: "Moderators will see who you reported and anything you add below. No messages are attached.",
 };
 
 export function ReportDialog({ target, onClose }: ReportDialogProps) {
+  const { t } = useTranslation();
   const [reason, setReason] = useState<ReportReason | null>(null);
   const [details, setDetails] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -62,7 +77,9 @@ export function ReportDialog({ target, onClose }: ReportDialogProps) {
       ? null
       : target.kind === "message"
         ? `message:${target.messageId}`
-        : `user:${target.userId}`;
+        : target.kind === "community"
+          ? `community:${target.serverId}`
+          : `user:${target.userId}`;
 
   useEffect(() => {
     setReason(null);
@@ -91,13 +108,20 @@ export function ReportDialog({ target, onClose }: ReportDialogProps) {
               reason,
               details: details.trim() || null,
             }
-          : {
-              subjectType: "user",
-              userId: target.userId,
-              serverId: target.serverId ?? null,
-              reason,
-              details: details.trim() || null,
-            };
+          : target.kind === "community"
+            ? {
+                subjectType: "server",
+                serverId: target.serverId,
+                reason,
+                details: details.trim() || null,
+              }
+            : {
+                subjectType: "user",
+                userId: target.userId,
+                serverId: target.serverId ?? null,
+                reason,
+                details: details.trim() || null,
+              };
       await createReport(body);
       // A duplicate answers 200 rather than an error, so re-reporting the same
       // thing lands here too and is told the same thing. That is deliberate:
@@ -142,14 +166,24 @@ export function ReportDialog({ target, onClose }: ReportDialogProps) {
     );
   }
 
-  const subject = target.subjectName ?? "this account";
+  const subject =
+    target.subjectName ??
+    (target.kind === "community" ? "this community" : "this account");
 
   return (
     <Dialog
       open
-      title={TITLES[target.kind]}
+      title={
+        target.kind === "community"
+          ? t("communities.reportTitle")
+          : TITLES[target.kind]
+      }
       eyebrow="Safety"
-      description={DESCRIPTIONS[target.kind]}
+      description={
+        target.kind === "community"
+          ? t("communities.reportBody")
+          : DESCRIPTIONS[target.kind]
+      }
       onClose={onClose}
       size="sm"
       // A half-written report should not vanish on a stray click outside it.

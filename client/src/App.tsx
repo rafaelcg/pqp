@@ -36,6 +36,8 @@ import { DmCallStage } from "@/components/dm/dm-call-stage";
 import { IncomingCallOverlay } from "@/components/dm/incoming-call-overlay";
 import { DmList } from "@/components/layout/dm-list";
 import { FriendsView } from "@/components/friends/friends-view";
+import { CommunitiesView } from "@/components/communities/communities-view";
+import { useCommunitiesEnabled } from "@/components/communities/use-communities-enabled";
 import {
   FriendsContext,
   useFriendsStore,
@@ -285,6 +287,17 @@ function MainAppContent({
    * unless a deep link has already claimed the navigation.
    */
   const [selection, setSelection] = useState<Selection>(HOME_SELECTION);
+  /**
+   * Which of the two home destinations is showing when no conversation is open.
+   *
+   * Local state rather than a `Selection` member: both are the SAME selection
+   * (`{ kind: "dm" }`, nothing open) and neither is addressable — there is no
+   * `/app/communities` route, deliberately, because a directory URL is a public
+   * entry point and this feature is not ready to have one. Adding a third
+   * `Selection` kind would make every consumer of `selectionServerId` and
+   * `selectionRoutePath` answer a question about a view that is not a place.
+   */
+  const [homeView, setHomeView] = useState<"friends" | "communities">("friends");
   const [selectedChannelId, setSelectedChannelId] = useState<string | null>(null);
   const [conversations, setConversations] = useState<DmSummary[]>([]);
   const [conversationsLoading, setConversationsLoading] = useState(false);
@@ -402,6 +415,16 @@ function MainAppContent({
    * bring back a 401 on every cold boot.
    */
   const friends = useFriendsStore(bootstrapReady);
+  /**
+   * False on every deployment that has not turned the directory on, which is
+   * all of them today. Nothing about Communities renders while it is false —
+   * not the nav row, not the view, not the owner's opt-in section.
+   *
+   * Gated on `bootstrapReady` for exactly the reason the friends store above
+   * is: the token provider is installed in an effect, and a config fetch that
+   * beats it takes a 401 on every cold boot.
+   */
+  const communitiesEnabled = useCommunitiesEnabled(bootstrapReady);
   /**
    * Non-null while the 18+ gate is standing between this account and the app.
    *
@@ -2788,9 +2811,25 @@ function MainAppContent({
           onStartConversation={() => setNewDmOpen(true)}
           // Home-with-nothing-selected IS the Friends view, so "open friends"
           // is just deselecting the conversation.
-          friendsSelected={!selectedChannelId}
+          friendsSelected={!selectedChannelId && homeView === "friends"}
           friendRequestCount={friends.data.incoming.length}
-          onOpenFriends={selectHome}
+          onOpenFriends={() => {
+            setHomeView("friends");
+            selectHome();
+          }}
+          communitiesSelected={
+            !selectedChannelId && homeView === "communities"
+          }
+          // Absent entirely with the flag off, which is what makes the row not
+          // exist rather than exist-and-refuse.
+          onOpenCommunities={
+            communitiesEnabled
+              ? () => {
+                  setHomeView("communities");
+                  selectHome();
+                }
+              : undefined
+          }
           onHideConversation={(id) => void handleHideConversation(id)}
           onBlockUser={(person) => void handleBlockUser(person.id)}
           onUnblockUser={(id) => void handleUnblockUser(id)}
@@ -2897,10 +2936,49 @@ function MainAppContent({
           </div>
         )}
 
+        {/* The other home destination. Same selection, same "nothing open"
+            state — the sidebar row chose which of the two to draw. Gated on
+            `communitiesEnabled` as well as on `homeView` so that a flag that
+            went off between renders cannot leave the directory on screen. */}
+        {selection.kind === "dm" &&
+          !selectedChannel &&
+          !channelsLoading &&
+          homeView === "communities" &&
+          communitiesEnabled && (
+            <CommunitiesView
+              onOpenNav={() => setMobileNavOpen(true)}
+              onEnterCommunity={async (serverId, joinedNow) => {
+                // The same welcome an invite link gets, and for the same
+                // reason: the room you just walked into is a cold transcript
+                // with nothing on it naming where you are. Only on a real
+                // join, and only once per device — re-opening a community you
+                // are already in is not an arrival.
+                if (joinedNow) {
+                  const storage = browserStorage();
+                  if (!hasArrived(storage, serverId)) {
+                    rememberArrival(storage, serverId);
+                    setArrivalServerId(serverId);
+                  }
+                }
+                await refreshAfterJoin(serverId);
+              }}
+              onReport={(community) =>
+                setReportTarget({
+                  kind: "community",
+                  serverId: community.id,
+                  subjectName: community.name,
+                })
+              }
+            />
+          )}
+
         {/* Home with nothing selected is the Friends view — who is online,
             and the requests waiting on you. The generic empty state below now
             only serves the server-side selections. */}
-        {selection.kind === "dm" && !selectedChannel && !channelsLoading && (
+        {selection.kind === "dm" &&
+          !selectedChannel &&
+          !channelsLoading &&
+          !(homeView === "communities" && communitiesEnabled) && (
           <FriendsView
             currentUserId={user?.id ?? null}
             onOpenNav={() => setMobileNavOpen(true)}

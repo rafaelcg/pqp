@@ -56,6 +56,7 @@ See `.env.example`. Important names:
 | Client TURN fallback (avoid in prod) | `VITE_TURN_URL`, `VITE_TURN_USERNAME`, `VITE_TURN_CREDENTIAL` |
 | SFU | `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` (implemented); `CLOUDFLARE_REALTIME_*` (stub) |
 | Attachments (S3/R2) | `S3_ENDPOINT`, `S3_BUCKET`, `S3_REGION`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_FORCE_PATH_STYLE`, `S3_PUBLIC_BASE_URL`, `MAX_ATTACHMENT_BYTES`, `ATTACHMENT_URL_TTL_SECONDS` |
+| Communities | `COMMUNITIES_ENABLED` (default off — read `docs/CONTENT_SAFETY.md` §Communities first; it changes the instance's legal category, not just its features) |
 | Electron | `VITE_APP_URL` |
 
 **Rule:** never commit `.env` / secrets. Prefer serving ICE via `GET /api/ice-servers` (Railway) over baking TURN into the Pages build.
@@ -72,6 +73,7 @@ Browser/Electron → Clerk (auth)
 
 - **Mesh limit:** ~5–8 peers per voice channel. **LiveKit SFU is implemented** — set `LIVEKIT_URL` / `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` and the server advertises it via `GET /api/voice/backend` (no client rebuild). Presence stays on `/ws` in both modes; only media moves. A room's transport is decided by the server, pinned for the room's lifetime and stated in `welcome` — a client that cannot use it is refused rather than silently split off from the call. `cloudflare-sfu` is still a stub that falls back to mesh. See [`docs/voice-backends.md`](./docs/voice-backends.md).
 - **Attachments:** S3-compatible storage (R2 hosted, MinIO local). The API only signs URLs — the browser PUTs and GETs the bytes itself. Off entirely unless `S3_*` is configured. Size is enforced twice: `Content-Length` is signed into the presigned PUT (verified against MinIO, not yet against R2), and the claim `HEAD`s the object — which is also what catches "never uploaded" and a stored type that differs from the signed one. That HEAD runs *before* the claim transaction opens; nothing between `BEGIN` and `COMMIT` may touch the network. See [`docs/ATTACHMENTS.md`](./docs/ATTACHMENTS.md).
+- **Communities:** a public directory of joinable servers, entirely behind `COMMUNITIES_ENABLED` (default off, exposed to the client via `GET /api/communities/config` like the attachments/GIF configs). A community is just a `servers` row with `is_community` set. Every directory read runs auth and hides servers the viewer is banned from; joining reuses `redeemInvite`'s semantics without an invite row. Reports about a community go to the **instance** queue, never to that community's own owner, and the operator can unlist one with a single `UPDATE servers SET is_community_suspended = TRUE`. See [`docs/CONTENT_SAFETY.md`](./docs/CONTENT_SAFETY.md) §Communities — turning it on moves the instance out of Brazil's private-messaging liability exemption (STF, Art. 19, 26 Jun 2025).
 - **Data model:** Server → Channels (`text` \| `voice`) → Messages (+ `message_attachments`); roles `owner` / `admin` / `member`; usernames `name#1234`.
 
 ## Deploy targets (hosted)

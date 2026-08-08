@@ -7,6 +7,10 @@ import type {
   BlockListResponse,
   Channel,
   ChannelUnread,
+  CommunityConfig,
+  CommunityPage,
+  CommunitySettings,
+  UpdateCommunityRequest,
   CreateAttachmentRequest,
   CreateAvatarUploadRequest,
   CreateAvatarUploadResponse,
@@ -442,6 +446,87 @@ export const updateServer = (
     ssoEmailDomain?: string | null;
   },
 ) => patch<{ ok: boolean; server?: Server }>(`/api/servers/${serverId}`, body);
+
+// -------------------------------------------------------------- communities
+
+/**
+ * Whether this deployment has the Communities directory.
+ *
+ * Same contract as `/api/gifs/config` and `/api/attachments/config`: asked once
+ * at bootstrap so the nav entry can be hidden entirely, rather than offering a
+ * section that can only ever 404. Deliberately the ONE community route that
+ * answers when the feature is off — every other one 404s, and a client that
+ * could not tell "off" from "unreachable" would have to guess.
+ */
+export const fetchCommunityConfig = () =>
+  apiFetch<CommunityConfig>("/api/communities/config");
+
+/**
+ * One page of the directory.
+ *
+ * `category` and `q` are both optional and independent — a category chip and a
+ * search box narrow the same list rather than replacing each other. Takes a
+ * signal because the search box calls this on every keystroke and an
+ * out-of-order response would render results for a query nobody is looking at.
+ */
+export const fetchCommunities = (
+  options: {
+    category?: string | null;
+    query?: string | null;
+    limit?: number;
+    offset?: number;
+  } = {},
+  signal?: AbortSignal,
+) => {
+  const params = new URLSearchParams();
+  if (options.category) {
+    params.set("category", options.category);
+  }
+  if (options.query) {
+    params.set("q", options.query);
+  }
+  if (options.limit != null) {
+    params.set("limit", String(options.limit));
+  }
+  if (options.offset) {
+    params.set("offset", String(options.offset));
+  }
+  const query = params.toString();
+  return apiFetch<CommunityPage>(
+    `/api/communities${query ? `?${query}` : ""}`,
+    signal ? { signal } : {},
+  );
+};
+
+/**
+ * Join a community — no invite, no approval.
+ *
+ * Idempotent on the server, which is what makes it safe to fire from a card the
+ * user may double-tap. `joinedNow` distinguishes a welcome from a re-entry.
+ */
+export const joinCommunity = (serverId: string) =>
+  post<{
+    ok: boolean;
+    serverId: string;
+    serverName: string;
+    joinedNow: boolean;
+  }>(`/api/communities/${serverId}/join`, {});
+
+/** The owner's own view of their server's listing. */
+export const fetchCommunitySettings = (serverId: string) =>
+  apiFetch<{ community: CommunitySettings }>(
+    `/api/servers/${serverId}/community`,
+  );
+
+/** Opt in, opt out, or edit the pitch. Owner-only, server-side. */
+export const updateCommunitySettings = (
+  serverId: string,
+  body: UpdateCommunityRequest,
+) =>
+  patch<{ ok: boolean; community: CommunitySettings }>(
+    `/api/servers/${serverId}/community`,
+    body,
+  );
 
 /** Servers a verified email domain lets this user join without an invite. */
 export const fetchSsoAvailableServers = () =>

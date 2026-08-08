@@ -521,6 +521,141 @@ need.
 
 ---
 
+## Communities: the public directory
+
+> **Status as shipped: `COMMUNITIES_ENABLED` is unset, so there is no directory,
+> no server can be listed, and every route below answers 404.**
+
+A *community* is an ordinary server whose owner has ticked one box. Ticking it
+puts the server in a directory any signed-in account can search and browse, and
+lets anyone who finds it join with one tap — no invite, no approval. Nothing
+else about the server changes: the same channels, the same roles, the same bans.
+
+### Why this section is in the content-safety document and not in a feature guide
+
+Because turning it on changes what kind of service this is.
+
+Brazilian platform liability turns on a distinction the STF drew on **26 June
+2025**, when it held Art. 19 of the Marco Civil da Internet partially
+unconstitutional (8–3). The exemption the ruling left standing covers **e-mail
+providers, private video/voice meeting platforms, and instant messaging
+services**. A private chat app plausibly sits inside it. **A public, searchable
+directory of rooms strangers can join is what takes an instance out of it** and
+into "platform hosting public content", which carries:
+
+* **presumed liability**, with immediate removal expected, for paid/boosted
+  content and content distributed by bot networks — escapable only by proving
+  diligent, timely action;
+* a **duty of care** for massively circulating grave content: anti-democratic
+  acts, terrorism, incitement to suicide or self-harm, racial/religious/sexual/
+  gender hate speech, misogyny, child sexual abuse material and crimes against
+  minors, human trafficking;
+* **affirmative duties on all platforms**: notification and due process, an
+  accessible complaint channel, a Brazilian legal representative with full
+  authority, and annual transparency reports.
+
+Layered on top and already in force: **Lei 15.211/2025 (ECA Digital)**, in force
+since 17 March 2026, applying to any digital service accessed by children in
+Brazil regardless of where the company is, enforced by the ANPD with fines,
+suspension and prohibition available.
+
+There is precedent for exactly this feature, at exactly this scale of failure.
+Roughly **90% of all human-rights-abuse reports SaferNet Brasil received about
+the entire internet concerned content on Orkut** — a free, public, self-service
+group primitive with one owner and no default moderation. About 40% of those
+were CSAM. It ended with a TAC carrying a R$ 25,000/day penalty, Google moving
+Orkut's global operation to Belo Horizonte to staff a Portuguese-speaking
+content team, and, in 2014, two Google Brasil legal directors charged personally
+with *desobediência*. `docs/research/communities-orkut.html` §08 has the full
+timeline.
+
+**Before setting `COMMUNITIES_ENABLED=true`:** configure and prove
+`CONTENT_SCAN_PROVIDER`, set `INSTANCE_MODERATOR_CLERK_IDS`, and have a rate of
+report arrival you can personally sustain. A public directory of rooms where
+anyone can upload an image, with nothing looking at the images, is the Orkut
+failure mode reproduced with better latency.
+
+### What ships with the directory, not after it
+
+| Affordance | Where |
+|---|---|
+| Every directory read requires auth | the router's own gate; there is no anonymous browsing, so the 18+ gate cannot be routed around |
+| A server you are banned from is **invisible**, not merely un-joinable | `LISTED_SQL` in `server/src/services/communities.ts` — grid, search and direct-id lookup alike |
+| Report a whole community from its card | `subjectType: "server"` on `POST /api/reports` |
+| Community reports go to the **instance** queue, never to that community's owner | `resolveServerSubject` writes `context_kind = 'none'` and a NULL `server_id`; the subject lives in `reported_server_id` |
+| The operator can pull a listing over the owner's head | `servers.is_community_suspended` — see below |
+| The opt-in is audited | `server.community_update`; directory joins are `member.community_join` |
+
+The routing rule is the one worth restating: **a community owner must never be
+able to read or close a report about their own community.** `listServerReports`
+is readable by owners and admins, so filing a community report into that queue
+would hand the accusation to the accused. It goes to `listInstanceReports`
+instead, which is gated on `INSTANCE_MODERATOR_CLERK_IDS` and on no role held
+inside the app.
+
+### Pulling a listing
+
+`servers.is_community_suspended` is the operator's kill switch. It is set with
+SQL and nothing else — there is deliberately **no route, no role and no setting**
+that writes it, because a switch an owner could flip is not a moderation tool.
+
+Suspending **unlists; it does not delete**. The server, its members, its channels
+and its history carry on exactly as a private server would. What stops is being
+findable and being joinable without an invite. That asymmetry is the point:
+pulling a listing is a reversible, low-evidence act you should be willing to take
+within the hour, and deleting a room full of people is not.
+
+```sql
+-- Pull one listing. Takes effect on the next request; nothing is cached.
+UPDATE servers SET is_community_suspended = TRUE WHERE id = '<server-uuid>';
+
+-- Find it by name first, if the report gave you a name rather than an id.
+SELECT id, name, community_category, member_count, is_community_suspended
+FROM servers
+WHERE is_community AND name ILIKE '%<fragment>%';
+
+-- Everything currently suspended, which is the list to review periodically.
+SELECT id, name, member_count FROM servers WHERE is_community_suspended;
+
+-- Restore it, once the report is resolved in the community's favour.
+UPDATE servers SET is_community_suspended = FALSE WHERE id = '<server-uuid>';
+
+-- Pull the whole directory, for an incident. Faster than a redeploy and it
+-- leaves every server working; only the listings go dark.
+UPDATE servers SET is_community_suspended = TRUE WHERE is_community;
+```
+
+An owner who re-ticks their opt-in after a suspension changes nothing: the
+column still keeps the server out of every read path, and the settings panel
+tells them in so many words that the listing was removed by the people who run
+the instance and that their server itself is untouched.
+
+Unsetting `COMMUNITIES_ENABLED` is the bigger hammer and needs a restart: it
+takes the entire feature down — directory, join path, opt-in, and community
+reports — leaving every server exactly as it was.
+
+### Runbook: a reported community
+
+1. **Read the queue, not the room.** `GET /api/reports/instance` as an instance
+   moderator. A `subjectType: "server"` row names the community in
+   `reportedUserName` and its owner in `reportedUserId`.
+2. **Decide on the listing first.** If the name, the tagline or the evident
+   purpose is the problem, suspend it with the UPDATE above. This is the
+   reversible step and it stops new people walking in.
+3. **Then decide on the room.** Content inside a community is reported,
+   scanned and moderated exactly like any other server's — the ordinary
+   message-report and attachment-scan paths already cover it, and the
+   illegal-content runbook above takes precedence over everything here.
+4. **Close the report** with a note saying which of the two you did. A
+   community report carries no `serverId`, so `PATCH /api/reports/:id` will
+   refuse a `timeoutMinutes` on it: the remedy for a bad listing is the
+   suspension, not a timeout on its owner, because timing the owner out changes
+   nothing about what strangers are still walking into.
+5. **Record it** alongside the s.23 records, same as any other action.
+
+
+---
+
 ## Residual risk, stated plainly
 
 Everything below is true with the recommended configuration (`openai`) turned
@@ -587,6 +722,7 @@ Full annotations in `.env.example`.
 | `SIGHTENGINE_API_USER` / `_SECRET` | | provider=sightengine |
 | `SIGHTENGINE_MODELS` | `nudity-2.1,gore,face-attributes` | provider=sightengine |
 | `CONTENT_SCAN_URL` / `CONTENT_SCAN_TOKEN` | | provider=webhook |
+| `COMMUNITIES_ENABLED` | `false` | The public directory. Read §"Communities" first — this one changes the instance's legal category, not just its feature set. |
 
 ### Columns on `message_attachments`
 
@@ -601,6 +737,23 @@ Full annotations in `.env.example`.
 
 `unscanned` is **not** a synonym for `pass` and nothing in this codebase treats
 it as one.
+
+### Columns on `servers` (communities)
+
+| Column | |
+|---|---|
+| `is_community` | The owner's opt-in. False for every server until somebody ticks the box. |
+| `community_tagline` | One line, ≤140 chars, owner-written. Null is normal. |
+| `community_category` | One of the ten slugs in `COMMUNITY_CATEGORIES`; `geral` is the default and the catch-all. |
+| `is_community_suspended` | **The operator's kill switch.** Set by SQL only — no route, no role, no setting writes it. Unlists without deleting anything. |
+| `member_count` | Maintained by a trigger on `server_members`. Decorative: it orders the directory and is authorised by nothing. |
+
+### Columns on `reports` (communities)
+
+| Column | |
+|---|---|
+| `subject_type = 'server'` | A report about a whole community — the listing, not anything said inside it. |
+| `reported_server_id` | The community. Separate from `server_id` on purpose: `server_id` means "route to that server's own queue", which is the one place a community report must never go. |
 
 ### Cost at a glance
 

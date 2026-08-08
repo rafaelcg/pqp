@@ -1,5 +1,5 @@
 import type { DmSummary, PublicUser } from "@pqp/shared";
-import { Phone, Plus, Users, X } from "lucide-react";
+import { Compass, Phone, Plus, Users, X } from "lucide-react";
 import { useRef, type ReactNode } from "react";
 import {
   formatBadgeCount,
@@ -43,6 +43,14 @@ interface DmListProps {
    * the number cannot disagree with the one on the server rail.
    */
   friendRequestCount?: number;
+  /**
+   * The Communities entry, below Friends. Absent entirely on a deployment where
+   * `/api/communities/config` answered `enabled: false` — the App passes no
+   * handler, and this list renders no row, so the surface does not exist rather
+   * than existing-but-disabled.
+   */
+  communitiesSelected?: boolean;
+  onOpenCommunities?: () => void;
   onHideConversation: (channelId: string) => void;
   onBlockUser: (user: PublicUser) => void;
   onUnblockUser: (userId: string) => void;
@@ -77,6 +85,8 @@ export function DmList({
   friendsSelected = false,
   onOpenFriends,
   friendRequestCount = 0,
+  communitiesSelected = false,
+  onOpenCommunities,
   onHideConversation,
   onBlockUser,
   onUnblockUser,
@@ -160,6 +170,34 @@ export function DmList({
                 {t("friends.pendingBadge", { count: friendRequestCount })}
               </span>
             )}
+          </button>
+        )}
+        {/* Communities sits directly under Friends because it answers the same
+            question from the other side: Friends is "who do I already know",
+            Communities is "who else is here". Both are home-view destinations
+            with no conversation open, which is why they share this block and
+            not the server rail. Rendered only when the server says the
+            directory exists — see `onOpenCommunities`. */}
+        {onOpenCommunities && (
+          <button
+            type="button"
+            data-communities-nav
+            className={cn(
+              "mb-2 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm",
+              communitiesSelected
+                ? "bg-ink-3 text-paper"
+                : "text-paper-muted hover:bg-ink-3/70 hover:text-paper",
+            )}
+            aria-current={communitiesSelected ? "page" : undefined}
+            onClick={() => {
+              onOpenCommunities();
+              onMobileClose?.();
+            }}
+          >
+            <Compass aria-hidden="true" className="h-4 w-4 shrink-0" />
+            <span className="truncate font-medium">
+              {t("communities.title")}
+            </span>
           </button>
         )}
         {isLoading ? (

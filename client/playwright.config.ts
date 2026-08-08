@@ -77,6 +77,20 @@ export default defineConfig({
         RATE_LIMIT_API_REFILL: "1000",
         RATE_LIMIT_WRITE_CAPACITY: "10000",
         RATE_LIMIT_WRITE_REFILL: "1000",
+        // The Communities directory, ON for the suite and OFF everywhere else
+        // (`.env.example` ships it false and production has never set it).
+        //
+        // Turned on here rather than in a spec because a spec cannot restart
+        // the shared server: `isCommunitiesEnabled` reads the environment per
+        // call, but the process that reads it is booted once for the whole run.
+        // The FLAG-OFF case is therefore proved two other ways — every route
+        // 404ing with the variable unset is pinned in
+        // `server/src/services/communities.test.ts`, and the client rendering
+        // nothing when `/api/communities/config` answers `enabled: false` is
+        // pinned in `communities.spec.ts`, which stubs that one response. Those
+        // two together are the whole contract; a third webServer on a third
+        // port would prove nothing extra and double the suite's boot time.
+        COMMUNITIES_ENABLED: "true",
       },
     },
     {

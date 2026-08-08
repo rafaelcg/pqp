@@ -37,6 +37,12 @@ import {
   REPORT_PAGE_SIZE,
   createReportSchema,
   createThreadSchema,
+  COMMUNITY_PAGE_MAX,
+  COMMUNITY_PAGE_SIZE,
+  communityCategorySchema,
+  communitySearchQuerySchema,
+  communityTaglineSchema,
+  updateCommunitySchema,
   reportStatusSchema,
   resolveReportSchema,
   safeTextSchema,
@@ -125,6 +131,14 @@ import {
   verifyAvatarObject,
 } from "../services/avatars.js";
 import { buildServerExport } from "../services/export.js";
+import {
+  getCommunity,
+  getCommunitySettings,
+  isCommunitiesEnabled,
+  joinCommunity,
+  listCommunities,
+  updateCommunitySettings,
+} from "../services/communities.js";
 import {
   createWebhook,
   deleteWebhook,
@@ -1495,6 +1509,266 @@ router.post("/api/servers/:serverId/sso-join", async ({ user }, { serverId }) =>
   return { ok: true, server: mapServer(result.server) };
 });
 
+// ------------------------------------------------------------- communities
+
+/**
+ * Whether this deployment has the directory at all.
+ *
+ * The one route in this section that is NOT flag-gated, and it has to be: the
+ * client hides the entire Communities surface when this answers `false`, so an
+ * endpoint that 404'd with the feature off would leave the client unable to
+ * tell "off" from "old server" from "network blip" — three states it must
+ * render identically as "nothing here". Same contract as `/api/gifs/config` and
+ * `/api/attachments/config`, and it leaks nothing an operator has not already
+ * decided to publish.
+ *
+ * Still behind auth like every other `/api` route (see pitfall 8 in CLAUDE.md
+ * — there is no public-route allowlist), which is deliberate rather than
+ * incidental: nothing about this feature, the config included, is readable
+ * without an account that has passed the 18+ gate.
+ */
+router.get("/api/communities/config", async () => ({
+  enabled: isCommunitiesEnabled(),
+}));
+
+/**
+ * The gate every other route in this section runs first.
+ *
+ * 404 AND NOT 503, unlike the GIF and attachment routes. Those two are
+ * *configuration* — the feature exists and this deployment has no key — so
+ * "unavailable" is the honest answer. This is different in kind: with the flag
+ * off, communities do not exist here, no server can be one, and the paths below
+ * name nothing. 404 is what an unbuilt feature answers, and it is also what
+ * keeps a probe from learning that a future version of pqp has a directory.
+ *
+ * The single choke point a per-user or percentage rollout would later replace —
+ * see `isCommunitiesEnabled`.
+ */
+function requireCommunities(): void {
+  if (!isCommunitiesEnabled()) {
+    throw new NotFound();
+  }
+}
+
+/**
+ * The directory.
+ *
+ * Auth is the router's, and it is load-bearing rather than incidental: browsing
+ * is not anonymous, which is what keeps the 18+ gate in front of public content
+ * and what makes "hide servers this person is banned from" a question with an
+ * answer. See rule 2 in services/communities.ts.
+ */
+router.get("/api/communities", async ({ url, user }) => {
+  requireCommunities();
+
+  const rawCategory = url.searchParams.get("category");
+  let category = null;
+  if (rawCategory) {
+    const parsed = communityCategorySchema.safeParse(rawCategory);
+    // An unknown category is refused rather than ignored. Falling back to "all"
+    // would answer a filtered request with unfiltered results, which reads as
+    // the filter silently not working.
+    if (!parsed.success) {
+      throw new HttpError(400, "Unknown category");
+    }
+    category = parsed.data;
+  }
+
+  const rawSearch = url.searchParams.get("q");
+  let search = null;
+  if (rawSearch && rawSearch.trim()) {
+    const parsed = communitySearchQuerySchema.safeParse(rawSearch);
+    if (!parsed.success) {
+      throw new HttpError(400, "Invalid search query");
+    }
+    search = parsed.data;
+  }
+
+  const limit = clampLimit(
+    url.searchParams.get("limit"),
+    COMMUNITY_PAGE_SIZE,
+    COMMUNITY_PAGE_MAX,
+  );
+  // Clamped through the same helper, with the page ceiling as its own bound: an
+  // unbounded OFFSET is a cheap way to make Postgres walk the whole partial
+  // index, and nothing in this UI pages past a few screens.
+  const offsetParam = Number(url.searchParams.get("offset") ?? 0);
+  const offset =
+    Number.isFinite(offsetParam) && offsetParam > 0
+      ? Math.min(Math.floor(offsetParam), 1000)
+      : 0;
+
+  return listCommunities(user.id, { category, search, limit, offset });
+});
+
+/** One listing, for a deep link into the directory. */
+router.get("/api/communities/:serverId", async ({ user }, { serverId }) => {
+  requireCommunities();
+  const community = await getCommunity(user.id, serverId!);
+  if (!community) {
+    throw new NotFound("Community not found");
+  }
+  return { community };
+});
+
+/**
+ * Join without an invite.
+ *
+ * Answers 200 whether or not a membership row was written — see `joinCommunity`
+ * on why idempotency here is load-bearing. `joinedNow` rides along so the client
+ * can tell a welcome from a re-entry without asking again.
+ *
+ * Audited on the server side of the join, matching `member.sso_join`: an owner
+ * looking at their audit log should be able to see who walked in off the
+ * directory, which is the one thing a public listing changes about their server.
+ */
+router.post(
+  "/api/communities/:serverId/join",
+  async ({ user }, { serverId }) => {
+    requireCommunities();
+    const result = await joinCommunity(serverId!, user.id);
+    if (!result.ok) {
+      if (result.reason === "banned") {
+        throw new Forbidden("You are banned from this community");
+      }
+      throw new NotFound("Community not found");
+    }
+    if (result.joinedNow) {
+      await logAudit({
+        serverId: serverId!,
+        actorId: user.id,
+        action: "member.community_join",
+        targetType: "user",
+        targetId: user.id,
+        changes: [],
+      });
+    }
+    return {
+      ok: true,
+      serverId: result.serverId,
+      serverName: result.serverName,
+      joinedNow: result.joinedNow,
+    };
+  },
+);
+
+/** The owner's own view of their listing. */
+router.get(
+  "/api/servers/:serverId/community",
+  async ({ user }, { serverId }) => {
+    requireCommunities();
+    await requireOwner(serverId!, user.id);
+    const settings = await getCommunitySettings(serverId!);
+    if (!settings) {
+      throw new NotFound("Server not found");
+    }
+    return { community: settings };
+  },
+);
+
+/**
+ * Opt in, opt out, or edit the pitch.
+ *
+ * OWNER ONLY, not manager. Every other per-server setting on this route family
+ * (`retention`, `ssoEmailDomain`) is owner-gated for the same reason, and this
+ * one has the strongest case of the three: it makes a private room publicly
+ * findable and joinable by strangers, which is not a thing an admin should be
+ * able to do to somebody else's server.
+ *
+ * A SEPARATE ROUTE FROM `PATCH /api/servers/:serverId` on purpose. That route
+ * must keep working with the flag off; this one must 404. Folding these fields
+ * into `updateServerSchema` would mean the general PATCH quietly accepting and
+ * discarding them on a deployment where communities do not exist.
+ */
+router.patch(
+  "/api/servers/:serverId/community",
+  async ({ req, user }, { serverId }) => {
+    requireCommunities();
+    await requireOwner(serverId!, user.id);
+    const body = updateCommunitySchema.parse(await readJsonBody(req));
+
+    // Validated here rather than in the schema for the same reason
+    // `ssoEmailDomain` is: the generic ZodError handler flattens everything to
+    // "Invalid request", and "your tagline is too long" is a sentence the owner
+    // needs to read.
+    let tagline: string | null | undefined;
+    if (body.tagline !== undefined) {
+      if (body.tagline === null || body.tagline.trim() === "") {
+        // An emptied box is a cleared tagline, not a stored empty string — the
+        // card renders "no tagline" from NULL and would otherwise reserve a
+        // line of layout for nothing.
+        tagline = null;
+      } else {
+        const parsed = communityTaglineSchema.safeParse(body.tagline);
+        if (!parsed.success) {
+          throw new HttpError(
+            400,
+            parsed.error.issues[0]?.message ?? "Tagline is too long",
+          );
+        }
+        tagline = parsed.data;
+      }
+    }
+
+    const updated = await updateCommunitySettings(serverId!, {
+      ...(body.isCommunity !== undefined ? { isCommunity: body.isCommunity } : {}),
+      ...(tagline !== undefined ? { tagline } : {}),
+      ...(body.category !== undefined ? { category: body.category } : {}),
+    });
+    if (!updated) {
+      throw new NotFound("Server not found");
+    }
+
+    // One entry for the whole patch, carrying only what actually moved. Listing
+    // a server publicly is the single most consequential setting an owner can
+    // change — it is what puts the room in front of strangers — so the trail has
+    // to say who did it and when, not merely that "the server was updated".
+    const changes = [
+      ...(body.isCommunity !== undefined &&
+      updated.previous.isCommunity !== updated.settings.isCommunity
+        ? [
+            {
+              key: "isCommunity",
+              old: updated.previous.isCommunity,
+              new: updated.settings.isCommunity,
+            },
+          ]
+        : []),
+      ...(tagline !== undefined && updated.previous.tagline !== updated.settings.tagline
+        ? [
+            {
+              key: "communityTagline",
+              old: updated.previous.tagline,
+              new: updated.settings.tagline,
+            },
+          ]
+        : []),
+      ...(body.category !== undefined &&
+      updated.previous.category !== updated.settings.category
+        ? [
+            {
+              key: "communityCategory",
+              old: updated.previous.category,
+              new: updated.settings.category,
+            },
+          ]
+        : []),
+    ];
+    if (changes.length > 0) {
+      await logAudit({
+        serverId: serverId!,
+        actorId: user.id,
+        action: "server.community_update",
+        targetType: "server",
+        targetId: serverId!,
+        changes,
+      });
+    }
+
+    return { ok: true, community: updated.settings };
+  },
+);
+
 router.delete("/api/servers/:serverId", async ({ user }, { serverId }) => {
   await requireOwner(serverId!, user.id);
   const channelIds = await listServerChannelIds(serverId!);
@@ -2710,6 +2984,12 @@ router.post("/api/reports", async ({ req, res, user }) => {
   }
 
   const body = createReportSchema.parse(await readJsonBody(req));
+  // A community report is only a thing where communities are a thing. Refused
+  // with the same 404 every other unreachable subject gets, rather than being
+  // silently coerced into some other kind of report.
+  if (body.subjectType === "server" && !isCommunitiesEnabled()) {
+    throw new NotFound("Not found");
+  }
   try {
     const result = await createReport(
       body.subjectType === "message"
@@ -2720,14 +3000,22 @@ router.post("/api/reports", async ({ req, res, user }) => {
             reason: body.reason,
             details: body.details,
           }
-        : {
-            subjectType: "user",
-            reporterId: user.id,
-            userId: body.userId,
-            serverId: body.serverId ?? null,
-            reason: body.reason,
-            details: body.details,
-          },
+        : body.subjectType === "server"
+          ? {
+              subjectType: "server",
+              reporterId: user.id,
+              serverId: body.serverId,
+              reason: body.reason,
+              details: body.details,
+            }
+          : {
+              subjectType: "user",
+              reporterId: user.id,
+              userId: body.userId,
+              serverId: body.serverId ?? null,
+              reason: body.reason,
+              details: body.details,
+            },
     );
     // Re-reporting something already in the queue is not an error and not a new
     // report, so it answers 200 while the first one answers 201 — the same

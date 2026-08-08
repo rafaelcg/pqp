@@ -35,6 +35,22 @@ export const AUDIT_ACTIONS = [
   "server.retention_update",
   "server.sso_domain_update",
   "member.sso_join",
+  /**
+   * The public-listing opt-in, and the tagline/category edits that go with it.
+   * A separate action from `server.update` because it is categorically bigger
+   * than a rename: it is the moment a private room becomes findable by, and
+   * joinable by, people the owner has never met. An owner reading their own log
+   * should be able to answer "when did this become public, and who did it"
+   * without inferring it from a generic update entry.
+   */
+  "server.community_update",
+  /**
+   * Somebody walked in off the directory, with no invite and nobody's approval.
+   * Logged for the same reason `member.sso_join` is: these are the only two
+   * ways to become a member without a member's involvement, and a server owner
+   * who cannot see them cannot explain their own member list.
+   */
+  "member.community_join",
   "server.ownership_transfer",
   "server.data_export",
   "invite.create",

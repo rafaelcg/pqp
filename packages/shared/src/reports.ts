@@ -25,8 +25,18 @@ export const REPORT_REASONS = [
 export const reportReasonSchema = z.enum(REPORT_REASONS);
 export type ReportReason = z.infer<typeof reportReasonSchema>;
 
-/** What a report is about. */
-export const reportSubjectTypeSchema = z.enum(["message", "user"]);
+/**
+ * What a report is about.
+ *
+ * `server` reports a whole community from the directory — the room, its name
+ * and its stated purpose, rather than any one thing said in it. It exists
+ * because a public directory is the one surface where the *listing* is the
+ * problem: "Eu odeio acordar cedo" is a joke and a valid community, and the
+ * anti-`nordestino` communities that got Orkut's operators criminally charged
+ * were the same shape with a different name. Reporting the person who posted a
+ * message inside is no remedy when nobody has posted anything.
+ */
+export const reportSubjectTypeSchema = z.enum(["message", "user", "server"]);
 export type ReportSubjectType = z.infer<typeof reportSubjectTypeSchema>;
 
 /**
@@ -84,6 +94,12 @@ const detailsSchema = z
  * A message report carries no context at all. The channel, and therefore the
  * server or the conversation, is read from the message itself — a client that
  * could name the destination could aim a report at the wrong moderators.
+ *
+ * A `server` report names the community and nothing else. It is accepted only
+ * for a server that is actually listed in the directory, and it is routed to
+ * the INSTANCE queue rather than to that server's own moderators — see
+ * `resolveServerSubject`. Filing one does not require membership: the whole
+ * point is that you saw the listing and did not want to go inside.
  */
 export const createReportSchema = z.discriminatedUnion("subjectType", [
   z.object({
@@ -96,6 +112,12 @@ export const createReportSchema = z.discriminatedUnion("subjectType", [
     subjectType: z.literal("user"),
     userId: z.string().uuid(),
     serverId: z.string().uuid().nullable().optional(),
+    reason: reportReasonSchema,
+    details: detailsSchema,
+  }),
+  z.object({
+    subjectType: z.literal("server"),
+    serverId: z.string().uuid(),
     reason: reportReasonSchema,
     details: detailsSchema,
   }),
@@ -154,8 +176,24 @@ export const reportSchema = z.object({
   reporterId: z.string().uuid().nullable(),
   reporterName: z.string().nullable(),
 
+  /**
+   * The account behind the subject. For a `server` report that is the
+   * community's OWNER — the person answering for the listing — so the queue
+   * names somebody rather than only a room.
+   *
+   * It is deliberately NOT sanctionable through `resolveReportSchema`'s
+   * `timeoutMinutes`: a community report has no `serverId`, and that route
+   * already refuses a timeout on a report with no server behind it. The remedy
+   * for a bad community is `is_community_suspended` — an operator's UPDATE, not
+   * a timeout — because timing the owner out of their own server changes
+   * nothing about the listing strangers are still walking into.
+   */
   reportedUserId: z.string().uuid().nullable(),
-  /** Snapshot of who was reported, taken at report time. */
+  /**
+   * Snapshot of the subject, taken at report time: a user's name and tag, or —
+   * for a `server` report — the community's own name, which is the string a
+   * moderator is actually judging.
+   */
   reportedUserName: z.string().nullable(),
 
   /** Null once the message has been deleted; `contentSnapshot` survives it. */

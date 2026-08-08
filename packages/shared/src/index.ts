@@ -4,6 +4,7 @@ export * from "./audit.js";
 export * from "./auth.js";
 export * from "./avatars.js";
 export * from "./chat.js";
+export * from "./communities.js";
 export * from "./dm.js";
 export * from "./embeds.js";
 export * from "./friends.js";
