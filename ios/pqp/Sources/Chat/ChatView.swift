@@ -1,6 +1,14 @@
 import SwiftUI
 import PhotosUI
 
+/// A conversation to push, wrapped so the destination is keyed by a type only
+/// this screen registers — `DmSummary` itself is already a destination further
+/// up some of the stacks a chat can live in.
+struct OpenedConversation: Identifiable, Hashable {
+    let summary: DmSummary
+    var id: String { summary.channelId }
+}
+
 struct ChatView: View {
     @Environment(SessionStore.self) private var session
     @Environment(CallModel.self) private var call
@@ -21,9 +29,16 @@ struct ChatView: View {
     @State private var openedThread: ThreadSummary?
     @State private var showingPicker = false
     @State private var showingPins = false
-    @State private var showingGifs = false
-    @State private var emojiTarget: Message?
+    /// The composer's emoji/GIF sheet.
+    @State private var showingExpression = false
+    /// The message whose long-press menu is up, and the message whose full
+    /// reaction picker is up. Two states, because the menu closes *into* the
+    /// picker and both being one would make that a flicker.
+    @State private var actionTarget: Message?
+    @State private var reactionTarget: Message?
     @State private var reportTarget: ReportTarget?
+    @State private var profileSubject: ProfileSubject?
+    @State private var openedConversation: OpenedConversation?
     @State private var pickerItem: PhotosPickerItem?
     @FocusState private var composerFocused: Bool
 
@@ -41,14 +56,23 @@ struct ChatView: View {
                     text: $model.draft,
                     isSending: model.isSending,
                     canAttach: model.attachmentsEnabled,
-                    canSendGif: model.gifsEnabled,
                     hasAttachments: !model.pendingAttachments.isEmpty,
                     onSend: { Task { await model.send() } },
                     onType: { model.noteTyping() },
                     onAttach: { showingPicker = true },
-                    onGif: { showingGifs = true }
+                    onExpress: {
+                        // The keyboard goes first: the sheet lands where it was,
+                        // so the two do not fight over the bottom of the screen.
+                        composerFocused = false
+                        showingExpression = true
+                    }
                 )
                 .focused($composerFocused)
+            }
+
+            if let target = actionTarget {
+                messageActions(for: target)
+                    .zIndex(10)
             }
         }
         .navigationTitle(title)
@@ -94,18 +118,40 @@ struct ChatView: View {
             }
         }
         .animation(Motion.standard, value: call.isCollapsed)
+        .animation(Motion.standard, value: actionTarget?.id)
         .threadDestination($openedThread)
-        .sheet(isPresented: $showingPins) { PinnedMessagesView(channelId: channelId) }
-        .sheet(isPresented: $showingGifs) {
-            GifPicker { gif in Task { await model.sendGif(gif) } }
+        // Opening a DM from a profile pushes the conversation onto this stack.
+        // Wrapped in its own type rather than pushing `DmSummary` directly:
+        // other screens in the same stack already declare a destination for
+        // that type, and two registrations for one type is a warning at best.
+        .navigationDestination(item: $openedConversation) { opened in
+            ChatView(
+                channelId: opened.summary.channelId,
+                title: opened.summary.title,
+                conversation: opened.summary
+            )
         }
-        .sheet(item: $emojiTarget) { target in
-            EmojiPicker { emoji in
+        .sheet(isPresented: $showingPins) { PinnedMessagesView(channelId: channelId) }
+        .sheet(isPresented: $showingExpression) {
+            ExpressionPicker(
+                mode: .compose,
+                gifsEnabled: model.gifsEnabled,
+                onEmoji: { model.draft.append($0) },
+                onGif: { gif in Task { await model.sendGif(gif) } }
+            )
+        }
+        .sheet(item: $reactionTarget) { target in
+            ExpressionPicker(mode: .reaction) { emoji in
                 Task { await model.toggleReaction(emoji, on: target) }
             }
         }
         .sheet(item: $reportTarget) { target in
             ReportSheet(target: target)
+        }
+        .sheet(item: $profileSubject) { subject in
+            UserProfileSheet(subject: subject) { conversation in
+                openedConversation = OpenedConversation(summary: conversation)
+            }
         }
         .photosPicker(isPresented: $showingPicker, selection: $pickerItem, matching: .images)
         .onChange(of: pickerItem) { _, item in
@@ -148,12 +194,30 @@ struct ChatView: View {
                             onToggleReaction: { emoji in
                                 Task { await model.toggleReaction(emoji, on: message) }
                             },
-                            onOpenThread: { openedThread = $0 }
+                            onOpenThread: { openedThread = $0 },
+                            onOpenProfile: { profileSubject = $0 }
                         )
                         .id(message.id)
-                        .contextMenu {
-                            messageActions(for: message)
-                        }
+                        // A gesture rather than `.contextMenu`, because the
+                        // quick-reaction row's layout is the whole point and a
+                        // context menu will not lay one out. The haptic is what
+                        // makes it feel like the system menu it replaces.
+                        //
+                        // High priority, not `.onLongPressGesture`: the row now
+                        // contains buttons (the avatar and the author name), and
+                        // a plain gesture on the parent loses to them — holding
+                        // on the name opened a profile instead of the menu, and
+                        // holding near one did it often enough to be a coin
+                        // flip. Priority makes "hold anywhere on the message"
+                        // mean one thing. A quick tap still fails the long press
+                        // and reaches the buttons as normal.
+                        .highPriorityGesture(
+                            LongPressGesture(minimumDuration: 0.35)
+                                .onEnded { _ in
+                                    Haptics.menuOpened()
+                                    withAnimation(Motion.standard) { actionTarget = message }
+                                }
+                        )
                     }
 
                     if model.messages.isEmpty && !model.isLoading {
@@ -182,91 +246,46 @@ struct ChatView: View {
         }
     }
 
-    @ViewBuilder
+    /// The long-press menu. Edit and delete are offered only on your own
+    /// messages and reporting only on other people's — the server refuses the
+    /// rest anyway, and offering an action that always fails is worse than not
+    /// offering it.
     private func messageActions(for message: Message) -> some View {
-        // The quick row first: reacting is by far the most common thing anyone
-        // does to someone else's message.
-        ControlGroup {
-            ForEach(ChatModel.quickReactions, id: \.self) { emoji in
-                Button(emoji) {
-                    Task { await model.toggleReaction(emoji, on: message) }
-                }
-            }
-        }
-        .controlGroupStyle(.compactMenu)
-
-        Button {
-            emojiTarget = message
-        } label: {
-            Label("More reactions…", systemImage: "face.smiling")
-        }
-
-        Button {
-            model.beginReply(to: message)
-            composerFocused = true
-        } label: {
-            Label("Reply", systemImage: "arrowshape.turn.up.left")
-        }
-
-        // Start a thread, or open the one this message already has — the server
-        // route is idempotent, so both are the same tap and the label just says
-        // which one it will be.
-        if canStartThreads {
-            Button {
+        MessageActionsOverlay(
+            message: message,
+            quickReactions: ChatModel.quickReactions,
+            canStartThreads: canStartThreads,
+            isMine: model.isMine(message),
+            canReport: !model.isMine(message) && !message.isWebhook,
+            onReact: { emoji in
+                Task { await model.toggleReaction(emoji, on: message) }
+            },
+            onMoreReactions: { reactionTarget = message },
+            onReply: {
+                model.beginReply(to: message)
+                composerFocused = true
+            },
+            onOpenThread: {
+                // Start a thread, or open the one this message already has —
+                // the server route is idempotent, so both are the same tap.
                 if let existing = message.thread {
                     openedThread = existing
                 } else {
                     Task { openedThread = await model.startThread(on: message) }
                 }
-            } label: {
-                Label(
-                    message.thread == nil ? "Start thread" : "Open thread",
-                    systemImage: "bubble.left.and.text.bubble.right"
-                )
-            }
-        }
-
-        Button {
-            UIPasteboard.general.string = message.body
-        } label: {
-            Label("Copy text", systemImage: "doc.on.doc")
-        }
-
-        Button {
-            Task { await model.togglePin(message) }
-        } label: {
-            Label(
-                message.pinnedAt == nil ? "Pin" : "Unpin",
-                systemImage: message.pinnedAt == nil ? "pin" : "pin.slash"
-            )
-        }
-
-        // Reporting your own message makes no sense; everyone else's can be.
-        if !model.isMine(message) && !message.isWebhook {
-            Button(role: .destructive) {
+            },
+            onCopy: { UIPasteboard.general.string = message.body },
+            onTogglePin: { Task { await model.togglePin(message) } },
+            onReport: {
                 reportTarget = .message(id: message.id, authorName: message.authorName)
-            } label: {
-                Label("Report", systemImage: "flag")
-            }
-        }
-
-        // Edit and delete are only ever offered on your own messages; the
-        // server would refuse anyway, and offering an action that always fails
-        // is worse than not offering it.
-        if model.isMine(message) {
-            Button {
+            },
+            onEdit: {
                 model.beginEdit(message)
                 composerFocused = true
-            } label: {
-                Label("Edit", systemImage: "pencil")
-            }
-
-            Button(role: .destructive) {
-                Task { await model.delete(message) }
-            } label: {
-                Label("Delete", systemImage: "trash")
-            }
-        }
+            },
+            onDelete: { Task { await model.delete(message) } },
+            onDismiss: { withAnimation(Motion.standard) { actionTarget = nil } }
+        )
     }
 
     @ViewBuilder
@@ -380,16 +399,26 @@ struct ChatView: View {
     }
 }
 
+/// The composer: one floating pill.
+///
+/// Everything that adds *content* lives inside the pill — attach on the leading
+/// edge, the smiley on the trailing one — and the send button only exists when
+/// there is something to send. That is deliberate: an always-present grey
+/// arrow is a permanent piece of furniture that says "nothing to do here", and
+/// the two content buttons flanking the field is what makes the field read as
+/// the input rather than as one control among four.
+///
+/// One smiley, not a smiley and a "GIF": emoji and GIFs are the same errand
+/// ("put something expressive in this message") and they now share one sheet.
 struct Composer: View {
     @Binding var text: String
     let isSending: Bool
     var canAttach: Bool = false
-    var canSendGif: Bool = false
     var hasAttachments: Bool = false
     let onSend: () -> Void
     let onType: () -> Void
     var onAttach: () -> Void = {}
-    var onGif: () -> Void = {}
+    var onExpress: () -> Void = {}
 
     private var canSend: Bool {
         // A photo with no caption is a valid message, so attachments alone
@@ -399,62 +428,72 @@ struct Composer: View {
     }
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: 10) {
-            if canAttach {
-                Button(action: onAttach) {
-                    Image(systemName: "plus.circle.fill")
-                        .font(.system(size: 26))
-                        .foregroundStyle(Palette.paperMuted)
+        HStack(alignment: .bottom, spacing: 8) {
+            HStack(alignment: .bottom, spacing: 4) {
+                if canAttach {
+                    Button(action: onAttach) {
+                        Image(systemName: "plus")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(Palette.paperMuted)
+                            .frame(width: 34, height: 34)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("composer.attach")
+                    .accessibilityLabel("Add photo")
                 }
-                .accessibilityIdentifier("composer.attach")
-                .accessibilityLabel("Add photo")
-                .padding(.bottom, 3)
-            }
 
-            if canSendGif {
-                Button(action: onGif) {
-                    Text("GIF")
-                        .font(.system(size: 12, weight: .heavy))
+                TextField("Message", text: $text, axis: .vertical)
+                    // Stable identifiers: a SwiftUI TextField's accessibility
+                    // label is its placeholder, which vanishes once the field
+                    // has text — so a UI test that queries by "Message" stops
+                    // finding it exactly when it is being edited.
+                    .accessibilityIdentifier("composer.input")
+                    .textFieldStyle(.plain)
+                    .font(Typography.body)
+                    .foregroundStyle(Palette.paper)
+                    .lineLimit(1...5)
+                    .padding(.vertical, 8)
+                    .padding(.leading, canAttach ? 0 : 8)
+                    .onChange(of: text) { _, _ in onType() }
+
+                Button(action: onExpress) {
+                    Image(systemName: "face.smiling")
+                        .font(.system(size: 18))
                         .foregroundStyle(Palette.paperMuted)
+                        .frame(width: 34, height: 34)
                 }
-                .accessibilityIdentifier("composer.gif")
-                .padding(.bottom, 12)
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("composer.express")
+                .accessibilityLabel("Emoji and GIFs")
             }
+            .padding(.horizontal, 5)
+            // A continuous rounded rectangle rather than a Capsule: at one line
+            // it reads as a pill, and at five it does not turn into a lozenge
+            // with the text swimming in the middle.
+            .background(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .fill(Palette.surface)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .strokeBorder(Palette.border, lineWidth: 1)
+            )
 
-            TextField("Message", text: $text, axis: .vertical)
-                // Stable identifiers: a SwiftUI TextField's accessibility label
-                // is its placeholder, which vanishes once the field has text —
-                // so a UI test that queries by "Message" stops finding it
-                // exactly when it is being edited.
-                .accessibilityIdentifier("composer.input")
-                .textFieldStyle(.plain)
-                .font(Typography.body)
-                .foregroundStyle(Palette.paper)
-                .lineLimit(1...5)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 11)
-                .background(
-                    RoundedRectangle(cornerRadius: 20, style: .continuous)
-                        .fill(Palette.surface)
-                )
-                .onChange(of: text) { _, _ in onType() }
-
-            Button(action: onSend) {
-                Image(systemName: "arrow.up")
-                    .accessibilityHidden(true)
-                    .font(.system(size: 16, weight: .bold))
-                    .foregroundStyle(Palette.inkDeep)
-                    .frame(width: 40, height: 40)
-                    .background(
-                        Circle().fill(canSend ? Palette.signal : Palette.surfaceRaised)
-                    )
+            if canSend {
+                Button(action: onSend) {
+                    Image(systemName: "arrow.up")
+                        .accessibilityHidden(true)
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(Palette.inkDeep)
+                        .frame(width: 40, height: 40)
+                        .background(Circle().fill(Palette.signal))
+                }
+                .accessibilityIdentifier("composer.send")
+                .accessibilityLabel("Send")
+                .transition(.scale(scale: 0.6).combined(with: .opacity))
             }
-            .accessibilityIdentifier("composer.send")
-            .accessibilityLabel("Send")
-            .disabled(!canSend)
-            .scaleEffect(canSend ? 1 : 0.92)
-            .animation(Motion.press, value: canSend)
         }
+        .animation(Motion.press, value: canSend)
         .padding(.horizontal, Metrics.hPadding)
         .padding(.vertical, 10)
         .background(Palette.inkDeep)
@@ -466,6 +505,14 @@ struct MessageRow: View {
     let isGrouped: Bool
     var onToggleReaction: (String) -> Void = { _ in }
     var onOpenThread: (ThreadSummary) -> Void = { _ in }
+    /// Tapping who said it opens them. This is the discovery path that was
+    /// missing: before it, the only way to befriend someone you were talking to
+    /// was to already know their full `name#1234` and type it into a different
+    /// screen.
+    var onOpenProfile: (ProfileSubject) -> Void = { _ in }
+
+    /// A webhook has no account behind it, so there is nobody to open.
+    private var isPerson: Bool { !message.isWebhook }
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -473,16 +520,31 @@ struct MessageRow: View {
                 // Keeps the text column aligned without repeating the avatar.
                 Color.clear.frame(width: 36, height: 1)
             } else {
-                Avatar(name: message.authorName, seed: message.authorId, size: 36,
-                       url: message.authorAvatarUrl)
+                Button {
+                    onOpenProfile(ProfileSubject(message: message))
+                } label: {
+                    Avatar(name: message.authorName, seed: message.authorId, size: 36,
+                           url: message.authorAvatarUrl)
+                }
+                .buttonStyle(.plain)
+                .disabled(!isPerson)
+                .accessibilityIdentifier("message.avatar")
+                .accessibilityLabel(Text("Open \(message.authorName)'s profile"))
             }
 
             VStack(alignment: .leading, spacing: 3) {
                 if !isGrouped {
                     HStack(spacing: 6) {
-                        Text(message.authorName)
-                            .font(Typography.bodyMedium)
-                            .foregroundStyle(Palette.paper)
+                        Button {
+                            onOpenProfile(ProfileSubject(message: message))
+                        } label: {
+                            Text(message.authorName)
+                                .font(Typography.bodyMedium)
+                                .foregroundStyle(Palette.paper)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!isPerson)
+                        .accessibilityIdentifier("message.author")
                         if message.isWebhook {
                             Text("WEBHOOK")
                                 .font(.system(size: 9, weight: .bold))
@@ -508,10 +570,13 @@ struct MessageRow: View {
                         .italic()
                         .foregroundStyle(Palette.paperMuted)
                 } else if !message.body.isEmpty {
+                    // Deliberately NOT `.textSelection(.enabled)`: selectable
+                    // text eats the long press, and the long press is now how
+                    // the whole action menu is reached. "Copy text" is in that
+                    // menu, which is the errand selection was serving anyway.
                     MessageBodyText(body: message.body)
                         .font(Typography.body)
                         .foregroundStyle(Palette.paper)
-                        .textSelection(.enabled)
                 }
 
                 ForEach(message.attachments) { attachment in

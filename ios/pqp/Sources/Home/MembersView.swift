@@ -18,6 +18,7 @@ struct MembersView: View {
     @State private var error: String?
     @State private var showingBans = false
     @State private var reportTarget: ReportTarget?
+    @State private var profileSubject: ProfileSubject?
 
     /// The same ladder the web offers; any value in range is legal, these are
     /// just the rungs worth a menu row.
@@ -48,8 +49,18 @@ struct MembersView: View {
                                     .padding(.bottom, 4)
                             }
                             ForEach(members) { member in
-                                MemberRow(member: member, isTimedOut: timeouts[member.id] != nil)
-                                    .contextMenu { actions(for: member) }
+                                // Tap opens the person, long-press is still the
+                                // moderation menu. The roster was previously a
+                                // list you could only *look* at unless you were
+                                // a moderator, which is where "how do I add
+                                // someone to my friends" dead-ended.
+                                Button {
+                                    profileSubject = ProfileSubject(member: member)
+                                } label: {
+                                    MemberRow(member: member, isTimedOut: timeouts[member.id] != nil)
+                                }
+                                .buttonStyle(.plain)
+                                .contextMenu { actions(for: member) }
                             }
                         }
                         .padding(.horizontal, Metrics.hPadding)
@@ -74,6 +85,14 @@ struct MembersView: View {
             }
             .sheet(item: $reportTarget) { target in
                 ReportSheet(target: target)
+            }
+            .sheet(item: $profileSubject) { subject in
+                // No `onOpenConversation`: this sheet sits on a modal with no
+                // navigation stack of its own to push a chat onto. The profile
+                // dismisses itself either way, and the DM is one tap away in
+                // the Messages tab — offering a push that silently did nothing
+                // would be worse than not offering it here.
+                UserProfileSheet(subject: subject)
             }
             .task { await load() }
         }

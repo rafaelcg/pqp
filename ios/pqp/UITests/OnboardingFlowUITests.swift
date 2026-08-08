@@ -145,16 +145,18 @@ final class OnboardingFlowUITests: XCTestCase {
     func testServersLoadFromTheLiveAPI() {
         let server = TestSeed.createServer(self)
         defer { TestSeed.deleteServer(self, id: server.id) }
-        let name = server.name
         let app = launchFresh()
         app.buttons["Skip"].tap()
 
         XCTAssertTrue(app.buttons["hub.profile"].waitForExistence(timeout: 10))
         // If decoding broke, the rail is empty and this fails rather than
-        // quietly showing an empty state.
+        // quietly showing an empty state. Scrolled to by id rather than assumed
+        // on screen: leftovers from an interrupted run can push the newest
+        // server past the rail's right edge.
+        app.openServerFromHub(server.id)
         XCTAssertTrue(
-            app.staticTexts[name].waitForExistence(timeout: 10),
-            "A seeded server should decode and render"
+            app.staticTexts["general"].waitForExistence(timeout: 10),
+            "A seeded server should decode, render and open"
         )
     }
 
@@ -178,8 +180,11 @@ final class OnboardingFlowUITests: XCTestCase {
 
         let sent = "hello from ios \(Int.random(in: 1000...9999))"
         composer.typeText(sent)
-        // The send button is the only other control in the composer row.
-        app.buttons["composer.send"].tap()
+        // Send only exists once there is something to send, so it is waited for
+        // rather than assumed to be sitting there greyed out.
+        let sendButton = app.buttons["composer.send"]
+        XCTAssertTrue(sendButton.waitForExistence(timeout: 3))
+        sendButton.tap()
 
         // Sending goes out over the WebSocket and comes back as a broadcast.
         // Asserting on the text appearing proves the whole round trip, not just
@@ -275,8 +280,14 @@ final class MessageActionUITests: XCTestCase {
         XCTAssertTrue(composer.waitForExistence(timeout: 5))
         composer.tap()
         composer.typeText(text)
-        app.buttons["composer.send"].tap()
+        let sendButton = app.buttons["composer.send"]
+        XCTAssertTrue(sendButton.waitForExistence(timeout: 3))
+        sendButton.tap()
         XCTAssertTrue(app.staticTexts[text].waitForExistence(timeout: 10))
+        // Let the scroll-to-tail animation finish before anything presses on
+        // the row: a press issued mid-animation lands where the row *was*, and
+        // the author name directly above the body is now a profile link.
+        Thread.sleep(forTimeInterval: 0.7)
     }
 
     func testEditingAMessageUpdatesItAndMarksItEdited() {
@@ -301,7 +312,9 @@ final class MessageActionUITests: XCTestCase {
                        "Composer should be prefilled with the original body before typing")
         composer.tap()
         composer.typeText(" v2")
-        app.buttons["composer.send"].tap()
+        let sendButton = app.buttons["composer.send"]
+        XCTAssertTrue(sendButton.waitForExistence(timeout: 3))
+        sendButton.tap()
 
         XCTAssertTrue(
             app.staticTexts["\(original) v2"].waitForExistence(timeout: 10),

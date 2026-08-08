@@ -74,7 +74,10 @@ struct Avatar: View {
         return letters.isEmpty ? "?" : letters.joined().uppercased()
     }
 
-    private var hue: Double {
+    /// Static so anything else that wants to be "this person's colour" — the
+    /// banner on their profile, for one — derives the same hue from the same id
+    /// rather than picking its own and drifting.
+    static func hue(seed: String) -> Double {
         // Stable, cheap, and evenly spread — a plain sum clusters similar ids.
         var hash: UInt64 = 5381
         for byte in seed.utf8 {
@@ -82,6 +85,8 @@ struct Avatar: View {
         }
         return Double(hash % 360) / 360
     }
+
+    private var hue: Double { Avatar.hue(seed: seed) }
 
     private var imageUrl: URL? {
         guard let url, let parsed = URL(string: url),
