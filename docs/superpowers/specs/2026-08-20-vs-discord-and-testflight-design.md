@@ -27,7 +27,7 @@ Non-goals: App Store public release this cycle; landing-nav link (optional follo
 | pqp camera in calls works | True | Conversation/DM camera path; do **not** claim camera in every voice-channel UX if we only advertise call camera — copy says “camera in calls”. |
 | Free / open source / self-host | True | Hosted pqp.gg free; repo public; self-host docs. |
 | Native 18+ age gate | True | Server age gate from day one. |
-| Servers in São Paulo | True | `DEPLOY_TARGET=fly`, `fly.toml` `primary_region = gru`; privacy policy already says Fly São Paulo. |
+| Servers in São Paulo | True | Live API on Fly `gru`; privacy policy says São Paulo. **Marketing copy says “São Paulo” only — never “Fly” / “gru” (ops jargon).** |
 | Desktop app | True | Electron, offered on landing. |
 | iOS App Store live | **False** | Do not claim. |
 | iOS TestFlight | **True (internal already)** | Repo at version **1.0 (11)**; Release signing + `gg.pqp.app` + live Clerk key in `project.yml`. External beta + ASC Test Information still need owner steps. |
@@ -73,12 +73,14 @@ Optional secondary: link to TestFlight once a **public or invite link** exists (
 | Open source | yes | no |
 | Self-host | yes | no |
 | 18+ age gate | yes | yes (neutral) |
-| Where we run it | yes (São Paulo / Fly gru) | partial (global; don’t invent their map) |
+| Where we run it | yes — **São Paulo** (no vendor/region codes in UI) | partial (global; don’t invent their map) |
 | Native apps | **partial** — Desktop ships; iOS **TestFlight beta**, not App Store | yes — polish, Android, stores |
 | Ecosystem | no / young | yes |
 | Maturity | partial — open beta | yes |
 
 Copy lives in `catalogue.ts` + `messages.pt-BR.ts` under `vsDiscord.*` keys (drafted in research; polish in implementation). H1 may use the user’s “comparação honesta (2026)” framing in pt-BR; EN keeps the same honesty job.
+
+**Copy banlist for end-user strings:** `Fly`, `gru`, `Railway`, bundle IDs, mesh/SFU, Clerk — say “São Paulo”, “open source”, “self-host” (label), not infra.
 
 ### 3.5 Implementation sketch
 
