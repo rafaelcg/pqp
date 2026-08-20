@@ -80,6 +80,28 @@ const ROWS: ScoreRow[] = [
   },
 ];
 
+/**
+ * The four questions people actually search after the suspension, in page
+ * order. The edge middleware serves the same pairs as FAQPage JSON-LD
+ * (`src/lib/marketing-meta.ts`), and the suite pins the two copies together —
+ * so a question added here without its edge twin fails the tests, not silently
+ * drifts.
+ */
+const FAQ_ITEMS: { id: string; question: MessageKey; answer: MessageKey }[] = [
+  { id: "why", question: "vsDiscord.faq.why.q", answer: "vsDiscord.faq.why.a" },
+  {
+    id: "when",
+    question: "vsDiscord.faq.when.q",
+    answer: "vsDiscord.faq.when.a",
+  },
+  { id: "how", question: "vsDiscord.faq.how.q", answer: "vsDiscord.faq.how.a" },
+  {
+    id: "catch",
+    question: "vsDiscord.faq.catch.q",
+    answer: "vsDiscord.faq.catch.a",
+  },
+];
+
 const VERDICT: Record<
   Verdict,
   { icon: LucideIcon; label: MessageKey; className: string }
@@ -395,12 +417,43 @@ export function VsDiscordPage() {
             </ul>
           </section>
 
+          {/* The FAQ. Real page copy, not schema bait: the same four pairs go
+              out as FAQPage JSON-LD from the edge middleware, and the suite
+              pins the copies together. */}
+          <section
+            className="animate-rise mt-20"
+            style={stagger(4)}
+            aria-labelledby="vs-discord-faq"
+          >
+            <h2
+              id="vs-discord-faq"
+              className="text-balance text-center font-display text-2xl font-bold tracking-tight sm:text-3xl"
+            >
+              {t("vsDiscord.faq.title")}
+            </h2>
+            <dl className="mx-auto mt-8 max-w-2xl space-y-4">
+              {FAQ_ITEMS.map((item) => (
+                <div
+                  key={item.id}
+                  className="rounded-xl border border-ink-4 bg-ink-2/60 p-5 sm:p-6"
+                >
+                  <dt className="font-display text-base font-bold tracking-tight text-paper">
+                    {t(item.question)}
+                  </dt>
+                  <dd className="mt-2 text-pretty text-sm leading-relaxed text-paper-muted">
+                    {t(item.answer)}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          </section>
+
           {/* `#ios-beta` is linked from the footer on every marketing page, so
               the anchor exists whether or not the TestFlight URL does. */}
           <section
             id="ios-beta"
             className="animate-rise mt-20 scroll-mt-8 text-center"
-            style={stagger(4)}
+            style={stagger(5)}
             aria-labelledby="vs-discord-closing"
           >
             <h2
