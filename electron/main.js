@@ -8,6 +8,7 @@ const {
   ipcMain,
   session,
   systemPreferences,
+  desktopCapturer,
 } = require("electron");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -401,6 +402,38 @@ function configureSessionSecurity(appOrigin) {
 
   ses.setPermissionCheckHandler((_wc, permission) =>
     ALLOWED_PERMISSIONS.has(permission),
+  );
+
+  // `getDisplayMedia` exists in the renderer but resolves NOTHING until the
+  // shell answers the request — Chromium delegates "which screen?" to the
+  // embedder. Without this handler every share attempt rejects and the client
+  // reads it as "unsupported by this browser", which is a lie on desktop and
+  // the one claim this product cannot afford to break. On macOS 15+ the OS
+  // picker does the choosing; elsewhere (and as fallback) the primary screen
+  // is shared. Loopback audio is Windows-only in Chromium, so it is offered
+  // only there — asking for it on macOS fails the whole request.
+  ses.setDisplayMediaRequestHandler(
+    (_request, callback) => {
+      desktopCapturer
+        .getSources({ types: ["screen"] })
+        .then((sources) => {
+          const primary = sources[0];
+          if (!primary) {
+            callback(null);
+            return;
+          }
+          callback(
+            process.platform === "win32"
+              ? { video: primary, audio: "loopback" }
+              : { video: primary },
+          );
+        })
+        .catch((err) => {
+          console.warn("[pqp] screen capture source failed:", err?.message ?? err);
+          callback(null);
+        });
+    },
+    { useSystemPicker: true },
   );
 
   // Harden navigation: stay on the app origin; open others externally.
