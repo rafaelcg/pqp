@@ -319,12 +319,17 @@ export const en = {
   // Never put vendor region codes (Fly, gru) in end-user strings.
   "vsDiscord.seo.title": "pqp vs Discord (2026): an honest comparison",
   "vsDiscord.seo.description":
-    "Screen share and camera work on pqp. In Brazil, Discord’s screen share, video, and Go Live have been suspended since 17 Aug 2026 (Discord’s letter; no return date). Free, open source, open beta.",
-  "vsDiscord.hero.title": "pqp vs Discord (2026): an honest comparison",
+    "Screen share and camera in calls work on pqp. In Brazil, Discord’s screen share, video, and Go Live have been suspended since 17 Aug 2026 (Discord’s letter; no return date). Free, open source, open beta.",
+  "vsDiscord.hero.tagline": "an honest comparison (2026)",
   "vsDiscord.hero.body":
     "Discord is excellent — we are not going to pretend otherwise. Since 17 August 2026, Go Live, video, and screen share have been suspended in Brazil by ANPD order, with no return date. Communities that lived on watch parties, study-with-screen, and RPG tables lost the main tool. pqp is open source, free, and in open beta. Here is the scoreboard — including where Discord still wins.",
   "vsDiscord.hero.disclaimer":
     "Product claim, not legal advice: Discord has said screen share, video, and Go Live are suspended in Brazil since 17 Aug 2026 under an ANPD order, with no return date in their letter.",
+  "vsDiscord.featured.pqpDetail":
+    "Screen share, and camera in calls — right from the browser, today.",
+  "vsDiscord.featured.discordDetail":
+    "Since 17 Aug 2026, by ANPD order — no return date announced.",
+  "vsDiscord.table.title": "The full scoreboard",
   "vsDiscord.table.caption": "Feature scoreboard",
   "vsDiscord.table.col.feature": "Thing",
   "vsDiscord.table.col.pqp": "pqp",
@@ -335,9 +340,6 @@ export const en = {
   "vsDiscord.chip.no": "No",
   "vsDiscord.chip.partial": "Partial",
   "vsDiscord.row.screen.label": "Screen share & video in Brazil",
-  "vsDiscord.row.screen.pqp": "Works",
-  "vsDiscord.row.screen.discord":
-    "Suspended since 17 Aug 2026 — no return date",
   "vsDiscord.row.price.label": "Price",
   "vsDiscord.row.price.pqp": "Free",
   "vsDiscord.row.price.discord": "Free (paid extras via Nitro)",
@@ -349,7 +351,7 @@ export const en = {
   "vsDiscord.row.selfHost.discord": "No",
   "vsDiscord.row.ageGate.label": "Age verification",
   "vsDiscord.row.ageGate.pqp": "Native, from day one",
-  "vsDiscord.row.ageGate.discord": "Partial — varies by region",
+  "vsDiscord.row.ageGate.discord": "Yes",
   "vsDiscord.row.apps.label": "Native apps (desktop / phone)",
   "vsDiscord.row.apps.pqp":
     "Desktop ships. iOS is in TestFlight beta — not a public App Store listing yet.",

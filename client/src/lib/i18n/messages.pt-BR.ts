@@ -281,12 +281,17 @@ export const ptBR: PartialMessages = {
   // ------------------------------------------------------------- vs Discord
   "vsDiscord.seo.title": "pqp vs Discord (2026): comparação honesta",
   "vsDiscord.seo.description":
-    "Tela compartilhada e câmera funcionam no pqp. No Brasil, tela, vídeo e Go Live do Discord estão suspensos desde 17 ago 2026 (carta da Discord; sem data de volta). Grátis, código aberto, beta aberto.",
-  "vsDiscord.hero.title": "pqp vs Discord (2026): comparação honesta",
+    "Tela compartilhada e câmera nas chamadas funcionam no pqp. No Brasil, tela, vídeo e Go Live do Discord estão suspensos desde 17 ago 2026 (carta da Discord; sem data de volta). Grátis, código aberto, beta aberto.",
+  "vsDiscord.hero.tagline": "comparação honesta (2026)",
   "vsDiscord.hero.body":
     "O Discord é excelente — a gente não vai fingir que não é. Mas desde 17 de agosto de 2026, o Go Live, o vídeo e o compartilhamento de tela estão suspensos no Brasil, por ordem da ANPD, sem data para voltar. Enquanto isso, comunidades que viviam de watch party, estudo com tela aberta e mesa de RPG ficaram sem a ferramenta principal. O pqp é uma alternativa open-source, de graça e em beta aberto. Segue a comparação — incluindo onde o Discord ganha.",
   "vsDiscord.hero.disclaimer":
     "Afirmação de produto, não conselho jurídico: a Discord comunicou que tela compartilhada, vídeo e Go Live estão suspensos no Brasil desde 17 ago 2026 por ordem da ANPD, sem data de volta na carta deles.",
+  "vsDiscord.featured.pqpDetail":
+    "Tela compartilhada e câmera nas chamadas, direto do navegador — hoje.",
+  "vsDiscord.featured.discordDetail":
+    "Desde 17/08/2026, por ordem da ANPD — sem data para voltar.",
+  "vsDiscord.table.title": "O placar completo",
   "vsDiscord.table.caption": "Placar de recursos",
   "vsDiscord.table.col.feature": "Coisa",
   "vsDiscord.table.col.pqp": "pqp",
@@ -297,9 +302,6 @@ export const ptBR: PartialMessages = {
   "vsDiscord.chip.no": "Não",
   "vsDiscord.chip.partial": "Parcial",
   "vsDiscord.row.screen.label": "Compartilhamento de tela e vídeo no Brasil",
-  "vsDiscord.row.screen.pqp": "Funciona",
-  "vsDiscord.row.screen.discord":
-    "Suspenso desde 17/08/2026, sem previsão",
   "vsDiscord.row.price.label": "Preço",
   "vsDiscord.row.price.pqp": "De graça",
   "vsDiscord.row.price.discord": "De graça (recursos pagos via Nitro)",
@@ -311,7 +313,7 @@ export const ptBR: PartialMessages = {
   "vsDiscord.row.selfHost.discord": "Não",
   "vsDiscord.row.ageGate.label": "Verificação de idade",
   "vsDiscord.row.ageGate.pqp": "Nativa, desde o primeiro dia",
-  "vsDiscord.row.ageGate.discord": "Parcial, varia por região",
+  "vsDiscord.row.ageGate.discord": "Sim",
   "vsDiscord.row.apps.label": "Apps nativos (desktop/celular)",
   "vsDiscord.row.apps.pqp":
     "Desktop já tem. iOS está em beta no TestFlight — ainda sem listagem pública na App Store.",
