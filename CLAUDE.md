@@ -2,7 +2,7 @@
 
 Open-source Discord-like voice + text chat (**pqp.gg**). Repo: [rafaelcg/pqp](https://github.com/rafaelcg/pqp).
 
-For current product status and open work, see [`docs/HANDOVER.md`](./docs/HANDOVER.md). Deeper design: [`ARCHITECTURE.md`](./ARCHITECTURE.md). Deploy: [`docs/DEPLOY.md`](./docs/DEPLOY.md), [`docs/deploy-railway.md`](./docs/deploy-railway.md).
+For current product status and open work, see [`docs/HANDOVER.md`](./docs/HANDOVER.md). Deeper design: [`ARCHITECTURE.md`](./ARCHITECTURE.md). Deploy: [`docs/DEPLOY.md`](./docs/DEPLOY.md), [`docs/deploy-fly.md`](./docs/deploy-fly.md).
 
 ## Stack
 
@@ -60,7 +60,7 @@ See `.env.example`. Important names:
 | Communities | `COMMUNITIES_ENABLED` (default off — read `docs/CONTENT_SAFETY.md` §Communities first; it changes the instance's legal category, not just its features) |
 | Electron | `VITE_APP_URL` |
 
-**Rule:** never commit `.env` / secrets. Prefer serving ICE via `GET /api/ice-servers` (Railway) over baking TURN into the Pages build.
+**Rule:** never commit `.env` / secrets. Prefer serving ICE via `GET /api/ice-servers` (the API) over baking TURN into the Pages build.
 
 ## Architecture (short)
 
@@ -80,16 +80,16 @@ Browser/Electron → Clerk (auth)
 
 ## Deploy targets (hosted)
 
-| Piece | Where | URL (as of 2026-07-11) |
+| Piece | Where | URL (as of 2026-08-20) |
 |---|---|---|
 | Static SPA | Cloudflare Pages project `pqp` | https://pqp-3yr.pages.dev |
-| API + WS | Railway | https://api-production-206d.up.railway.app — `wss://…/ws` |
+| API + WS | Fly.io app `pqp-api`, region `gru` (São Paulo) | https://api.pqp.gg — `wss://api.pqp.gg/ws` |
 
-CI workflows: `.github/workflows/ci.yml`, `deploy-web.yml`, `electron.yml`.
+CI workflows: `.github/workflows/ci.yml`, `deploy-web.yml`, `deploy-api-fly.yml` (API auto-deploys from `main` — a merged schema/endpoint change is live minutes later), `electron.yml`.
 
 **GitHub Actions secrets (names):** `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `VITE_CLERK_PUBLISHABLE_KEY`, `VITE_API_URL`, `VITE_WS_URL`.
 
-**Railway env (names):** `DATABASE_URL`, `CLERK_SECRET_KEY`, plus TURN/ICE vars above and `S3_*` if attachments are wanted. Do not put Clerk secret, TURN credentials, or S3 keys in Pages/client secrets.
+**API secrets on Fly (names):** `DATABASE_URL`, `CLERK_SECRET_KEY`, plus TURN/ICE vars above and `S3_*` if attachments are wanted. A stale Railway copy may still answer at api-production-206d.up.railway.app; nothing points at it. Do not put Clerk secret, TURN credentials, or S3 keys in Pages/client secrets.
 
 ## Pitfalls already hit
 
