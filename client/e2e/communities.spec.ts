@@ -305,9 +305,13 @@ test.describe("Communities", () => {
       .click();
 
     // The directory gets out of the way, and the form it handed you is the
-    // existing create flow — renamed, not rebuilt.
+    // existing create flow — renamed, not rebuilt. A dialog, not a strip: the
+    // checklist's "Make a community" used to paint that strip above Friends
+    // where nobody looking at the button could see it.
     await expect(page.locator("[data-communities-view]")).toHaveCount(0);
-    await expect(page.getByPlaceholder("Community name")).toBeVisible();
+    await expect(
+      page.getByRole("dialog").getByPlaceholder("Community name"),
+    ).toBeVisible();
   });
 
   test("escape and the close button both put the app back", async ({ page }) => {

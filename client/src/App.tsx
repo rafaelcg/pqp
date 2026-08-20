@@ -82,6 +82,7 @@ import {
 import { usePushToTalk } from "@/components/voice/use-push-to-talk";
 import { useVoiceStateSync } from "@/components/voice/voice-state-sync";
 import { VoiceStatusBar } from "@/components/voice/voice-status-bar";
+import { Dialog } from "@/components/ui/dialog";
 import { PromptDialog } from "@/components/ui/prompt-dialog";
 import { Seo } from "@/components/marketing/seo";
 import {
@@ -3169,38 +3170,6 @@ function MainAppContent({
           </div>
         )}
 
-        {showCreateServer && (
-          <div className="border-b border-ink-4/60 bg-ink-2 p-4">
-            <div className="flex flex-col gap-2 sm:flex-row">
-              <Input
-                value={newServerName}
-                onChange={(e) => setNewServerName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    void handleCreateServer();
-                  }
-                }}
-                placeholder={t("communities.create.placeholder")}
-                autoFocus
-              />
-              <div className="flex gap-2">
-                <Button
-                  onClick={() => void handleCreateServer()}
-                  disabled={!newServerName.trim() || creatingServer}
-                >
-                  {creatingServer ? "Creating…" : "Create"}
-                </Button>
-                <Button
-                  variant="ghost"
-                  onClick={() => setShowCreateServer(false)}
-                >
-                  Cancel
-                </Button>
-              </div>
-            </div>
-          </div>
-        )}
-
         {/* Home with nothing selected is the Friends view — who is online,
             and the requests waiting on you. The generic empty state below now
             only serves the server-side selections. */}
@@ -3469,6 +3438,58 @@ function MainAppContent({
           void dropServer(serverId);
         }}
       />
+
+      {/* A dialog rather than the old inline strip at the top of `<main>`:
+          that strip sat above the Friends header, outside the scroll region
+          that holds the first-run checklist, so "Make a community" looked like
+          a dead button from the place people actually click it. */}
+      <Dialog
+        open={showCreateServer}
+        title={t("communities.create.title")}
+        description={t("communities.create.body")}
+        size="sm"
+        onClose={() => {
+          setShowCreateServer(false);
+          setNewServerName("");
+        }}
+        footer={
+          <>
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => {
+                setShowCreateServer(false);
+                setNewServerName("");
+              }}
+              disabled={creatingServer}
+            >
+              {t("invite.join.cancel")}
+            </Button>
+            <Button
+              type="button"
+              onClick={() => void handleCreateServer()}
+              disabled={!newServerName.trim() || creatingServer}
+            >
+              {creatingServer ? "Creating…" : "Create"}
+            </Button>
+          </>
+        }
+      >
+        <div className="px-5 py-4">
+          <Input
+            value={newServerName}
+            onChange={(e) => setNewServerName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                void handleCreateServer();
+              }
+            }}
+            placeholder={t("communities.create.placeholder")}
+            autoFocus
+            disabled={creatingServer}
+          />
+        </div>
+      </Dialog>
 
       <InvitePanel
         open={inviteMode !== null}

@@ -186,6 +186,16 @@ test("the checklist's buttons open the things they name", async ({ page }) => {
   await page.getByRole("button", { name: "I'll do this later" }).click();
   await expect(page.locator(card)).toBeVisible({ timeout: 20_000 });
 
+  // "Make a community" — a dialog, same weight as "Use an invite". The old
+  // inline strip at the top of `<main>` sat above the Friends header and
+  // outside the scroll region that holds the checklist, so from the button
+  // it looked like nothing happened.
+  await page.getByRole("button", { name: "Make a community" }).click();
+  await expect(
+    page.getByRole("dialog").getByPlaceholder("Community name"),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Cancel" }).click();
+
   // "Use an invite" — the join dialog, which the rail's unlabelled icon was the
   // only previous route to.
   await page.getByRole("button", { name: "Use an invite" }).click();
@@ -250,7 +260,10 @@ test("making a server ticks the server row and leaves the other two", async ({
   await expect(page.locator(card)).toBeVisible({ timeout: 20_000 });
 
   await page.getByRole("button", { name: "Make a community" }).click();
-  await page.getByPlaceholder("Community name").fill("Panelinha");
+  await page
+    .getByRole("dialog")
+    .getByPlaceholder("Community name")
+    .fill("Panelinha");
   await page.getByRole("button", { name: "Create", exact: true }).click();
 
   // Creating opens the new server, so come back to the hub to read the card.
