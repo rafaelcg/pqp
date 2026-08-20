@@ -82,6 +82,7 @@ import {
 import { usePushToTalk } from "@/components/voice/use-push-to-talk";
 import { useVoiceStateSync } from "@/components/voice/voice-state-sync";
 import { VoiceStatusBar } from "@/components/voice/voice-status-bar";
+import { BetaTag } from "@/components/ui/beta-tag";
 import { Dialog } from "@/components/ui/dialog";
 import { PromptDialog } from "@/components/ui/prompt-dialog";
 import { Seo } from "@/components/marketing/seo";
@@ -233,9 +234,10 @@ function ClerkAppGate() {
         <div className="animate-rise relative z-10 max-w-lg">
           <Link
             to="/"
-            className="mb-3 inline-block text-xs uppercase tracking-[0.28em] text-signal"
+            className="mb-3 inline-flex items-center gap-2 text-xs uppercase tracking-[0.28em] text-signal"
           >
             pqp.gg
+            <BetaTag />
           </Link>
           <h1 className="font-display text-5xl font-extrabold leading-[0.95] sm:text-6xl">
             {t("signedOut.title")}

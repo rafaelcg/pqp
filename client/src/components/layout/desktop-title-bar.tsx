@@ -16,7 +16,7 @@ export function DesktopTitleBar() {
       className="desktop-drag flex h-10 shrink-0 items-center border-b border-ink-4/50 bg-rail"
     >
       <div className="pointer-events-none pl-[76px] font-display text-[11px] font-semibold tracking-[0.18em] text-paper-muted uppercase">
-        pqp
+        pqp beta
       </div>
     </header>
   );
