@@ -192,6 +192,8 @@ export const en = {
   // The Orkut sentence, and the one string on this page worth arguing about:
   // it is "member of N communities", not "N communities". The fact being shown
   // is belonging, not inventory.
+  "publicProfile.achievements": "Achievements",
+  "publicProfile.achievements.cacaBugs": "Found a real bug and told us",
   "publicProfile.communities.count": "member of {count} communities",
   "publicProfile.communities.count.one": "member of 1 community",
   "publicProfile.depoimentos": "{count} testimonials",
@@ -1121,6 +1123,22 @@ export const en = {
   "settings.section.appearance": "Appearance & Language",
   "settings.section.privacy": "Privacy",
   "settings.section.data": "Your data",
+  "settings.section.feedback": "Feedback",
+  "settings.feedback.description": "Bugs, ideas, anything on your mind",
+  "settings.feedback.intro":
+    "Found a bug? Tell us — a confirmed catch earns the 🐛 caça-bugs badge on your public profile. Ideas and gripes welcome too.",
+  "settings.feedback.kind.label": "What is it?",
+  "settings.feedback.kind.bug": "Bug",
+  "settings.feedback.kind.idea": "Idea",
+  "settings.feedback.kind.other": "Other",
+  "settings.feedback.placeholder":
+    "What happened, and where? The more detail, the faster the hunt.",
+  "settings.feedback.send": "Send it",
+  "settings.feedback.done":
+    "Got it. If the bug checks out, the badge is yours. 🐛",
+  "settings.feedback.again": "Send another",
+  "settings.feedback.error": "Sending failed. Try again.",
+  "userMenu.feedback": "Send feedback",
 
   // -- profile
   "settings.profile.description": "How you show up to everybody else.",

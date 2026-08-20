@@ -1,4 +1,4 @@
-import { Check, Mic, MicOff, Settings } from "lucide-react";
+import { Bug, Check, Mic, MicOff, Settings } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { UserButton } from "@clerk/clerk-react";
 import type { ManualStatus, UserStatus } from "@pqp/shared";
@@ -25,6 +25,8 @@ interface UserPanelProps {
   onSetStatus: (status: ManualStatus) => void;
   onToggleMute: () => void;
   onOpenSettings: () => void;
+  /** Opens settings straight at the feedback section. */
+  onOpenFeedback: () => void;
 }
 
 /**
@@ -76,6 +78,7 @@ export function UserPanel({
   onSetStatus,
   onToggleMute,
   onOpenSettings,
+  onOpenFeedback,
 }: UserPanelProps) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -165,6 +168,21 @@ export function UserPanel({
               {statusError}
             </p>
           )}
+          {/* The low-key home of the feedback box: one quiet menu item under
+              the status choices, on every screen, costing no footer space. */}
+          <div role="separator" className="my-1 border-t border-ink-4/60" />
+          <button
+            type="button"
+            role="menuitem"
+            className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm text-paper outline-none hover:bg-ink-3 focus-visible:bg-ink-3"
+            onClick={() => {
+              onOpenFeedback();
+              setOpen(false);
+            }}
+          >
+            <Bug className="h-4 w-4 shrink-0 text-paper-muted" aria-hidden />
+            {t("userMenu.feedback")}
+          </button>
         </div>
       )}
 

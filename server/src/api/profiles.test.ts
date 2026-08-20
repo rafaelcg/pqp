@@ -313,6 +313,7 @@ describeDb("public handles and profiles", () => {
       "/api/public/profiles/rafa",
     );
     expect(Object.keys(response.body.profile).sort()).toEqual([
+      "achievements",
       "avatarUrl",
       "badges",
       "bannerUrl",

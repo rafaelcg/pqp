@@ -13,6 +13,7 @@ import {
 } from "@pqp/shared";
 import { getPool } from "../db.js";
 import { HttpError } from "../lib/http.js";
+import { listUserAchievements } from "./feedback.js";
 
 /**
  * Handles and the thin public profile they address.
@@ -342,11 +343,13 @@ export async function getPublicProfileByHandle(
     return null;
   }
 
-  const [badges, depoimentoCount, depoimentos] = await Promise.all([
-    listProfileBadges(row.id),
-    countApprovedDepoimentos(row.id),
-    listPublicDepoimentos(row.id),
-  ]);
+  const [badges, achievements, depoimentoCount, depoimentos] =
+    await Promise.all([
+      listProfileBadges(row.id),
+      listUserAchievements(row.id),
+      countApprovedDepoimentos(row.id),
+      listPublicDepoimentos(row.id),
+    ]);
 
   return {
     handle: row.handle,
@@ -354,6 +357,7 @@ export async function getPublicProfileByHandle(
     avatarUrl: row.avatar_url,
     bannerUrl: row.banner_url,
     badges,
+    achievements,
     depoimentoCount,
     depoimentos,
     // MONTH, NEVER A DAY, and the truncation happens here rather than in the

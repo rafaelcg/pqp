@@ -8,6 +8,7 @@ export * from "./communities.js";
 export * from "./depoimentos.js";
 export * from "./dm.js";
 export * from "./embeds.js";
+export * from "./feedback.js";
 export * from "./friends.js";
 export * from "./gifs.js";
 export * from "./moderation.js";

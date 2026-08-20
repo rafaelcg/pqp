@@ -178,6 +178,8 @@ export const ptBR: PartialMessages = {
   "publicProfile.seo.title": "{name} (@{handle}) no pqp",
   "publicProfile.seo.description": "{name} tá no pqp. Me adiciona.",
   "publicProfile.communities": "Comunidades",
+  "publicProfile.achievements": "Conquistas",
+  "publicProfile.achievements.cacaBugs": "Achou bug de verdade e avisou",
   "publicProfile.communities.count": "membro de {count} comunidades",
   "publicProfile.communities.count.one": "membro de 1 comunidade",
   "publicProfile.depoimentos": "{count} depoimentos",
@@ -993,6 +995,21 @@ export const ptBR: PartialMessages = {
   "settings.section.appearance": "Aparência e idioma",
   "settings.section.privacy": "Privacidade",
   "settings.section.data": "Seus dados",
+  "settings.section.feedback": "Feedback",
+  "settings.feedback.description": "Bug, ideia, o que tiver na cabeça",
+  "settings.feedback.intro":
+    "Achou bug? Conta pra gente — caça confirmada ganha o selo 🐛 caça-bugs no seu perfil público. Ideia e reclamação também valem.",
+  "settings.feedback.kind.label": "O que é?",
+  "settings.feedback.kind.bug": "Bug",
+  "settings.feedback.kind.idea": "Ideia",
+  "settings.feedback.kind.other": "Outro",
+  "settings.feedback.placeholder":
+    "O que aconteceu, e onde? Quanto mais detalhe, mais rápida a caçada.",
+  "settings.feedback.send": "Manda",
+  "settings.feedback.done": "Recebido. Se o bug for real, o selo é seu. 🐛",
+  "settings.feedback.again": "Mandar outro",
+  "settings.feedback.error": "Deu ruim ao enviar. Tenta de novo.",
+  "userMenu.feedback": "Enviar feedback",
 
   // -- perfil
   "settings.profile.description": "Como você aparece pra todo mundo.",

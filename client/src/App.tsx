@@ -68,6 +68,7 @@ import {
   saveLocalSettings,
   SettingsModal,
   type LocalSettings,
+  type SettingsSectionId,
 } from "@/components/layout/settings-modal";
 import { SanctionNoticeBar } from "@/components/layout/sanction-notice-bar";
 import { SsoServerSuggestions } from "@/components/layout/sso-server-suggestions";
@@ -351,6 +352,11 @@ function MainAppContent({
   const [connection, setConnection] = useState<RealtimeStatus>("idle");
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Non-null only while a caller wants a specific section on open — the user
+  // menu's "send feedback". The gear clears it so the dialog keeps its sticky
+  // last-visited section.
+  const [settingsSection, setSettingsSection] =
+    useState<SettingsSectionId | null>(null);
   const [serverSettingsOpen, setServerSettingsOpen] = useState(false);
   const [inviteMode, setInviteMode] = useState<"create" | "join" | null>(null);
   const [inviteCodeFromUrl, setInviteCodeFromUrl] = useState<string | null>(null);
@@ -2559,7 +2565,14 @@ function MainAppContent({
         statusError={status.error}
         onSetStatus={status.setManual}
         onToggleMute={() => voice.toggleMute()}
-        onOpenSettings={() => setSettingsOpen(true)}
+        onOpenSettings={() => {
+          setSettingsSection(null);
+          setSettingsOpen(true);
+        }}
+        onOpenFeedback={() => {
+          setSettingsSection("feedback");
+          setSettingsOpen(true);
+        }}
       />
     </>
   );
@@ -3193,7 +3206,10 @@ function MainAppContent({
                     // The avatar picker's only home is the profile section of
                     // settings, three clicks in and behind a gear nothing points
                     // at. The card is the first thing in the product that does.
-                    onPickAvatar: () => setSettingsOpen(true),
+                    onPickAvatar: () => {
+                      setSettingsSection("profile");
+                      setSettingsOpen(true);
+                    },
                     onSettled: settleFirstRun,
                   }
                 : undefined
@@ -3408,6 +3424,7 @@ function MainAppContent({
 
       <SettingsModal
         open={settingsOpen}
+        requestedSection={settingsSection}
         user={user}
         localSettings={localSettings}
         voiceAnalyser={voice.getAnalyser()}

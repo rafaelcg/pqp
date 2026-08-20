@@ -27,7 +27,9 @@ import type {
   MemberTimeout,
   Message,
   MessageSearchResponse,
+  CreateFeedbackRequest,
   CreateReportRequest,
+  FeedbackItem,
   PublicCommunity,
   PublicProfile,
   PublicUser,
@@ -1107,6 +1109,13 @@ export const previewInvite = (code: string) =>
  */
 export const createReport = (body: CreateReportRequest) =>
   post<{ report: Report }>("/api/reports", body);
+
+/**
+ * The settings feedback box — product feedback for the operator, a different
+ * queue from reports entirely.
+ */
+export const sendFeedback = (body: CreateFeedbackRequest) =>
+  post<{ feedback: FeedbackItem }>("/api/feedback", body);
 
 /** Same bare-integer cursor contract as the audit log. */
 function reportQuery(options: { before?: string; status?: ReportStatus }) {
