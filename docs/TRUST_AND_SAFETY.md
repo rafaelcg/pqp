@@ -15,7 +15,8 @@ Operational companion to the three public legal pages:
 > lawyer if the project ever grows into something that can afford one — it is a
 > deferred list, not a launch blocker.
 >
-> The pages are English-only. A pt-BR translation is still outstanding (§6).
+> The legal pages ship in English and pt-BR (`client/src/pages/legal/`). App
+> chrome uses i18next; see [`I18N.md`](./I18N.md).
 
 ---
 
@@ -515,7 +516,7 @@ Ordered by how badly it hurts at launch.
 | **Temporary sanctions (timeout/mute)** | The ladder jumped from message deletion straight to ban. No graduated enforcement was possible | **Built** — server-scoped timeouts, §3.7. Enforced at two chokepoints plus the voice join; expiry needs no sweeper. Remaining gap: the web client does not yet render the `sanction-notice` frame (two lines in `App.tsx` and `use-chat.ts`) |
 | **Account deletion is a ban-evasion route** | A banned user deletes their account, signs up again, and walks back in. Bans are keyed on `users.id`, which is regenerated on re-registration, and `server_bans.user_id` is `ON DELETE CASCADE` — so the ban rows are gone before the new account even exists | **Deliberately not closed. Needs a retention decision, not a code change.** See §6.1 |
 | **Platform-level moderation tooling** | No admin console. Platform-level actions are still mostly manual SQL or borrowing a server owner's permissions | **Partly built** — account termination now has an operator route (`DELETE /api/admin/users/:userId`, §3.3), gated on `INSTANCE_MODERATOR_CLERK_IDS`. There is still no UI, no instance-level audit log, and no operator route for anything else |
-| **pt-BR translation of these three pages** | A privacy policy in English for a Brazilian audience is bad practice and arguably defeats informed consent. Only Clerk's sign-in modal is translated (`client/src/lib/locale.ts`); the app's own strings, including these pages, are English-only | **Not built** |
+| **pt-BR translation of these three pages** | Legal pages have `pages/legal/*.{en,pt-BR}.tsx`. App chrome uses i18next (`docs/I18N.md`) | **Built** |
 | **Link-preview cache never purged** | `link_embeds` rows are overwritten on refresh but never deleted. Contains third-party page metadata keyed by URL hash, not tied to a user — low risk, but it is unbounded | **Known** |
 | **DMs have no retention and no moderation** | `message_retention_days` joins through `channels.server_id`, which is NULL for DMs, so DM history is kept forever. In a DM only the author can delete a message | **By design; disclosed in the privacy policy** |
 | **`DELETE /api/dms/:channelId` hides, it does not delete** | Users may reasonably read "remove conversation" as deletion. Disclosed in the privacy policy; consider relabelling the UI | **Known** |

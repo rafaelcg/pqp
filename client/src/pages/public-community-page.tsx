@@ -228,14 +228,12 @@ function CommunityPoster({ community }: { community: PublicCommunity }) {
       })
     : null;
 
-  const memberLabel =
-    community.memberCount === 1
-      ? t("publicCommunity.members.one")
-      : t("publicCommunity.members", {
-          count: community.memberCount.toLocaleString(
-            locale === "pt-BR" ? "pt-BR" : "en-US",
-          ),
-        });
+  const memberLabel = t("publicCommunity.members", {
+    count: community.memberCount,
+    countLabel: community.memberCount.toLocaleString(
+      locale === "pt-BR" ? "pt-BR" : "en-US",
+    ),
+  });
 
   return (
     <CommunityShell>

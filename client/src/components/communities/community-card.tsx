@@ -10,7 +10,6 @@ import {
   cardAction,
   communityHue,
   formatMemberCount,
-  memberCountKey,
   monogram,
 } from "./communities-model";
 
@@ -221,8 +220,9 @@ export function CommunityCard({
           {/* Tabular figures so a column of counts lines up rather than
               shimmering as the digits change width. */}
           <span className="tabular-nums">
-            {t(memberCountKey(community.memberCount), {
-              count: formatMemberCount(community.memberCount, locale),
+            {t("communities.members", {
+              count: community.memberCount,
+              countLabel: formatMemberCount(community.memberCount, locale),
             })}
           </span>
         </p>

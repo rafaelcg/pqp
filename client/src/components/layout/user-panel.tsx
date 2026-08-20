@@ -236,8 +236,8 @@ export function UserPanel({
         className="h-8 w-8 shrink-0"
         onClick={onToggleMute}
         disabled={!inVoice}
-        title={isMuted ? "Unmute" : "Mute"}
-        aria-label={isMuted ? "Unmute microphone" : "Mute microphone"}
+        title={isMuted ? t("userPanel.unmute") : t("userPanel.mute")}
+        aria-label={isMuted ? t("userPanel.unmuteMic") : t("userPanel.muteMic")}
         aria-pressed={isMuted}
       >
         {isMuted ? (
@@ -251,8 +251,8 @@ export function UserPanel({
         size="icon"
         className="h-8 w-8 shrink-0"
         onClick={onOpenSettings}
-        title="Settings"
-        aria-label="Open settings"
+        title={t("userPanel.settings")}
+        aria-label={t("userPanel.openSettings")}
       >
         <Settings className="h-4 w-4" />
       </Button>

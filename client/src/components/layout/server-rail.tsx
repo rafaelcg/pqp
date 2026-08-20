@@ -113,8 +113,8 @@ export function ServerRail({
       <button
         type="button"
         onClick={onSelectHome}
-        title="Direct messages"
-        aria-label="Direct messages"
+        title={t("chrome.directMessages")}
+        aria-label={t("chrome.directMessages")}
         aria-current={homeSelected ? "page" : undefined}
         className={cn(
           "relative flex h-12 w-12 items-center justify-center rounded-2xl transition-all duration-200 hover:rounded-xl",
@@ -186,17 +186,17 @@ export function ServerRail({
         const items: ContextMenuItemDef[] = [
           {
             id: "invite",
-            label: "Invite people",
+            label: t("chrome.invitePeople"),
             onSelect: () => onInvite(server.id),
           },
           {
             id: "members",
-            label: "Members",
+            label: t("chrome.members"),
             onSelect: () => onOpenMembers(server.id),
           },
           {
             id: "settings",
-            label: "Community settings",
+            label: t("chrome.communitySettings"),
             onSelect: () => onOpenSettings(server.id),
           },
         ];
@@ -221,7 +221,7 @@ export function ServerRail({
             { id: "sep", label: "", separator: true },
             {
               id: "leave",
-              label: "Leave community",
+              label: t("chrome.leaveCommunity"),
               danger: true,
               onSelect: () => onLeaveServer(server.id),
             },
@@ -289,8 +289,8 @@ export function ServerRail({
         size="icon"
         className="h-12 w-12 rounded-2xl hover:rounded-xl"
         onClick={onJoinServer}
-        title="Join with invite"
-        aria-label="Join with invite"
+        title={t("chrome.joinInvite")}
+        aria-label={t("chrome.joinInvite")}
       >
         <UserPlus className="h-5 w-5" />
       </Button>

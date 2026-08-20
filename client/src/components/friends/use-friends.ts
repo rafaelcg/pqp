@@ -18,7 +18,7 @@ import {
   fetchPendingDepoimentos,
 } from "@/components/depoimentos/depoimentos-api";
 import { waitingOnYou } from "@/components/depoimentos/depoimentos-model";
-import { translateMessage } from "@/lib/i18n/catalogue";
+import { translateMessage } from "@/lib/i18n";
 import {
   acceptFriendRequest,
   fetchFriends,

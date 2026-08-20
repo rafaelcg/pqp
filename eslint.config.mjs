@@ -88,7 +88,9 @@ export default tseslint.config(
     // point (see `tools/ambient`).
     files: [
       "scripts/**/*.mjs",
+      "client/scripts/**/*.mjs",
       "client/bench/**/*.mjs",
+      "electron/**/*.mjs",
       "tools/**/*.{js,mjs}",
       "*.mjs",
     ],

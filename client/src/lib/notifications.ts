@@ -18,6 +18,7 @@ import type {
 } from "@pqp/shared";
 import { channelRoutePath, conversationRoutePath } from "@/lib/app-route";
 import { getDesktop } from "@/lib/desktop";
+import { translateMessage } from "@/lib/i18n";
 import { queuePreferenceSync } from "@/lib/preferences";
 
 export type { NotificationLevel };
@@ -473,14 +474,18 @@ function describe(burst: Burst): { title: string; body: string } {
     ? isConversation
       ? activity.channelName
       : `#${activity.channelName}`
-    : "New activity";
+    : translateMessage("notify.activity");
   const title = activity.serverName ? `${channel} — ${activity.serverName}` : channel;
   if (burst.mentions > 0) {
-    const plural = burst.mentions === 1 ? "" : "s";
-    return { title, body: `${burst.mentions} new mention${plural}` };
+    return {
+      title,
+      body: translateMessage("notify.mentions", { count: burst.mentions }),
+    };
   }
-  const plural = burst.count === 1 ? "" : "s";
-  return { title, body: `${burst.count} new message${plural}` };
+  return {
+    title,
+    body: translateMessage("notify.messages", { count: burst.count }),
+  };
 }
 
 function deliver(burst: Burst): void {

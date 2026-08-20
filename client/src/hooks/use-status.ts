@@ -6,7 +6,7 @@ import {
   type UserStatus,
 } from "@pqp/shared";
 import { updatePreferences } from "@/lib/api";
-import { translateMessage } from "@/lib/i18n/catalogue";
+import { translateMessage } from "@/lib/i18n";
 import { setDoNotDisturb } from "@/lib/notifications";
 
 /**

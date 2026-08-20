@@ -155,7 +155,7 @@ export async function resetPreferences(): Promise<void> {
 export async function openApp(page: Page): Promise<void> {
   await ensureServer();
   await resetPreferences();
-  await page.goto("/app");
+  await page.goto("/app?lang=en");
   await expect(page.getByText("Dev auth bypass")).toBeVisible({ timeout: 20_000 });
   // The composer only exists once a text channel is selected.
   await expect(page.getByRole("button", { name: "Send" })).toBeVisible({

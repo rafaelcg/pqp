@@ -91,18 +91,20 @@ export function ChannelMetaDialog({
   return (
     <Dialog
       open={open && channel !== null}
-      eyebrow="Channel"
-      title={`Edit #${channel?.name ?? "channel"}`}
-      description="Topic shows in the channel header. Icon can be an emoji or image URL."
+      eyebrow={t("channelMeta.eyebrow")}
+      title={t("channelMeta.title", {
+        name: channel?.name ?? t("channelMeta.titleFallback"),
+      })}
+      description={t("channelMeta.description")}
       size="sm"
       onClose={onClose}
       footer={
         <>
           <Button type="button" variant="ghost" onClick={onClose}>
-            Cancel
+            {t("common.cancel")}
           </Button>
           <Button type="submit" form={formId} disabled={saving}>
-            {saving ? "Saving…" : "Save"}
+            {saving ? t("common.saving") : t("common.save")}
           </Button>
         </>
       }
@@ -114,12 +116,12 @@ export function ChannelMetaDialog({
       >
         <label className="mb-3 block">
           <span className="mb-1 block text-xs uppercase tracking-wide text-paper-muted">
-            Topic
+            {t("channelMeta.topic")}
           </span>
           <Input
             value={topic}
             onChange={(e) => setTopic(e.target.value)}
-            placeholder="What is this channel about?"
+            placeholder={t("channelMeta.topicPlaceholder")}
             maxLength={200}
             autoFocus
           />

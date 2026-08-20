@@ -1651,7 +1651,7 @@ function MainAppContent({
   }
 
   async function handleDeleteChannel(channelId: string) {
-    if (!window.confirm("Delete this channel? Messages cannot be recovered.")) {
+    if (!window.confirm(t("chrome.deleteChannelConfirm"))) {
       return;
     }
     try {
@@ -1745,7 +1745,7 @@ function MainAppContent({
   );
 
   async function handleLeaveServer(serverId: string) {
-    if (!window.confirm("Leave this server?")) {
+    if (!window.confirm(t("chrome.leaveServer"))) {
       return;
     }
     try {
@@ -1753,7 +1753,7 @@ function MainAppContent({
       await dropServer(serverId);
     } catch (error) {
       setAppError(
-        error instanceof Error ? error.message : "Failed to leave server",
+        error instanceof Error ? error.message : t("chrome.leaveFailed"),
       );
     }
   }
@@ -2605,7 +2605,7 @@ function MainAppContent({
         // Inert, so the drop lands on the pane below rather than on the overlay.
         <div className="pointer-events-none absolute inset-0 z-30 m-2 flex items-center justify-center rounded-lg border-2 border-dashed border-signal bg-ink/85">
           <p className="font-display text-lg font-bold text-signal">
-            Drop to attach
+            {t("chrome.dropToAttach")}
           </p>
         </div>
       )}
@@ -2613,7 +2613,7 @@ function MainAppContent({
         <button
           type="button"
           className="mr-2 rounded-md p-1.5 hover:bg-ink-3 md:hidden"
-          aria-label="Open navigation"
+          aria-label={t("chrome.openNav")}
           onClick={() => setMobileNavOpen(true)}
         >
           <Menu className="h-5 w-5" />
@@ -2644,7 +2644,7 @@ function MainAppContent({
               ? conversationSubtitle(activeConversation)
               : selectedChannel.topic
                 ? selectedChannel.topic
-                : `${selectedChannel.isPrivate ? "Private · " : ""}${chat.getPresence().length} here`}
+                : `${selectedChannel.isPrivate ? t("chrome.privatePrefix") : ""}${t("chrome.peopleHere", { count: chat.getPresence().length })}`}
           </p>
         </div>
         <div className="ml-auto flex items-center gap-1 sm:gap-2">
@@ -2710,7 +2710,7 @@ function MainAppContent({
             className="rounded-md px-2 py-1 text-xs text-signal hover:bg-ink-3"
             onClick={() => setPinsOpen(true)}
           >
-            Pins
+            {t("chrome.pins")}
           </button>
           {canManage && (
             <button
@@ -2718,7 +2718,7 @@ function MainAppContent({
               className="rounded-md px-2 py-1 text-xs text-signal hover:bg-ink-3"
               onClick={() => setChannelMetaChannel(selectedChannel)}
             >
-              Topic
+              {t("chrome.topic")}
             </button>
           )}
           {canManage && selectedChannel.isPrivate && (
@@ -2727,7 +2727,7 @@ function MainAppContent({
               className="rounded-md px-2 py-1 text-xs text-signal hover:bg-ink-3"
               onClick={() => setChannelMembersChannel(selectedChannel)}
             >
-              Access
+              {t("chrome.access")}
             </button>
           )}
           {/* The roster toggle, last in the row — the same position and the
@@ -2913,7 +2913,7 @@ function MainAppContent({
           isMuted: voiceState.isMuted,
         }}
         disabled={!selectedChannelId || messagesLoading}
-        placeholder={`Message ${selectedChannel.name}`}
+        placeholder={t("composer.placeholder", { name: selectedChannel.name })}
       />
     </div>
   ) : null;
@@ -3019,7 +3019,7 @@ function MainAppContent({
         <button
           type="button"
           className="fixed inset-0 z-20 bg-ink/70 md:hidden"
-          aria-label="Close navigation"
+          aria-label={t("chrome.closeNav")}
           onClick={() => setMobileNavOpen(false)}
         />
       )}
@@ -3127,7 +3127,7 @@ function MainAppContent({
       <main className="flex min-w-0 flex-1 flex-col bg-transparent">
         {isDevAuthBypassEnabled() && (
           <div className="border-b border-warning/30 bg-warning/10 px-3 py-1 text-center text-xs text-warning">
-            Dev auth bypass
+            {t("chrome.devBypass")}
           </div>
         )}
 
@@ -3470,7 +3470,7 @@ function MainAppContent({
               onClick={() => void handleCreateServer()}
               disabled={!newServerName.trim() || creatingServer}
             >
-              {creatingServer ? "Creating…" : "Create"}
+              {creatingServer ? t("chrome.creating") : t("chrome.create")}
             </Button>
           </>
         }
@@ -3597,14 +3597,16 @@ function MainAppContent({
         title={
           channelPrompt?.mode === "rename"
             ? channelPrompt.channel?.type === "category"
-              ? "Rename category"
-              : "Rename channel"
+              ? t("chrome.renameCategory")
+              : t("chrome.renameChannel")
             : channelPrompt?.type === "category"
-              ? "Create category"
-              : `Create ${channelPrompt?.type ?? "text"} channel`
+              ? t("chrome.createCategory")
+              : channelPrompt?.type === "voice"
+                ? t("chrome.createVoiceChannel")
+                : t("chrome.createTextChannel")
         }
-        placeholder="channel-name"
-        confirmLabel={channelPrompt?.mode === "rename" ? "Rename" : "Create"}
+        placeholder={t("chrome.channelNamePlaceholder")}
+        confirmLabel={channelPrompt?.mode === "rename" ? t("chrome.rename") : t("chrome.create")}
         initialValue={
           channelPrompt?.mode === "rename"
             ? (channelPrompt.channel?.name ?? "")
@@ -3612,7 +3614,7 @@ function MainAppContent({
         }
         checkboxLabel={
           channelPrompt?.mode === "create" && channelPrompt.type !== "category"
-            ? "Private channel"
+            ? t("chrome.privateChannel")
             : undefined
         }
         checkboxDefault={channelPrompt?.isPrivate ?? false}

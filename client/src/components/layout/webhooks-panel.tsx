@@ -5,6 +5,7 @@ import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { createWebhook, deleteWebhook, fetchWebhooks } from "@/lib/api";
 import { getApiBaseUrl } from "@/lib/utils";
+import { useTranslation } from "@/lib/i18n";
 
 interface WebhooksPanelProps {
   open: boolean;
@@ -23,6 +24,7 @@ export function WebhooksPanel({
   channelName,
   onClose,
 }: WebhooksPanelProps) {
+  const { t } = useTranslation();
   const [webhooks, setWebhooks] = useState<Webhook[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -49,7 +51,7 @@ export function WebhooksPanel({
       })
       .catch((err: unknown) => {
         if (!cancelled) {
-          setError(messageOf(err, "Failed to load webhooks"));
+          setError(messageOf(err, t("webhooks.loadFailed")));
         }
       })
       .finally(() => {
@@ -74,7 +76,7 @@ export function WebhooksPanel({
       setWebhooks((prev) => [...prev, res.webhook]);
       setName("");
     } catch (err) {
-      setError(messageOf(err, "Failed to create webhook"));
+      setError(messageOf(err, t("webhooks.createFailed")));
     } finally {
       setCreating(false);
     }
@@ -87,7 +89,7 @@ export function WebhooksPanel({
       await deleteWebhook(webhookId);
       setWebhooks((prev) => prev.filter((w) => w.id !== webhookId));
     } catch (err) {
-      setError(messageOf(err, "Failed to delete webhook"));
+      setError(messageOf(err, t("webhooks.deleteFailed")));
     } finally {
       setBusyId(null);
     }
@@ -100,16 +102,16 @@ export function WebhooksPanel({
       setCopiedId(webhook.id);
       window.setTimeout(() => setCopiedId(null), 2000);
     } catch {
-      setError("Could not copy — your browser blocked clipboard access.");
+      setError(t("webhooks.copyBlocked"));
     }
   }
 
   return (
     <Dialog
       open={open}
-      eyebrow="Webhooks"
+      eyebrow={t("webhooks.eyebrow")}
       title={`#${channelName ?? "channel"}`}
-      description="Anything that can POST JSON to a URL can post here — paste the address into a CI job, GitHub, or a monitoring tool exactly the way you would a Discord webhook URL."
+      description={t("webhooks.description")}
       onClose={onClose}
     >
       <div className="space-y-4 p-4">
@@ -122,24 +124,24 @@ export function WebhooksPanel({
         <div className="flex gap-2">
           <Input
             value={name}
-            placeholder="Build Bot"
+            placeholder={t("webhooks.namePlaceholder")}
             maxLength={80}
-            aria-label="New webhook name"
+            aria-label={t("webhooks.nameAria")}
             disabled={creating}
             onChange={(e) => setName(e.target.value)}
           />
           <Button disabled={creating || !name.trim()} onClick={() => void create()}>
-            {creating ? "Creating…" : "Create"}
+            {creating ? t("webhooks.creating") : t("webhooks.create")}
           </Button>
         </div>
 
         {loading && (
           <p role="status" aria-live="polite" className="text-sm text-paper-muted">
-            Loading…
+            {t("common.loading")}
           </p>
         )}
         {!loading && webhooks.length === 0 && !error && (
-          <p className="text-sm text-paper-muted">No webhooks yet.</p>
+          <p className="text-sm text-paper-muted">{t("webhooks.empty")}</p>
         )}
 
         <ul className="space-y-2">
@@ -159,7 +161,7 @@ export function WebhooksPanel({
                   disabled={busyId === webhook.id}
                   onClick={() => void remove(webhook.id)}
                 >
-                  Delete
+                  {t("webhooks.delete")}
                 </Button>
               </div>
               <div className="mt-2 flex gap-2">
@@ -168,7 +170,7 @@ export function WebhooksPanel({
                   {webhook.url}
                 </code>
                 <Button size="sm" variant="secondary" onClick={() => void copyUrl(webhook)}>
-                  {copiedId === webhook.id ? "Copied" : "Copy"}
+                  {copiedId === webhook.id ? t("common.copied") : t("common.copy")}
                 </Button>
               </div>
             </li>

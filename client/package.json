@@ -14,7 +14,8 @@
     "e2e:ui": "playwright test --ui",
     "bench:tokens": "node bench/theme-tokens.mjs",
     "bench": "node bench/theme-tokens.mjs && node bench/theme-runtime.mjs",
-    "bench:runtime": "node bench/theme-runtime.mjs"
+    "bench:runtime": "node bench/theme-runtime.mjs",
+    "i18n:check": "node scripts/check-i18n.mjs"
   },
   "dependencies": {
     "@clerk/clerk-react": "^5.22.4",
@@ -28,6 +29,7 @@
     "@radix-ui/react-slot": "^1.1.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "i18next": "^26.4.0",
     "livekit-client": "^2.21.0",
     "lucide-react": "^0.469.0",
     "react": "^19.0.0",

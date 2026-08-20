@@ -57,6 +57,13 @@ contextBridge.exposeInMainWorld("pqpDesktop", {
     ipcRenderer.send("pqp:set-theme", theme);
   },
 
+  setLocale(locale) {
+    if (locale !== "en" && locale !== "pt-BR") {
+      return Promise.resolve(null);
+    }
+    return ipcRenderer.invoke("pqp:set-locale", locale);
+  },
+
   /** Dock / taskbar mention count. Zero clears it. */
   setBadgeCount(count) {
     if (!Number.isFinite(count)) {

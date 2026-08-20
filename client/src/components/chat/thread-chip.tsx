@@ -15,9 +15,7 @@ export function threadChipLabel(t: Translator["t"], replyCount: number): string 
   if (replyCount === 0) {
     return t("thread.noReplies");
   }
-  return t(replyCount === 1 ? "thread.replies.one" : "thread.replies.many", {
-    count: replyCount,
-  });
+  return t("thread.replies", { count: replyCount });
 }
 
 interface ThreadChipProps {

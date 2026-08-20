@@ -435,9 +435,7 @@ function CommunityBadges({ badges }: { badges: ProfileBadge[] }) {
   return (
     <section className="mt-8" data-profile-communities>
       <h2 className="text-[11px] font-semibold uppercase tracking-[0.2em] text-paper-muted">
-        {badges.length === 1
-          ? t("publicProfile.communities.count.one")
-          : t("publicProfile.communities.count", { count: badges.length })}
+        {t("publicProfile.communities.count", { count: badges.length })}
       </h2>
       <ul className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
         {badges.map((badge, index) => (

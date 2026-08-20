@@ -5,6 +5,7 @@ import { UserSearch } from "@/components/user/user-search";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { ApiError, createConversation } from "@/lib/api";
+import { useTranslation } from "@/lib/i18n";
 
 interface NewDmDialogProps {
   open: boolean;
@@ -28,6 +29,7 @@ export function NewDmDialog({
   onClose,
   onCreated,
 }: NewDmDialogProps) {
+  const { t } = useTranslation();
   const [picked, setPicked] = useState<PublicUser[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -63,7 +65,7 @@ export function NewDmDialog({
           ? err.message
           : err instanceof Error
             ? err.message
-            : "Could not start that conversation",
+            : t("dm.dialog.failed"),
       );
     } finally {
       setBusy(false);
@@ -73,21 +75,25 @@ export function NewDmDialog({
   return (
     <Dialog
       open={open}
-      eyebrow="Direct message"
-      title="Start a conversation"
-      description="Find someone by handle. Add more than one to make it a group."
+      eyebrow={t("dm.dialog.eyebrow")}
+      title={t("dm.dialog.title")}
+      description={t("dm.dialog.description")}
       size="sm"
       onClose={onClose}
       footer={
         <>
           <Button variant="ghost" onClick={onClose} disabled={busy}>
-            Cancel
+            {t("common.cancel")}
           </Button>
           <Button
             onClick={() => void create()}
             disabled={busy || picked.length === 0}
           >
-            {busy ? "Opening…" : picked.length > 1 ? "Start group" : "Start"}
+            {busy
+              ? t("dm.dialog.opening")
+              : picked.length > 1
+                ? t("dm.dialog.startGroup")
+                : t("dm.dialog.start")}
           </Button>
         </>
       }
@@ -105,7 +111,9 @@ export function NewDmDialog({
                     )
                   }
                   className="flex items-center gap-1.5 rounded-full border border-border bg-surface-2 px-2.5 py-1 text-xs text-text hover:border-border-strong"
-                  aria-label={`Remove ${person.displayName}`}
+                  aria-label={t("dm.dialog.removeAria", {
+                    name: person.displayName,
+                  })}
                 >
                   {person.displayName}
                   <X aria-hidden="true" className="h-3 w-3" />
@@ -117,12 +125,11 @@ export function NewDmDialog({
 
         {full ? (
           <p className="text-xs text-text-muted">
-            That is the most people one conversation holds. A bigger group wants
-            a server, which has moderation.
+            {t("dm.dialog.full")}
           </p>
         ) : (
           <UserSearch
-            label="Find people"
+            label={t("dm.dialog.findPeople")}
             autoFocus
             excludeIds={[
               ...(currentUserId ? [currentUserId] : []),

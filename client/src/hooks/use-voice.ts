@@ -10,12 +10,8 @@ import {
   screenShareUnavailableMessage,
   supportsScreenShare,
 } from "@/components/voice/capabilities";
-// The pure catalogue module, not `lib/i18n` — this hook must not depend on a
-// React context to name an error.
-import {
-  translateMessage,
-  type MessageKey,
-} from "@/lib/i18n/catalogue";
+import { desktopContext } from "@/lib/desktop";
+import { translateMessage, type MessageKey } from "@/lib/i18n";
 import {
   buildAudioConstraints,
   defaultMicProcessing,
@@ -243,7 +239,7 @@ function micErrorMessage(err: unknown): string {
     return translateMessage("voice.error.micFailed");
   }
   if (err.name === "NotAllowedError") {
-    return translateMessage("voice.error.micBlocked");
+    return translateMessage("voice.error.micBlocked", desktopContext());
   }
   // A browser's own message, in the browser's own language. Better than a
   // generic sentence that throws away what actually went wrong.
@@ -1490,7 +1486,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       } catch (err) {
         state.error =
           err instanceof Error && err.name === "NotAllowedError"
-            ? translateMessage("voice.error.cameraBlocked")
+            ? translateMessage("voice.error.cameraBlocked", desktopContext())
             : err instanceof Error && err.message
               ? err.message
               : translateMessage("voice.error.cameraFailed");

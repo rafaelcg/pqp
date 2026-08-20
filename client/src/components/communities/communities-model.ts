@@ -257,11 +257,6 @@ export function applyJoin(
   );
 }
 
-/** Singular gets its own key — Portuguese does not tolerate "1 membros". */
-export function memberCountKey(count: number): MessageKey {
-  return (count === 1 ? "communities.members.one" : "communities.members") as MessageKey;
-}
-
 /**
  * The member count as it is printed on a card.
  *

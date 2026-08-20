@@ -13,6 +13,8 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { loadWindowState, trackWindowState, DEFAULTS } = require("./lib/window-state");
 const { loadTheme, saveTheme, BACKGROUNDS } = require("./lib/theme-state");
+const { loadLocale, saveLocale } = require("./lib/locale-state");
+const { setLanguage, t } = require("./lib/i18n");
 const { startStaticServer } = require("./lib/static-server");
 const { waitForUrl, isLocalDevUrl } = require("./lib/wait-for-url");
 const { classifyNavigation } = require("./lib/nav-policy");
@@ -267,7 +269,7 @@ function createAppMenu() {
         ]
       : []),
     {
-      label: "Edit",
+      label: t("menu.edit"),
       submenu: [
         { role: "undo" },
         { role: "redo" },
@@ -282,7 +284,7 @@ function createAppMenu() {
               { role: "selectAll" },
               { type: "separator" },
               {
-                label: "Speech",
+                label: t("menu.speech"),
                 submenu: [{ role: "startSpeaking" }, { role: "stopSpeaking" }],
               },
             ]
@@ -290,7 +292,7 @@ function createAppMenu() {
       ],
     },
     {
-      label: "View",
+      label: t("menu.view"),
       submenu: [
         { role: "reload" },
         { role: "forceReload" },
@@ -303,7 +305,7 @@ function createAppMenu() {
         { role: "togglefullscreen" },
         { type: "separator" },
         {
-          label: "Toggle Mute",
+          label: t("menu.toggleMute"),
           accelerator: "CommandOrControl+Shift+M",
           click: () => {
             sendToRenderer("pqp:toggle-mute");
@@ -312,7 +314,7 @@ function createAppMenu() {
       ],
     },
     {
-      label: "Window",
+      label: t("menu.window"),
       submenu: [
         { role: "minimize" },
         { role: "zoom" },
@@ -330,7 +332,7 @@ function createAppMenu() {
       role: "help",
       submenu: [
         {
-          label: "Toggle Mute (Cmd/Ctrl+Shift+M)",
+          label: t("menu.toggleMuteHelp"),
           click: () => {
             sendToRenderer("pqp:toggle-mute");
           },
@@ -565,6 +567,14 @@ if (!gotLock) {
     saveTheme(app.getPath("userData"), theme);
   });
 
+  ipcMain.handle("pqp:set-locale", (_event, locale) => {
+    saveLocale(app.getPath("userData"), locale);
+    const next = loadLocale(app.getPath("userData"), app.getLocale());
+    setLanguage(next);
+    createAppMenu();
+    return next;
+  });
+
   ipcMain.on("pqp:set-badge", (_event, count) => {
     if (!Number.isFinite(count)) {
       return;
@@ -587,6 +597,8 @@ if (!gotLock) {
   app.whenReady().then(async () => {
     app.setName("pqp");
     registerProtocolClient();
+    const locale = loadLocale(app.getPath("userData"), app.getLocale());
+    setLanguage(locale);
     createAppMenu();
     collectDeepLinkFromArgv(process.argv);
 

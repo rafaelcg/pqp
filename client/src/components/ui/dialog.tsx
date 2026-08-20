@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
+import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 const FOCUSABLE =
@@ -148,6 +149,7 @@ export function Dialog({
   closeOnBackdrop = true,
   dismissible = true,
 }: DialogProps) {
+  const { t } = useTranslation();
   const panelRef = useRef<HTMLDivElement>(null);
   const previouslyFocused = useRef<HTMLElement | null>(null);
   const titleId = useId();
@@ -331,7 +333,7 @@ export function Dialog({
             {dismissible && (
               <button
                 type="button"
-                aria-label="Close dialog"
+                aria-label={t("a11y.closeDialog")}
                 className="shrink-0 rounded-md p-1.5 text-paper-muted transition-colors hover:bg-ink-3 hover:text-paper"
                 onClick={onClose}
               >

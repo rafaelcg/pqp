@@ -1,0 +1,13 @@
+{
+  "menu.edit": "Edit",
+  "menu.view": "View",
+  "menu.window": "Window",
+  "menu.speech": "Speech",
+  "menu.toggleMute": "Toggle Mute",
+  "menu.toggleMuteHelp": "Toggle Mute (Cmd/Ctrl+Shift+M)",
+  "updater.title": "Update ready",
+  "updater.message": "pqp {version} is ready to install.",
+  "updater.detail": "Restarting takes a few seconds. If you are in a call, choose Later — the update installs the next time you quit.",
+  "updater.restart": "Restart now",
+  "updater.later": "Later"
+}

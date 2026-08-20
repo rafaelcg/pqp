@@ -69,7 +69,11 @@ function formatExpiry(t: Translator["t"], expiresAt: string | null): string {
 function formatUses(t: Translator["t"], invite: Invite): string {
   return invite.maxUses === null
     ? t("invite.uses.unlimited", { count: invite.uses })
-    : t("invite.uses.capped", { used: invite.uses, max: invite.maxUses });
+    : t("invite.uses.capped", {
+        count: invite.uses,
+        used: invite.uses,
+        max: invite.maxUses,
+      });
 }
 
 export function InvitePanel({
