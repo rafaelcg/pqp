@@ -155,6 +155,9 @@ export async function resetPreferences(): Promise<void> {
 export async function openApp(page: Page): Promise<void> {
   await ensureServer();
   await resetPreferences();
+  // Pin English. `?lang=` outranks the browser, so a Portuguese runner (or a
+  // leftover `pqp:locale`) cannot flip the rest of the suite. The one test
+  // that must follow the browser skips this helper.
   await page.goto("/app?lang=en");
   await expect(page.getByText("Dev auth bypass")).toBeVisible({ timeout: 20_000 });
   // The composer only exists once a text channel is selected.

@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { openApp } from "./fixtures";
+import { ensureServer, openApp, resetPreferences } from "./fixtures";
 
 /**
  * The directory's language filter, driven end to end.
@@ -215,7 +215,16 @@ test.describe("Communities — language filter", () => {
     });
     const page = await context.newPage();
     try {
-      await openDirectory(page);
+      // `openApp` pins `?lang=en` so the rest of the suite is not OS-locale
+      // dependent. This test is the one that must follow the browser instead.
+      await ensureServer();
+      await resetPreferences();
+      await page.goto("/app");
+      await expect(
+        page.getByText("Bypass de auth de desenvolvimento"),
+      ).toBeVisible({ timeout: 20_000 });
+      await page.locator("[data-communities-rail]").click();
+      await expect(page.locator("[data-communities-view]")).toBeVisible();
       await expect(segment(page, "pt")).toHaveAttribute("aria-pressed", "true");
       await expect(card(page, "Só PT")).toBeVisible();
       await expect(card(page, "Only EN")).toHaveCount(0);

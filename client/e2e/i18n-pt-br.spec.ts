@@ -5,7 +5,7 @@ test("pt-BR paints the chat chrome from the catalogue", async ({ page }) => {
   await ensureServer();
   await resetPreferences();
   await page.goto("/app?lang=pt-BR");
-  await expect(page.getByText("Dev auth bypass")).toBeVisible({
+  await expect(page.getByText("Bypass de auth de desenvolvimento")).toBeVisible({
     timeout: 20_000,
   });
   await expect(page.getByRole("button", { name: "Enviar" })).toBeVisible({
