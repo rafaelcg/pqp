@@ -1,4 +1,5 @@
 import { Link } from "react-router-dom";
+import { BetaTag } from "@/components/ui/beta-tag";
 import { RELEASES_PAGE_URL } from "@/lib/downloads";
 import { useTranslation } from "@/lib/i18n";
 import { testflightUrl } from "@/lib/testflight";
@@ -11,7 +12,10 @@ export function MarketingFooter() {
     <footer className="border-t border-ink-4/40 bg-ink px-5 py-10 sm:px-8">
       <div className="mx-auto flex max-w-5xl flex-col gap-8 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <p className="font-brand text-2xl tracking-tight">pqp</p>
+          <p className="flex items-center gap-2 font-brand text-2xl tracking-tight">
+            pqp
+            <BetaTag />
+          </p>
           <p className="mt-2 max-w-xs text-sm text-paper-muted">
             {t("footer.tagline")}
           </p>

@@ -5,6 +5,7 @@ import {
   SignedOut,
 } from "@clerk/clerk-react";
 import { Link } from "react-router-dom";
+import { BetaTag } from "@/components/ui/beta-tag";
 import { Button } from "@/components/ui/button";
 import { isDevAuthBypassEnabled } from "@/lib/dev-auth";
 import { useTranslation } from "@/lib/i18n";
@@ -29,11 +30,12 @@ export function MarketingNav({ variant = "solid" }: MarketingNavProps) {
       <Link
         to="/"
         className={cn(
-          "font-brand text-xl tracking-tight",
+          "flex items-center gap-2 font-brand text-xl tracking-tight",
           isHero ? "text-white" : "text-paper",
         )}
       >
         pqp
+        <BetaTag variant={isHero ? "hero" : "default"} />
       </Link>
 
       <nav className="hidden items-center gap-8 md:flex">

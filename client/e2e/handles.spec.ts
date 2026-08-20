@@ -256,6 +256,7 @@ test.describe("public handles", () => {
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(Object.keys(body.profile).sort()).toEqual([
+      "achievements",
       "avatarUrl",
       "badges",
       "bannerUrl",

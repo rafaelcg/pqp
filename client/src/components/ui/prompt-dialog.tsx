@@ -3,6 +3,24 @@ import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 
+/**
+ * What a typed channel name becomes, keystroke by keystroke.
+ *
+ * Accents FOLD instead of vanishing — a Brazilian keyboard produces `ç` and
+ * `ã` by reflex, and stripping them turns "caça-bugs" into "caa-bugs", a
+ * misspelling nobody typed. Same argument `normalizeHandle` makes for
+ * handles. Spaces become hyphens for the same reason: "mesa de rpg" means
+ * "mesa-de-rpg", not "mesaderpg".
+ */
+export function sanitizeChannelName(raw: string): string {
+  return raw
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, "-")
+    .replace(/[^a-z0-9-_]/g, "");
+}
+
 interface PromptDialogProps {
   open: boolean;
   title: string;
@@ -89,9 +107,7 @@ export function PromptDialog({
           </span>
           <Input
             value={value}
-            onChange={(e) =>
-              setValue(e.target.value.toLowerCase().replace(/[^a-z0-9-_]/gi, ""))
-            }
+            onChange={(e) => setValue(sanitizeChannelName(e.target.value))}
             placeholder={placeholder}
             disabled={busy}
             autoFocus

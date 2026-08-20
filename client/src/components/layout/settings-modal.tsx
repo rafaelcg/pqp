@@ -8,6 +8,7 @@ import {
 } from "react";
 import {
   Bell,
+  Bug,
   Database,
   Mic,
   Palette,
@@ -28,6 +29,9 @@ import {
   USER_BANNER_HEIGHT,
   USER_BANNER_MIME_ALLOWLIST,
   USER_BANNER_WIDTH,
+  FEEDBACK_BODY_MAX_LENGTH,
+  FEEDBACK_KINDS,
+  type FeedbackKind,
   type BlockedUser,
   type DmPrivacy,
   type User,
@@ -84,6 +88,7 @@ import {
   deleteUserBanner,
   exportMyData,
   fetchUserBannerConfig,
+  sendFeedback,
   updateMe,
   OwnedServersError,
   type BlockingOwnedServer,
@@ -255,6 +260,12 @@ interface SettingsModalProps {
   onUserUpdated: (user: User) => void;
   onUnblockUser: (userId: string) => void;
   onAudioSettingsLive?: (settings: LocalSettings) => void;
+  /**
+   * A section to land on when the dialog opens — the user menu's "send
+   * feedback" goes straight to that section. Null keeps the sticky
+   * last-visited behaviour the dialog already has.
+   */
+  requestedSection?: SectionId | null;
 }
 
 /* ------------------------------------------------------------------ layout */
@@ -279,7 +290,11 @@ type SectionId =
   | "notifications"
   | "appearance"
   | "privacy"
-  | "data";
+  | "data"
+  | "feedback";
+
+/** For callers that open the dialog at a particular section (the user menu). */
+export type SettingsSectionId = SectionId;
 
 interface SectionDef {
   id: SectionId;
@@ -324,6 +339,12 @@ const SECTIONS: SectionDef[] = [
     label: "settings.section.data",
     description: "settings.data.description",
     icon: Database,
+  },
+  {
+    id: "feedback",
+    label: "settings.section.feedback",
+    description: "settings.feedback.description",
+    icon: Bug,
   },
 ];
 
@@ -2059,6 +2080,115 @@ function BannerField({
 
 /* ------------------------------------------------------------------- modal */
 
+/**
+ * The feedback box — bugs, ideas, gripes. A confirmed bug earns the caça-bugs
+ * badge, which is the entire gamification budget of this feature: one fun
+ * consequence, no points, no leaderboard.
+ */
+function FeedbackSection() {
+  const { t } = useTranslation();
+  const [kind, setKind] = useState<FeedbackKind>("bug");
+  const [body, setBody] = useState("");
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  if (sent) {
+    return (
+      <div className="space-y-4">
+        <p className="text-sm text-paper" role="status">
+          {t("settings.feedback.done")}
+        </p>
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={() => {
+            setSent(false);
+            setBody("");
+            setError(null);
+          }}
+        >
+          {t("settings.feedback.again")}
+        </Button>
+      </div>
+    );
+  }
+
+  const submit = async () => {
+    setSending(true);
+    setError(null);
+    try {
+      await sendFeedback({ kind, body: body.trim() });
+      setSent(true);
+    } catch {
+      setError(t("settings.feedback.error"));
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      <p className="text-sm text-paper-muted">{t("settings.feedback.intro")}</p>
+
+      <Field label={t("settings.feedback.kind.label")}>
+        <div
+          role="radiogroup"
+          aria-label={t("settings.feedback.kind.label")}
+          className="flex flex-wrap gap-1.5"
+        >
+          {FEEDBACK_KINDS.map((option) => {
+            const selected = option === kind;
+            return (
+              <button
+                key={option}
+                type="button"
+                role="radio"
+                aria-checked={selected}
+                onClick={() => setKind(option)}
+                className={chipClass(selected)}
+              >
+                {t(FEEDBACK_KIND_LABELS[option])}
+              </button>
+            );
+          })}
+        </div>
+      </Field>
+
+      <textarea
+        value={body}
+        onChange={(event) => setBody(event.target.value)}
+        maxLength={FEEDBACK_BODY_MAX_LENGTH}
+        rows={5}
+        placeholder={t("settings.feedback.placeholder")}
+        aria-label={t("settings.section.feedback")}
+        className="w-full resize-y rounded-md border border-ink-4 bg-ink px-3 py-2 text-sm text-paper placeholder:text-paper-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
+      />
+
+      <div className="flex items-center gap-3">
+        <Button
+          size="sm"
+          disabled={sending || body.trim().length === 0}
+          onClick={() => void submit()}
+        >
+          {t("settings.feedback.send")}
+        </Button>
+        {error && (
+          <p className="text-xs text-danger" role="alert">
+            {error}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const FEEDBACK_KIND_LABELS: Record<FeedbackKind, MessageKey> = {
+  bug: "settings.feedback.kind.bug",
+  idea: "settings.feedback.kind.idea",
+  other: "settings.feedback.kind.other",
+};
+
 export function SettingsModal({
   open,
   user,
@@ -2070,6 +2200,7 @@ export function SettingsModal({
   onUserUpdated,
   onUnblockUser,
   onAudioSettingsLive,
+  requestedSection = null,
 }: SettingsModalProps) {
   const { t } = useTranslation();
   const [displayName, setDisplayName] = useState("");
@@ -2110,6 +2241,15 @@ export function SettingsModal({
       setConfirmingDelete(false);
     }
   }, [open]);
+
+  // A caller that asked for a particular section wins over the sticky
+  // last-visited one — but only while it is asking; the gear passes null and
+  // keeps the old behaviour.
+  useEffect(() => {
+    if (open && requestedSection) {
+      setSection(requestedSection);
+    }
+  }, [open, requestedSection]);
 
   useEffect(() => {
     settingsRef.current = localSettings;
@@ -2313,6 +2453,8 @@ export function SettingsModal({
                 onRequestDelete={() => setConfirmingDelete(true)}
               />
             )}
+
+            {section === "feedback" && <FeedbackSection />}
 
             {error && (
               <p className="mt-4 text-sm text-danger" role="alert">

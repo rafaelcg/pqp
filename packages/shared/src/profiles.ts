@@ -493,6 +493,16 @@ export const publicProfileSchema = z.object({
    */
   bannerUrl: z.string().nullable().default(null),
   badges: z.array(profileBadgeSchema),
+  /**
+   * Earned marks, separate from `badges` on purpose: a badge says "this person
+   * is in this room" and the page counts them as communities, while an
+   * achievement (today only caça-bugs, for a confirmed bug report) is a thing
+   * the person did. Optional with a default so a payload from an older server
+   * parses unchanged.
+   */
+  achievements: z
+    .array(z.object({ badge: z.string(), name: z.string() }))
+    .default([]),
   depoimentoCount: z.number().int().nonnegative(),
   depoimentos: z.array(publicDepoimentoSchema).default([]),
   /** `YYYY-MM`, or null on a row with no creation stamp. Month, never a day. */

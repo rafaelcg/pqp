@@ -4,6 +4,10 @@ import {
   type CommunityMeta,
 } from "../src/lib/community-meta";
 import {
+  injectMarketingHead,
+  marketingPageFromMetaPath,
+} from "../src/lib/marketing-meta";
+import {
   handleFromMetaPath,
   injectProfileHead,
   preferredLocale,
@@ -20,14 +24,18 @@ import {
  * whose entire growth loop is somebody sharing their own page. This runs at the
  * edge, in front of the asset, and rewrites the bytes.
  *
- * TWO SURFACES, ONE MIDDLEWARE. `/@rafa` is a person and `/c/valorant` is a
- * room, and they get different cards — a square avatar with `summary` for the
- * one, a 3:1 banner with `summary_large_image` for the other. The two head
- * builders live in `src/lib/profile-meta.ts` and `src/lib/community-meta.ts`
- * and are deliberately not one parameterised builder; see the file comment on
- * the second for the argument. What is shared is everything below: the API
- * origin, the timeout, the locale, and the rule that every failure path serves
- * the page unchanged.
+ * THREE SURFACES, ONE MIDDLEWARE. `/@rafa` is a person, `/c/valorant` is a
+ * room, and `/vs-discord` is the product arguing for itself — and they get
+ * different cards: a square avatar with `summary` for the first, a 3:1 banner
+ * with `summary_large_image` for the second, and static per-locale copy for
+ * the third. The head builders live in `src/lib/profile-meta.ts`,
+ * `src/lib/community-meta.ts` and `src/lib/marketing-meta.ts` and are
+ * deliberately not one parameterised builder; see the file comment on the
+ * community one for the argument. The marketing branch is also the only one
+ * that fetches nothing — its copy is constant, so it runs before the API
+ * origin is even resolved. What is shared is everything below: the API origin,
+ * the timeout, the locale, and the rule that every failure path serves the
+ * page unchanged.
  *
  * WHAT IT DOES NOT DO. It does not render the page. The SPA still fetches and
  * draws it; this only fixes the head. Two fetches of the same JSON (one at the
@@ -249,9 +257,13 @@ export async function onRequest(context: PagesContext): Promise<Response> {
 
   const handle = handleFromMetaPath(url.pathname);
   const slug = handle ? null : communitySlugFromMetaPath(url.pathname);
+  const marketing =
+    handle || slug ? null : marketingPageFromMetaPath(url.pathname);
   // The overwhelmingly common case, and it must cost nothing: this middleware
-  // is in front of every request the site serves, including every hashed asset.
-  if ((!handle && !slug) || context.request.method !== "GET") {
+  // is in front of every request the site serves, including every hashed
+  // asset. All three parsers are pure string checks — nothing is awaited
+  // before this return.
+  if ((!handle && !slug && !marketing) || context.request.method !== "GET") {
     return context.next();
   }
 
@@ -261,15 +273,23 @@ export async function onRequest(context: PagesContext): Promise<Response> {
     return response;
   }
 
-  const apiOrigin = await resolveApiOrigin(context);
-  if (!apiOrigin) {
-    return response;
-  }
-
   const locale = preferredLocale(
     url.search,
     context.request.headers.get("accept-language"),
   );
+
+  if (marketing) {
+    // No API involved: the copy is constant per page and locale, so the only
+    // failure mode left is a document with no <head>, and the injector answers
+    // that by returning the html unchanged.
+    const html = await response.text();
+    return rewritten(response, injectMarketingHead(html, marketing, locale));
+  }
+
+  const apiOrigin = await resolveApiOrigin(context);
+  if (!apiOrigin) {
+    return response;
+  }
 
   if (slug) {
     const community = await fetchCommunity(apiOrigin, slug);

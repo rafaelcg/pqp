@@ -68,6 +68,7 @@ import {
   saveLocalSettings,
   SettingsModal,
   type LocalSettings,
+  type SettingsSectionId,
 } from "@/components/layout/settings-modal";
 import { SanctionNoticeBar } from "@/components/layout/sanction-notice-bar";
 import { SsoServerSuggestions } from "@/components/layout/sso-server-suggestions";
@@ -82,6 +83,7 @@ import {
 import { usePushToTalk } from "@/components/voice/use-push-to-talk";
 import { useVoiceStateSync } from "@/components/voice/voice-state-sync";
 import { VoiceStatusBar } from "@/components/voice/voice-status-bar";
+import { BetaTag } from "@/components/ui/beta-tag";
 import { Dialog } from "@/components/ui/dialog";
 import { PromptDialog } from "@/components/ui/prompt-dialog";
 import { Seo } from "@/components/marketing/seo";
@@ -233,9 +235,10 @@ function ClerkAppGate() {
         <div className="animate-rise relative z-10 max-w-lg">
           <Link
             to="/"
-            className="mb-3 inline-block text-xs uppercase tracking-[0.28em] text-signal"
+            className="mb-3 inline-flex items-center gap-2 text-xs uppercase tracking-[0.28em] text-signal"
           >
             pqp.gg
+            <BetaTag />
           </Link>
           <h1 className="font-display text-5xl font-extrabold leading-[0.95] sm:text-6xl">
             {t("signedOut.title")}
@@ -349,6 +352,11 @@ function MainAppContent({
   const [connection, setConnection] = useState<RealtimeStatus>("idle");
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Non-null only while a caller wants a specific section on open — the user
+  // menu's "send feedback". The gear clears it so the dialog keeps its sticky
+  // last-visited section.
+  const [settingsSection, setSettingsSection] =
+    useState<SettingsSectionId | null>(null);
   const [serverSettingsOpen, setServerSettingsOpen] = useState(false);
   const [inviteMode, setInviteMode] = useState<"create" | "join" | null>(null);
   const [inviteCodeFromUrl, setInviteCodeFromUrl] = useState<string | null>(null);
@@ -2557,7 +2565,14 @@ function MainAppContent({
         statusError={status.error}
         onSetStatus={status.setManual}
         onToggleMute={() => voice.toggleMute()}
-        onOpenSettings={() => setSettingsOpen(true)}
+        onOpenSettings={() => {
+          setSettingsSection(null);
+          setSettingsOpen(true);
+        }}
+        onOpenFeedback={() => {
+          setSettingsSection("feedback");
+          setSettingsOpen(true);
+        }}
       />
     </>
   );
@@ -3191,7 +3206,10 @@ function MainAppContent({
                     // The avatar picker's only home is the profile section of
                     // settings, three clicks in and behind a gear nothing points
                     // at. The card is the first thing in the product that does.
-                    onPickAvatar: () => setSettingsOpen(true),
+                    onPickAvatar: () => {
+                      setSettingsSection("profile");
+                      setSettingsOpen(true);
+                    },
                     onSettled: settleFirstRun,
                   }
                 : undefined
@@ -3406,6 +3424,7 @@ function MainAppContent({
 
       <SettingsModal
         open={settingsOpen}
+        requestedSection={settingsSection}
         user={user}
         localSettings={localSettings}
         voiceAnalyser={voice.getAnalyser()}

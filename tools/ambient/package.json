@@ -2,6 +2,7 @@
   "name": "@pqp/ambient",
   "version": "0.0.1",
   "private": true,
+  "license": "AGPL-3.0-only",
   "type": "module",
   "description": "Ambient-life runner: scheduled AI personas that hold conversations in pqp servers.",
   "engines": {

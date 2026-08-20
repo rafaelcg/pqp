@@ -244,13 +244,15 @@ describe("publicProfileSchema", () => {
     // The point of the shape. If somebody adds `id`, `tag` or `email` here,
     // this is the test that should stop them and make them argue for it.
     //
-    // Four fields have been added since, and each had to argue: `bannerUrl` is
+    // Five fields have been added since, and each had to argue: `bannerUrl` is
     // an image the account holder uploaded for this page, `depoimentos` are
-    // words two people published to it (see `publicDepoimentoSchema`), and
+    // words two people published to it (see `publicDepoimentoSchema`),
     // `memberSince` is a MONTH — never a date, which is why the regex is on the
-    // schema and not merely in the server.
+    // schema and not merely in the server — and `achievements` carries only a
+    // badge slug and its display name, never an id.
     const keys = Object.keys(publicProfileSchema.shape).sort();
     expect(keys).toEqual([
+      "achievements",
       "avatarUrl",
       "badges",
       "bannerUrl",

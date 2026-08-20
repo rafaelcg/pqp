@@ -44,7 +44,12 @@ import {
   removeMemberSchema,
   REPORT_PAGE_MAX,
   REPORT_PAGE_SIZE,
+  createFeedbackSchema,
   createReportSchema,
+  FEEDBACK_PAGE_MAX,
+  FEEDBACK_PAGE_SIZE,
+  feedbackStatusSchema,
+  resolveFeedbackSchema,
   createThreadSchema,
   claimUserBannerSchema,
   COMMUNITY_PAGE_MAX,
@@ -282,6 +287,11 @@ import {
   resolveReport,
 } from "../services/reports.js";
 import {
+  createFeedback,
+  listFeedback,
+  resolveFeedback,
+} from "../services/feedback.js";
+import {
   claimHandle,
   findUserIdByHandle,
   getPublicProfileByHandle,
@@ -439,6 +449,11 @@ const webhookExecuteLimiter = createRateLimiter({
  * survives both a restart and a second replica. See the comment there.
  */
 const reportLimiter = createRateLimiter({ capacity: 5, refillPerSecond: 0.05 });
+/** The settings feedback box — same shape of write as a report, same budget. */
+const feedbackLimiter = createRateLimiter({
+  capacity: 5,
+  refillPerSecond: 0.05,
+});
 /**
  * The one public, unauthenticated read that answers with a person — see
  * `servePublicProfile`. Its own bucket rather than a share of `anonLimiter`
@@ -3766,6 +3781,71 @@ router.patch("/api/reports/:report", async ({ req, user }, { report }) => {
   }
 
   return { report: resolved };
+});
+
+// --------------------------------------------------------------- feedback
+
+/**
+ * Same escape hatch as `reportIdParam`, for the same reason: feedback ids are
+ * BIGSERIAL, so the `:xxxId`-must-be-uuid convention cannot carry them.
+ */
+function feedbackIdParam(value: string | undefined): string {
+  if (!value || !/^[0-9]{1,19}$/.test(value)) {
+    throw new NotFound("Feedback not found");
+  }
+  return value;
+}
+
+/**
+ * The settings box. Rate-limited like reports — it is the same "small text
+ * box that writes a row anybody can fill" shape — but routed to the operator
+ * rather than to any moderation queue; see services/feedback.ts.
+ */
+router.post("/api/feedback", async ({ req, res, user }) => {
+  const key = `user:${user.id}`;
+  if (!feedbackLimiter.take(key)) {
+    res.setHeader("Retry-After", String(feedbackLimiter.retryAfter(key)));
+    throw new HttpError(429, "Slow down");
+  }
+  const body = createFeedbackSchema.parse(await readJsonBody(req));
+  const item = await createFeedback(user.id, body);
+  return created({ feedback: item });
+});
+
+/** The operator's inbox. Same gate as the instance report queue, same 404. */
+router.get("/api/feedback/instance", async ({ url, user }) => {
+  if (!isInstanceModerator(user)) {
+    throw new NotFound("Not found");
+  }
+  const rawStatus = url.searchParams.get("status");
+  return listFeedback({
+    before: url.searchParams.get("before") ?? undefined,
+    limit: clampLimit(
+      url.searchParams.get("limit"),
+      FEEDBACK_PAGE_SIZE,
+      FEEDBACK_PAGE_MAX,
+    ),
+    status: rawStatus
+      ? (feedbackStatusSchema.safeParse(rawStatus).data ?? undefined)
+      : undefined,
+  });
+});
+
+/**
+ * Close or confirm one item. Confirming a bug is the fun path: it grants the
+ * author the caça-bugs badge — see `resolveFeedback`.
+ */
+router.patch("/api/feedback/:item", async ({ req, user }, { item }) => {
+  const feedbackId = feedbackIdParam(item);
+  if (!isInstanceModerator(user)) {
+    throw new NotFound("Feedback not found");
+  }
+  const body = resolveFeedbackSchema.parse(await readJsonBody(req));
+  const resolved = await resolveFeedback(feedbackId, body.status);
+  if (!resolved) {
+    throw new NotFound("Feedback not found");
+  }
+  return { feedback: resolved };
 });
 
 // ---------------------------------------------------------------- invites

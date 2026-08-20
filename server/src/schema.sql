@@ -2317,3 +2317,40 @@ BEGIN
     RAISE NOTICE 'pqp: derived community slugs for % listing(s)', filled;
   END IF;
 END $$;
+
+-- --------------------------------------------------------------- feedback
+--
+-- Product feedback from the box in settings — a different thing from
+-- `reports`, which are about people and route to moderators. Feedback is
+-- about the product and is read only by the operator (the same
+-- INSTANCE_MODERATOR_CLERK_IDS gate the instance report queue uses).
+--
+-- `status` has one fun value: 'confirmed' marks a bug report as a real
+-- catch, and confirming it is what grants the reporter the caça-bugs badge
+-- in `user_badges`. BIGSERIAL id so the queue keysets the same way reports
+-- do. The author is SET NULL, not CASCADE: feedback about a bug outlives
+-- the account that filed it.
+CREATE TABLE IF NOT EXISTS feedback (
+  id BIGSERIAL PRIMARY KEY,
+  user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('bug', 'idea', 'other')),
+  body TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'open'
+    CHECK (status IN ('open', 'confirmed', 'closed')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_feedback_status_id
+  ON feedback (status, id DESC);
+
+-- Earned marks, keyed by a stable badge slug ('caca-bugs' is the only one
+-- today). Deliberately generic — the next achievement is one INSERT away —
+-- and deliberately NOT the community-membership "badges" on the public
+-- profile, which are derived from server_members at read time and mean
+-- membership, not merit.
+CREATE TABLE IF NOT EXISTS user_badges (
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  badge TEXT NOT NULL,
+  granted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (user_id, badge)
+);
