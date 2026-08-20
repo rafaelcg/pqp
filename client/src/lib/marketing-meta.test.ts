@@ -3,8 +3,8 @@
 // suite has no business being the one file that needs them.
 import INDEX_HTML from "../../index.html?raw";
 import { describe, expect, it } from "vitest";
-import { en } from "./i18n/catalogue";
-import { ptBR } from "./i18n/messages.pt-BR";
+import en from "../locales/en/translation.json";
+import ptBR from "../locales/pt-BR/translation.json";
 import {
   injectMarketingHead,
   marketingPageFromMetaPath,
@@ -20,9 +20,9 @@ import {
  * this suite tests the whole of what could actually be wrong: the path parser
  * that decides whether the middleware acts at all, the rewrite — run against
  * THE REAL `index.html`, imported as text — and, most importantly, the
- * duplicated copy. `marketing-meta.ts` cannot import the i18n catalogue (it is
+ * duplicated copy. `marketing-meta.ts` cannot import the i18n JSON (it is
  * bundled by an esbuild run outside the workspace), so its strings are
- * duplicates of the catalogue's; this file is what makes that duplication
+ * duplicates of the JSON catalogues; this file is what makes that duplication
  * unable to drift. Same shape as `profile-meta.test.ts`, one namespace over.
  */
 
@@ -64,7 +64,7 @@ describe("marketingPageFromMetaPath", () => {
   });
 });
 
-describe("the duplicated copy is pinned to the catalogue", () => {
+describe("the duplicated copy is pinned to the JSON catalogues", () => {
   it("landing title and description", () => {
     const head = renderMarketingHead("/", "en");
     expect(head).toContain(`<title>${en["landing.seo.title"]}</title>`);

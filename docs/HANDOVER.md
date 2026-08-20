@@ -52,6 +52,7 @@ Detail and “still open” list: [`PLAN_STATUS.md`](./PLAN_STATUS.md).
 
 ## Recent shipped work (context for next agents)
 
+- **i18n (en + pt-BR):** i18next core, JSON catalogues, lazy Portuguese, Electron menus. See [`I18N.md`](./I18N.md).
 - Discord-like **voice sidebar** + **speaking rings**
 - Channel **topics / icons**
 - **Avatar presets**

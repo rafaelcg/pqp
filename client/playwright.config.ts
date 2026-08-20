@@ -47,6 +47,7 @@ export default defineConfig({
     // Playwright defaults to a light OS preference. Pin dark so "no stored
     // choice" is a known starting point; the system-preference tests build
     // their own light context explicitly.
+    locale: "en-US",
     colorScheme: "dark",
   },
 

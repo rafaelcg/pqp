@@ -9,6 +9,7 @@
  */
 
 import type { Channel, DmSummary, PublicUser, UnreadCounts } from "@pqp/shared";
+import { translateMessage } from "@/lib/i18n";
 
 /** Past this the names stop identifying the room and start being a wall. */
 const MAX_TITLE_NAMES = 3;
@@ -27,14 +28,17 @@ export function conversationTitle(
   if (names.length === 0) {
     // Everybody else left, or their accounts are gone. Naming the state beats a
     // blank row that reads as a rendering bug.
-    return "Empty conversation";
+    return translateMessage("conversations.empty");
   }
   if (names.length <= MAX_TITLE_NAMES) {
     return names.join(", ");
   }
   const shown = names.slice(0, MAX_TITLE_NAMES);
   const rest = names.length - MAX_TITLE_NAMES;
-  return `${shown.join(", ")} and ${rest} other${rest === 1 ? "" : "s"}`;
+  return translateMessage("conversations.others", {
+    names: shown.join(", "),
+    count: rest,
+  });
 }
 
 /**
@@ -135,9 +139,10 @@ export function touchConversation(
 export function conversationSubtitle(summary: DmSummary): string {
   if (summary.participants.length === 1) {
     const other = summary.participants[0]!;
-    return other.tag ?? "Direct message";
+    return other.tag ?? translateMessage("dm.directMessage");
   }
-  return `${summary.participants.length + 1} people`;
+  const count = summary.participants.length + 1;
+  return translateMessage("dm.people", { count });
 }
 
 /**

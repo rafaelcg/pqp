@@ -6,6 +6,7 @@ import { clampSelection } from "@/components/search/search-results";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { ApiError, lookupUserByTag, searchUsers } from "@/lib/api";
 import { excludeUsers, readUserQuery } from "@/lib/user-search";
+import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 /** Same as message search: one typed word is one request, and it still feels live. */
@@ -36,11 +37,13 @@ interface UserSearchProps {
  */
 export function UserSearch({
   label,
-  placeholder = "Search by name or name#0000",
+  placeholder,
   excludeIds = [],
   autoFocus = false,
   onSelect,
 }: UserSearchProps) {
+  const { t } = useTranslation();
+  const resolvedPlaceholder = placeholder ?? t("userSearch.placeholder");
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<PublicUser[]>([]);
   const [selected, setSelected] = useState(0);
@@ -152,7 +155,7 @@ export function UserSearch({
           autoFocus={autoFocus}
           onChange={(event) => setQuery(event.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder={placeholder}
+          placeholder={resolvedPlaceholder}
           aria-label={label}
           role="combobox"
           aria-expanded={searching}
@@ -172,7 +175,7 @@ export function UserSearch({
         <AutocompleteMenu
           id={listboxId}
           label={label}
-          heading="People"
+          heading={t("userSearch.heading")}
           // In flow, not floating: this field lives inside a dialog whose body
           // scrolls and whose panel clips, so an absolutely positioned menu is
           // drawn inside that clip and gets cut off at the panel's edge. Taking
@@ -180,10 +183,10 @@ export function UserSearch({
           placement="inline"
           emptyLabel={
             failed
-              ? "Search is unavailable right now."
+              ? t("userSearch.unavailable")
               : loading
-                ? "Searching…"
-                : "Nobody matched. Handles are exact — try name#0000."
+                ? t("userSearch.searching")
+                : t("userSearch.nobody")
           }
           options={visible.map((user) => ({
             id: user.id,

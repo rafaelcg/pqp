@@ -24,7 +24,8 @@
     "test": "node --test lib/*.test.mjs"
   },
   "dependencies": {
-    "electron-updater": "^6.3.9"
+    "electron-updater": "^6.3.9",
+    "i18next": "^26.4.0"
   },
   "devDependencies": {
     "electron": "^34.0.0",
@@ -63,6 +64,13 @@
         "to": "client",
         "filter": [
           "**/*"
+        ]
+      },
+      {
+        "from": "locales",
+        "to": "locales",
+        "filter": [
+          "**/*.json"
         ]
       }
     ],

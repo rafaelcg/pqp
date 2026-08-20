@@ -1,0 +1,13 @@
+{
+  "menu.edit": "Editar",
+  "menu.view": "Exibir",
+  "menu.window": "Janela",
+  "menu.speech": "Fala",
+  "menu.toggleMute": "Alternar mute",
+  "menu.toggleMuteHelp": "Alternar mute (Cmd/Ctrl+Shift+M)",
+  "updater.title": "Atualização pronta",
+  "updater.message": "O pqp {version} está pronto para instalar.",
+  "updater.detail": "Reiniciar leva alguns segundos. Se você está numa call, escolha Depois — a atualização instala na próxima vez que você sair.",
+  "updater.restart": "Reiniciar agora",
+  "updater.later": "Depois"
+}

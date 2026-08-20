@@ -51,6 +51,7 @@ import {
   type SlashCommandMeta,
   type SlashFeedback,
 } from "@/lib/slash-commands";
+import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 export interface ComposerSlashContext {
@@ -131,8 +132,10 @@ export function MessageComposer({
   onCancelReply,
   mentionCandidates = [],
   disabled,
-  placeholder = "Message channel",
+  placeholder,
 }: MessageComposerProps) {
+  const { t } = useTranslation();
+  const inputPlaceholder = placeholder ?? t("composer.placeholderFallback");
   const [body, setBody] = useState("");
   const [caret, setCaret] = useState(0);
   const [isPickerOpen, setIsPickerOpen] = useState(false);
@@ -383,7 +386,7 @@ export function MessageComposer({
     } catch (error) {
       updatePending(localId, {
         status: "failed",
-        error: error instanceof Error ? error.message : "Could not add that GIF",
+        error: error instanceof Error ? error.message : t("composer.gifFailed"),
       });
     }
   }
@@ -446,7 +449,7 @@ export function MessageComposer({
         }
         updatePending(localId, {
           status: "failed",
-          error: error instanceof Error ? error.message : "Upload failed",
+          error: error instanceof Error ? error.message : t("composer.uploadFailed"),
         });
       })
       .finally(() => uploadsRef.current.delete(localId));
@@ -725,9 +728,9 @@ export function MessageComposer({
       {menuKind && (
         <AutocompleteMenu
           id={MENU_ID}
-          label={menuKind === "mention" ? "Members" : "Slash commands"}
-          heading={menuKind === "mention" ? "Members" : "Commands"}
-          emptyLabel="No matching commands"
+          label={menuKind === "mention" ? t("composer.members") : t("composer.slashCommands")}
+          heading={menuKind === "mention" ? t("composer.members") : t("composer.commands")}
+          emptyLabel={t("composer.noCommands")}
           options={options}
           selectedIndex={selectedIndex}
           onSelect={applySelection}
@@ -769,14 +772,11 @@ export function MessageComposer({
         <div className="mb-2 flex items-center gap-2 rounded-md border border-border bg-surface-2 px-2.5 py-1.5 text-xs text-text-muted">
           <CornerUpLeft className="h-3.5 w-3.5 shrink-0 text-accent" />
           <span className="min-w-0 flex-1 truncate">
-            Replying to{" "}
-            <span className="font-medium text-text">
-              {replyTarget.authorName}
-            </span>
+            {t("composer.replying", { name: replyTarget.authorName })}
           </span>
           <button
             type="button"
-            aria-label="Cancel reply"
+            aria-label={t("composer.cancelReply")}
             onClick={() => onCancelReply?.()}
             className="shrink-0 rounded p-0.5 hover:text-text"
           >
@@ -786,7 +786,7 @@ export function MessageComposer({
       )}
       {pending.length > 0 && (
         <ul
-          aria-label="Attachments to send"
+          aria-label={t("composer.attachments")}
           className="mb-2 flex flex-wrap gap-2"
         >
           {pending.map((item) => (
@@ -823,7 +823,7 @@ export function MessageComposer({
               variant="ghost"
               size="icon"
               disabled={disabled}
-              aria-label="Attach a file"
+              aria-label={t("composer.attach")}
               onClick={() => fileInputRef.current?.click()}
               onMouseDown={(event) => {
                 if (menuKind) {
@@ -841,7 +841,7 @@ export function MessageComposer({
           variant="ghost"
           size="icon"
           disabled={disabled}
-          aria-label="Add emoji"
+          aria-label={t("composer.addEmoji")}
           aria-expanded={isPickerOpen}
           onClick={() => {
             setIsGifPickerOpen(false);
@@ -862,7 +862,7 @@ export function MessageComposer({
             variant="ghost"
             size="icon"
             disabled={disabled}
-            aria-label="Add GIF"
+            aria-label={t("composer.addGif")}
             aria-expanded={isGifPickerOpen}
             onClick={() => {
               setIsPickerOpen(false);
@@ -897,7 +897,7 @@ export function MessageComposer({
           // the active `@token` is defined by where the caret is.
           onSelect={(e) => syncCaret(e.currentTarget)}
           onPaste={handlePaste}
-          placeholder={placeholder}
+          placeholder={inputPlaceholder}
           disabled={disabled || isRunningSlash}
           maxLength={MESSAGE_MAX_LENGTH}
           className="flex-1 resize-none self-center rounded-md border border-ink-4 bg-ink-3 px-3 py-2 text-sm leading-6 text-paper placeholder:text-paper-muted focus-visible:border-signal/60 focus-visible:outline-none disabled:opacity-50"
@@ -905,7 +905,7 @@ export function MessageComposer({
           aria-expanded={Boolean(menuKind)}
           aria-controls={menuKind ? MENU_ID : undefined}
           aria-autocomplete="list"
-          aria-label={placeholder}
+          aria-label={inputPlaceholder}
           onKeyDown={handleKeyDown}
         />
         <Button
@@ -920,7 +920,7 @@ export function MessageComposer({
             (!body.trim() && readyCount === 0)
           }
         >
-          Send
+          {t("composer.send")}
         </Button>
       </div>
     </form>
@@ -934,6 +934,7 @@ function AttachmentChip({
   attachment: PendingAttachment;
   onRemove: () => void;
 }) {
+  const { t } = useTranslation();
   const isImage = isImageContentType(attachment.contentType);
   const percent = Math.round(attachment.progress * 100);
 
@@ -958,7 +959,7 @@ function AttachmentChip({
         {attachment.status === "failed" ? (
           <span className="flex items-center gap-1 text-[11px] text-danger">
             <AlertCircle className="h-3 w-3 shrink-0" />
-            <span className="truncate">{attachment.error ?? "Failed"}</span>
+            <span className="truncate">{attachment.error ?? t("common.failed")}</span>
           </span>
         ) : (
           <span className="block text-[11px] text-paper-muted">
@@ -975,7 +976,7 @@ function AttachmentChip({
         {attachment.status === "uploading" && (
           <span
             role="progressbar"
-            aria-label={`Uploading ${attachment.filename}`}
+            aria-label={t("composer.uploading", { name: attachment.filename })}
             aria-valuenow={percent}
             aria-valuemin={0}
             aria-valuemax={100}
@@ -992,7 +993,7 @@ function AttachmentChip({
       <button
         type="button"
         onClick={onRemove}
-        aria-label={`Remove ${attachment.filename}`}
+        aria-label={t("composer.remove", { name: attachment.filename })}
         className="shrink-0 self-start rounded p-0.5 text-paper-muted hover:text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
       >
         <X className="h-3.5 w-3.5" />

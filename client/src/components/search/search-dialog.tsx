@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { searchServerMessages } from "@/lib/api";
 import { messageRoutePath } from "@/lib/app-route";
+import { useTranslation } from "@/lib/i18n";
 import { cn, formatDayLabel, formatFullTimestamp } from "@/lib/utils";
 import { appendUniqueResults, clampSelection } from "./search-results";
 
@@ -36,6 +37,7 @@ export function SearchDialog({
   onClose,
   onNavigate,
 }: SearchDialogProps) {
+  const { t } = useTranslation();
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<MessageSearchResult[]>([]);
   const [status, setStatus] = useState<Status>("idle");
@@ -159,7 +161,7 @@ export function SearchDialog({
   return (
     <Dialog
       open={open}
-      title="Search messages"
+      title={t("search.title")}
       eyebrow={serverName}
       size="lg"
       onClose={onClose}
@@ -172,8 +174,8 @@ export function SearchDialog({
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Search this server"
-            aria-label="Search messages"
+            placeholder={t("search.placeholder")}
+            aria-label={t("search.title")}
             role="combobox"
             aria-expanded={results.length > 0}
             aria-controls={LISTBOX_ID}
@@ -192,27 +194,27 @@ export function SearchDialog({
         <div className="min-h-0 flex-1 overflow-y-auto">
           {status === "error" ? (
             <EmptyState
-              title="Search is unavailable right now."
-              hint="Try again in a moment."
+              title={t("search.unavailable")}
+              hint={t("search.unavailableHint")}
             />
           ) : !searchable ? (
             <EmptyState
-              title="Find anything said here."
-              hint={`Type at least ${SEARCH_QUERY_MIN_LENGTH} characters. Results cover every channel you can see.`}
+              title={t("search.prompt")}
+              hint={t("search.minChars", { count: SEARCH_QUERY_MIN_LENGTH })}
             />
           ) : status === "loading" && results.length === 0 ? (
-            <EmptyState title="Searching…" />
+            <EmptyState title={t("search.searching")} />
           ) : results.length === 0 ? (
             <EmptyState
-              title={`No messages matched “${trimmed}”.`}
-              hint="Different words find different things — search matches whole words, not fragments."
+              title={t("search.noMatch", { query: trimmed })}
+              hint={t("search.wholeWords")}
             />
           ) : (
             <>
               <ul
                 id={LISTBOX_ID}
                 role="listbox"
-                aria-label="Search results"
+                aria-label={t("search.results")}
                 className="p-2"
               >
                 {results.map((result, index) => (
@@ -269,7 +271,7 @@ export function SearchDialog({
                     disabled={loadingMore}
                     onClick={() => void loadMore()}
                   >
-                    {loadingMore ? "Loading…" : "Load more"}
+                    {loadingMore ? t("common.loading") : t("common.loadMore")}
                   </Button>
                 </div>
               )}

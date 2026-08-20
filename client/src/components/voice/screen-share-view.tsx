@@ -5,6 +5,7 @@ import {
   detectFullscreenMode,
   type FullscreenMode,
 } from "@/components/voice/capabilities";
+import { desktopContext } from "@/lib/desktop";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
@@ -247,7 +248,7 @@ export function ScreenShareView({
         <div className="flex shrink-0 items-center gap-1">
           {blocked && (
             <span role="status" className="truncate text-[11px] text-paper-muted">
-              {t("voice.share.fullscreenBlocked")}
+              {t("voice.share.fullscreenBlocked", desktopContext())}
             </span>
           )}
           {isSelf && onStopSharing && (

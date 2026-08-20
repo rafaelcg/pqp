@@ -85,9 +85,7 @@ export function VoiceStatusBar({
           {connected && (
             <span className="ml-1 font-normal text-paper-muted">
               ·{" "}
-              {total === 1
-                ? t("voice.bar.person", { count: total })
-                : t("voice.bar.people", { count: total })}
+              {t("voice.bar.people", { count: total })}
             </span>
           )}
         </p>

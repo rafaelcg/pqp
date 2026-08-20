@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { User } from "@pqp/shared";
 import { ApiError } from "@/lib/api";
-import { en } from "@/lib/i18n/catalogue";
+import { en } from "@/lib/i18n";
 import {
   handleErrorMessage,
   isValidUsername,

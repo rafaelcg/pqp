@@ -1,11 +1,10 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ThreadSummary } from "@pqp/shared";
 import { describe, expect, it } from "vitest";
-import { translate } from "@/lib/i18n/catalogue";
+import { translateMessage } from "@/lib/i18n";
 import { ThreadChip, threadChipLabel } from "./thread-chip";
 
-const t = (key: Parameters<typeof translate>[1], vars?: Parameters<typeof translate>[2]) =>
-  translate(undefined, key, vars);
+const t = translateMessage;
 
 const BASE: ThreadSummary = {
   channelId: "11111111-1111-4111-8111-111111111111",

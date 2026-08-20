@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
+import { useTranslation } from "@/lib/i18n";
 import {
   addChannelMember,
   fetchChannelMembers,
@@ -29,6 +30,7 @@ export function ChannelMembersPanel({
   serverId,
   onClose,
 }: ChannelMembersPanelProps) {
+  const { t } = useTranslation();
   const [channelMembers, setChannelMembers] = useState<Person[]>([]);
   const [serverMembers, setServerMembers] = useState<Person[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -72,7 +74,7 @@ export function ChannelMembersPanel({
         );
       } catch (err) {
         if (!cancelled) {
-          setError(err instanceof Error ? err.message : "Failed to load");
+          setError(err instanceof Error ? err.message : t("channelMembers.loadFailed"));
         }
       } finally {
         if (!cancelled) {
@@ -107,7 +109,7 @@ export function ChannelMembersPanel({
         setChannelMembers((prev) => [...prev, person]);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to add member");
+      setError(err instanceof Error ? err.message : t("channelMembers.addFailed"));
     } finally {
       setBusyId(null);
     }
@@ -123,7 +125,7 @@ export function ChannelMembersPanel({
       await removeChannelMember(channelId, userId);
       setChannelMembers((prev) => prev.filter((m) => m.id !== userId));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to remove member");
+      setError(err instanceof Error ? err.message : t("channelMembers.removeFailed"));
     } finally {
       setBusyId(null);
     }
@@ -132,9 +134,9 @@ export function ChannelMembersPanel({
   return (
     <Dialog
       open={open}
-      eyebrow="Private channel"
-      title={`#${channelName ?? "channel"}`}
-      description="Only listed members (plus owners/admins) can see this channel."
+      eyebrow={t("channelMembers.eyebrow")}
+      title={`#${channelName ?? t("channelMembers.fallbackName")}`}
+      description={t("channelMembers.description")}
       onClose={onClose}
     >
       <div className="space-y-5 p-4">
@@ -146,17 +148,17 @@ export function ChannelMembersPanel({
 
         {loading && (
           <p className="text-sm text-paper-muted" role="status">
-            Loading access list…
+            {t("channelMembers.loading")}
           </p>
         )}
 
         <section>
           <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-paper-muted">
-            Access ({channelMembers.length})
+            {t("channelMembers.access", { count: channelMembers.length })}
           </h3>
           {channelMembers.length === 0 ? (
             <p className="text-sm text-paper-muted">
-              {loading ? "…" : "No members yet."}
+              {loading ? t("common.loading") : t("channelMembers.empty")}
             </p>
           ) : (
             channelMembers.map((member) => (
@@ -180,11 +182,13 @@ export function ChannelMembersPanel({
                 <Button
                   size="sm"
                   variant="ghost"
-                  aria-label={`Remove ${member.displayName} from this channel`}
+                  aria-label={t("channelMembers.removeAria", {
+                    name: member.displayName,
+                  })}
                   disabled={busyId === member.id}
                   onClick={() => void removeMember(member.id)}
                 >
-                  Remove
+                  {t("channelMembers.remove")}
                 </Button>
               </div>
             ))
@@ -193,11 +197,11 @@ export function ChannelMembersPanel({
 
         <section>
           <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-paper-muted">
-            Add from server
+            {t("channelMembers.addFromServer")}
           </h3>
           {candidates.length === 0 ? (
             <p className="text-sm text-paper-muted">
-              Everyone on the server already has access.
+              {t("channelMembers.everyoneHasAccess")}
             </p>
           ) : (
             candidates.map((member) => (
@@ -221,11 +225,13 @@ export function ChannelMembersPanel({
                 <Button
                   size="sm"
                   variant="secondary"
-                  aria-label={`Give ${member.displayName} access to this channel`}
+                  aria-label={t("channelMembers.addAria", {
+                    name: member.displayName,
+                  })}
                   disabled={busyId === member.id}
                   onClick={() => void addMember(member.id)}
                 >
-                  Add
+                  {t("channelMembers.add")}
                 </Button>
               </div>
             ))

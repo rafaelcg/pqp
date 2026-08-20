@@ -43,25 +43,6 @@ interface ReportDialogProps {
   onClose: () => void;
 }
 
-/**
- * Every user-facing string in this file is a plain sentence held at the top
- * level of its element rather than assembled inside a branch, so they can be
- * lifted into the catalogue without untangling logic. The `community` kind's
- * two strings already live there (`communities.reportTitle` /
- * `communities.reportBody`) because that surface shipped translated; these two
- * kinds predate the catalogue and are left alone rather than half-migrated.
- */
-const TITLES: Record<"message" | "user", string> = {
-  message: "Report message",
-  user: "Report user",
-};
-
-const DESCRIPTIONS: Record<"message" | "user", string> = {
-  message:
-    "Moderators will see a copy of this message, who sent it, and anything you add below.",
-  user: "Moderators will see who you reported and anything you add below. No messages are attached.",
-};
-
 export function ReportDialog({ target, onClose }: ReportDialogProps) {
   const { t } = useTranslation();
   const [reason, setReason] = useState<ReportReason | null>(null);
@@ -131,7 +112,7 @@ export function ReportDialog({ target, onClose }: ReportDialogProps) {
       setError(
         err instanceof ApiError
           ? err.message
-          : "Could not send this report. Try again in a moment.",
+          : t("report.sendFailed"),
       );
     } finally {
       setSubmitting(false);
@@ -142,20 +123,19 @@ export function ReportDialog({ target, onClose }: ReportDialogProps) {
     return (
       <Dialog
         open
-        title="Report sent"
-        eyebrow="Safety"
+        title={t("report.sent")}
+        eyebrow={t("report.eyebrow")}
         onClose={onClose}
         size="sm"
         footer={
           <Button onClick={onClose}>
-            Done
+            {t("report.done")}
           </Button>
         }
       >
         <div className="space-y-3 px-5 py-4 text-sm text-paper-muted">
           <p>
-            Thanks — moderators have been notified. You will not be told who
-            reviews it.
+            {t("report.thanks")}
           </p>
           <p>
             If this person is bothering you directly, blocking them stops them
@@ -176,13 +156,21 @@ export function ReportDialog({ target, onClose }: ReportDialogProps) {
       title={
         target.kind === "community"
           ? t("communities.reportTitle")
-          : TITLES[target.kind]
+          : t(
+              target.kind === "message"
+                ? "report.title.message"
+                : "report.title.user",
+            )
       }
-      eyebrow="Safety"
+      eyebrow={t("report.eyebrow")}
       description={
         target.kind === "community"
           ? t("communities.reportBody")
-          : DESCRIPTIONS[target.kind]
+          : t(
+              target.kind === "message"
+                ? "report.body.message"
+                : "report.body.user",
+            )
       }
       onClose={onClose}
       size="sm"
@@ -191,10 +179,10 @@ export function ReportDialog({ target, onClose }: ReportDialogProps) {
       footer={
         <>
           <Button variant="ghost" disabled={submitting} onClick={onClose}>
-            Cancel
+            {t("common.cancel")}
           </Button>
           <Button disabled={!reason || submitting} onClick={() => void submit()}>
-            {submitting ? "Sending…" : "Send report"}
+            {submitting ? t("report.sending") : t("report.send")}
           </Button>
         </>
       }
@@ -236,7 +224,7 @@ export function ReportDialog({ target, onClose }: ReportDialogProps) {
             disabled={submitting}
             onChange={(e) => setDetails(e.target.value)}
             className="mt-2 w-full resize-none rounded-md border border-ink-4 bg-ink px-3 py-2 text-sm text-paper placeholder:text-paper-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/50 disabled:opacity-50"
-            placeholder="Context, links, or what happened before this."
+            placeholder={t("report.placeholder")}
           />
         </label>
 
