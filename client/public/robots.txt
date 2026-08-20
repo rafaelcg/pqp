@@ -16,6 +16,11 @@ Allow: /c/
 Allow: /garanta
 Allow: /claim
 
+# The comparison page. It targets the one set of queries this site can
+# realistically win right now, so it gets the same explicit line the profile
+# pages get — and for the same reason.
+Allow: /vs-discord
+
 # The app itself has nothing an index can use: every URL under it is per-account
 # and behind a login, and a crawler following one gets a sign-in screen.
 Disallow: /app
