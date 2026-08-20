@@ -2,6 +2,7 @@
   "name": "@pqp/electron",
   "version": "0.1.0",
   "private": true,
+  "license": "AGPL-3.0-only",
   "description": "Desktop shell for pqp",
   "homepage": "https://github.com/rafaelcg/pqp",
   "author": {

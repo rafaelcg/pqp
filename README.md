@@ -145,7 +145,8 @@ bilingual at [pqp.gg/terms](https://pqp.gg/terms) and
 
 ## License
 
-**No license file yet — which means, despite everything above, this is not
-legally open source until one lands.** Without a license, default copyright
-applies and self-hosting is not actually permitted. Choosing one (MIT for
-maximum adoption, AGPL to keep hosted forks honest) is an open decision.
+Copyright (C) 2026 [rafaelcg](https://github.com/rafaelcg).
+
+This project is licensed under the [GNU Affero General Public License v3.0](./LICENSE)
+(`AGPL-3.0-only`). Anyone who modifies the software and runs it as a network
+service must make the corresponding source available to users of that service.
