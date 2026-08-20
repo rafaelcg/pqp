@@ -374,6 +374,26 @@ export const en = {
     "Install via TestFlight. You’ll need an invite link from us until the public link is live.",
   "vsDiscord.cta.compare": "pqp vs Discord",
 
+  // The questions people actually type into a search box after the 17 Aug 2026
+  // suspension, answered in the page's voice. Same truth rules as the rows
+  // above: product claims only, no legal advice, no return-date speculation,
+  // and no promise about DRM'd streaming content. The edge middleware serves
+  // these four pairs as FAQPage JSON-LD (src/lib/marketing-meta.ts) — the
+  // suite pins the two copies together, so edit both or the tests fail.
+  "vsDiscord.faq.title": "Quick questions",
+  "vsDiscord.faq.why.q": "Why is Discord screen share suspended in Brazil?",
+  "vsDiscord.faq.why.a":
+    "Discord announced that screen share, video, and Go Live are suspended for users in Brazil since 17 August 2026, complying with a preventive order from the ANPD, Brazil's data-protection authority. That is Discord's own announcement — this page is a product comparison, not legal advice.",
+  "vsDiscord.faq.when.q": "When does Discord screen share come back in Brazil?",
+  "vsDiscord.faq.when.a":
+    "No date has been announced. Discord's letter to its Brazilian community says they are working to restore the features, without saying when.",
+  "vsDiscord.faq.how.q": "How can my group share a screen today?",
+  "vsDiscord.faq.how.a":
+    "Create a community on pqp.gg, send the invite link, and share your screen straight from the browser — the game, the code, the slides. Free, nothing to install; there's a desktop app too.",
+  "vsDiscord.faq.catch.q": "Is pqp really free? What's the catch?",
+  "vsDiscord.faq.catch.a":
+    "Free and open source. Use the hosted service at pqp.gg, or run your own copy on your own machines — the code is public. It's an open beta: young, honest about it, and built in the open.",
+
   "footer.iosBeta": "Join the iOS beta",
   "footer.vsDiscord": "pqp vs Discord",
 

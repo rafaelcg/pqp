@@ -336,6 +336,26 @@ export const ptBR: PartialMessages = {
     "Instala pelo TestFlight. Por enquanto precisa de um convite nosso até o link público existir.",
   "vsDiscord.cta.compare": "pqp vs Discord",
 
+  // Mesmas regras de verdade das linhas do placar: afirmação de produto, sem
+  // conselho jurídico, sem especular data de volta. O middleware de borda
+  // serve estes quatro pares como FAQPage JSON-LD (src/lib/marketing-meta.ts)
+  // — a suíte trava as duas cópias juntas.
+  "vsDiscord.faq.title": "Perguntas rápidas",
+  "vsDiscord.faq.why.q":
+    "Por que o compartilhamento de tela do Discord está suspenso no Brasil?",
+  "vsDiscord.faq.why.a":
+    "A Discord comunicou que tela compartilhada, vídeo e Go Live estão suspensos para usuários no Brasil desde 17 de agosto de 2026, cumprindo uma medida preventiva da ANPD, a autoridade brasileira de proteção de dados. É o comunicado da própria Discord — esta página é uma comparação de produto, não conselho jurídico.",
+  "vsDiscord.faq.when.q":
+    "Quando volta o compartilhamento de tela do Discord no Brasil?",
+  "vsDiscord.faq.when.a":
+    "Não há data anunciada. A carta da Discord para a comunidade brasileira diz que estão trabalhando para restaurar os recursos, sem dizer quando.",
+  "vsDiscord.faq.how.q": "Como compartilhar tela com o meu grupo hoje?",
+  "vsDiscord.faq.how.a":
+    "Cria uma comunidade no pqp.gg, manda o link do convite e compartilha a tela direto do navegador — o jogo, o código, os slides. De graça, sem instalar nada; também tem app pra desktop.",
+  "vsDiscord.faq.catch.q": "O pqp é grátis mesmo? Qual é a pegadinha?",
+  "vsDiscord.faq.catch.a":
+    "Grátis e de código aberto. Usa o serviço hospedado no pqp.gg, ou roda a sua própria cópia nas suas máquinas — o código é público. É um beta aberto: novo, honesto sobre isso, e construído às claras.",
+
   // ------------------------------------------------------- app bootstrap shell
   "app.seo.title": "App — pqp",
   "app.seo.description": "Abra o pqp — comunidades, texto e voz.",
