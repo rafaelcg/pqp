@@ -325,7 +325,7 @@ export const ptBR: PartialMessages = {
   "vsDiscord.row.maturity.pqp": "Beta aberto",
   "vsDiscord.row.maturity.discord": "Dez anos de estrada",
   "vsDiscord.row.region.label": "Servidores no Brasil",
-  "vsDiscord.row.region.pqp": "São Paulo",
+  "vsDiscord.row.region.pqp": "Sim",
   "vsDiscord.row.region.discord": "Sim",
   "vsDiscord.closing.title": "Resumo honesto",
   "vsDiscord.closing.body":

@@ -363,7 +363,7 @@ export const en = {
   "vsDiscord.row.maturity.pqp": "Open beta",
   "vsDiscord.row.maturity.discord": "A decade on the road",
   "vsDiscord.row.region.label": "Servers in Brazil",
-  "vsDiscord.row.region.pqp": "São Paulo",
+  "vsDiscord.row.region.pqp": "Yes",
   "vsDiscord.row.region.discord": "Yes",
   "vsDiscord.closing.title": "Honest summary",
   "vsDiscord.closing.body":

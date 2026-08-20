@@ -207,6 +207,14 @@
   box-sizing: border-box;
 }
 
+/* In-page anchors (footer → /vs-discord#ios-beta, nav → /#how) glide instead
+   of teleporting — but never for someone who asked for less motion. */
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
+}
+
 html,
 body,
 #root {

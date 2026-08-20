@@ -214,8 +214,39 @@ function rewritten(response: Response, html: string): Response {
   });
 }
 
+/**
+ * Build-output namespaces where every file is content-hashed. A request here
+ * can only legitimately be answered with the asset itself — never with HTML.
+ */
+function isHashedAssetPath(pathname: string): boolean {
+  return pathname.startsWith("/assets/") || /^\/workbox-[\w-]+\.js$/.test(pathname);
+}
+
 export async function onRequest(context: PagesContext): Promise<Response> {
   const url = new URL(context.request.url);
+
+  // A hashed asset that falls through to the SPA fallback must die as an
+  // uncacheable 404, never travel as HTML. During a deploy's propagation
+  // window the domain can briefly answer for a hash it does not have yet; the
+  // fallback is index.html, `_headers` stamps everything under /assets/* as
+  // immutable for a year, and the edge cache will happily serve that HTML as
+  // the stylesheet until 2027 (it did, 2026-08-20 — blank site). `_headers`
+  // does not apply to function responses, so the no-store here is what wins.
+  if (isHashedAssetPath(url.pathname)) {
+    const response = await context.next();
+    const contentType = response.headers.get("content-type") ?? "";
+    if (contentType.includes("text/html")) {
+      return new Response("Not found", {
+        status: 404,
+        headers: {
+          "cache-control": "no-store",
+          "content-type": "text/plain; charset=utf-8",
+        },
+      });
+    }
+    return response;
+  }
+
   const handle = handleFromMetaPath(url.pathname);
   const slug = handle ? null : communitySlugFromMetaPath(url.pathname);
   // The overwhelmingly common case, and it must cost nothing: this middleware
