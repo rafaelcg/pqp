@@ -164,7 +164,7 @@ export function VsDiscordPage() {
 
       <main className="relative flex-1 overflow-hidden">
         <div
-          className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top,rgba(209,255,77,0.08),transparent_55%)]"
+          className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top,var(--glow-accent),transparent_55%)]"
           aria-hidden
         />
 
@@ -196,7 +196,7 @@ export function VsDiscordPage() {
 
           {/* Desktop table */}
           <div
-            className="animate-rise mt-12 hidden overflow-hidden rounded-2xl border border-ink-4 bg-ink-2/60 shadow-[0_0_0_1px_rgba(209,255,77,0.06)] md:block"
+            className="animate-rise mt-12 hidden overflow-hidden rounded-2xl border border-ink-4 bg-ink-2/60 md:block"
             style={stagger(4)}
           >
             <table className="w-full border-collapse text-left text-sm">
