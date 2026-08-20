@@ -1,9 +1,11 @@
 import { Link } from "react-router-dom";
 import { RELEASES_PAGE_URL } from "@/lib/downloads";
 import { useTranslation } from "@/lib/i18n";
+import { testflightUrl } from "@/lib/testflight";
 
 export function MarketingFooter() {
   const { t, locale } = useTranslation();
+  const betaUrl = testflightUrl();
 
   return (
     <footer className="border-t border-ink-4/40 bg-ink px-5 py-10 sm:px-8">
@@ -33,6 +35,9 @@ export function MarketingFooter() {
             >
               {t("nav.selfHost")}
             </a>
+            <Link to="/vs-discord" className="text-paper hover:text-signal">
+              {t("footer.vsDiscord")}
+            </Link>
             {/* The releases page, not a direct asset: the filenames carry the
                 version, so only GitHub can say what the newest one is called.
                 See `lib/downloads.ts`. */}
@@ -44,6 +49,23 @@ export function MarketingFooter() {
             >
               {t("footer.desktop")}
             </a>
+            {betaUrl ? (
+              <a
+                href={betaUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-paper hover:text-signal"
+              >
+                {t("footer.iosBeta")}
+              </a>
+            ) : (
+              <Link
+                to="/vs-discord#ios-beta"
+                className="text-paper hover:text-signal"
+              >
+                {t("footer.iosBeta")}
+              </Link>
+            )}
             <Link to="/status" className="text-paper hover:text-signal">
               {t("footer.status")}
             </Link>

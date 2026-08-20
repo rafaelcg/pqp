@@ -11,6 +11,7 @@ import {
 } from "@/lib/downloads";
 import { isDesktopApp } from "@/lib/desktop";
 import { useTranslation } from "@/lib/i18n";
+import { testflightUrl } from "@/lib/testflight";
 import { cn } from "@/lib/utils";
 
 /**
@@ -78,8 +79,26 @@ export function HeroDownload({ className, style }: HeroDownloadProps) {
   const href = (id: AssetId) => assets[id] ?? RELEASES_PAGE_URL;
 
   if (plan.platform === "mobile") {
-    // No store presence to point at, and a .dmg on a phone is a dead end. The
-    // PWA is a real answer (docs/PWA.md) and costs nothing to mention.
+    const beta = testflightUrl();
+    // Prefer the native beta when we have a join URL; otherwise the PWA is the
+    // honest answer (docs/PWA.md) — a .dmg on a phone is a dead end.
+    if (beta) {
+      return (
+        <p
+          className={cn("max-w-xs text-sm text-white/60", className)}
+          style={style}
+        >
+          <a
+            href={beta}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline decoration-white/30 underline-offset-2 hover:text-white hover:decoration-white/60"
+          >
+            {t("download.mobile.beta")}
+          </a>
+        </p>
+      );
+    }
     return (
       <p className={cn("max-w-xs text-sm text-white/60", className)} style={style}>
         {t("download.mobile")}

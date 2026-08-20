@@ -68,6 +68,9 @@ jobs:
           VITE_API_URL: ${{ secrets.VITE_API_URL }}
           VITE_WS_URL: ${{ secrets.VITE_WS_URL }}
           VITE_DEV_AUTH_BYPASS: "false"
+          # Optional — public TestFlight join link. Empty is fine; the site then
+          # points "Join the iOS beta" at /vs-discord#ios-beta instead.
+          VITE_TESTFLIGHT_URL: ${{ secrets.VITE_TESTFLIGHT_URL }}
         run: pnpm --filter @pqp/client build
 
       # Install wrangler outside the pnpm workspace (npm + workspace:* fails in client/)

@@ -256,6 +256,7 @@ export const ptBR: PartialMessages = {
   "download.other": "Baixar pro desktop",
   "download.mobile":
     "Não tem app pra instalar aqui. Abre o pqp no navegador e adiciona na tela de início pelo menu.",
+  "download.mobile.beta": "No iPhone? Entra no beta do iOS pelo TestFlight.",
 
   // ------------------------------------------------------------ legal pages
   // O texto das páginas legais está em `pages/legal/*.pt-BR.tsx`, não aqui.
@@ -267,6 +268,8 @@ export const ptBR: PartialMessages = {
     "O chat em grupo é seu. Hospede você mesmo ou use o pqp.gg — a bagunça é a mesma.",
   "footer.product": "Produto",
   "footer.desktop": "App de desktop",
+  "footer.iosBeta": "Entra no beta do iOS",
+  "footer.vsDiscord": "pqp vs Discord",
   "footer.legal": "Jurídico",
   "footer.status": "Status",
   "footer.privacy": "Privacidade",
@@ -274,6 +277,62 @@ export const ptBR: PartialMessages = {
   "footer.cookies": "Cookies",
   "footer.copyright":
     "© {year} pqp. Código aberto. Feito para o grupo que não cala a boca.",
+
+  // ------------------------------------------------------------- vs Discord
+  "vsDiscord.seo.title": "pqp vs Discord (2026): comparação honesta",
+  "vsDiscord.seo.description":
+    "Tela compartilhada e câmera funcionam no pqp. No Brasil, tela, vídeo e Go Live do Discord estão suspensos desde 17 ago 2026 (carta da Discord; sem data de volta). Grátis, código aberto, beta aberto.",
+  "vsDiscord.hero.title": "pqp vs Discord (2026): comparação honesta",
+  "vsDiscord.hero.body":
+    "O Discord é excelente — a gente não vai fingir que não é. Mas desde 17 de agosto de 2026, o Go Live, o vídeo e o compartilhamento de tela estão suspensos no Brasil, por ordem da ANPD, sem data para voltar. Enquanto isso, comunidades que viviam de watch party, estudo com tela aberta e mesa de RPG ficaram sem a ferramenta principal. O pqp é uma alternativa open-source, de graça e em beta aberto. Segue a comparação — incluindo onde o Discord ganha.",
+  "vsDiscord.hero.disclaimer":
+    "Afirmação de produto, não conselho jurídico: a Discord comunicou que tela compartilhada, vídeo e Go Live estão suspensos no Brasil desde 17 ago 2026 por ordem da ANPD, sem data de volta na carta deles.",
+  "vsDiscord.table.caption": "Placar de recursos",
+  "vsDiscord.table.col.feature": "Coisa",
+  "vsDiscord.table.col.pqp": "pqp",
+  "vsDiscord.table.col.discord": "Discord",
+  "vsDiscord.chip.works": "Funciona",
+  "vsDiscord.chip.suspended": "Suspenso",
+  "vsDiscord.chip.yes": "Sim",
+  "vsDiscord.chip.no": "Não",
+  "vsDiscord.chip.partial": "Parcial",
+  "vsDiscord.row.screen.label": "Compartilhamento de tela e vídeo no Brasil",
+  "vsDiscord.row.screen.pqp": "Funciona",
+  "vsDiscord.row.screen.discord":
+    "Suspenso desde 17/08/2026, sem previsão",
+  "vsDiscord.row.price.label": "Preço",
+  "vsDiscord.row.price.pqp": "De graça",
+  "vsDiscord.row.price.discord": "De graça (recursos pagos via Nitro)",
+  "vsDiscord.row.openSource.label": "Código aberto",
+  "vsDiscord.row.openSource.pqp": "Sim",
+  "vsDiscord.row.openSource.discord": "Não",
+  "vsDiscord.row.selfHost.label": "Rodar no seu próprio servidor",
+  "vsDiscord.row.selfHost.pqp": "Sim",
+  "vsDiscord.row.selfHost.discord": "Não",
+  "vsDiscord.row.ageGate.label": "Verificação de idade",
+  "vsDiscord.row.ageGate.pqp": "Nativa, desde o primeiro dia",
+  "vsDiscord.row.ageGate.discord": "Parcial, varia por região",
+  "vsDiscord.row.apps.label": "Apps nativos (desktop/celular)",
+  "vsDiscord.row.apps.pqp":
+    "Desktop já tem. iOS está em beta no TestFlight — ainda sem listagem pública na App Store.",
+  "vsDiscord.row.apps.discord": "Sim, e são ótimos",
+  "vsDiscord.row.ecosystem.label": "Ecossistema (bots, integrações)",
+  "vsDiscord.row.ecosystem.pqp": "Começando",
+  "vsDiscord.row.ecosystem.discord": "Gigante",
+  "vsDiscord.row.maturity.label": "Maturidade",
+  "vsDiscord.row.maturity.pqp": "Beta aberto",
+  "vsDiscord.row.maturity.discord": "Dez anos de estrada",
+  "vsDiscord.row.region.label": "Servidores no Brasil",
+  "vsDiscord.row.region.pqp": "São Paulo",
+  "vsDiscord.row.region.discord": "Sim",
+  "vsDiscord.closing.title": "Resumo honesto",
+  "vsDiscord.closing.body":
+    "Se a sua comunidade depende de tela compartilhada e você quer algo de graça e aberto, testa o pqp hoje — leva um minuto e não pede cartão. Se você precisa de um ecossistema maduro com bots e apps polidos, o Discord continua imbatível — quando o vídeo voltar.",
+  "vsDiscord.cta.create": "Criar uma sala",
+  "vsDiscord.cta.beta": "Entra no beta do iOS",
+  "vsDiscord.cta.beta.hint":
+    "Instala pelo TestFlight. Por enquanto precisa de um convite nosso até o link público existir.",
+  "vsDiscord.cta.compare": "pqp vs Discord",
 
   // ------------------------------------------------------- app bootstrap shell
   "app.seo.title": "App — pqp",

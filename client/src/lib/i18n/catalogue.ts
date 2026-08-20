@@ -313,6 +313,74 @@ export const en = {
   "footer.copyright":
     "© {year} pqp. Open source. Built for the group that won't shut up.",
 
+  // ------------------------------------------------------------- vs Discord
+  // Scoreboard marketing page at /vs-discord. Claims must stay true — see
+  // docs/superpowers/specs/2026-08-20-vs-discord-and-testflight-design.md.
+  // Never put vendor region codes (Fly, gru) in end-user strings.
+  "vsDiscord.seo.title": "pqp vs Discord (2026): an honest comparison",
+  "vsDiscord.seo.description":
+    "Screen share and camera work on pqp. In Brazil, Discord’s screen share, video, and Go Live have been suspended since 17 Aug 2026 (Discord’s letter; no return date). Free, open source, open beta.",
+  "vsDiscord.hero.title": "pqp vs Discord (2026): an honest comparison",
+  "vsDiscord.hero.body":
+    "Discord is excellent — we are not going to pretend otherwise. Since 17 August 2026, Go Live, video, and screen share have been suspended in Brazil by ANPD order, with no return date. Communities that lived on watch parties, study-with-screen, and RPG tables lost the main tool. pqp is open source, free, and in open beta. Here is the scoreboard — including where Discord still wins.",
+  "vsDiscord.hero.disclaimer":
+    "Product claim, not legal advice: Discord has said screen share, video, and Go Live are suspended in Brazil since 17 Aug 2026 under an ANPD order, with no return date in their letter.",
+  "vsDiscord.table.caption": "Feature scoreboard",
+  "vsDiscord.table.col.feature": "Thing",
+  "vsDiscord.table.col.pqp": "pqp",
+  "vsDiscord.table.col.discord": "Discord",
+  "vsDiscord.chip.works": "Works",
+  "vsDiscord.chip.suspended": "Suspended",
+  "vsDiscord.chip.yes": "Yes",
+  "vsDiscord.chip.no": "No",
+  "vsDiscord.chip.partial": "Partial",
+  "vsDiscord.row.screen.label": "Screen share & video in Brazil",
+  "vsDiscord.row.screen.pqp": "Works",
+  "vsDiscord.row.screen.discord":
+    "Suspended since 17 Aug 2026 — no return date",
+  "vsDiscord.row.price.label": "Price",
+  "vsDiscord.row.price.pqp": "Free",
+  "vsDiscord.row.price.discord": "Free (paid extras via Nitro)",
+  "vsDiscord.row.openSource.label": "Open source",
+  "vsDiscord.row.openSource.pqp": "Yes",
+  "vsDiscord.row.openSource.discord": "No",
+  "vsDiscord.row.selfHost.label": "Run on your own server",
+  "vsDiscord.row.selfHost.pqp": "Yes",
+  "vsDiscord.row.selfHost.discord": "No",
+  "vsDiscord.row.ageGate.label": "Age verification",
+  "vsDiscord.row.ageGate.pqp": "Native, from day one",
+  "vsDiscord.row.ageGate.discord": "Partial — varies by region",
+  "vsDiscord.row.apps.label": "Native apps (desktop / phone)",
+  "vsDiscord.row.apps.pqp":
+    "Desktop ships. iOS is in TestFlight beta — not a public App Store listing yet.",
+  "vsDiscord.row.apps.discord": "Yes, and they are excellent",
+  "vsDiscord.row.ecosystem.label": "Ecosystem (bots, integrations)",
+  "vsDiscord.row.ecosystem.pqp": "Just getting started",
+  "vsDiscord.row.ecosystem.discord": "Huge",
+  "vsDiscord.row.maturity.label": "Maturity",
+  "vsDiscord.row.maturity.pqp": "Open beta",
+  "vsDiscord.row.maturity.discord": "A decade on the road",
+  "vsDiscord.row.region.label": "Servers in Brazil",
+  "vsDiscord.row.region.pqp": "São Paulo",
+  "vsDiscord.row.region.discord": "Yes",
+  "vsDiscord.closing.title": "Honest summary",
+  "vsDiscord.closing.body":
+    "If your community needs shared screens and you want something free and open, try pqp today — takes a minute, no card. If you need a mature ecosystem with bots and polished store apps, Discord is still unbeatable — when video comes back.",
+  "vsDiscord.cta.create": "Create a room",
+  "vsDiscord.cta.beta": "Join the iOS beta",
+  "vsDiscord.cta.beta.hint":
+    "Install via TestFlight. You’ll need an invite link from us until the public link is live.",
+  "vsDiscord.cta.compare": "pqp vs Discord",
+
+  "footer.iosBeta": "Join the iOS beta",
+  "footer.vsDiscord": "pqp vs Discord",
+
+  // A phone gets pointed at the browser, never at a .dmg — and never at a store
+  // listing, which does not exist. It is installable from the browser menu
+  // (docs/PWA.md), which is the honest version of "get the app". When
+  // VITE_TESTFLIGHT_URL is set, HeroDownload offers that instead.
+  "download.mobile.beta": "On iPhone? Join the iOS beta on TestFlight.",
+
   // ------------------------------------------------------- app bootstrap shell
   "app.seo.title": "App — pqp",
   "app.seo.description": "Open pqp — communities, text, and voice.",

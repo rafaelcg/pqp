@@ -50,6 +50,9 @@ const CookiesPage = lazy(() =>
 const StatusPage = lazy(() =>
   import("./pages/status-page").then((m) => ({ default: m.StatusPage })),
 );
+const VsDiscordPage = lazy(() =>
+  import("./pages/vs-discord-page").then((m) => ({ default: m.VsDiscordPage })),
+);
 const ClaimPage = lazy(() =>
   import("./pages/claim-page").then((m) => ({ default: m.ClaimPage })),
 );
@@ -140,6 +143,7 @@ function AppRoutes({ devBypass = false }: { devBypass?: boolean }) {
           <Route path="/terms" element={<TermsPage />} />
           <Route path="/cookies" element={<CookiesPage />} />
           <Route path="/status" element={<StatusPage />} />
+          <Route path="/vs-discord" element={<VsDiscordPage />} />
           {/* Two paths, one page. `/garanta` is the one that gets shared in
               Brazil and the one every CTA points at; `/claim` exists so an
               English-speaking visitor guessing at a URL is not wrong. Neither

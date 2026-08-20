@@ -107,5 +107,5 @@ CI workflows: `.github/workflows/ci.yml`, `deploy-web.yml`, `electron.yml`.
 
 - Do not invent secret values in docs or commits.
 - Point humans to `docs/HANDLES.md` for public handles, the `/@` profile page and its edge-injected SEO; `docs/ambient-deploy.md` for character accounts and the ambient-life runner (the house cast); `docs/CLERK_SETUP.md` for Clerk CLI setup; `docs/SSO.md` for SAML/enterprise domain joining; `docs/voice-backends.md` for SFU notes; `docs/ATTACHMENTS.md` for R2/MinIO setup; `docs/CONTENT_SAFETY.md` for image scanning, what is
-  *not* scanned, and the CSAM reporting runbook; `docs/PWA.md` for the mobile/installable app.
+ *not* scanned, and the CSAM reporting runbook; `docs/PWA.md` for the mobile/installable app; `docs/TESTFLIGHT.md` for the iOS beta / App Review demo account.
 - Update `docs/HANDOVER.md` + `docs/PLAN_STATUS.md` when phase status changes.
