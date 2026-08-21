@@ -1,10 +1,10 @@
 import { Download } from "lucide-react";
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
-import { Link } from "react-router-dom";
 import {
   DESKTOP_DOCS_URL,
   RELEASES_PAGE_URL,
   detectDownloadPlan,
+  isIOSDevice,
   resolveLatestAssets,
   type AssetId,
   type AssetUrls,
@@ -81,9 +81,10 @@ export function HeroDownload({ className, style }: HeroDownloadProps) {
 
   if (plan.platform === "mobile") {
     const beta = testflightUrl();
-    // Prefer the native beta when we have a join URL; otherwise the PWA is the
-    // honest answer (docs/PWA.md) — a .dmg on a phone is a dead end.
-    if (beta) {
+    // The iOS beta is only for iPhones: an Android visitor offered a TestFlight
+    // link has nothing to do with it, so they get the PWA answer instead
+    // (docs/PWA.md) — a .dmg on a phone is a dead end either way.
+    if (beta && isIOSDevice()) {
       return (
         <p
           className={cn("max-w-xs text-sm text-white/60", className)}
@@ -196,12 +197,7 @@ export function HeroDownload({ className, style }: HeroDownloadProps) {
     );
   }
 
-  return (
-    <>
-      {download}
-      <DesktopBetaLine />
-    </>
-  );
+  return download;
 }
 
 function Shell({
@@ -280,24 +276,4 @@ function Separator() {
 
 function Note({ children }: { children: ReactNode }) {
   return <p className="mt-2 max-w-sm text-xs text-white/55">{children}</p>;
-}
-
-/**
- * The iOS beta, offered under the desktop download. Links to `/beta` rather than
- * straight to TestFlight: the landing page sells it and carries the honest
- * framing before the external hop. A desktop visitor with an iPhone (or a
- * friend on one) meets the option here instead of only on a phone.
- */
-function DesktopBetaLine() {
-  const { t } = useTranslation();
-  return (
-    <p className="mt-3 text-sm text-white/55">
-      <Link
-        to="/beta"
-        className="underline decoration-white/25 underline-offset-2 hover:text-white/80"
-      >
-        {t("download.mobile.beta")}
-      </Link>
-    </p>
-  );
 }
