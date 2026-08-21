@@ -31,6 +31,7 @@ describe("marketingPageFromMetaPath", () => {
     const pages: MarketingPage[] = [
       "/",
       "/vs-discord",
+      "/beta",
       "/garanta",
       "/claim",
       "/privacy",

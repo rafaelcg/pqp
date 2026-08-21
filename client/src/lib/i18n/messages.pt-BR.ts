@@ -258,7 +258,7 @@ export const ptBR: PartialMessages = {
   "download.other": "Baixar pro desktop",
   "download.mobile":
     "Não tem app pra instalar aqui. Abre o pqp no navegador e adiciona na tela de início pelo menu.",
-  "download.mobile.beta": "No iPhone? Entra no beta do iOS pelo TestFlight.",
+  "download.mobile.beta": "No iPhone? Pega uma vaga no beta do iOS pelo TestFlight.",
 
   // ------------------------------------------------------------ legal pages
   // O texto das páginas legais está em `pages/legal/*.pt-BR.tsx`, não aqui.
@@ -335,8 +335,34 @@ export const ptBR: PartialMessages = {
   "vsDiscord.cta.create": "Criar uma sala",
   "vsDiscord.cta.beta": "Entra no beta do iOS",
   "vsDiscord.cta.beta.hint":
-    "Instala pelo TestFlight. Por enquanto precisa de um convite nosso até o link público existir.",
+    "Instala pelo TestFlight, leva um minuto e é de graça.",
   "vsDiscord.cta.compare": "pqp vs Discord",
+  "betaPage.seo.title": "Beta do iOS — pqp no iPhone",
+  "betaPage.seo.description":
+    "Acesso antecipado ao pqp no iPhone. Voz, tela compartilhada e câmera na chamada, direto do bolso. Vagas pelo TestFlight, de graça e em beta aberto.",
+  "betaPage.badge": "Acesso antecipado · vagas limitadas",
+  "betaPage.title": "pqp no seu iPhone, antes de todo mundo",
+  "betaPage.body":
+    "Enquanto a versão da App Store não sai, você entra pela porta da frente: o beta do iOS pelo TestFlight. Voz, tela compartilhada e câmera na chamada, direto do bolso.",
+  "betaPage.cta": "Entrar no beta do iOS",
+  "betaPage.cta.sub": "Instala pelo TestFlight, leva um minuto. De graça.",
+  "betaPage.web": "ou abre agora no navegador",
+  "betaPage.perks.title": "O que você leva",
+  "betaPage.perk.share.title": "Tela e câmera na call",
+  "betaPage.perk.share.body":
+    "Compartilha a tela e liga a câmera na chamada, do celular, sem gambiarra.",
+  "betaPage.perk.early.title": "Antes de todo mundo",
+  "betaPage.perk.early.body":
+    "Você testa o app do iPhone antes de existir listagem pública, e o que reportar molda o que sai.",
+  "betaPage.perk.free.title": "De graça e aberto",
+  "betaPage.perk.free.body":
+    "Sem cobrança, sem cartão. Código aberto, servidores em São Paulo.",
+  "betaPage.how.title": "Como entrar",
+  "betaPage.how.1": "Toca em entrar no beta e abre no TestFlight.",
+  "betaPage.how.2": "Instala o pqp como qualquer outro app.",
+  "betaPage.how.3": "Faz login e tá dentro.",
+  "betaPage.honest":
+    "É um beta pelo TestFlight, não uma listagem da App Store. É novo, feito por uma pessoa só, então vai ter aresta. Se algo quebrar, a gente conserta rápido.",
 
   // Mesmas regras de verdade das linhas do placar: afirmação de produto, sem
   // conselho jurídico, sem especular data de volta. O middleware de borda

@@ -373,8 +373,34 @@ export const en = {
   "vsDiscord.cta.create": "Create a room",
   "vsDiscord.cta.beta": "Join the iOS beta",
   "vsDiscord.cta.beta.hint":
-    "Install via TestFlight. You’ll need an invite link from us until the public link is live.",
+    "Install via TestFlight, takes a minute and it's free.",
   "vsDiscord.cta.compare": "pqp vs Discord",
+  "betaPage.seo.title": "iOS beta — pqp on iPhone",
+  "betaPage.seo.description":
+    "Early access to pqp on iPhone. Voice, screen share, and camera in the call, from your pocket. Spots via TestFlight, free and in open beta.",
+  "betaPage.badge": "Early access · limited spots",
+  "betaPage.title": "pqp on your iPhone, before everyone else",
+  "betaPage.body":
+    "While the App Store version isn't out yet, you get in through the front door: the iOS beta on TestFlight. Voice, screen share, and camera in the call, straight from your pocket.",
+  "betaPage.cta": "Get the iOS beta",
+  "betaPage.cta.sub": "Install via TestFlight, takes a minute. Free.",
+  "betaPage.web": "or open it now in the browser",
+  "betaPage.perks.title": "What you get",
+  "betaPage.perk.share.title": "Screen and camera in the call",
+  "betaPage.perk.share.body":
+    "Share your screen and turn on the camera in a call, from your phone, no workarounds.",
+  "betaPage.perk.early.title": "Before everyone else",
+  "betaPage.perk.early.body":
+    "You try the iPhone app before there's a public listing, and what you report shapes what ships.",
+  "betaPage.perk.free.title": "Free and open",
+  "betaPage.perk.free.body":
+    "No charge, no card. Open source, servers in São Paulo.",
+  "betaPage.how.title": "How to join",
+  "betaPage.how.1": "Tap join the beta and it opens in TestFlight.",
+  "betaPage.how.2": "Install pqp like any other app.",
+  "betaPage.how.3": "Sign in and you're in.",
+  "betaPage.honest":
+    "It's a TestFlight beta, not an App Store listing. It's young, built by one person, so expect rough edges. If something breaks, we fix it fast.",
 
   // The questions people actually type into a search box after the 17 Aug 2026
   // suspension, answered in the page's voice. Same truth rules as the rows
@@ -403,7 +429,7 @@ export const en = {
   // listing, which does not exist. It is installable from the browser menu
   // (docs/PWA.md), which is the honest version of "get the app". When
   // VITE_TESTFLIGHT_URL is set, HeroDownload offers that instead.
-  "download.mobile.beta": "On iPhone? Join the iOS beta on TestFlight.",
+  "download.mobile.beta": "On iPhone? Grab a spot in the iOS beta on TestFlight.",
 
   // ------------------------------------------------------- app bootstrap shell
   "app.seo.title": "App — pqp",

@@ -39,6 +39,7 @@ const CANONICAL_ORIGIN = "https://pqp.gg";
 export type MarketingPage =
   | "/"
   | "/vs-discord"
+  | "/beta"
   | "/garanta"
   | "/claim"
   | "/privacy"
@@ -51,6 +52,7 @@ export type MarketingLocale = "pt-BR" | "en";
 const MARKETING_PATHS: ReadonlySet<string> = new Set([
   "/",
   "/vs-discord",
+  "/beta",
   "/garanta",
   "/claim",
   "/privacy",
@@ -116,6 +118,18 @@ const PAGE_COPY: Record<MarketingPage, PageCopy> = {
       "pt-BR":
         "Tela compartilhada e câmera nas chamadas funcionam no pqp. No Brasil, tela, vídeo e Go Live do Discord estão suspensos desde 17 ago 2026 (carta da Discord; sem data de volta). Grátis, código aberto, beta aberto.",
       en: "Screen share and camera in calls work on pqp. In Brazil, Discord’s screen share, video, and Go Live have been suspended since 17 Aug 2026 (Discord’s letter; no return date). Free, open source, open beta.",
+    },
+  },
+  "/beta": {
+    canonicalPath: "/beta",
+    title: {
+      "pt-BR": "Beta do iOS — pqp no iPhone",
+      en: "iOS beta — pqp on iPhone",
+    },
+    description: {
+      "pt-BR":
+        "Acesso antecipado ao pqp no iPhone. Voz, tela compartilhada e câmera na chamada, direto do bolso. Vagas pelo TestFlight, de graça e em beta aberto.",
+      en: "Early access to pqp on iPhone. Voice, screen share, and camera in the call, from your pocket. Spots via TestFlight, free and in open beta.",
     },
   },
   "/garanta": {

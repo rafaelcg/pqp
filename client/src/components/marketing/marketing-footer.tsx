@@ -2,11 +2,9 @@ import { Link } from "react-router-dom";
 import { BetaTag } from "@/components/ui/beta-tag";
 import { RELEASES_PAGE_URL } from "@/lib/downloads";
 import { useTranslation } from "@/lib/i18n";
-import { testflightUrl } from "@/lib/testflight";
 
 export function MarketingFooter() {
   const { t, locale } = useTranslation();
-  const betaUrl = testflightUrl();
 
   return (
     <footer className="border-t border-ink-4/40 bg-ink px-5 py-10 sm:px-8">
@@ -53,23 +51,12 @@ export function MarketingFooter() {
             >
               {t("footer.desktop")}
             </a>
-            {betaUrl ? (
-              <a
-                href={betaUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-paper hover:text-signal"
-              >
-                {t("footer.iosBeta")}
-              </a>
-            ) : (
-              <Link
-                to="/vs-discord#ios-beta"
-                className="text-paper hover:text-signal"
-              >
-                {t("footer.iosBeta")}
-              </Link>
-            )}
+            {/* The footer drives to the /beta landing, not straight to
+                TestFlight: the page sells the beta and carries the honest
+                framing before the external hop. */}
+            <Link to="/beta" className="text-paper hover:text-signal">
+              {t("footer.iosBeta")}
+            </Link>
             <Link to="/status" className="text-paper hover:text-signal">
               {t("footer.status")}
             </Link>
