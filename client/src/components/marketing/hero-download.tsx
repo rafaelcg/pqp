@@ -1,5 +1,6 @@
 import { Download } from "lucide-react";
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
+import { Link } from "react-router-dom";
 import {
   DESKTOP_DOCS_URL,
   RELEASES_PAGE_URL,
@@ -106,27 +107,28 @@ export function HeroDownload({ className, style }: HeroDownloadProps) {
     );
   }
 
+  // The desktop download itself, chosen by platform. The iOS beta line is
+  // appended under all of them (`DesktopBetaLine`) so a desktop visitor sees
+  // the iPhone option too — it used to exist only on the mobile branch.
+  let download: ReactNode;
   if (plan.platform === "mac") {
-    if (plan.macArch) {
-      return (
-        <Shell className={className} style={style} onIntent={prefetch}>
-          <DownloadLink
-            href={href(plan.macArch === "arm64" ? "mac-arm64" : "mac-x64")}
-            label={t(
-              plan.macArch === "arm64"
-                ? "download.mac.appleSilicon"
-                : "download.mac.intel",
-            )}
-            icon
-          />
-        </Shell>
-      );
-    }
-    // Chip unknown (Safari, Firefox — neither ships userAgentData). Offering
-    // both is the only honest move: an Intel build on an M-series Mac runs
-    // under Rosetta if it is even installed, and the reverse does not run at
-    // all, so a guess here is a broken first run.
-    return (
+    download = plan.macArch ? (
+      <Shell className={className} style={style} onIntent={prefetch}>
+        <DownloadLink
+          href={href(plan.macArch === "arm64" ? "mac-arm64" : "mac-x64")}
+          label={t(
+            plan.macArch === "arm64"
+              ? "download.mac.appleSilicon"
+              : "download.mac.intel",
+          )}
+          icon
+        />
+      </Shell>
+    ) : (
+      // Chip unknown (Safari, Firefox — neither ships userAgentData). Offering
+      // both is the only honest move: an Intel build on an M-series Mac runs
+      // under Rosetta if it is even installed, and the reverse does not run at
+      // all, so a guess here is a broken first run.
       <Shell className={className} style={style} onIntent={prefetch}>
         <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
           <Download aria-hidden className="h-4 w-4 shrink-0" />
@@ -146,10 +148,8 @@ export function HeroDownload({ className, style }: HeroDownloadProps) {
         <Note>{t("download.mac.whichChip")}</Note>
       </Shell>
     );
-  }
-
-  if (plan.platform === "windows") {
-    return (
+  } else if (plan.platform === "windows") {
+    download = (
       <Shell className={className} style={style} onIntent={prefetch}>
         <DownloadLink
           href={href("windows")}
@@ -162,10 +162,8 @@ export function HeroDownload({ className, style }: HeroDownloadProps) {
         </Note>
       </Shell>
     );
-  }
-
-  if (plan.platform === "linux") {
-    return (
+  } else if (plan.platform === "linux") {
+    download = (
       <Shell className={className} style={style} onIntent={prefetch}>
         <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
           <Download aria-hidden className="h-4 w-4 shrink-0" />
@@ -188,18 +186,21 @@ export function HeroDownload({ className, style }: HeroDownloadProps) {
         </Note>
       </Shell>
     );
+  } else {
+    // Some desktop we could not name. The releases page lists every build,
+    // which is a better answer than picking one at random.
+    download = (
+      <Shell className={className} style={style} onIntent={prefetch}>
+        <DownloadLink href={RELEASES_PAGE_URL} label={t("download.other")} icon />
+      </Shell>
+    );
   }
 
-  // Some desktop we could not name. The releases page lists every build, which
-  // is a better answer than picking one at random.
   return (
-    <Shell className={className} style={style} onIntent={prefetch}>
-      <DownloadLink
-        href={RELEASES_PAGE_URL}
-        label={t("download.other")}
-        icon
-      />
-    </Shell>
+    <>
+      {download}
+      <DesktopBetaLine />
+    </>
   );
 }
 
@@ -279,4 +280,24 @@ function Separator() {
 
 function Note({ children }: { children: ReactNode }) {
   return <p className="mt-2 max-w-sm text-xs text-white/55">{children}</p>;
+}
+
+/**
+ * The iOS beta, offered under the desktop download. Links to `/beta` rather than
+ * straight to TestFlight: the landing page sells it and carries the honest
+ * framing before the external hop. A desktop visitor with an iPhone (or a
+ * friend on one) meets the option here instead of only on a phone.
+ */
+function DesktopBetaLine() {
+  const { t } = useTranslation();
+  return (
+    <p className="mt-3 text-sm text-white/55">
+      <Link
+        to="/beta"
+        className="underline decoration-white/25 underline-offset-2 hover:text-white/80"
+      >
+        {t("download.mobile.beta")}
+      </Link>
+    </p>
+  );
 }
