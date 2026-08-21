@@ -175,6 +175,36 @@ describe("createRealtimeTransport", () => {
     expect(payloads).toContain("leave-channel");
   });
 
+  it("drains a deep offline queue in paced chunks, never one burst", async () => {
+    // The server closes any connection that exceeds its 60-message burst
+    // budget (server/src/ws/index.ts, close code 4429). A full-queue flush on
+    // reconnect used to dump up to 300 messages in one loop, so the freshly
+    // reconnected socket was killed immediately — on repeat, for exactly the
+    // flaky networks the queues exist to survive.
+    const transport = createRealtimeTransport();
+    transport.connect(async () => "t");
+    await flush();
+
+    for (let i = 0; i < 100; i++) {
+      transport.sendChat({ type: "leave-channel" });
+    }
+
+    sockets[0]!.accept();
+    // auth + the first burst only — comfortably under the server's budget.
+    expect(sockets[0]!.sent.length).toBe(1 + 30);
+
+    await vi.advanceTimersByTimeAsync(500);
+    expect(sockets[0]!.sent.length).toBe(1 + 30 + 8);
+
+    // A live send while draining joins the back of the queue, not the wire.
+    transport.sendChat({ type: "leave-channel" });
+    expect(sockets[0]!.sent.length).toBe(1 + 30 + 8);
+
+    // The remainder (including the late send) drips out to completion.
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(sockets[0]!.sent.length).toBe(1 + 101);
+  });
+
   it("reports reconnected=true only on subsequent connects", async () => {
     const seen: boolean[] = [];
     const transport = createRealtimeTransport();
