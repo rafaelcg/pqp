@@ -1,0 +1,19 @@
+{
+  "name": "@pqp/admin-dashboard",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Operator dashboard for pqp.gg: static page + Cloudflare Worker gate/proxy",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "check": "tsc --noEmit",
+    "dry-run": "wrangler deploy --dry-run --outdir .wrangler/dry-run"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260820.1",
+    "typescript": "^5.7.3",
+    "wrangler": "^4.125.0"
+  }
+}

@@ -296,6 +296,11 @@ import {
   recordAcquisition,
 } from "../services/acquisition.js";
 import {
+  ADMIN_METRICS_PATH,
+  getAdminMetrics,
+  isAdminMetricsTokenValid,
+} from "../services/metrics.js";
+import {
   claimHandle,
   findUserIdByHandle,
   getPublicProfileByHandle,
@@ -1227,6 +1232,19 @@ router.get("/api/admin/acquisition", async ({ url, user }) => {
     throw new NotFound("Not found");
   }
   return acquisitionReport(clampLimit(url.searchParams.get("days"), 30, 90));
+});
+
+/**
+ * Aggregate counts for the operator dashboard. Same gate, same 404. The other
+ * way in, a machine token, is resolved in `handleApi` before Clerk runs, so
+ * this handler only ever sees a signed-in moderator. See services/metrics.ts
+ * for what the payload carries and what it deliberately does not.
+ */
+router.get(ADMIN_METRICS_PATH, async ({ user }) => {
+  if (!isInstanceModerator(user)) {
+    throw new NotFound("Not found");
+  }
+  return getAdminMetrics();
 });
 
 // --------------------------------------------------------- user discovery
@@ -4452,6 +4470,18 @@ export async function handleApi(
     return;
   }
 
+  // The operator dashboard's machine token, for exactly one GET and nothing
+  // else. Checked before Clerk resolution because the caller (a Cloudflare
+  // Worker) has no session to present; a header that does not match falls
+  // through to the normal resolution, so a moderator's JWT still works and an
+  // unauthenticated probe still ends in the same 404 as a non-moderator.
+  const isAdminMetricsRequest =
+    req.method === "GET" && pathname === ADMIN_METRICS_PATH;
+  if (isAdminMetricsRequest && isAdminMetricsTokenValid(req.headers.authorization)) {
+    sendJson(res, 200, await getAdminMetrics(), req);
+    return;
+  }
+
   let resolved: Awaited<ReturnType<typeof resolveAuthSession>> = null;
   try {
     resolved = await resolveAuthSession(req.headers.authorization);
@@ -4462,7 +4492,14 @@ export async function handleApi(
   }
 
   if (!resolved) {
-    sendError(res, 401, "Unauthorized", req);
+    // The metrics route answers 404 to everybody it refuses, whether that is a
+    // wrong token, no token, or a signed-in non-moderator. A 401 here would
+    // tell a probe that the route exists and only the credential was wrong.
+    if (isAdminMetricsRequest) {
+      sendError(res, 404, "Not found", req);
+    } else {
+      sendError(res, 401, "Unauthorized", req);
+    }
     return;
   }
 

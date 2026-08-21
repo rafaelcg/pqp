@@ -168,6 +168,77 @@ function getRoomPeers(voiceChannelId: string): VoicePeer[] {
   return [...peers.values()].filter((p) => p.voiceChannelId === voiceChannelId);
 }
 
+// --- operator metrics ---------------------------------------------------
+//
+// Read by `GET /api/admin/metrics` and nothing else. Process-local like
+// `peers` itself: a deploy restarts the machine and the peak starts over, which
+// the payload states (`peakTrackedSince`) so the dashboard never presents a
+// post-deploy zero as "nobody called today". "Today" is the operator's day,
+// America/Sao_Paulo, not UTC.
+
+let peakRoomSizeToday = 0;
+let peakDay = "";
+let peakTrackedSince = new Date().toISOString();
+
+const SAO_PAULO_DAY = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "America/Sao_Paulo",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+
+function rollPeakDay(): void {
+  const today = SAO_PAULO_DAY.format(new Date());
+  if (today !== peakDay) {
+    peakDay = today;
+    peakRoomSizeToday = 0;
+    peakTrackedSince = new Date().toISOString();
+  }
+}
+
+function noteRoomSizeForPeak(size: number): void {
+  rollPeakDay();
+  if (size > peakRoomSizeToday) {
+    peakRoomSizeToday = size;
+  }
+}
+
+export interface VoiceActivitySnapshot {
+  /** Rooms with at least one peer right now (server channels and DM calls alike). */
+  activeRooms: number;
+  /** Peers across every room right now. */
+  participants: number;
+  largestRoomNow: number;
+  /** Largest room seen since `peakTrackedSince`. */
+  peakRoomSizeToday: number;
+  /** ISO. Process start or the last São Paulo midnight, whichever is later. */
+  peakTrackedSince: string;
+  /** The transport a room opened now would get. */
+  backend: VoiceRoomTransport;
+}
+
+export function getVoiceActivitySnapshot(): VoiceActivitySnapshot {
+  rollPeakDay();
+  const sizes = new Map<string, number>();
+  for (const peer of peers.values()) {
+    sizes.set(peer.voiceChannelId, (sizes.get(peer.voiceChannelId) ?? 0) + 1);
+  }
+  let largestRoomNow = 0;
+  for (const size of sizes.values()) {
+    if (size > largestRoomNow) {
+      largestRoomNow = size;
+    }
+  }
+  return {
+    activeRooms: sizes.size,
+    participants: peers.size,
+    largestRoomNow,
+    peakRoomSizeToday: Math.max(peakRoomSizeToday, largestRoomNow),
+    peakTrackedSince,
+    backend: configuredTransport(),
+  };
+}
+
 function toParticipant(peer: VoicePeer): VoiceParticipant {
   return {
     peerId: peer.id,
@@ -582,6 +653,7 @@ export async function handleVoiceMessage(
     };
     peers.set(peerId, peer);
     socketToPeerId.set(socket, peerId);
+    noteRoomSizeForPeak(getRoomPeers(payload.voiceChannelId).length);
     // Pinned only now that the room is non-empty, so `removePeer`'s cleanup
     // above cannot race this write away.
     roomTransports.set(payload.voiceChannelId, transport);
