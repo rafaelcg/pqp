@@ -119,8 +119,25 @@ export function BetaPage() {
             </Link>
           </div>
 
+          {/* The product itself, in the hand. A representative call screen, not a
+              real capture, so it stays honest about being a mockup while showing
+              the hero feature: screen share and cameras in a voice call. */}
+          <div
+            className="animate-rise mt-14 flex justify-center"
+            style={stagger(4)}
+          >
+            <img
+              src="/images/beta-iphone.webp"
+              alt="pqp no iPhone: uma chamada de voz com tela compartilhada e as câmeras dos amigos"
+              width={720}
+              height={1336}
+              loading="lazy"
+              className="w-[236px] drop-shadow-2xl sm:w-[272px]"
+            />
+          </div>
+
           {/* What you get. */}
-          <section className="animate-rise mt-20" style={stagger(4)}>
+          <section className="animate-rise mt-20" style={stagger(5)}>
             <h2 className="text-center font-display text-2xl font-bold tracking-tight sm:text-3xl">
               {t("betaPage.perks.title")}
             </h2>
@@ -148,7 +165,7 @@ export function BetaPage() {
           </section>
 
           {/* How to join — a real 3-step sequence, so numbered markers earn it. */}
-          <section className="animate-rise mt-16" style={stagger(5)}>
+          <section className="animate-rise mt-16" style={stagger(6)}>
             <h2 className="text-center font-display text-2xl font-bold tracking-tight sm:text-3xl">
               {t("betaPage.how.title")}
             </h2>

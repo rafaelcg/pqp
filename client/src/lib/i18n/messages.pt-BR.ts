@@ -112,6 +112,7 @@ export const ptBR: PartialMessages = {
   // O contraponto do "vem" lá de cima: aqui a ação é mandar alguém pra algum
   // lugar, que é onde a piada funciona de novo. A seta é desenhada no JSX.
   "landing.cta.action": "Vai pra pqp",
+  "landing.cta.beta": "Tá no iPhone? Pega uma vaga no beta do iOS.",
 
   // ------------------------------------------------- comunidades (marketing)
   //

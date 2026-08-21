@@ -123,6 +123,7 @@ export const en = {
   // The arrow is drawn in JSX and hidden from assistive tech, so it stays out
   // of the string a translator has to carry.
   "landing.cta.action": "Head to pqp",
+  "landing.cta.beta": "On iPhone? Grab a spot in the iOS beta.",
 
   // ------------------------------------------------- communities (marketing)
   //

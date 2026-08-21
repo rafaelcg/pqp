@@ -495,6 +495,17 @@ export function LandingPage() {
             </>
           )}
         </div>
+        {/* iOS beta is not just a mobile-visitor affordance (HeroDownload
+            handles that); it gets a standing mention here so a desktop visitor
+            can send the /beta link to a friend on iPhone. */}
+        <p className="mt-6 text-sm text-paper-muted">
+          <Link
+            to="/beta"
+            className="underline decoration-paper-muted/40 underline-offset-4 hover:text-paper hover:decoration-paper/60"
+          >
+            {t("landing.cta.beta")}
+          </Link>
+        </p>
       </section>
 
       <MarketingFooter />
