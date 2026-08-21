@@ -11,7 +11,7 @@ export const privacyEn: LegalDocument = {
   description:
     "How pqp.gg handles personal data: what we collect, our legal bases, where it is processed, retention, and your rights under the LGPD and UK data protection law.",
   heading: "Privacy Policy",
-  updated: "7 August 2026",
+  updated: "21 August 2026",
   sections: [
     {
       id: "intro",
@@ -134,7 +134,16 @@ export const privacyEn: LegalDocument = {
             an avatar URL, the <em>domains</em> of your verified email addresses
             (for example <code>empresa.com.br</code>, used for company-domain
             server joins — never the mailbox itself), your DM privacy setting,
-            and when the account was created.
+            and when the account was created. If the link that first brought
+            you to pqp.gg carried campaign parameters (
+            <code>utm_source</code>, <code>utm_medium</code>,{" "}
+            <code>utm_campaign</code>, <code>gclid</code> or <code>ref</code>
+            ), those values and the page
+            you landed on are saved on the account once, at sign-up, and never
+            changed afterwards, so we can tell which links bring people here.
+            This uses no cookie and no third party (see the{" "}
+            <Link to="/cookies">Cookie notice</Link>), and it is only ever
+            read as a count per campaign, never as a list of people.
           </p>
           <p>
             <strong>Content you post.</strong> Message text, timestamps, edits,

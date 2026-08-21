@@ -40,6 +40,9 @@ export function MarketingFooter() {
             <Link to="/vs-discord" className="text-paper hover:text-signal">
               {t("footer.vsDiscord")}
             </Link>
+            <Link to="/tela" className="text-paper hover:text-signal">
+              {t("footer.tela")}
+            </Link>
             {/* The releases page, not a direct asset: the filenames carry the
                 version, so only GitHub can say what the newest one is called.
                 See `lib/downloads.ts`. */}

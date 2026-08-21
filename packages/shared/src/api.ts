@@ -638,6 +638,31 @@ export const createInviteSchema = z.object({
   expiresInHours: z.number().int().positive().nullable().optional(),
 });
 
+/**
+ * Where a signup came from, as the landing page saw it.
+ *
+ * The five values are the ones a campaign link can carry (`utm_source`,
+ * `utm_medium`, `utm_campaign`, `gclid`, and the site's own `ref`) plus the
+ * path the person landed on. The client keeps them in `localStorage` through
+ * the sign-up and sends them exactly once; the server writes them onto the
+ * account only while the account has none (first touch) and never again. No
+ * cookie, no third-party tag, no identifier of any kind rides in here, and
+ * every field is bounded because a query string is user-writable: nothing in
+ * this object is trusted beyond "a short label to group a count by".
+ */
+export const acquisitionSchema = z
+  .object({
+    source: z.string().trim().max(100),
+    medium: z.string().trim().max(100),
+    campaign: z.string().trim().max(100),
+    gclid: z.string().trim().max(200),
+    ref: z.string().trim().max(100),
+    landing: z.string().trim().max(200),
+  })
+  .partial();
+
+export type AcquisitionInput = z.infer<typeof acquisitionSchema>;
+
 export const updateProfileSchema = z.object({
   displayName: z.string().min(1).max(100).optional(),
   username: usernameSchema.optional(),
@@ -667,6 +692,12 @@ export const updateProfileSchema = z.object({
    * set.
    */
   handle: handleSchema.optional(),
+  /**
+   * First-touch acquisition, sent once by the client right after sign-up.
+   * Write-only: it never comes back in any user payload, and the server
+   * ignores it for an account that already has one. See `acquisitionSchema`.
+   */
+  acquisition: acquisitionSchema.optional(),
 });
 
 /**

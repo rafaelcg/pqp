@@ -16,7 +16,7 @@ export const cookiesPtBr: LegalDocument = {
   description:
     "Exatamente quais cookies, chaves de armazenamento local e caches o pqp.gg coloca no seu dispositivo, e quais terceiros o seu navegador contata.",
   heading: "Aviso de cookies",
-  updated: "7 de agosto de 2026",
+  updated: "21 de agosto de 2026",
   sections: [
     {
       id: "intro",
@@ -60,7 +60,7 @@ export const cookiesPtBr: LegalDocument = {
     },
     {
       id: "local-storage",
-      sourceRev: "3113f22e",
+      sourceRev: "9475cc28",
       heading: "Armazenamento local",
       body: (
         <>
@@ -90,6 +90,19 @@ export const cookiesPtBr: LegalDocument = {
             <li>
               <code>pqp:collapsed-categories</code> — quais categorias de canal
               você deixou recolhidas na barra lateral.
+            </li>
+            <li>
+              <code>pqp:acquisition</code>: se o link que trouxe você aqui
+              veio com parâmetros de campanha (<code>utm_source</code>,{" "}
+              <code>utm_medium</code>, <code>utm_campaign</code>,{" "}
+              <code>gclid</code> ou <code>ref</code>), esses valores e a página
+              em que você chegou, para a gente saber de qual link veio um
+              cadastro. Não guarda identificador de tipo nenhum, nunca é lido
+              por terceiro, expira em 30 dias, é gravado uma vez só (um link
+              de campanha posterior não substitui) e é apagado do seu
+              dispositivo na primeira vez que o app carrega depois do seu
+              login, quando é enviado uma única vez para a sua conta. Se você
+              nunca se cadastrar, ele simplesmente expira.
             </li>
           </ul>
           <p>

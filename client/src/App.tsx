@@ -137,6 +137,7 @@ import { sendFriendRequest } from "@/components/friends/friends-api";
 import { shouldRunOnboarding } from "@/lib/onboarding";
 import { firstRunDismissedPatch } from "@/lib/first-run";
 import { browserStorage, hasArrived, rememberArrival } from "@/lib/arrival";
+import { takeAcquisition } from "@/lib/acquisition";
 import { ArrivalBanner } from "@/components/onboarding/arrival-banner";
 import { translateMessage, useTranslation } from "@/lib/i18n";
 import {
@@ -2123,6 +2124,9 @@ function MainAppContent({
     const stashedClaim = takeHandleClaim(storage);
     const stashedAdd = takeAddIntent(storage);
     const stashedJoin = takeJoinIntent(storage);
+    // Consumed in the same breath as the intents and for the same reason: a
+    // stash that outlives the request it causes is a request that repeats.
+    const acquisition = takeAcquisition(storage);
     const claim = normalizeHandle(params.get("claim") ?? "") || stashedClaim;
     const add = addIntentFromSearch(location.search) ?? stashedAdd;
     const join = joinIntentFromSearch(location.search) ?? stashedJoin;
@@ -2134,6 +2138,21 @@ function MainAppContent({
       const rest = params.toString();
       navigate(`${location.pathname}${rest ? `?${rest}` : ""}`, {
         replace: true,
+      });
+    }
+
+    /**
+     * Which link brought this account here, told to the server once.
+     *
+     * Fire-and-forget, and deliberately not awaited inside the chain below:
+     * nothing the person sees depends on it, and a failure costs one count in
+     * an operator report, not a feature. The server writes it only onto an
+     * account that has none and is less than a day old, so a returning member
+     * who clicked a campaign link is never re-attributed (lib/acquisition.ts).
+     */
+    if (acquisition) {
+      void updateMe({ acquisition }).catch(() => {
+        // A lost attribution. Not worth a banner.
       });
     }
 

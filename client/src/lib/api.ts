@@ -1,4 +1,5 @@
 import type {
+  AcquisitionInput,
   AgeCheckResponse,
   Attachment,
   AttachmentUrlResponse,
@@ -205,6 +206,8 @@ export const updateMe = (body: {
   avatarUrl?: string | null;
   dmPrivacy?: DmPrivacy;
   handle?: string;
+  /** First-touch attribution, sent once after sign-up. See `lib/acquisition.ts`. */
+  acquisition?: AcquisitionInput;
 }) => patch<User>("/api/me", body);
 
 // ---------------------------------------------------------- public profiles

@@ -292,6 +292,10 @@ import {
   resolveFeedback,
 } from "../services/feedback.js";
 import {
+  acquisitionReport,
+  recordAcquisition,
+} from "../services/acquisition.js";
+import {
   claimHandle,
   findUserIdByHandle,
   getPublicProfileByHandle,
@@ -733,6 +737,12 @@ router.patch("/api/me", async ({ req, user, ageGate }) => {
   // handful of times per account, ever.
   if (body.handle !== undefined) {
     await claimHandle(user.id, body.handle);
+  }
+  // Write-only and first-touch: the service refuses it for an account that
+  // already has one, or that is older than a day. Nothing below reads it back,
+  // so a refusal is not a failure of this request and is not reported as one.
+  if (body.acquisition !== undefined) {
+    await recordAcquisition(user.id, body.acquisition);
   }
   const updated = await updateProfile(user.id, {
     displayName: body.displayName,
@@ -1202,6 +1212,21 @@ router.delete("/api/admin/users/:userId", async ({ user, res }, { userId }) => {
   );
 
   return { ok: true };
+});
+
+/**
+ * Signups by campaign source, for the operator. Same gate as the route above,
+ * same 404 for everybody else. `?days=` bounds the window (default 30, at most
+ * 90) and that is the only input. Read-only, aggregate, never a list of
+ * people: the rows are (source, medium, campaign, count). See
+ * services/acquisition.ts. Deliberately NOT on the status page, which carries
+ * no user counts of any kind.
+ */
+router.get("/api/admin/acquisition", async ({ url, user }) => {
+  if (!isInstanceModerator(user)) {
+    throw new NotFound("Not found");
+  }
+  return acquisitionReport(clampLimit(url.searchParams.get("days"), 30, 90));
 });
 
 // --------------------------------------------------------- user discovery

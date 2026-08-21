@@ -109,6 +109,22 @@ export interface DbUser {
   banner_key?: string | null;
   /** When the account was created. Month-truncated before it reaches a page. */
   created_at?: Date | string | null;
+  /**
+   * First-touch acquisition: the campaign parameters on the URL the person
+   * first landed with, written once and never overwritten. See the
+   * `acquisition` block in schema.sql. NOT in DB_USER_COLUMNS on purpose: no
+   * user payload carries these, and the only reader is the operator report in
+   * services/acquisition.ts, which selects them by name. Optional here so the
+   * narrower reads type-check; an absent value means "not selected", never
+   * "unattributed".
+   */
+  acquisition_source?: string | null;
+  acquisition_medium?: string | null;
+  acquisition_campaign?: string | null;
+  acquisition_gclid?: string | null;
+  acquisition_ref?: string | null;
+  acquisition_landing?: string | null;
+  acquisition_at?: Date | string | null;
 }
 
 export interface DbServer {
