@@ -79,6 +79,15 @@ export function MarketingFooter() {
       </div>
       <p className="mx-auto mt-10 max-w-5xl text-xs text-paper-muted">
         {t("footer.copyright", { year: new Date().getFullYear() })}
+        {" · "}
+        <a
+          href="https://rafael.ltd"
+          target="_blank"
+          rel="noopener"
+          className="hover:text-signal"
+        >
+          rafael.ltd
+        </a>
       </p>
     </footer>
   );
