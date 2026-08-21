@@ -273,6 +273,7 @@ export const ptBR: PartialMessages = {
   "footer.desktop": "App de desktop",
   "footer.iosBeta": "Entra no beta do iOS",
   "footer.vsDiscord": "pqp vs Discord",
+  "footer.tela": "Tela no Brasil: o que usar",
   "footer.legal": "Jurídico",
   "footer.status": "Status",
   "footer.privacy": "Privacidade",
@@ -384,6 +385,91 @@ export const ptBR: PartialMessages = {
   "vsDiscord.faq.catch.q": "O pqp é grátis mesmo? Qual é a pegadinha?",
   "vsDiscord.faq.catch.a":
     "Grátis e de código aberto. Usa o serviço hospedado no pqp.gg, ou roda a sua própria cópia nas suas máquinas — o código é público. É um beta aberto: novo, honesto sobre isso, e construído às claras.",
+
+  // ------------------------------------------------------------------ /tela
+  // A página de busca pra "discord sem compartilhamento de tela no brasil, o
+  // que usar agora". Português é a primeira língua dela. Mesmas regras de
+  // verdade do /vs-discord: a suspensão como a Discord comunicou, sem opinião
+  // sobre a ordem, sem deboche, sem falar em App Store, nunca "melhor que o
+  // Discord", e dizendo na cara que o pqp é nosso. Os pares da FAQ são
+  // duplicados como FAQPage JSON-LD em src/lib/marketing-meta.ts; a suíte
+  // trava as duas cópias juntas.
+  "tela.seo.title":
+    "Discord sem compartilhar tela no Brasil? O que usar agora | pqp",
+  "tela.seo.description":
+    "Tela do Discord suspensa no Brasil desde 17/08? Veja o que funciona hoje pra compartilhar tela com os amigos no navegador, sem baixar nada. Comparação honesta, com o pqp e outras opções.",
+  "tela.hero.title":
+    "Discord sem tela no Brasil? Dá pra compartilhar a tela hoje, no navegador.",
+  "tela.hero.lede":
+    "Desde 17 de agosto de 2026, o compartilhamento de tela, o vídeo e o Go Live do Discord estão suspensos no Brasil por determinação da ANPD; voz e texto seguem funcionando. Esta página é sobre o que dá pra usar agora. Mantém o servidor do Discord se quiser, e compartilha a tela em outro lugar.",
+  "tela.hero.disclosure":
+    "Jogo limpo: o pqp é o nosso produto. As outras opções abaixo estão aqui porque resolvem o mesmo problema, e uma delas pode servir melhor pra você.",
+  "tela.options.title": "O que funciona hoje",
+  "tela.options.goodFor": "Bom pra",
+  "tela.options.limit": "Limite",
+  "tela.options.ours": "é o nosso",
+  "tela.option.pqp.name": "pqp.gg",
+  "tela.option.pqp.body":
+    "Voz, texto, tela e câmera, no navegador, sem baixar nada. Grátis, código aberto, servidores em São Paulo. Beta aberto, feito por uma pessoa só.",
+  "tela.option.pqp.good":
+    "Um grupo pequeno de amigos que quer uma sala que fica: canais, voz e tela, com o link mandado uma vez.",
+  "tela.option.pqp.limit":
+    "A voz P2P vai bem até uns 5 ou 6 por sala; mais que isso a qualidade cai. Salas maiores estão em teste. É beta: vai ter aresta.",
+  "tela.option.jitsi.name": "Jitsi Meet",
+  "tela.option.jitsi.body":
+    "Chamada de vídeo no navegador com tela compartilhada, sem precisar de conta. Grátis e código aberto.",
+  "tela.option.jitsi.good":
+    "Uma chamada avulsa: abre o link, compartilha a tela, pronto.",
+  "tela.option.jitsi.limit":
+    "É uma reunião, não um chat de comunidade: sem canais, sem histórico, e a sala fica vazia quando todo mundo sai.",
+  "tela.option.teamspeak.name": "TeamSpeak 6",
+  "tela.option.teamspeak.body":
+    "Servidores de voz com compartilhamento de tela dentro do servidor. App de desktop.",
+  "tela.option.teamspeak.good":
+    "Grupos que já têm um servidor TeamSpeak e querem tela nele.",
+  "tela.option.teamspeak.limit":
+    "Precisa do app e de um servidor; as chamadas 1-a-1 com tela ainda estão em alpha.",
+  "tela.option.meet.name": "Google Meet",
+  "tela.option.meet.body":
+    "Tela funciona, no navegador, com uma conta Google.",
+  "tela.option.meet.good":
+    "Uma chamada rápida com gente que já tem conta Google.",
+  "tela.option.meet.limit":
+    "O plano grátis tem limite de tempo em chamada de grupo, e é uma reunião, não um lugar onde o grupo mora.",
+  "tela.options.asOf":
+    "Situação em 21 de agosto de 2026, pelos comunicados públicos de cada empresa. Se algo mudou, avisa a gente: contato@pqp.gg.",
+  "tela.how.title": "Como fazer no pqp em 1 minuto",
+  "tela.how.1":
+    "Cria a sala: faz o cadastro (grátis, sem cartão) e cria uma comunidade. Já vem com canal de voz.",
+  "tela.how.2":
+    "Manda o link do convite pra galera. Ninguém baixa nada; abre no navegador.",
+  "tela.how.3":
+    "Todo mundo entra no canal de voz e quem quiser compartilha a tela, ou a câmera. Só isso.",
+  "tela.faq.title": "Perguntas rápidas",
+  "tela.faq.download.q": "Precisa baixar alguma coisa?",
+  "tela.faq.download.a":
+    "Não. O pqp roda no navegador, no desktop e no Android. Tem app de desktop se você quiser, e um beta de iOS pelo TestFlight, mas nenhum dos dois é obrigatório.",
+  "tela.faq.vpn.q": "Precisa de VPN?",
+  "tela.faq.vpn.a":
+    "Não. Isso não é um jeito de burlar nada: o pqp é outro app, com servidores próprios no Brasil, e compartilhar tela é um recurso que ele tem. Nada aqui mexe no Discord.",
+  "tela.faq.people.q": "Quantas pessoas podem compartilhar tela numa sala?",
+  "tela.faq.people.a":
+    "A voz é P2P, o que é ótimo pra grupo pequeno: 5 ou 6 pessoas por sala vai bem. Mais que isso a qualidade cai. Salas maiores estão em teste e ainda não são o padrão.",
+  "tela.faq.free.q": "É de graça?",
+  "tela.faq.free.a":
+    "Sim. O pqp é código aberto sob a AGPL (github.com/rafaelcg/pqp). Usa o serviço hospedado no pqp.gg de graça, ou roda a sua própria cópia.",
+  "tela.faq.mobile.q": "Tem no celular?",
+  "tela.faq.mobile.a":
+    "No Android, o navegador funciona. No iPhone tem um beta pelo TestFlight em pqp.gg/beta; ainda não está na App Store.",
+  "tela.faq.data.q": "O que vocês guardam sobre mim?",
+  "tela.faq.data.a":
+    "Menos do que você imagina, e tudo está listado em linguagem simples na política de privacidade em pqp.gg/privacy. Sem rastreador de anúncio e sem cookie de analytics.",
+  "tela.faq.data.link": "Ler a política de privacidade",
+  "tela.cta.title": "Quer testar agora?",
+  "tela.cta.body":
+    "A sala leva um minuto pra criar e o link é tudo que os seus amigos precisam.",
+  "tela.cta.create": "Criar sala grátis",
+  "tela.cta.compare": "Ver a comparação completa pqp vs Discord",
 
   // ------------------------------------------------------- app bootstrap shell
   "app.seo.title": "App — pqp",

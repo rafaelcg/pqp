@@ -425,6 +425,91 @@ export const en = {
 
   "footer.iosBeta": "Join the iOS beta",
   "footer.vsDiscord": "pqp vs Discord",
+  "footer.tela": "Screen share in Brazil: what to use",
+
+  // The pt-BR search landing at /tela, for "discord sem compartilhamento de
+  // tela no brasil, o que usar agora". Portuguese is the page's first
+  // language; these are the source strings it falls back to. Same truth rules
+  // as /vs-discord: state the suspension as Discord announced it, no opinion
+  // on the order, no mockery, no App Store claim, never "better than Discord",
+  // and say out loud that pqp is ours. The FAQ pairs are duplicated as
+  // FAQPage JSON-LD in src/lib/marketing-meta.ts, pinned by the suite.
+  "tela.seo.title":
+    "Discord screen share suspended in Brazil? What to use now | pqp",
+  "tela.seo.description":
+    "Discord screen share suspended in Brazil since 17 Aug? Here is what works today to share your screen with friends in the browser, nothing to download. An honest comparison, with pqp and other options.",
+  "tela.hero.title":
+    "Discord without screen share in Brazil? You can still share your screen today, in the browser.",
+  "tela.hero.lede":
+    "Since 17 August 2026, Discord's screen share, video and Go Live are suspended in Brazil under an ANPD order; voice and text keep working. This page is about what you can use right now. Keep the Discord server if you like, and share the screen somewhere else.",
+  "tela.hero.disclosure":
+    "Full disclosure: pqp is our product. The other options below are listed because they solve the same problem, and one of them may fit you better.",
+  "tela.options.title": "What works today",
+  "tela.options.goodFor": "Good for",
+  "tela.options.limit": "Limit",
+  "tela.options.ours": "ours",
+  "tela.option.pqp.name": "pqp.gg",
+  "tela.option.pqp.body":
+    "Voice, text, screen share and camera, in the browser, nothing to download. Free, open source, servers in São Paulo. Open beta, built by one person.",
+  "tela.option.pqp.good":
+    "A small group of friends that wants a room that stays: channels, voice and a screen, with the link shared once.",
+  "tela.option.pqp.limit":
+    "Peer-to-peer voice holds up well to about 5 or 6 people per room; past that, quality drops. Bigger rooms are being tested. It is a beta: expect rough edges.",
+  "tela.option.jitsi.name": "Jitsi Meet",
+  "tela.option.jitsi.body":
+    "Video calls in the browser with screen share, no account needed. Free and open source.",
+  "tela.option.jitsi.good":
+    "A one-off call: open a link, share the screen, done.",
+  "tela.option.jitsi.limit":
+    "It is a meeting, not a community chat: no channels, no history, and the room is empty when everybody leaves.",
+  "tela.option.teamspeak.name": "TeamSpeak 6",
+  "tela.option.teamspeak.body":
+    "Voice servers with screen share inside a server. Desktop app.",
+  "tela.option.teamspeak.good":
+    "Groups that already run a TeamSpeak server and want a screen in it.",
+  "tela.option.teamspeak.limit":
+    "Needs the app and a server; 1-to-1 calls with screen share are still in alpha.",
+  "tela.option.meet.name": "Google Meet",
+  "tela.option.meet.body":
+    "Screen share works, in the browser, with a Google account.",
+  "tela.option.meet.good":
+    "A quick call with people who all have a Google account already.",
+  "tela.option.meet.limit":
+    "The free plan has a time limit on group calls, and it is a meeting, not a place your group lives in.",
+  "tela.options.asOf":
+    "Status as of 21 August 2026, from each company's own public notes. If something changed, tell us: contato@pqp.gg.",
+  "tela.how.title": "How to do it on pqp in one minute",
+  "tela.how.1":
+    "Create a room: sign up (free, no card) and create a community. You get a voice channel right away.",
+  "tela.how.2":
+    "Send the invite link to your people. Nobody downloads anything; it opens in the browser.",
+  "tela.how.3":
+    "Everybody joins the voice channel and whoever wants to shares the screen, or the camera. That is it.",
+  "tela.faq.title": "Quick questions",
+  "tela.faq.download.q": "Do I need to download anything?",
+  "tela.faq.download.a":
+    "No. pqp runs in the browser on desktop and on Android. There is a desktop app if you want one, and an iOS beta via TestFlight, but neither is required.",
+  "tela.faq.vpn.q": "Do I need a VPN?",
+  "tela.faq.vpn.a":
+    "No. This is not a way around anything: pqp is a different app with its own servers in Brazil, and screen share is a feature it has. Nothing here touches Discord.",
+  "tela.faq.people.q": "How many people can share a screen in one room?",
+  "tela.faq.people.a":
+    "Voice is peer-to-peer, which is great for a small group: 5 or 6 people per room works well. Beyond that, quality drops. Bigger rooms are being tested and are not the default yet.",
+  "tela.faq.free.q": "Is it free?",
+  "tela.faq.free.a":
+    "Yes. pqp is open source under the AGPL (github.com/rafaelcg/pqp). Use the hosted service at pqp.gg for free, or run your own copy.",
+  "tela.faq.mobile.q": "Does it work on a phone?",
+  "tela.faq.mobile.a":
+    "On Android, the browser works. On iPhone there is a beta via TestFlight at pqp.gg/beta; it is not on the App Store yet.",
+  "tela.faq.data.q": "What do you keep about me?",
+  "tela.faq.data.a":
+    "Less than you would expect, and all of it is listed in plain language in the privacy policy at pqp.gg/privacy. No ad trackers and no analytics cookies.",
+  "tela.faq.data.link": "Read the privacy policy",
+  "tela.cta.title": "Want to try it now?",
+  "tela.cta.body":
+    "A room takes a minute to make and the link is all your friends need.",
+  "tela.cta.create": "Create a free room",
+  "tela.cta.compare": "See the full pqp vs Discord comparison",
 
   // A phone gets pointed at the browser, never at a .dmg — and never at a store
   // listing, which does not exist. It is installable from the browser menu

@@ -11,7 +11,7 @@ export const cookiesEn: LegalDocument = {
   description:
     "Exactly which cookies, local storage keys and caches pqp.gg puts on your device, and which third parties your browser contacts.",
   heading: "Cookie notice",
-  updated: "7 August 2026",
+  updated: "21 August 2026",
   sections: [
     {
       id: "intro",
@@ -80,6 +80,19 @@ export const cookiesEn: LegalDocument = {
             <li>
               <code>pqp:collapsed-categories</code> — which channel categories
               you have collapsed in the sidebar.
+            </li>
+            <li>
+              <code>pqp:acquisition</code>: if the link that brought you here
+              carried campaign parameters (<code>utm_source</code>,{" "}
+              <code>utm_medium</code>, <code>utm_campaign</code>,{" "}
+              <code>gclid</code> or <code>ref</code>), those values and the
+              page you landed on, so we can tell which link a sign-up came
+              from. It holds no identifier of any kind, is never read by a
+              third party, expires after 30 days, is written only once (a
+              later campaign link does not replace it), and is deleted from
+              your device the first time the app loads after you sign in,
+              when it is sent to your account once. If you never sign up it
+              simply expires.
             </li>
           </ul>
           <p>

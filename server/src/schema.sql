@@ -2354,3 +2354,29 @@ CREATE TABLE IF NOT EXISTS user_badges (
   granted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (user_id, badge)
 );
+
+-- ------------------------------------------------------ acquisition
+--
+-- Where an account came from, as the landing page saw it: the `utm_source`,
+-- `utm_medium`, `utm_campaign`, `gclid` and `ref` parameters on the URL the
+-- person first arrived with, plus the path they landed on. This exists so a
+-- paid or organic channel can be judged by signups rather than by clicks,
+-- WITHOUT a cookie, a pixel or any third-party tag on the site: the client
+-- remembers the parameters in its own localStorage through the sign-up, sends
+-- them once, and deletes them.
+--
+-- FIRST TOUCH, AND NEVER OVERWRITTEN. The write in services/acquisition.ts is
+-- `WHERE acquisition_at IS NULL` and is refused outright for an account older
+-- than a day, so a later campaign click by somebody who already has an account
+-- is a visit, not an acquisition. Nothing here is ever read back into a user
+-- payload; the only reader is the operator's GET /api/admin/acquisition, which
+-- groups counts by source/medium/campaign. The columns are deliberately absent
+-- from DB_USER_COLUMNS for that reason. Every value is bounded at the API
+-- (acquisitionSchema) because a query string is user-writable.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS acquisition_source TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS acquisition_medium TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS acquisition_campaign TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS acquisition_gclid TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS acquisition_ref TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS acquisition_landing TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS acquisition_at TIMESTAMPTZ;

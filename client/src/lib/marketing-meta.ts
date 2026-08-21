@@ -28,7 +28,8 @@
  * DELIBERATELY DEPENDENCY-FREE, like its two siblings: wrangler's esbuild
  * bundles this outside the pnpm workspace, so it cannot import the i18n
  * catalogue. The strings below are duplicates of `landing.seo.*`,
- * `vsDiscord.seo.*`, `claim.seo.*` and `vsDiscord.faq.*`, and
+ * `vsDiscord.seo.*`, `tela.seo.*`, `claim.seo.*`, `vsDiscord.faq.*` and
+ * `tela.faq.*`, and
  * `marketing-meta.test.ts` pins each pair against the catalogue — the
  * duplication cannot drift without failing the suite.
  */
@@ -39,6 +40,7 @@ const CANONICAL_ORIGIN = "https://pqp.gg";
 export type MarketingPage =
   | "/"
   | "/vs-discord"
+  | "/tela"
   | "/beta"
   | "/garanta"
   | "/claim"
@@ -52,6 +54,7 @@ export type MarketingLocale = "pt-BR" | "en";
 const MARKETING_PATHS: ReadonlySet<string> = new Set([
   "/",
   "/vs-discord",
+  "/tela",
   "/beta",
   "/garanta",
   "/claim",
@@ -118,6 +121,19 @@ const PAGE_COPY: Record<MarketingPage, PageCopy> = {
       "pt-BR":
         "Tela compartilhada e câmera nas chamadas funcionam no pqp. No Brasil, tela, vídeo e Go Live do Discord estão suspensos desde 17 ago 2026 (carta da Discord; sem data de volta). Grátis, código aberto, beta aberto.",
       en: "Screen share and camera in calls work on pqp. In Brazil, Discord’s screen share, video, and Go Live have been suspended since 17 Aug 2026 (Discord’s letter; no return date). Free, open source, open beta.",
+    },
+  },
+  "/tela": {
+    canonicalPath: "/tela",
+    title: {
+      "pt-BR":
+        "Discord sem compartilhar tela no Brasil? O que usar agora | pqp",
+      en: "Discord screen share suspended in Brazil? What to use now | pqp",
+    },
+    description: {
+      "pt-BR":
+        "Tela do Discord suspensa no Brasil desde 17/08? Veja o que funciona hoje pra compartilhar tela com os amigos no navegador, sem baixar nada. Comparação honesta, com o pqp e outras opções.",
+      en: "Discord screen share suspended in Brazil since 17 Aug? Here is what works today to share your screen with friends in the browser, nothing to download. An honest comparison, with pqp and other options.",
     },
   },
   "/beta": {
@@ -261,6 +277,82 @@ export const VS_DISCORD_FAQ: Record<
   ],
 };
 
+/**
+ * The `/tela` FAQ, duplicated from `tela.faq.*` in the catalogue and served as
+ * FAQPage JSON-LD, in the page's own order. Same truth rules as the page:
+ * product claims only, no legal advice, no App Store claim, no return-date
+ * speculation. The suite pins every string here against its catalogue twin.
+ */
+export const TELA_FAQ: Record<
+  MarketingLocale,
+  { question: string; answer: string }[]
+> = {
+  "pt-BR": [
+    {
+      question: "Precisa baixar alguma coisa?",
+      answer:
+        "Não. O pqp roda no navegador, no desktop e no Android. Tem app de desktop se você quiser, e um beta de iOS pelo TestFlight, mas nenhum dos dois é obrigatório.",
+    },
+    {
+      question: "Precisa de VPN?",
+      answer:
+        "Não. Isso não é um jeito de burlar nada: o pqp é outro app, com servidores próprios no Brasil, e compartilhar tela é um recurso que ele tem. Nada aqui mexe no Discord.",
+    },
+    {
+      question: "Quantas pessoas podem compartilhar tela numa sala?",
+      answer:
+        "A voz é P2P, o que é ótimo pra grupo pequeno: 5 ou 6 pessoas por sala vai bem. Mais que isso a qualidade cai. Salas maiores estão em teste e ainda não são o padrão.",
+    },
+    {
+      question: "É de graça?",
+      answer:
+        "Sim. O pqp é código aberto sob a AGPL (github.com/rafaelcg/pqp). Usa o serviço hospedado no pqp.gg de graça, ou roda a sua própria cópia.",
+    },
+    {
+      question: "Tem no celular?",
+      answer:
+        "No Android, o navegador funciona. No iPhone tem um beta pelo TestFlight em pqp.gg/beta; ainda não está na App Store.",
+    },
+    {
+      question: "O que vocês guardam sobre mim?",
+      answer:
+        "Menos do que você imagina, e tudo está listado em linguagem simples na política de privacidade em pqp.gg/privacy. Sem rastreador de anúncio e sem cookie de analytics.",
+    },
+  ],
+  en: [
+    {
+      question: "Do I need to download anything?",
+      answer:
+        "No. pqp runs in the browser on desktop and on Android. There is a desktop app if you want one, and an iOS beta via TestFlight, but neither is required.",
+    },
+    {
+      question: "Do I need a VPN?",
+      answer:
+        "No. This is not a way around anything: pqp is a different app with its own servers in Brazil, and screen share is a feature it has. Nothing here touches Discord.",
+    },
+    {
+      question: "How many people can share a screen in one room?",
+      answer:
+        "Voice is peer-to-peer, which is great for a small group: 5 or 6 people per room works well. Beyond that, quality drops. Bigger rooms are being tested and are not the default yet.",
+    },
+    {
+      question: "Is it free?",
+      answer:
+        "Yes. pqp is open source under the AGPL (github.com/rafaelcg/pqp). Use the hosted service at pqp.gg for free, or run your own copy.",
+    },
+    {
+      question: "Does it work on a phone?",
+      answer:
+        "On Android, the browser works. On iPhone there is a beta via TestFlight at pqp.gg/beta; it is not on the App Store yet.",
+    },
+    {
+      question: "What do you keep about me?",
+      answer:
+        "Less than you would expect, and all of it is listed in plain language in the privacy policy at pqp.gg/privacy. No ad trackers and no analytics cookies.",
+    },
+  ],
+};
+
 /** `&`, `<`, `>` and `"` — everything that can escape an attribute. */
 export function escapeHtml(value: string): string {
   return value
@@ -277,7 +369,8 @@ export function escapeHtml(value: string): string {
  * the page is the product — mirroring what the shipped `index.html` says
  * (`applicationCategory`, a zero-price Offer). `/vs-discord` adds FAQPage,
  * whose questions are the FAQ section actually rendered on the page — schema
- * for copy a visitor can read, never schema alone.
+ * for copy a visitor can read, never schema alone. `/tela` does the same
+ * with its own six.
  */
 function jsonLdFor(page: MarketingPage, locale: MarketingLocale): string {
   const graph: Record<string, unknown>[] = [
@@ -299,10 +392,16 @@ function jsonLdFor(page: MarketingPage, locale: MarketingLocale): string {
       offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
     });
   }
-  if (page === "/vs-discord") {
+  const faq =
+    page === "/vs-discord"
+      ? VS_DISCORD_FAQ[locale]
+      : page === "/tela"
+        ? TELA_FAQ[locale]
+        : null;
+  if (faq) {
     graph.push({
       "@type": "FAQPage",
-      mainEntity: VS_DISCORD_FAQ[locale].map((item) => ({
+      mainEntity: faq.map((item) => ({
         "@type": "Question",
         name: item.question,
         acceptedAnswer: { "@type": "Answer", text: item.answer },

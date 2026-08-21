@@ -129,6 +129,37 @@ describe("updateProfileSchema", () => {
     );
     expect(updateProfileSchema.safeParse({ username: "a" }).success).toBe(false);
   });
+
+  it("accepts a partial, trimmed acquisition and bounds every field", () => {
+    const parsed = updateProfileSchema.safeParse({
+      acquisition: { source: "  google ", campaign: "tela-br", landing: "/tela" },
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.acquisition).toEqual({
+        source: "google",
+        campaign: "tela-br",
+        landing: "/tela",
+      });
+    }
+    expect(updateProfileSchema.safeParse({ acquisition: {} }).success).toBe(true);
+    // A query string is user-writable, so the bound is the whole defence.
+    expect(
+      updateProfileSchema.safeParse({ acquisition: { source: "x".repeat(101) } })
+        .success,
+    ).toBe(false);
+    expect(
+      updateProfileSchema.safeParse({ acquisition: { gclid: "x".repeat(200) } })
+        .success,
+    ).toBe(true);
+    expect(
+      updateProfileSchema.safeParse({ acquisition: { gclid: "x".repeat(201) } })
+        .success,
+    ).toBe(false);
+    expect(
+      updateProfileSchema.safeParse({ acquisition: { source: 42 } }).success,
+    ).toBe(false);
+  });
 });
 
 describe("userPreferencesSchema", () => {
