@@ -119,18 +119,17 @@ export function BetaPage() {
             </Link>
           </div>
 
-          {/* The product itself, in the hand. A representative call screen, not a
-              real capture, so it stays honest about being a mockup while showing
-              the hero feature: screen share and cameras in a voice call. */}
+          {/* The product itself, in the hand. A real screenshot of the iOS app
+              (captured from the actual build), not a mockup. */}
           <div
             className="animate-rise mt-14 flex justify-center"
             style={stagger(4)}
           >
             <img
               src="/images/beta-iphone.webp"
-              alt="pqp no iPhone: uma chamada de voz com tela compartilhada e as câmeras dos amigos"
+              alt="pqp no iPhone: o canal #geral com a galera conversando na comunidade"
               width={720}
-              height={1336}
+              height={1541}
               loading="lazy"
               className="w-[236px] drop-shadow-2xl sm:w-[272px]"
             />
