@@ -52,6 +52,7 @@ Detail and “still open” list: [`PLAN_STATUS.md`](./PLAN_STATUS.md).
 
 ## Recent shipped work (context for next agents)
 
+- **Operator dashboard is live-capable (2026-08-21):** `tools/admin-dashboard/` (Cloudflare Worker `pqp-admin`, Basic Auth in front of everything) renders `GET /api/admin/metrics`, a new moderator-or-`ADMIN_METRICS_TOKEN` gated aggregate-counts endpoint (30s in-memory cache, 404 to everybody else, never on status.json). Secrets to set before it goes live are listed in its README; until then the page shows seed numbers labelled as such.
 - Discord-like **voice sidebar** + **speaking rings**
 - Channel **topics / icons**
 - **Avatar presets**

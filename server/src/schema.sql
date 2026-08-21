@@ -1356,6 +1356,13 @@ CREATE INDEX IF NOT EXISTS idx_member_timeouts_user
 -- exactly that tuple, so the same index serves both halves of art. 18.
 CREATE INDEX IF NOT EXISTS idx_messages_author_created
   ON messages (author_id, created_at, id);
+
+-- `(created_at)` alone: the operator metrics (`GET /api/admin/metrics`) ask
+-- "how many messages in the last 24/48 hours, by hour" with no channel or
+-- author in the predicate, which neither index above can serve. Small, and
+-- the only thing standing between that endpoint and a full scan per refresh.
+CREATE INDEX IF NOT EXISTS idx_messages_created
+  ON messages (created_at);
 CREATE INDEX IF NOT EXISTS idx_message_reactions_user
   ON message_reactions (user_id);
 CREATE INDEX IF NOT EXISTS idx_message_attachments_uploader
