@@ -2,14 +2,21 @@
  * The release-notes index: what has been posted, in what order, under what
  * title.
  *
- * WHY THE METADATA AND THE PROSE ARE SEPARATE FILES. This module is imported by
- * the Cloudflare Pages middleware, which runs in front of every request the
- * site serves. It needs a slug, a date, a title and a summary so a shared
- * `/blog/...` link unfurls with the post's own card instead of the product's
- * generic one. It does not need the post. Keeping the bodies behind the dynamic
- * importers in `BODIES` means the edge bundle carries a few hundred bytes of
- * strings rather than every release note ever written, and the browser
- * downloads exactly the one post on screen, in one language.
+ * WHY THE PROSE LIVES IN `bodies.ts` AND NOT HERE. This module is imported by
+ * the Cloudflare Pages middleware, which needs a slug, a date, a title and a
+ * summary so a shared `/blog/...` link unfurls with the post's own card instead
+ * of the product's generic one. It does not need the post.
+ *
+ * That used to be a size argument. It is a hard requirement. Wrangler bundles
+ * `functions/_middleware.ts` with esbuild, not with Vite, and esbuild has no
+ * loader for `.md`. A `?raw` import anywhere in this module's graph fails the
+ * Pages deploy outright, even inside a dynamic `import()` the edge would never
+ * execute, because the bundler still has to parse it. That failure does not
+ * appear in CI, which builds the client but never bundles the functions. It
+ * appeared in production on 22 Aug 2026, after CI went green.
+ *
+ * So: metadata here, prose in `bodies.ts`, and nothing that reaches the edge
+ * may import `bodies.ts`.
  *
  * WHY NOT A CMS, OR FRONTMATTER, OR A BUILD STEP. A release note is written by
  * the person who shipped the thing, in the same commit, and is then never
@@ -19,9 +26,9 @@
  * dates, both locales present, newest first.
  *
  * ADDING A POST. Write the two markdown files under `content/blog/`, add the
- * entry at the TOP of `POSTS`, add both importers to `BODIES`, add the URL to
- * `client/public/sitemap.xml`. Dates are the day the work reached people, not
- * the day it was merged.
+ * entry at the TOP of `POSTS`, add both importers to `BODIES` in `bodies.ts`,
+ * add the URL to `client/public/sitemap.xml`. Dates are the day the work
+ * reached people, not the day it was merged.
  */
 
 /**
@@ -107,71 +114,7 @@ export const POSTS: readonly BlogPost[] = [
   },
 ] as const;
 
-/**
- * The prose, one importer per post and locale.
- *
- * `?raw` rather than a markdown plugin: the body is handed straight to the
- * `react-markdown` the app already ships for messages, so there is nothing to
- * transform at build time and nothing new in the dependency tree.
- */
-const BODIES: Record<string, Record<BlogLocale, () => Promise<string>>> = {
-  "som-na-tela": {
-    "pt-BR": () =>
-      import("@/content/blog/som-na-tela.pt-BR.md?raw").then((m) => m.default),
-    en: () =>
-      import("@/content/blog/som-na-tela.en.md?raw").then((m) => m.default),
-  },
-  "beta-no-iphone": {
-    "pt-BR": () =>
-      import("@/content/blog/beta-no-iphone.pt-BR.md?raw").then(
-        (m) => m.default,
-      ),
-    en: () =>
-      import("@/content/blog/beta-no-iphone.en.md?raw").then((m) => m.default),
-  },
-  "codigo-aberto-e-caca-bugs": {
-    "pt-BR": () =>
-      import("@/content/blog/codigo-aberto-e-caca-bugs.pt-BR.md?raw").then(
-        (m) => m.default,
-      ),
-    en: () =>
-      import("@/content/blog/codigo-aberto-e-caca-bugs.en.md?raw").then(
-        (m) => m.default,
-      ),
-  },
-  "comunidades-perfis-e-o-seu-arroba": {
-    "pt-BR": () =>
-      import(
-        "@/content/blog/comunidades-perfis-e-o-seu-arroba.pt-BR.md?raw"
-      ).then((m) => m.default),
-    en: () =>
-      import("@/content/blog/comunidades-perfis-e-o-seu-arroba.en.md?raw").then(
-        (m) => m.default,
-      ),
-  },
-};
-
 /** The post at a slug, or null. Null is "there is no such post", not an error. */
 export function postBySlug(slug: string): BlogPost | null {
   return POSTS.find((post) => post.slug === slug) ?? null;
-}
-
-/**
- * The body of one post in one language.
- *
- * Falls back to Portuguese rather than to English, which is the opposite of the
- * string catalogue and deliberate: the catalogue's source of truth is English
- * because that is where new keys are written, but release notes are written for
- * the people already using the product, and they are in Brazil.
- */
-export async function loadPostBody(
-  slug: string,
-  locale: BlogLocale,
-): Promise<string | null> {
-  const bodies = BODIES[slug];
-  if (!bodies) {
-    return null;
-  }
-  const load = bodies[locale] ?? bodies["pt-BR"];
-  return load();
 }
