@@ -164,8 +164,14 @@ describeDb("acquisition over the API", () => {
     expect(report.body.days).toBe(7);
     expect(report.body.total).toBe(2);
     expect(report.body.rows).toEqual([
-      { source: "google", medium: "cpc", campaign: "tela-br", signups: 1 },
-      { source: null, medium: null, campaign: null, signups: 1 },
+      {
+        source: "google",
+        medium: "cpc",
+        campaign: "tela-br",
+        ref: null,
+        signups: 1,
+      },
+      { source: null, medium: null, campaign: null, ref: null, signups: 1 },
     ]);
     // No names, no ids: the report is counts and nothing else.
     expect(JSON.stringify(report.body)).not.toContain(ana.id);

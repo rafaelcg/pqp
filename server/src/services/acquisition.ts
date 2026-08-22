@@ -68,6 +68,13 @@ export interface AcquisitionReportRow {
   source: string | null;
   medium: string | null;
   campaign: string | null;
+  /**
+   * pqp's own short-link parameter. Reported alongside the UTM trio rather
+   * than folded into it: a `?ref=reddit` link is the readable form we hand to
+   * humans, and if it did not appear here it would land in the report as an
+   * unattributed signup, which is the exact hole this report exists to close.
+   */
+  ref: string | null;
   signups: number;
 }
 
@@ -77,8 +84,15 @@ export interface AcquisitionReport {
   days: number;
   /** Every account created in the window, attributed or not. */
   total: number;
-  /** Attributed accounts, grouped; a null triple is "no campaign parameters". */
+  /** Attributed accounts, grouped; an all-null row is "no campaign parameters". */
   rows: AcquisitionReportRow[];
+  /** The same window broken down by the page the person first landed on. */
+  landings: AcquisitionLandingRow[];
+}
+
+export interface AcquisitionLandingRow {
+  landing: string | null;
+  signups: number;
 }
 
 /**
@@ -94,23 +108,25 @@ export interface AcquisitionReport {
  */
 export async function acquisitionReport(days: number): Promise<AcquisitionReport> {
   const pool = getPool();
-  const [grouped, total] = await Promise.all([
+  const [grouped, total, landings] = await Promise.all([
     pool.query<{
       source: string | null;
       medium: string | null;
       campaign: string | null;
+      ref: string | null;
       signups: string;
     }>(
       `SELECT acquisition_source AS source,
               acquisition_medium AS medium,
               acquisition_campaign AS campaign,
+              acquisition_ref AS ref,
               COUNT(*)::text AS signups
          FROM users
         WHERE created_at >= now() - ($1::int * interval '1 day')
           AND NOT is_webhook
           AND NOT is_character
-        GROUP BY 1, 2, 3
-        ORDER BY COUNT(*) DESC, 1 NULLS LAST, 2 NULLS LAST, 3 NULLS LAST`,
+        GROUP BY 1, 2, 3, 4
+        ORDER BY COUNT(*) DESC, 1 NULLS LAST, 2 NULLS LAST, 3 NULLS LAST, 4 NULLS LAST`,
       [days],
     ),
     pool.query<{ total: string }>(
@@ -119,6 +135,18 @@ export async function acquisitionReport(days: number): Promise<AcquisitionReport
         WHERE created_at >= now() - ($1::int * interval '1 day')
           AND NOT is_webhook
           AND NOT is_character`,
+      [days],
+    ),
+    pool.query<{ landing: string | null; signups: string }>(
+      `SELECT acquisition_landing AS landing,
+              COUNT(*)::text AS signups
+         FROM users
+        WHERE created_at >= now() - ($1::int * interval '1 day')
+          AND NOT is_webhook
+          AND NOT is_character
+          AND acquisition_landing IS NOT NULL
+        GROUP BY 1
+        ORDER BY COUNT(*) DESC, 1`,
       [days],
     ),
   ]);
@@ -131,6 +159,11 @@ export async function acquisitionReport(days: number): Promise<AcquisitionReport
       source: row.source,
       medium: row.medium,
       campaign: row.campaign,
+      ref: row.ref,
+      signups: Number(row.signups),
+    })),
+    landings: landings.rows.map((row) => ({
+      landing: row.landing,
       signups: Number(row.signups),
     })),
   };
