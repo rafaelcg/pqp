@@ -87,7 +87,21 @@ export default defineConfig({
         navigateFallback: "/index.html",
         // Anything the server answers must never be served from the shell
         // fallback — a navigation to /status.json or an API path is not a route.
-        navigateFallbackDenylist: [/^\/api\//, /^\/status\.json$/, /^\/ws/],
+        //
+        // `/r/*` is in here for a different reason: those are the short
+        // referral links, and they are not routes at all. They exist only to be
+        // 302'd at the edge to `/?ref=...` by client/public/_redirects, which
+        // is what puts the channel in the acquisition report. A returning
+        // visitor already has this worker installed, so without the denylist
+        // the navigation never reaches Cloudflare, the shell is served for
+        // /r/x, the router matches nothing and drops the person on `/` with no
+        // ref recorded. Verified happening in a real browser on 22 Aug 2026.
+        navigateFallbackDenylist: [
+          /^\/api\//,
+          /^\/status\.json$/,
+          /^\/ws/,
+          /^\/r\//,
+        ],
         cleanupOutdatedCaches: true,
         // Adds the notificationclick handler. Android Chrome only permits
         // notifications raised from a worker, and their clicks arrive here
