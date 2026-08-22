@@ -30,6 +30,9 @@ export function MarketingFooter() {
             <a href="/#how" className="text-paper hover:text-signal">
               {t("nav.howItWorks")}
             </a>
+            <a href="/#communities" className="text-paper hover:text-signal">
+              {t("nav.communities")}
+            </a>
             <a
               href="/#hosting"
               className="text-paper hover:text-signal"

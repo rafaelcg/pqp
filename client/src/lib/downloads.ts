@@ -30,6 +30,9 @@
 
 const REPO = "rafaelcg/pqp";
 
+/** The public repository. Used by the landing hosting column and trust strip. */
+export const SOURCE_REPO_URL = `https://github.com/${REPO}`;
+
 /** Always valid, even before the first tag exists on a fresh repo… almost:
  *  GitHub 404s `/releases/latest` while a repo has zero published releases.
  *  These links go live with the first `v*` tag. */
