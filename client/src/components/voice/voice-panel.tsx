@@ -155,7 +155,7 @@ function ParticipantTile({
               ) : (
                 <MicOff className="h-3 w-3" aria-hidden="true" />
               )}
-              {isTransmitting ? "Live" : "Hold to talk"}
+              {isTransmitting ? t("voice.tile.live") : t("voice.tile.holdToTalk")}
             </span>
           )}
           {isPresenting && (
@@ -589,15 +589,15 @@ export function VoicePanel({
                     <MicOff className="h-4 w-4" aria-hidden="true" />
                   )}
                   {pushToTalkBlocked
-                    ? "Muted — push-to-talk is off"
+                    ? t("voice.ptt.blocked")
                     : isTransmitting
-                      ? "Transmitting"
-                      : "Hold to talk"}
+                      ? t("voice.ptt.transmitting")
+                      : t("voice.ptt.hold")}
                 </Button>
                 <p className="mt-1 text-center text-[11px] text-paper-muted">
                   {pushToTalkKeyLabel
-                    ? `Hold ${pushToTalkKeyLabel} or the button above.`
-                    : "Hold the button above to talk."}
+                    ? t("voice.ptt.hintKey", { key: pushToTalkKeyLabel })
+                    : t("voice.ptt.hintButton")}
                 </p>
                 {pushToTalkKeyLabel && !windowFocused && (
                   /* Said out loud rather than hidden: a browser cannot see a
@@ -608,8 +608,7 @@ export function VoicePanel({
                     role="status"
                     className="mt-1 text-center text-[11px] text-warning"
                   >
-                    This window isn&apos;t focused — the key won&apos;t reach
-                    it. Click here first, or use the button.
+                    {t("voice.ptt.unfocused")}
                   </p>
                 )}
               </div>

@@ -14,13 +14,6 @@ import {
  * unsent composer drafts, and possibly an active call; swapping the bundle out
  * from under any of those is a worse outcome than running yesterday's build for
  * another minute. So it asks, and it can be dismissed.
- *
- * WHICH MAKES THIS THE MOST IMPORTANT FOUR WORDS IN THE PRODUCT after a
- * deploy: nothing shipped today reaches anybody already sitting in the app
- * until they act on this. It shipped in hardcoded English on a product whose
- * users are Brazilian, so most of them were being asked to do something in a
- * language they did not choose. Every string here now goes through the
- * catalogue like everything else.
  */
 export function UpdatePrompt() {
   const { t } = useTranslation();
@@ -63,7 +56,7 @@ export function UpdatePrompt() {
       <Button
         size="sm"
         variant="ghost"
-        aria-label={t("update.dismiss.label")}
+        aria-label={t("update.dismiss")}
         onClick={() => setDismissed(true)}
       >
         {t("update.later")}

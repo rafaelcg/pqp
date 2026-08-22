@@ -47,7 +47,7 @@ import { messageRoutePath } from "@/lib/app-route";
 import { QUICK_REACTIONS } from "@/lib/emoji-shortcodes";
 import { gifMessageMedia, type GifMedia } from "@/lib/gif-media";
 import { remarkMentions } from "@/lib/remark-mentions";
-import { useTranslation } from "@/lib/i18n";
+import { translateMessage, useTranslation } from "@/lib/i18n";
 import {
   cn,
   formatDayLabel,
@@ -199,6 +199,7 @@ export function MessageList({
   unreadThreadIds = EMPTY_BLOCKED,
   activeThreadId = null,
 }: MessageListProps) {
+  const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const [pickerMessageId, setPickerMessageId] = useState<string | null>(null);
@@ -520,8 +521,8 @@ export function MessageList({
     const newest = latestMessageRef.current;
     setLiveAnnouncement(
       arrived === 1 && newest
-        ? `New message from ${newest.authorName}`
-        : `${arrived} new messages`,
+        ? translateMessage("chat.live.from", { name: newest.authorName })
+        : translateMessage("chat.live.many", { count: arrived }),
     );
   }, [messages.length, scrollToBottom]);
 
@@ -701,7 +702,7 @@ export function MessageList({
         ref={scrollRef}
         onScroll={handleScroll}
         role="log"
-        aria-label="Messages"
+        aria-label={t("chat.messagesAria")}
         // The container itself never auto-announces: a busy channel mutates
         // constantly (reactions, edits, pagination), and role="log" implies
         // aria-live="polite" by default — enough to bury a screen-reader user
@@ -875,7 +876,7 @@ export function MessageList({
           role="status"
           className="animate-rise absolute bottom-16 right-4 z-10 max-w-[16rem] rounded-md border border-border bg-surface-2 px-3 py-2 text-xs text-text-muted shadow-lg"
         >
-          That message is no longer available — it may have been deleted.
+          {t("chat.jump.gone")}
         </p>
       )}
 
@@ -887,8 +888,8 @@ export function MessageList({
         >
           <ArrowDown className="h-3.5 w-3.5" />
           {missedCount > 0 && !hasNewer
-            ? `${missedCount} new message${missedCount === 1 ? "" : "s"}`
-            : "Jump to present"}
+            ? t("chat.jump.missed", { count: missedCount })
+            : t("chat.jump.present")}
         </button>
       )}
     </div>
@@ -896,30 +897,31 @@ export function MessageList({
 }
 
 function EmptyState() {
+  const { t } = useTranslation();
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 py-16 text-center">
       <p className="font-display text-xl font-bold text-paper">
-        Start the thread
+        {t("chat.empty.title")}
       </p>
       <p className="max-w-xs text-sm text-paper-muted">
-        Messages persist. Use <code>**bold**</code>, <code>*italic*</code>,{" "}
-        <code>`code`</code>, and links. Shift+Enter adds a line.
+        {t("chat.empty.body")}
       </p>
     </div>
   );
 }
 
 function TypingIndicator({ users }: { users: TypingUser[] }) {
+  const { t } = useTranslation();
   if (users.length === 0) {
     return null;
   }
   const names = users.map((user) => user.displayName);
   const label =
     names.length === 1
-      ? `${names[0]} is typing`
+      ? t("chat.typing_one", { name: names[0]! })
       : names.length === 2
-        ? `${names[0]} and ${names[1]} are typing`
-        : `${names.length} people are typing`;
+        ? t("chat.typing_two", { name: names[0]!, other: names[1]! })
+        : t("chat.typing_other", { count: names.length });
 
   return (
     <p
@@ -1021,63 +1023,70 @@ function buildMessageAriaLabel(
   gifMedia: GifMedia | null,
 ): string {
   const parts: string[] = [];
-  const who = isMine ? "You" : message.authorName;
+  const who = isMine ? translateMessage("chat.you") : message.authorName;
   parts.push(
-    `${who}${message.isWebhook ? " via webhook" : ""}, ${formatFullTimestamp(message.createdAt)}`,
+    `${who}${message.isWebhook ? translateMessage("chat.viaWebhook") : ""}, ${formatFullTimestamp(message.createdAt)}`,
   );
 
   if (message.replyTo) {
     parts.push(
       message.replyTo.deleted
-        ? "Replying to a deleted message"
-        : `Replying to ${message.replyTo.authorName}: ${message.replyTo.excerpt}`,
+        ? translateMessage("chat.replyDeleted")
+        : translateMessage("chat.replyTo", {
+            name: message.replyTo.authorName ?? "",
+            excerpt: message.replyTo.excerpt ?? "",
+          }),
     );
   }
 
   if (message.pending) {
-    parts.push("Sending");
+    parts.push(translateMessage("chat.sending"));
   } else if (message.failed) {
-    parts.push("Failed to send");
+    parts.push(translateMessage("chat.failedSend"));
   }
 
   const attachmentCount = message.attachments?.length ?? 0;
   if (gifMedia) {
-    parts.push(`GIF: ${gifMedia.alt}`);
+    parts.push(translateMessage("chat.gifAlt", { alt: gifMedia.alt }));
   } else if (message.body) {
     parts.push(message.body);
   } else if (
     attachmentCount === 0 &&
     message.webhookEmbeds.length === 0
   ) {
-    parts.push("Attachment unavailable");
+    parts.push(translateMessage("chat.attachmentUnavailable"));
   }
 
   if (attachmentCount > 0) {
     parts.push(
-      `${attachmentCount} attachment${attachmentCount === 1 ? "" : "s"}`,
+      translateMessage("chat.attachments", { count: attachmentCount }),
     );
   }
 
   if (message.editedAt) {
-    parts.push("edited");
+    parts.push(translateMessage("chat.edited"));
   }
   if (message.pinnedAt) {
-    parts.push("Pinned");
+    parts.push(translateMessage("chat.pinned"));
   }
   if (message.thread) {
     parts.push(
-      `Has thread ${message.thread.name}, ${message.thread.replyCount} ${
-        message.thread.replyCount === 1 ? "reply" : "replies"
-      }`,
+      translateMessage("chat.hasThread", {
+        name: message.thread.name,
+        count: message.thread.replyCount,
+      }),
     );
   }
 
   const reactions = message.reactions ?? [];
   if (reactions.length > 0) {
     const summary = reactions
-      .map((r) => `${r.emoji} ${r.count}${r.me ? ", you reacted" : ""}`)
+      .map(
+        (r) =>
+          `${r.emoji} ${r.count}${r.me ? translateMessage("chat.youReacted") : ""}`,
+      )
       .join("; ");
-    parts.push(`Reactions: ${summary}`);
+    parts.push(translateMessage("chat.reactionsSummary", { summary }));
   }
 
   return parts.join(". ");
@@ -1200,7 +1209,7 @@ const MessageRow = memo(function MessageRow({
   const canReport = isReal && !isMine && !!onReport;
 
   function confirmDelete() {
-    if (window.confirm("Delete this message?")) {
+    if (window.confirm(t("chat.deleteConfirm"))) {
       onDelete?.();
     }
   }
@@ -1232,19 +1241,19 @@ const MessageRow = memo(function MessageRow({
             registerRow(message.id, node);
           }}
           tabIndex={isActive ? 0 : -1}
-          aria-label="Blocked message"
+          aria-label={t("chat.blocked")}
           onFocus={onFocusRow}
           onKeyDown={(event) => onNavigate(event, message.id)}
           className="group mt-1 flex items-center gap-2 rounded-md px-1 py-1 text-xs text-paper-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
         >
-          <span className="italic">Blocked message</span>
+          <span className="italic">{t("chat.blocked")}</span>
           <button
             type="button"
             tabIndex={controlTabIndex}
             onClick={onReveal}
             className="underline underline-offset-2 hover:text-paper"
           >
-            Show
+            {t("chat.showBlocked")}
           </button>
         </article>
       </>
@@ -1266,7 +1275,7 @@ const MessageRow = memo(function MessageRow({
   const items: ContextMenuItemDef[] = [
     ...(canReply
       ? [
-          { id: "reply", label: "Reply", onSelect: selectAndClose(onReply, false) },
+          { id: "reply", label: t("chat.reply"), onSelect: selectAndClose(onReply, false) },
         ]
       : []),
     ...(threadAction
@@ -1284,7 +1293,7 @@ const MessageRow = memo(function MessageRow({
       : []),
     {
       id: "copy-text",
-      label: "Copy text",
+      label: t("chat.copyText"),
       onSelect: selectAndClose(
         () => void navigator.clipboard.writeText(message.body),
         true,
@@ -1292,7 +1301,7 @@ const MessageRow = memo(function MessageRow({
     },
     {
       id: "copy-id",
-      label: "Copy message ID",
+      label: t("chat.copyId"),
       onSelect: selectAndClose(
         () => void navigator.clipboard.writeText(message.id),
         true,
@@ -1302,7 +1311,7 @@ const MessageRow = memo(function MessageRow({
       ? [
           {
             id: "copy-link",
-            label: "Copy message link",
+            label: t("chat.copyLink"),
             onSelect: selectAndClose(() => {
               const link = `${window.location.origin}${messageRoutePath(
                 serverId,
@@ -1319,7 +1328,7 @@ const MessageRow = memo(function MessageRow({
           { id: "sep-edit", label: "", separator: true },
           {
             id: "edit",
-            label: "Edit message",
+            label: t("chat.edit"),
             onSelect: selectAndClose(onStartEdit, false),
           },
         ]
@@ -1328,7 +1337,7 @@ const MessageRow = memo(function MessageRow({
       ? [
           {
             id: "pin",
-            label: isMessagePinned ? "Unpin message" : "Pin message",
+            label: isMessagePinned ? t("chat.unpin") : t("chat.pin"),
             onSelect: selectAndClose(
               isMessagePinned ? onUnpin : onPin,
               true,
@@ -1340,7 +1349,7 @@ const MessageRow = memo(function MessageRow({
       ? [
           {
             id: "delete",
-            label: "Delete message",
+            label: t("chat.delete"),
             danger: true,
             onSelect: selectAndClose(confirmDelete, true),
           },
@@ -1352,7 +1361,7 @@ const MessageRow = memo(function MessageRow({
       ? [
           {
             id: "report",
-            label: "Report message",
+            label: t("chat.report"),
             danger: true,
             onSelect: selectAndClose(onReport, false),
           },
@@ -1379,7 +1388,7 @@ const MessageRow = memo(function MessageRow({
         const mine = reactions.some((r) => r.emoji === emoji && r.me);
         return {
           emoji,
-          label: mine ? `${emoji} (remove your reaction)` : undefined,
+          label: mine ? t("chat.removeReaction", { emoji }) : undefined,
           active: mine,
           onSelect: selectAndClose(
             () => onToggleReaction(message.id, emoji),
@@ -1471,7 +1480,7 @@ const MessageRow = memo(function MessageRow({
                 {message.isWebhook && (
                   <span
                     className="rounded bg-ink-4 px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-paper-muted"
-                    title="Posted by a webhook, not a member"
+                    title={t("chat.webhookPosted")}
                   >
                     Webhook
                   </span>
@@ -1493,12 +1502,14 @@ const MessageRow = memo(function MessageRow({
                     className="inline-flex items-center gap-0.5 text-[11px] text-signal"
                     title={
                       message.pinnedBy
-                        ? `Pinned by ${message.pinnedBy.displayName}`
-                        : "Pinned"
+                        ? t("chat.pinnedBy", {
+                            name: message.pinnedBy.displayName,
+                          })
+                        : t("chat.pinned")
                     }
                   >
                     <Pin className="h-3 w-3" aria-hidden />
-                    <span className="sr-only">Pinned</span>
+                    <span className="sr-only">{t("chat.pinned")}</span>
                   </span>
                 )}
               </div>
@@ -1549,7 +1560,7 @@ const MessageRow = memo(function MessageRow({
                   attachments.length === 0 &&
                   message.webhookEmbeds.length === 0 && (
                     <p className="text-[15px] italic leading-relaxed text-paper-muted">
-                      Attachment unavailable.
+                      {t("chat.attachmentUnavailable")}
                     </p>
                   )}
                 {showLinkEmbeds && message.embeds?.[0] && (
@@ -1621,7 +1632,7 @@ const MessageRow = memo(function MessageRow({
                 variant="ghost"
                 size="icon"
                 tabIndex={-1}
-                aria-label="Add reaction"
+                aria-label={t("chat.addReaction")}
                 className="h-6 w-6"
                 onClick={onOpenPicker}
               >
@@ -1633,7 +1644,7 @@ const MessageRow = memo(function MessageRow({
                   variant="ghost"
                   size="icon"
                   tabIndex={-1}
-                  aria-label="Reply"
+                  aria-label={t("chat.reply")}
                   className="h-6 w-6"
                   onClick={onReply}
                 >
@@ -1646,7 +1657,7 @@ const MessageRow = memo(function MessageRow({
                   variant="ghost"
                   size="icon"
                   tabIndex={-1}
-                  aria-label="Edit message"
+                  aria-label={t("chat.edit")}
                   className="h-6 w-6"
                   onClick={onStartEdit}
                 >
@@ -1659,7 +1670,7 @@ const MessageRow = memo(function MessageRow({
                   variant="ghost"
                   size="icon"
                   tabIndex={-1}
-                  aria-label="Delete message"
+                  aria-label={t("chat.delete")}
                   className="h-6 w-6 text-danger hover:text-danger"
                   onClick={confirmDelete}
                 >
@@ -1988,11 +1999,12 @@ function ReplyQuote({
   /** -1 outside the active row — see `controlTabIndex` in MessageRow. */
   tabIndex: number;
 }) {
+  const { t } = useTranslation();
   if (replyTo.deleted) {
     return (
       <p className="mb-0.5 flex items-center gap-1.5 text-xs text-text-muted">
         <CornerUpLeft className="h-3 w-3 shrink-0" />
-        <span className="italic">Original message was deleted</span>
+        <span className="italic">{t("chat.originalDeleted")}</span>
       </p>
     );
   }
@@ -2002,7 +2014,10 @@ function ReplyQuote({
       type="button"
       tabIndex={tabIndex}
       onClick={() => onJump(replyTo.id)}
-      aria-label={`Jump to ${replyTo.authorName}'s message: ${replyTo.excerpt}`}
+      aria-label={t("chat.jumpToReply", {
+        name: replyTo.authorName ?? "",
+        excerpt: replyTo.excerpt ?? "",
+      })}
       className="mb-0.5 flex w-full min-w-0 items-center gap-1.5 text-left text-xs text-text-muted hover:text-text focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
     >
       <CornerUpLeft className="h-3 w-3 shrink-0" aria-hidden />
@@ -2031,6 +2046,7 @@ function EditComposer({
   onCancel: () => void;
   onSubmit: (body: string) => Promise<void>;
 }) {
+  const { t } = useTranslation();
   const [value, setValue] = useState(initialValue);
   const [busy, setBusy] = useState(false);
   const ref = useRef<HTMLTextAreaElement>(null);
@@ -2067,7 +2083,7 @@ function EditComposer({
       <textarea
         ref={ref}
         value={value}
-        aria-label="Edit message"
+        aria-label={t("chat.edit")}
         rows={Math.min(8, value.split("\n").length + 1)}
         onChange={(event) => setValue(event.target.value)}
         onKeyDown={(event) => {
@@ -2107,6 +2123,7 @@ function ReactionBar({
   onClosePicker,
   tabIndex,
 }: ReactionBarProps) {
+  const { t } = useTranslation();
   const hasReactions = reactions.length > 0;
 
   if (!hasReactions && !isPickerOpen) {
@@ -2122,9 +2139,13 @@ function ReactionBar({
           tabIndex={tabIndex}
           onClick={() => onToggle(reaction.emoji)}
           aria-pressed={reaction.me}
-          aria-label={`${reaction.emoji} reaction, ${reaction.count} ${
-            reaction.count === 1 ? "person" : "people"
-          }${reaction.me ? ", you reacted — activate to remove" : " — activate to react"}`}
+          aria-label={t(
+            reaction.me ? "chat.reaction.ariaMine" : "chat.reaction.aria",
+            {
+              emoji: reaction.emoji,
+              people: t("chat.reaction.people", { count: reaction.count }),
+            },
+          )}
           className={cn(
             "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60",
             reaction.me
@@ -2141,7 +2162,7 @@ function ReactionBar({
       <button
         type="button"
         tabIndex={tabIndex}
-        aria-label="Add reaction"
+        aria-label={t("chat.addReaction")}
         onClick={onOpenPicker}
         className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-dashed border-ink-4 text-paper-muted hover:border-signal/50 hover:text-signal focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
       >

@@ -9,10 +9,8 @@
  * Node test rather than only on a real iPhone.
  */
 
-import {
-  translateMessage,
-  type MessageKey,
-} from "@/lib/i18n/catalogue";
+import { desktopContext } from "@/lib/desktop";
+import { translateMessage, type MessageKey } from "@/lib/i18n";
 
 export type ScreenShareUnavailableReason = "no-api" | "insecure-context";
 
@@ -88,7 +86,7 @@ const SCREEN_SHARE_UNAVAILABLE_KEY: Record<
 export function screenShareUnavailableMessage(
   reason: ScreenShareUnavailableReason,
 ): string {
-  return translateMessage(SCREEN_SHARE_UNAVAILABLE_KEY[reason]);
+  return translateMessage(SCREEN_SHARE_UNAVAILABLE_KEY[reason], desktopContext());
 }
 
 /**

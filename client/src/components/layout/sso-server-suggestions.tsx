@@ -80,7 +80,7 @@ export function SsoServerSuggestions({
         {/* Two whole sentences rather than a spliced noun phrase: Portuguese
             inflects the demonstrative and the noun together, so "this server" /
             "these servers" cannot be swapped inside a fixed frame. */}
-        {t(servers.length === 1 ? "sso.body.one" : "sso.body.many")}
+        {t(servers.length === 1 ? "sso.body_single" : "sso.body_several")}
       </p>
       {error && (
         <p role="alert" className="text-sm text-danger">

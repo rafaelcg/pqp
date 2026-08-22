@@ -3,6 +3,8 @@ import { Pin } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Dialog } from "@/components/ui/dialog";
 import { fetchPinnedMessages, unpinMessage } from "@/lib/api";
+import { useTranslation, type Translator } from "@/lib/i18n";
+import { formatFullTimestamp } from "@/lib/utils";
 
 interface PinnedMessagesPanelProps {
   open: boolean;
@@ -17,17 +19,20 @@ interface PinnedMessagesPanelProps {
 
 /** What to show when a pin has no text of its own — an image-only or
  * GIF-only message — rather than rendering an empty line. */
-function describeBody(message: Message): string {
+function describeBody(message: Message, t: Translator["t"]): string {
   if (message.body.trim()) {
     return buildReplyExcerpt(message.body);
   }
   if (message.attachments.length > 0) {
     const first = message.attachments[0]!;
     return message.attachments.length > 1
-      ? `${first.filename} + ${message.attachments.length - 1} more`
+      ? t("pins.moreAttachments", {
+          filename: first.filename,
+          count: message.attachments.length - 1,
+        })
       : first.filename;
   }
-  return "(empty message)";
+  return t("pins.emptyMessage");
 }
 
 export function PinnedMessagesPanel({
@@ -38,6 +43,7 @@ export function PinnedMessagesPanel({
   onClose,
   onJumpToMessage,
 }: PinnedMessagesPanelProps) {
+  const { t } = useTranslation();
   const [pins, setPins] = useState<Message[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -59,7 +65,7 @@ export function PinnedMessagesPanel({
       })
       .catch((err: unknown) => {
         if (!cancelled) {
-          setError(err instanceof Error ? err.message : "Failed to load pins");
+          setError(err instanceof Error ? err.message : t("pins.loadFailed"));
         }
       })
       .finally(() => {
@@ -81,7 +87,7 @@ export function PinnedMessagesPanel({
       // read, not the message list, so it drops the row itself.
       setPins((prev) => prev.filter((message) => message.id !== messageId));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to unpin");
+      setError(err instanceof Error ? err.message : t("pins.unpinFailed"));
     } finally {
       setBusyId(null);
     }
@@ -90,9 +96,9 @@ export function PinnedMessagesPanel({
   return (
     <Dialog
       open={open}
-      eyebrow="Pinned messages"
-      title={`#${channelName ?? "channel"}`}
-      description="Messages the channel has agreed are worth finding again."
+      eyebrow={t("pins.eyebrow")}
+      title={`#${channelName ?? t("pins.untitled")}`}
+      description={t("pins.description")}
       onClose={onClose}
     >
       <div className="space-y-3 p-4">
@@ -103,12 +109,12 @@ export function PinnedMessagesPanel({
         )}
         {loading && (
           <p className="text-sm text-paper-muted" role="status">
-            Loading pins…
+            {t("pins.loading")}
           </p>
         )}
         {!loading && pins.length === 0 && !error && (
           <p className="text-sm text-paper-muted">
-            Nothing pinned yet. Right-click a message to pin it.
+            {t("pins.empty")}
           </p>
         )}
         <ul className="space-y-2">
@@ -131,15 +137,17 @@ export function PinnedMessagesPanel({
                       {message.authorName}
                     </span>
                     <span>·</span>
-                    <span>{new Date(message.createdAt).toLocaleString()}</span>
+                    <span>{formatFullTimestamp(message.createdAt)}</span>
                   </p>
                   <p className="mt-0.5 truncate text-sm text-paper">
-                    {describeBody(message)}
+                    {describeBody(message, t)}
                   </p>
                   {message.pinnedBy && (
                     <p className="mt-1 flex items-center gap-1 text-[11px] text-paper-muted">
                       <Pin className="h-3 w-3 text-signal" aria-hidden />
-                      Pinned by {message.pinnedBy.displayName}
+                      {t("chat.pinnedBy", {
+                        name: message.pinnedBy.displayName,
+                      })}
                     </p>
                   )}
                 </button>
@@ -150,7 +158,7 @@ export function PinnedMessagesPanel({
                     onClick={() => void unpin(message.id)}
                     className="shrink-0 rounded px-2 py-1 text-xs text-paper-muted hover:bg-ink-4 hover:text-paper disabled:opacity-50"
                   >
-                    Unpin
+                    {t("pins.unpin")}
                   </button>
                 )}
               </div>

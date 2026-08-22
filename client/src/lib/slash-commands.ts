@@ -1,3 +1,5 @@
+import { translateMessage, type MessageKey } from "@/lib/i18n";
+
 export interface SlashCommandMeta {
   name: string;
   description: string;
@@ -31,7 +33,11 @@ export type SlashExecuteResult =
   | { kind: "ok"; feedback?: SlashFeedback; clearComposer?: boolean }
   | { kind: "error"; feedback: SlashFeedback };
 
-interface SlashCommand extends SlashCommandMeta {
+interface SlashCommand {
+  name: string;
+  descriptionKey: MessageKey;
+  usage: string;
+  takesArgs: boolean;
   execute: (ctx: SlashCommandContext) => Promise<SlashExecuteResult> | SlashExecuteResult;
 }
 
@@ -49,10 +55,14 @@ function err(message: string): SlashExecuteResult {
   return { kind: "error", feedback: { message, tone: "error" } };
 }
 
+function errKey(key: MessageKey, vars?: Record<string, string | number>): SlashExecuteResult {
+  return err(translateMessage(key, vars));
+}
+
 const commands: SlashCommand[] = [
   {
     name: "help",
-    description: "List available slash commands",
+    descriptionKey: "slash.help.description",
     usage: "/help",
     takesArgs: false,
     execute() {
@@ -67,7 +77,7 @@ const commands: SlashCommand[] = [
   },
   {
     name: "shrug",
-    description: "Append a shrug to your message",
+    descriptionKey: "slash.shrug.description",
     usage: "/shrug [text]",
     takesArgs: true,
     execute({ args, sendMessage }) {
@@ -78,7 +88,7 @@ const commands: SlashCommand[] = [
   },
   {
     name: "tableflip",
-    description: "Flip a table in chat",
+    descriptionKey: "slash.tableflip.description",
     usage: "/tableflip [text]",
     takesArgs: true,
     execute({ args, sendMessage }) {
@@ -89,12 +99,12 @@ const commands: SlashCommand[] = [
   },
   {
     name: "me",
-    description: "Send an emote-style italic action",
+    descriptionKey: "slash.me.description",
     usage: "/me <action>",
     takesArgs: true,
     execute({ args, sendMessage }) {
       if (!args) {
-        return err("Usage: /me <action>");
+        return errKey("slash.me.usage");
       }
       sendMessage(`_${args}_`);
       return ok();
@@ -102,110 +112,108 @@ const commands: SlashCommand[] = [
   },
   {
     name: "nick",
-    description: "Update your display name",
+    descriptionKey: "slash.nick.description",
     usage: "/nick <name>",
     takesArgs: true,
     async execute({ args, updateDisplayName }) {
       const name = args.trim();
       if (!name) {
-        return err("Usage: /nick <name>");
+        return errKey("slash.nick.usage");
       }
       if (name.length > 100) {
-        return err("Display name must be 100 characters or fewer.");
+        return errKey("slash.nick.tooLong");
       }
       try {
         await updateDisplayName(name);
         return ok({
-          message: `Display name set to ${name}`,
+          message: translateMessage("slash.nick.ok", { name }),
           tone: "success",
         });
       } catch (error) {
         return err(
-          error instanceof Error ? error.message : "Failed to update name",
+          error instanceof Error ? error.message : translateMessage("slash.nick.failed"),
         );
       }
     },
   },
   {
     name: "invite",
-    description: "Open the invite panel for this server",
+    descriptionKey: "slash.invite.description",
     usage: "/invite",
     takesArgs: false,
     execute({ openInvite }) {
       openInvite("create");
       return ok({
-        message: "Opened invite panel",
+        message: translateMessage("slash.invite.opened"),
         tone: "info",
       });
     },
   },
   {
     name: "join",
-    description: "Join a server with an invite code",
+    descriptionKey: "slash.join.description",
     usage: "/join <code>",
     takesArgs: true,
     async execute({ args, joinByCode }) {
       const code = args.trim();
       if (!code) {
-        return err("Usage: /join <code>");
+        return errKey("slash.join.usage");
       }
       try {
         await joinByCode(code);
         return ok({
-          message: `Joined via invite ${code}`,
+          message: translateMessage("slash.join.ok", { code }),
           tone: "success",
         });
       } catch (error) {
         return err(
-          error instanceof Error ? error.message : "Failed to join invite",
+          error instanceof Error ? error.message : translateMessage("slash.join.failed"),
         );
       }
     },
   },
   {
     name: "mute",
-    description: "Mute your microphone in voice",
+    descriptionKey: "slash.mute.description",
     usage: "/mute",
     takesArgs: false,
     execute({ isInVoice, isMuted, setMuted }) {
       if (!isInVoice) {
-        return err("Join a voice channel first.");
+        return errKey("slash.voice.first");
       }
       if (isMuted) {
-        return ok({ message: "Already muted", tone: "info" });
+        return ok({ message: translateMessage("slash.mute.already"), tone: "info" });
       }
       setMuted(true);
-      return ok({ message: "Muted", tone: "success" });
+      return ok({ message: translateMessage("slash.mute.ok"), tone: "success" });
     },
   },
   {
     name: "unmute",
-    description: "Unmute your microphone in voice",
+    descriptionKey: "slash.unmute.description",
     usage: "/unmute",
     takesArgs: false,
     execute({ isInVoice, isMuted, setMuted }) {
       if (!isInVoice) {
-        return err("Join a voice channel first.");
+        return errKey("slash.voice.first");
       }
       if (!isMuted) {
-        return ok({ message: "Already unmuted", tone: "info" });
+        return ok({ message: translateMessage("slash.unmute.already"), tone: "info" });
       }
       setMuted(false);
-      return ok({ message: "Unmuted", tone: "success" });
+      return ok({ message: translateMessage("slash.unmute.ok"), tone: "success" });
     },
   },
   {
     name: "gif",
-    description: "Search GIFs",
+    descriptionKey: "slash.gif.description",
     usage: "/gif [query]",
     takesArgs: true,
     execute({ args, openGifPicker, isGifSearchEnabled }) {
       // The deployment answers this at boot; hard-coding "not configured" here
       // meant the command kept saying so long after a key was set.
       if (!isGifSearchEnabled) {
-        return err(
-          "GIF search isn’t configured on this server. Paste a GIF link instead.",
-        );
+        return errKey("slash.gif.unconfigured");
       }
       // No argument is a valid way to ask — it opens on trending, which is what
       // the button does.
@@ -215,13 +223,12 @@ const commands: SlashCommand[] = [
   },
   {
     name: "clear",
-    description: "Clear the message composer (local only)",
+    descriptionKey: "slash.clear.description",
     usage: "/clear",
     takesArgs: false,
     execute() {
       return ok({
-        message:
-          "Composer cleared. Server message history is not deleted (no API for that).",
+        message: translateMessage("slash.clear.ok"),
         tone: "info",
       });
     },
@@ -231,9 +238,9 @@ const commands: SlashCommand[] = [
 const byName = new Map(commands.map((c) => [c.name, c]));
 
 export function listSlashCommands(): SlashCommandMeta[] {
-  return commands.map(({ name, description, usage, takesArgs }) => ({
+  return commands.map(({ name, descriptionKey, usage, takesArgs }) => ({
     name,
-    description,
+    description: translateMessage(descriptionKey),
     usage,
     takesArgs,
   }));
@@ -281,12 +288,12 @@ export async function executeSlashCommand(
 ): Promise<SlashExecuteResult> {
   const parsed = parseSlashInput(value);
   if (!parsed || !parsed.name) {
-    return err("Unknown command. Type /help for a list.");
+    return errKey("slash.unknown");
   }
 
   const command = byName.get(parsed.name);
   if (!command) {
-    return err(`Unknown command /${parsed.name}. Type /help for a list.`);
+    return errKey("slash.unknownNamed", { name: parsed.name });
   }
 
   return command.execute({ ...ctx, args: parsed.args });

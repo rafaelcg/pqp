@@ -27,10 +27,10 @@
  *
  * DELIBERATELY DEPENDENCY-FREE, like its two siblings: wrangler's esbuild
  * bundles this outside the pnpm workspace, so it cannot import the i18n
- * catalogue. The strings below are duplicates of `landing.seo.*`,
+ * JSON. The strings below are duplicates of `landing.seo.*`,
  * `vsDiscord.seo.*`, `tela.seo.*`, `claim.seo.*`, `vsDiscord.faq.*` and
  * `tela.faq.*`, and
- * `marketing-meta.test.ts` pins each pair against the catalogue — the
+ * `marketing-meta.test.ts` pins each pair against the JSON catalogues — the
  * duplication cannot drift without failing the suite.
  */
 
@@ -220,10 +220,10 @@ const PAGE_COPY: Record<MarketingPage, PageCopy> = {
 };
 
 /**
- * The `/vs-discord` FAQ, duplicated from `vsDiscord.faq.*` in the catalogue
- * and served as FAQPage JSON-LD. Same truth rules as the page: product claims
- * only, no legal advice, no return-date speculation. The test suite pins every
- * string here against its catalogue twin.
+ * The `/vs-discord` FAQ, duplicated from `vsDiscord.faq.*` in the JSON
+ * catalogues and served as FAQPage JSON-LD. Same truth rules as the page:
+ * product claims only, no legal advice, no return-date speculation. The test
+ * suite pins every string here against its JSON twin.
  */
 export const VS_DISCORD_FAQ: Record<
   MarketingLocale,
@@ -278,10 +278,11 @@ export const VS_DISCORD_FAQ: Record<
 };
 
 /**
- * The `/tela` FAQ, duplicated from `tela.faq.*` in the catalogue and served as
- * FAQPage JSON-LD, in the page's own order. Same truth rules as the page:
- * product claims only, no legal advice, no App Store claim, no return-date
- * speculation. The suite pins every string here against its catalogue twin.
+ * The `/tela` FAQ, duplicated from `tela.faq.*` in the JSON catalogues and
+ * served as FAQPage JSON-LD, in the page's own order. Same truth rules as the
+ * page: product claims only, no legal advice, no App Store claim, no
+ * return-date speculation. The suite pins every string here against its JSON
+ * twin.
  */
 export const TELA_FAQ: Record<
   MarketingLocale,

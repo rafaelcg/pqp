@@ -4,8 +4,11 @@ import {
   COMMUNITY_LANGUAGES,
   type CommunitySummary,
 } from "@pqp/shared";
-import { en } from "@/lib/i18n/catalogue";
-import { ptBR } from "@/lib/i18n/messages.pt-BR";
+import { translateMessage, en as enMessages } from "@/lib/i18n";
+import ptBRJson from "@/locales/pt-BR/translation.json";
+
+const en = enMessages as Record<string, string>;
+const ptBR = ptBRJson as Record<string, string>;
 import {
   applyJoin,
   cardAction,
@@ -15,7 +18,6 @@ import {
   emptyStateKeys,
   formatMemberCount,
   languageSegments,
-  memberCountKey,
   mergePages,
   monogram,
 } from "./communities-model";
@@ -181,11 +183,17 @@ describe("applyJoin", () => {
   });
 });
 
-describe("memberCountKey", () => {
-  it("uses a singular key, because Portuguese will not take `1 membros`", () => {
-    expect(memberCountKey(1)).toBe("communities.members.one");
-    expect(memberCountKey(0)).toBe("communities.members");
-    expect(memberCountKey(2)).toBe("communities.members");
+describe("community member count copy", () => {
+  it("singularizes one member without formatting the count as the plural selector", () => {
+    expect(
+      translateMessage("communities.members", { count: 1, countLabel: "1" }),
+    ).toBe("1 member");
+    expect(
+      translateMessage("communities.members", { count: 0, countLabel: "0" }),
+    ).toBe("0 members");
+    expect(
+      translateMessage("communities.members", { count: 2, countLabel: "2" }),
+    ).toBe("2 members");
   });
 });
 

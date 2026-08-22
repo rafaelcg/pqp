@@ -1,3 +1,4 @@
+import { translateMessage } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 interface SkeletonProps {
@@ -18,7 +19,7 @@ export function Skeleton({ className }: SkeletonProps) {
 
 export function ChannelListSkeleton() {
   return (
-    <div className="space-y-4 p-2" aria-busy="true" aria-label="Loading channels">
+    <div className="space-y-4 p-2" aria-busy="true" aria-label={translateMessage("a11y.loadingChannels")}>
       <div className="space-y-2 px-2">
         <Skeleton className="h-3 w-12" />
         <Skeleton className="h-8 w-full" />
@@ -39,7 +40,7 @@ export function MessageListSkeleton() {
     <div
       className="flex flex-1 flex-col gap-5 overflow-hidden px-3 py-4 sm:px-5"
       aria-busy="true"
-      aria-label="Loading messages"
+      aria-label={translateMessage("a11y.loadingMessages")}
     >
       {Array.from({ length: 6 }).map((_, i) => (
         <div key={i} className="flex gap-3">

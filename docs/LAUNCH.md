@@ -171,22 +171,13 @@ Re-run against the real deploy before trusting any absolute number.
 
 ## P1 — Brazil
 
-### B1. There is no i18n at all
+### B1. i18n shipped (en + pt-BR)
 
-Zero infrastructure: no i18n library in `client/package.json`, no locale
-detection, no message catalog, no `pt-BR` string anywhere in the repo. Every
-string is hardcoded English JSX across ~40 components.
+The client uses i18next core (`docs/I18N.md`). English is the source of truth.
+Portuguese loads lazily. Chat chrome, settings, and Electron menus are
+translated. Marketing and legal bodies have their own files. A third locale
+and live (no-reload) switching are still out of scope.
 
-This is genuinely multi-day work — extraction is the slow part, translation is
-not. Scope it honestly. Two paths:
-
-- **Launch English, ship pt-BR in week 2.** Brazilian gamers tolerate English
-  UI (Discord itself launched that way there), and this keeps launch day real.
-- **Localize the funnel only** — landing page, sign-up, onboarding, empty
-  states. Maybe 15% of the strings, most of the perceived localization. This is
-  the high-leverage middle path and is achievable in a day or two.
-
-Recommend the second.
 
 ### B2. Localize the Clerk modal (cheap, visible)
 

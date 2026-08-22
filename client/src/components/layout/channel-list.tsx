@@ -30,6 +30,7 @@ import {
   notificationLevelItems,
   useChannelNotificationLevel,
 } from "@/hooks/use-notifications";
+import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 export interface UnreadState {
@@ -67,6 +68,7 @@ export function VoiceOccupantBadges({
 }: {
   person: VoiceParticipant;
 }) {
+  const { t } = useTranslation();
   if (!person.muted && !person.deafened && !person.sharingScreen) {
     return null;
   }
@@ -74,20 +76,20 @@ export function VoiceOccupantBadges({
     <span className="ml-auto flex shrink-0 items-center gap-1">
       {person.sharingScreen && (
         <ScreenShare
-          aria-label="Sharing their screen"
+          aria-label={t("chrome.sharingScreen")}
           role="img"
           className="h-3 w-3 text-signal"
         />
       )}
       {person.deafened ? (
         <HeadphoneOff
-          aria-label="Deafened"
+          aria-label={t("chrome.deafened")}
           role="img"
           className="h-3 w-3 text-danger"
         />
       ) : (
         person.muted && (
-          <MicOff aria-label="Muted" role="img" className="h-3 w-3 text-danger" />
+          <MicOff aria-label={t("chrome.muted")} role="img" className="h-3 w-3 text-danger" />
         )
       )}
     </span>
@@ -162,6 +164,7 @@ export function ChannelList({
   mobileOpen = false,
   onMobileClose,
 }: ChannelListProps) {
+  const { t } = useTranslation();
   const topLevelText = sortByPosition(
     channels.filter((c) => c.type === "text" && !c.parentId),
   );
@@ -334,14 +337,14 @@ export function ChannelList({
 
   const headerItems: ContextMenuItemDef[] = server
     ? [
-        { id: "invite", label: "Invite people", onSelect: onInvite },
-        { id: "members", label: "Members", onSelect: onOpenMembers },
+        { id: "invite", label: t("chrome.invitePeople"), onSelect: onInvite },
+        { id: "members", label: t("chrome.members"), onSelect: onOpenMembers },
         ...(canManage
           ? [
               { id: "sep", label: "", separator: true },
               {
                 id: "settings",
-                label: "Community settings",
+                label: t("chrome.communitySettings"),
                 onSelect: onOpenServerSettings,
               },
             ]
@@ -379,7 +382,7 @@ export function ChannelList({
             )}
             <div className="min-w-0">
               <p className="truncate font-display text-base font-bold leading-tight">
-                {server?.name ?? (isLoading ? "Loading…" : "No server")}
+                {server?.name ?? (isLoading ? t("common.loading") : t("chrome.noServer"))}
               </p>
               {server?.role && (
                 <p className="mt-0.5 text-[11px] uppercase tracking-wider text-paper-muted">
@@ -395,8 +398,8 @@ export function ChannelList({
                   <button
                     type="button"
                     className="rounded-md p-1.5 text-paper-muted hover:bg-ink-3 hover:text-paper"
-                    title="Community settings"
-                    aria-label="Community settings"
+                    title={t("chrome.communitySettings")}
+                    aria-label={t("chrome.communitySettings")}
                     onClick={onOpenServerSettings}
                   >
                     <Settings className="h-4 w-4" />
@@ -405,8 +408,8 @@ export function ChannelList({
                 <button
                   type="button"
                   className="rounded-md p-1.5 text-paper-muted hover:bg-ink-3 hover:text-paper"
-                  title="Members"
-                  aria-label="Members"
+                  title={t("chrome.members")}
+                  aria-label={t("chrome.members")}
                   onClick={onOpenMembers}
                 >
                   <Users className="h-4 w-4" />
@@ -416,7 +419,7 @@ export function ChannelList({
                   className="rounded-md px-2 py-1 text-xs text-signal hover:bg-ink-3"
                   onClick={onInvite}
                 >
-                  Invite
+                  {t("chrome.invite")}
                 </button>
               </>
             )}
@@ -424,7 +427,7 @@ export function ChannelList({
               <button
                 type="button"
                 className="rounded p-1 hover:bg-ink-3 md:hidden"
-                aria-label="Close channel list"
+                aria-label={t("chrome.closeChannelList")}
                 onClick={onMobileClose}
               >
                 <X className="h-4 w-4" />
@@ -442,7 +445,7 @@ export function ChannelList({
             onClick={() => setSearchOpen(true)}
           >
             <Search className="h-3.5 w-3.5 shrink-0" />
-            <span className="truncate">Search messages</span>
+            <span className="truncate">{t("chrome.searchMessages")}</span>
             <kbd className="ml-auto hidden shrink-0 rounded border border-border px-1 py-px text-[10px] font-sans md:inline">
               {SEARCH_SHORTCUT_HINT}
             </kbd>
@@ -463,7 +466,7 @@ export function ChannelList({
         ) : (
           <>
             <ChannelSection
-              label="Text"
+              label={t("chrome.text")}
               canManage={canManage}
               onAdd={() => onCreateChannel("text", false)}
               onAddPrivate={() => onCreateChannel("text", true)}
@@ -472,7 +475,7 @@ export function ChannelList({
             </ChannelSection>
 
             <ChannelSection
-              label="Voice"
+              label={t("chrome.voice")}
               canManage={canManage}
               onAdd={() => onCreateChannel("voice", false)}
               onAddPrivate={() => onCreateChannel("voice", true)}
@@ -486,12 +489,12 @@ export function ChannelList({
               <div className="mb-4">
                 <div className="mb-1 flex items-center justify-between px-2">
                   <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-paper-muted">
-                    Categories
+                    {t("chrome.categories")}
                   </span>
                   {canManage && (
                     <button
                       type="button"
-                      title="New category"
+                      title={t("chrome.newCategory")}
                       className="rounded p-0.5 text-paper-muted hover:bg-ink-3 hover:text-paper"
                       onClick={() => onCreateChannel("category", false)}
                     >
@@ -617,13 +620,14 @@ function CategoryHeader({
   onDragOverRow: () => void;
   onDrop: () => void;
 }) {
+  const { t } = useTranslation();
   const items: ContextMenuItemDef[] = canManage
     ? [
-        { id: "rename", label: "Rename category", onSelect: onRename },
+        { id: "rename", label: t("chrome.renameCategory"), onSelect: onRename },
         { id: "sep", label: "", separator: true },
         {
           id: "delete",
-          label: "Delete category",
+          label: t("chrome.deleteCategory"),
           danger: true,
           onSelect: onDelete,
         },
@@ -717,52 +721,53 @@ function ChannelRow({
   onDragOverRow: () => void;
   onDrop: () => void;
 }) {
+  const { t } = useTranslation();
   const notifications = useChannelNotificationLevel(channel);
   const items: ContextMenuItemDef[] = [];
 
   if (canManage) {
-    items.push({ id: "rename", label: "Rename channel", onSelect: onRename });
+    items.push({ id: "rename", label: t("chrome.renameChannel"), onSelect: onRename });
     if (onEditMeta) {
       items.push({
         id: "meta",
-        label: "Edit topic & icon",
+        label: t("chrome.editTopicIcon"),
         onSelect: onEditMeta,
       });
     }
     items.push({
       id: "private",
-      label: channel.isPrivate ? "Make public" : "Make private",
+      label: channel.isPrivate ? t("chrome.makePublic") : t("chrome.makePrivate"),
       onSelect: onTogglePrivate,
     });
     if (channel.isPrivate) {
       items.push({
         id: "invite-private",
-        label: "Manage private access",
+        label: t("chrome.manageAccess"),
         onSelect: onManageMembers,
       });
     }
     if (onManageWebhooks) {
       items.push({
         id: "webhooks",
-        label: "Manage webhooks",
+        label: t("chrome.manageWebhooks"),
         onSelect: onManageWebhooks,
       });
     }
     items.push({ id: "sep-1", label: "", separator: true });
     if (onMoveUp) {
-      items.push({ id: "move-up", label: "Move up", onSelect: onMoveUp });
+      items.push({ id: "move-up", label: t("chrome.moveUp"), onSelect: onMoveUp });
     }
     if (onMoveDown) {
       items.push({
         id: "move-down",
-        label: "Move down",
+        label: t("chrome.moveDown"),
         onSelect: onMoveDown,
       });
     }
     if (channel.parentId) {
       items.push({
         id: "uncategorize",
-        label: "Remove from category",
+        label: t("chrome.removeFromCategory"),
         onSelect: () => onMoveToCategory(null),
       });
     }
@@ -780,7 +785,7 @@ function ChannelRow({
       { id: "sep-2", label: "", separator: true },
       {
         id: "delete",
-        label: "Delete channel",
+        label: t("chrome.deleteChannel"),
         danger: true,
         onSelect: onDelete,
       },
@@ -793,7 +798,7 @@ function ChannelRow({
       : []),
     {
       id: "copy-id",
-      label: "Copy channel ID",
+      label: t("chrome.copyChannelId"),
       onSelect: () => void navigator.clipboard.writeText(channel.id),
     },
     ...notificationLevelItems("notify", notifications, "server"),
@@ -846,8 +851,8 @@ function ChannelRow({
           <span className={cn("truncate", hasUnread && !muted && "font-semibold")}>
             {channel.name}
           </span>
-          {hasUnread && !muted && <span className="sr-only">(unread)</span>}
-          {muted && <span className="sr-only">(muted)</span>}
+          {hasUnread && !muted && <span className="sr-only">{t("chrome.unreadSr")}</span>}
+          {muted && <span className="sr-only">{t("chrome.mutedSr")}</span>}
           <span className="ml-auto flex shrink-0 items-center gap-1">
             {connected && (
               <>
@@ -855,12 +860,12 @@ function ChannelRow({
                   aria-hidden="true"
                   className="h-1.5 w-1.5 rounded-full bg-signal"
                 />
-                <span className="sr-only">Connected</span>
+                <span className="sr-only">{t("chrome.connected")}</span>
               </>
             )}
             {channel.isPrivate && (
               <span className="rounded bg-warning/10 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-warning">
-                Private
+                {t("chrome.private")}
               </span>
             )}
             {mentions > 0 && (

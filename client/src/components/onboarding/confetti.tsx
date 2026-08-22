@@ -7,8 +7,8 @@ import { createPortal } from "react-dom";
  * WHY NOT A LIBRARY. `canvas-confetti` is 5–8 KB gzipped for one animation on
  * one screen, and it would land in the App chunk that every signed-in user
  * downloads. The whole effect is ninety rotating rectangles under gravity; that
- * is the eighty lines below, and this repo already refuses a 15–40 KB i18n
- * dependency for the same reason (see `lib/i18n/catalogue.ts`).
+ * is the eighty lines below. UI copy uses i18next (`docs/I18N.md`); this
+ * animation stays a few dozen lines rather than a second animation library.
  *
  * WHY IT RESPECTS `prefers-reduced-motion`. A screenful of falling objects is
  * exactly the pattern that triggers vestibular symptoms, and the user has

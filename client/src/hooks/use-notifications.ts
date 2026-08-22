@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import type { Channel } from "@pqp/shared";
 import type { ContextMenuItemDef } from "@/components/ui/context-menu";
 import { getDesktop } from "@/lib/desktop";
+import { translateMessage } from "@/lib/i18n";
 import {
   getNotificationState,
   hasNotificationOverride,
@@ -72,10 +73,10 @@ export function useChannelNotificationLevel(
   };
 }
 
-const LEVEL_LABELS: { level: NotificationLevel; label: string }[] = [
-  { level: "all", label: "All messages" },
-  { level: "mentions", label: "Only @mentions" },
-  { level: "none", label: "Nothing" },
+const LEVEL_LABELS: { level: NotificationLevel; key: "notify.level.all" | "notify.level.mentions" | "notify.level.none" }[] = [
+  { level: "all", key: "notify.level.all" },
+  { level: "mentions", key: "notify.level.mentions" },
+  { level: "none", key: "notify.level.none" },
 ];
 
 /**
@@ -93,17 +94,20 @@ export function notificationLevelItems(
 ): ContextMenuItemDef[] {
   const items: ContextMenuItemDef[] = [
     { id: `${prefix}-sep`, label: "", separator: true },
-    { id: `${prefix}-heading`, label: "Notifications", disabled: true },
-    ...LEVEL_LABELS.map(({ level: value, label }) => ({
-      id: `${prefix}-${value}`,
-      label: value === level ? `${label} ✓` : label,
-      onSelect: () => setLevel(value),
-    })),
+    { id: `${prefix}-heading`, label: translateMessage("notify.menu.heading"), disabled: true },
+    ...LEVEL_LABELS.map(({ level: value, key }) => {
+      const label = translateMessage(key);
+      return {
+        id: `${prefix}-${value}`,
+        label: value === level ? `${label} ✓` : label,
+        onSelect: () => setLevel(value),
+      };
+    }),
   ];
   if (overridden && inherits) {
     items.push({
       id: `${prefix}-reset`,
-      label: `Use ${inherits} default`,
+      label: translateMessage("notify.menu.reset", { inherits }),
       onSelect: () => setLevel(null),
     });
   }

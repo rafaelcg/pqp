@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { en, setActiveCatalogue } from "@/lib/i18n/catalogue";
+import { en, setActiveCatalogue } from "@/lib/i18n";
 import {
   detectFullscreenMode,
   screenShareUnavailableMessage,

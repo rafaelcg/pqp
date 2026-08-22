@@ -3,6 +3,7 @@ import { Loader2, Search } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
 import { fetchTrendingGifs, searchGifs } from "@/lib/api";
+import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 interface GifPickerPanelProps {
@@ -29,6 +30,7 @@ export function GifPickerPanel({
   className,
   initialQuery = "",
 }: GifPickerPanelProps) {
+  const { t } = useTranslation();
   const panelRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const tileRefs = useRef(new Map<string, HTMLButtonElement>());
@@ -160,8 +162,8 @@ export function GifPickerPanel({
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Search GIFs"
-          aria-label="Search GIFs"
+          placeholder={t("gif.search")}
+          aria-label={t("gif.search")}
           role="combobox"
           aria-expanded
           aria-controls={LISTBOX_ID}
@@ -176,17 +178,17 @@ export function GifPickerPanel({
 
       {status === "error" ? (
         <p className="flex flex-1 items-center justify-center px-6 text-center text-sm text-text-muted">
-          GIF search is unavailable right now.
+          {t("gif.unavailable")}
         </p>
       ) : gifs.length === 0 && status === "ready" ? (
         <p className="flex flex-1 items-center justify-center px-6 text-center text-sm text-text-muted">
-          Nothing matched that.
+          {t("gif.noMatch")}
         </p>
       ) : (
         <div
           id={LISTBOX_ID}
           role="listbox"
-          aria-label="GIF results"
+          aria-label={t("gif.results")}
           // Explicit row height, and it is load-bearing. A tile's width comes
           // from the column and its height would come from that width, so
           // automatic track sizing is circular: the browser gives up and sizes
