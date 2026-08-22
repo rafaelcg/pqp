@@ -62,4 +62,33 @@
     <changefreq>daily</changefreq>
     <priority>0.2</priority>
   </url>
+  <url>
+    <loc>https://pqp.gg/blog</loc>
+    <changefreq>weekly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://pqp.gg/blog/som-na-tela</loc>
+    <lastmod>2026-08-22</lastmod>
+    <changefreq>yearly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  <url>
+    <loc>https://pqp.gg/blog/beta-no-iphone</loc>
+    <lastmod>2026-08-21</lastmod>
+    <changefreq>yearly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  <url>
+    <loc>https://pqp.gg/blog/codigo-aberto-e-caca-bugs</loc>
+    <lastmod>2026-08-20</lastmod>
+    <changefreq>yearly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  <url>
+    <loc>https://pqp.gg/blog/comunidades-perfis-e-o-seu-arroba</loc>
+    <lastmod>2026-08-08</lastmod>
+    <changefreq>yearly</changefreq>
+    <priority>0.6</priority>
+  </url>
 </urlset>

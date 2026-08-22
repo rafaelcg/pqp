@@ -35,6 +35,22 @@ export const en = {
   "nav.signIn": "Sign in",
   "nav.signUp": "Start a community",
   "nav.openApp": "Open the app",
+  "nav.blog": "Release notes",
+
+  // ------------------------------------------------------------------- blog
+  // `blog.seo.*` is duplicated in `src/lib/blog-meta.ts` (the edge writes the
+  // head before this catalogue exists) and `blog-meta.test.ts` pins the pair,
+  // so the two cannot drift.
+  "blog.seo.title": "Release notes — pqp",
+  "blog.seo.description":
+    "What changed in pqp and when. Each note says what started working, what still does not, and why.",
+  "blog.hero.title": "Release notes",
+  "blog.hero.lede":
+    "What changed, on the day it changed. Written by the person who shipped it, including the parts that are not finished.",
+  "blog.back": "All release notes",
+  "blog.notFound.title": "There is no note at this address",
+  "blog.notFound.body":
+    "The link may be old, or the address may have a typo in it. The full list is one click away.",
 
   "landing.seo.title": "pqp — group chat you own",
   "landing.seo.description":
@@ -1019,6 +1035,30 @@ export const en = {
   "voice.share.fullscreen": "View fullscreen",
   "voice.share.exitFullscreen": "Exit fullscreen",
   "voice.share.waiting": "Connecting to presenter's screen…",
+  // Most shares carry no sound, and the presenter is the last person to find
+  // out: their own machine is playing the film, so the silence only exists on
+  // everyone else's side. Said once, quietly, right where they can act on it.
+  "voice.share.noAudio":
+    "Sharing without sound. To send the audio too, share a Chrome tab and tick the share-tab-audio box.",
+  /** The same fact, short enough for a status line that truncates. */
+  "voice.share.noAudioShort": "no sound",
+  // Shown on the press that opens the picker, because the tick box is inside
+  // that dialog and the dialog does not say what it is for.
+  // ------------------------------------------------------------ call rating
+  // Asked once after a call worth rating, never more than once every six
+  // hours. The two end labels carry the scale, because a bare 1-to-5 does not
+  // say which end is good.
+  "call.rating.ask": "How was that call?",
+  "call.rating.score": "Rate {score} out of 5",
+  "call.rating.low": "Unusable",
+  "call.rating.high": "Perfect",
+  "call.rating.notePlaceholder": "What went wrong? (optional)",
+  "call.rating.send": "Send",
+  "call.rating.dismiss": "Close",
+  "call.rating.thanks": "Thanks. That helps.",
+
+  "voice.share.tickAudio":
+    "Pick a Chrome tab and tick \u201cAlso share tab audio\u201d to send the sound too.",
   // A refused fullscreen used to be swallowed, which is how "I clicked it and
   // nothing happened" became a bug report nobody could act on. Quiet helper
   // text, not an alert — the call is still fine, only the frame did not grow.

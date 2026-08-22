@@ -45,6 +45,9 @@ interface VoicePeer {
   /** Sender-side camera MediaStream id, or null while the camera is off.
    *  See `voiceParticipantSchema.cameraStreamId` for why the id travels. */
   cameraStreamId: string | null;
+  /** Sender-side MediaStream id of the screen capture when it carries audio,
+   *  null otherwise. See `voiceParticipantSchema.screenAudioStreamId`. */
+  screenAudioStreamId: string | null;
   // --- voice state ---
   // Self-reported over `set-voice-state`, carried on every roster so the
   // channel list can badge occupants for people outside the call. Display
@@ -247,6 +250,7 @@ function toParticipant(peer: VoicePeer): VoiceParticipant {
     avatarUrl: peer.avatarUrl,
     sharingScreen: peer.sharingScreen,
     cameraStreamId: peer.cameraStreamId,
+    screenAudioStreamId: peer.screenAudioStreamId,
     muted: peer.muted,
     deafened: peer.deafened,
   };
@@ -645,6 +649,7 @@ export async function handleVoiceMessage(
       voiceChannelId: payload.voiceChannelId,
       sharingScreen: false,
       cameraStreamId: null,
+      screenAudioStreamId: null,
       // Not muted until the client says so: the client re-declares its state
       // right after `welcome` (including after a rejoin, where this reset
       // would otherwise erase a standing mute). See use of `set-voice-state`.
@@ -721,6 +726,11 @@ export async function handleVoiceMessage(
       }
     }
     peer.sharingScreen = payload.sharing;
+    // Only a live share can have audio; stopping clears the id in the same
+    // frame so no roster can advertise sound for a capture that is gone.
+    peer.screenAudioStreamId = payload.sharing
+      ? (payload.audioStreamId ?? null)
+      : null;
     await broadcastRoster(peer.voiceChannelId);
     return;
   }

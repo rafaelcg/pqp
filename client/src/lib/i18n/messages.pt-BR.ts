@@ -29,6 +29,18 @@ export const ptBR: PartialMessages = {
   "nav.signIn": "Entrar",
   "nav.signUp": "Criar uma comunidade",
   "nav.openApp": "Abrir o app",
+  "nav.blog": "Notas de versão",
+
+  "blog.seo.title": "Notas de versão — pqp",
+  "blog.seo.description":
+    "O que mudou no pqp e quando. Cada nota conta o que passou a funcionar, o que ainda não funciona e por quê.",
+  "blog.hero.title": "Notas de versão",
+  "blog.hero.lede":
+    "O que mudou, no dia em que mudou. Escrito por quem fez, incluindo as partes que ainda não estão prontas.",
+  "blog.back": "Todas as notas",
+  "blog.notFound.title": "Não tem nota nesse endereço",
+  "blog.notFound.body":
+    "O link pode ser antigo, ou o endereço pode ter um erro de digitação. A lista completa está a um clique.",
 
   "landing.seo.title": "pqp — o chat em grupo é seu",
   "landing.seo.description":
@@ -924,6 +936,20 @@ export const ptBR: PartialMessages = {
   "voice.share.fullscreen": "Tela cheia",
   "voice.share.exitFullscreen": "Sair da tela cheia",
   "voice.share.waiting": "Conectando na tela de quem está compartilhando…",
+  "voice.share.noAudio":
+    "Compartilhando sem som. Pra mandar o áudio junto, compartilha uma guia do Chrome e marca a caixinha de compartilhar áudio da guia.",
+  "voice.share.noAudioShort": "sem som",
+  "call.rating.ask": "Como foi essa call?",
+  "call.rating.score": "Dar nota {score} de 5",
+  "call.rating.low": "Não deu",
+  "call.rating.high": "Perfeita",
+  "call.rating.notePlaceholder": "O que deu errado? (opcional)",
+  "call.rating.send": "Enviar",
+  "call.rating.dismiss": "Fechar",
+  "call.rating.thanks": "Valeu. Isso ajuda.",
+
+  "voice.share.tickAudio":
+    "Escolhe uma guia do Chrome e marca \u201cTamb\u00e9m compartilhar \u00e1udio da guia\u201d pra mandar o som junto.",
   "voice.share.fullscreenBlocked": "O navegador não abriu a tela cheia.",
 
   "voice.screenShareUnsupported":

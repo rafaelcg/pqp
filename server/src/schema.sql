@@ -2362,6 +2362,38 @@ CREATE TABLE IF NOT EXISTS user_badges (
   PRIMARY KEY (user_id, badge)
 );
 
+-- ------------------------------------------------------ call ratings
+--
+-- One prompted score per call, asked once when a call ends. Distinct from
+-- `feedback` on purpose: feedback is volunteered, which selects for people
+-- already annoyed enough to open settings, while this is asked, and is the
+-- only signal here a quiet majority ever produces. Averaging the two together
+-- would make both meaningless.
+--
+-- What is NOT here is the point: no peer ids, no message content, no channel
+-- name, no address. A row is a score, the shape of the call it scored, and a
+-- time. `user_id` goes NULL rather than cascading away, because a rating from
+-- somebody who later deleted their account is still a true thing about how the
+-- product performed that day.
+CREATE TABLE IF NOT EXISTS call_ratings (
+  id BIGSERIAL PRIMARY KEY,
+  user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  channel_id UUID REFERENCES channels(id) ON DELETE SET NULL,
+  rating SMALLINT NOT NULL CHECK (rating BETWEEN 1 AND 5),
+  -- Only ever written on a low score, where the number does not say what broke.
+  note TEXT,
+  duration_seconds INTEGER NOT NULL CHECK (duration_seconds >= 0),
+  peer_count SMALLINT NOT NULL CHECK (peer_count >= 0),
+  transport TEXT NOT NULL CHECK (transport IN ('mesh', 'livekit')),
+  had_screen_share BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- The dashboard reads "everything since <time>", grouped. Nothing reads a
+-- single row by id, so the index follows the only query that exists.
+CREATE INDEX IF NOT EXISTS idx_call_ratings_created_at
+  ON call_ratings (created_at DESC);
+
 -- ------------------------------------------------------ acquisition
 --
 -- Where an account came from, as the landing page saw it: the `utm_source`,

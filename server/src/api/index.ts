@@ -48,6 +48,7 @@ import {
   createReportSchema,
   FEEDBACK_PAGE_MAX,
   FEEDBACK_PAGE_SIZE,
+  createCallRatingSchema,
   feedbackStatusSchema,
   resolveFeedbackSchema,
   createThreadSchema,
@@ -291,6 +292,7 @@ import {
   listFeedback,
   resolveFeedback,
 } from "../services/feedback.js";
+import { recordCallRating } from "../services/call-ratings.js";
 import {
   acquisitionReport,
   recordAcquisition,
@@ -462,6 +464,16 @@ const reportLimiter = createRateLimiter({ capacity: 5, refillPerSecond: 0.05 });
 const feedbackLimiter = createRateLimiter({
   capacity: 5,
   refillPerSecond: 0.05,
+});
+/**
+ * Post-call ratings. Roomier than feedback because this one is *asked for*:
+ * somebody who genuinely has ten short calls in an evening should be able to
+ * answer every prompt, and the client already refuses to ask more than once
+ * per call. Tight enough that a script cannot flood the average.
+ */
+const callRatingLimiter = createRateLimiter({
+  capacity: 10,
+  refillPerSecond: 0.1,
 });
 /**
  * The one public, unauthenticated read that answers with a person — see
@@ -3824,6 +3836,30 @@ router.patch("/api/reports/:report", async ({ req, user }, { report }) => {
   }
 
   return { report: resolved };
+});
+
+// ----------------------------------------------------------- call ratings
+
+/**
+ * How the last call went, one number, asked once when it ends.
+ *
+ * Write-only for everybody: there is no route to read an individual rating,
+ * and the operator sees only the aggregate that rides along on
+ * `GET /api/admin/metrics`. That is the whole privacy design, so resist adding
+ * a `GET /api/voice/ratings/:id` later.
+ */
+router.post("/api/voice/ratings", async ({ req, res, user }) => {
+  const key = `user:${user.id}`;
+  if (!callRatingLimiter.take(key)) {
+    res.setHeader("Retry-After", String(callRatingLimiter.retryAfter(key)));
+    throw new HttpError(429, "Slow down");
+  }
+  const body = createCallRatingSchema.parse(await readJsonBody(req));
+  await recordCallRating(user.id, body);
+  // Nothing meaningful to hand back. The client has already dismissed the
+  // prompt by the time this resolves, and returning the row would only invite
+  // somebody to build a reader for it later.
+  return { ok: true };
 });
 
 // --------------------------------------------------------------- feedback

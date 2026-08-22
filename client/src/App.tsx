@@ -83,6 +83,8 @@ import {
 import { usePushToTalk } from "@/components/voice/use-push-to-talk";
 import { useVoiceStateSync } from "@/components/voice/voice-state-sync";
 import { VoiceStatusBar } from "@/components/voice/voice-status-bar";
+import { CallRatingPrompt } from "@/components/voice/call-rating-prompt";
+import { useCallRating } from "@/hooks/use-call-rating";
 import { BetaTag } from "@/components/ui/beta-tag";
 import { Dialog } from "@/components/ui/dialog";
 import { PromptDialog } from "@/components/ui/prompt-dialog";
@@ -530,6 +532,12 @@ function MainAppContent({
   // for everyone else. Lives outside the voice controller: it is display
   // state, and dropping every frame of it would change nothing about the call.
   useVoiceStateSync(transport, voiceState);
+
+  // "How was that call?" — armed while a call runs, fires once when one ends
+  // that was long enough and had somebody else in it. See use-call-rating.ts
+  // for the three gates and why the cooldown is written on show, not on answer.
+  const { pending: ratableCall, dismiss: dismissCallRating } =
+    useCallRating(voiceState);
   /**
    * channelId → the transport its voice room runs on, read off `voice-roster`
    * frames as they pass by. The members panel needs it to offer the SFU-only
@@ -2995,6 +3003,7 @@ function MainAppContent({
         isDeafened={voiceState.isDeafened}
         outputDeviceId={localSettings.outputDeviceId}
         outputVolume={localSettings.outputVolume}
+        screenSharePeerId={voiceState.screenSharePeerId}
       />
 
       {/* At the root and over everything, because the directory is a mode
@@ -3346,6 +3355,7 @@ function MainAppContent({
                 // The room's roster — mute/deafen badges for the other tiles.
                 participants={voiceState.occupancy[selectedChannel.id] ?? []}
                 isSharingScreen={voiceState.isSharingScreen}
+                isSharingScreenAudio={voiceState.isSharingScreenAudio}
                 screenSharePeerId={
                   voiceState.voiceChannelId === selectedChannel.id
                     ? voiceState.screenSharePeerId
@@ -3659,6 +3669,16 @@ function MainAppContent({
           handleChannelPromptConfirm(name, isPrivate)
         }
       />
+
+      {ratableCall && (
+        // Bottom-left, clear of the channel dialogs and of the voice panel the
+        // person has just left. Fixed rather than in flow so it cannot push the
+        // chat around at the exact moment somebody is scrolling back through
+        // what they missed.
+        <div className="fixed bottom-4 left-4 z-40 w-[19rem] max-w-[calc(100vw-2rem)]">
+          <CallRatingPrompt call={ratableCall} onDone={dismissCallRating} />
+        </div>
+      )}
 
       <ChannelMetaDialog
         open={channelMetaChannel !== null}
