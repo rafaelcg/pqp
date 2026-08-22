@@ -172,6 +172,23 @@ export const userPreferencesSchema = z.object({
    */
   onboardedAt: z.string().optional(),
   /**
+   * When this account was dropped into the instance's default community, as an
+   * ISO instant. Written once, and its only job is to make sure that never
+   * happens twice.
+   *
+   * A PREFERENCE AND NOT A MEMBERSHIP CHECK. "Is this person already in the
+   * default community" is the wrong question, because the answer changes the
+   * moment they leave it, and re-adding somebody to a room they walked out of
+   * is the single most obnoxious thing an auto-join can do. "Have we ever put
+   * them there" does not change, so that is what is recorded.
+   *
+   * Absent means "never placed", which reads correctly for a brand new account
+   * and for every account that predates the feature. Nobody who already has
+   * communities gets swept in, because the placement only runs for an account
+   * with no memberships at all.
+   */
+  defaultCommunityJoinedAt: z.string().optional(),
+  /**
    * When the first-run checklist in the hub was put away, as an ISO instant.
    *
    * Separate from `onboardedAt` because they answer different questions.

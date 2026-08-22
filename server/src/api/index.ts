@@ -293,6 +293,7 @@ import {
   resolveFeedback,
 } from "../services/feedback.js";
 import { recordCallRating } from "../services/call-ratings.js";
+import { placeInDefaultCommunity } from "../services/default-community.js";
 import {
   acquisitionReport,
   recordAcquisition,
@@ -1688,9 +1689,26 @@ router.get(
 
 // ---------------------------------------------------------------- servers
 
-router.get("/api/servers", async ({ user }) =>
-  etagged({ servers: (await listServersForUser(user.id)).map(mapServer) }),
-);
+/**
+ * The account's communities.
+ *
+ * Also the one place the default-community placement runs, and this is the
+ * right hook rather than the bootstrap: it is the first authenticated call the
+ * client makes that is *about* memberships, it runs before anything renders a
+ * list, and a person who is placed here sees the community in the very response
+ * that triggered the placement rather than after a refresh.
+ *
+ * Deliberately awaited, and deliberately incapable of failing the request. The
+ * service answers with a reason rather than throwing, and every one of those
+ * reasons ends in "carry on and serve the list", including the common case
+ * where the feature is switched off entirely.
+ */
+router.get("/api/servers", async ({ user }) => {
+  await placeInDefaultCommunity(user.id).catch(() => {
+    // A placement that fell over is not worth the sign-in it would cost.
+  });
+  return etagged({ servers: (await listServersForUser(user.id)).map(mapServer) });
+});
 
 router.post("/api/servers", async ({ req, user }) => {
   // A CHARACTER IS A MEMBER, NEVER A LANDLORD. The communities the product
