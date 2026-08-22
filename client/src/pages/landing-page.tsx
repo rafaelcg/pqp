@@ -1,19 +1,25 @@
 import {
-  SignInButton,
-  SignUpButton,
-  SignedIn,
-  SignedOut,
-} from "@clerk/clerk-react";
-import { ArrowUpRight } from "lucide-react";
+  DoorOpen,
+  KeyRound,
+  LayoutGrid,
+  Link2,
+  MessageSquare,
+  MessagesSquare,
+  Mic,
+  MonitorUp,
+  Search,
+  ShieldCheck,
+  type LucideIcon,
+} from "lucide-react";
 import { type CSSProperties, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { HeroDownload } from "@/components/marketing/hero-download";
+import { MarketingAuthCtas } from "@/components/marketing/marketing-auth-ctas";
 import { MarketingFooter } from "@/components/marketing/marketing-footer";
 import { MarketingNav } from "@/components/marketing/marketing-nav";
 import { Seo } from "@/components/marketing/seo";
-import { Button } from "@/components/ui/button";
 import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
-import { isDevAuthBypassEnabled } from "@/lib/dev-auth";
+import { SOURCE_REPO_URL } from "@/lib/downloads";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
@@ -21,13 +27,21 @@ function stagger(i: number): CSSProperties {
   return { "--stagger": i } as CSSProperties;
 }
 
-const TRUST_ITEMS: MessageKey[] = [
-  "landing.trust.openSource",
-  "landing.trust.selfHostable",
-  "landing.trust.meshVoice",
-  "landing.trust.inviteCodes",
-  "landing.trust.yourKeys",
-];
+const TRUST_ITEMS = [
+  {
+    key: "landing.trust.openSource",
+    href: SOURCE_REPO_URL,
+    external: true,
+  },
+  { key: "landing.trust.selfHostable", href: "/#hosting" },
+  { key: "landing.trust.meshVoice", href: "/#features" },
+  { key: "landing.trust.inviteCodes", href: "/#features" },
+  { key: "landing.trust.yourKeys", href: "/#hosting" },
+] satisfies {
+  key: MessageKey;
+  href: string;
+  external?: boolean;
+}[];
 
 const HOW_STEPS = [
   {
@@ -54,30 +68,47 @@ const HOW_STEPS = [
  * if a row stops being true, delete the row rather than softening the wording.
  */
 const FEATURES = [
-  { title: "landing.features.voice.title", body: "landing.features.voice.body" },
   {
+    icon: Mic,
+    title: "landing.features.voice.title",
+    body: "landing.features.voice.body",
+  },
+  {
+    icon: MonitorUp,
     title: "landing.features.screen.title",
     body: "landing.features.screen.body",
   },
-  { title: "landing.features.chat.title", body: "landing.features.chat.body" },
   {
+    icon: MessageSquare,
+    title: "landing.features.chat.title",
+    body: "landing.features.chat.body",
+  },
+  {
+    icon: Search,
     title: "landing.features.search.title",
     body: "landing.features.search.body",
   },
-  { title: "landing.features.dms.title", body: "landing.features.dms.body" },
   {
+    icon: MessagesSquare,
+    title: "landing.features.dms.title",
+    body: "landing.features.dms.body",
+  },
+  {
+    icon: LayoutGrid,
     title: "landing.features.structure.title",
     body: "landing.features.structure.body",
   },
   {
+    icon: Link2,
     title: "landing.features.invites.title",
     body: "landing.features.invites.body",
   },
   {
+    icon: ShieldCheck,
     title: "landing.features.moderation.title",
     body: "landing.features.moderation.body",
   },
-] satisfies { title: MessageKey; body: MessageKey }[];
+] satisfies { icon: LucideIcon; title: MessageKey; body: MessageKey }[];
 
 /**
  * The three things a community is, sold on the open web.
@@ -90,45 +121,30 @@ const FEATURES = [
  */
 const COMMUNITY_POINTS = [
   {
-    emoji: "🚪",
+    icon: DoorOpen,
     title: "landing.communities.point1.title",
     body: "landing.communities.point1.body",
   },
   {
-    emoji: "🎧",
+    icon: LayoutGrid,
     title: "landing.communities.point2.title",
     body: "landing.communities.point2.body",
   },
   {
-    emoji: "🔑",
+    icon: KeyRound,
     title: "landing.communities.point3.title",
     body: "landing.communities.point3.body",
   },
-] satisfies { emoji: string; title: MessageKey; body: MessageKey }[];
-
-/**
- * The closing call to action. The arrow is drawn here rather than typed into
- * the catalogue: it is decoration, so a translator never has to carry it and a
- * screen reader announces "Vai pra pqp" instead of "right arrow".
- */
-function CtaAction({ label }: { label: string }) {
-  return (
-    <>
-      {label}
-      <span aria-hidden className="ml-2">
-        →
-      </span>
-    </>
-  );
-}
+] satisfies { icon: LucideIcon; title: MessageKey; body: MessageKey }[];
 
 export function LandingPage() {
   const { t, locale } = useTranslation();
-  const bypass = isDevAuthBypassEnabled();
   const reducedMotion = usePrefersReducedMotion();
   // The still is what paints first and what stays put if the clip never runs —
   // a blocked autoplay (iOS Low Power Mode) simply leaves this false.
   const [heroPlaying, setHeroPlaying] = useState(false);
+  const [overHero, setOverHero] = useState(true);
+  const heroRef = useRef<HTMLElement>(null);
   const heroVideo = useRef<HTMLVideoElement>(null);
 
   // `autoplay` alone is not enough: a tab that mounts in the background leaves
@@ -149,6 +165,17 @@ export function LandingPage() {
     return () => document.removeEventListener("visibilitychange", start);
   }, [reducedMotion]);
 
+  useEffect(() => {
+    const el = heroRef.current;
+    if (!el) return;
+    const io = new IntersectionObserver(
+      ([entry]) => setOverHero(entry.isIntersecting),
+      { rootMargin: "-64px 0px 0px 0px", threshold: 0 },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
+
   return (
     <div className="min-h-full bg-ink text-paper">
       <Seo
@@ -157,7 +184,14 @@ export function LandingPage() {
         path="/"
       />
 
-      <section className="relative flex min-h-[100svh] flex-col overflow-hidden">
+      <div className="sticky top-0 z-30">
+        <MarketingNav variant={overHero ? "hero" : "solid"} />
+      </div>
+
+      <section
+        ref={heroRef}
+        className="relative -mt-16 flex min-h-[100svh] flex-col overflow-hidden"
+      >
         <div className="hero-parallax absolute inset-0" aria-hidden>
           <img
             src="/images/hero-background.jpg"
@@ -193,9 +227,7 @@ export function LandingPage() {
         />
         <div className="hero-grain pointer-events-none absolute inset-0" aria-hidden />
 
-        <MarketingNav variant="hero" />
-
-        <div className="relative z-10 flex flex-1 flex-col items-center justify-center px-5 pb-28 pt-8 text-center sm:px-8">
+        <div className="relative z-10 flex flex-1 flex-col items-center justify-center px-5 pb-28 pt-24 text-center sm:px-8">
           <p
             className="animate-rise font-brand text-6xl font-normal tracking-tight text-white drop-shadow-sm sm:text-7xl md:text-8xl"
             style={stagger(0)}
@@ -215,85 +247,43 @@ export function LandingPage() {
             {t("landing.hero.body")}
           </p>
 
-          <div
-            className="animate-rise mt-8 flex items-center gap-3"
-            style={stagger(3)}
-          >
-            {bypass ? (
-              <>
-                <Button
-                  asChild
-                  className="cta-lift h-11 rounded-full bg-white px-6 text-base font-semibold text-ink shadow-lg shadow-black/25 hover:bg-white/90"
-                >
-                  <Link to="/app">{t("nav.openApp")}</Link>
-                </Button>
-                <Link
-                  to="/app"
-                  className="cta-lift flex h-11 w-11 items-center justify-center rounded-full bg-white/15 text-white ring-1 ring-white/40 backdrop-blur-sm hover:bg-white/25"
-                  aria-label={t("nav.openApp")}
-                >
-                  <ArrowUpRight className="h-5 w-5" />
-                </Link>
-              </>
-            ) : (
-              <>
-                <SignedOut>
-                  <SignUpButton mode="modal" forceRedirectUrl="/app">
-                    <Button className="cta-lift h-11 rounded-full bg-white px-6 text-base font-semibold text-ink shadow-lg shadow-black/25 hover:bg-white/90">
-                      {t("nav.signUp")}
-                    </Button>
-                  </SignUpButton>
-                  <SignInButton mode="modal" forceRedirectUrl="/app">
-                    <button
-                      type="button"
-                      className="cta-lift flex h-11 w-11 items-center justify-center rounded-full bg-white/15 text-white ring-1 ring-white/40 backdrop-blur-sm hover:bg-white/25"
-                      aria-label={t("nav.signIn")}
-                    >
-                      <ArrowUpRight className="h-5 w-5" />
-                    </button>
-                  </SignInButton>
-                </SignedOut>
-                <SignedIn>
-                  <Button
-                    asChild
-                    className="cta-lift h-11 rounded-full bg-white px-6 text-base font-semibold text-ink shadow-lg shadow-black/25 hover:bg-white/90"
-                  >
-                    <Link to="/app">{t("nav.openApp")}</Link>
-                  </Button>
-                  <Link
-                    to="/app"
-                    className="cta-lift flex h-11 w-11 items-center justify-center rounded-full bg-white/15 text-white ring-1 ring-white/40 backdrop-blur-sm hover:bg-white/25"
-                    aria-label={t("nav.openApp")}
-                  >
-                    <ArrowUpRight className="h-5 w-5" />
-                  </Link>
-                </SignedIn>
-              </>
-            )}
+          <div className="animate-rise mt-8" style={stagger(3)}>
+            <MarketingAuthCtas appearance="hero" />
           </div>
+
+          <p
+            className="animate-rise mt-4 max-w-md text-sm text-white/65"
+            style={stagger(4)}
+          >
+            {t("landing.hero.hint")}
+          </p>
 
           {/* Under the buttons, not beside them. See `HeroDownload` for why
               this is a link rather than a second pill. */}
-          <HeroDownload className="animate-rise mt-6" style={stagger(4)} />
+          <HeroDownload className="animate-rise mt-5" style={stagger(5)} />
         </div>
 
         <div className="absolute inset-x-0 bottom-0 z-10 border-t border-white/10 bg-black/25 px-5 py-4 backdrop-blur-sm sm:px-8">
           <ul className="mx-auto flex max-w-4xl flex-wrap items-center justify-center gap-x-8 gap-y-2">
-            {TRUST_ITEMS.map((key, i) => (
-              <li
-                key={key}
-                className="animate-rise text-[11px] font-medium uppercase tracking-[0.22em] text-white/70"
-                style={stagger(5 + i)}
-                // "Self-host" is left in English in Portuguese because that is
-                // the word the audience uses. Saying so in the markup keeps a
-                // screen reader from pronouncing it with Portuguese phonetics.
-                lang={
-                  key === "landing.trust.selfHostable" && locale !== "en"
-                    ? "en"
-                    : undefined
-                }
-              >
-                {t(key)}
+            {TRUST_ITEMS.map((item, i) => (
+              <li key={item.key} className="animate-rise" style={stagger(5 + i)}>
+                <a
+                  href={item.href}
+                  {...(item.external
+                    ? { target: "_blank", rel: "noopener" }
+                    : {})}
+                  className="text-[11px] font-medium uppercase tracking-[0.22em] text-white/70 underline decoration-transparent underline-offset-4 transition-colors duration-150 hover:text-white hover:decoration-white/70"
+                  // "Self-host" is left in English in Portuguese because that is
+                  // the word the audience uses. Saying so in the markup keeps a
+                  // screen reader from pronouncing it with Portuguese phonetics.
+                  lang={
+                    item.key === "landing.trust.selfHostable" && locale !== "en"
+                      ? "en"
+                      : undefined
+                  }
+                >
+                  {t(item.key)}
+                </a>
               </li>
             ))}
           </ul>
@@ -313,7 +303,7 @@ export function LandingPage() {
 
       <section
         id="how"
-        className="scroll-mt-8 border-b border-ink-4/40 px-5 py-20 sm:px-8 sm:py-24"
+        className="scroll-mt-20 border-b border-ink-4/40 px-5 py-20 sm:px-8 sm:py-24"
       >
         <div className="mx-auto max-w-4xl">
           <div className="mx-auto max-w-xl text-center">
@@ -344,7 +334,7 @@ export function LandingPage() {
           reads as the one different thing on a page of equal sections. */}
       <section
         id="communities"
-        className="scroll-mt-8 border-b border-ink-4/40 bg-signal/[0.04] px-5 py-20 sm:px-8 sm:py-24"
+        className="scroll-mt-20 border-b border-ink-4/40 bg-signal/[0.04] px-5 py-20 sm:px-8 sm:py-24"
       >
         <div className="mx-auto max-w-4xl">
           <div className="mx-auto max-w-xl text-center">
@@ -361,9 +351,10 @@ export function LandingPage() {
           <ul className="mt-14 grid gap-10 sm:grid-cols-3 sm:gap-8">
             {COMMUNITY_POINTS.map((item) => (
               <li key={item.title} className="text-left sm:text-center">
-                <span aria-hidden className="text-2xl">
-                  {item.emoji}
-                </span>
+                <item.icon
+                  aria-hidden
+                  className="h-6 w-6 text-signal sm:mx-auto"
+                />
                 <h3 className="mt-2 font-display text-lg font-bold">
                   {t(item.title)}
                 </h3>
@@ -372,33 +363,17 @@ export function LandingPage() {
             ))}
           </ul>
           <div className="mt-12 flex justify-center">
-            {bypass ? (
-              <Button asChild className="cta-lift h-11 px-6 text-base">
-                <Link to="/app">{t("landing.communities.action")}</Link>
-              </Button>
-            ) : (
-              <>
-                <SignedOut>
-                  <SignUpButton mode="modal" forceRedirectUrl="/app">
-                    <Button className="cta-lift h-11 px-6 text-base">
-                      {t("landing.communities.action")}
-                    </Button>
-                  </SignUpButton>
-                </SignedOut>
-                <SignedIn>
-                  <Button asChild className="cta-lift h-11 px-6 text-base">
-                    <Link to="/app">{t("landing.communities.action")}</Link>
-                  </Button>
-                </SignedIn>
-              </>
-            )}
+            <MarketingAuthCtas
+              primaryKey="landing.communities.action"
+              showSignIn={false}
+            />
           </div>
         </div>
       </section>
 
       <section
         id="features"
-        className="scroll-mt-8 border-b border-ink-4/40 px-5 py-20 sm:px-8 sm:py-24"
+        className="scroll-mt-20 border-b border-ink-4/40 px-5 py-20 sm:px-8 sm:py-24"
       >
         <div className="mx-auto max-w-4xl">
           <div className="mx-auto max-w-xl text-center">
@@ -412,7 +387,8 @@ export function LandingPage() {
           <ul className="mt-14 grid gap-x-8 gap-y-10 sm:grid-cols-2 lg:grid-cols-3">
             {FEATURES.map((item) => (
               <li key={item.title}>
-                <h3 className="font-display text-lg font-bold">
+                <item.icon aria-hidden className="h-5 w-5 text-signal" />
+                <h3 className="mt-2 font-display text-lg font-bold">
                   {t(item.title)}
                 </h3>
                 <p className="mt-2 text-sm text-paper-muted">{t(item.body)}</p>
@@ -424,7 +400,7 @@ export function LandingPage() {
 
       <section
         id="hosting"
-        className="scroll-mt-8 border-b border-ink-4/40 px-5 py-20 sm:px-8 sm:py-24"
+        className="scroll-mt-20 border-b border-ink-4/40 px-5 py-20 sm:px-8 sm:py-24"
       >
         <div className="mx-auto max-w-4xl">
           <div className="mx-auto max-w-xl text-center">
@@ -434,7 +410,7 @@ export function LandingPage() {
             <p className="mt-3 text-paper-muted">{t("landing.hosting.body")}</p>
           </div>
           <div className="mt-14 grid gap-8 sm:grid-cols-2">
-            <div>
+            <div className="rounded-xl border border-ink-4/60 p-6 transition-colors duration-200 hover:border-signal/40">
               <h3
                 className="font-display text-xl font-bold"
                 lang={locale === "en" ? undefined : "en"}
@@ -444,14 +420,29 @@ export function LandingPage() {
               <p className="mt-3 text-paper-muted">
                 {t("landing.hosting.selfHost.body")}
               </p>
+              <a
+                href={SOURCE_REPO_URL}
+                target="_blank"
+                rel="noopener"
+                className="mt-5 inline-flex text-sm font-medium text-signal transition-colors duration-150 hover:underline"
+              >
+                {t("landing.hosting.selfHost.action")}
+              </a>
             </div>
-            <div>
+            <div className="rounded-xl border border-ink-4/60 p-6 transition-colors duration-200 hover:border-signal/40">
               <h3 className="font-display text-xl font-bold">
                 {t("landing.hosting.hosted.title")}
               </h3>
               <p className="mt-3 text-paper-muted">
                 {t("landing.hosting.hosted.body")}
               </p>
+              <div className="mt-5">
+                <MarketingAuthCtas
+                  primaryKey="landing.hosting.hosted.action"
+                  showSignIn={false}
+                  className="justify-start"
+                />
+              </div>
             </div>
           </div>
         </div>
@@ -464,44 +455,18 @@ export function LandingPage() {
         <p className="mx-auto mt-3 max-w-md text-paper-muted">
           {t("landing.cta.body")}
         </p>
-        <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
-          {bypass ? (
-            <Button asChild className="cta-lift h-11 px-6 text-base">
-              <Link to="/app">
-                <CtaAction label={t("landing.cta.action")} />
-              </Link>
-            </Button>
-          ) : (
-            <>
-              <SignedOut>
-                <SignUpButton mode="modal" forceRedirectUrl="/app">
-                  <Button className="cta-lift h-11 px-6 text-base">
-                    <CtaAction label={t("landing.cta.action")} />
-                  </Button>
-                </SignUpButton>
-                <SignInButton mode="modal" forceRedirectUrl="/app">
-                  <Button variant="secondary" className="cta-lift h-11 px-6 text-base">
-                    {t("nav.signIn")}
-                  </Button>
-                </SignInButton>
-              </SignedOut>
-              <SignedIn>
-                <Button asChild className="cta-lift h-11 px-6 text-base">
-                  <Link to="/app">
-                    <CtaAction label={t("landing.cta.action")} />
-                  </Link>
-                </Button>
-              </SignedIn>
-            </>
-          )}
-        </div>
+        <MarketingAuthCtas
+          primaryKey="landing.cta.action"
+          decoratePrimary
+          className="mt-8"
+        />
         {/* iOS beta is not just a mobile-visitor affordance (HeroDownload
             handles that); it gets a standing mention here so a desktop visitor
             can send the /beta link to a friend on iPhone. */}
         <p className="mt-6 text-sm text-paper-muted">
           <Link
             to="/beta"
-            className="underline decoration-paper-muted/40 underline-offset-4 hover:text-paper hover:decoration-paper/60"
+            className="underline decoration-paper-muted/40 underline-offset-4 transition-colors duration-150 hover:text-paper hover:decoration-paper/60"
           >
             {t("landing.cta.beta")}
           </Link>

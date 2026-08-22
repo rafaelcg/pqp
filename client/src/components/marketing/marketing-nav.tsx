@@ -1,13 +1,6 @@
-import {
-  SignInButton,
-  SignUpButton,
-  SignedIn,
-  SignedOut,
-} from "@clerk/clerk-react";
 import { Link } from "react-router-dom";
+import { MarketingAuthCtas } from "@/components/marketing/marketing-auth-ctas";
 import { BetaTag } from "@/components/ui/beta-tag";
-import { Button } from "@/components/ui/button";
-import { isDevAuthBypassEnabled } from "@/lib/dev-auth";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
@@ -18,19 +11,24 @@ interface MarketingNavProps {
 export function MarketingNav({ variant = "solid" }: MarketingNavProps) {
   const { t, locale } = useTranslation();
   const isHero = variant === "hero";
-  const bypass = isDevAuthBypassEnabled();
+  const linkClass = cn(
+    "text-xs font-medium uppercase tracking-[0.18em] transition-colors duration-150",
+    isHero ? "text-white/70 hover:text-white" : "text-paper-muted hover:text-paper",
+  );
 
   return (
     <header
       className={cn(
-        "relative z-20 flex items-center justify-between px-5 py-4 sm:px-8",
-        !isHero && "border-b border-ink-4/50 bg-ink/80 backdrop-blur-md",
+        "relative z-20 flex h-16 items-center justify-between border-b px-5 sm:px-8 transition-[background-color,border-color] duration-200 ease-out",
+        isHero
+          ? "border-transparent bg-transparent"
+          : "border-ink-4/50 bg-ink/80 backdrop-blur-md",
       )}
     >
       <Link
         to="/"
         className={cn(
-          "flex items-center gap-2 font-brand text-xl tracking-tight",
+          "flex items-center gap-2 font-brand text-xl tracking-tight transition-colors duration-200",
           isHero ? "text-white" : "text-paper",
         )}
       >
@@ -39,21 +37,15 @@ export function MarketingNav({ variant = "solid" }: MarketingNavProps) {
       </Link>
 
       <nav className="hidden items-center gap-8 md:flex">
-        <a
-          href="/#how"
-          className={cn(
-            "text-xs font-medium uppercase tracking-[0.18em] transition-opacity hover:opacity-100",
-            isHero ? "text-white/70 opacity-90" : "text-paper-muted hover:text-paper",
-          )}
-        >
+        <a href="/#how" className={linkClass}>
           {t("nav.howItWorks")}
+        </a>
+        <a href="/#communities" className={linkClass}>
+          {t("nav.communities")}
         </a>
         <a
           href="/#hosting"
-          className={cn(
-            "text-xs font-medium uppercase tracking-[0.18em] transition-opacity hover:opacity-100",
-            isHero ? "text-white/70 opacity-90" : "text-paper-muted hover:text-paper",
-          )}
+          className={linkClass}
           // Deliberately still English in Portuguese — see the catalogue.
           lang={locale === "en" ? undefined : "en"}
         >
@@ -61,59 +53,7 @@ export function MarketingNav({ variant = "solid" }: MarketingNavProps) {
         </a>
       </nav>
 
-      <div className="flex items-center gap-2">
-        {bypass ? (
-          <Button
-            asChild
-            className={cn(
-              "cta-lift",
-              isHero && "bg-white text-ink hover:bg-white/90 shadow-lg shadow-black/20",
-            )}
-          >
-            <Link to="/app">{t("nav.openApp")}</Link>
-          </Button>
-        ) : (
-          <>
-            <SignedOut>
-              <SignInButton mode="modal" forceRedirectUrl="/app">
-                <button
-                  type="button"
-                  className={cn(
-                    "hidden px-3 py-1.5 text-sm font-medium sm:inline",
-                    isHero
-                      ? "text-white/85 hover:text-white"
-                      : "text-paper-muted hover:text-paper",
-                  )}
-                >
-                  {t("nav.signIn")}
-                </button>
-              </SignInButton>
-              <SignUpButton mode="modal" forceRedirectUrl="/app">
-                <Button
-                  className={cn(
-                    "cta-lift",
-                    isHero &&
-                      "bg-white text-ink hover:bg-white/90 shadow-lg shadow-black/20",
-                  )}
-                >
-                  {t("nav.signUp")}
-                </Button>
-              </SignUpButton>
-            </SignedOut>
-            <SignedIn>
-              <Button
-                asChild
-                className={cn(
-                  "cta-lift",
-                  isHero && "bg-white text-ink hover:bg-white/90",
-                )}
-              >
-                <Link to="/app">{t("nav.openApp")}</Link>
-              </Button>
-            </SignedIn>
-          </>
-        )}
-      </div>
+      <MarketingAuthCtas appearance={isHero ? "nav-hero" : "nav-solid"} />
     </header>
   );
 }
