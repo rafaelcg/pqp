@@ -148,7 +148,9 @@ function useStageFullscreen(
   hasPrimaryVideo: boolean,
 ) {
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [mode, setMode] = useState<FullscreenMode>("none");
+  // `expand` needs no platform support, so it is the safe starting point and
+  // the detector only ever upgrades it.
+  const [mode, setMode] = useState<FullscreenMode>("expand");
 
   useEffect(() => {
     const doc = fullscreenDocument();
@@ -162,11 +164,8 @@ function useStageFullscreen(
         webkitRequestFullscreen: (
           containerRef.current as WebkitFullscreenElement | null
         )?.webkitRequestFullscreen,
-        webkitEnterFullscreen: videoRef.current?.webkitEnterFullscreen,
       }),
     );
-    // Re-probed when the primary video element appears: the iOS path needs the
-    // <video> itself, which does not exist while the call is audio-only.
   }, [containerRef, videoRef, hasPrimaryVideo]);
 
   useEffect(() => {
@@ -217,26 +216,15 @@ function useStageFullscreen(
       });
       return;
     }
-    if (mode === "video") {
-      const video = videoRef.current;
-      if (!video) {
-        return;
-      }
-      try {
-        if (video.webkitDisplayingFullscreen) {
-          video.webkitExitFullscreen?.();
-        } else {
-          video.webkitEnterFullscreen?.();
-        }
-      } catch (err) {
-        console.warn("[call] video fullscreen refused", err);
-      }
-    }
-  }, [mode, containerRef, videoRef]);
+    // `expand`: grow the stage inside the page. Replaces handing the <video>
+    // to the OS media player, which cannot render a MediaStream and left an
+    // iPhone showing a black rectangle with the audio still playing.
+    setIsFullscreen((was) => !was);
+  }, [mode, containerRef]);
 
-  // The iOS mode can only fullscreen an actual <video>; without one the button
-  // would silently no-op, which is worse than no button.
-  const available = mode === "element" || (mode === "video" && hasPrimaryVideo);
+  // Nothing to gate on any more: expanding needs no platform support, and
+  // there is always a stage to expand even when the call is audio-only.
+  const available = true;
   return { isFullscreen, mode, available, toggle };
 }
 
@@ -592,8 +580,14 @@ function ActiveCall({
       data-testid="call-stage"
       className={cn(
         "relative shrink-0 overflow-hidden border-b border-ink-4/60 bg-ink",
-        fullscreen.isFullscreen && fullscreen.mode === "element"
-          ? "h-full max-h-none"
+        fullscreen.isFullscreen
+          ? fullscreen.mode === "element"
+            ? "h-full max-h-none"
+            : // In-page fullscreen. `fixed inset-0` rather than a viewport
+              // height unit because on an iPhone those overshoot the visible
+              // area and hide the exit control under Safari's toolbar, which
+              // is how somebody gets stuck in a fullscreen they cannot leave.
+              "fixed inset-0 z-50 h-auto max-h-none"
           : anyVideo
             ? "h-[68svh] min-h-[280px]"
             : "h-[38svh] max-h-[420px] min-h-[220px]",

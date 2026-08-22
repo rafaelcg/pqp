@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useTranslation } from "@/lib/i18n";
 import {
   registerServiceWorker,
   type ServiceWorkerControls,
@@ -13,8 +14,16 @@ import {
  * unsent composer drafts, and possibly an active call; swapping the bundle out
  * from under any of those is a worse outcome than running yesterday's build for
  * another minute. So it asks, and it can be dismissed.
+ *
+ * WHICH MAKES THIS THE MOST IMPORTANT FOUR WORDS IN THE PRODUCT after a
+ * deploy: nothing shipped today reaches anybody already sitting in the app
+ * until they act on this. It shipped in hardcoded English on a product whose
+ * users are Brazilian, so most of them were being asked to do something in a
+ * language they did not choose. Every string here now goes through the
+ * catalogue like everything else.
  */
 export function UpdatePrompt() {
+  const { t } = useTranslation();
   const [needsRefresh, setNeedsRefresh] = useState(false);
   const [dismissed, setDismissed] = useState(false);
   const [updating, setUpdating] = useState(false);
@@ -38,7 +47,7 @@ export function UpdatePrompt() {
     >
       <RefreshCw className="h-4 w-4 shrink-0 text-signal" aria-hidden="true" />
       <p className="min-w-0 flex-1 text-sm text-paper">
-        A new version of pqp is ready.
+        {t("update.ready")}
       </p>
       <Button
         size="sm"
@@ -49,15 +58,15 @@ export function UpdatePrompt() {
           void controlsRef.current?.update();
         }}
       >
-        {updating ? "Updating…" : "Reload"}
+        {updating ? t("update.updating") : t("update.reload")}
       </Button>
       <Button
         size="sm"
         variant="ghost"
-        aria-label="Dismiss update notice"
+        aria-label={t("update.dismiss.label")}
         onClick={() => setDismissed(true)}
       >
-        Later
+        {t("update.later")}
       </Button>
     </div>
   );
