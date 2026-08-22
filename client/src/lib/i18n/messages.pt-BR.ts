@@ -939,6 +939,12 @@ export const ptBR: PartialMessages = {
   "voice.share.noAudio":
     "Compartilhando sem som. Pra mandar o áudio junto, compartilha uma guia do Chrome e marca a caixinha de compartilhar áudio da guia.",
   "voice.share.noAudioShort": "sem som",
+  "update.ready": "Tem uma versão nova do pqp pronta.",
+  "update.reload": "Atualizar",
+  "update.updating": "Atualizando\u2026",
+  "update.later": "Depois",
+  "update.dismiss.label": "Fechar aviso de atualização",
+
   "call.rating.ask": "Como foi essa call?",
   "call.rating.score": "Dar nota {score} de 5",
   "call.rating.low": "Não deu",

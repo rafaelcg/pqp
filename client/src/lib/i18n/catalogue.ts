@@ -1048,6 +1048,15 @@ export const en = {
   // Asked once after a call worth rating, never more than once every six
   // hours. The two end labels carry the scale, because a bare 1-to-5 does not
   // say which end is good.
+  // ---------------------------------------------------------- update prompt
+  // The gate between a deploy and the people already in the app. Nothing
+  // shipped reaches them until they act on this, so it is worth translating.
+  "update.ready": "A new version of pqp is ready.",
+  "update.reload": "Reload",
+  "update.updating": "Updating\u2026",
+  "update.later": "Later",
+  "update.dismiss.label": "Dismiss update notice",
+
   "call.rating.ask": "How was that call?",
   "call.rating.score": "Rate {score} out of 5",
   "call.rating.low": "Unusable",
