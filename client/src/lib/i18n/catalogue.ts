@@ -1028,6 +1028,19 @@ export const en = {
   "voice.share.noAudioShort": "no sound",
   // Shown on the press that opens the picker, because the tick box is inside
   // that dialog and the dialog does not say what it is for.
+  // ------------------------------------------------------------ call rating
+  // Asked once after a call worth rating, never more than once every six
+  // hours. The two end labels carry the scale, because a bare 1-to-5 does not
+  // say which end is good.
+  "call.rating.ask": "How was that call?",
+  "call.rating.score": "Rate {score} out of 5",
+  "call.rating.low": "Unusable",
+  "call.rating.high": "Perfect",
+  "call.rating.notePlaceholder": "What went wrong? (optional)",
+  "call.rating.send": "Send",
+  "call.rating.dismiss": "Close",
+  "call.rating.thanks": "Thanks. That helps.",
+
   "voice.share.tickAudio":
     "Pick a Chrome tab and tick \u201cAlso share tab audio\u201d to send the sound too.",
   // A refused fullscreen used to be swallowed, which is how "I clicked it and

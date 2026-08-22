@@ -2,6 +2,8 @@ import { timingSafeEqual } from "node:crypto";
 import { getPool } from "../db.js";
 import { getVoiceActivitySnapshot } from "../ws/voice.js";
 import { acquisitionReport, type AcquisitionReport } from "./acquisition.js";
+import { callRatingSummary } from "./call-ratings.js";
+import type { CallRatingSummary } from "@pqp/shared";
 
 /**
  * The operator dashboard's one read: `GET /api/admin/metrics`.
@@ -79,6 +81,8 @@ export interface AdminMetrics {
     messages24h: number;
   }[];
   acquisition: AcquisitionReport;
+  /** Prompted call quality, last 7 days. Counts only; see call-ratings.ts. */
+  callRatings: CallRatingSummary;
 }
 
 // ------------------------------------------------------------------- token
@@ -153,6 +157,7 @@ async function computeAdminMetrics(): Promise<AdminMetrics> {
     messagesByHour,
     topServers,
     acquisition,
+    callRatings,
   ] = await Promise.all([
     pool.query<{ total: string; last24h: string }>(
       `SELECT COUNT(*)::text AS total,
@@ -243,6 +248,7 @@ async function computeAdminMetrics(): Promise<AdminMetrics> {
         ORDER BY a.messages_24h DESC, s.name`,
     ),
     acquisitionReport(7),
+    callRatingSummary(7),
   ]);
 
   const channelCounts = { text: 0, voice: 0, category: 0, thread: 0 };
@@ -295,6 +301,7 @@ async function computeAdminMetrics(): Promise<AdminMetrics> {
       messages24h: Number(row.messages_24h),
     })),
     acquisition,
+    callRatings,
   };
 }
 
