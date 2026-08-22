@@ -12,21 +12,23 @@ export function MarketingNav({ variant = "solid" }: MarketingNavProps) {
   const { t, locale } = useTranslation();
   const isHero = variant === "hero";
   const linkClass = cn(
-    "text-xs font-medium uppercase tracking-[0.18em] transition-opacity hover:opacity-100",
-    isHero ? "text-white/70 opacity-90" : "text-paper-muted hover:text-paper",
+    "text-xs font-medium uppercase tracking-[0.18em] transition-colors duration-150",
+    isHero ? "text-white/70 hover:text-white" : "text-paper-muted hover:text-paper",
   );
 
   return (
     <header
       className={cn(
-        "relative z-20 flex h-16 items-center justify-between px-5 sm:px-8",
-        !isHero && "border-b border-ink-4/50 bg-ink/80 backdrop-blur-md",
+        "relative z-20 flex h-16 items-center justify-between border-b px-5 sm:px-8 transition-[background-color,border-color] duration-200 ease-out",
+        isHero
+          ? "border-transparent bg-transparent"
+          : "border-ink-4/50 bg-ink/80 backdrop-blur-md",
       )}
     >
       <Link
         to="/"
         className={cn(
-          "flex items-center gap-2 font-brand text-xl tracking-tight",
+          "flex items-center gap-2 font-brand text-xl tracking-tight transition-colors duration-200",
           isHero ? "text-white" : "text-paper",
         )}
       >

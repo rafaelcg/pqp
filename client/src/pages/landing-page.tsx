@@ -272,7 +272,7 @@ export function LandingPage() {
                   {...(item.external
                     ? { target: "_blank", rel: "noopener" }
                     : {})}
-                  className="text-[11px] font-medium uppercase tracking-[0.22em] text-white/70 underline-offset-4 hover:text-white hover:underline"
+                  className="text-[11px] font-medium uppercase tracking-[0.22em] text-white/70 underline decoration-transparent underline-offset-4 transition-colors duration-150 hover:text-white hover:decoration-white/70"
                   // "Self-host" is left in English in Portuguese because that is
                   // the word the audience uses. Saying so in the markup keeps a
                   // screen reader from pronouncing it with Portuguese phonetics.
@@ -410,7 +410,7 @@ export function LandingPage() {
             <p className="mt-3 text-paper-muted">{t("landing.hosting.body")}</p>
           </div>
           <div className="mt-14 grid gap-8 sm:grid-cols-2">
-            <div className="rounded-xl border border-ink-4/60 p-6">
+            <div className="rounded-xl border border-ink-4/60 p-6 transition-colors duration-200 hover:border-signal/40">
               <h3
                 className="font-display text-xl font-bold"
                 lang={locale === "en" ? undefined : "en"}
@@ -424,12 +424,12 @@ export function LandingPage() {
                 href={SOURCE_REPO_URL}
                 target="_blank"
                 rel="noopener"
-                className="mt-5 inline-flex text-sm font-medium text-signal hover:underline"
+                className="mt-5 inline-flex text-sm font-medium text-signal transition-colors duration-150 hover:underline"
               >
                 {t("landing.hosting.selfHost.action")}
               </a>
             </div>
-            <div className="rounded-xl border border-ink-4/60 p-6">
+            <div className="rounded-xl border border-ink-4/60 p-6 transition-colors duration-200 hover:border-signal/40">
               <h3 className="font-display text-xl font-bold">
                 {t("landing.hosting.hosted.title")}
               </h3>
@@ -466,7 +466,7 @@ export function LandingPage() {
         <p className="mt-6 text-sm text-paper-muted">
           <Link
             to="/beta"
-            className="underline decoration-paper-muted/40 underline-offset-4 hover:text-paper hover:decoration-paper/60"
+            className="underline decoration-paper-muted/40 underline-offset-4 transition-colors duration-150 hover:text-paper hover:decoration-paper/60"
           >
             {t("landing.cta.beta")}
           </Link>

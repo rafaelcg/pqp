@@ -3,6 +3,9 @@ import { BetaTag } from "@/components/ui/beta-tag";
 import { RELEASES_PAGE_URL } from "@/lib/downloads";
 import { useTranslation } from "@/lib/i18n";
 
+const FOOTER_LINK =
+  "text-paper transition-colors duration-150 hover:text-signal";
+
 export function MarketingFooter() {
   const { t, locale } = useTranslation();
 
@@ -24,26 +27,26 @@ export function MarketingFooter() {
             <p className="text-xs font-medium uppercase tracking-[0.16em] text-paper-muted">
               {t("footer.product")}
             </p>
-            <Link to="/app" className="text-paper hover:text-signal">
+            <Link to="/app" className={FOOTER_LINK}>
               {t("nav.openApp")}
             </Link>
-            <a href="/#how" className="text-paper hover:text-signal">
+            <a href="/#how" className={FOOTER_LINK}>
               {t("nav.howItWorks")}
             </a>
-            <a href="/#communities" className="text-paper hover:text-signal">
+            <a href="/#communities" className={FOOTER_LINK}>
               {t("nav.communities")}
             </a>
             <a
               href="/#hosting"
-              className="text-paper hover:text-signal"
+              className={FOOTER_LINK}
               lang={locale === "en" ? undefined : "en"}
             >
               {t("nav.selfHost")}
             </a>
-            <Link to="/vs-discord" className="text-paper hover:text-signal">
+            <Link to="/vs-discord" className={FOOTER_LINK}>
               {t("footer.vsDiscord")}
             </Link>
-            <Link to="/tela" className="text-paper hover:text-signal">
+            <Link to="/tela" className={FOOTER_LINK}>
               {t("footer.tela")}
             </Link>
             {/* The releases page, not a direct asset: the filenames carry the
@@ -53,20 +56,20 @@ export function MarketingFooter() {
               href={RELEASES_PAGE_URL}
               target="_blank"
               rel="noopener"
-              className="text-paper hover:text-signal"
+              className={FOOTER_LINK}
             >
               {t("footer.desktop")}
             </a>
             {/* The footer drives to the /beta landing, not straight to
                 TestFlight: the page sells the beta and carries the honest
                 framing before the external hop. */}
-            <Link to="/beta" className="text-paper hover:text-signal">
+            <Link to="/beta" className={FOOTER_LINK}>
               {t("footer.iosBeta")}
             </Link>
-            <Link to="/blog" className="text-paper hover:text-signal">
+            <Link to="/blog" className={FOOTER_LINK}>
               {t("nav.blog")}
             </Link>
-            <Link to="/status" className="text-paper hover:text-signal">
+            <Link to="/status" className={FOOTER_LINK}>
               {t("footer.status")}
             </Link>
           </div>
@@ -74,13 +77,13 @@ export function MarketingFooter() {
             <p className="text-xs font-medium uppercase tracking-[0.16em] text-paper-muted">
               {t("footer.legal")}
             </p>
-            <Link to="/privacy" className="text-paper hover:text-signal">
+            <Link to="/privacy" className={FOOTER_LINK}>
               {t("footer.privacy")}
             </Link>
-            <Link to="/terms" className="text-paper hover:text-signal">
+            <Link to="/terms" className={FOOTER_LINK}>
               {t("footer.terms")}
             </Link>
-            <Link to="/cookies" className="text-paper hover:text-signal">
+            <Link to="/cookies" className={FOOTER_LINK}>
               {t("footer.cookies")}
             </Link>
           </div>
@@ -93,7 +96,7 @@ export function MarketingFooter() {
           href="https://rafael.ltd"
           target="_blank"
           rel="noopener"
-          className="hover:text-signal"
+          className="transition-colors duration-150 hover:text-signal"
         >
           rafael.ltd
         </a>

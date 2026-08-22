@@ -130,7 +130,7 @@ function signInClass(appearance: AuthCtaAppearance): string {
     return "";
   }
   return cn(
-    "hidden px-3 py-1.5 text-sm font-medium sm:inline",
+    "hidden px-3 py-1.5 text-sm font-medium transition-colors duration-150 sm:inline",
     appearance === "nav-hero"
       ? "text-white/85 hover:text-white"
       : "text-paper-muted hover:text-paper",
