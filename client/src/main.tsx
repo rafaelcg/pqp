@@ -61,6 +61,12 @@ const BetaPage = lazy(() =>
 const TelaPage = lazy(() =>
   import("./pages/tela-page").then((m) => ({ default: m.TelaPage })),
 );
+const BlogPage = lazy(() =>
+  import("./pages/blog-page").then((m) => ({ default: m.BlogPage })),
+);
+const BlogPostPage = lazy(() =>
+  import("./pages/blog-post-page").then((m) => ({ default: m.BlogPostPage })),
+);
 const ClaimPage = lazy(() =>
   import("./pages/claim-page").then((m) => ({ default: m.ClaimPage })),
 );
@@ -161,6 +167,12 @@ function AppRoutes({ devBypass = false }: { devBypass?: boolean }) {
               a second one without the same thought. */}
           <Route path="/tela" element={<TelaPage />} />
           <Route path="/beta" element={<BetaPage />} />
+          {/* Static before dynamic, and both before `/:handleSegment`. React
+              Router ranks a static segment above a parameter, so `/blog/x`
+              cannot be read as a handle, but keeping them adjacent here is how
+              the next person sees that the ordering was considered. */}
+          <Route path="/blog" element={<BlogPage />} />
+          <Route path="/blog/:slug" element={<BlogPostPage />} />
           {/* Two paths, one page. `/garanta` is the one that gets shared in
               Brazil and the one every CTA points at; `/claim` exists so an
               English-speaking visitor guessing at a URL is not wrong. Neither

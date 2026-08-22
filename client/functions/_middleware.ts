@@ -1,4 +1,9 @@
 import {
+  blogTargetFromMetaPath,
+  injectBlogHead,
+  type BlogTarget,
+} from "../src/lib/blog-meta";
+import {
   communitySlugFromMetaPath,
   injectCommunityHead,
   type CommunityMeta,
@@ -259,11 +264,16 @@ export async function onRequest(context: PagesContext): Promise<Response> {
   const slug = handle ? null : communitySlugFromMetaPath(url.pathname);
   const marketing =
     handle || slug ? null : marketingPageFromMetaPath(url.pathname);
+  const blog: BlogTarget | null =
+    handle || slug || marketing ? null : blogTargetFromMetaPath(url.pathname);
   // The overwhelmingly common case, and it must cost nothing: this middleware
   // is in front of every request the site serves, including every hashed
-  // asset. All three parsers are pure string checks — nothing is awaited
+  // asset. All four parsers are pure string checks — nothing is awaited
   // before this return.
-  if ((!handle && !slug && !marketing) || context.request.method !== "GET") {
+  if (
+    (!handle && !slug && !marketing && !blog) ||
+    context.request.method !== "GET"
+  ) {
     return context.next();
   }
 
@@ -284,6 +294,14 @@ export async function onRequest(context: PagesContext): Promise<Response> {
     // that by returning the html unchanged.
     const html = await response.text();
     return rewritten(response, injectMarketingHead(html, marketing, locale));
+  }
+
+  if (blog) {
+    // Same as the marketing branch and for the same reason: a release note's
+    // title, summary and date are checked into the repository, so the head can
+    // be written without asking the API anything.
+    const html = await response.text();
+    return rewritten(response, injectBlogHead(html, blog, locale));
   }
 
   const apiOrigin = await resolveApiOrigin(context);
