@@ -312,7 +312,18 @@ interface ScreenCaptureOptions extends DisplayMediaStreamOptions {
  * than an echo nobody can locate.
  */
 const SCREEN_CAPTURE_OPTIONS: ScreenCaptureOptions = {
-  video: true,
+  // `video: true` used to be the whole of this, and it is why a share arrived
+  // as a slideshow. With no frameRate asked for, a capture of a large surface
+  // is handed over at whatever rate the browser feels like, and with no ceiling
+  // on size a 4K or Retina display is captured at its full pixel count and then
+  // has to be scaled down inside the encoder every frame. 1080p30 is the shape
+  // of the thing people actually share, and asking for it is cheaper than
+  // paying for pixels nobody in the call can see.
+  video: {
+    frameRate: { ideal: 30, max: 30 },
+    width: { max: 1920 },
+    height: { max: 1080 },
+  },
   audio: {
     echoCancellation: false,
     noiseSuppression: false,
@@ -1570,6 +1581,20 @@ export function createVoiceController(transport: RealtimeTransport) {
         state.error = translateMessage("voice.error.noVideoTrack");
         emit();
         return;
+      }
+      // The single most effective line in this feature. A capture track carries
+      // no content hint by default and the encoder then optimises a screen for
+      // sharpness, holding resolution and dropping frames the moment bandwidth
+      // tightens. That is right for a spreadsheet and wrong for everything
+      // people actually share here: a film, a match, a game. "motion" flips the
+      // trade to framerate, which is what makes a share look live rather than
+      // like a series of stills. Text loses a little crispness; a film stops
+      // stuttering. Guarded because the property is read-only on some older
+      // implementations rather than merely ignored.
+      try {
+        track.contentHint = "motion";
+      } catch {
+        // Encoder defaults, working share.
       }
       // Empty on Safari and Firefox, on a macOS screen or window share, and
       // whenever the "share audio" box was left unticked. It is the common

@@ -1026,6 +1026,10 @@ export const en = {
     "Sharing without sound. To send the audio too, share a Chrome tab and tick the share-tab-audio box.",
   /** The same fact, short enough for a status line that truncates. */
   "voice.share.noAudioShort": "no sound",
+  // Shown on the press that opens the picker, because the tick box is inside
+  // that dialog and the dialog does not say what it is for.
+  "voice.share.tickAudio":
+    "Pick a Chrome tab and tick \u201cAlso share tab audio\u201d to send the sound too.",
   // A refused fullscreen used to be swallowed, which is how "I clicked it and
   // nothing happened" became a bug report nobody could act on. Quiet helper
   // text, not an alert — the call is still fine, only the frame did not grow.

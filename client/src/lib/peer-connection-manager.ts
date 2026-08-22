@@ -192,12 +192,101 @@ export interface PeerConnectionManager {
   onPeerStateChange(handler: PeerStateChangeHandler): void;
 }
 
+/**
+ * Total upload the presenter is allowed to spend on the screen, in bits per
+ * second, and what each peer gets out of it.
+ *
+ * WHY THIS EXISTS AT ALL. Nothing here used to call `setParameters`, so every
+ * screen share ran on the encoder's defaults, and the defaults are wrong for
+ * this. A capture track with no `contentHint` is treated as detail-first, and
+ * the default degradation preference for screen content is
+ * `maintain-resolution`: under any bandwidth pressure the encoder holds 1080p
+ * and spends the framerate instead. That is the correct trade for a slide and
+ * exactly the wrong one for a film, which is what people actually share here,
+ * and it is why a share looked like a slideshow.
+ *
+ * WHY IT DIVIDES. This is a full mesh. The presenter uploads a separate copy to
+ * every peer, so a fixed per-peer bitrate multiplies by the room. A single
+ * budget split between peers keeps a six-person room from asking one domestic
+ * uplink for 15 Mbps and getting congestion collapse instead of video. The
+ * floor stops the arithmetic from producing something unwatchable in a big
+ * room: past that point the honest fix is the SFU, not a smaller number.
+ */
+const SCREEN_UPLOAD_BUDGET_BPS = 5_000_000;
+const SCREEN_MIN_BITRATE_BPS = 600_000;
+const SCREEN_MAX_BITRATE_BPS = 2_500_000;
+const SCREEN_MAX_FRAMERATE = 30;
+
+function screenBitrateFor(peerCount: number): number {
+  const share = SCREEN_UPLOAD_BUDGET_BPS / Math.max(1, peerCount);
+  return Math.round(
+    Math.min(SCREEN_MAX_BITRATE_BPS, Math.max(SCREEN_MIN_BITRATE_BPS, share)),
+  );
+}
+
+/**
+ * Point one screen-video sender at framerate rather than sharpness.
+ *
+ * `degradationPreference` is set on the parameters object rather than passed to
+ * `addTransceiver`, because the track is added with `addTrack` and there is no
+ * other hook. Every field is applied on top of the parameters the browser
+ * already produced: replacing the object wholesale would drop the SSRCs and RTX
+ * settings the connection is already using.
+ *
+ * Failure is swallowed on purpose. `setParameters` rejects on browsers that do
+ * not accept one of these fields, and a share that runs on the old defaults is
+ * enormously better than one that throws while starting.
+ */
+async function tuneScreenSender(
+  sender: RTCRtpSender | null,
+  peerCount: number,
+): Promise<void> {
+  if (!sender) {
+    return;
+  }
+  try {
+    const params = sender.getParameters();
+    // Firefox has been known to hand back parameters with no encodings at all
+    // before the first negotiation completes; writing one in is what the spec
+    // says to do and is a no-op where the array is already populated.
+    if (!params.encodings || params.encodings.length === 0) {
+      params.encodings = [{}];
+    }
+    params.degradationPreference = "maintain-framerate";
+    for (const encoding of params.encodings) {
+      encoding.maxBitrate = screenBitrateFor(peerCount);
+      encoding.maxFramerate = SCREEN_MAX_FRAMERATE;
+    }
+    await sender.setParameters(params);
+  } catch {
+    // Old defaults, working share.
+  }
+}
+
 export function createPeerConnectionManager(
   localPeerId: string,
   send: SignalingSend,
   iceServers: RTCIceServer[] = getDefaultIceServers(),
 ): PeerConnectionManager {
   const peers = new Map<string, ManagedPeer>();
+
+  /**
+   * Re-split the screen upload budget across everyone currently connected.
+   *
+   * Called whenever the room's size changes, in both directions: a joiner means
+   * every existing sender must give some bitrate back, and someone leaving
+   * means the rest can have it. Without the leaving half, a call that started
+   * at six and dropped to two would keep encoding at the six-way rate forever.
+   */
+  function retuneAllScreenSenders(): void {
+    if (!localScreenStream) {
+      return;
+    }
+    for (const peer of peers.values()) {
+      void tuneScreenSender(peer.screenSender, peers.size);
+    }
+  }
+
   let localStream: MediaStream | null = null;
   let localScreenStream: MediaStream | null = null;
   let localCameraStream: MediaStream | null = null;
@@ -486,6 +575,11 @@ export function createPeerConnectionManager(
       // that stopping later can remove exactly one of them.
       for (const track of localScreenStream.getVideoTracks()) {
         managed.screenSender = pc.addTrack(track, localScreenStream);
+        // Somebody joining mid-share gets the same treatment as everybody who
+        // was already here, and the room just grew, so this is also the moment
+        // the existing senders need their share of the budget recomputed.
+        void tuneScreenSender(managed.screenSender, peers.size + 1);
+        void retuneAllScreenSenders();
       }
       for (const track of localScreenStream.getAudioTracks()) {
         managed.screenAudioSender = pc.addTrack(track, localScreenStream);
@@ -688,6 +782,7 @@ export function createPeerConnectionManager(
             peer.screenSender = peer.pc.addTrack(nextVideo, stream!);
             needsOffer = true;
           }
+          await tuneScreenSender(peer.screenSender, peers.size);
         } else if (peer.screenSender) {
           peer.pc.removeTrack(peer.screenSender);
           peer.screenSender = null;
@@ -892,6 +987,9 @@ export function createPeerConnectionManager(
       clearIceRestartTimer(peer);
       peer.pc.close();
       peers.delete(remotePeerId);
+      // The room just shrank, so whoever is left can have the departed peer's
+      // share of the upload budget.
+      retuneAllScreenSenders();
       emitState();
     },
 

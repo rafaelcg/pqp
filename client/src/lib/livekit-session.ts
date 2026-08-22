@@ -236,6 +236,15 @@ export async function connectLiveKit({
       await room.localParticipant.publishTrack(videoTrack, {
         source: Track.Source.ScreenShare,
         simulcast: false,
+        // The SFU half of the same argument as the mesh path: without these the
+        // encoder holds resolution and spends framerate, which turns a film
+        // into stills. `degradationPreference` is the lever; the encoding is a
+        // ceiling, not a target, so a still screen still costs almost nothing.
+        degradationPreference: "maintain-framerate",
+        videoEncoding: {
+          maxBitrate: 2_500_000,
+          maxFramerate: 30,
+        },
       });
 
       // The audio half. Absent from most captures, so its absence is not an

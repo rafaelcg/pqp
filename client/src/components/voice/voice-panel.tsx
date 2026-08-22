@@ -384,15 +384,13 @@ export function VoicePanel({
     return () => clearTimeout(timer);
   }, [hint]);
 
-  // A share that carries no sound is the common one, and the presenter cannot
-  // hear the problem: their own machine is playing whatever they shared. So it
-  // is stated once, in the same quiet slot every other explanation uses, and
-  // fades on the same timer rather than nagging for the whole presentation.
-  useEffect(() => {
-    if (isSharingScreen && !isSharingScreenAudio) {
-      setHint(t("voice.share.noAudio"));
-    }
-  }, [isSharingScreen, isSharingScreenAudio, t]);
+  // A silent share is a live state, not an answer to a tap, so it does not go
+  // through `hint` and does not fade. The presenter is the one person who
+  // cannot hear the problem, their own machine is playing the thing they
+  // shared, and the fix stays available the whole time: stop, share again,
+  // tick the box. A notice that vanished after six seconds was telling them
+  // something they could still act on and then taking it away.
+  const sharingSilently = isSharingScreen && !isSharingScreenAudio;
 
   const avatarSize = avatarSizeFor(connectedCount, compactPeers);
   // A call of one still deserves a stage rather than a stray card — but only
@@ -683,9 +681,19 @@ export function VoicePanel({
                         ? t("voice.control.shareTaken")
                         : undefined
                     }
-                    onClick={
-                      isSharingScreen ? onStopScreenShare : onStartScreenShare
-                    }
+                    onClick={() => {
+                      if (isSharingScreen) {
+                        onStopScreenShare?.();
+                        return;
+                      }
+                      // The tick box lives in the browser's own picker, which
+                      // is about to cover this panel, and nothing in that
+                      // dialog explains what it is for. Saying it here, on the
+                      // press that opens it, is the only moment the sentence
+                      // can still change what the user does.
+                      setHint(t("voice.share.tickAudio"));
+                      onStartScreenShare?.();
+                    }}
                   >
                     {isSharingScreen ? (
                       <ScreenShareOff className="h-4 w-4 text-signal" />
@@ -700,7 +708,16 @@ export function VoicePanel({
               </Button>
             </div>
 
-            {hint && (
+            {sharingSilently && (
+              <p
+                role="status"
+                className="mt-1.5 text-center text-[11px] text-signal/80"
+              >
+                {t("voice.share.noAudio")}
+              </p>
+            )}
+
+            {hint && !(sharingSilently && hint === t("voice.share.noAudio")) && (
               <p
                 role="status"
                 className="mt-1.5 text-center text-[11px] text-paper-muted"

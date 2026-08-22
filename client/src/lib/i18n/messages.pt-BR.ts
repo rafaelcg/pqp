@@ -927,6 +927,8 @@ export const ptBR: PartialMessages = {
   "voice.share.noAudio":
     "Compartilhando sem som. Pra mandar o áudio junto, compartilha uma guia do Chrome e marca a caixinha de compartilhar áudio da guia.",
   "voice.share.noAudioShort": "sem som",
+  "voice.share.tickAudio":
+    "Escolhe uma guia do Chrome e marca \u201cTamb\u00e9m compartilhar \u00e1udio da guia\u201d pra mandar o som junto.",
   "voice.share.fullscreenBlocked": "O navegador não abriu a tela cheia.",
 
   "voice.screenShareUnsupported":
