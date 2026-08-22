@@ -102,3 +102,14 @@ jobs:
           # Never ship a CI artifact that accepts the public dev token.
           VITE_DEV_AUTH_BYPASS: "false"
         run: pnpm --filter @pqp/client build
+
+      # The Vite build is NOT enough. Cloudflare Pages bundles
+      # `client/functions/` with esbuild, separately and with different rules,
+      # and that step only ever ran inside the deploy. On 22 Aug 2026 a `?raw`
+      # markdown import reachable from the middleware passed CI, passed the
+      # Vite build, and then failed the deploy with "No loader is configured
+      # for .md files" — leaving the API on the new commit and the site on the
+      # old one. Bundling here costs seconds and turns that into a red PR.
+      - name: Bundle Pages functions
+        working-directory: client
+        run: npx wrangler pages functions build --outfile=/tmp/functions-bundle.js

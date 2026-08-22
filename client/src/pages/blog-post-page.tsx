@@ -6,7 +6,8 @@ import { MarketingFooter } from "@/components/marketing/marketing-footer";
 import { MarketingNav } from "@/components/marketing/marketing-nav";
 import { Seo } from "@/components/marketing/seo";
 import { formatPostDate } from "@/lib/blog/format";
-import { loadPostBody, postBySlug, type BlogLocale } from "@/lib/blog/posts";
+import { loadPostBody } from "@/lib/blog/bodies";
+import { postBySlug, type BlogLocale } from "@/lib/blog/posts";
 import { useTranslation } from "@/lib/i18n";
 
 /**

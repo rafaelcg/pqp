@@ -6,7 +6,8 @@ import {
   injectBlogHead,
   renderBlogHead,
 } from "./blog-meta";
-import { POSTS, loadPostBody } from "./blog/posts";
+import { POSTS } from "./blog/posts";
+import { loadPostBody } from "./blog/bodies";
 import { en } from "./i18n/catalogue";
 import { ptBR } from "./i18n/messages.pt-BR";
 
@@ -159,6 +160,21 @@ describe("index copy stays in step with the catalogue", () => {
     expect(head).toContain(
       `<meta name="description" content="${ptBR["blog.seo.description"]}" />`,
     );
+  });
+});
+
+describe("the edge import graph", () => {
+  // The bug this pins: wrangler bundles the Pages middleware with esbuild, not
+  // Vite, and esbuild has no loader for `.md`. A `?raw` import anywhere in the
+  // middleware's graph fails the deploy even inside a dynamic import the edge
+  // would never run, because the bundler still parses it. CI builds the client
+  // and never bundles the functions, so it went green and production did not.
+  it("keeps markdown out of what the middleware imports", async () => {
+    const posts = await import("./blog/posts?raw").then((m) => m.default);
+    expect(posts).not.toContain(".md?raw");
+    const meta = await import("./blog-meta?raw").then((m) => m.default);
+    expect(meta).not.toContain(".md?raw");
+    expect(meta).not.toContain("blog/bodies");
   });
 });
 
