@@ -234,6 +234,27 @@ describe("publishing a screen share with audio", () => {
     // The film is still going to the film sender.
     expect(kinds).toContain("sys");
   });
+
+  it("does not hand the microphone to the screen-audio sender", async () => {
+    const ctx = setup();
+    // The case above cannot actually fail: the microphone sender was added
+    // first, so a lookup by kind alone finds it anyway. Here the share is the
+    // only audio on the connection, which is the arrangement where picking by
+    // kind picks the presentation and sends the voice into the film.
+    await ctx.manager.setLocalScreenStream(
+      fakeStream("cap", [track("video", "v"), track("audio", "sys")]),
+    );
+    ctx.manager.connectToPeer(REMOTE);
+    await settle();
+
+    await ctx.manager.replaceLocalTrack(
+      fakeStream("mic", [track("audio", "mic-1")]),
+    );
+
+    const ids = ctx.pc().senders.map((s) => s.track?.id);
+    expect(ids).toContain("sys");
+    expect(ids).toContain("mic-1");
+  });
 });
 
 describe("receiving a peer's screen audio", () => {

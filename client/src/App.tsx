@@ -2995,6 +2995,7 @@ function MainAppContent({
         isDeafened={voiceState.isDeafened}
         outputDeviceId={localSettings.outputDeviceId}
         outputVolume={localSettings.outputVolume}
+        screenSharePeerId={voiceState.screenSharePeerId}
       />
 
       {/* At the root and over everything, because the directory is a mode

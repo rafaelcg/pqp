@@ -332,6 +332,22 @@ describe("screen share audio", () => {
     expect(voice.getState().isSharingScreen).toBe(true);
   });
 
+  it("does not reopen the picker when the capture itself failed", async () => {
+    displayMedia = async () => {
+      // Raised after the user has already chosen a surface. Asking again would
+      // put a second picker on screen with nothing to explain it.
+      const err = new Error("could not start");
+      err.name = "NotReadableError";
+      throw err;
+    };
+    const { voice } = await connectedMesh();
+    await voice.startScreenShare();
+
+    expect(displayMediaCalls).toHaveLength(1);
+    expect(voice.getState().isSharingScreen).toBe(false);
+    expect(voice.getState().error).not.toBeNull();
+  });
+
   it("does not reopen the picker when the user dismissed it", async () => {
     displayMedia = async () => {
       const err = new Error("denied");

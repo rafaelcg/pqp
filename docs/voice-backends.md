@@ -167,6 +167,8 @@ Both transports carry it the same way the video is carried. Mesh adds the audio 
 
 Playback is a second `<audio>` element in `VoiceAudioSinks`, next to the one that plays that person's voice, so deafen, the output-device choice and their volume slider all apply to it. The `<video>` elements stay muted in both the presenter's preview and the viewer's stage.
 
+That element is mounted only for the peer the roster names as the presenter. On the mesh that is close to implied, since the roster is what classifies the track at all, but on the SFU it is the whole check: a LiveKit publication labelled `ScreenShareAudio` is labelled by the client that published it, and the presenter lock lives on the WS in `server/src/ws/voice.ts`, not in the LiveKit grant. Without the gate a client that never won the slot would be heard by the entire room while its picture was correctly kept off the stage.
+
 Feedback control is one rule: `selfBrowserSurface: "exclude"`, so the pqp tab itself is not offered in the picker. Sharing a whole Windows screen with system audio while listening on speakers is still a loop the app cannot break; headphones are the answer there, as they are for the microphone.
 
 ## Screen share on the SFU (verified)

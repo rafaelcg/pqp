@@ -82,12 +82,24 @@ interface VoiceAudioSinksProps {
   isDeafened: boolean;
   outputDeviceId?: string;
   outputVolume?: number;
+  /**
+   * Whoever the server says holds the presenter slot, or null.
+   *
+   * Screen audio is played only for them. On the mesh that is nearly implied
+   * already, because the roster is what classifies the track in the first
+   * place; on the SFU it is the only check there is, since a publication
+   * labelled `ScreenShareAudio` is whatever the publishing client chose to
+   * call it. Without this, a client that never won the slot would be heard by
+   * the whole room while its picture was correctly refused a place on stage.
+   */
+  screenSharePeerId?: string | null;
 }
 
 /**
- * The `<audio>` elements that actually play remote voice and remote screen audio. They live at the app
- * root rather than inside the voice panel: the panel unmounts as soon as you
- * navigate to another channel, and audio must not stop when you do.
+ * The `<audio>` elements that actually play remote voice and remote screen
+ * audio. They live at the app root rather than inside the voice panel: the
+ * panel unmounts as soon as you navigate to another channel, and audio must
+ * not stop when you do.
  */
 export function VoiceAudioSinks({
   peers,
@@ -95,6 +107,7 @@ export function VoiceAudioSinks({
   isDeafened,
   outputDeviceId = "",
   outputVolume = 1,
+  screenSharePeerId = null,
 }: VoiceAudioSinksProps) {
   return (
     <>
@@ -109,10 +122,13 @@ export function VoiceAudioSinks({
         />
       ))}
       {/* The presenter's system audio, when their capture carried any. Mounted
-          only for the peer who is actually sharing sound, so the usual call has
-          exactly the elements it has always had. */}
+          only for the peer the roster names as the presenter, so the usual call
+          has exactly the elements it has always had and an unannounced
+          publication is inaudible rather than merely unwatchable. */}
       {peers
-        .filter((peer) => peer.screenAudioStream)
+        .filter(
+          (peer) => peer.screenAudioStream && peer.peerId === screenSharePeerId,
+        )
         .map((peer) => (
           <PeerAudio
             key={`${peer.peerId}:screen`}

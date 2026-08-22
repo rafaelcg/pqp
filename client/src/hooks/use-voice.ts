@@ -1542,11 +1542,16 @@ export function createVoiceController(transport: RealtimeTransport) {
       } catch (err) {
         // A browser that refuses the *shape* of the request rather than the
         // request itself would otherwise cost the user their screen share
-        // entirely, so ask again the old way. Not for NotAllowedError: that is
-        // the person cancelling the picker, and reopening it would be arguing
-        // with them.
-        const cancelled = err instanceof Error && err.name === "NotAllowedError";
-        if (cancelled) {
+        // entirely, so ask again the old way. Only for the two names that mean
+        // "I do not understand this request", because only those are thrown
+        // before the picker opens. Everything else (the person cancelling,
+        // the OS refusing the capture, the chosen surface failing to start)
+        // happens *after* they already chose something, and asking again there
+        // would put a second picker on screen with nothing to explain it.
+        const shapeRefused =
+          err instanceof Error &&
+          (err.name === "TypeError" || err.name === "NotSupportedError");
+        if (!shapeRefused) {
           state.error = screenShareErrorMessage(err);
           emit();
           return;
