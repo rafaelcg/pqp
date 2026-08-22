@@ -54,6 +54,19 @@ export interface BlogPost {
  */
 export const POSTS: readonly BlogPost[] = [
   {
+    slug: "som-na-tela",
+    date: "2026-08-22",
+    title: {
+      "pt-BR": "A tela compartilhada agora vai com som",
+      en: "Screen sharing now carries sound",
+    },
+    summary: {
+      "pt-BR":
+        "Compartilhar tela passou a mandar o áudio junto, o vídeo ficou fluido em vez de travado, e a call ganhou uma pergunta rápida de 1 a 5 quando acaba.",
+      en: "Screen sharing now sends the audio too, the picture is smooth instead of stuttering, and a call ends with a quick 1-to-5 question.",
+    },
+  },
+  {
     slug: "beta-no-iphone",
     date: "2026-08-21",
     title: {
@@ -102,6 +115,12 @@ export const POSTS: readonly BlogPost[] = [
  * transform at build time and nothing new in the dependency tree.
  */
 const BODIES: Record<string, Record<BlogLocale, () => Promise<string>>> = {
+  "som-na-tela": {
+    "pt-BR": () =>
+      import("@/content/blog/som-na-tela.pt-BR.md?raw").then((m) => m.default),
+    en: () =>
+      import("@/content/blog/som-na-tela.en.md?raw").then((m) => m.default),
+  },
   "beta-no-iphone": {
     "pt-BR": () =>
       import("@/content/blog/beta-no-iphone.pt-BR.md?raw").then(
