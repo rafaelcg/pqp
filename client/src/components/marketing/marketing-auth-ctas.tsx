@@ -1,12 +1,14 @@
-import { SignInButton, SignUpButton, useAuth } from "@clerk/clerk-react";
+import { useAuth, useClerk } from "@clerk/clerk-react";
 import type { ComponentProps, ReactNode } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { isDevAuthBypassEnabled } from "@/lib/dev-auth";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 export type AuthCtaAppearance = "hero" | "nav-hero" | "nav-solid" | "default";
+
+const AFTER_AUTH = "/app";
 
 interface MarketingAuthCtasProps {
   appearance?: AuthCtaAppearance;
@@ -26,6 +28,12 @@ interface MarketingAuthCtasProps {
  * without a button. Most visitors are signed out, so that pair paints first.
  * Open the app replaces it only after `isSignedIn` is true.
  *
+ * WHY `useClerk()` AND NOT `<SignUpButton>`. Clerk's wrappers clone `onClick`
+ * onto a single child. A custom face that does not forward that prop (the old
+ * Sign in control) is a dead click. Calling `openSignUp` / `openSignIn` on our
+ * own buttons keeps the modal and always fires. If Clerk is not ready, we go
+ * to `/app`, which already hosts the same forms.
+ *
  * Dev bypass has no ClerkProvider, so both actions go to `/app`. The signed-out
  * chrome still shows, because that is the page a first-time visitor sees.
  */
@@ -37,8 +45,38 @@ export function MarketingAuthCtas(props: MarketingAuthCtasProps) {
 }
 
 function ClerkAuthCtas(props: MarketingAuthCtasProps) {
-  const { isSignedIn } = useAuth();
-  return <AuthPair {...props} signedIn={isSignedIn === true} />;
+  const { isSignedIn, isLoaded } = useAuth();
+  const clerk = useClerk();
+  const navigate = useNavigate();
+
+  const goApp = () => {
+    void navigate(AFTER_AUTH);
+  };
+
+  const openOrGo = (open: () => unknown) => {
+    if (!isLoaded) {
+      goApp();
+      return;
+    }
+    try {
+      void Promise.resolve(open()).catch(goApp);
+    } catch {
+      goApp();
+    }
+  };
+
+  return (
+    <AuthPair
+      {...props}
+      signedIn={isSignedIn === true}
+      onJoin={() =>
+        openOrGo(() => clerk.openSignUp({ forceRedirectUrl: AFTER_AUTH }))
+      }
+      onSignIn={() =>
+        openOrGo(() => clerk.openSignIn({ forceRedirectUrl: AFTER_AUTH }))
+      }
+    />
+  );
 }
 
 function AuthPair({
@@ -49,34 +87,40 @@ function AuthPair({
   className,
   signedIn,
   bypass = false,
-}: MarketingAuthCtasProps & { signedIn: boolean; bypass?: boolean }) {
+  onJoin,
+  onSignIn,
+}: MarketingAuthCtasProps & {
+  signedIn: boolean;
+  bypass?: boolean;
+  onJoin?: () => void;
+  onSignIn?: () => void;
+}) {
   const { t } = useTranslation();
   const primaryLabel =
     signedIn && primaryKey === "nav.join" ? t("nav.openApp") : t(primaryKey);
   const label = (
     <PrimaryLabel label={primaryLabel} decorate={decoratePrimary} />
   );
+  const useLink = signedIn || bypass;
 
   return (
     <div className={cn("flex flex-wrap items-center justify-center gap-2", className)}>
-      {signedIn || bypass ? (
+      {useLink ? (
         <PrimaryButton appearance={appearance} asChild>
-          <Link to="/app">{label}</Link>
+          <Link to={AFTER_AUTH}>{label}</Link>
         </PrimaryButton>
       ) : (
-        <SignUpButton mode="modal" forceRedirectUrl="/app">
-          <PrimaryButton appearance={appearance}>{label}</PrimaryButton>
-        </SignUpButton>
+        <PrimaryButton appearance={appearance} type="button" onClick={onJoin}>
+          {label}
+        </PrimaryButton>
       )}
       {showSignIn && !signedIn ? (
         bypass ? (
           <SignInLink appearance={appearance} />
         ) : (
-          <SignInButton mode="modal" forceRedirectUrl="/app">
-            <SignInButtonFace appearance={appearance}>
-              {t("nav.signIn")}
-            </SignInButtonFace>
-          </SignInButton>
+          <SignInButtonFace appearance={appearance} onClick={onSignIn}>
+            {t("nav.signIn")}
+          </SignInButtonFace>
         )
       ) : null}
     </div>
@@ -142,12 +186,12 @@ function SignInLink({ appearance }: { appearance: AuthCtaAppearance }) {
   if (appearance === "default") {
     return (
       <Button variant="secondary" asChild className="cta-lift h-11 px-6 text-base">
-        <Link to="/app">{t("nav.signIn")}</Link>
+        <Link to={AFTER_AUTH}>{t("nav.signIn")}</Link>
       </Button>
     );
   }
   return (
-    <Link to="/app" className={signInClass(appearance)}>
+    <Link to={AFTER_AUTH} className={signInClass(appearance)}>
       {t("nav.signIn")}
     </Link>
   );
@@ -156,19 +200,26 @@ function SignInLink({ appearance }: { appearance: AuthCtaAppearance }) {
 function SignInButtonFace({
   appearance,
   children,
+  onClick,
 }: {
   appearance: AuthCtaAppearance;
   children: ReactNode;
+  onClick?: () => void;
 }) {
   if (appearance === "default") {
     return (
-      <Button variant="secondary" className="cta-lift h-11 px-6 text-base">
+      <Button
+        type="button"
+        variant="secondary"
+        className="cta-lift h-11 px-6 text-base"
+        onClick={onClick}
+      >
         {children}
       </Button>
     );
   }
   return (
-    <button type="button" className={signInClass(appearance)}>
+    <button type="button" className={signInClass(appearance)} onClick={onClick}>
       {children}
     </button>
   );

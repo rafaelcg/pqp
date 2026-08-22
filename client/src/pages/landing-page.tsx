@@ -192,7 +192,7 @@ export function LandingPage() {
         ref={heroRef}
         className="relative -mt-16 flex min-h-[100svh] flex-col overflow-hidden"
       >
-        <div className="hero-parallax absolute inset-0" aria-hidden>
+        <div className="hero-parallax pointer-events-none absolute inset-0" aria-hidden>
           <img
             src="/images/hero-background.jpg"
             alt=""
@@ -218,7 +218,7 @@ export function LandingPage() {
           )}
         </div>
         <div
-          className="absolute inset-0 bg-gradient-to-b from-black/50 via-black/28 to-black/75"
+          className="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/50 via-black/28 to-black/75"
           aria-hidden
         />
         <div
