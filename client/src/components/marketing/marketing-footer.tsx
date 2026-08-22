@@ -60,6 +60,9 @@ export function MarketingFooter() {
             <Link to="/beta" className="text-paper hover:text-signal">
               {t("footer.iosBeta")}
             </Link>
+            <Link to="/blog" className="text-paper hover:text-signal">
+              {t("nav.blog")}
+            </Link>
             <Link to="/status" className="text-paper hover:text-signal">
               {t("footer.status")}
             </Link>

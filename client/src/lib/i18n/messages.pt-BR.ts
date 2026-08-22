@@ -29,6 +29,18 @@ export const ptBR: PartialMessages = {
   "nav.signIn": "Entrar",
   "nav.signUp": "Criar uma comunidade",
   "nav.openApp": "Abrir o app",
+  "nav.blog": "Notas de versão",
+
+  "blog.seo.title": "Notas de versão — pqp",
+  "blog.seo.description":
+    "O que mudou no pqp e quando. Cada nota conta o que passou a funcionar, o que ainda não funciona e por quê.",
+  "blog.hero.title": "Notas de versão",
+  "blog.hero.lede":
+    "O que mudou, no dia em que mudou. Escrito por quem fez, incluindo as partes que ainda não estão prontas.",
+  "blog.back": "Todas as notas",
+  "blog.notFound.title": "Não tem nota nesse endereço",
+  "blog.notFound.body":
+    "O link pode ser antigo, ou o endereço pode ter um erro de digitação. A lista completa está a um clique.",
 
   "landing.seo.title": "pqp — o chat em grupo é seu",
   "landing.seo.description":

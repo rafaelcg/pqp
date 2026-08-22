@@ -35,6 +35,22 @@ export const en = {
   "nav.signIn": "Sign in",
   "nav.signUp": "Start a community",
   "nav.openApp": "Open the app",
+  "nav.blog": "Release notes",
+
+  // ------------------------------------------------------------------- blog
+  // `blog.seo.*` is duplicated in `src/lib/blog-meta.ts` (the edge writes the
+  // head before this catalogue exists) and `blog-meta.test.ts` pins the pair,
+  // so the two cannot drift.
+  "blog.seo.title": "Release notes — pqp",
+  "blog.seo.description":
+    "What changed in pqp and when. Each note says what started working, what still does not, and why.",
+  "blog.hero.title": "Release notes",
+  "blog.hero.lede":
+    "What changed, on the day it changed. Written by the person who shipped it, including the parts that are not finished.",
+  "blog.back": "All release notes",
+  "blog.notFound.title": "There is no note at this address",
+  "blog.notFound.body":
+    "The link may be old, or the address may have a typo in it. The full list is one click away.",
 
   "landing.seo.title": "pqp — group chat you own",
   "landing.seo.description":
