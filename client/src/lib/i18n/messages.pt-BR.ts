@@ -157,6 +157,7 @@ export const ptBR: PartialMessages = {
   "claim.seo.description":
     "pqp.gg/@você — um nome só, quem chegar primeiro leva. De graça, e é seu.",
   "claim.eyebrow": "Um nome. O seu.",
+  "claim.edition": "ago 2026",
   "claim.title": "Garanta seu @ no pqp",
   "claim.body":
     "Sua página, seu link, sua galera. Digita um nome e vê se ainda tá livre.",
@@ -184,7 +185,7 @@ export const ptBR: PartialMessages = {
     "Chega de soletrar quatro dígitos. Um nome, e é o que você escolheu.",
   "claim.why.3.title": "Quem chegar primeiro leva",
   "claim.why.3.body":
-    "Só existe um de cada. Os bons vão cedo — é assim que funciona.",
+    "Só existe um de cada. Os bons vão cedo, é assim que funciona.",
   "claim.existing": "Você já tem o seu: {url}",
 
   "publicProfile.loading": "Carregando…",

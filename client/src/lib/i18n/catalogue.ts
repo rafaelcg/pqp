@@ -171,6 +171,8 @@ export const en = {
   "claim.seo.title": "Claim your @ on pqp",
   "claim.seo.description":
     "pqp.gg/@you — one name, first come, first served. Free, and yours.",
+  // Stamped on the badge, the way a card carries a month.
+  "claim.edition": "aug 2026",
   "claim.eyebrow": "One name. Yours.",
   "claim.title": "Claim your @ on pqp",
   "claim.body":
