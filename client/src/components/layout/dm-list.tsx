@@ -96,13 +96,13 @@ export function DmList({
       }`}
     >
       <div className="flex h-14 items-center justify-between gap-2 border-b border-ink-4/60 px-4">
-        <p className="truncate font-display text-base font-bold">Messages</p>
+        <p className="truncate font-display text-base font-bold">{t("dm.title")}</p>
         <div className="flex items-center gap-1">
           <button
             type="button"
             className="rounded-md p-1.5 text-paper-muted hover:bg-ink-3 hover:text-paper"
-            title="New message"
-            aria-label="New message"
+            title={t("dm.new")}
+            aria-label={t("dm.new")}
             onClick={onStartConversation}
           >
             <Plus className="h-4 w-4" />
@@ -111,7 +111,7 @@ export function DmList({
             <button
               type="button"
               className="rounded p-1 hover:bg-ink-3 md:hidden"
-              aria-label="Close conversation list"
+              aria-label={t("dm.closeList")}
               onClick={onMobileClose}
             >
               <X className="h-4 w-4" />
@@ -167,14 +167,14 @@ export function DmList({
         ) : conversations.length === 0 ? (
           <div className="px-2 py-6">
             <p className="text-sm text-paper-muted">
-              No conversations yet.
+              {t("dm.empty")}
             </p>
             <button
               type="button"
               className="mt-2 text-sm text-signal underline underline-offset-2"
               onClick={onStartConversation}
             >
-              Message someone
+              {t("dm.messageSomeone")}
             </button>
           </div>
         ) : (
@@ -285,14 +285,14 @@ function ConversationRow({
       : []),
     {
       id: "copy-id",
-      label: "Copy conversation ID",
+      label: t("dm.copyId"),
       onSelect: () => void navigator.clipboard.writeText(conversation.channelId),
     },
     ...notificationLevelItems("notify", notifications, "account"),
     { id: "sep", label: "", separator: true },
     {
       id: "hide",
-      label: "Close conversation",
+      label: t("dm.close"),
       onSelect: onHide,
     },
   ];

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useTranslation } from "@/lib/i18n";
 import {
   registerServiceWorker,
   type ServiceWorkerControls,
@@ -15,6 +16,7 @@ import {
  * another minute. So it asks, and it can be dismissed.
  */
 export function UpdatePrompt() {
+  const { t } = useTranslation();
   const [needsRefresh, setNeedsRefresh] = useState(false);
   const [dismissed, setDismissed] = useState(false);
   const [updating, setUpdating] = useState(false);
@@ -38,7 +40,7 @@ export function UpdatePrompt() {
     >
       <RefreshCw className="h-4 w-4 shrink-0 text-signal" aria-hidden="true" />
       <p className="min-w-0 flex-1 text-sm text-paper">
-        A new version of pqp is ready.
+        {t("update.ready")}
       </p>
       <Button
         size="sm"
@@ -49,15 +51,15 @@ export function UpdatePrompt() {
           void controlsRef.current?.update();
         }}
       >
-        {updating ? "Updating…" : "Reload"}
+        {updating ? t("update.updating") : t("update.reload")}
       </Button>
       <Button
         size="sm"
         variant="ghost"
-        aria-label="Dismiss update notice"
+        aria-label={t("update.dismiss")}
         onClick={() => setDismissed(true)}
       >
-        Later
+        {t("update.later")}
       </Button>
     </div>
   );

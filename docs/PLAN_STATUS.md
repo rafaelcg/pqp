@@ -50,6 +50,7 @@
 | Per-server message retention policy | Done (owner-configurable window, daily sweep, pinned messages exempt — `servers.message_retention_days`) |
 | Per-server data export | Done (owner-only JSON download of channels/members/messages, capped at 50k messages, audit-logged) |
 | Incoming webhooks | Done (Discord wire-compatible payload shape; per-channel management UI; pseudo-user authors messages so no read path had to change; audit-logged) |
+| i18n (en + pt-BR) | Done (i18next core, lazy pt-BR, Electron menus in `electron/locales/`) |
 | Mobile PWA | Done (installable, shell precache + offline fallback, prompted updates, iOS safe-area/`dvh`, SW notification path for Android — `docs/PWA.md`) |
 | Public status page | Done (`/status` + unauthenticated `/status.json`; per-component probes sampled once a minute, real 24h/7d uptime kept 30 days) |
 | SSO / SAML readiness | Done (Clerk federates; app adds verified-email-domain joining per server, owner-only, exact-match, bans still apply — `docs/SSO.md`) |

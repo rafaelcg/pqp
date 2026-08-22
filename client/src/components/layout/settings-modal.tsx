@@ -61,6 +61,7 @@ import {
   type MediaDeviceOption,
   type MicProcessing,
 } from "@/lib/audio-devices";
+import { desktopContext, getDesktop } from "@/lib/desktop";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import {
   SUPPORTED_LOCALES,
@@ -846,7 +847,7 @@ function VoiceSection({
         </label>
       ) : (
         <p className="text-xs text-paper-muted">
-          {t("settings.voice.outputUnsupported")}
+          {t("settings.voice.outputUnsupported", desktopContext())}
         </p>
       )}
 
@@ -997,11 +998,12 @@ const LOCALE_LABELS: Record<Locale, MessageKey> = {
 function LanguagePicker() {
   const { t, locale } = useTranslation();
 
-  function choose(next: Locale) {
+  async function choose(next: Locale) {
     if (next === locale) {
       return;
     }
     setLocalePreference(next);
+    await getDesktop()?.setLocale?.(next);
     try {
       const url = new URL(window.location.href);
       url.searchParams.delete("lang");
@@ -1029,7 +1031,7 @@ function LanguagePicker() {
               type="button"
               role="radio"
               aria-checked={selected}
-              onClick={() => choose(option)}
+              onClick={() => void choose(option)}
               className={chipClass(selected)}
             >
               {t(LOCALE_LABELS[option])}
@@ -1096,11 +1098,11 @@ function NotificationsSection() {
       <div>
         {permission === "unsupported" ? (
           <p className="text-xs text-paper-muted">
-            {t("settings.notifications.unsupported")}
+            {t("settings.notifications.unsupported", desktopContext())}
           </p>
         ) : permission === "denied" ? (
           <p className="text-xs text-warning" role="status">
-            {t("settings.notifications.denied")}
+            {t("settings.notifications.denied", desktopContext())}
           </p>
         ) : (
           <div className="flex flex-wrap items-center gap-3">
@@ -1116,7 +1118,7 @@ function NotificationsSection() {
             <span className="text-xs text-paper-muted">
               {active
                 ? t("settings.notifications.on")
-                : t("settings.notifications.willAsk")}
+                : t("settings.notifications.willAsk", desktopContext())}
             </span>
           </div>
         )}
@@ -1215,7 +1217,7 @@ function PushNotificationsSection() {
         if (result === "enabled") {
           setSubscribed(true);
         } else if (result === "denied") {
-          setError(t("settings.push.denied"));
+          setError(t("settings.push.denied", desktopContext()));
         } else {
           setError(t("settings.push.failed"));
         }
@@ -1251,7 +1253,7 @@ function PushNotificationsSection() {
         </p>
       ) : availability === "unsupported" ? (
         <p className="text-xs text-paper-muted">
-          {t("settings.push.unsupported")}
+          {t("settings.push.unsupported", desktopContext())}
         </p>
       ) : serverEnabled === false ? (
         <p className="text-xs text-paper-muted">
@@ -1655,12 +1657,9 @@ function DeleteAccountDialog({
                 <li key={server.id} className="text-sm text-paper">
                   {server.name}{" "}
                   <span className="text-xs text-paper-muted">
-                    {t(
-                      server.otherMemberCount === 1
-                        ? "settings.delete.ownedMember"
-                        : "settings.delete.ownedMembers",
-                      { count: server.otherMemberCount },
-                    )}
+                    {t("settings.delete.ownedMembers", {
+                      count: server.otherMemberCount,
+                    })}
                   </span>
                 </li>
               ))}

@@ -1,11 +1,9 @@
 /**
  * The one place that decides which language the app speaks.
  *
- * Clerk's sign-in and sign-up modals are the first interactive surface a new
- * user touches, and they are the only strings translated so far — everything
- * the app itself renders is still hardcoded English. Keeping the decision here
- * rather than inline at the Clerk provider means the app's own strings can join
- * later without a second, subtly different notion of "what language is this".
+ * Resolution lives here so Clerk, the React provider, and Electron's menu
+ * file all ask the same question. `?lang=` outranks `localStorage`, which
+ * outranks the OS.
  */
 
 export type Locale = "en" | "pt-BR";

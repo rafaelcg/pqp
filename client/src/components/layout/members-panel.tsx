@@ -35,7 +35,7 @@ import { Dialog } from "@/components/ui/dialog";
 import { StatusDot } from "@/components/user/status-dot";
 import { useProfilePopover } from "@/components/user/user-profile-popover";
 import type { ProfileSubject } from "@/components/user/profile-relations";
-import { useTranslation } from "@/lib/i18n";
+import { translateMessage, useTranslation } from "@/lib/i18n";
 import {
   ApiError,
   banMember,
@@ -53,48 +53,41 @@ import {
   type ServerBan,
   type ServerMember,
 } from "@/lib/api";
-import { cn } from "@/lib/utils";
+import { cn, formatFullTimestamp } from "@/lib/utils";
 
 type MemberRole = "owner" | "admin" | "member";
 
 /** "45 minutes", "7 days" — a duration a moderator reads, not 10080. */
 function describeMinutes(minutes: number): string {
   if (minutes < 60) {
-    return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+    return translateMessage("timeout.minutes", { count: minutes });
   }
   if (minutes < 60 * 24) {
     const hours = minutes / 60;
-    return `${hours} hour${hours === 1 ? "" : "s"}`;
+    return translateMessage("timeout.hours", { count: hours });
   }
   const days = minutes / (60 * 24);
-  return `${days} day${days === 1 ? "" : "s"}`;
+  return translateMessage("timeout.days", { count: days });
 }
 
-/**
- * How long is left, in the coarsest unit that is still honest.
- *
- * Computed from the absolute `expiresAt` the server sent rather than from a
- * duration it counted down, so a tab left open overnight is stale by a render
- * rather than wrong by twelve hours.
- */
 function timeRemaining(expiresAt: string): string {
   const ms = new Date(expiresAt).getTime() - Date.now();
   if (ms <= 0) {
-    return "expiring now";
+    return translateMessage("timeout.expiring");
   }
   const minutes = Math.ceil(ms / 60_000);
   if (minutes < 60) {
-    return `${minutes}m left`;
+    return translateMessage("timeout.left.minutes", { count: minutes });
   }
   const hours = Math.ceil(minutes / 60);
   if (hours < 48) {
-    return `${hours}h left`;
+    return translateMessage("timeout.left.hours", { count: hours });
   }
-  return `${Math.ceil(hours / 24)}d left`;
+  return translateMessage("timeout.left.days", { count: Math.ceil(hours / 24) });
 }
 
 function formatMoment(iso: string): string {
-  return new Date(iso).toLocaleString();
+  return formatFullTimestamp(iso);
 }
 
 interface RowAction {
@@ -138,8 +131,9 @@ interface PendingMove {
  * audio path to do the muting, and faking it client-side would be enforcement
  * theater.
  */
-const MESH_MUTE_UNAVAILABLE =
-  "This call runs peer-to-peer — the audio never touches the server, so a server mute cannot be enforced. Disconnect them or use a timeout instead.";
+function meshMuteUnavailable(): string {
+  return translateMessage("timeout.mesh");
+}
 
 interface PendingRemoval {
   member: ServerMember;
@@ -297,7 +291,7 @@ export function MembersPanel({
       })
       .catch((err) => {
         if (!cancelled) {
-          setError(messageOf(err, "Failed to load members"));
+          setError(messageOf(err, t("member.loadFailed")));
         }
       })
       .finally(() => {
@@ -319,7 +313,7 @@ export function MembersPanel({
         })
         .catch((err) => {
           if (!cancelled) {
-            setTimeoutsError(messageOf(err, "Failed to load timeouts"));
+            setTimeoutsError(messageOf(err, t("timeout.loadFailed")));
           }
         });
     }
@@ -381,7 +375,7 @@ export function MembersPanel({
       setTimeouts((await listTimeouts(serverId)).timeouts);
       setTimeoutsError(null);
     } catch (err) {
-      setTimeoutsError(messageOf(err, "Failed to load timeouts"));
+      setTimeoutsError(messageOf(err, t("timeout.loadFailed")));
     }
   }, [serverId, canManage]);
 
@@ -395,7 +389,7 @@ export function MembersPanel({
       const res = await listBans(serverId);
       setBans(res.bans);
     } catch (err) {
-      setBansError(messageOf(err, "Failed to load bans"));
+      setBansError(messageOf(err, t("member.bansLoadFailed")));
     } finally {
       setBansLoading(false);
     }
@@ -433,7 +427,7 @@ export function MembersPanel({
         prev.map((m) => (m.id === userId ? { ...m, role: next } : m)),
       );
     } catch (err) {
-      setError(messageOf(err, "Failed to update role"));
+      setError(messageOf(err, t("member.roleFailed")));
     } finally {
       setBusyId(null);
     }
@@ -459,7 +453,7 @@ export function MembersPanel({
       }
     } catch (err) {
       setError(
-        messageOf(err, ban ? "Failed to ban member" : "Failed to remove member"),
+        messageOf(err, ban ? t("member.banFailed") : t("member.removeFailed")),
       );
     } finally {
       setBusyId(null);
@@ -478,7 +472,7 @@ export function MembersPanel({
       setPendingTimeout(null);
       await reloadTimeouts();
     } catch (err) {
-      setError(messageOf(err, "Failed to time out member"));
+      setError(messageOf(err, t("member.timeoutFailed")));
     } finally {
       setBusyId(null);
     }
@@ -494,7 +488,7 @@ export function MembersPanel({
       await liftTimeout(serverId, userId);
       setTimeouts((prev) => prev.filter((one) => one.userId !== userId));
     } catch (err) {
-      setTimeoutsError(messageOf(err, "Failed to lift the timeout"));
+      setTimeoutsError(messageOf(err, t("timeout.liftFailed")));
     } finally {
       setBusyId(null);
     }
@@ -514,7 +508,7 @@ export function MembersPanel({
       // No local list surgery: the roster broadcast that follows the eviction
       // is what removes their voice line, and it is the authority anyway.
     } catch (err) {
-      setError(messageOf(err, "Failed to disconnect them from voice"));
+      setError(messageOf(err, t("member.disconnectFailed")));
     } finally {
       setBusyId(null);
     }
@@ -531,7 +525,7 @@ export function MembersPanel({
       await moveMemberVoice(serverId, member.id, channelId);
       setPendingMove(null);
     } catch (err) {
-      setError(messageOf(err, "Failed to move them"));
+      setError(messageOf(err, t("member.moveFailed")));
     } finally {
       setBusyId(null);
     }
@@ -547,12 +541,12 @@ export function MembersPanel({
     try {
       await setMemberVoiceMuted(serverId, member.id, true);
       setVoiceHint(
-        `${member.displayName}'s mic is muted at the voice server. They can unmute themselves — for anything lasting, use a timeout.`,
+        t("timeout.sfuMute", { name: member.displayName }),
       );
     } catch (err) {
       // The 409 for a mesh room lands here too, with the server's own honest
       // sentence — a hint, not an error: nothing is broken, it is a limit.
-      setVoiceHint(messageOf(err, "Failed to mute them"));
+      setVoiceHint(messageOf(err, t("member.muteFailed")));
     } finally {
       setBusyId(null);
     }
@@ -568,7 +562,7 @@ export function MembersPanel({
       await unbanMember(serverId, userId);
       setBans((prev) => prev.filter((b) => b.userId !== userId));
     } catch (err) {
-      setBansError(messageOf(err, "Failed to lift ban"));
+      setBansError(messageOf(err, t("member.unbanFailed")));
     } finally {
       setBusyId(null);
     }
@@ -580,7 +574,7 @@ export function MembersPanel({
       const username = member.username;
       actions.push({
         id: "mention",
-        label: "Mention",
+        label: t("member.mention"),
         icon: AtSign,
         onSelect: () => onMention(username),
       });
@@ -590,13 +584,13 @@ export function MembersPanel({
         member.role === "member"
           ? {
               id: "promote",
-              label: "Promote to admin",
+              label: t("member.promote"),
               icon: ShieldPlus,
               onSelect: () => void setRole(member.id, "admin"),
             }
           : {
               id: "demote",
-              label: "Demote to member",
+              label: t("member.demote"),
               icon: ShieldMinus,
               onSelect: () => void setRole(member.id, "member"),
             },
@@ -611,13 +605,13 @@ export function MembersPanel({
         blockedUserIds.has(member.id)
           ? {
               id: "unblock",
-              label: "Unblock",
+              label: t("member.unblock"),
               icon: UserCheck,
               onSelect: () => onUnblockUser(member.id),
             }
           : {
               id: "block",
-              label: "Block",
+              label: t("member.block"),
               icon: UserX,
               onSelect: () => onBlockUser(member.id),
               danger: true,
@@ -631,7 +625,7 @@ export function MembersPanel({
     if (onReportUser && member.id !== currentUserId) {
       actions.push({
         id: "report",
-        label: "Report",
+        label: t("member.report"),
         icon: Flag,
         onSelect: () => onReportUser(member),
         danger: true,
@@ -647,13 +641,15 @@ export function MembersPanel({
         active
           ? {
               id: "untimeout",
-              label: `End timeout (${timeRemaining(active.expiresAt)})`,
+              label: t("timeout.end", {
+                remaining: timeRemaining(active.expiresAt),
+              }),
               icon: TimerReset,
               onSelect: () => void endTimeout(member.id),
             }
           : {
               id: "timeout",
-              label: "Time out",
+              label: t("timeout.action"),
               icon: Clock,
               onSelect: () =>
                 setPendingTimeout({
@@ -673,7 +669,7 @@ export function MembersPanel({
         if (voiceChannels.length > 1) {
           actions.push({
             id: "voice-move",
-            label: "Move to a voice channel",
+            label: t("member.moveVoice"),
             icon: ArrowRightLeft,
             onSelect: () =>
               setPendingMove({ member, fromChannelId: voice.channelId }),
@@ -686,15 +682,15 @@ export function MembersPanel({
         const meshRoom = voice.transport === "mesh";
         actions.push({
           id: "voice-mute",
-          label: "Server mute mic (SFU)",
+          label: t("member.serverMute"),
           icon: MicOff,
           title: meshRoom
-            ? MESH_MUTE_UNAVAILABLE
-            : "Mute their mic at the voice server, for everyone in the call. They can unmute themselves.",
+            ? meshMuteUnavailable()
+            : t("timeout.sfuMute", { name: member.displayName }),
           dim: meshRoom,
           onSelect: () => {
             if (meshRoom) {
-              setVoiceHint(MESH_MUTE_UNAVAILABLE);
+              setVoiceHint(meshMuteUnavailable());
               return;
             }
             void serverMuteVoice(member);
@@ -702,7 +698,7 @@ export function MembersPanel({
         });
         actions.push({
           id: "voice-disconnect",
-          label: `Disconnect from voice (${voice.channelName})`,
+          label: t("member.disconnectVoice", { channel: voice.channelName }),
           icon: PhoneOff,
           onSelect: () => void disconnectVoice(member),
           danger: true,
@@ -711,14 +707,14 @@ export function MembersPanel({
       actions.push(
         {
           id: "kick",
-          label: "Remove from community",
+          label: t("member.remove"),
           icon: UserMinus,
           onSelect: () => setPending({ member, ban: false }),
           danger: true,
         },
         {
           id: "ban",
-          label: "Ban from community",
+          label: t("member.ban"),
           icon: Ban,
           onSelect: () => setPending({ member, ban: true }),
           danger: true,
@@ -734,8 +730,8 @@ export function MembersPanel({
     return (
       <Dialog
         open
-        title={`Time out ${name}?`}
-        eyebrow="Confirm"
+        title={t("timeout.title", { name })}
+        eyebrow={t("timeout.eyebrow")}
         size="lg"
         closeOnBackdrop={false}
         onClose={() => setPendingTimeout(null)}
@@ -746,7 +742,7 @@ export function MembersPanel({
               disabled={busy}
               onClick={() => setPendingTimeout(null)}
             >
-              Cancel
+              {t("common.cancel")}
             </Button>
             <Button
               variant="danger"
@@ -754,8 +750,10 @@ export function MembersPanel({
               onClick={() => void confirmTimeout()}
             >
               {busy
-                ? "Working…"
-                : `Time out for ${describeMinutes(pendingTimeout.minutes)}`}
+                ? t("common.working")
+                : t("timeout.confirm", {
+                    duration: describeMinutes(pendingTimeout.minutes),
+                  })}
             </Button>
           </>
         }
@@ -764,23 +762,15 @@ export function MembersPanel({
           {/* Says what a timeout is *not*, because that is the part a moderator
               reaching for the ban button does not know yet. */}
           <p className="text-sm text-paper">
-            <span className="font-semibold">{name}</span>
-            {pendingTimeout.member.tag && (
-              <span className="font-mono text-paper-muted">
-                {" "}
-                {pendingTimeout.member.tag}
-              </span>
-            )}{" "}
-            stays in{" "}
-            <span className="font-semibold">{serverName ?? "this server"}</span>{" "}
-            and can still read every channel. They cannot post, react or join
-            voice until the timeout ends. It does not touch their direct
-            messages.
+            {t("timeout.body", {
+              name,
+              server: serverName ?? t("timeout.thisServer"),
+            })}
           </p>
 
           <fieldset>
             <legend className="mb-2 text-xs font-semibold uppercase tracking-wider text-paper-muted">
-              How long
+              {t("timeout.howLong")}
             </legend>
             <div className="flex flex-wrap gap-2">
               {TIMEOUT_PRESET_MINUTES.map((minutes) => (
@@ -809,7 +799,7 @@ export function MembersPanel({
               htmlFor="timeout-reason"
               className="mb-2 block text-xs font-semibold uppercase tracking-wider text-paper-muted"
             >
-              Why (kept in the audit log)
+              {t("timeout.why")}
             </label>
             <input
               id="timeout-reason"
@@ -817,7 +807,7 @@ export function MembersPanel({
               value={pendingTimeout.reason}
               maxLength={TIMEOUT_REASON_MAX_LENGTH}
               disabled={busy}
-              placeholder="Optional — but this is what you will read next week"
+              placeholder={t("timeout.reasonPlaceholder")}
               className="w-full rounded-md border border-ink-4 bg-ink-2 px-3 py-2 text-sm text-paper placeholder:text-paper-muted"
               onChange={(event) => {
                 const reason = event.target.value;
@@ -846,8 +836,8 @@ export function MembersPanel({
     return (
       <Dialog
         open
-        title={`Move ${name}?`}
-        eyebrow="Voice"
+        title={t("member.moveTitle", { name })}
+        eyebrow={t("chrome.voice")}
         size="lg"
         closeOnBackdrop={false}
         onClose={() => setPendingMove(null)}
@@ -857,7 +847,7 @@ export function MembersPanel({
             disabled={busy}
             onClick={() => setPendingMove(null)}
           >
-            Cancel
+            {t("common.cancel")}
           </Button>
         }
       >
@@ -865,9 +855,7 @@ export function MembersPanel({
           {/* Honest about the mechanism: the server cannot teleport a client,
               it disconnects them with an invitation their app follows. */}
           <p className="text-sm text-paper">
-            <span className="font-semibold">{name}</span> will be disconnected
-            and their app will rejoin the channel you pick. They can only be
-            moved to a voice channel they already have access to.
+            {t("member.moveBody", { name })}
           </p>
           <div className="flex flex-col gap-1">
             {targets.map((channel) => (
@@ -898,8 +886,12 @@ export function MembersPanel({
     return (
       <Dialog
         open
-        title={pending.ban ? `Ban ${name}?` : `Remove ${name}?`}
-        eyebrow="Confirm"
+        title={
+          pending.ban
+            ? t("member.banTitle", { name })
+            : t("member.removeTitle", { name })
+        }
+        eyebrow={t("timeout.eyebrow")}
         size="lg"
         closeOnBackdrop={false}
         onClose={() => setPending(null)}
@@ -910,7 +902,7 @@ export function MembersPanel({
               disabled={busyId === pending.member.id}
               onClick={() => setPending(null)}
             >
-              Cancel
+              {t("common.cancel")}
             </Button>
             <Button
               variant="danger"
@@ -918,32 +910,24 @@ export function MembersPanel({
               onClick={() => void confirmRemoval()}
             >
               {busyId === pending.member.id
-                ? "Working…"
+                ? t("common.working")
                 : pending.ban
-                  ? "Ban member"
-                  : "Remove member"}
+                  ? t("member.banAction")
+                  : t("member.removeAction")}
             </Button>
           </>
         }
       >
         <div className="space-y-3 px-5 py-5">
           <p className="text-sm text-paper">
-            <span className="font-semibold">{name}</span>
-            {pending.member.tag && (
-              <span className="font-mono text-paper-muted">
-                {" "}
-                {pending.member.tag}
-              </span>
-            )}{" "}
-            will be removed from{" "}
-            <span className="font-semibold">{serverName ?? "this server"}</span>
-            {pending.ban
-              ? " and cannot rejoin by invite until the ban is lifted."
-              : ". They can rejoin with a new invite."}
+            {t(pending.ban ? "member.banBody" : "member.removeBody", {
+              name,
+              server: serverName ?? t("timeout.thisServer"),
+            })}
           </p>
           {pending.ban && (
             <p className="text-sm text-paper-muted">
-              Lift the ban from the Banned section to let them back in.
+              {t("member.liftBanHint")}
             </p>
           )}
           {error && (
@@ -959,8 +943,8 @@ export function MembersPanel({
   return (
     <Dialog
       open
-      title={serverName ?? "Server"}
-      eyebrow="Members"
+      title={serverName ?? t("chrome.fallbackServer")}
+      eyebrow={t("memberList.title")}
       size="lg"
       onClose={onClose}
     >
@@ -973,13 +957,13 @@ export function MembersPanel({
 
         {loading && (
           <p role="status" aria-live="polite" className="px-2 py-6 text-sm text-paper-muted">
-            Loading members…
+            {t("memberList.loading")}
           </p>
         )}
 
         {!loading && members.length === 0 && !error && (
           <p className="px-2 py-6 text-sm text-paper-muted">
-            Nobody here yet. Invite people to get started.
+            {t("member.emptyInvite")}
           </p>
         )}
 
@@ -1076,11 +1060,13 @@ export function MembersPanel({
                       reason `listTimeouts` returns more than a boolean. */}
                   {timeout && (
                     <p className="truncate text-[11px] text-warning">
-                      Timed out until {formatMoment(timeout.expiresAt)} (
-                      {timeRemaining(timeout.expiresAt)}) by{" "}
-                      {timeout.issuedByName ?? "a former moderator"} on{" "}
-                      {formatMoment(timeout.createdAt)}
-                      {timeout.reason ? ` — ${timeout.reason}` : ""}
+                    {t("timeout.until", {
+                      expires: formatMoment(timeout.expiresAt),
+                      remaining: timeRemaining(timeout.expiresAt),
+                      issuer: timeout.issuedByName ?? t("timeout.formerMod"),
+                      created: formatMoment(timeout.createdAt),
+                    })}
+                    {timeout.reason ? ` — ${timeout.reason}` : ""}
                     </p>
                   )}
                   {/* Same visibility as the channel list's occupant rows —
@@ -1088,12 +1074,12 @@ export function MembersPanel({
                       receives, so it is not gated on moderator rank. */}
                   {voice && (
                     <p className="flex items-center gap-1 truncate text-[11px] text-signal">
-                      In voice — {voice.channelName}
+                    {t("memberList.inVoice", { channel: voice.channelName })}
                       {voice.deafened ? (
-                        <span className="text-danger">(deafened)</span>
+                        <span className="text-danger">{t("timeout.deafened")}</span>
                       ) : (
                         voice.muted && (
-                          <span className="text-danger">(muted)</span>
+                          <span className="text-danger">{t("timeout.muted")}</span>
                         )
                       )}
                     </p>
@@ -1102,7 +1088,9 @@ export function MembersPanel({
                 {timeout && (
                   <span
                     className="flex shrink-0 items-center gap-1 rounded bg-warning/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-warning"
-                    title={`Timed out until ${formatMoment(timeout.expiresAt)}`}
+                    title={t("member.timeoutUntil", {
+                      expires: formatMoment(timeout.expiresAt),
+                    })}
                   >
                     <Clock className="h-3 w-3" />
                     {timeRemaining(timeout.expiresAt)}
@@ -1118,7 +1106,11 @@ export function MembersPanel({
                         : "bg-ink-4 text-paper-muted",
                   )}
                 >
-                  {member.role}
+                  {member.role === "owner"
+                    ? t("member.role.owner")
+                    : member.role === "admin"
+                      ? t("member.role.admin")
+                      : t("member.role.member")}
                 </span>
                 {actions.length > 0 && (
                   <div className="flex shrink-0 items-center gap-0.5">
@@ -1159,7 +1151,7 @@ export function MembersPanel({
               ) : (
                 <ChevronRight className="h-4 w-4" />
               )}
-              Banned
+              {t("member.bans")}
             </button>
 
             {bansOpen && (
@@ -1175,12 +1167,12 @@ export function MembersPanel({
                     aria-live="polite"
                     className="px-2 py-4 text-sm text-paper-muted"
                   >
-                    Loading bans…
+                    {t("member.bansLoading")}
                   </p>
                 )}
                 {!bansLoading && bans.length === 0 && !bansError && (
                   <p className="px-2 py-4 text-sm text-paper-muted">
-                    Nobody is banned from this server.
+                    {t("member.bansEmpty")}
                   </p>
                 )}
                 {bans.map((banned) => (
@@ -1214,7 +1206,9 @@ export function MembersPanel({
                       onClick={() => void unban(banned.userId)}
                     >
                       <RotateCcw className="h-3.5 w-3.5" />
-                      {busyId === banned.userId ? "Working…" : "Unban"}
+                      {busyId === banned.userId
+                        ? t("common.working")
+                        : t("member.unban")}
                     </Button>
                   </div>
                 ))}

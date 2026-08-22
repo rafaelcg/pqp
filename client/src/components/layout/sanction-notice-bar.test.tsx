@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import type { SanctionNotice } from "@pqp/shared";
 import { afterEach, describe, expect, it } from "vitest";
-import { en, setActiveCatalogue } from "@/lib/i18n/catalogue";
+import { en, setActiveCatalogue } from "@/lib/i18n";
 import { SanctionNoticeBar } from "./sanction-notice-bar";
 
 afterEach(() => setActiveCatalogue(undefined));

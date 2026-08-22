@@ -8,6 +8,8 @@ export interface PqpDesktop {
   getPendingDeepLink(): Promise<string | null>;
   /** Older shells predate theming, so this may be absent. */
   setTheme?(theme: "dark" | "light"): void;
+  /** Persist the UI locale in the main process and rebuild the app menu. */
+  setLocale?(locale: "en" | "pt-BR"): Promise<string | null>;
   /** Dock / taskbar mention count. Older shells predate notifications. */
   setBadgeCount?(count: number): void;
   /**
@@ -34,6 +36,11 @@ export function getDesktop(): PqpDesktop | undefined {
 
 export function isDesktopApp(): boolean {
   return getDesktop()?.isElectron === true;
+}
+
+/** i18next `context` for permission copy that must not say "browser" in Electron. */
+export function desktopContext(): { context: "desktop" } | undefined {
+  return isDesktopApp() ? { context: "desktop" } : undefined;
 }
 
 /**

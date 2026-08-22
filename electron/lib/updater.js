@@ -1,4 +1,5 @@
 const { app, dialog } = require("electron");
+const { t } = require("./i18n");
 
 /**
  * Shell auto-update, over electron-updater / GitHub Releases.
@@ -84,15 +85,15 @@ function initAutoUpdate(getWindow) {
     promptOpen = true;
 
     const window = getWindow();
+    const version = info?.version ?? "";
     const options = {
       type: "info",
-      buttons: ["Restart now", "Later"],
+      buttons: [t("updater.restart"), t("updater.later")],
       defaultId: 0,
       cancelId: 1,
-      title: "Update ready",
-      message: `pqp ${info?.version ?? ""} is ready to install.`.trim(),
-      detail:
-        "Restarting takes a few seconds. If you are in a call, choose Later — the update installs the next time you quit.",
+      title: t("updater.title"),
+      message: t("updater.message", { version }).trim(),
+      detail: t("updater.detail"),
     };
 
     try {

@@ -3,7 +3,7 @@
  *
  * WHY NOT CATALOGUE KEYS
  *
- * Everything else the app says goes through `lib/i18n/catalogue.ts`, and for UI
+ * Everything else the app says goes through `@/lib/i18n`, and for UI
  * labels that is right. These three pages are not labels. Terms, Privacy and
  * Cookies are ~15,000 words of connected prose where sentences qualify each
  * other and a clause only means what it means next to the one above it. Cutting

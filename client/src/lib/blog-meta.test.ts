@@ -8,8 +8,8 @@ import {
 } from "./blog-meta";
 import { POSTS } from "./blog/posts";
 import { loadPostBody } from "./blog/bodies";
-import { en } from "./i18n/catalogue";
-import { ptBR } from "./i18n/messages.pt-BR";
+import en from "../locales/en/translation.json";
+import ptBR from "../locales/pt-BR/translation.json";
 
 /**
  * The blog half of the Pages middleware, plus the post index behind it.
@@ -142,8 +142,8 @@ describe("injectBlogHead", () => {
   });
 });
 
-describe("index copy stays in step with the catalogue", () => {
-  // `blog-meta.ts` cannot import the catalogue (it is bundled for the edge by
+describe("index copy stays in step with the JSON catalogues", () => {
+  // `blog-meta.ts` cannot import the JSON catalogues (it is bundled for the edge by
   // an esbuild run outside the workspace), so its strings are duplicates. This
   // is what stops the duplication drifting.
   it("matches English", () => {

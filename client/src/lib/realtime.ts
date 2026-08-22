@@ -6,7 +6,7 @@ import type {
 } from "@pqp/shared";
 // The pure catalogue module, not `lib/i18n` — this file must not pull React
 // into a transport.
-import { translateMessage } from "@/lib/i18n/catalogue";
+import { translateMessage } from "@/lib/i18n";
 import { getWsUrl } from "@/lib/utils";
 
 type MessageHandler = (message: ChatServerMessage | VoiceSignalingMessage) => void;

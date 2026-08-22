@@ -56,6 +56,9 @@ jobs:
       - name: Build shared
         run: pnpm --filter @pqp/shared build
 
+      - name: Check i18n catalogues
+        run: pnpm --filter @pqp/client i18n:check
+
       - name: Lint
         run: pnpm lint
 
