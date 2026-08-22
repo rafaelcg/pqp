@@ -95,12 +95,26 @@ export function screenShareUnavailableMessage(
  * How (or whether) this browser can show something fullscreen.
  *
  * - `element` — the standard Fullscreen API on any element.
- * - `video` — iOS Safari's video-only `webkitEnterFullscreen`, the only
- *   fullscreen it has.
- * - `none` — no fullscreen at all; the control must not be rendered, because a
- *   button that does nothing is worse than no button.
+ * - `expand` — no real fullscreen; the app grows the panel to fill the
+ *   viewport itself.
+ *
+ * THERE IS NO `video` MODE ANY MORE, and that is the fix for a real bug. iOS
+ * Safari's only native fullscreen is the video element's own
+ * `webkitEnterFullscreen`, which hands the element to the operating system's
+ * media player. That player renders files and HLS. It cannot render a
+ * `MediaStream`, so on an iPhone it went fullscreen and showed **black** while
+ * the call's audio carried on from its own <audio> sink: no error, no crash,
+ * no picture. Reported from a real iPhone on 22 Aug 2026.
+ *
+ * So on any browser without element fullscreen we do it ourselves, in the
+ * page, with CSS. It is not the OS chrome, and it cannot hide the browser's
+ * own toolbars, but it fills the viewport and it shows the actual video, which
+ * is the entire point of the button.
+ *
+ * `none` is gone too: `expand` needs no platform support at all, so there is
+ * no browser left where the control has to be hidden.
  */
-export type FullscreenMode = "element" | "video" | "none";
+export type FullscreenMode = "element" | "expand";
 
 interface FullscreenProbe {
   /** `document.fullscreenEnabled` — false inside an iframe without allowfullscreen. */
@@ -119,8 +133,6 @@ interface FullscreenProbe {
    * support. The user clicked the button and nothing happened.
    */
   webkitRequestFullscreen?: unknown;
-  /** `video.webkitEnterFullscreen` — iOS Safari's only fullscreen. */
-  webkitEnterFullscreen?: unknown;
 }
 
 export function detectFullscreenMode(probe: FullscreenProbe): FullscreenMode {
@@ -131,10 +143,10 @@ export function detectFullscreenMode(probe: FullscreenProbe): FullscreenMode {
   ) {
     return "element";
   }
-  if (typeof probe.webkitEnterFullscreen === "function") {
-    return "video";
-  }
-  return "none";
+  // Everything else, iPhone included, expands in the page. Deliberately not a
+  // probe for `webkitEnterFullscreen`: it exists on an iPhone and it is
+  // precisely the thing that renders a MediaStream as a black rectangle.
+  return "expand";
 }
 
 /**

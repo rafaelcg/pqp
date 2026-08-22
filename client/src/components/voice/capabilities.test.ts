@@ -119,41 +119,43 @@ describe("fullscreen capability", () => {
 
   it("uses element fullscreen on Safari before 16.4, which only has the prefix", () => {
     // The bug this pins: with only the standard name probed, a Mac on Safari
-    // 16.3 reported "no element fullscreen", fell through to the iOS video-only
-    // path, and then threw from `webkitEnterFullscreen` on a MediaStream video
-    // — into a silent catch. The button did nothing, twice over.
+    // 16.3 reported "no element fullscreen" and fell through to the fallback,
+    // so a machine with perfectly good OS fullscreen never used it.
     expect(
       detectFullscreenMode({
         documentFullscreenEnabled: undefined,
         requestFullscreen: undefined,
         webkitRequestFullscreen: () => Promise.resolve(),
-        webkitEnterFullscreen: () => {},
       }),
     ).toBe("element");
   });
 
-  it("falls back to iOS Safari's video-only fullscreen", () => {
-    // iOS Safari: no Element.requestFullscreen under either spelling, no
-    // document.fullscreenEnabled, but <video> can go fullscreen through the
-    // webkit method.
+  it("expands in the page on an iPhone rather than using the native player", () => {
+    // The bug this pins, reported from a real iPhone on 22 Aug 2026. iOS
+    // Safari's only native fullscreen hands the <video> to the OS media
+    // player, which renders files and HLS and CANNOT render a MediaStream: it
+    // went fullscreen and showed black while the call's audio kept playing
+    // from its own <audio> sink. No error, no crash, no picture. So the
+    // fallback must never be the native path, even though the method exists.
     expect(
       detectFullscreenMode({
         documentFullscreenEnabled: undefined,
         requestFullscreen: undefined,
         webkitRequestFullscreen: undefined,
-        webkitEnterFullscreen: () => {},
       }),
-    ).toBe("video");
+    ).toBe("expand");
   });
 
-  it("reports none when nothing can go fullscreen, so the control can be hidden", () => {
-    expect(detectFullscreenMode({})).toBe("none");
+  it("expands when the document forbids real fullscreen", () => {
+    // An iframe without allowfullscreen. There is no longer a "none": the
+    // in-page expand needs no permission from anybody.
+    expect(detectFullscreenMode({})).toBe("expand");
     expect(
       detectFullscreenMode({
         documentFullscreenEnabled: false,
         requestFullscreen: () => Promise.resolve(),
       }),
-    ).toBe("none");
+    ).toBe("expand");
   });
 });
 
