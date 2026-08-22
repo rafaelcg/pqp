@@ -60,8 +60,14 @@ export const ptBR: PartialMessages = {
   // "Renting the room" has no Brazilian equivalent that lands. "Morar de favor"
   // does the same job: you are only there while somebody else allows it.
   "landing.pitch.title": "Cansado de morar de favor?",
+  // REWRITTEN 22 Aug 2026 after a reader called the old version "super
+  // prepotente" and was right. It said "O pqp é o contrário", which reads as a
+  // promise never to change the rules, and nobody running a server in Brazil
+  // can make that promise: an order arrives and it gets obeyed. The real
+  // difference was never a promise about our behaviour, it is that the code is
+  // open and you can leave with it, so the sentence now says that instead.
   "landing.pitch.body":
-    "Os apps grandes mudam as regras quando querem, escondem as suas comunidades e tratam a sua turma como estoque. O pqp é o contrário: cria uma comunidade, chama a galera, conversa. Fica com as chaves se quiser — ou usa as nossas e esquece a infra.",
+    "Os apps grandes escondem as suas comunidades e tratam a sua turma como estoque. O pqp não promete ser mais bonzinho: promete não te prender. O código é aberto, dá pra hospedar você mesmo e levar a sua turma junto. Se preferir usar o nosso, ele fica em São Paulo e segue a lei daqui igual todo mundo.",
 
   "landing.how.title": "Três passos. Depois é só gritar.",
   "landing.how.body": "Sem labirinto de cadastro. Cria, chama, apronta.",

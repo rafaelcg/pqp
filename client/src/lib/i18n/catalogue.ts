@@ -70,8 +70,11 @@ export const en = {
   "landing.trust.yourKeys": "Your keys",
 
   "landing.pitch.title": "Tired of renting the room?",
+  // See the note on the Portuguese. "pqp is the opposite" claimed an immunity
+  // from rule changes that no hosted service has, and read as arrogant to the
+  // person who said so. The claim is now the one we can actually keep.
   "landing.pitch.body":
-    "Big chat apps rewrite the house rules, bury your communities, and treat your crew like inventory. pqp is the opposite: make a community, invite people, talk. Keep the keys if you want — or use ours and skip the ops.",
+    "Big chat apps bury your communities and treat your crew like inventory. pqp does not promise to behave better: it promises not to trap you. The code is open, you can host it yourself and take your people with you. Use ours instead and it lives in São Paulo, under the same laws as everyone else.",
 
   "landing.how.title": "Three moves. Then you're loud.",
   "landing.how.body": "No onboarding maze. Create, invite, cause problems.",
