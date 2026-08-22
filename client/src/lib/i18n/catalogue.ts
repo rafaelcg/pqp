@@ -235,6 +235,12 @@ export const en = {
     "Something went wrong on our end. Try again in a moment.",
   "publicProfile.retry": "Try again",
 
+  // The share offered the moment a handle is claimed. The label changes to
+  // match what the device did, because a phone opens a sheet and a desktop
+  // copies a line.
+  "handle.share.cta": "Show it off",
+  "handle.share.copied": "Copied",
+  "handle.share.failed": "Could not share",
   "handle.claimed.notice": "Your link is {url} — copy it and go show off.",
   "handle.claim.failed": "Could not save that @: {reason}",
   "handle.add.sent": "Friend request sent to {name}.",

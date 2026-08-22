@@ -216,6 +216,9 @@ export const ptBR: PartialMessages = {
     "Deu ruim aqui do nosso lado. Tenta de novo daqui a pouco.",
   "publicProfile.retry": "Tentar de novo",
 
+  "handle.share.cta": "Mostrar pra galera",
+  "handle.share.copied": "Copiado",
+  "handle.share.failed": "Não deu pra compartilhar",
   "handle.claimed.notice": "Seu link é {url} — copia e vai mostrar pra galera.",
   "handle.claim.failed": "Não deu pra salvar esse @: {reason}",
   "handle.add.sent": "Pedido de amizade enviado pra {name}.",
