@@ -15,6 +15,7 @@ import {
   validateHandle,
   type HandleRejection,
 } from "@pqp/shared";
+import { Cracha } from "@/components/marketing/cracha";
 import { MarketingFooter } from "@/components/marketing/marketing-footer";
 import { MarketingNav } from "@/components/marketing/marketing-nav";
 import { Seo } from "@/components/marketing/seo";
@@ -169,6 +170,16 @@ export function ClaimPage() {
         />
 
         <div className="relative z-10 w-full max-w-lg text-center">
+          {/* The object, above everything, showing whatever is in the box.
+              Seeing your own name on a thing you could own is the argument;
+              the words below it are for the people who want one in sentences. */}
+          <div
+            className="animate-rise mb-2"
+            style={{ "--stagger": 0 } as CSSProperties}
+          >
+            <Cracha handle={handle} edition={t("claim.edition")} />
+          </div>
+
           <p
             className="animate-rise text-[11px] font-medium uppercase tracking-[0.28em] text-signal"
             style={{ "--stagger": 0 } as CSSProperties}

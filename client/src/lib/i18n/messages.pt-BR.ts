@@ -157,6 +157,7 @@ export const ptBR: PartialMessages = {
   "claim.seo.description":
     "pqp.gg/@você — um nome só, quem chegar primeiro leva. De graça, e é seu.",
   "claim.eyebrow": "Um nome. O seu.",
+  "claim.edition": "ago 2026",
   "claim.title": "Garanta seu @ no pqp",
   "claim.body":
     "Sua página, seu link, sua galera. Digita um nome e vê se ainda tá livre.",
@@ -184,7 +185,7 @@ export const ptBR: PartialMessages = {
     "Chega de soletrar quatro dígitos. Um nome, e é o que você escolheu.",
   "claim.why.3.title": "Quem chegar primeiro leva",
   "claim.why.3.body":
-    "Só existe um de cada. Os bons vão cedo — é assim que funciona.",
+    "Só existe um de cada. Os bons vão cedo, é assim que funciona.",
   "claim.existing": "Você já tem o seu: {url}",
 
   "publicProfile.loading": "Carregando…",
@@ -215,6 +216,9 @@ export const ptBR: PartialMessages = {
     "Deu ruim aqui do nosso lado. Tenta de novo daqui a pouco.",
   "publicProfile.retry": "Tentar de novo",
 
+  "handle.share.cta": "Mostrar pra galera",
+  "handle.share.copied": "Copiado",
+  "handle.share.failed": "Não deu pra compartilhar",
   "handle.claimed.notice": "Seu link é {url} — copia e vai mostrar pra galera.",
   "handle.claim.failed": "Não deu pra salvar esse @: {reason}",
   "handle.add.sent": "Pedido de amizade enviado pra {name}.",

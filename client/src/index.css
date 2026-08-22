@@ -64,8 +64,27 @@
   --color-channel: var(--color-surface-1);
 
   --font-sans: "Instrument Sans", ui-sans-serif, system-ui, sans-serif;
-  --font-display: "Unbounded", "Instrument Sans", sans-serif;
-  --font-brand: "Dela Gothic One", "Unbounded", sans-serif;
+  /*
+   * WHY GABARITO AND NOT UNBOUNDED. Unbounded sets nearly every letter to the
+   * same width, so a word stops having rhythm and reads as a brick, and at
+   * weight 800 the counters in a, e, o and g close up exactly where the type
+   * is largest. In Portuguese, with long words and accents, that produced a
+   * heavy slab that broke in the wrong places: the /garanta headline wrapped
+   * as "no / pqp". Gabarito keeps the friendly geometric character but is
+   * narrower with real width contrast between letters, holds its counters open
+   * at heavy weights, and fits more per line, which fixes the wrap for free.
+   */
+  --font-display: "Gabarito", "Instrument Sans", sans-serif;
+  /*
+   * The signature face, and it is used for exactly one thing: somebody's @.
+   * A handle is the one piece of text on this product that belongs to a
+   * person rather than to us, so it gets the face with opinions while
+   * everything around it stays in the workhorse. Bricolage's irregular a, g
+   * and R are the point; they would be noise in a heading and are character
+   * on a name.
+   */
+  --font-handle: "Bricolage Grotesque", "Gabarito", sans-serif;
+  --font-brand: "Dela Gothic One", "Gabarito", sans-serif;
 }
 
 /*
@@ -275,6 +294,12 @@ h1,
 h2,
 .font-display {
   font-family: var(--font-display);
+  letter-spacing: -0.03em;
+}
+
+.font-handle {
+  font-family: var(--font-handle);
+  font-weight: 800;
   letter-spacing: -0.03em;
 }
 

@@ -171,6 +171,8 @@ export const en = {
   "claim.seo.title": "Claim your @ on pqp",
   "claim.seo.description":
     "pqp.gg/@you — one name, first come, first served. Free, and yours.",
+  // Stamped on the badge, the way a card carries a month.
+  "claim.edition": "aug 2026",
   "claim.eyebrow": "One name. Yours.",
   "claim.title": "Claim your @ on pqp",
   "claim.body":
@@ -233,6 +235,12 @@ export const en = {
     "Something went wrong on our end. Try again in a moment.",
   "publicProfile.retry": "Try again",
 
+  // The share offered the moment a handle is claimed. The label changes to
+  // match what the device did, because a phone opens a sheet and a desktop
+  // copies a line.
+  "handle.share.cta": "Show it off",
+  "handle.share.copied": "Copied",
+  "handle.share.failed": "Could not share",
   "handle.claimed.notice": "Your link is {url} — copy it and go show off.",
   "handle.claim.failed": "Could not save that @: {reason}",
   "handle.add.sent": "Friend request sent to {name}.",
