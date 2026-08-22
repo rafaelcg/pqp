@@ -1,39 +1,30 @@
+// The module's own source, through Vite's `?raw`, the way
+// `marketing-meta.test.ts` reads index.html: the client's tsconfig has no Node
+// types and this suite has no business being the file that needs them.
+import SOURCE from "./cracha-face.ts?raw";
 import { describe, expect, it } from "vitest";
-import { withAlpha } from "./cracha-face";
 
 /**
- * The bug this file exists for.
+ * The rule this module lives under, asserted rather than promised.
  *
- * The first version built translucent colours by concatenating a hex alpha onto
- * whatever the stylesheet held: `${palette.accent}44`. pqp's tokens are
- * `oklch(...)`, so that produced `oklch(0.88 0.19 125)44`, `addColorStop`
- * rejected it, and the error boundary took down the whole /garanta page. It
- * passed typecheck, passed lint, and only showed up in a real browser.
+ * Two bugs and a failed build came out of colour handling here. Building
+ * translucency by string concatenation produced an invalid colour that
+ * `addColorStop` rejected, taking the page down through the error boundary.
+ * Hardcoding the palette to work around that then tripped the repository's
+ * token-leak ratchet, which exists precisely to stop a colour drifting away
+ * from the token layer.
+ *
+ * The resolution was for this file to hold no colour value at all: it paints
+ * only with strings its caller read from the live stylesheet. One convenient
+ * constant undoes that by accident, so it is checked here as well as in
+ * `bench/theme-tokens.mjs`, where the same failure arrives as a red build and
+ * is easier to misread as unrelated.
  */
-describe("withAlpha", () => {
-  it("adds alpha to an rgb string, which is what the browser hands back", () => {
-    expect(withAlpha("rgb(201, 242, 75)", 0.27)).toBe("rgba(201, 242, 75, 0.27)");
-  });
-
-  it("handles the spaced syntax too", () => {
-    expect(withAlpha("rgb(10 20 30)", 0.5)).toBe("rgba(10, 20, 30, 0.5)");
-  });
-
-  it("adds alpha to hex, which is what the defaults are", () => {
-    expect(withAlpha("#c9f24b", 0)).toBe("rgba(201, 242, 75, 0)");
-  });
-
-  it("clamps out-of-range alpha rather than emitting an invalid colour", () => {
-    expect(withAlpha("#000000", 5)).toBe("rgba(0, 0, 0, 1)");
-    expect(withAlpha("#000000", -2)).toBe("rgba(0, 0, 0, 0)");
-  });
-
-  it("never returns something a canvas would reject", () => {
-    // The actual failure mode: an unparseable colour must come back unchanged
-    // and opaque, which is a worse picture and a working page. It must NOT come
-    // back with characters glued to the end.
-    const oklch = "oklch(0.88 0.19 125)";
-    expect(withAlpha(oklch, 0.3)).toBe(oklch);
-    expect(withAlpha(oklch, 0.3)).not.toMatch(/\)\S/);
+describe("cracha-face", () => {
+  it("contains no colour literal of any kind", () => {
+    // The bench's own pattern, so the two cannot disagree about what counts.
+    const literal =
+      /(?:oklch|rgba?|hsla?)\([^)]*\)|(?<![\w])#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{3,4})\b/g;
+    expect(SOURCE.match(literal)).toBeNull();
   });
 });

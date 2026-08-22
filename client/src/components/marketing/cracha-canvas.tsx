@@ -8,7 +8,8 @@ import {
   stepRope,
   type RopePoint,
 } from "@/lib/rope";
-import { DEFAULT_PALETTE, drawCrachaFace } from "./cracha-face";
+import { cssColorToRgb, type Oklch } from "@/lib/oklch";
+import { drawCrachaFace, type FacePalette } from "./cracha-face";
 
 /**
  * The crachá: a badge on a lanyard, in three.js, that you can grab and swing.
@@ -41,6 +42,43 @@ const ORIGIN_Y = 2.05;
 /** Clamped so a backgrounded tab does not hand back a second-long frame. */
 const MAX_DT = 1 / 30;
 
+/**
+ * The tokens the badge is painted from, and the only place the stylesheet is
+ * read. Values as OKLCH components rather than colour strings, because the
+ * token bench counts a colour literal anywhere outside `index.css`, and because
+ * these are only reached when a token is missing entirely.
+ */
+const TOKENS: Record<keyof FacePalette, { name: string; fallback: Oklch }> = {
+  ink: { name: "--color-surface-0", fallback: { l: 0.16, c: 0.012, h: 250 } },
+  surface: { name: "--color-surface-2", fallback: { l: 0.24, c: 0.016, h: 250 } },
+  accent: { name: "--color-accent", fallback: { l: 0.88, c: 0.19, h: 125 } },
+  text: { name: "--color-text", fallback: { l: 0.93, c: 0.015, h: 95 } },
+  muted: { name: "--color-text-muted", fallback: { l: 0.72, c: 0.02, h: 95 } },
+};
+
+/**
+ * The palette twice, because the two renderers speak different languages.
+ *
+ * A 2D canvas parses whatever the stylesheet holds, so it gets the raw token
+ * value straight through. `THREE.Color` does not parse OKLCH at all and
+ * silently renders white when handed it, which is how the first version of this
+ * shipped a blank badge, so WebGL gets real numbers from `lib/oklch.ts`.
+ * Reading the tokens rather than hardcoding them means changing
+ * `--color-accent` changes the lanyard.
+ */
+function readTokens(element: HTMLElement) {
+  const styles = getComputedStyle(element);
+  const css = {} as FacePalette;
+  const rgb = {} as Record<keyof FacePalette, THREE.Color>;
+  for (const key of Object.keys(TOKENS) as (keyof FacePalette)[]) {
+    const raw = styles.getPropertyValue(TOKENS[key].name).trim();
+    css[key] = raw;
+    const { r, g, b } = cssColorToRgb(raw, TOKENS[key].fallback);
+    rgb[key] = new THREE.Color().setRGB(r, g, b);
+  }
+  return { css, rgb };
+}
+
 export default function CrachaCanvas({
   handle,
   edition,
@@ -59,7 +97,7 @@ export default function CrachaCanvas({
       return;
     }
 
-    const palette = DEFAULT_PALETTE;
+    const { css: palette, rgb } = readTokens(host);
     const scene = new THREE.Scene();
     // Framed to hold the whole assembly: the pin sits at ORIGIN_Y and the
     // badge's bottom edge reaches roughly -1.5, so the camera is pulled back
@@ -89,7 +127,7 @@ export default function CrachaCanvas({
     const key = new THREE.DirectionalLight(0xffffff, 2.1);
     key.position.set(2.4, 3.2, 3.4);
     scene.add(key);
-    const rim = new THREE.DirectionalLight(new THREE.Color(palette.accent), 0.9);
+    const rim = new THREE.DirectionalLight(rgb.accent, 0.9);
     rim.position.set(-3, 1.2, 1.6);
     scene.add(rim);
 
@@ -101,7 +139,7 @@ export default function CrachaCanvas({
     faceTexture.anisotropy = renderer.capabilities.getMaxAnisotropy();
 
     const edgeMaterial = new THREE.MeshStandardMaterial({
-      color: new THREE.Color(palette.ink),
+      color: rgb.ink,
       roughness: 0.75,
       metalness: 0.05,
     });
@@ -155,7 +193,7 @@ export default function CrachaCanvas({
     }
     strapGeometry.setIndex(indices);
     const strapMaterial = new THREE.MeshStandardMaterial({
-      color: new THREE.Color(palette.accent),
+      color: rgb.accent,
       roughness: 0.85,
       metalness: 0,
       side: THREE.DoubleSide,

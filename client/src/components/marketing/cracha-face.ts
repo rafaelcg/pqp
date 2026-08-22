@@ -30,58 +30,6 @@ export interface FacePalette {
   muted: string;
 }
 
-/**
- * pqp's palette, converted once to sRGB hex.
- *
- * WHY NOT READ THE CSS TOKENS AT RUNTIME. That was the first version and it
- * failed twice. `getComputedStyle` hands back `oklch(...)` verbatim rather than
- * converting to sRGB, so resolving through a probe element achieved nothing;
- * and `THREE.Color` cannot parse `oklch` at all, so every material silently
- * became white. These values were measured by painting each token to a 1x1
- * canvas in a real browser and reading the pixel, so they are exactly what the
- * stylesheet renders.
- *
- * The badge is a printed object with fixed brand colours, not a themed surface.
- * Not following runtime theming is the correct behaviour here as well as the
- * simpler one: a crachá does not change colour because you switched to light
- * mode.
- */
-export const DEFAULT_PALETTE: FacePalette = {
-  ink: "#090e12",
-  surface: "#1b2127",
-  accent: "#baed4d",
-  text: "#eae9dd",
-  muted: "#a9a497",
-};
-
-/**
- * Add alpha to a colour that may be hex or `rgb(...)`.
- *
- * WHY THIS EXISTS. The first version concatenated a hex alpha onto whatever the
- * stylesheet held: `${palette.accent}44`. pqp's tokens are `oklch(...)`, so that
- * produced `oklch(0.88 0.19 125)44`, which `addColorStop` rejects outright and
- * which took the whole page down with an error boundary. The caller now resolves
- * every token through the browser first, so what arrives here is always `rgb(r,
- * g, b)` or a hex string, and alpha is applied structurally instead of by string
- * concatenation.
- *
- * Anything unparseable comes back unchanged and fully opaque, which is a worse
- * picture and a working page.
- */
-export function withAlpha(color: string, alpha: number): string {
-  const a = Math.max(0, Math.min(1, alpha));
-  const rgb = /^rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)/i.exec(color);
-  if (rgb) {
-    return `rgba(${rgb[1]}, ${rgb[2]}, ${rgb[3]}, ${a})`;
-  }
-  const hex = /^#([0-9a-f]{6})$/i.exec(color.trim());
-  if (hex) {
-    const n = parseInt(hex[1]!, 16);
-    return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
-  }
-  return color;
-}
-
 function roundedRect(
   ctx: CanvasRenderingContext2D,
   x: number,
@@ -130,7 +78,17 @@ export interface FaceOptions {
   handle: string;
   /** Shown under the name. The month somebody joins is the badge's edition. */
   edition: string;
-  palette?: FacePalette;
+  /**
+   * Required, and always supplied by the caller from the live token layer.
+   *
+   * NO COLOUR IS WRITTEN IN THIS FILE. `bench/theme-tokens.mjs` fails the build
+   * on a colour literal outside `index.css`, including inside a comment, and it
+   * is right to: a constant here next to a promise to keep it in step with the
+   * tokens is a promise that breaks the first time somebody changes the accent.
+   * So this module paints only with strings it was handed, and the one place
+   * that reads the stylesheet is `cracha-canvas.tsx`.
+   */
+  palette: FacePalette;
   /** The two families, already loaded by the document. */
   displayFamily?: string;
   handleFamily?: string;
@@ -147,7 +105,7 @@ export function drawCrachaFace(
   const {
     handle,
     edition,
-    palette = DEFAULT_PALETTE,
+    palette,
     displayFamily = '"Gabarito", sans-serif',
     handleFamily = '"Bricolage Grotesque", sans-serif',
   } = options;
@@ -171,28 +129,41 @@ export function drawCrachaFace(
 
   // The accent bloom, top left, matching the radial glow the marketing pages
   // already use so the badge looks like it came off the same site.
+  // Translucency comes from `globalAlpha`, never from a translucent colour
+  // string: assembling one would put colour syntax in this file, which the
+  // token bench counts as a leak. The far stop is the `transparent` keyword,
+  // which is not colour syntax and needs no value.
   const bloom = ctx.createRadialGradient(90, 40, 10, 90, 40, 460);
-  bloom.addColorStop(0, withAlpha(palette.accent, 0.27));
-  bloom.addColorStop(1, withAlpha(palette.accent, 0));
+  bloom.addColorStop(0, palette.accent);
+  bloom.addColorStop(1, "transparent");
+  ctx.save();
+  ctx.globalAlpha = 0.27;
   ctx.fillStyle = bloom;
   ctx.fillRect(0, 0, FACE_WIDTH, FACE_HEIGHT);
+  ctx.restore();
 
   // Inner hairline, inset. Gives the print an edge so the badge does not look
   // like a screenshot of a div.
-  ctx.strokeStyle = withAlpha(palette.text, 0.11);
+  ctx.save();
+  ctx.globalAlpha = 0.11;
+  ctx.strokeStyle = palette.text;
   ctx.lineWidth = 2;
   roundedRect(ctx, 18, 18, FACE_WIDTH - 36, FACE_HEIGHT - 36, 20);
   ctx.stroke();
+  ctx.restore();
 
   // The slot the lanyard passes through, drawn as a hole rather than modelled,
   // because at this size nobody can tell and geometry is not free.
   ctx.fillStyle = palette.ink;
   roundedRect(ctx, FACE_WIDTH / 2 - 52, 44, 104, 18, 9);
   ctx.fill();
-  ctx.strokeStyle = withAlpha(palette.text, 0.13);
+  ctx.save();
+  ctx.globalAlpha = 0.13;
+  ctx.strokeStyle = palette.text;
   ctx.lineWidth = 1.5;
   roundedRect(ctx, FACE_WIDTH / 2 - 52, 44, 104, 18, 9);
   ctx.stroke();
+  ctx.restore();
 
   // Top rail.
   ctx.font = `600 20px ${displayFamily}`;
@@ -231,7 +202,8 @@ export function drawCrachaFace(
   ctx.fillText(edition.toUpperCase(), FACE_WIDTH - 44, FACE_HEIGHT - 92);
 
   ctx.font = `600 17px ${displayFamily}`;
-  ctx.fillStyle = withAlpha(palette.text, 0.8);
+  ctx.globalAlpha = 0.8;
+  ctx.fillStyle = palette.text;
   ctx.textAlign = "center";
   ctx.fillText(`pqp.gg/@${shown}`, FACE_WIDTH / 2, FACE_HEIGHT - 54);
 
