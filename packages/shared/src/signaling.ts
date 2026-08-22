@@ -41,6 +41,20 @@ export const voiceParticipantSchema = z.object({
    * already allowed to see the roster receive it.
    */
   cameraStreamId: z.string().nullable().optional(),
+  /**
+   * The sender-side MediaStream id of this participant's screen capture *when
+   * that capture carries audio*, or null/absent when it does not.
+   *
+   * Same job as `cameraStreamId`, for the other ambiguity a mesh receiver has:
+   * an incoming audio track carries only its stream id, and a peer sharing a
+   * tab with sound is sending two of them (microphone and system audio). Without
+   * this the second one would be filed as the peer's voice and silence their
+   * microphone. Absent is the common case, not an error: Safari and Firefox give
+   * no display audio at all, and on macOS neither does a screen or window share.
+   * On the SFU path LiveKit labels the publication `ScreenShareAudio`, so this
+   * field is informational there.
+   */
+  screenAudioStreamId: z.string().nullable().optional(),
   // --- voice state ---
   //
   // Self-reported by the participant's client over `set-voice-state` and
@@ -331,6 +345,12 @@ export const leaveVoiceRoomMessageSchema = z.object({
 export const setSharingScreenMessageSchema = z.object({
   type: z.literal("set-sharing-screen"),
   sharing: z.boolean(),
+  /**
+   * The capture's MediaStream id when it carries audio (see
+   * `voiceParticipantSchema.screenAudioStreamId`). Omitted or null means the
+   * share is silent, which is what most of them are.
+   */
+  audioStreamId: z.string().nullable().optional(),
 });
 
 // --- voice state ---

@@ -3346,6 +3346,7 @@ function MainAppContent({
                 // The room's roster — mute/deafen badges for the other tiles.
                 participants={voiceState.occupancy[selectedChannel.id] ?? []}
                 isSharingScreen={voiceState.isSharingScreen}
+                isSharingScreenAudio={voiceState.isSharingScreenAudio}
                 screenSharePeerId={
                   voiceState.voiceChannelId === selectedChannel.id
                     ? voiceState.screenSharePeerId

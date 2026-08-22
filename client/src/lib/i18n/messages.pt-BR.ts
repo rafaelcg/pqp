@@ -924,6 +924,9 @@ export const ptBR: PartialMessages = {
   "voice.share.fullscreen": "Tela cheia",
   "voice.share.exitFullscreen": "Sair da tela cheia",
   "voice.share.waiting": "Conectando na tela de quem está compartilhando…",
+  "voice.share.noAudio":
+    "Compartilhando sem som. Pra mandar o áudio junto, compartilha uma guia do Chrome e marca a caixinha de compartilhar áudio da guia.",
+  "voice.share.noAudioShort": "sem som",
   "voice.share.fullscreenBlocked": "O navegador não abriu a tela cheia.",
 
   "voice.screenShareUnsupported":

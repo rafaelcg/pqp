@@ -52,6 +52,7 @@ Detail and “still open” list: [`PLAN_STATUS.md`](./PLAN_STATUS.md).
 
 ## Recent shipped work (context for next agents)
 
+- **Screen share carries the machine's audio (2026-08-22):** `getDisplayMedia` now asks for audio (`systemAudio: "include"`, plus `selfBrowserSurface: "exclude"` so the call's own tab cannot be shared back into itself). Mesh publishes the system-audio track alongside the video under the same capture msid and the roster's new `screenAudioStreamId` is what lets receivers tell it from the presenter's microphone; LiveKit publishes it as `Track.Source.ScreenShareAudio`. Receivers play it through a second `<audio>` in `VoiceAudioSinks`, so deafen, output device and the per-person volume all apply. A capture with no audio track is the normal case (Safari, Firefox, any macOS screen or window share, box left unticked) and degrades to exactly the old behaviour, with a quiet pt-BR hint under the share control. Not yet verified with two real browsers in one call.
 - **Operator dashboard is live-capable (2026-08-21):** `tools/admin-dashboard/` (Cloudflare Worker `pqp-admin`, Basic Auth in front of everything) renders `GET /api/admin/metrics`, a new moderator-or-`ADMIN_METRICS_TOKEN` gated aggregate-counts endpoint (30s in-memory cache, 404 to everybody else, never on status.json). Secrets to set before it goes live are listed in its README; until then the page shows seed numbers labelled as such.
 - Discord-like **voice sidebar** + **speaking rings**
 - Channel **topics / icons**

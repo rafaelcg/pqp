@@ -1019,6 +1019,13 @@ export const en = {
   "voice.share.fullscreen": "View fullscreen",
   "voice.share.exitFullscreen": "Exit fullscreen",
   "voice.share.waiting": "Connecting to presenter's screen…",
+  // Most shares carry no sound, and the presenter is the last person to find
+  // out: their own machine is playing the film, so the silence only exists on
+  // everyone else's side. Said once, quietly, right where they can act on it.
+  "voice.share.noAudio":
+    "Sharing without sound. To send the audio too, share a Chrome tab and tick the share-tab-audio box.",
+  /** The same fact, short enough for a status line that truncates. */
+  "voice.share.noAudioShort": "no sound",
   // A refused fullscreen used to be swallowed, which is how "I clicked it and
   // nothing happened" became a bug report nobody could act on. Quiet helper
   // text, not an alert — the call is still fine, only the frame did not grow.

@@ -18,6 +18,16 @@ export interface RemotePeer {
    * for every peer that never announces one.
    */
   cameraStream: MediaStream | null;
+  /**
+   * The audio of this peer's screen share, when their capture had any.
+   *
+   * Kept apart from `stream` (their microphone) rather than merged into it:
+   * the two are played through different sinks, and merging would put a film
+   * under the same speaking detection as the presenter's voice. Null is the
+   * normal case, since most captures are silent (see
+   * `voiceParticipantSchema.screenAudioStreamId`).
+   */
+  screenAudioStream: MediaStream | null;
   userId?: string;
   displayName?: string;
   avatarUrl?: string | null;
@@ -104,6 +114,7 @@ interface ManagedPeer {
   stream: MediaStream | null;
   screenStream: MediaStream | null;
   cameraStream: MediaStream | null;
+  screenAudioStream: MediaStream | null;
   /**
    * Every video stream this peer is sending, keyed by the *sender-side*
    * MediaStream id (`a=msid`, preserved across the wire). Classification into
@@ -112,12 +123,22 @@ interface ManagedPeer {
    * either order.
    */
   videoStreams: Map<string, MediaStream>;
+  /**
+   * Every audio stream this peer is sending, keyed the same way and for the
+   * same reason: a peer sharing a tab with sound sends two audio tracks, and
+   * only the announced id says which of them is the microphone.
+   */
+  audioStreams: Map<string, MediaStream>;
   /** The camera stream id this peer announced over the WS, or null. */
   remoteCameraStreamId: string | null;
+  /** The screen-audio stream id this peer announced over the WS, or null. */
+  remoteScreenAudioStreamId: string | null;
   /** Our own outgoing video senders on this connection, one per purpose —
    *  looked up by role, never by `track.kind`, because both are video. */
   screenSender: RTCRtpSender | null;
   cameraSender: RTCRtpSender | null;
+  /** The system-audio half of a screen share, when the capture carried one. */
+  screenAudioSender: RTCRtpSender | null;
   pendingCandidates: RTCIceCandidateInit[];
   userId?: string;
   displayName?: string;
@@ -132,7 +153,14 @@ const MAX_ICE_RESTARTS = 3;
 export interface PeerConnectionManager {
   setLocalStream(stream: MediaStream): void;
   replaceLocalTrack(stream: MediaStream): Promise<void>;
-  /** Publish (stream set) or stop (null) a screen-share video track to every peer. */
+  /**
+   * Publish (stream set) or stop (null) a screen share to every peer.
+   *
+   * Takes the whole capture rather than a track: `getDisplayMedia` may hand
+   * back a system-audio track alongside the video, both belong to the same
+   * share, and both are added, replaced and removed together under a single
+   * renegotiation.
+   */
   setLocalScreenStream(stream: MediaStream | null): Promise<void>;
   /** Publish (stream set) or stop (null) a camera video track to every peer. */
   setLocalCameraStream(stream: MediaStream | null): Promise<void>;
@@ -141,6 +169,14 @@ export interface PeerConnectionManager {
    * Null means "camera off" — any remaining video is treated as screen share.
    */
   setPeerCameraStreamId(remotePeerId: string, streamId: string | null): void;
+  /**
+   * Record which of a peer's audio streams is their screen share (from the
+   * roster). Null means "no screen audio": every audio track is their voice.
+   */
+  setPeerScreenAudioStreamId(
+    remotePeerId: string,
+    streamId: string | null,
+  ): void;
   setIceServers(servers: RTCIceServer[]): void;
   connectToPeer(remotePeerId: string, identity?: PeerIdentity): void;
   setPeerIdentity(remotePeerId: string, identity: PeerIdentity): void;
@@ -175,6 +211,7 @@ export function createPeerConnectionManager(
       stream: peer.stream,
       screenStream: peer.screenStream,
       cameraStream: peer.cameraStream,
+      screenAudioStream: peer.screenAudioStream,
       userId: peer.userId,
       displayName: peer.displayName,
       avatarUrl: peer.avatarUrl,
@@ -201,6 +238,33 @@ export function createPeerConnectionManager(
     }
     peer.cameraStream = camera;
     peer.screenStream = screen;
+  }
+
+  /**
+   * Re-derive which incoming audio is the voice and which the screen share.
+   *
+   * The mirror image of `classifyVideo`, racing the same way: the roster frame
+   * and the track arrive in either order. The announced stream is the screen
+   * one, everything else is the microphone, which preserves the old behaviour
+   * exactly for a peer that announces nothing. The microphone slot is
+   * first-wins so that a screen-audio track arriving before its announcement
+   * cannot take the voice away from the peer.
+   */
+  function classifyAudio(peer: ManagedPeer) {
+    let voice: MediaStream | null = null;
+    let screenAudio: MediaStream | null = null;
+    for (const [id, stream] of peer.audioStreams) {
+      if (
+        peer.remoteScreenAudioStreamId !== null &&
+        id === peer.remoteScreenAudioStreamId
+      ) {
+        screenAudio = screenAudio ?? stream;
+      } else {
+        voice = voice ?? stream;
+      }
+    }
+    peer.stream = voice;
+    peer.screenAudioStream = screenAudio;
   }
 
   function applyIdentity(peer: ManagedPeer, identity?: PeerIdentity) {
@@ -329,7 +393,17 @@ export function createPeerConnectionManager(
           emitState();
         };
       } else {
-        managed.stream = stream;
+        managed.audioStreams.set(stream.id, stream);
+        classifyAudio(managed);
+        // Same reason as the video branch: the sender ending the track (share
+        // stopped, capture revoked) is observed nowhere else, and a dead
+        // screen-audio stream left behind keeps an <audio> element pointed at
+        // silence.
+        event.track.onended = () => {
+          managed.audioStreams.delete(stream.id);
+          classifyAudio(managed);
+          emitState();
+        };
       }
       emitState();
     };
@@ -385,10 +459,14 @@ export function createPeerConnectionManager(
       stream: null,
       screenStream: null,
       cameraStream: null,
+      screenAudioStream: null,
       videoStreams: new Map(),
+      audioStreams: new Map(),
       remoteCameraStreamId: null,
+      remoteScreenAudioStreamId: null,
       screenSender: null,
       cameraSender: null,
+      screenAudioSender: null,
       pendingCandidates: [],
       iceRestartTimer: null,
       politeRestartFallback: null,
@@ -403,8 +481,14 @@ export function createPeerConnectionManager(
       }
     }
     if (localScreenStream) {
-      for (const track of localScreenStream.getTracks()) {
+      // Filed by role rather than by iteration order: the capture may hold a
+      // video track and a system-audio track, and each needs its own sender so
+      // that stopping later can remove exactly one of them.
+      for (const track of localScreenStream.getVideoTracks()) {
         managed.screenSender = pc.addTrack(track, localScreenStream);
+      }
+      for (const track of localScreenStream.getAudioTracks()) {
+        managed.screenAudioSender = pc.addTrack(track, localScreenStream);
       }
     }
     if (localCameraStream) {
@@ -572,9 +656,14 @@ export function createPeerConnectionManager(
       localStream = stream;
       const nextTrack = stream.getAudioTracks()[0] ?? null;
       for (const peer of peers.values()) {
+        // Explicitly not the screen-audio sender: it is an audio sender too,
+        // and swapping the microphone into it would send the mic to the
+        // presentation and the film to nobody.
         const sender = peer.pc
           .getSenders()
-          .find((s) => s.track?.kind === "audio");
+          .find(
+            (s) => s.track?.kind === "audio" && s !== peer.screenAudioSender,
+          );
         if (sender) {
           await sender.replaceTrack(nextTrack);
         } else if (nextTrack) {
@@ -585,18 +674,41 @@ export function createPeerConnectionManager(
 
     async setLocalScreenStream(stream: MediaStream | null) {
       localScreenStream = stream;
-      const nextTrack = stream?.getVideoTracks()[0] ?? null;
+      const nextVideo = stream?.getVideoTracks()[0] ?? null;
+      // Absent on Safari and Firefox, on any macOS screen or window capture,
+      // and whenever the user leaves the "share audio" box unticked. None of
+      // that is a failure here: the share is silent, exactly as it always was.
+      const nextAudio = stream?.getAudioTracks()[0] ?? null;
       for (const peer of peers.values()) {
-        if (nextTrack) {
+        let needsOffer = false;
+        if (nextVideo) {
           if (peer.screenSender) {
-            await peer.screenSender.replaceTrack(nextTrack);
+            await peer.screenSender.replaceTrack(nextVideo);
           } else {
-            peer.screenSender = peer.pc.addTrack(nextTrack, stream!);
-            await negotiate(peer);
+            peer.screenSender = peer.pc.addTrack(nextVideo, stream!);
+            needsOffer = true;
           }
         } else if (peer.screenSender) {
           peer.pc.removeTrack(peer.screenSender);
           peer.screenSender = null;
+          needsOffer = true;
+        }
+        if (nextAudio) {
+          if (peer.screenAudioSender) {
+            await peer.screenAudioSender.replaceTrack(nextAudio);
+          } else {
+            peer.screenAudioSender = peer.pc.addTrack(nextAudio, stream!);
+            needsOffer = true;
+          }
+        } else if (peer.screenAudioSender) {
+          peer.pc.removeTrack(peer.screenAudioSender);
+          peer.screenAudioSender = null;
+          needsOffer = true;
+        }
+        // One offer covering both m-lines. Offering once per track would put
+        // the second offer on the wire while the first answer was still being
+        // applied, which perfect negotiation resolves by dropping it.
+        if (needsOffer) {
           await negotiate(peer);
         }
       }
@@ -636,6 +748,22 @@ export function createPeerConnectionManager(
         peer.videoStreams.delete(previous);
       }
       classifyVideo(peer);
+      emitState();
+    },
+
+    setPeerScreenAudioStreamId(remotePeerId: string, streamId: string | null) {
+      const peer = peers.get(remotePeerId);
+      if (!peer || peer.remoteScreenAudioStreamId === streamId) {
+        return;
+      }
+      const previous = peer.remoteScreenAudioStreamId;
+      peer.remoteScreenAudioStreamId = streamId;
+      // Share stopped: drop the stream outright rather than let it fall back
+      // into the microphone slot, for the same reason the camera does.
+      if (streamId === null && previous !== null) {
+        peer.audioStreams.delete(previous);
+      }
+      classifyAudio(peer);
       emitState();
     },
 
@@ -737,6 +865,8 @@ export function createPeerConnectionManager(
         : undefined;
 
       const preservedCameraStreamId = previous?.remoteCameraStreamId ?? null;
+      const preservedScreenAudioStreamId =
+        previous?.remoteScreenAudioStreamId ?? null;
       if (previous) {
         clearIceRestartTimer(previous);
         previous.pc.close();
@@ -747,6 +877,7 @@ export function createPeerConnectionManager(
       // Survives the rebuild: no roster frame accompanies a manual retry, so
       // without this the re-arriving camera track would classify as a screen.
       managed.remoteCameraStreamId = preservedCameraStreamId;
+      managed.remoteScreenAudioStreamId = preservedScreenAudioStreamId;
       peers.set(remotePeerId, managed);
       emitState();
       await negotiate(managed, true);

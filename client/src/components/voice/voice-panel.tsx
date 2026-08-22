@@ -302,6 +302,8 @@ interface VoicePanelProps {
   /** Media is going through an SFU — the mesh peer ceiling does not apply. */
   usingSfu?: boolean;
   isSharingScreen?: boolean;
+  /** Whether our own live share is carrying the machine's audio. */
+  isSharingScreenAudio?: boolean;
   /** peerId of whoever is presenting (self or remote), or null if nobody is. */
   screenSharePeerId?: string | null;
   /**
@@ -341,6 +343,7 @@ export function VoicePanel({
   compactPeers = false,
   usingSfu = false,
   isSharingScreen = false,
+  isSharingScreenAudio = false,
   screenSharePeerId = null,
   participants = [],
   onJoin,
@@ -380,6 +383,16 @@ export function VoicePanel({
     const timer = setTimeout(() => setHint(null), 6000);
     return () => clearTimeout(timer);
   }, [hint]);
+
+  // A share that carries no sound is the common one, and the presenter cannot
+  // hear the problem: their own machine is playing whatever they shared. So it
+  // is stated once, in the same quiet slot every other explanation uses, and
+  // fades on the same timer rather than nagging for the whole presentation.
+  useEffect(() => {
+    if (isSharingScreen && !isSharingScreenAudio) {
+      setHint(t("voice.share.noAudio"));
+    }
+  }, [isSharingScreen, isSharingScreenAudio, t]);
 
   const avatarSize = avatarSizeFor(connectedCount, compactPeers);
   // A call of one still deserves a stage rather than a stray card — but only

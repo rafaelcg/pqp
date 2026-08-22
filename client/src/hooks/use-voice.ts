@@ -140,6 +140,15 @@ export interface VoiceState {
   screenSharePeerId: string | null;
   /** Our own outgoing capture, for a local preview of what's being shared. */
   localScreenStream: MediaStream | null;
+  /**
+   * Whether *our* live share is carrying sound.
+   *
+   * False for most shares and that is not a fault: only a Chromium browser
+   * gives display audio at all, and on macOS only for a tab. The UI uses this
+   * to say so once, quietly, instead of leaving people to discover the silence
+   * from the other side of the call.
+   */
+  isSharingScreenAudio: boolean;
   // --- conversation calls ---
   /**
    * Conversations currently ringing this device, oldest first. Lives on the
@@ -270,6 +279,51 @@ function screenShareErrorMessage(err: unknown): string {
 }
 
 /**
+ * The display-capture options the DOM lib does not know about yet.
+ *
+ * `systemAudio`, `selfBrowserSurface` and `surfaceSwitching` are Screen Capture
+ * spec extensions that TypeScript's `DisplayMediaStreamOptions` still omits.
+ * Declared narrowly, as the three fields we actually pass, so a typo stays a
+ * compile error, where casting the call to `any` would hide exactly the
+ * mistakes this feature is most likely to make. A browser that does not know a key
+ * ignores it, which is the degradation we want.
+ */
+interface ScreenCaptureOptions extends DisplayMediaStreamOptions {
+  /** Chromium: offer the machine's own output as a capturable source. */
+  systemAudio?: "include" | "exclude";
+  /** Chromium: whether the tab running this app may be picked. */
+  selfBrowserSurface?: "include" | "exclude";
+  /** Chromium: offer "share this tab instead" while a share is running. */
+  surfaceSwitching?: "include" | "exclude";
+}
+
+/**
+ * What we ask a screen capture for.
+ *
+ * Audio is requested every time; a browser that cannot supply it answers with a
+ * stream that simply has no audio track, and every path below treats that as
+ * normal rather than as an error. The mic's processing chain is explicitly off:
+ * echo cancellation and noise suppression exist for a person talking into a
+ * laptop and would chew holes in a film's soundtrack.
+ *
+ * `selfBrowserSurface: "exclude"` is the anti-feedback rule. Sharing the pqp
+ * tab itself would put the call's own audio back into the call, and the loop
+ * gets louder every trip; the picker not offering that tab is a cheaper answer
+ * than an echo nobody can locate.
+ */
+const SCREEN_CAPTURE_OPTIONS: ScreenCaptureOptions = {
+  video: true,
+  audio: {
+    echoCancellation: false,
+    noiseSuppression: false,
+    autoGainControl: false,
+  },
+  systemAudio: "include",
+  selfBrowserSurface: "exclude",
+  surfaceSwitching: "include",
+};
+
+/**
  * Supplies an SFU session for a voice channel.
  *
  * Registering one is a statement of **capability**, not a choice of transport:
@@ -355,6 +409,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     isSharingScreen: false,
     screenSharePeerId: null,
     localScreenStream: null,
+    isSharingScreenAudio: false,
     incomingCalls: [],
     isCameraOn: false,
     localCameraStream: null,
@@ -700,6 +755,79 @@ export function createVoiceController(transport: RealtimeTransport) {
     screenCaptureStream = null;
     state.isSharingScreen = false;
     state.localScreenStream = null;
+    state.isSharingScreenAudio = false;
+  }
+
+  /**
+   * The stream id to announce for a capture that carries sound, or null.
+   *
+   * Receivers on the mesh path need it to tell the presentation's audio from
+   * the presenter's microphone (see `voiceParticipantSchema.screenAudioStreamId`),
+   * and it is re-sent with every `set-sharing-screen` so a reconnect or a lost
+   * audio track cannot leave a stale one on the roster.
+   */
+  function screenAudioStreamId(): string | null {
+    if (!screenCaptureStream) {
+      return null;
+    }
+    return screenCaptureStream.getAudioTracks().length > 0
+      ? screenCaptureStream.id
+      : null;
+  }
+
+  /** Announce the share (and whether it has sound) to the room. */
+  function announceSharing() {
+    transport.sendVoice({
+      type: "set-sharing-screen",
+      sharing: true,
+      audioStreamId: screenAudioStreamId(),
+    });
+  }
+
+  /**
+   * The capture lost its audio but kept its picture.
+   *
+   * Happens on its own when the shared tab stops producing sound the browser
+   * will hand over, and it must not read as "the share ended": the video is
+   * still live and still wanted. Only the audio half is withdrawn, from both
+   * transports and from the roster.
+   */
+  async function dropScreenAudio(track: MediaStreamTrack) {
+    if (!screenCaptureStream) {
+      return;
+    }
+    screenCaptureStream.removeTrack(track);
+    track.stop();
+    state.isSharingScreenAudio = false;
+    announceSharing();
+    await manager?.setLocalScreenStream(screenCaptureStream);
+    if (sfu) {
+      await sfu.unpublishScreenAudio();
+    }
+    emit();
+  }
+
+  /**
+   * Wire the capture's tracks to the two ways a share can end.
+   *
+   * The video track ending is the browser's own "Stop sharing" bar (and the
+   * shared window closing); the audio track can end by itself. Both are events
+   * nothing else observes, which is why neither can be left unhandled.
+   */
+  function watchScreenCapture(stream: MediaStream) {
+    const video = stream.getVideoTracks()[0];
+    if (video) {
+      video.onended = () => {
+        void stopScreenShareInternal();
+        emit();
+      };
+    }
+    const audio = stream.getAudioTracks()[0];
+    if (audio) {
+      audio.onended = () => {
+        void dropScreenAudio(audio);
+      };
+    }
   }
 
   /** Full stop while still in-call: releases the capture and tells everyone. */
@@ -708,7 +836,11 @@ export function createVoiceController(transport: RealtimeTransport) {
       return;
     }
     releaseScreenCapture();
-    transport.sendVoice({ type: "set-sharing-screen", sharing: false });
+    transport.sendVoice({
+      type: "set-sharing-screen",
+      sharing: false,
+      audioStreamId: null,
+    });
     await manager?.setLocalScreenStream(null);
     if (sfu) {
       await sfu.unpublishScreen();
@@ -758,6 +890,21 @@ export function createVoiceController(transport: RealtimeTransport) {
         manager.setPeerCameraStreamId(
           participant.peerId,
           participant.cameraStreamId ?? null,
+        );
+      }
+    }
+  }
+
+  /** The same trip for screen audio, and a no-op on the SFU path for the same reason. */
+  function applyScreenAudioStreamIds(participants: VoiceParticipant[]) {
+    if (!manager) {
+      return;
+    }
+    for (const participant of participants) {
+      if (participant.peerId !== state.peerId) {
+        manager.setPeerScreenAudioStreamId(
+          participant.peerId,
+          participant.screenAudioStreamId ?? null,
         );
       }
     }
@@ -830,7 +977,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       // tied to the connection), only the publish needs redoing.
       if (screenCaptureStream) {
         await sfu.publishScreen(screenCaptureStream);
-        transport.sendVoice({ type: "set-sharing-screen", sharing: true });
+        announceSharing();
       }
       // Same story for the camera in a conversation call.
       if (cameraCaptureStream) {
@@ -859,7 +1006,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     // forward across a rebuilt mesh (e.g. after a WS reconnect).
     if (screenCaptureStream) {
       void manager.setLocalScreenStream(screenCaptureStream);
-      transport.sendVoice({ type: "set-sharing-screen", sharing: true });
+      announceSharing();
     }
     // And the camera of a conversation call.
     if (cameraCaptureStream) {
@@ -877,6 +1024,10 @@ export function createVoiceController(transport: RealtimeTransport) {
     for (const peer of peers) {
       manager.connectToPeer(peer.peerId, toIdentity(peer));
       manager.setPeerCameraStreamId(peer.peerId, peer.cameraStreamId ?? null);
+      manager.setPeerScreenAudioStreamId(
+        peer.peerId,
+        peer.screenAudioStreamId ?? null,
+      );
     }
   }
 
@@ -908,6 +1059,7 @@ export function createVoiceController(transport: RealtimeTransport) {
             message.participants.find((p) => p.sharingScreen)?.peerId ?? null;
           // Mesh camera classification rides the roster — see the banner.
           applyCameraStreamIds(message.participants);
+          applyScreenAudioStreamIds(message.participants);
         }
         emit();
         break;
@@ -1039,6 +1191,10 @@ export function createVoiceController(transport: RealtimeTransport) {
         manager?.setPeerCameraStreamId(
           message.peer.peerId,
           message.peer.cameraStreamId ?? null,
+        );
+        manager?.setPeerScreenAudioStreamId(
+          message.peer.peerId,
+          message.peer.screenAudioStreamId ?? null,
         );
         break;
       case "peer-left":
@@ -1279,6 +1435,7 @@ export function createVoiceController(transport: RealtimeTransport) {
         isSharingScreen: false,
         screenSharePeerId: null,
         localScreenStream: null,
+        isSharingScreenAudio: false,
         // Invitations from OTHER conversations are not our call state and
         // survive hanging up, the way a second phone line keeps ringing.
         incomingCalls: state.incomingCalls,
@@ -1379,11 +1536,28 @@ export function createVoiceController(transport: RealtimeTransport) {
 
       let stream: MediaStream;
       try {
-        stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+        stream = await navigator.mediaDevices.getDisplayMedia(
+          SCREEN_CAPTURE_OPTIONS,
+        );
       } catch (err) {
-        state.error = screenShareErrorMessage(err);
-        emit();
-        return;
+        // A browser that refuses the *shape* of the request rather than the
+        // request itself would otherwise cost the user their screen share
+        // entirely, so ask again the old way. Not for NotAllowedError: that is
+        // the person cancelling the picker, and reopening it would be arguing
+        // with them.
+        const cancelled = err instanceof Error && err.name === "NotAllowedError";
+        if (cancelled) {
+          state.error = screenShareErrorMessage(err);
+          emit();
+          return;
+        }
+        try {
+          stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+        } catch {
+          state.error = screenShareErrorMessage(err);
+          emit();
+          return;
+        }
       }
       const track = stream.getVideoTracks()[0];
       if (!track) {
@@ -1392,17 +1566,18 @@ export function createVoiceController(transport: RealtimeTransport) {
         emit();
         return;
       }
-      // Fires on the browser's native "Stop sharing" control, not just our
-      // own button.
-      track.onended = () => {
-        void stopScreenShareInternal();
-        emit();
-      };
+      // Empty on Safari and Firefox, on a macOS screen or window share, and
+      // whenever the "share audio" box was left unticked. It is the common
+      // case, not a failure: the share goes ahead silent, exactly as every
+      // share did before this existed.
+      const hasAudio = stream.getAudioTracks().length > 0;
+      watchScreenCapture(stream);
       screenCaptureStream = stream;
       state.isSharingScreen = true;
       state.localScreenStream = stream;
+      state.isSharingScreenAudio = hasAudio;
       emit();
-      transport.sendVoice({ type: "set-sharing-screen", sharing: true });
+      announceSharing();
 
       try {
         await manager?.setLocalScreenStream(stream);

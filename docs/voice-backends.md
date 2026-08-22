@@ -59,7 +59,7 @@ The compose service publishes **7880/tcp (signal), 7881/tcp (ICE over TCP) and 7
 1. Client joins the voice room over `/ws` and receives `welcome` with its `peerId`.
 2. Client `POST /api/voice/token` `{ voiceChannelId, peerId }`.
 3. Server verifies the peer is live, owned by the caller, and in that channel, then mints a LiveKit JWT (room = channel id, identity = `peerId`, metadata = `{ userId }`, 15 min TTL, publish/subscribe — covers mic and screen-share video alike).
-4. Client connects to LiveKit and publishes the processed mic track; remote audio tracks are mapped back onto the same `RemotePeer[]` the mesh path produces. A screen share publishes a second track tagged `Track.Source.ScreenShare`, subscribed separately into `RemotePeer.screenStream`.
+4. Client connects to LiveKit and publishes the processed mic track; remote audio tracks are mapped back onto the same `RemotePeer[]` the mesh path produces. A screen share publishes a second track tagged `Track.Source.ScreenShare`, subscribed separately into `RemotePeer.screenStream`, and, when the capture came with sound, a third tagged `Track.Source.ScreenShareAudio` that lands in `RemotePeer.screenAudioStream`.
 
 `livekit-client` is loaded via dynamic `import()`, so mesh deployments never download it (it is emitted as a separate ~530 kB chunk).
 
@@ -150,6 +150,24 @@ Net effect: one participant in the call, listed in the sidebar, silent, indistin
 ### What can still split a call
 
 Two server instances with **different** LiveKit config pin the same channel differently, because `roomTransports` is per-process like `peers`. That is the same constraint that already makes mesh voice single-instance (see the block comment above `peers` in `server/src/ws/voice.ts`); nothing here fixes it, and nothing here makes it worse.
+
+## Screen-share audio
+
+The capture is requested with `audio` plus `systemAudio: "include"`, and most of the time the browser hands back no audio track at all. That is the expected answer, not a failure:
+
+| Browser / OS | Sound in a screen share? |
+|---|---|
+| Chrome or Edge, any OS, sharing a **tab** | Yes, when the user ticks "share tab audio" |
+| Chrome or Edge on **Windows or ChromeOS**, sharing the **whole screen** | Yes, when the user ticks "share system audio" |
+| Chrome on **macOS or Linux**, sharing a screen or a window | No. The OS does not hand the browser its own output |
+| **Safari**, anything | No display audio at all |
+| **Firefox**, anything | No display audio at all |
+
+Both transports carry it the same way the video is carried. Mesh adds the audio track to every peer connection under the capture's own MediaStream, so both halves share one msid, and announces that id on `set-sharing-screen` (`audioStreamId`), which the server puts on the roster as `screenAudioStreamId`. That announcement is the whole receive-side story: without it a second incoming audio track would be filed as the presenter's microphone and silence them. LiveKit needs no such thing, because the publication is labelled `ScreenShareAudio`.
+
+Playback is a second `<audio>` element in `VoiceAudioSinks`, next to the one that plays that person's voice, so deafen, the output-device choice and their volume slider all apply to it. The `<video>` elements stay muted in both the presenter's preview and the viewer's stage.
+
+Feedback control is one rule: `selfBrowserSurface: "exclude"`, so the pqp tab itself is not offered in the picker. Sharing a whole Windows screen with system audio while listening on speakers is still a loop the app cannot break; headphones are the answer there, as they are for the microphone.
 
 ## Screen share on the SFU (verified)
 

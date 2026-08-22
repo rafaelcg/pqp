@@ -18,18 +18,27 @@ const managers: ManagerStub[] = [];
 interface ManagerStub {
   peerIds: string[];
   disposed: boolean;
+  /** Every capture handed to the mesh, in order. `null` means "stop sharing". */
+  screenStreams: (MediaStream | null)[];
 }
 
 vi.mock("@/lib/peer-connection-manager", () => ({
   getDefaultIceServers: () => [],
   createPeerConnectionManager: vi.fn(() => {
-    const stub: ManagerStub = { peerIds: [], disposed: false };
+    const stub: ManagerStub = {
+      peerIds: [],
+      disposed: false,
+      screenStreams: [],
+    };
     managers.push(stub);
     return {
       setLocalStream: () => {},
-      setLocalScreenStream: async () => {},
+      setLocalScreenStream: async (stream: MediaStream | null) => {
+        stub.screenStreams.push(stream);
+      },
       setLocalCameraStream: async () => {},
       setPeerCameraStreamId: () => {},
+      setPeerScreenAudioStreamId: () => {},
       onPeerStateChange: () => {},
       connectToPeer: (peerId: string) => stub.peerIds.push(peerId),
       removePeer: () => {},
@@ -46,13 +55,21 @@ vi.mock("@/lib/peer-connection-manager", () => ({
   }),
 }));
 
+/** Screen publications the SFU stub was asked for, in order. */
+const sfuScreenPublishes: (MediaStream | null)[] = [];
+
 vi.mock("@/lib/livekit-session", () => ({
   connectLiveKit: vi.fn(async () => ({
     publish: async () => {},
     replaceTrack: async () => {},
     setMuted: async () => {},
-    publishScreen: async () => {},
-    unpublishScreen: async () => {},
+    publishScreen: async (stream: MediaStream) => {
+      sfuScreenPublishes.push(stream);
+    },
+    unpublishScreen: async () => {
+      sfuScreenPublishes.push(null);
+    },
+    unpublishScreenAudio: async () => {},
     publishCamera: async () => {},
     unpublishCamera: async () => {},
     disconnect: async () => {},
@@ -83,15 +100,71 @@ function fakeStream(label: string) {
   };
 }
 
+/** A track with the two things the share paths touch: `stop` and `onended`. */
+interface FakeCaptureTrack {
+  kind: "video" | "audio";
+  onended: (() => void) | null;
+  stop: () => void;
+}
+
+interface FakeCapture {
+  id: string;
+  getTracks: () => FakeCaptureTrack[];
+  getVideoTracks: () => FakeCaptureTrack[];
+  getAudioTracks: () => FakeCaptureTrack[];
+  removeTrack: (track: FakeCaptureTrack) => void;
+}
+
+/**
+ * A `getDisplayMedia` result, with or without the system-audio track.
+ *
+ * Without is the case that must keep working untouched: Safari, Firefox, and
+ * every macOS screen or window share land here.
+ */
+function fakeCapture(id: string, withAudio: boolean): FakeCapture {
+  let tracks: FakeCaptureTrack[] = [
+    { kind: "video", onended: null, stop: () => stoppedTracks.push(`${id}:video`) },
+  ];
+  if (withAudio) {
+    tracks.push({
+      kind: "audio",
+      onended: null,
+      stop: () => stoppedTracks.push(`${id}:audio`),
+    });
+  }
+  return {
+    id,
+    getTracks: () => tracks,
+    getVideoTracks: () => tracks.filter((t) => t.kind === "video"),
+    getAudioTracks: () => tracks.filter((t) => t.kind === "audio"),
+    removeTrack: (track) => {
+      tracks = tracks.filter((t) => t !== track);
+    },
+  };
+}
+
+/** Arguments every `getDisplayMedia` of the current test received. */
+let displayMediaCalls: unknown[] = [];
+/** What the next `getDisplayMedia` does. Replaced per test. */
+let displayMedia: () => Promise<unknown> = async () => fakeCapture("screen", false);
+
 function installBrowserStubs() {
   const g = globalThis as unknown as Record<string, unknown>;
   g.requestAnimationFrame = () => 1;
   g.cancelAnimationFrame = () => {};
+  displayMediaCalls = [];
+  displayMedia = async () => fakeCapture("screen", false);
   // Node exposes `navigator` as a getter-only global, so define the one
   // property the mic pipeline reaches for rather than replacing the object.
   Object.defineProperty(globalThis.navigator, "mediaDevices", {
     configurable: true,
-    value: { getUserMedia: async () => fakeStream("mic") },
+    value: {
+      getUserMedia: async () => fakeStream("mic"),
+      getDisplayMedia: async (options: unknown) => {
+        displayMediaCalls.push(options);
+        return displayMedia();
+      },
+    },
   });
   g.AudioContext = class {
     createMediaStreamSource() {
@@ -168,6 +241,169 @@ function sfuSession() {
     identity: PEER,
   };
 }
+
+/**
+ * Screen share carries the machine's audio when the browser will give it, and
+ * is silent, working and unremarkable when it will not.
+ *
+ * The silent case is the majority one (Safari, Firefox, every macOS screen or
+ * window capture, and anyone who leaves the box unticked), which is why most of
+ * what is pinned here is that nothing about it looks like a failure.
+ */
+describe("screen share audio", () => {
+  beforeEach(() => {
+    installBrowserStubs();
+    managers.length = 0;
+    stoppedTracks.length = 0;
+    sfuScreenPublishes.length = 0;
+    vi.mocked(connectLiveKit).mockClear();
+  });
+
+  async function connectedMesh() {
+    const { transport, sent } = createTransport();
+    const voice = createVoiceController(transport);
+    await voice.join(CHANNEL);
+    voice.handleSignaling(welcome("mesh"));
+    await settle();
+    return { voice, sent };
+  }
+
+  it("asks for system audio, and for a picker that cannot offer our own tab", async () => {
+    const { voice } = await connectedMesh();
+    await voice.startScreenShare();
+
+    expect(displayMediaCalls).toHaveLength(1);
+    expect(displayMediaCalls[0]).toMatchObject({
+      audio: { echoCancellation: false },
+      systemAudio: "include",
+      // The anti-feedback rule: sharing the call's own tab would put the call
+      // back into the call.
+      selfBrowserSurface: "exclude",
+    });
+  });
+
+  it("publishes the capture and announces its audio stream id", async () => {
+    displayMedia = async () => fakeCapture("cap-1", true);
+    const { voice, sent } = await connectedMesh();
+    await voice.startScreenShare();
+
+    expect(managers[0]?.screenStreams).toHaveLength(1);
+    expect(sent.at(-1)).toMatchObject({
+      type: "set-sharing-screen",
+      sharing: true,
+      audioStreamId: "cap-1",
+    });
+    expect(voice.getState().isSharingScreenAudio).toBe(true);
+  });
+
+  it("shares silently, with no error, when the browser gives no audio track", async () => {
+    displayMedia = async () => fakeCapture("cap-2", false);
+    const { voice, sent } = await connectedMesh();
+    await voice.startScreenShare();
+
+    expect(sent.at(-1)).toMatchObject({
+      type: "set-sharing-screen",
+      sharing: true,
+      // Not the id: there is no audio to file under it, and a receiver acting
+      // on a stale one would mute the presenter's voice.
+      audioStreamId: null,
+    });
+    expect(voice.getState().isSharingScreen).toBe(true);
+    expect(voice.getState().isSharingScreenAudio).toBe(false);
+    expect(voice.getState().error).toBeNull();
+  });
+
+  it("falls back to a plain video request when the audio one is refused", async () => {
+    let attempt = 0;
+    displayMedia = async () => {
+      attempt += 1;
+      if (attempt === 1) {
+        const err = new Error("nope");
+        err.name = "NotSupportedError";
+        throw err;
+      }
+      return fakeCapture("cap-3", false);
+    };
+    const { voice } = await connectedMesh();
+    await voice.startScreenShare();
+
+    expect(displayMediaCalls).toHaveLength(2);
+    expect(displayMediaCalls[1]).toEqual({ video: true });
+    expect(voice.getState().isSharingScreen).toBe(true);
+  });
+
+  it("does not reopen the picker when the user dismissed it", async () => {
+    displayMedia = async () => {
+      const err = new Error("denied");
+      err.name = "NotAllowedError";
+      throw err;
+    };
+    const { voice } = await connectedMesh();
+    await voice.startScreenShare();
+
+    // Asking twice would be arguing with someone who just said no.
+    expect(displayMediaCalls).toHaveLength(1);
+    expect(voice.getState().isSharingScreen).toBe(false);
+    expect(voice.getState().error).not.toBeNull();
+  });
+
+  it("stops both tracks and withdraws the announcement", async () => {
+    displayMedia = async () => fakeCapture("cap-4", true);
+    const { voice, sent } = await connectedMesh();
+    await voice.startScreenShare();
+    await voice.stopScreenShare();
+
+    expect(stoppedTracks).toContain("cap-4:video");
+    expect(stoppedTracks).toContain("cap-4:audio");
+    expect(sent.at(-1)).toMatchObject({
+      type: "set-sharing-screen",
+      sharing: false,
+      audioStreamId: null,
+    });
+    expect(managers[0]?.screenStreams.at(-1)).toBeNull();
+    expect(voice.getState().isSharingScreenAudio).toBe(false);
+  });
+
+  it("keeps the picture when only the audio track ends", async () => {
+    const capture = fakeCapture("cap-5", true);
+    displayMedia = async () => capture;
+    const { voice, sent } = await connectedMesh();
+    await voice.startScreenShare();
+
+    const audio = capture.getAudioTracks()[0]!;
+    audio.onended?.();
+    await settle();
+
+    expect(voice.getState().isSharingScreen).toBe(true);
+    expect(voice.getState().isSharingScreenAudio).toBe(false);
+    expect(sent.at(-1)).toMatchObject({
+      type: "set-sharing-screen",
+      sharing: true,
+      audioStreamId: null,
+    });
+    // Re-published without the audio half rather than torn down.
+    expect(managers[0]?.screenStreams.at(-1)).not.toBeNull();
+  });
+
+  it("hands the whole capture to the SFU, audio included", async () => {
+    displayMedia = async () => fakeCapture("cap-6", true);
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    voice.setSessionProvider(async () => sfuSession());
+    await voice.join(CHANNEL);
+    voice.handleSignaling(welcome("livekit"));
+    await settle();
+
+    await voice.startScreenShare();
+    expect(sfuScreenPublishes).toHaveLength(1);
+    expect(
+      (sfuScreenPublishes[0] as unknown as FakeCapture).getAudioTracks(),
+    ).toHaveLength(1);
+
+    await voice.stopScreenShare();
+    expect(sfuScreenPublishes.at(-1)).toBeNull();
+  });
+});
 
 describe("voice transport is the server's decision", () => {
   beforeEach(() => {
