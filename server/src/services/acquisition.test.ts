@@ -106,7 +106,7 @@ describeDb("recordAcquisition", () => {
     expect((await columns(user.id)).acquisition_at).toBeNull();
   });
 
-  it("reports signups grouped by source, medium and campaign", async () => {
+  it("reports signups grouped by source, medium, campaign and ref", async () => {
     const a = await freshUser("clerk-a");
     const b = await freshUser("clerk-b");
     const c = await freshUser("clerk-c");
@@ -128,8 +128,39 @@ describeDb("recordAcquisition", () => {
     expect(report.days).toBe(30);
     expect(report.total).toBe(3);
     expect(report.rows).toEqual([
-      { source: "google", medium: "cpc", campaign: "x", signups: 2 },
-      { source: null, medium: null, campaign: null, signups: 1 },
+      { source: "google", medium: "cpc", campaign: "x", ref: null, signups: 2 },
+      { source: null, medium: null, campaign: null, ref: null, signups: 1 },
+    ]);
+  });
+
+  // The whole point of reporting `ref`: a signup from pqp.gg/r/reddit has no
+  // UTM parameters at all, so without this column it is indistinguishable in
+  // the report from somebody who arrived on an untagged link.
+  it("keeps a ref-only signup out of the unattributed row", async () => {
+    const a = await freshUser("clerk-ref");
+    await freshUser("clerk-bare");
+    await recordAcquisition(a.id, { ref: "reddit", landing: "/" });
+
+    const report = await acquisitionReport(30);
+    expect(report.rows).toEqual([
+      { source: null, medium: null, campaign: null, ref: "reddit", signups: 1 },
+      { source: null, medium: null, campaign: null, ref: null, signups: 1 },
+    ]);
+  });
+
+  it("breaks the same window down by landing page", async () => {
+    const a = await freshUser("clerk-tela");
+    const b = await freshUser("clerk-tela-2");
+    const c = await freshUser("clerk-root");
+    await freshUser("clerk-nolanding");
+    await recordAcquisition(a.id, { source: "google", landing: "/tela" });
+    await recordAcquisition(b.id, { source: "google", landing: "/tela" });
+    await recordAcquisition(c.id, { source: "x", landing: "/" });
+
+    const report = await acquisitionReport(30);
+    expect(report.landings).toEqual([
+      { landing: "/tela", signups: 2 },
+      { landing: "/", signups: 1 },
     ]);
   });
 });
