@@ -85,6 +85,7 @@ import { useVoiceStateSync } from "@/components/voice/voice-state-sync";
 import { VoiceStatusBar } from "@/components/voice/voice-status-bar";
 import { CallRatingPrompt } from "@/components/voice/call-rating-prompt";
 import { useCallRating } from "@/hooks/use-call-rating";
+import { ShareHandleButton } from "@/components/handle/share-handle-button";
 import { BetaTag } from "@/components/ui/beta-tag";
 import { Dialog } from "@/components/ui/dialog";
 import { PromptDialog } from "@/components/ui/prompt-dialog";
@@ -343,6 +344,10 @@ function MainAppContent({
    * something that just happened.
    */
   const [appNotice, setAppNotice] = useState<string | null>(null);
+  // Set only by a successful handle claim, so the share offer appears at the
+  // one moment it is a celebration rather than a request. Cleared with the
+  // notice it rides on.
+  const [claimedHandle, setClaimedHandle] = useState<string | null>(null);
   /**
    * The last refusal a timeout produced, shown against the composer it belongs
    * to. Transient app state rather than anything persisted: a timeout is
@@ -2175,6 +2180,7 @@ function MainAppContent({
               url: publicProfileDisplayUrl(updated.handle ?? claim),
             }),
           );
+          setClaimedHandle(updated.handle ?? claim);
         } catch (error) {
           // The most likely reason by far is that somebody else took it in the
           // seconds between the availability check and the sign-up, which is
@@ -3203,10 +3209,14 @@ function MainAppContent({
         {appNotice && (
           <div className="flex items-start gap-3 border-b border-success/40 bg-success/10 px-4 py-2 text-sm text-success">
             <span className="flex-1">{appNotice}</span>
+            {claimedHandle && <ShareHandleButton handle={claimedHandle} />}
             <button
               type="button"
               className="shrink-0 text-xs underline underline-offset-2"
-              onClick={() => setAppNotice(null)}
+              onClick={() => {
+                setAppNotice(null);
+                setClaimedHandle(null);
+              }}
             >
               {t("connection.dismiss")}
             </button>

@@ -23,13 +23,6 @@ import { cn } from "@/lib/utils";
  * fullscreen it offers is the video element's own webkit method, which is what
  * the `video` mode below is for.
  */
-interface WebkitFullscreenVideo extends HTMLVideoElement {
-  webkitSupportsFullscreen?: boolean;
-  webkitDisplayingFullscreen?: boolean;
-  webkitEnterFullscreen?: () => void;
-  webkitExitFullscreen?: () => void;
-}
-
 interface WebkitFullscreenElement extends HTMLElement {
   webkitRequestFullscreen?: () => Promise<void> | void;
 }
@@ -95,12 +88,13 @@ export function ScreenShareView({
   onStopSharing,
 }: ScreenShareViewProps) {
   const { t } = useTranslation();
-  const videoRef = useRef<WebkitFullscreenVideo>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  // "none" until the refs exist. Starting pessimistic means the control is
-  // never rendered before we know it would do something.
-  const [fullscreenMode, setFullscreenMode] = useState<FullscreenMode>("none");
+  // `expand` until the refs exist, because it is the mode that needs no
+  // platform support: the control is always safe to render, and the detector
+  // below only ever upgrades it to real element fullscreen.
+  const [fullscreenMode, setFullscreenMode] = useState<FullscreenMode>("expand");
   const [blocked, setBlocked] = useState(false);
 
   useEffect(() => {
@@ -131,7 +125,6 @@ export function ScreenShareView({
         webkitRequestFullscreen: (
           containerRef.current as WebkitFullscreenElement | null
         )?.webkitRequestFullscreen,
-        webkitEnterFullscreen: videoRef.current?.webkitEnterFullscreen,
       }),
     );
   }, []);
@@ -208,25 +201,11 @@ export function ScreenShareView({
       });
       return;
     }
-    if (fullscreenMode === "video") {
-      const video = videoRef.current;
-      if (!video) {
-        return;
-      }
-      try {
-        if (video.webkitDisplayingFullscreen) {
-          video.webkitExitFullscreen?.();
-        } else {
-          // Throws if metadata has not loaded yet, and on any <video> whose
-          // `webkitSupportsFullscreen` is false — a MediaStream source is
-          // exactly that case on some builds.
-          video.webkitEnterFullscreen?.();
-        }
-      } catch (err) {
-        console.warn("[voice] video fullscreen refused", err);
-        setBlocked(true);
-      }
-    }
+    // `expand`: no platform call at all, so nothing can refuse it. The panel
+    // grows to fill the viewport in the page. This is what an iPhone gets, and
+    // it replaces handing the element to the OS media player, which cannot
+    // render a MediaStream and showed a black rectangle instead.
+    setIsFullscreen((was) => !was);
   }, [fullscreenMode]);
 
   return (
@@ -234,9 +213,15 @@ export function ScreenShareView({
       ref={containerRef}
       className={cn(
         "flex shrink-0 flex-col border-b border-panel-hover bg-ink",
-        isFullscreen && fullscreenMode === "element"
-          ? "h-screen max-h-none w-screen"
-          : "max-h-[45%] min-h-[160px]",
+        isFullscreen &&
+          (fullscreenMode === "element"
+            ? "h-screen max-h-none w-screen"
+            : // In-page fullscreen. `fixed inset-0` rather than 100vh because
+              // on an iPhone 100vh is taller than the visible area and puts the
+              // exit control under Safari's toolbar, which is how a person gets
+              // stuck in a fullscreen they cannot leave.
+              "fixed inset-0 z-50 h-auto max-h-none w-auto"),
+        !isFullscreen && "max-h-[45%] min-h-[160px]",
       )}
     >
       <div className="flex shrink-0 items-center justify-between px-3 py-1.5">
@@ -262,9 +247,9 @@ export function ScreenShareView({
               {t("voice.share.stop")}
             </Button>
           )}
-          {/* Rendered only where it can actually do something — a button that
-              silently no-ops is worse than no button. */}
-          {fullscreenMode !== "none" && (
+          {/* Always rendered: `expand` needs no platform support, so there is
+              no browser left where this button would do nothing. */}
+          {(
             <Button
               variant="ghost"
               size="icon"
@@ -292,9 +277,7 @@ export function ScreenShareView({
           autoPlay
           playsInline
           muted
-          onDoubleClick={
-            fullscreenMode === "none" ? undefined : toggleFullscreen
-          }
+          onDoubleClick={toggleFullscreen}
           className="h-full w-full object-contain"
         />
         {!stream && (

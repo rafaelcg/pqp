@@ -1459,5 +1459,10 @@
   "update.reload": "Recarregar",
   "update.updating": "Atualizando…",
   "update.dismiss": "Dispensar aviso de atualização",
-  "update.later": "Depois"
+  "update.later": "Depois",
+  "update.dismiss.label": "Fechar aviso de atualização",
+  "claim.edition": "ago 2026",
+  "handle.share.cta": "Mostrar pra galera",
+  "handle.share.copied": "Copiado",
+  "handle.share.failed": "Não deu pra compartilhar"
 }

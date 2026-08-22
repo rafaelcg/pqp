@@ -1459,5 +1459,10 @@
   "update.reload": "Reload",
   "update.updating": "Updating…",
   "update.dismiss": "Dismiss update notice",
-  "update.later": "Later"
+  "update.later": "Later",
+  "update.dismiss.label": "Dismiss update notice",
+  "claim.edition": "aug 2026",
+  "handle.share.cta": "Show it off",
+  "handle.share.copied": "Copied",
+  "handle.share.failed": "Could not share"
 }
