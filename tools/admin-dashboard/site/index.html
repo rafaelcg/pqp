@@ -552,6 +552,48 @@
   </section>
 
   <!-- ============ CHANNELS & SERVERS ============ -->
+  <section aria-label="origem dos cadastros">
+    <div class="sec-head">
+      <h2>de onde vêm os cadastros</h2>
+      <span class="rule"></span>
+      <span class="note" id="acqNote">carregando</span>
+    </div>
+    <div class="grid g-3">
+      <div class="card pad" style="grid-column:span 2">
+        <p class="subtle-title">primeiro toque · por campanha</p>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>origem</th>
+                <th>meio</th>
+                <th>campanha</th>
+                <th class="r">cadastros</th>
+                <th class="r">%</th>
+              </tr>
+            </thead>
+            <tbody id="acqBody"><!-- injected --></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card pad">
+        <p class="subtle-title">página de entrada</p>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>caminho</th>
+                <th class="r">cadastros</th>
+              </tr>
+            </thead>
+            <tbody id="acqLandingBody"><!-- injected --></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <section aria-label="canais e servidores">
     <div class="sec-head">
       <h2>canais e servidores</h2>
@@ -1112,6 +1154,60 @@
   }
 
   /* ---------------- render: servers table ---------------- */
+  /* ---------------- render: acquisition ----------------
+     Every row is first touch. A row with nothing in it is a signup whose link
+     carried no parameters, and it is shown rather than hidden: the size of that
+     row IS the measurement problem, so burying it would defeat the panel. */
+  function renderAcquisition(acq) {
+    var body = $("acqBody"), lbody = $("acqLandingBody");
+    if (!body) return;
+    var rows = (acq && Array.isArray(acq.rows)) ? acq.rows : [];
+    var total = (acq && acq.total) || 0;
+    body.innerHTML = "";
+    if (!rows.length) {
+      body.innerHTML = '<tr><td colspan="5" style="color:var(--faint)">nenhum cadastro na janela</td></tr>';
+    } else {
+      rows.forEach(function (r) {
+        var untagged = !r.source && !r.medium && !r.campaign && !r.ref;
+        var source = untagged ? "sem etiqueta" : (r.source || r.ref || "—");
+        var tr = el("tr");
+        tr.innerHTML =
+          '<td>' + (untagged
+            ? '<span class="srv-name" style="color:var(--faint)">' + esc(source) + '</span>' +
+              '<div class="srv-cat">link postado sem utm</div>'
+            : '<span class="srv-name">' + esc(source) + '</span>' +
+              (r.ref && r.source ? '<div class="srv-cat">ref ' + esc(r.ref) + '</div>' : '')) + '</td>' +
+          '<td>' + esc(r.medium || "—") + '</td>' +
+          '<td>' + esc(r.campaign || "—") + '</td>' +
+          '<td class="r num cell-strong">' + fmt(r.signups || 0) + '</td>' +
+          '<td class="r num">' + pct(r.signups || 0, total) + '%</td>';
+        body.appendChild(tr);
+      });
+    }
+    var tagged = 0;
+    rows.forEach(function (r) {
+      if (r.source || r.medium || r.campaign || r.ref) tagged += (r.signups || 0);
+    });
+    setText("acqNote", total
+      ? fmt(tagged) + " de " + fmt(total) + " cadastros com origem conhecida (" + pct(tagged, total) + "%) · " + ((acq && acq.days) || 7) + " dias"
+      : "sem cadastros na janela");
+
+    if (!lbody) return;
+    var landings = (acq && Array.isArray(acq.landings)) ? acq.landings : [];
+    lbody.innerHTML = "";
+    if (!landings.length) {
+      lbody.innerHTML = '<tr><td colspan="2" style="color:var(--faint)">nenhuma entrada registrada</td></tr>';
+      return;
+    }
+    landings.slice(0, 8).forEach(function (l) {
+      var tr = el("tr");
+      tr.innerHTML =
+        '<td><span class="mono">' + esc(l.landing || "/") + '</span></td>' +
+        '<td class="r num cell-strong">' + fmt(l.signups || 0) + '</td>';
+      lbody.appendChild(tr);
+    });
+  }
+
   function renderServers(servers) {
     var sb = $("serversBody");
     sb.innerHTML = "";
@@ -1219,6 +1315,7 @@
   renderHealth(seedHealth, seedHost);
   renderMetrics(seedMetrics);
   renderCharts(seedNewUsersHourly, seedMessagesHourly);
+  renderAcquisition({ days: 7, total: 0, rows: [], landings: [] });
   renderServers(seedServers);
   renderChannels(seedChannels);
   renderVoice(seedVoice);
@@ -1307,6 +1404,8 @@
     ]);
 
     renderCharts(usersHourly, msgsHourly);
+
+    renderAcquisition(d.acquisition);
 
     var top = Array.isArray(d.topServers24h) ? d.topServers24h : [];
     renderServers(top.map(function (s, i) {
