@@ -48,6 +48,7 @@ import {
   createReportSchema,
   FEEDBACK_PAGE_MAX,
   FEEDBACK_PAGE_SIZE,
+  createCallRatingSchema,
   feedbackStatusSchema,
   resolveFeedbackSchema,
   createThreadSchema,
@@ -291,6 +292,16 @@ import {
   listFeedback,
   resolveFeedback,
 } from "../services/feedback.js";
+import { recordCallRating } from "../services/call-ratings.js";
+import {
+  acquisitionReport,
+  recordAcquisition,
+} from "../services/acquisition.js";
+import {
+  ADMIN_METRICS_PATH,
+  getAdminMetrics,
+  isAdminMetricsTokenValid,
+} from "../services/metrics.js";
 import {
   claimHandle,
   findUserIdByHandle,
@@ -453,6 +464,16 @@ const reportLimiter = createRateLimiter({ capacity: 5, refillPerSecond: 0.05 });
 const feedbackLimiter = createRateLimiter({
   capacity: 5,
   refillPerSecond: 0.05,
+});
+/**
+ * Post-call ratings. Roomier than feedback because this one is *asked for*:
+ * somebody who genuinely has ten short calls in an evening should be able to
+ * answer every prompt, and the client already refuses to ask more than once
+ * per call. Tight enough that a script cannot flood the average.
+ */
+const callRatingLimiter = createRateLimiter({
+  capacity: 10,
+  refillPerSecond: 0.1,
 });
 /**
  * The one public, unauthenticated read that answers with a person — see
@@ -733,6 +754,12 @@ router.patch("/api/me", async ({ req, user, ageGate }) => {
   // handful of times per account, ever.
   if (body.handle !== undefined) {
     await claimHandle(user.id, body.handle);
+  }
+  // Write-only and first-touch: the service refuses it for an account that
+  // already has one, or that is older than a day. Nothing below reads it back,
+  // so a refusal is not a failure of this request and is not reported as one.
+  if (body.acquisition !== undefined) {
+    await recordAcquisition(user.id, body.acquisition);
   }
   const updated = await updateProfile(user.id, {
     displayName: body.displayName,
@@ -1202,6 +1229,34 @@ router.delete("/api/admin/users/:userId", async ({ user, res }, { userId }) => {
   );
 
   return { ok: true };
+});
+
+/**
+ * Signups by campaign source, for the operator. Same gate as the route above,
+ * same 404 for everybody else. `?days=` bounds the window (default 30, at most
+ * 90) and that is the only input. Read-only, aggregate, never a list of
+ * people: the rows are (source, medium, campaign, count). See
+ * services/acquisition.ts. Deliberately NOT on the status page, which carries
+ * no user counts of any kind.
+ */
+router.get("/api/admin/acquisition", async ({ url, user }) => {
+  if (!isInstanceModerator(user)) {
+    throw new NotFound("Not found");
+  }
+  return acquisitionReport(clampLimit(url.searchParams.get("days"), 30, 90));
+});
+
+/**
+ * Aggregate counts for the operator dashboard. Same gate, same 404. The other
+ * way in, a machine token, is resolved in `handleApi` before Clerk runs, so
+ * this handler only ever sees a signed-in moderator. See services/metrics.ts
+ * for what the payload carries and what it deliberately does not.
+ */
+router.get(ADMIN_METRICS_PATH, async ({ user }) => {
+  if (!isInstanceModerator(user)) {
+    throw new NotFound("Not found");
+  }
+  return getAdminMetrics();
 });
 
 // --------------------------------------------------------- user discovery
@@ -3783,6 +3838,30 @@ router.patch("/api/reports/:report", async ({ req, user }, { report }) => {
   return { report: resolved };
 });
 
+// ----------------------------------------------------------- call ratings
+
+/**
+ * How the last call went, one number, asked once when it ends.
+ *
+ * Write-only for everybody: there is no route to read an individual rating,
+ * and the operator sees only the aggregate that rides along on
+ * `GET /api/admin/metrics`. That is the whole privacy design, so resist adding
+ * a `GET /api/voice/ratings/:id` later.
+ */
+router.post("/api/voice/ratings", async ({ req, res, user }) => {
+  const key = `user:${user.id}`;
+  if (!callRatingLimiter.take(key)) {
+    res.setHeader("Retry-After", String(callRatingLimiter.retryAfter(key)));
+    throw new HttpError(429, "Slow down");
+  }
+  const body = createCallRatingSchema.parse(await readJsonBody(req));
+  await recordCallRating(user.id, body);
+  // Nothing meaningful to hand back. The client has already dismissed the
+  // prompt by the time this resolves, and returning the row would only invite
+  // somebody to build a reader for it later.
+  return { ok: true };
+});
+
 // --------------------------------------------------------------- feedback
 
 /**
@@ -4427,6 +4506,18 @@ export async function handleApi(
     return;
   }
 
+  // The operator dashboard's machine token, for exactly one GET and nothing
+  // else. Checked before Clerk resolution because the caller (a Cloudflare
+  // Worker) has no session to present; a header that does not match falls
+  // through to the normal resolution, so a moderator's JWT still works and an
+  // unauthenticated probe still ends in the same 404 as a non-moderator.
+  const isAdminMetricsRequest =
+    req.method === "GET" && pathname === ADMIN_METRICS_PATH;
+  if (isAdminMetricsRequest && isAdminMetricsTokenValid(req.headers.authorization)) {
+    sendJson(res, 200, await getAdminMetrics(), req);
+    return;
+  }
+
   let resolved: Awaited<ReturnType<typeof resolveAuthSession>> = null;
   try {
     resolved = await resolveAuthSession(req.headers.authorization);
@@ -4437,7 +4528,14 @@ export async function handleApi(
   }
 
   if (!resolved) {
-    sendError(res, 401, "Unauthorized", req);
+    // The metrics route answers 404 to everybody it refuses, whether that is a
+    // wrong token, no token, or a signed-in non-moderator. A 401 here would
+    // tell a probe that the route exists and only the credential was wrong.
+    if (isAdminMetricsRequest) {
+      sendError(res, 404, "Not found", req);
+    } else {
+      sendError(res, 401, "Unauthorized", req);
+    }
     return;
   }
 

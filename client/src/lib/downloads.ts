@@ -215,6 +215,27 @@ export async function detectDownloadPlan(
   };
 }
 
+/**
+ * True on an actual iPhone/iPad/iPod. The iOS beta CTA is only useful to these
+ * visitors: an Android or desktop user offered a TestFlight link has nothing to
+ * do with it. iPadOS 13+ reports its UA as a Mac, so the touch heuristic is what
+ * separates a touch Mac (an iPad) from a real desktop.
+ */
+export function isIOSDevice(): boolean {
+  if (typeof navigator === "undefined") {
+    return false;
+  }
+  const ua = navigator.userAgent;
+  if (/iPhone|iPad|iPod/i.test(ua)) {
+    return true;
+  }
+  return (
+    /Macintosh/.test(ua) &&
+    typeof document !== "undefined" &&
+    "ontouchend" in document
+  );
+}
+
 // ------------------------------------------------------------- asset lookup
 
 interface ReleaseAsset {

@@ -1356,6 +1356,13 @@ CREATE INDEX IF NOT EXISTS idx_member_timeouts_user
 -- exactly that tuple, so the same index serves both halves of art. 18.
 CREATE INDEX IF NOT EXISTS idx_messages_author_created
   ON messages (author_id, created_at, id);
+
+-- `(created_at)` alone: the operator metrics (`GET /api/admin/metrics`) ask
+-- "how many messages in the last 24/48 hours, by hour" with no channel or
+-- author in the predicate, which neither index above can serve. Small, and
+-- the only thing standing between that endpoint and a full scan per refresh.
+CREATE INDEX IF NOT EXISTS idx_messages_created
+  ON messages (created_at);
 CREATE INDEX IF NOT EXISTS idx_message_reactions_user
   ON message_reactions (user_id);
 CREATE INDEX IF NOT EXISTS idx_message_attachments_uploader
@@ -2354,3 +2361,61 @@ CREATE TABLE IF NOT EXISTS user_badges (
   granted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (user_id, badge)
 );
+
+-- ------------------------------------------------------ call ratings
+--
+-- One prompted score per call, asked once when a call ends. Distinct from
+-- `feedback` on purpose: feedback is volunteered, which selects for people
+-- already annoyed enough to open settings, while this is asked, and is the
+-- only signal here a quiet majority ever produces. Averaging the two together
+-- would make both meaningless.
+--
+-- What is NOT here is the point: no peer ids, no message content, no channel
+-- name, no address. A row is a score, the shape of the call it scored, and a
+-- time. `user_id` goes NULL rather than cascading away, because a rating from
+-- somebody who later deleted their account is still a true thing about how the
+-- product performed that day.
+CREATE TABLE IF NOT EXISTS call_ratings (
+  id BIGSERIAL PRIMARY KEY,
+  user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  channel_id UUID REFERENCES channels(id) ON DELETE SET NULL,
+  rating SMALLINT NOT NULL CHECK (rating BETWEEN 1 AND 5),
+  -- Only ever written on a low score, where the number does not say what broke.
+  note TEXT,
+  duration_seconds INTEGER NOT NULL CHECK (duration_seconds >= 0),
+  peer_count SMALLINT NOT NULL CHECK (peer_count >= 0),
+  transport TEXT NOT NULL CHECK (transport IN ('mesh', 'livekit')),
+  had_screen_share BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- The dashboard reads "everything since <time>", grouped. Nothing reads a
+-- single row by id, so the index follows the only query that exists.
+CREATE INDEX IF NOT EXISTS idx_call_ratings_created_at
+  ON call_ratings (created_at DESC);
+
+-- ------------------------------------------------------ acquisition
+--
+-- Where an account came from, as the landing page saw it: the `utm_source`,
+-- `utm_medium`, `utm_campaign`, `gclid` and `ref` parameters on the URL the
+-- person first arrived with, plus the path they landed on. This exists so a
+-- paid or organic channel can be judged by signups rather than by clicks,
+-- WITHOUT a cookie, a pixel or any third-party tag on the site: the client
+-- remembers the parameters in its own localStorage through the sign-up, sends
+-- them once, and deletes them.
+--
+-- FIRST TOUCH, AND NEVER OVERWRITTEN. The write in services/acquisition.ts is
+-- `WHERE acquisition_at IS NULL` and is refused outright for an account older
+-- than a day, so a later campaign click by somebody who already has an account
+-- is a visit, not an acquisition. Nothing here is ever read back into a user
+-- payload; the only reader is the operator's GET /api/admin/acquisition, which
+-- groups counts by source/medium/campaign. The columns are deliberately absent
+-- from DB_USER_COLUMNS for that reason. Every value is bounded at the API
+-- (acquisitionSchema) because a query string is user-writable.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS acquisition_source TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS acquisition_medium TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS acquisition_campaign TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS acquisition_gclid TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS acquisition_ref TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS acquisition_landing TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS acquisition_at TIMESTAMPTZ;

@@ -32,6 +32,15 @@ const RECONNECT_MAX_DELAY_MS = 30_000;
 // without limit; overflow drops the oldest entries.
 const MAX_CHAT_QUEUE = 200;
 const MAX_VOICE_QUEUE = 100;
+// The server admits a burst of 60 messages per connection, refilled at 20/s
+// (server/src/ws/index.ts). The queues above can hold 300 between them, so a
+// reconnect flush that dumps everything in one loop trips that limiter and the
+// fresh socket is closed with 4429 — a reconnect-kill loop for exactly the
+// flaky networks the queues exist to survive. Drain in paced chunks that leave
+// headroom for live traffic (auth, rejoin, fresh signaling) instead.
+const FLUSH_FIRST_BURST = 30;
+const FLUSH_CHUNK = 8;
+const FLUSH_INTERVAL_MS = 500;
 
 function enqueueBounded<T>(queue: T[], message: T, max: number) {
   queue.push(message);
@@ -80,6 +89,7 @@ export function createRealtimeTransport(): RealtimeTransport {
   let reconnectAttempt = 0;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let pingTimer: ReturnType<typeof setInterval> | null = null;
+  let flushTimer: ReturnType<typeof setTimeout> | null = null;
   let awaitingPong = false;
   let missedPongs = 0;
   const chatQueue: ChatClientMessage[] = [];
@@ -119,6 +129,13 @@ export function createRealtimeTransport(): RealtimeTransport {
     }
     awaitingPong = false;
     missedPongs = 0;
+  }
+
+  function stopFlushTimer() {
+    if (flushTimer) {
+      clearTimeout(flushTimer);
+      flushTimer = null;
+    }
   }
 
   function startKeepalive(ws: WebSocket) {
@@ -192,6 +209,8 @@ export function createRealtimeTransport(): RealtimeTransport {
     const wasReady = isReady;
     isReady = false;
     stopKeepalive();
+    // Anything still undrained stays queued for the next connection.
+    stopFlushTimer();
 
     if (manualClose) {
       return;
@@ -308,20 +327,45 @@ export function createRealtimeTransport(): RealtimeTransport {
     };
   }
 
+  /** Send up to `limit` queued messages; true when both queues are empty. */
+  function drainChunk(ws: WebSocket, limit: number): boolean {
+    let budget = limit;
+    while (budget > 0 && chatQueue.length > 0) {
+      ws.send(JSON.stringify(chatQueue.shift()));
+      budget -= 1;
+    }
+    while (budget > 0 && voiceQueue.length > 0) {
+      ws.send(JSON.stringify(voiceQueue.shift()));
+      budget -= 1;
+    }
+    return chatQueue.length === 0 && voiceQueue.length === 0;
+  }
+
   function flushQueues() {
+    stopFlushTimer();
     if (!socket || socket.readyState !== WebSocket.OPEN || !isReady) {
       return;
     }
-    for (const message of chatQueue.splice(0)) {
-      socket.send(JSON.stringify(message));
+    const ws = socket;
+    if (drainChunk(ws, FLUSH_FIRST_BURST)) {
+      return;
     }
-    for (const message of voiceQueue.splice(0)) {
-      socket.send(JSON.stringify(message));
-    }
+    const tick = () => {
+      flushTimer = null;
+      if (ws !== socket || ws.readyState !== WebSocket.OPEN || !isReady) {
+        return;
+      }
+      if (!drainChunk(ws, FLUSH_CHUNK)) {
+        flushTimer = setTimeout(tick, FLUSH_INTERVAL_MS);
+      }
+    };
+    flushTimer = setTimeout(tick, FLUSH_INTERVAL_MS);
   }
 
   function sendOrQueueChat(message: ChatClientMessage) {
-    if (socket?.readyState === WebSocket.OPEN && isReady) {
+    // While a paced flush is draining, join the back of the queue — a direct
+    // send would overtake older messages and spend the same rate budget.
+    if (flushTimer === null && socket?.readyState === WebSocket.OPEN && isReady) {
       socket.send(JSON.stringify(message));
       return;
     }
@@ -329,7 +373,7 @@ export function createRealtimeTransport(): RealtimeTransport {
   }
 
   function sendOrQueueVoice(message: VoiceClientMessage) {
-    if (socket?.readyState === WebSocket.OPEN && isReady) {
+    if (flushTimer === null && socket?.readyState === WebSocket.OPEN && isReady) {
       socket.send(JSON.stringify(message));
       return;
     }

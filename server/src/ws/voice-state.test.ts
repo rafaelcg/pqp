@@ -84,6 +84,7 @@ interface RosterFrame {
     muted: boolean;
     deafened: boolean;
     sharingScreen: boolean;
+    screenAudioStreamId?: string | null;
   }>;
 }
 
@@ -216,5 +217,72 @@ describe("voice roster carries mute/deafen state", () => {
     // over — the client owns the state and re-declares it after welcome.
     await join(caller, "talker");
     expect(lastRoster(outside).participants![0]!.muted).toBe(false);
+  });
+
+  /**
+   * A share that carries the machine's audio announces the capture's stream id,
+   * and the roster is how every mesh receiver learns which of that peer's two
+   * audio tracks is the presentation rather than their voice. Getting this
+   * wrong silences the presenter for the whole room, so the wire contract is
+   * pinned here: the id rides the roster, an older client that sends no id is
+   * accepted as silent, and stopping clears it.
+   */
+  it("carries the screen-audio stream id, and clears it on stop", async () => {
+    const outside = viewer("viewer");
+    const caller = track(recorder());
+    await join(caller, "talker");
+
+    await handleVoiceMessage(
+      { socket: caller.socket, user: asUser("talker") },
+      { type: "set-sharing-screen", sharing: true, audioStreamId: "cap-1" },
+    );
+    expect(lastRoster(outside).participants![0]).toMatchObject({
+      sharingScreen: true,
+      screenAudioStreamId: "cap-1",
+    });
+
+    await handleVoiceMessage(
+      { socket: caller.socket, user: asUser("talker") },
+      { type: "set-sharing-screen", sharing: false, audioStreamId: null },
+    );
+    expect(lastRoster(outside).participants![0]).toMatchObject({
+      sharingScreen: false,
+      screenAudioStreamId: null,
+    });
+  });
+
+  it("treats a share announced with no id at all as silent", async () => {
+    const outside = viewer("viewer");
+    const caller = track(recorder());
+    await join(caller, "talker");
+
+    // An older client, which knows nothing about screen audio. The field is
+    // optional precisely so this parses rather than dropping the whole frame.
+    await handleVoiceMessage(
+      { socket: caller.socket, user: asUser("talker") },
+      { type: "set-sharing-screen", sharing: true },
+    );
+
+    expect(lastRoster(outside).participants![0]).toMatchObject({
+      sharingScreen: true,
+      screenAudioStreamId: null,
+    });
+  });
+
+  it("never advertises audio for a share that is not running", async () => {
+    const outside = viewer("viewer");
+    const caller = track(recorder());
+    await join(caller, "talker");
+
+    // A stop that still carries an id must not leave one on the roster: a
+    // receiver acting on it would file the presenter's microphone as a film.
+    await handleVoiceMessage(
+      { socket: caller.socket, user: asUser("talker") },
+      { type: "set-sharing-screen", sharing: false, audioStreamId: "cap-1" },
+    );
+
+    expect(
+      lastRoster(outside).participants![0]!.screenAudioStreamId,
+    ).toBeNull();
   });
 });

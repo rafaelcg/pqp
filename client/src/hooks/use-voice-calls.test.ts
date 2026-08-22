@@ -37,6 +37,7 @@ vi.mock("@/lib/peer-connection-manager", () => ({
       setPeerCameraStreamId: (peerId: string, streamId: string | null) => {
         stub.cameraStreamIds.push([peerId, streamId]);
       },
+      setPeerScreenAudioStreamId: () => {},
       onPeerStateChange: () => {},
       connectToPeer: (peerId: string) => stub.peerIds.push(peerId),
       removePeer: () => {},
@@ -60,6 +61,7 @@ vi.mock("@/lib/livekit-session", () => ({
     setMuted: async () => {},
     publishScreen: async () => {},
     unpublishScreen: async () => {},
+    unpublishScreenAudio: async () => {},
     publishCamera: async () => {},
     unpublishCamera: async () => {},
     disconnect: async () => {},

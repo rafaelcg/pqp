@@ -50,7 +50,7 @@ See `.env.example`. Important names:
 
 | Area | Names |
 |---|---|
-| Server | `DATABASE_URL`, `CLERK_SECRET_KEY`, `PORT`, `DEV_AUTH_BYPASS`, `CHARACTER_ACCOUNTS_ENABLED` |
+| Server | `DATABASE_URL`, `CLERK_SECRET_KEY`, `PORT`, `DEV_AUTH_BYPASS`, `CHARACTER_ACCOUNTS_ENABLED`, `INSTANCE_MODERATOR_CLERK_IDS`, `ADMIN_METRICS_TOKEN` (machine token for `GET /api/admin/metrics`, the operator dashboard feed; see `tools/admin-dashboard/README.md`) |
 | Ambient runner (`tools/ambient`) | `PQP_API_URL`, `AMBIENT_TOKENS_FILE`, `AMBIENT_STATE_DIR`, `AMBIENT_CONFIG`, `AMBIENT_MODEL`, `ANTHROPIC_API_KEY`, `AMBIENT_KILL_SWITCH` |
 | Client | `VITE_CLERK_PUBLISHABLE_KEY`, `VITE_API_URL`, `VITE_WS_URL`, `VITE_DEV_AUTH_BYPASS`, `VITE_VOICE_BACKEND` (leave empty to follow the server; `mesh` forces peer-to-peer) |
 | ICE / TURN (API preferred) | `TURN_URL`, `TURN_USERNAME`, `TURN_CREDENTIAL`, `CLOUDFLARE_TURN_KEY_ID`, `CLOUDFLARE_TURN_API_TOKEN`, `METERED_API_KEY`, `METERED_DOMAIN` |
@@ -107,5 +107,5 @@ CI workflows: `.github/workflows/ci.yml`, `deploy-web.yml`, `deploy-api-fly.yml`
 
 - Do not invent secret values in docs or commits.
 - Point humans to `docs/I18N.md` for adding UI copy (i18next, `{name}` slots, `_one`/`_other`, Electron menus); `docs/HANDLES.md` for public handles, the `/@` profile page and its edge-injected SEO; `docs/ambient-deploy.md` for character accounts and the ambient-life runner (the house cast); `docs/CLERK_SETUP.md` for Clerk CLI setup; `docs/SSO.md` for SAML/enterprise domain joining; `docs/voice-backends.md` for SFU notes; `docs/ATTACHMENTS.md` for R2/MinIO setup; `docs/CONTENT_SAFETY.md` for image scanning, what is
- *not* scanned, and the CSAM reporting runbook; `docs/PWA.md` for the mobile/installable app; `docs/TESTFLIGHT.md` for the iOS beta / App Review demo account.
+ *not* scanned, and the CSAM reporting runbook; `docs/PWA.md` for the mobile/installable app; `docs/TESTFLIGHT.md` for the iOS beta / App Review demo account; `tools/admin-dashboard/README.md` for the operator dashboard (`pqp-admin` Worker) and its `ADMIN_METRICS_TOKEN` / Basic Auth secrets.
 - Update `docs/HANDOVER.md` + `docs/PLAN_STATUS.md` when phase status changes.

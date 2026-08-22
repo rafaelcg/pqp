@@ -27,7 +27,7 @@ export const privacyPtBr: LegalDocument = {
   description:
     "Como o pqp.gg trata dados pessoais: o que a gente coleta, as bases legais, onde os dados são tratados, por quanto tempo ficam e os seus direitos sob a LGPD e a lei de proteção de dados do Reino Unido.",
   heading: "Política de Privacidade",
-  updated: "7 de agosto de 2026",
+  updated: "21 de agosto de 2026",
   sections: [
     {
       id: "intro",
@@ -138,7 +138,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "what-we-collect",
-      sourceRev: "3ef7aca7",
+      sourceRev: "ac588d76",
       heading: "O que a gente coleta",
       body: (
         <>
@@ -160,7 +160,16 @@ export const privacyPtBr: LegalDocument = {
             avatar, os <em>domínios</em> dos seus e-mails verificados (por
             exemplo <code>empresa.com.br</code>, usado para entrar em servidores
             por domínio de empresa — nunca a caixa de e-mail em si), a sua
-            configuração de privacidade de DM, e quando a conta foi criada.
+            configuração de privacidade de DM, e quando a conta foi criada. Se
+            o link que trouxe você ao pqp.gg pela primeira vez veio com
+            parâmetros de campanha (<code>utm_source</code>,{" "}
+            <code>utm_medium</code>, <code>utm_campaign</code>,{" "}
+            <code>gclid</code> ou <code>ref</code>), esses valores e a página
+            em que você chegou são salvos na conta uma vez, no cadastro, e
+            nunca mais alterados, para a gente saber quais links trazem gente
+            pra cá. Isso não usa cookie nem terceiro (veja o{" "}
+            <Link to="/cookies">Aviso de cookies</Link>) e só é lido como
+            contagem por campanha, nunca como lista de pessoas.
           </p>
           <p>
             <strong>Conteúdo que você publica.</strong> Texto das mensagens,

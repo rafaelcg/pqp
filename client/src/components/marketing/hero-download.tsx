@@ -4,6 +4,7 @@ import {
   DESKTOP_DOCS_URL,
   RELEASES_PAGE_URL,
   detectDownloadPlan,
+  isIOSDevice,
   resolveLatestAssets,
   type AssetId,
   type AssetUrls,
@@ -80,9 +81,10 @@ export function HeroDownload({ className, style }: HeroDownloadProps) {
 
   if (plan.platform === "mobile") {
     const beta = testflightUrl();
-    // Prefer the native beta when we have a join URL; otherwise the PWA is the
-    // honest answer (docs/PWA.md) — a .dmg on a phone is a dead end.
-    if (beta) {
+    // The iOS beta is only for iPhones: an Android visitor offered a TestFlight
+    // link has nothing to do with it, so they get the PWA answer instead
+    // (docs/PWA.md) — a .dmg on a phone is a dead end either way.
+    if (beta && isIOSDevice()) {
       return (
         <p
           className={cn("max-w-xs text-sm text-white/60", className)}
@@ -106,27 +108,28 @@ export function HeroDownload({ className, style }: HeroDownloadProps) {
     );
   }
 
+  // The desktop download itself, chosen by platform. The iOS beta line is
+  // appended under all of them (`DesktopBetaLine`) so a desktop visitor sees
+  // the iPhone option too — it used to exist only on the mobile branch.
+  let download: ReactNode;
   if (plan.platform === "mac") {
-    if (plan.macArch) {
-      return (
-        <Shell className={className} style={style} onIntent={prefetch}>
-          <DownloadLink
-            href={href(plan.macArch === "arm64" ? "mac-arm64" : "mac-x64")}
-            label={t(
-              plan.macArch === "arm64"
-                ? "download.mac.appleSilicon"
-                : "download.mac.intel",
-            )}
-            icon
-          />
-        </Shell>
-      );
-    }
-    // Chip unknown (Safari, Firefox — neither ships userAgentData). Offering
-    // both is the only honest move: an Intel build on an M-series Mac runs
-    // under Rosetta if it is even installed, and the reverse does not run at
-    // all, so a guess here is a broken first run.
-    return (
+    download = plan.macArch ? (
+      <Shell className={className} style={style} onIntent={prefetch}>
+        <DownloadLink
+          href={href(plan.macArch === "arm64" ? "mac-arm64" : "mac-x64")}
+          label={t(
+            plan.macArch === "arm64"
+              ? "download.mac.appleSilicon"
+              : "download.mac.intel",
+          )}
+          icon
+        />
+      </Shell>
+    ) : (
+      // Chip unknown (Safari, Firefox — neither ships userAgentData). Offering
+      // both is the only honest move: an Intel build on an M-series Mac runs
+      // under Rosetta if it is even installed, and the reverse does not run at
+      // all, so a guess here is a broken first run.
       <Shell className={className} style={style} onIntent={prefetch}>
         <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
           <Download aria-hidden className="h-4 w-4 shrink-0" />
@@ -146,10 +149,8 @@ export function HeroDownload({ className, style }: HeroDownloadProps) {
         <Note>{t("download.mac.whichChip")}</Note>
       </Shell>
     );
-  }
-
-  if (plan.platform === "windows") {
-    return (
+  } else if (plan.platform === "windows") {
+    download = (
       <Shell className={className} style={style} onIntent={prefetch}>
         <DownloadLink
           href={href("windows")}
@@ -162,10 +163,8 @@ export function HeroDownload({ className, style }: HeroDownloadProps) {
         </Note>
       </Shell>
     );
-  }
-
-  if (plan.platform === "linux") {
-    return (
+  } else if (plan.platform === "linux") {
+    download = (
       <Shell className={className} style={style} onIntent={prefetch}>
         <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
           <Download aria-hidden className="h-4 w-4 shrink-0" />
@@ -188,19 +187,17 @@ export function HeroDownload({ className, style }: HeroDownloadProps) {
         </Note>
       </Shell>
     );
+  } else {
+    // Some desktop we could not name. The releases page lists every build,
+    // which is a better answer than picking one at random.
+    download = (
+      <Shell className={className} style={style} onIntent={prefetch}>
+        <DownloadLink href={RELEASES_PAGE_URL} label={t("download.other")} icon />
+      </Shell>
+    );
   }
 
-  // Some desktop we could not name. The releases page lists every build, which
-  // is a better answer than picking one at random.
-  return (
-    <Shell className={className} style={style} onIntent={prefetch}>
-      <DownloadLink
-        href={RELEASES_PAGE_URL}
-        label={t("download.other")}
-        icon
-      />
-    </Shell>
-  );
+  return download;
 }
 
 function Shell({

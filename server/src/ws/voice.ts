@@ -45,6 +45,9 @@ interface VoicePeer {
   /** Sender-side camera MediaStream id, or null while the camera is off.
    *  See `voiceParticipantSchema.cameraStreamId` for why the id travels. */
   cameraStreamId: string | null;
+  /** Sender-side MediaStream id of the screen capture when it carries audio,
+   *  null otherwise. See `voiceParticipantSchema.screenAudioStreamId`. */
+  screenAudioStreamId: string | null;
   // --- voice state ---
   // Self-reported over `set-voice-state`, carried on every roster so the
   // channel list can badge occupants for people outside the call. Display
@@ -168,6 +171,77 @@ function getRoomPeers(voiceChannelId: string): VoicePeer[] {
   return [...peers.values()].filter((p) => p.voiceChannelId === voiceChannelId);
 }
 
+// --- operator metrics ---------------------------------------------------
+//
+// Read by `GET /api/admin/metrics` and nothing else. Process-local like
+// `peers` itself: a deploy restarts the machine and the peak starts over, which
+// the payload states (`peakTrackedSince`) so the dashboard never presents a
+// post-deploy zero as "nobody called today". "Today" is the operator's day,
+// America/Sao_Paulo, not UTC.
+
+let peakRoomSizeToday = 0;
+let peakDay = "";
+let peakTrackedSince = new Date().toISOString();
+
+const SAO_PAULO_DAY = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "America/Sao_Paulo",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+
+function rollPeakDay(): void {
+  const today = SAO_PAULO_DAY.format(new Date());
+  if (today !== peakDay) {
+    peakDay = today;
+    peakRoomSizeToday = 0;
+    peakTrackedSince = new Date().toISOString();
+  }
+}
+
+function noteRoomSizeForPeak(size: number): void {
+  rollPeakDay();
+  if (size > peakRoomSizeToday) {
+    peakRoomSizeToday = size;
+  }
+}
+
+export interface VoiceActivitySnapshot {
+  /** Rooms with at least one peer right now (server channels and DM calls alike). */
+  activeRooms: number;
+  /** Peers across every room right now. */
+  participants: number;
+  largestRoomNow: number;
+  /** Largest room seen since `peakTrackedSince`. */
+  peakRoomSizeToday: number;
+  /** ISO. Process start or the last São Paulo midnight, whichever is later. */
+  peakTrackedSince: string;
+  /** The transport a room opened now would get. */
+  backend: VoiceRoomTransport;
+}
+
+export function getVoiceActivitySnapshot(): VoiceActivitySnapshot {
+  rollPeakDay();
+  const sizes = new Map<string, number>();
+  for (const peer of peers.values()) {
+    sizes.set(peer.voiceChannelId, (sizes.get(peer.voiceChannelId) ?? 0) + 1);
+  }
+  let largestRoomNow = 0;
+  for (const size of sizes.values()) {
+    if (size > largestRoomNow) {
+      largestRoomNow = size;
+    }
+  }
+  return {
+    activeRooms: sizes.size,
+    participants: peers.size,
+    largestRoomNow,
+    peakRoomSizeToday: Math.max(peakRoomSizeToday, largestRoomNow),
+    peakTrackedSince,
+    backend: configuredTransport(),
+  };
+}
+
 function toParticipant(peer: VoicePeer): VoiceParticipant {
   return {
     peerId: peer.id,
@@ -176,6 +250,7 @@ function toParticipant(peer: VoicePeer): VoiceParticipant {
     avatarUrl: peer.avatarUrl,
     sharingScreen: peer.sharingScreen,
     cameraStreamId: peer.cameraStreamId,
+    screenAudioStreamId: peer.screenAudioStreamId,
     muted: peer.muted,
     deafened: peer.deafened,
   };
@@ -574,6 +649,7 @@ export async function handleVoiceMessage(
       voiceChannelId: payload.voiceChannelId,
       sharingScreen: false,
       cameraStreamId: null,
+      screenAudioStreamId: null,
       // Not muted until the client says so: the client re-declares its state
       // right after `welcome` (including after a rejoin, where this reset
       // would otherwise erase a standing mute). See use of `set-voice-state`.
@@ -582,6 +658,7 @@ export async function handleVoiceMessage(
     };
     peers.set(peerId, peer);
     socketToPeerId.set(socket, peerId);
+    noteRoomSizeForPeak(getRoomPeers(payload.voiceChannelId).length);
     // Pinned only now that the room is non-empty, so `removePeer`'s cleanup
     // above cannot race this write away.
     roomTransports.set(payload.voiceChannelId, transport);
@@ -649,6 +726,11 @@ export async function handleVoiceMessage(
       }
     }
     peer.sharingScreen = payload.sharing;
+    // Only a live share can have audio; stopping clears the id in the same
+    // frame so no roster can advertise sound for a capture that is gone.
+    peer.screenAudioStreamId = payload.sharing
+      ? (payload.audioStreamId ?? null)
+      : null;
     await broadcastRoster(peer.voiceChannelId);
     return;
   }

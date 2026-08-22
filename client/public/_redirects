@@ -1,1 +1,24 @@
+# Short referral links: pqp.gg/r/<code> -> the site with ?ref=<channel>
+#
+# WHY A PATH AND NOT A QUERY STRING. X strips the query off the URL in a
+# profile's Website field (verified 22 Aug 2026: https://pqp.gg/?ref=x-bio
+# saved fine and resolved to a bare https://pqp.gg/), so a bio link cannot
+# carry attribution as a parameter. It can carry a path. The same short form
+# is worth having anywhere the raw URL is read by a human, a Reddit comment
+# above all, where a full utm_source/utm_medium/utm_campaign triple reads as
+# marketing and ?ref= does not.
+#
+# These must stay above the SPA catch-all: Pages takes the first match.
+# `ref` is picked up by client/src/lib/acquisition.ts like any UTM parameter.
+#
+# Deliberately an explicit list and not `/r/* -> /?ref=:splat`: a wildcard
+# would let any crawler that guesses a path invent a channel name and put it
+# in the report as if it were one of ours.
+/r/x          /?ref=x-bio          302
+/r/reddit     /?ref=reddit         302
+/r/github     /?ref=github         302
+/r/yt         /?ref=youtube        302
+/r/ig         /?ref=instagram      302
+/r/tt         /?ref=tiktok         302
+
 /*    /index.html   200

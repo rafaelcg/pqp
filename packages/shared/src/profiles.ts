@@ -93,6 +93,7 @@ export const RESERVED_HANDLES: ReadonlySet<string> = new Set([
   "blog",
   "claim",
   "garanta",
+  "tela",
   "cookies",
   "docs",
   "doc",

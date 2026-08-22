@@ -9,6 +9,7 @@ import {
   injectMarketingHead,
   marketingPageFromMetaPath,
   renderMarketingHead,
+  TELA_FAQ,
   VS_DISCORD_FAQ,
   type MarketingPage,
 } from "./marketing-meta";
@@ -31,6 +32,8 @@ describe("marketingPageFromMetaPath", () => {
     const pages: MarketingPage[] = [
       "/",
       "/vs-discord",
+      "/tela",
+      "/beta",
       "/garanta",
       "/claim",
       "/privacy",
@@ -58,6 +61,9 @@ describe("marketingPageFromMetaPath", () => {
     expect(marketingPageFromMetaPath("/c/valorant")).toBeNull();
     expect(marketingPageFromMetaPath("/vs-discordx")).toBeNull();
     expect(marketingPageFromMetaPath("/vs-discord/extra")).toBeNull();
+    expect(marketingPageFromMetaPath("/telas")).toBeNull();
+    expect(marketingPageFromMetaPath("/tela/x")).toBeNull();
+    expect(marketingPageFromMetaPath("/@tela")).toBeNull();
     expect(marketingPageFromMetaPath("/VS-DISCORD")).toBeNull();
     expect(marketingPageFromMetaPath("")).toBeNull();
     expect(marketingPageFromMetaPath("//")).toBeNull();
@@ -79,6 +85,15 @@ describe("the duplicated copy is pinned to the JSON catalogues", () => {
     expect(head).toContain(`<title>${en["vsDiscord.seo.title"]}</title>`);
     const pt = renderMarketingHead("/vs-discord", "pt-BR");
     expect(pt).toContain(`<title>${ptBR["vsDiscord.seo.title"]}</title>`);
+  });
+
+  it("tela title and description", () => {
+    const head = renderMarketingHead("/tela", "en");
+    expect(head).toContain(`<title>${en["tela.seo.title"]}</title>`);
+    expect(head).toContain(en["tela.seo.description"]);
+    const pt = renderMarketingHead("/tela", "pt-BR");
+    expect(pt).toContain(`<title>${ptBR["tela.seo.title"]}</title>`);
+    expect(pt).toContain(ptBR["tela.seo.description"]!);
   });
 
   it("claim title and description, under both routes", () => {
@@ -106,6 +121,23 @@ describe("the duplicated copy is pinned to the JSON catalogues", () => {
       expect(VS_DISCORD_FAQ["pt-BR"][index]).toEqual({
         question: ptBR[`vsDiscord.faq.${id}.q`],
         answer: ptBR[`vsDiscord.faq.${id}.a`],
+      });
+    });
+  });
+
+  it("every /tela FAQ pair matches its tela.faq.* twin, both locales", () => {
+    // Same rule as above: page order, and the JSON-LD must be the same list.
+    const ids = ["download", "vpn", "people", "free", "mobile", "data"] as const;
+    expect(TELA_FAQ.en).toHaveLength(ids.length);
+    expect(TELA_FAQ["pt-BR"]).toHaveLength(ids.length);
+    ids.forEach((id, index) => {
+      expect(TELA_FAQ.en[index]).toEqual({
+        question: en[`tela.faq.${id}.q`],
+        answer: en[`tela.faq.${id}.a`],
+      });
+      expect(TELA_FAQ["pt-BR"][index]).toEqual({
+        question: ptBR[`tela.faq.${id}.q`],
+        answer: ptBR[`tela.faq.${id}.a`],
       });
     });
   });
@@ -145,9 +177,14 @@ describe("renderMarketingHead", () => {
     );
   });
 
-  it("carries FAQPage JSON-LD on /vs-discord only", () => {
+  it("carries FAQPage JSON-LD on /vs-discord and /tela only", () => {
     expect(renderMarketingHead("/vs-discord", "pt-BR")).toContain('"FAQPage"');
+    expect(renderMarketingHead("/tela", "pt-BR")).toContain('"FAQPage"');
+    expect(renderMarketingHead("/tela", "en")).toContain(
+      TELA_FAQ.en[0]!.question,
+    );
     expect(renderMarketingHead("/", "pt-BR")).not.toContain('"FAQPage"');
+    expect(renderMarketingHead("/beta", "pt-BR")).not.toContain('"FAQPage"');
     expect(renderMarketingHead("/privacy", "pt-BR")).not.toContain('"FAQPage"');
   });
 

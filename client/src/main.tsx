@@ -25,6 +25,8 @@ import { DesktopDeepLinkBridge } from "./components/desktop-bridge";
 import { ErrorBoundary } from "./components/error-boundary";
 import { DesktopTitleBar } from "./components/layout/desktop-title-bar";
 import { useTheme } from "./hooks/use-theme";
+import { rememberAcquisitionFromLocation } from "./lib/acquisition";
+import { browserStorage } from "./lib/arrival";
 import { isDesktopApp } from "./lib/desktop";
 import { isDevAuthBypassEnabled } from "./lib/dev-auth";
 import { I18nProvider, useTranslation } from "./lib/i18n";
@@ -52,6 +54,18 @@ const StatusPage = lazy(() =>
 );
 const VsDiscordPage = lazy(() =>
   import("./pages/vs-discord-page").then((m) => ({ default: m.VsDiscordPage })),
+);
+const BetaPage = lazy(() =>
+  import("./pages/beta-page").then((m) => ({ default: m.BetaPage })),
+);
+const TelaPage = lazy(() =>
+  import("./pages/tela-page").then((m) => ({ default: m.TelaPage })),
+);
+const BlogPage = lazy(() =>
+  import("./pages/blog-page").then((m) => ({ default: m.BlogPage })),
+);
+const BlogPostPage = lazy(() =>
+  import("./pages/blog-post-page").then((m) => ({ default: m.BlogPostPage })),
 );
 const ClaimPage = lazy(() =>
   import("./pages/claim-page").then((m) => ({ default: m.ClaimPage })),
@@ -144,6 +158,21 @@ function AppRoutes({ devBypass = false }: { devBypass?: boolean }) {
           <Route path="/cookies" element={<CookiesPage />} />
           <Route path="/status" element={<StatusPage />} />
           <Route path="/vs-discord" element={<VsDiscordPage />} />
+          {/* `/tela`: the pt-BR landing for "Discord sem tela no Brasil, o
+              que usar". A static single segment, so, as the note on
+              `PublicProfileRoute` below explains, the word joins
+              RESERVED_HANDLES and nobody can hold `@tela` from now on. A
+              search landing has to be a short memorable path and `/tela` is
+              the query itself, so the trade is accepted knowingly; do not add
+              a second one without the same thought. */}
+          <Route path="/tela" element={<TelaPage />} />
+          <Route path="/beta" element={<BetaPage />} />
+          {/* Static before dynamic, and both before `/:handleSegment`. React
+              Router ranks a static segment above a parameter, so `/blog/x`
+              cannot be read as a handle, but keeping them adjacent here is how
+              the next person sees that the ordering was considered. */}
+          <Route path="/blog" element={<BlogPage />} />
+          <Route path="/blog/:slug" element={<BlogPostPage />} />
           {/* Two paths, one page. `/garanta` is the one that gets shared in
               Brazil and the one every CTA points at; `/claim` exists so an
               English-speaking visitor guessing at a URL is not wrong. Neither
@@ -284,6 +313,12 @@ function DesktopShell({ children }: { children: ReactNode }) {
     </div>
   );
 }
+
+// Before routing, so every door works the same: the campaign parameters on
+// the URL this page loaded with are remembered now, and sent once after the
+// account exists (see `lib/acquisition.ts` and the arrival effect in App.tsx).
+// Nothing is stripped from the address bar here; the URL is the page's to own.
+rememberAcquisitionFromLocation(browserStorage(), window.location);
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

@@ -2,11 +2,9 @@ import { Link } from "react-router-dom";
 import { BetaTag } from "@/components/ui/beta-tag";
 import { RELEASES_PAGE_URL } from "@/lib/downloads";
 import { useTranslation } from "@/lib/i18n";
-import { testflightUrl } from "@/lib/testflight";
 
 export function MarketingFooter() {
   const { t, locale } = useTranslation();
-  const betaUrl = testflightUrl();
 
   return (
     <footer className="border-t border-ink-4/40 bg-ink px-5 py-10 sm:px-8">
@@ -42,6 +40,9 @@ export function MarketingFooter() {
             <Link to="/vs-discord" className="text-paper hover:text-signal">
               {t("footer.vsDiscord")}
             </Link>
+            <Link to="/tela" className="text-paper hover:text-signal">
+              {t("footer.tela")}
+            </Link>
             {/* The releases page, not a direct asset: the filenames carry the
                 version, so only GitHub can say what the newest one is called.
                 See `lib/downloads.ts`. */}
@@ -53,23 +54,15 @@ export function MarketingFooter() {
             >
               {t("footer.desktop")}
             </a>
-            {betaUrl ? (
-              <a
-                href={betaUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-paper hover:text-signal"
-              >
-                {t("footer.iosBeta")}
-              </a>
-            ) : (
-              <Link
-                to="/vs-discord#ios-beta"
-                className="text-paper hover:text-signal"
-              >
-                {t("footer.iosBeta")}
-              </Link>
-            )}
+            {/* The footer drives to the /beta landing, not straight to
+                TestFlight: the page sells the beta and carries the honest
+                framing before the external hop. */}
+            <Link to="/beta" className="text-paper hover:text-signal">
+              {t("footer.iosBeta")}
+            </Link>
+            <Link to="/blog" className="text-paper hover:text-signal">
+              {t("nav.blog")}
+            </Link>
             <Link to="/status" className="text-paper hover:text-signal">
               {t("footer.status")}
             </Link>
@@ -92,6 +85,15 @@ export function MarketingFooter() {
       </div>
       <p className="mx-auto mt-10 max-w-5xl text-xs text-paper-muted">
         {t("footer.copyright", { year: new Date().getFullYear() })}
+        {" · "}
+        <a
+          href="https://rafael.ltd"
+          target="_blank"
+          rel="noopener"
+          className="hover:text-signal"
+        >
+          rafael.ltd
+        </a>
       </p>
     </footer>
   );

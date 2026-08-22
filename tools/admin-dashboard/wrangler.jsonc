@@ -1,0 +1,24 @@
+{
+  // Operator dashboard for pqp.gg. Deploys to the existing `pqp-admin` Worker.
+  // Static page under ./site, a tiny Worker in front of it that (1) gates every
+  // request with HTTP Basic Auth and (2) proxies /metrics and /health to the API
+  // so the page never holds a credential. See README.md.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "pqp-admin",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+  "assets": {
+    "directory": "./site",
+    "binding": "ASSETS",
+    // The Worker must see every request first, or the static page would be
+    // served straight from the edge with no Basic Auth in front of it.
+    "run_worker_first": true
+  },
+  // Non-secret configuration. Secrets (ADMIN_DASH_PASSWORD, ADMIN_METRICS_TOKEN)
+  // are set with `wrangler secret put` and never live in this file.
+  "vars": {
+    "API_ORIGIN": "https://api.pqp.gg",
+    "ADMIN_DASH_USER": "operador"
+  },
+  "observability": { "enabled": true }
+}

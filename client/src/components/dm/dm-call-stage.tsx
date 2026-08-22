@@ -715,6 +715,14 @@ function ActiveCall({
                 {voiceState.isSharingScreen
                   ? t("voice.share.youPresenting")
                   : t("voice.share.peerPresenting", { name: presenterName })}
+                {/* Only about our own share: whether someone else's carries
+                    sound is their business, and we would only be guessing. */}
+                {voiceState.isSharingScreen &&
+                  !voiceState.isSharingScreenAudio && (
+                    <span className="ml-1 text-paper-muted">
+                      ({t("voice.share.noAudioShort")})
+                    </span>
+                  )}
               </span>
             )}
           </p>

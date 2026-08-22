@@ -1,0 +1,1505 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="robots" content="noindex, nofollow" />
+<title>pqp.gg · painel do operador</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Dela+Gothic+One&family=Unbounded:wght@400;500;600;700&family=Instrument+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    /* surfaces */
+    --surface-0: oklch(0.16 0.012 250);
+    --surface-1: oklch(0.20 0.014 250);
+    --surface-2: oklch(0.24 0.016 250);
+    --surface-3: oklch(0.28 0.017 250);
+    --border:    oklch(0.30 0.018 250);
+    --border-soft: oklch(0.30 0.018 250 / 0.55);
+
+    /* text */
+    --text:  oklch(0.93 0.015 95);
+    --muted: oklch(0.72 0.02 95);
+    --faint: oklch(0.60 0.02 95);
+
+    /* single accent */
+    --accent: oklch(0.88 0.19 125);
+    --accent-dim: oklch(0.88 0.19 125 / 0.14);
+    --accent-line: oklch(0.88 0.19 125 / 0.9);
+
+    /* semantic status (kept distinct from accent) */
+    --success: oklch(0.72 0.14 150);
+    --success-dim: oklch(0.72 0.14 150 / 0.16);
+    --warning: oklch(0.80 0.14 85);
+    --warning-dim: oklch(0.80 0.14 85 / 0.16);
+    --danger:  oklch(0.65 0.20 25);
+    --danger-dim: oklch(0.65 0.20 25 / 0.16);
+
+    --shadow-1: 0 1px 2px oklch(0 0 0 / 0.25), 0 2px 8px oklch(0 0 0 / 0.22);
+    --shadow-2: 0 2px 6px oklch(0 0 0 / 0.30), 0 12px 32px oklch(0 0 0 / 0.30);
+
+    --r-lg: 20px;
+    --r-md: 14px;
+    --r-sm: 10px;
+    --r-xs: 8px;
+
+    --maxw: 1240px;
+  }
+
+  * { box-sizing: border-box; }
+
+  html { -webkit-text-size-adjust: 100%; }
+
+  body {
+    margin: 0;
+    background:
+      radial-gradient(1100px 600px at 82% -8%, oklch(0.88 0.19 125 / 0.06), transparent 60%),
+      radial-gradient(900px 520px at 6% 0%, oklch(0.72 0.14 150 / 0.05), transparent 55%),
+      var(--surface-0);
+    background-attachment: fixed;
+    color: var(--text);
+    font-family: "Instrument Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 15px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  .num, .num * { font-variant-numeric: tabular-nums; }
+  body { font-variant-numeric: tabular-nums; }
+
+  .wrap {
+    max-width: var(--maxw);
+    margin: 0 auto;
+    padding: 22px clamp(14px, 3vw, 34px) 60px;
+  }
+
+  a { color: inherit; }
+
+  /* ---------- focus ---------- */
+  a:focus-visible,
+  button:focus-visible,
+  [tabindex]:focus-visible,
+  .card:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+    border-radius: var(--r-sm);
+  }
+
+  /* ---------- header ---------- */
+  header.top {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 14px 20px;
+    padding: 6px 2px 20px;
+  }
+  .brand { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
+  .wordmark {
+    font-family: "Dela Gothic One", "Unbounded", sans-serif;
+    font-size: clamp(24px, 3.4vw, 34px);
+    letter-spacing: -0.02em;
+    line-height: 1;
+    color: var(--text);
+  }
+  .wordmark .dot { color: var(--accent); }
+  .brand .sub {
+    font-family: "Unbounded", sans-serif;
+    font-weight: 500;
+    font-size: 13px;
+    color: var(--muted);
+    letter-spacing: 0.01em;
+    white-space: nowrap;
+  }
+  .top .spacer { flex: 1 1 40px; }
+
+  .top-right {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+  .updated {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 1px;
+    font-size: 12px;
+    color: var(--faint);
+    line-height: 1.35;
+  }
+  .updated b { color: var(--muted); font-weight: 600; font-size: 12.5px; }
+
+  /* ---------- status pill ---------- */
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px 8px 12px;
+    border-radius: 999px;
+    background: var(--success-dim);
+    border: 1px solid oklch(0.72 0.14 150 / 0.35);
+    color: var(--success);
+    font-family: "Unbounded", sans-serif;
+    font-weight: 500;
+    font-size: 12.5px;
+    letter-spacing: 0.01em;
+    white-space: nowrap;
+  }
+  .dot {
+    width: 9px; height: 9px; border-radius: 50%;
+    background: currentColor;
+    box-shadow: 0 0 0 0 currentColor;
+    flex: none;
+  }
+  .pill.warn { background: var(--warning-dim); border-color: oklch(0.80 0.14 85 / 0.35); color: var(--warning); }
+  .pill.bad { background: var(--danger-dim); border-color: oklch(0.65 0.20 25 / 0.35); color: var(--danger); }
+  .status-chip.off { color: var(--faint); }
+  .seed-badge {
+    display: inline-flex; align-items: center; gap: 5px;
+    margin-left: 8px; padding: 2px 8px; border-radius: 999px;
+    font-family: "Instrument Sans", sans-serif; font-size: 10.5px; font-weight: 600;
+    letter-spacing: 0.02em; text-transform: none;
+    border: 1px solid var(--border-soft); background: var(--surface-2); color: var(--faint);
+    vertical-align: middle;
+  }
+  .dot.live { animation: pulse 2.4s ease-out infinite; }
+  @keyframes pulse {
+    0%   { box-shadow: 0 0 0 0 oklch(0.72 0.14 150 / 0.5); }
+    70%  { box-shadow: 0 0 0 7px oklch(0.72 0.14 150 / 0); }
+    100% { box-shadow: 0 0 0 0 oklch(0.72 0.14 150 / 0); }
+  }
+
+  .live-chip {
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 6px 11px; border-radius: 999px;
+    font-size: 11.5px; font-weight: 600;
+    border: 1px solid var(--border);
+    background: var(--surface-1);
+    color: var(--muted);
+    letter-spacing: 0.02em;
+  }
+  .live-chip .dot { width: 7px; height: 7px; }
+  .live-chip[data-state="live"] { color: var(--success); border-color: oklch(0.72 0.14 150 / 0.4); }
+  .live-chip[data-state="seed"] { color: var(--faint); }
+
+  /* ---------- section ---------- */
+  section { margin-top: 30px; }
+  .sec-head {
+    display: flex; align-items: baseline; gap: 12px;
+    margin: 0 2px 13px;
+    flex-wrap: wrap;
+  }
+  .sec-head h2 {
+    font-family: "Unbounded", sans-serif;
+    font-weight: 600;
+    font-size: 15px;
+    letter-spacing: 0.005em;
+    margin: 0;
+    color: var(--text);
+  }
+  .sec-head .note {
+    font-size: 12.5px; color: var(--faint);
+  }
+  .sec-head .rule {
+    flex: 1 1 20px; height: 1px; align-self: center;
+    background: linear-gradient(90deg, var(--border), transparent);
+    min-width: 20px;
+  }
+
+  /* ---------- cards ---------- */
+  .card {
+    background: var(--surface-1);
+    border: 1px solid var(--border-soft);
+    border-radius: var(--r-lg);
+    box-shadow: var(--shadow-1);
+  }
+  .card.pad { padding: 18px; }
+
+  .grid { display: grid; gap: 14px; }
+  .g-health { grid-template-columns: repeat(6, minmax(0,1fr)); }
+  .g-metrics { grid-template-columns: repeat(6, minmax(0,1fr)); }
+  .g-charts { grid-template-columns: 1fr 1fr; }
+  .g-2 { grid-template-columns: 1fr 1fr; }
+  .g-3 { grid-template-columns: 1.35fr 1fr; }
+
+  /* ---------- health tile ---------- */
+  .health {
+    padding: 15px 15px 14px;
+    display: flex; flex-direction: column; gap: 11px;
+    border-radius: var(--r-md);
+    background: var(--surface-1);
+    border: 1px solid var(--border-soft);
+    box-shadow: var(--shadow-1);
+    min-width: 0;
+  }
+  .health .h-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .health .h-name {
+    font-family: "Unbounded", sans-serif; font-weight: 500;
+    font-size: 12.5px; color: var(--muted); letter-spacing: 0.01em;
+  }
+  .status-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 10.5px; font-weight: 700; letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--success);
+  }
+  .status-chip .dot { width: 7px; height: 7px; }
+  .status-chip.warn { color: var(--warning); }
+  .status-chip.bad { color: var(--danger); }
+
+  .health .h-val {
+    font-family: "Unbounded", sans-serif; font-weight: 700;
+    font-size: 26px; line-height: 1; letter-spacing: -0.01em;
+    display: flex; align-items: baseline; gap: 4px;
+  }
+  .health .h-val .u { font-size: 12px; font-weight: 500; color: var(--muted); font-family: "Instrument Sans", sans-serif; }
+  .health .h-sub { font-size: 11.5px; color: var(--faint); }
+  .health .bar {
+    height: 4px; border-radius: 3px; overflow: hidden;
+    background: var(--surface-3);
+  }
+  .health .bar > i {
+    display: block; height: 100%;
+    background: linear-gradient(90deg, oklch(0.72 0.14 150 / 0.7), var(--success));
+    border-radius: 3px;
+  }
+
+  .health.host { }
+  .host .meta-row { display: flex; flex-wrap: wrap; gap: 6px; }
+  .tag {
+    font-size: 10.5px; font-weight: 600; letter-spacing: 0.02em;
+    padding: 3px 8px; border-radius: 999px;
+    background: var(--surface-2); border: 1px solid var(--border-soft);
+    color: var(--muted);
+  }
+  .tag.accent { color: var(--accent); border-color: oklch(0.88 0.19 125 / 0.3); background: var(--accent-dim); }
+
+  /* ---------- metric tile ---------- */
+  .metric {
+    padding: 16px 16px 12px;
+    border-radius: var(--r-md);
+    background: var(--surface-1);
+    border: 1px solid var(--border-soft);
+    box-shadow: var(--shadow-1);
+    display: flex; flex-direction: column; gap: 9px;
+    min-width: 0;
+    position: relative;
+    overflow: hidden;
+  }
+  .metric .m-label {
+    font-family: "Unbounded", sans-serif; font-weight: 500;
+    font-size: 11.5px; color: var(--muted); letter-spacing: 0.015em;
+  }
+  .metric .m-val {
+    font-family: "Unbounded", sans-serif; font-weight: 700;
+    font-size: clamp(28px, 3vw, 34px); line-height: 1; letter-spacing: -0.015em;
+    color: var(--text);
+  }
+  .metric .m-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .delta {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-size: 12px; font-weight: 600;
+    padding: 2px 7px; border-radius: 999px;
+    background: var(--success-dim); color: var(--success);
+  }
+  .delta.flat { background: var(--surface-2); color: var(--muted); }
+  .delta .arw { font-size: 10px; }
+  .metric .m-note { font-size: 11px; color: var(--faint); }
+  .spark { width: 100%; height: 34px; display: block; }
+
+  /* ---------- chart card ---------- */
+  .chartcard { padding: 16px 16px 12px; }
+  .chartcard .c-head {
+    display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+    margin-bottom: 4px; flex-wrap: wrap;
+  }
+  .chartcard .c-title {
+    font-family: "Unbounded", sans-serif; font-weight: 500;
+    font-size: 13px; color: var(--text); letter-spacing: 0.01em;
+  }
+  .chartcard .c-sum { font-size: 12px; color: var(--muted); }
+  .chartcard .c-sum b { color: var(--accent); font-weight: 700; }
+  .chart-scroll { overflow-x: auto; }
+  .chart-scroll svg { display: block; width: 100%; min-width: 460px; height: auto; }
+  .xaxis {
+    display: flex; justify-content: space-between;
+    font-size: 10.5px; color: var(--faint);
+    margin-top: 6px; padding: 0 2px;
+    min-width: 460px;
+  }
+
+  /* ---------- text/voice split ---------- */
+  .split { display: flex; gap: 12px; }
+  .split .seg {
+    flex: 1; padding: 14px; border-radius: var(--r-md);
+    background: var(--surface-2); border: 1px solid var(--border-soft);
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .split .seg .k { font-size: 11.5px; color: var(--muted); font-family: "Unbounded", sans-serif; font-weight: 500; }
+  .split .seg .v { font-family: "Unbounded", sans-serif; font-weight: 700; font-size: 24px; line-height: 1; }
+  .split .seg .v .u { font-size: 11px; color: var(--muted); font-weight: 500; font-family: "Instrument Sans", sans-serif; }
+  .stackbar { height: 8px; border-radius: 5px; overflow: hidden; display: flex; background: var(--surface-3); margin-top: 2px; }
+  .stackbar i { display: block; height: 100%; }
+  .legend { display: flex; gap: 14px; font-size: 11.5px; color: var(--muted); margin-top: 8px; flex-wrap: wrap; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .swatch { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+
+  /* ---------- tables ---------- */
+  .table-scroll { overflow-x: auto; border-radius: var(--r-md); }
+  table {
+    width: 100%; border-collapse: collapse; min-width: 440px;
+    font-size: 13px;
+  }
+  thead th {
+    text-align: left; font-family: "Unbounded", sans-serif; font-weight: 500;
+    font-size: 10.5px; letter-spacing: 0.05em; text-transform: uppercase;
+    color: var(--faint); padding: 8px 12px; border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  thead th.r, tbody td.r { text-align: right; }
+  tbody td { padding: 10px 12px; border-bottom: 1px solid var(--border-soft); vertical-align: middle; }
+  tbody tr:last-child td { border-bottom: 0; }
+  tbody tr:hover td { background: oklch(0.24 0.016 250 / 0.5); }
+  .mono { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 12px; color: var(--muted); }
+  .srv-name { font-weight: 600; }
+  .srv-cat { font-size: 11px; color: var(--faint); }
+  .cell-strong { font-weight: 700; color: var(--text); }
+  .rank {
+    display: inline-grid; place-items: center; width: 20px; height: 20px;
+    border-radius: 6px; font-size: 11px; font-weight: 700;
+    background: var(--surface-2); color: var(--muted); margin-right: 2px;
+  }
+  .rank.top { background: var(--accent-dim); color: var(--accent); }
+
+  .badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 11px; font-weight: 600; letter-spacing: 0.01em;
+    padding: 3px 9px; border-radius: 999px;
+    border: 1px solid var(--border-soft); background: var(--surface-2); color: var(--muted);
+    white-space: nowrap;
+  }
+  .badge.ok { color: var(--success); border-color: oklch(0.72 0.14 150 / 0.35); background: var(--success-dim); }
+  .badge.warn { color: var(--warning); border-color: oklch(0.80 0.14 85 / 0.35); background: var(--warning-dim); }
+  .badge.bad { color: var(--danger); border-color: oklch(0.65 0.20 25 / 0.35); background: var(--danger-dim); }
+  .badge.accent { color: var(--accent); border-color: oklch(0.88 0.19 125 / 0.3); background: var(--accent-dim); }
+  .badge .dot { width: 6px; height: 6px; }
+
+  .live-tr td { background: oklch(0.88 0.19 125 / 0.05); }
+
+  /* ---------- safety / feedback ---------- */
+  .stat-row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+  .stat-mini {
+    flex: 1 1 120px; padding: 13px 14px; border-radius: var(--r-md);
+    background: var(--surface-2); border: 1px solid var(--border-soft);
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .stat-mini .k { font-size: 11px; color: var(--muted); }
+  .stat-mini .v { font-family: "Unbounded", sans-serif; font-weight: 700; font-size: 22px; line-height: 1; }
+  .stat-mini.good .v { color: var(--success); }
+  .stat-mini.attn .v { color: var(--warning); }
+
+  .bug { display: flex; flex-direction: column; gap: 3px; }
+  .bug .b-title { font-weight: 600; }
+  .bug .b-meta { font-size: 11.5px; color: var(--faint); }
+
+  /* ---------- infra / deploy ---------- */
+  .kv-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 10px; }
+  .kv {
+    padding: 12px 13px; border-radius: var(--r-sm);
+    background: var(--surface-2); border: 1px solid var(--border-soft);
+    display: flex; flex-direction: column; gap: 3px;
+  }
+  .kv .k { font-size: 11px; color: var(--muted); font-family: "Unbounded", sans-serif; font-weight: 500; }
+  .kv .v { font-weight: 600; font-size: 14px; }
+  .kv .v.mono { font-family: ui-monospace, Menlo, monospace; font-size: 13px; color: var(--text); }
+
+  .timeline { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0; }
+  .timeline li {
+    position: relative; padding: 0 0 16px 22px; margin: 0;
+    border-left: 1.5px solid var(--border);
+  }
+  .timeline li:last-child { border-left-color: transparent; padding-bottom: 0; }
+  .timeline li::before {
+    content: ""; position: absolute; left: -6px; top: 3px;
+    width: 10px; height: 10px; border-radius: 50%;
+    background: var(--surface-3); border: 2px solid var(--border);
+  }
+  .timeline li.ok::before { background: var(--success); border-color: oklch(0.72 0.14 150 / 0.4); }
+  .timeline li.info::before { background: var(--accent); border-color: oklch(0.88 0.19 125 / 0.4); }
+  .timeline li.warnpt::before { background: var(--warning); border-color: oklch(0.80 0.14 85 / 0.4); }
+  .timeline .t-when { font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
+  .timeline .t-title { font-weight: 600; font-size: 13.5px; margin: 1px 0 2px; }
+  .timeline .t-body { font-size: 12.5px; color: var(--muted); }
+
+  /* ---------- footer ---------- */
+  footer.foot {
+    margin-top: 40px; padding-top: 18px;
+    border-top: 1px solid var(--border-soft);
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; flex-wrap: wrap;
+    font-size: 12px; color: var(--faint);
+  }
+  footer.foot .fm {
+    font-family: "Dela Gothic One", sans-serif; font-size: 13px; color: var(--muted); letter-spacing: -0.01em;
+  }
+  footer.foot .fm .dot { color: var(--accent); }
+  .disclaimer {
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 5px 11px; border-radius: 999px;
+    background: var(--surface-1); border: 1px solid var(--border-soft);
+  }
+
+  .subtle-title {
+    font-family: "Unbounded", sans-serif; font-weight: 500;
+    font-size: 12.5px; color: var(--muted); margin: 0 0 10px; letter-spacing: 0.01em;
+  }
+
+  /* ---------- responsive ---------- */
+  @media (max-width: 1080px) {
+    .g-health { grid-template-columns: repeat(3, minmax(0,1fr)); }
+    .g-metrics { grid-template-columns: repeat(3, minmax(0,1fr)); }
+  }
+  @media (max-width: 860px) {
+    .g-charts, .g-2, .g-3 { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 620px) {
+    .g-health { grid-template-columns: repeat(2, minmax(0,1fr)); }
+    .g-metrics { grid-template-columns: repeat(2, minmax(0,1fr)); }
+    .kv-grid { grid-template-columns: 1fr; }
+    .split { flex-direction: column; }
+    body { font-size: 14px; }
+  }
+  @media (max-width: 420px) {
+    .g-health { grid-template-columns: 1fr; }
+    .g-metrics { grid-template-columns: 1fr; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- ============ HEADER ============ -->
+  <header class="top">
+    <div class="brand">
+      <span class="wordmark">pqp<span class="dot">.</span>gg</span>
+      <span class="sub">painel do operador</span>
+    </div>
+    <span class="spacer"></span>
+    <div class="top-right">
+      <span class="pill" id="statusPill"><span class="dot live"></span> <span id="statusPillText">tudo operacional</span></span>
+      <span class="live-chip" id="liveChip" data-state="seed" title="fonte dos dados de saúde">
+        <span class="dot"></span> dados representativos
+      </span>
+      <div class="updated">
+        <b id="updatedAt">carregando</b>
+        <span>atualiza a cada 60s · fuso são paulo (brt)</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- ============ HEALTH ============ -->
+  <section aria-label="saúde dos serviços">
+    <div class="sec-head">
+      <h2>saúde dos serviços</h2>
+      <span class="rule"></span>
+      <span class="note" id="healthNote">5 serviços operacionais · host fly.io no gru</span>
+    </div>
+    <div class="grid g-health" id="healthGrid"><!-- injected --></div>
+  </section>
+
+  <!-- ============ KEY METRICS ============ -->
+  <section aria-label="métricas principais">
+    <div class="sec-head">
+      <h2>métricas principais</h2>
+      <span class="rule"></span>
+      <span class="note">variação comparada às 24h anteriores</span>
+    </div>
+    <div class="grid g-metrics" id="metricGrid"><!-- injected --></div>
+  </section>
+
+  <!-- ============ GROWTH CHARTS ============ -->
+  <section aria-label="crescimento nas últimas 24h">
+    <div class="sec-head">
+      <h2>crescimento · últimas 24h</h2>
+      <span class="rule"></span>
+      <span class="note">pico no fim de tarde e à noite (horário do brasil)</span>
+    </div>
+    <div class="grid g-charts">
+      <div class="card chartcard">
+        <div class="c-head">
+          <span class="c-title">novos usuários por hora</span>
+          <span class="c-sum"><b id="usersSum">163</b> novos cadastros</span>
+        </div>
+        <div class="chart-scroll" id="chartUsers"></div>
+        <div class="xaxis"><span>-24h</span><span>-18h</span><span>-12h</span><span>-6h</span><span>agora</span></div>
+      </div>
+      <div class="card chartcard">
+        <div class="c-head">
+          <span class="c-title">mensagens por hora</span>
+          <span class="c-sum"><b id="msgsSum">1.321</b> mensagens</span>
+        </div>
+        <div class="chart-scroll" id="chartMsgs"></div>
+        <div class="xaxis"><span>-24h</span><span>-18h</span><span>-12h</span><span>-6h</span><span>agora</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ CHANNELS & SERVERS ============ -->
+  <section aria-label="origem dos cadastros">
+    <div class="sec-head">
+      <h2>de onde vêm os cadastros</h2>
+      <span class="rule"></span>
+      <span class="note" id="acqNote">carregando</span>
+    </div>
+    <div class="grid g-3">
+      <div class="card pad" style="grid-column:span 2">
+        <p class="subtle-title">primeiro toque · por campanha</p>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>origem</th>
+                <th>meio</th>
+                <th>campanha</th>
+                <th class="r">cadastros</th>
+                <th class="r">%</th>
+              </tr>
+            </thead>
+            <tbody id="acqBody"><!-- injected --></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card pad">
+        <p class="subtle-title">página de entrada</p>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>caminho</th>
+                <th class="r">cadastros</th>
+              </tr>
+            </thead>
+            <tbody id="acqLandingBody"><!-- injected --></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section aria-label="canais e servidores">
+    <div class="sec-head">
+      <h2>canais e servidores</h2>
+      <span class="rule"></span>
+      <span class="note" id="serversNote">69 servidores · 49 criados em 24h</span>
+    </div>
+    <div class="grid g-3">
+      <div class="card pad">
+        <p class="subtle-title">servidores mais ativos · 24h</p>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>servidor</th>
+                <th class="r">canais</th>
+                <th class="r">membros</th>
+                <th class="r">msgs 24h</th>
+              </tr>
+            </thead>
+            <tbody id="serversBody"><!-- injected --></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card pad">
+        <p class="subtle-title">composição de canais</p>
+        <div class="split">
+          <div class="seg">
+            <span class="k">texto</span>
+            <span class="v num" id="chText">154</span>
+            <span class="stackbar"><i id="chTextBarA" style="width:67.5%;background:var(--accent-line)"></i><i id="chTextBarB" style="width:32.5%;background:oklch(0.62 0.09 250)"></i></span>
+          </div>
+          <div class="seg">
+            <span class="k">voz</span>
+            <span class="v num" id="chVoice">74</span>
+            <span class="stackbar"><i style="width:100%;background:oklch(0.62 0.09 250)"></i></span>
+          </div>
+        </div>
+        <div class="legend">
+          <span><i class="swatch" style="background:var(--accent-line)"></i> <span id="legText">texto 154</span></span>
+          <span><i class="swatch" style="background:oklch(0.62 0.09 250)"></i> <span id="legVoice">voz 74</span></span>
+          <span><i class="swatch" style="background:var(--surface-3)"></i> <span id="legOther">categorias 1 · threads 1</span></span>
+        </div>
+
+        <div class="stat-row" style="margin-top:16px">
+          <div class="stat-mini">
+            <span class="k">total de canais</span>
+            <span class="v num" id="chTotal">230</span>
+          </div>
+          <div class="stat-mini">
+            <span class="k">novos servidores 24h</span>
+            <span class="v num" id="srvNew24h">49</span>
+          </div>
+          <div class="stat-mini">
+            <span class="k">canais de texto ativos 24h</span>
+            <span class="v num" id="chActive24h">39</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ VOICE ACTIVITY ============ -->
+  <section aria-label="atividade de voz">
+    <div class="sec-head">
+      <h2>atividade de voz</h2>
+      <span class="rule"></span>
+      <span class="note" id="voiceNote">pico de sala hoje: 5 pessoas · backend mesh (webrtc)</span>
+    </div>
+    <div class="grid g-3">
+      <div class="card pad">
+        <p class="subtle-title" data-seed="card">salas recentes</p>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>sala</th>
+                <th>canal</th>
+                <th class="r">pessoas</th>
+                <th class="r">duração</th>
+                <th>início</th>
+                <th>estado</th>
+              </tr>
+            </thead>
+            <tbody id="voiceBody"><!-- injected --></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="card pad">
+        <p class="subtle-title">resumo de voz · hoje</p>
+        <div class="stat-row" style="margin-bottom:0">
+          <div class="stat-mini">
+            <span class="k">salas ativas agora</span>
+            <span class="v num" id="vActive">2</span>
+          </div>
+          <div class="stat-mini">
+            <span class="k">pico de sala</span>
+            <span class="v num" id="vPeak">5</span>
+          </div>
+        </div>
+        <div class="stat-row" style="margin-top:12px;margin-bottom:0" data-seed="row">
+          <div class="stat-mini">
+            <span class="k">chamada mais longa</span>
+            <span class="v num" style="font-size:19px">2h28m</span>
+            <span class="k" style="color:var(--faint)">2 pessoas · papo geral</span>
+          </div>
+          <div class="stat-mini">
+            <span class="k">maior sala do dia</span>
+            <span class="v num" style="font-size:19px">4 pessoas</span>
+            <span class="k" style="color:var(--faint)">45min · treino cs2</span>
+          </div>
+        </div>
+        <p class="m-note" style="font-size:11.5px;color:var(--faint);margin:14px 0 0">
+          limite prático do mesh: ~5 a 8 pares por sala. sfu (livekit) fica pronto para quando uma sala passar disso.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ SAFETY & FEEDBACK ============ -->
+  <section aria-label="segurança e feedback">
+    <div class="sec-head">
+      <h2>segurança e feedback</h2>
+      <span class="rule"></span>
+      <span class="note">fila de denúncias e caça-bugs</span>
+    </div>
+    <div class="grid g-2">
+      <div class="card pad">
+        <p class="subtle-title" data-seed="card">moderação</p>
+        <div class="stat-row">
+          <div class="stat-mini good">
+            <span class="k">denúncias abertas</span>
+            <span class="v num">0</span>
+          </div>
+          <div class="stat-mini good">
+            <span class="k">bans ativos</span>
+            <span class="v num">0</span>
+          </div>
+          <div class="stat-mini">
+            <span class="k">badges caça-bugs</span>
+            <span class="v num">1</span>
+          </div>
+        </div>
+        <p class="m-note" style="font-size:12px;color:var(--muted);margin:2px 0 0">
+          instância privada de mensagens: comunidades públicas seguem desligadas, então a fila de denúncias vai só para o operador da instância. nada pendente no momento.
+        </p>
+      </div>
+
+      <div class="card pad">
+        <p class="subtle-title" data-seed="card">caça-bugs · fila de feedback</p>
+        <div class="stat-row">
+          <div class="stat-mini attn">
+            <span class="k">abertos</span>
+            <span class="v num">2</span>
+          </div>
+          <div class="stat-mini good">
+            <span class="k">resolvidos hoje</span>
+            <span class="v num">1</span>
+          </div>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr><th>relato</th><th>prioridade</th><th>estado</th></tr>
+            </thead>
+            <tbody id="bugsBody"><!-- injected --></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ INFRA & DEPLOYS ============ -->
+  <section aria-label="infraestrutura e deploys">
+    <div class="sec-head">
+      <h2>infraestrutura e deploys</h2>
+      <span class="rule"></span>
+      <span class="note">fly.io · região gru (são paulo)</span>
+    </div>
+    <div class="grid g-3">
+      <div class="card pad">
+        <p class="subtle-title">estado atual</p>
+        <div class="kv-grid">
+          <div class="kv"><span class="k">versão</span><span class="v mono" id="infraVersion">v42</span></div>
+          <div class="kv"><span class="k">região</span><span class="v mono">gru · são paulo</span></div>
+          <div class="kv"><span class="k">máquina fly</span><span class="v">1/1 health checks</span></div>
+          <div class="kv"><span class="k">deploy da api</span><span class="v">automático a partir do main</span></div>
+          <div class="kv"><span class="k">spa estática</span><span class="v mono">cloudflare pages</span></div>
+          <div class="kv"><span class="k">banco</span><span class="v" id="infraDb">postgres · ~6ms</span></div>
+        </div>
+        <div class="stat-row" style="margin:14px 0 0" data-seed="row">
+          <div class="stat-mini good" style="flex:1 1 100%">
+            <span class="k">janela sem incidentes</span>
+            <span class="v num" style="font-size:19px">13h desde o último deploy</span>
+            <span class="k" style="color:var(--faint)">nenhum reinício não planejado registrado</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="card pad">
+        <p class="subtle-title" data-seed="card">eventos recentes</p>
+        <ul class="timeline">
+          <li class="ok">
+            <span class="t-when">21 ago · 01:31 brt</span>
+            <div class="t-title">deploy v42 · correção paced-flush do websocket</div>
+            <div class="t-body">flood de reconexão do /app resolvido: o flush passou a ser ritmado no cliente. sem novos loops de reconexão desde então.</div>
+          </li>
+          <li class="warnpt">
+            <span class="t-when">a cada ~30 a 40 min</span>
+            <div class="t-title">probe de jwt inválido no websocket</div>
+            <div class="t-body">é a sonda externa de uptime batendo no /ws sem token. comportamento benigno e esperado, não conta como erro real.</div>
+          </li>
+          <li class="info">
+            <span class="t-when">últimas ~28h</span>
+            <div class="t-title">crescimento pós-lançamento</div>
+            <div class="t-body">de ~11 para 203 usuários e de poucos para 69 servidores. carga tranquila para a máquina única no gru.</div>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ FOOTER ============ -->
+  <footer class="foot">
+    <span class="fm">pqp<span class="dot">.</span>gg · painel interno</span>
+    <span class="disclaimer"><span class="dot" style="width:6px;height:6px;background:var(--faint)"></span> <span id="footDisclaimer">números seed representativos · uso apenas do operador</span></span>
+  </footer>
+
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  /* ---------------- seed data (fallback: "dados representativos") ---------------- */
+  // Everything below is illustrative. It is what the page shows when /metrics
+  // (the API, through the Worker) cannot be reached, and it is always labelled
+  // as such. Sections with no live source yet keep it and are badged.
+  var seedHealth = [
+    { name: "api",      val: "0",   unit: "ms", sub: "resposta média · 200 ok", uptime: 99.99, state: "ok" },
+    { name: "postgres", val: "6",   unit: "ms", sub: "query de leitura · pool ok", uptime: 99.98, state: "ok" },
+    { name: "storage (r2)", val: "220", unit: "ms", sub: "put/get assinados · 99,93% sucesso", uptime: 99.93, state: "ok" },
+    { name: "voz (ws)", val: "0",   unit: "ms", sub: "sinalização webrtc no /ws", uptime: 99.97, state: "ok" },
+    { name: "gifs",     val: "0",   unit: "ms", sub: "proxy de busca · cache quente", uptime: 99.99, state: "ok" }
+  ];
+
+  var seedMetrics = [
+    { label: "usuários", val: "203", delta: "+163", note: "de ~11 no lançamento (~28h)",
+      spark: [11,24,38,55,74,96,121,149,172,190,203] },
+    { label: "servidores", val: "69", delta: "+49", note: "49 criados nas últimas 24h",
+      spark: [20,24,29,35,41,48,54,59,63,66,69] },
+    { label: "mensagens · 24h", val: "1.321", delta: "+364", note: "72 na última hora",
+      spark: [30,24,18,32,58,66,54,70,104,142,113,72] },
+    { label: "remetentes distintos · 24h", val: "114", delta: "+71", note: "de 39 canais de texto ativos",
+      spark: [12,22,34,45,58,70,82,93,102,109,114] },
+    { label: "salas de voz ativas", val: "2", delta: "estável", flat: true, note: "pico hoje: 5 pessoas",
+      spark: [0,1,2,1,3,2,4,5,3,2,2] },
+    { label: "pico de sala · hoje", val: "5", delta: "+1", note: "vs 4 ontem",
+      spark: [2,2,3,3,4,4,4,5,5,5,5] }
+  ];
+
+  // hourly series, oldest -> newest (last bucket = current hour)
+  var seedNewUsersHourly = [3,2,1,1,0,0,1,2,3,5,7,8,9,7,6,7,9,13,16,20,18,12,9,4]; // sum 163
+  var seedMessagesHourly = [30,24,16,10,6,4,6,10,18,32,46,58,66,60,54,58,70,86,104,128,142,113,108,72]; // sum 1321
+
+  var seedServers = [
+    { rank: 1, name: "várzea fc", cat: "futebol e zoeira", ch: 14, mem: 47, msg: 312 },
+    { rank: 2, name: "cs2 brasil", cat: "fps · scrims", ch: 11, mem: 41, msg: 268 },
+    { rank: 3, name: "lofi & estudos", cat: "foco · pomodoro", ch: 8, mem: 33, msg: 176 },
+    { rank: 4, name: "quebrada gamer", cat: "geral · games", ch: 9, mem: 38, msg: 141 },
+    { rank: 5, name: "dev br", cat: "código e carreira", ch: 12, mem: 29, msg: 118 },
+    { rank: 6, name: "rpg mesa noturna", cat: "rpg de mesa", ch: 7, mem: 18, msg: 93 },
+    { rank: 7, name: "resenha da firma", cat: "papo geral", ch: 6, mem: 22, msg: 61 }
+  ];
+
+  var seedVoiceRooms = [
+    { id: "vc-5a90", ch: "resenha",     ppl: 2, dur: "6min",  start: "14:26", live: true,  size: "pequena" },
+    { id: "vc-7c2a", ch: "papo geral",  ppl: 5, dur: "1h12m", start: "12:44", live: false, size: "pico" },
+    { id: "vc-3f81", ch: "só nós dois", ppl: 2, dur: "2h28m", start: "10:02", live: false, size: "longa" },
+    { id: "vc-9d04", ch: "treino cs2",  ppl: 4, dur: "44min", start: "09:15", live: false, size: "média" },
+    { id: "vc-1b6e", ch: "estudos",     ppl: 3, dur: "18min", start: "08:40", live: false, size: "curta" }
+  ];
+
+  var seedBugs = [
+    { title: "avatar não atualiza sem dar refresh", meta: "reportado por 2 pessoas · #caça-bugs", prio: "média", pstate: "warn", est: "aberto", sstate: "warn" },
+    { title: "menção não some no badge do mobile", meta: "pwa · android · 1 relato", prio: "baixa", pstate: "", est: "triado", sstate: "" },
+    { title: "flood de reconexão do websocket no /app", meta: "correção paced-flush · deploy v42 01:31", prio: "alta", pstate: "bad", est: "corrigido", sstate: "ok" }
+  ];
+
+  var seedChannels = { text: 154, voice: 74, category: 1, thread: 1, total: 230, newServers24h: 49, activeText24h: 39 };
+  var seedVoice = { activeRooms: 2, peak: 5, backend: "mesh" };
+  var seedServersNote = "69 servidores · 49 criados em 24h";
+  var seedHost = { version: "v42", versionKnown: true };
+
+  /* ---------------- helpers ---------------- */
+  function el(tag, cls, html) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (html != null) e.innerHTML = html;
+    return e;
+  }
+
+  function svgEl(name, attrs) {
+    var e = document.createElementNS("http://www.w3.org/2000/svg", name);
+    for (var k in attrs) e.setAttribute(k, attrs[k]);
+    return e;
+  }
+
+  function esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+
+  var ptBR = (typeof Intl !== "undefined" && Intl.NumberFormat) ? new Intl.NumberFormat("pt-BR") : null;
+  function fmt(n) {
+    if (typeof n !== "number" || !isFinite(n)) return String(n);
+    return ptBR ? ptBR.format(n) : String(n);
+  }
+  function signed(n) {
+    if (n > 0) return "+" + fmt(n);
+    if (n < 0) return "−" + fmt(-n);
+    return "0";
+  }
+  function sum(arr) {
+    var t = 0;
+    for (var i = 0; i < arr.length; i++) t += arr[i];
+    return t;
+  }
+  function pct(n, d) {
+    return d > 0 ? Math.round((n / d) * 1000) / 10 : 0;
+  }
+  function fmtTime(iso) {
+    try {
+      var f = new Intl.DateTimeFormat("pt-BR", {
+        timeZone: "America/Sao_Paulo", hour: "2-digit", minute: "2-digit"
+      });
+      return f.format(new Date(iso));
+    } catch (e) {
+      return "";
+    }
+  }
+  function fmtStamp(date) {
+    try {
+      var f = new Intl.DateTimeFormat("pt-BR", {
+        timeZone: "America/Sao_Paulo",
+        day: "2-digit", month: "short", year: "numeric",
+        hour: "2-digit", minute: "2-digit"
+      });
+      return f.format(date).replace(",", " ·");
+    } catch (e) {
+      return "agora";
+    }
+  }
+
+  // smooth (Catmull-Rom -> cubic bezier) path from points
+  function smoothPath(pts) {
+    if (pts.length < 2) return "";
+    var d = "M " + pts[0].x.toFixed(1) + " " + pts[0].y.toFixed(1);
+    for (var i = 0; i < pts.length - 1; i++) {
+      var p0 = pts[i - 1] || pts[i];
+      var p1 = pts[i];
+      var p2 = pts[i + 1];
+      var p3 = pts[i + 2] || p2;
+      var c1x = p1.x + (p2.x - p0.x) / 6;
+      var c1y = p1.y + (p2.y - p0.y) / 6;
+      var c2x = p2.x - (p3.x - p1.x) / 6;
+      var c2y = p2.y - (p3.y - p1.y) / 6;
+      d += " C " + c1x.toFixed(1) + " " + c1y.toFixed(1) + ", " +
+                   c2x.toFixed(1) + " " + c2y.toFixed(1) + ", " +
+                   p2.x.toFixed(1) + " " + p2.y.toFixed(1);
+    }
+    return d;
+  }
+
+  var uid = 0;
+  function areaChart(values, opts) {
+    opts = opts || {};
+    var W = opts.w || 720, H = opts.h || 210, pad = 26, padB = 20, padT = 16;
+    var min = 0; // baseline at zero for volume series
+    var max = Math.max.apply(null, values);
+    var range = (max - min) || 1;
+    var n = values.length;
+    var innerW = W - pad * 2;
+    var innerH = H - padT - padB;
+    var xOf = function (i) { return pad + (i / (n - 1)) * innerW; };
+    var yOf = function (v) { return padT + innerH - ((v - min) / range) * innerH; };
+
+    var pts = values.map(function (v, i) { return { x: xOf(i), y: yOf(v) }; });
+    var line = smoothPath(pts);
+    var baseY = padT + innerH;
+    var area = line + " L " + xOf(n - 1).toFixed(1) + " " + baseY.toFixed(1) +
+                      " L " + xOf(0).toFixed(1) + " " + baseY.toFixed(1) + " Z";
+
+    var id = "g" + (++uid);
+    var svg = svgEl("svg", { viewBox: "0 0 " + W + " " + H, role: "img", preserveAspectRatio: "none" });
+    svg.setAttribute("aria-label", opts.label || "gráfico de área");
+
+    var defs = svgEl("defs", {});
+    var grad = svgEl("linearGradient", { id: id, x1: "0", y1: "0", x2: "0", y2: "1" });
+    grad.appendChild(svgEl("stop", { offset: "0%", "stop-color": "oklch(0.88 0.19 125)", "stop-opacity": "0.30" }));
+    grad.appendChild(svgEl("stop", { offset: "72%", "stop-color": "oklch(0.88 0.19 125)", "stop-opacity": "0.05" }));
+    grad.appendChild(svgEl("stop", { offset: "100%", "stop-color": "oklch(0.88 0.19 125)", "stop-opacity": "0" }));
+    defs.appendChild(grad);
+    svg.appendChild(defs);
+
+    // horizontal grid
+    for (var g = 0; g <= 3; g++) {
+      var gy = padT + (innerH / 3) * g;
+      svg.appendChild(svgEl("line", {
+        x1: pad, x2: W - pad, y1: gy, y2: gy,
+        stroke: "oklch(0.30 0.018 250)", "stroke-width": "1",
+        "stroke-dasharray": g === 3 ? "0" : "3 5", opacity: g === 3 ? "0.9" : "0.5"
+      }));
+    }
+
+    svg.appendChild(svgEl("path", { d: area, fill: "url(#" + id + ")" }));
+    svg.appendChild(svgEl("path", {
+      d: line, fill: "none", stroke: "oklch(0.88 0.19 125 / 0.92)",
+      "stroke-width": "2.4", "stroke-linecap": "round", "stroke-linejoin": "round"
+    }));
+
+    // emphasized endpoint
+    var lx = xOf(n - 1), ly = yOf(values[n - 1]);
+    svg.appendChild(svgEl("line", {
+      x1: lx, x2: lx, y1: ly, y2: baseY,
+      stroke: "oklch(0.88 0.19 125 / 0.4)", "stroke-width": "1.4", "stroke-dasharray": "2 4"
+    }));
+    svg.appendChild(svgEl("circle", { cx: lx, cy: ly, r: "7", fill: "oklch(0.88 0.19 125 / 0.18)" }));
+    svg.appendChild(svgEl("circle", {
+      cx: lx, cy: ly, r: "3.6", fill: "oklch(0.88 0.19 125)",
+      stroke: "oklch(0.16 0.012 250)", "stroke-width": "1.6"
+    }));
+
+    // max label
+    var mt = svgEl("text", {
+      x: pad, y: padT - 3, fill: "oklch(0.60 0.02 95)",
+      "font-size": "10", "font-family": "Instrument Sans, sans-serif"
+    });
+    mt.textContent = "pico " + fmt(max) + "/h";
+    svg.appendChild(mt);
+
+    return svg;
+  }
+
+  function sparkline(values, opts) {
+    opts = opts || {};
+    var W = 220, H = 40, pad = 4;
+    var svg = svgEl("svg", { class: "spark", viewBox: "0 0 " + W + " " + H, preserveAspectRatio: "none", "aria-hidden": "true" });
+    // No series for this tile: keep the box so the grid stays aligned, draw nothing.
+    if (!values || values.length < 2) return svg;
+    var min = Math.min.apply(null, values);
+    var max = Math.max.apply(null, values);
+    var range = (max - min) || 1;
+    var n = values.length;
+    var xOf = function (i) { return pad + (i / (n - 1)) * (W - pad * 2); };
+    var yOf = function (v) { return pad + (H - pad * 2) - ((v - min) / range) * (H - pad * 2); };
+    var pts = values.map(function (v, i) { return { x: xOf(i), y: yOf(v) }; });
+    var line = smoothPath(pts);
+    var col = opts.flat ? "oklch(0.72 0.02 95)" : "oklch(0.88 0.19 125 / 0.9)";
+    var fillTop = opts.flat ? "oklch(0.72 0.02 95 / 0.16)" : "oklch(0.88 0.19 125 / 0.18)";
+
+    var id = "s" + (++uid);
+    var defs = svgEl("defs", {});
+    var grad = svgEl("linearGradient", { id: id, x1: "0", y1: "0", x2: "0", y2: "1" });
+    grad.appendChild(svgEl("stop", { offset: "0%", "stop-color": fillTop.split(" / ")[0], "stop-opacity": opts.flat ? "0.16" : "0.20" }));
+    grad.appendChild(svgEl("stop", { offset: "100%", "stop-color": fillTop.split(" / ")[0], "stop-opacity": "0" }));
+    defs.appendChild(grad);
+    svg.appendChild(defs);
+    var base = pad + (H - pad * 2);
+    svg.appendChild(svgEl("path", { d: line + " L " + xOf(n - 1).toFixed(1) + " " + base + " L " + xOf(0).toFixed(1) + " " + base + " Z", fill: "url(#" + id + ")" }));
+    svg.appendChild(svgEl("path", { d: line, fill: "none", stroke: col, "stroke-width": "2", "stroke-linecap": "round", "stroke-linejoin": "round" }));
+    svg.appendChild(svgEl("circle", { cx: xOf(n - 1), cy: yOf(values[n - 1]), r: "2.6", fill: col }));
+    return svg;
+  }
+
+  function $(id) { return document.getElementById(id); }
+  function setText(id, text) { var e = $(id); if (e) e.textContent = text; }
+
+  /* ---------------- render: health ---------------- */
+  function renderHealth(health, host) {
+    var hg = $("healthGrid");
+    hg.innerHTML = "";
+    health.forEach(function (h) {
+      var card = el("div", "health");
+      var stChip = h.state === "warn" ? "warn" : h.state === "bad" ? "bad" : h.state === "off" ? "off" : "";
+      var stLabel = h.state === "warn" ? "atenção" : h.state === "bad" ? "instável" : h.state === "off" ? "desligado" : "operacional";
+      var dot = h.state === "off" ? '<span class="dot"></span>' : '<span class="dot live"></span>';
+      var uptimeLine = typeof h.uptime === "number"
+        ? '<div class="bar"><i style="width:' + h.uptime + '%"></i></div>' +
+          '<div class="h-sub num" style="color:var(--muted)">uptime ' + h.uptime.toFixed(2).replace(".", ",") + '%</div>'
+        : '<div class="bar"><i style="width:0%"></i></div>' +
+          '<div class="h-sub" style="color:var(--muted)">uptime sem amostras</div>';
+      card.innerHTML =
+        '<div class="h-top">' +
+          '<span class="h-name">' + esc(h.name) + '</span>' +
+          '<span class="status-chip ' + stChip + '">' + dot + stLabel + '</span>' +
+        '</div>' +
+        '<div class="h-val num">' + esc(h.val) + '<span class="u">' + esc(h.unit) + '</span></div>' +
+        '<div class="h-sub">' + esc(h.sub) + '</div>' +
+        uptimeLine;
+      hg.appendChild(card);
+    });
+
+    // Fly host tile
+    var hostTile = el("div", "health host");
+    var versionTag = host.versionKnown
+      ? '<span class="tag accent mono" title="commit em produção">' + esc(host.version) + '</span>'
+      : '<span class="tag">versão desconhecida</span>';
+    hostTile.innerHTML =
+      '<div class="h-top">' +
+        '<span class="h-name">host · fly.io</span>' +
+        '<span class="status-chip"><span class="dot live"></span>checks ok</span>' +
+      '</div>' +
+      '<div class="h-val num" style="font-size:22px">gru<span class="u">são paulo</span></div>' +
+      '<div class="h-sub">máquina única · api + ws</div>' +
+      '<div class="meta-row">' +
+        versionTag +
+        '<span class="tag">1/1 health checks</span>' +
+        '<span class="tag">região gru</span>' +
+      '</div>';
+    hg.appendChild(hostTile);
+  }
+
+  /* ---------------- render: metrics ---------------- */
+  function renderMetrics(metrics) {
+    var mg = $("metricGrid");
+    mg.innerHTML = "";
+    metrics.forEach(function (m) {
+      var card = el("div", "metric");
+      var deltaHtml = "";
+      if (m.delta != null) {
+        var deltaCls = m.flat ? "delta flat" : "delta";
+        var arrow = m.flat ? "" : '<span class="arw">▲</span> ';
+        deltaHtml = '<span class="' + deltaCls + '">' + arrow + esc(m.delta) + '</span>';
+      } else {
+        deltaHtml = '<span></span>';
+      }
+      card.innerHTML =
+        '<div class="m-label">' + esc(m.label) + '</div>' +
+        '<div class="m-val num">' + esc(m.val) + '</div>' +
+        '<div class="m-foot">' +
+          deltaHtml +
+          '<span class="m-note">' + esc(m.note) + '</span>' +
+        '</div>';
+      card.appendChild(sparkline(m.spark, { flat: !!m.flat }));
+      mg.appendChild(card);
+    });
+  }
+
+  /* ---------------- render: charts ---------------- */
+  function renderCharts(usersHourly, messagesHourly) {
+    var cu = $("chartUsers"), cm = $("chartMsgs");
+    cu.innerHTML = ""; cm.innerHTML = "";
+    cu.appendChild(areaChart(usersHourly, { label: "novos usuários por hora nas últimas 24 horas" }));
+    cm.appendChild(areaChart(messagesHourly, { label: "mensagens por hora nas últimas 24 horas" }));
+    setText("usersSum", fmt(sum(usersHourly)));
+    setText("msgsSum", fmt(sum(messagesHourly)));
+  }
+
+  /* ---------------- render: servers table ---------------- */
+  /* ---------------- render: acquisition ----------------
+     Every row is first touch. A row with nothing in it is a signup whose link
+     carried no parameters, and it is shown rather than hidden: the size of that
+     row IS the measurement problem, so burying it would defeat the panel. */
+  function renderAcquisition(acq) {
+    var body = $("acqBody"), lbody = $("acqLandingBody");
+    if (!body) return;
+    var rows = (acq && Array.isArray(acq.rows)) ? acq.rows : [];
+    var total = (acq && acq.total) || 0;
+    body.innerHTML = "";
+    if (!rows.length) {
+      body.innerHTML = '<tr><td colspan="5" style="color:var(--faint)">nenhum cadastro na janela</td></tr>';
+    } else {
+      rows.forEach(function (r) {
+        var untagged = !r.source && !r.medium && !r.campaign && !r.ref;
+        var source = untagged ? "sem etiqueta" : (r.source || r.ref || "—");
+        var tr = el("tr");
+        tr.innerHTML =
+          '<td>' + (untagged
+            ? '<span class="srv-name" style="color:var(--faint)">' + esc(source) + '</span>' +
+              '<div class="srv-cat">link postado sem utm</div>'
+            : '<span class="srv-name">' + esc(source) + '</span>' +
+              (r.ref && r.source ? '<div class="srv-cat">ref ' + esc(r.ref) + '</div>' : '')) + '</td>' +
+          '<td>' + esc(r.medium || "—") + '</td>' +
+          '<td>' + esc(r.campaign || "—") + '</td>' +
+          '<td class="r num cell-strong">' + fmt(r.signups || 0) + '</td>' +
+          '<td class="r num">' + pct(r.signups || 0, total) + '%</td>';
+        body.appendChild(tr);
+      });
+    }
+    var tagged = 0;
+    rows.forEach(function (r) {
+      if (r.source || r.medium || r.campaign || r.ref) tagged += (r.signups || 0);
+    });
+    setText("acqNote", total
+      ? fmt(tagged) + " de " + fmt(total) + " cadastros com origem conhecida (" + pct(tagged, total) + "%) · " + ((acq && acq.days) || 7) + " dias"
+      : "sem cadastros na janela");
+
+    if (!lbody) return;
+    var landings = (acq && Array.isArray(acq.landings)) ? acq.landings : [];
+    lbody.innerHTML = "";
+    if (!landings.length) {
+      lbody.innerHTML = '<tr><td colspan="2" style="color:var(--faint)">nenhuma entrada registrada</td></tr>';
+      return;
+    }
+    landings.slice(0, 8).forEach(function (l) {
+      var tr = el("tr");
+      tr.innerHTML =
+        '<td><span class="mono">' + esc(l.landing || "/") + '</span></td>' +
+        '<td class="r num cell-strong">' + fmt(l.signups || 0) + '</td>';
+      lbody.appendChild(tr);
+    });
+  }
+
+  function renderServers(servers) {
+    var sb = $("serversBody");
+    sb.innerHTML = "";
+    if (!servers.length) {
+      var empty = el("tr");
+      empty.innerHTML = '<td colspan="4" style="color:var(--faint)">nenhuma mensagem em servidores nas últimas 24h</td>';
+      sb.appendChild(empty);
+      return;
+    }
+    servers.forEach(function (s) {
+      var tr = el("tr");
+      tr.innerHTML =
+        '<td><span class="rank ' + (s.rank <= 3 ? "top" : "") + '">' + s.rank + '</span> ' +
+          '<span class="srv-name">' + esc(s.name) + '</span>' +
+          (s.cat ? '<div class="srv-cat">' + esc(s.cat) + '</div>' : '') + '</td>' +
+        '<td class="r num">' + fmt(s.ch) + '</td>' +
+        '<td class="r num">' + fmt(s.mem) + '</td>' +
+        '<td class="r num cell-strong">' + fmt(s.msg) + '</td>';
+      sb.appendChild(tr);
+    });
+  }
+
+  /* ---------------- render: channel composition + voice summary ---------------- */
+  function renderChannels(c) {
+    var tv = c.text + c.voice;
+    setText("chText", fmt(c.text));
+    setText("chVoice", fmt(c.voice));
+    var a = $("chTextBarA"), b = $("chTextBarB");
+    if (a && b) { a.style.width = pct(c.text, tv) + "%"; b.style.width = pct(c.voice, tv) + "%"; }
+    setText("legText", "texto " + fmt(c.text));
+    setText("legVoice", "voz " + fmt(c.voice));
+    setText("legOther", "categorias " + fmt(c.category) + " · threads " + fmt(c.thread));
+    setText("chTotal", fmt(c.total));
+    setText("srvNew24h", fmt(c.newServers24h));
+    setText("chActive24h", fmt(c.activeText24h));
+  }
+
+  function renderVoice(v) {
+    setText("vActive", fmt(v.activeRooms));
+    setText("vPeak", fmt(v.peak));
+    setText("voiceNote", "pico de sala hoje: " + fmt(v.peak) + " pessoas · backend " +
+      (v.backend === "livekit" ? "livekit (sfu)" : "mesh (webrtc)"));
+  }
+
+  /* ---------------- render: voice table (seed only) ---------------- */
+  function renderVoiceRooms(voiceRooms) {
+    var vb = $("voiceBody");
+    vb.innerHTML = "";
+    voiceRooms.forEach(function (v) {
+      var tr = el("tr", v.live ? "live-tr" : "");
+      var stateBadge = v.live
+        ? '<span class="badge ok"><span class="dot live"></span>ativa</span>'
+        : '<span class="badge">encerrada</span>';
+      var sizeBadge = v.size === "pico" ? '<span class="badge accent">pico</span>'
+        : v.size === "longa" ? '<span class="badge">mais longa</span>' : "";
+      tr.innerHTML =
+        '<td class="mono">' + v.id + '</td>' +
+        '<td>' + v.ch + ' ' + sizeBadge + '</td>' +
+        '<td class="r num cell-strong">' + v.ppl + '</td>' +
+        '<td class="r num">' + v.dur + '</td>' +
+        '<td class="num" style="color:var(--muted)">' + v.start + '</td>' +
+        '<td>' + stateBadge + '</td>';
+      vb.appendChild(tr);
+    });
+  }
+
+  /* ---------------- render: bugs table (seed only) ---------------- */
+  function renderBugs(bugs) {
+    var bb = $("bugsBody");
+    bb.innerHTML = "";
+    bugs.forEach(function (b) {
+      var tr = el("tr");
+      var pcls = b.pstate === "bad" ? "badge bad" : b.pstate === "warn" ? "badge warn" : "badge";
+      var scls = b.sstate === "ok" ? "badge ok" : b.sstate === "warn" ? "badge warn" : "badge";
+      var sdot = b.sstate === "ok" ? '<span class="dot"></span>' : "";
+      tr.innerHTML =
+        '<td><div class="bug"><span class="b-title">' + b.title + '</span>' +
+          '<span class="b-meta">' + b.meta + '</span></div></td>' +
+        '<td><span class="' + pcls + '">' + b.prio + '</span></td>' +
+        '<td><span class="' + scls + '">' + sdot + b.est + '</span></td>';
+      bb.appendChild(tr);
+    });
+  }
+
+  /* ---------------- seed badges ---------------- */
+  // Once anything is live, every block that is still seed says so, next to
+  // its own title, so nobody reads an illustrative number as a real one.
+  function markSeedSections() {
+    Array.prototype.forEach.call(document.querySelectorAll("[data-seed]"), function (node) {
+      if (node.getAttribute("data-seed-marked")) return;
+      node.setAttribute("data-seed-marked", "1");
+      var badge = el("span", "seed-badge", '<span class="dot" style="width:5px;height:5px;background:var(--faint)"></span> dados representativos');
+      if (node.getAttribute("data-seed") === "row") {
+        var wrap = el("div", "", "");
+        wrap.style.cssText = "flex:1 1 100%;margin:-4px 0 0;font-size:11px;color:var(--faint)";
+        wrap.appendChild(badge);
+        node.appendChild(wrap);
+      } else {
+        node.appendChild(badge);
+      }
+    });
+  }
+
+  /* ---------------- initial render: seed ---------------- */
+  renderHealth(seedHealth, seedHost);
+  renderMetrics(seedMetrics);
+  renderCharts(seedNewUsersHourly, seedMessagesHourly);
+  renderAcquisition({ days: 7, total: 0, rows: [], landings: [] });
+  renderServers(seedServers);
+  renderChannels(seedChannels);
+  renderVoice(seedVoice);
+  renderVoiceRooms(seedVoiceRooms);
+  renderBugs(seedBugs);
+  setText("serversNote", seedServersNote);
+
+  /* ---------------- last-updated clock ---------------- */
+  var upEl = $("updatedAt");
+  var lastLiveAt = null; // Date of the last successful /metrics read
+  function paintUpdated() {
+    if (lastLiveAt) {
+      upEl.textContent = "atualizado " + fmtStamp(lastLiveAt);
+    } else {
+      upEl.textContent = "atualizado " + fmtStamp(new Date());
+    }
+  }
+  paintUpdated();
+
+  /* ---------------- live data ---------------- */
+  var chip = $("liveChip");
+  var state = { metrics: false, health: false, failedOnce: false };
+
+  function paintChip() {
+    var live = state.metrics || state.health;
+    chip.setAttribute("data-state", live ? "live" : "seed");
+    var label;
+    if (state.metrics && state.health) label = "ao vivo · api.pqp.gg";
+    else if (state.metrics) label = "ao vivo · api.pqp.gg (saúde indisponível)";
+    else if (state.health) label = "saúde ao vivo · números representativos";
+    else label = "dados representativos";
+    if (live && state.failedOnce) label += " · última leitura " + fmtTime(lastLiveAt || new Date());
+    chip.innerHTML = (live ? '<span class="dot live"></span> ' : '<span class="dot"></span> ') + esc(label);
+    chip.title = live ? "lido de /metrics e /health neste worker" : "a api não respondeu; mostrando números seed";
+    setText("footDisclaimer", state.metrics
+      ? "números ao vivo da api · blocos sem fonte marcados como representativos · uso apenas do operador"
+      : "números seed representativos · uso apenas do operador");
+  }
+
+  function fetchJson(path) {
+    var ctrl = ("AbortController" in window) ? new AbortController() : null;
+    var timer = setTimeout(function () { if (ctrl) ctrl.abort(); }, 8000);
+    return fetch(path, { cache: "no-store", credentials: "same-origin", signal: ctrl ? ctrl.signal : undefined })
+      .then(function (r) {
+        clearTimeout(timer);
+        if (!r.ok) throw new Error("http " + r.status);
+        return r.json();
+      })
+      .catch(function (e) { clearTimeout(timer); throw e; });
+  }
+
+  function cumulative(total, hourly) {
+    // Walk back from the total so the sparkline ends exactly on the headline number.
+    var start = total - sum(hourly);
+    var out = [], acc = start;
+    for (var i = 0; i < hourly.length; i++) { acc += hourly[i]; out.push(acc); }
+    return out;
+  }
+
+  function applyMetrics(d) {
+    var users = d.users || {}, servers = d.servers || {}, msgs = d.messages || {};
+    var ch = d.channels || {}, voice = d.voice || {};
+    var usersHourly = Array.isArray(users.byHour) && users.byHour.length ? users.byHour : [0, 0];
+    var msgsHourly = Array.isArray(msgs.byHour) && msgs.byHour.length ? msgs.byHour : [0, 0];
+    var msgDelta = (msgs.last24h || 0) - (msgs.previous24h || 0);
+    var peakSince = voice.peakTrackedSince ? fmtTime(voice.peakTrackedSince) : "";
+
+    renderMetrics([
+      { label: "usuários", val: fmt(users.total || 0),
+        delta: users.last24h ? "+" + fmt(users.last24h) : "estável", flat: !users.last24h,
+        note: "novos nas últimas 24h", spark: cumulative(users.total || 0, usersHourly) },
+      { label: "servidores", val: fmt(servers.total || 0),
+        delta: servers.last24h ? "+" + fmt(servers.last24h) : "estável", flat: !servers.last24h,
+        note: fmt(servers.last24h || 0) + " criados nas últimas 24h", spark: null },
+      { label: "mensagens · 24h", val: fmt(msgs.last24h || 0),
+        delta: msgDelta === 0 ? "estável" : signed(msgDelta), flat: msgDelta <= 0,
+        note: fmt(msgs.lastHour || 0) + " na última hora", spark: msgsHourly },
+      { label: "remetentes distintos · 24h", val: fmt(d.distinctSenders24h || 0), delta: null,
+        note: "de " + fmt(d.activeTextChannels24h || 0) + ((d.activeTextChannels24h || 0) === 1 ? " canal de texto ativo" : " canais de texto ativos"), spark: null },
+      { label: "salas de voz ativas", val: fmt(voice.activeRooms || 0),
+        delta: fmt(voice.participants || 0) + " pessoas", flat: true,
+        note: "pico hoje: " + fmt(voice.peakRoomSizeToday || 0) + " pessoas", spark: null },
+      { label: "pico de sala · hoje", val: fmt(voice.peakRoomSizeToday || 0),
+        delta: voice.backend === "livekit" ? "livekit" : "mesh", flat: true,
+        note: peakSince ? "contado desde " + peakSince + " (zera no deploy)" : "zera no deploy", spark: null }
+    ]);
+
+    renderCharts(usersHourly, msgsHourly);
+
+    renderAcquisition(d.acquisition);
+
+    var top = Array.isArray(d.topServers24h) ? d.topServers24h : [];
+    renderServers(top.map(function (s, i) {
+      return { rank: i + 1, name: s.name, cat: s.tagline || "", ch: s.channels, mem: s.members, msg: s.messages24h };
+    }));
+    setText("serversNote", fmt(servers.total || 0) + " servidores · " + fmt(servers.last24h || 0) + " criados em 24h");
+
+    var text = ch.text || 0, vo = ch.voice || 0, cat = ch.category || 0, th = ch.thread || 0;
+    renderChannels({ text: text, voice: vo, category: cat, thread: th,
+      total: text + vo + cat + th, newServers24h: servers.last24h || 0, activeText24h: d.activeTextChannels24h || 0 });
+
+    renderVoice({ activeRooms: voice.activeRooms || 0, peak: voice.peakRoomSizeToday || 0, backend: voice.backend });
+
+    // Infra: the deployed commit, when the machine was stamped with one.
+    // A git sha is shown short, the way `git log --oneline` would; anything else as-is.
+    var raw = typeof d.version === "string" ? d.version.trim() : "";
+    var version = !raw ? null : /^[0-9a-f]{12,}$/i.test(raw) ? raw.slice(0, 7) : raw.slice(0, 16);
+    setText("infraVersion", version || "desconhecida");
+    lastHost = { version: version || "", versionKnown: !!version };
+    renderHealth(lastHealth, lastHost);
+
+    lastLiveAt = d.generatedAt ? new Date(d.generatedAt) : new Date();
+    paintUpdated();
+  }
+
+  var HEALTH_KEYS = { api: "api", database: "postgres", storage: "storage (r2)", voice: "voz (ws)", gifs: "gifs" };
+  var HEALTH_SUB = {
+    api: "resposta do /status.json", database: "SELECT 1 · pool ok", storage: "HEAD assinado no bucket",
+    voice: "sinalização webrtc no /ws", gifs: "proxy de busca"
+  };
+  var lastHealth = seedHealth;
+  var lastHost = seedHost;
+
+  function applyHealth(s) {
+    var comps = Array.isArray(s.components) ? s.components : [];
+    var tiles = [];
+    var operational = 0, off = 0;
+    comps.forEach(function (c) {
+      var name = HEALTH_KEYS[c.key] || c.label || c.key;
+      var st = c.state === "operational" ? "ok" : c.state === "degraded" ? "warn" : c.state === "down" ? "bad" : "off";
+      if (st === "ok") operational++;
+      if (st === "off") off++;
+      tiles.push({
+        name: name,
+        val: st === "off" ? "off" : String(typeof c.latencyMs === "number" ? Math.round(c.latencyMs) : 0),
+        unit: st === "off" ? "" : "ms",
+        sub: st === "off" ? "não configurado nesta instância" : (HEALTH_SUB[c.key] || c.label || ""),
+        uptime: typeof c.uptime24h === "number" ? Math.round(c.uptime24h * 10000) / 100 : null,
+        state: st
+      });
+    });
+    if (!tiles.length) throw new Error("status.json sem componentes");
+    lastHealth = tiles;
+    renderHealth(lastHealth, lastHost);
+
+    setText("healthNote", fmt(operational) + (operational === 1 ? " serviço operacional" : " serviços operacionais") +
+      (off ? " · " + fmt(off) + " desligado" + (off === 1 ? "" : "s") : "") + " · host fly.io no gru");
+
+    var pill = $("statusPill");
+    var headline = s.state === "down" ? "bad" : s.state === "degraded" ? "warn" : "ok";
+    pill.className = "pill" + (headline === "ok" ? "" : " " + headline);
+    setText("statusPillText", headline === "ok" ? "tudo operacional" : headline === "warn" ? "degradação parcial" : "incidente em andamento");
+
+    var db = comps.filter(function (c) { return c.key === "database"; })[0];
+    if (db && typeof db.latencyMs === "number") setText("infraDb", "postgres · ~" + Math.round(db.latencyMs) + "ms");
+  }
+
+  function refresh() {
+    var metricsReq = fetchJson("/metrics").then(function (d) {
+      if (!d || typeof d !== "object" || !d.users) throw new Error("payload inesperado");
+      applyMetrics(d);
+      state.metrics = true;
+    }).catch(function () {
+      if (state.metrics) state.failedOnce = true;
+    });
+    var healthReq = fetchJson("/health").then(function (s) {
+      applyHealth(s);
+      state.health = true;
+    }).catch(function () { /* keep whatever is on screen */ });
+    return Promise.all([metricsReq, healthReq]).then(function () {
+      if (state.metrics || state.health) markSeedSections();
+      paintChip();
+      if (!state.metrics) paintUpdated();
+    });
+  }
+
+  if (typeof fetch === "function") {
+    refresh();
+    setInterval(refresh, 60000);
+  } else {
+    paintChip();
+    setInterval(paintUpdated, 60000);
+  }
+})();
+</script>
+</body>
+</html>
