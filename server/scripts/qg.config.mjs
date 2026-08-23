@@ -10,6 +10,13 @@
  * of that config is also the safest way to make sure nobody adds a cast to it
  * by editing the wrong block.
  *
+ * THE ONE EXCEPTION, and it is not a resident: `@manual_bot`
+ * (`tools/support-bot`) answers product questions in `#ajuda`. It is a
+ * different thing from a persona and is built as one - permanently disclosed,
+ * named for what it is, and incapable of speaking unless somebody @-mentions
+ * it. The welcome below says so out loud, because a room that has exactly one
+ * bot in it should be a room that tells you which one.
+ *
  * WHY CHANNELS AND NOT ONE ROOM. A person who lands here should be able to see,
  * without asking, what kind of place it is and where their thing goes. Five
  * channels each with a job does that; one general channel makes everybody guess
@@ -48,7 +55,8 @@ export const QG = {
     {
       name: "ajuda",
       type: "text",
-      topic: "Travou, sumiu, não conecta. Pergunta aqui que alguém responde.",
+      topic:
+        "Travou, sumiu, não conecta. Pergunta aqui que alguém responde. Dúvida rápida de produto, chama o @manual_bot.",
     },
     {
       name: "caca-bugs",
@@ -84,6 +92,9 @@ export const QG = {
     "",
     "**onde botar cada coisa:**",
     "`#chegou-agora` pra se apresentar, `#ajuda` quando travar, `#caca-bugs` quando quebrar de verdade, `#papo-reto` pro resto. `#call-aberta` tá sempre aberta se você quiser testar a voz com alguém.",
+    "",
+    "**tem um bot no `#ajuda`, e só ele:**",
+    "o `@manual_bot` é um bot mesmo, tá escrito no nome dele. ele responde dúvida de produto a partir de uma lista de fatos escrita à mão, e só fala quando você chama. quando não sabe, ele fala que não sabe e chama o Rafael. o resto do QG é gente.",
     "",
     "o pqp é beta e é feito por uma pessoa só. o código é aberto: github.com/rafaelcg/pqp. se achar bug, fala. bug confirmado vira badge no teu perfil.",
   ].join("\n"),

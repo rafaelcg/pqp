@@ -183,7 +183,12 @@ every automated account in the product including this one.
 1. `CHARACTER_ACCOUNTS_ENABLED=true` on the API, or every token is refused.
 2. `node scripts/provision.mjs` against the database, once. **Not yet done.**
 3. Invite the account to the QG. It does not join or create servers by itself.
-4. Put it in `#ajuda`'s topic and the pinned welcome. This is the whole
-   discoverability plan, and it is the room's job, not the bot's.
+4. Run `server/scripts/seed-qg.mjs` to publish the copy that tells people the
+   bot exists. It is already written into `server/scripts/qg.config.mjs`: the
+   `#ajuda` topic, and a block in the welcome that names `@manual_bot`, says it
+   only speaks when called, and says **the rest of the QG is people**. This is
+   the whole discoverability plan, and it is the room's job, not the bot's.
+   Note that re-seeding posts a *new* welcome message and unpins the old one
+   (it never deletes), so the change is visible in `#chegou-agora`.
 5. Read `facts.md` end to end and correct anything wrong. It is the only thing
    standing between this bot and the failure it was built to avoid.
