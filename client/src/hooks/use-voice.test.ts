@@ -28,7 +28,7 @@ const whenCueSettledMock = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock("@/lib/sounds", () => ({
   playCue: (...args: unknown[]) => playCueMock(...args),
   stopAllSoundLoops: () => {},
-  whenCueSettled: (...args: unknown[]) => whenCueSettledMock(...args),
+  whenCueSettled: () => whenCueSettledMock(),
 }));
 
 vi.mock("@/lib/peer-connection-manager", () => ({
