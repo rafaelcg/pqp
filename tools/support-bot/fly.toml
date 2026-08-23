@@ -81,6 +81,24 @@ kill_timeout = 15
   guest_path = "/secrets/bot.json"
   secret_name = "SUPPORT_CHARACTER_TOKEN"
 
+# ALWAYS COME BACK.
+#
+# Not the default, and the default is actively wrong for this service. The
+# SIGTERM handler engages the kill switch and exits 0 on purpose, so that a
+# restart finishes the line being posted instead of stopping halfway through
+# delivering an answer. But a clean exit is exactly what Fly reads as "the job
+# finished" — so under the default policy the machine stops and STAYS stopped.
+# That is not hypothetical: it happened within three minutes of the first
+# deploy, silently, with the bot simply absent from #ajuda and nothing anywhere
+# saying so. A support bot that is quietly missing is worse than one that is
+# obviously broken, because nobody goes looking.
+#
+# `always` makes the graceful shutdown mean "restart cleanly" rather than
+# "retire". The kill switch is still the real way to stop it, and it works by
+# refusing to act rather than by exiting, so it survives a restart.
+[[restart]]
+  policy = "always"
+
 [mounts]
   source = "support_state"
   destination = "/data"
