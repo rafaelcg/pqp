@@ -1,0 +1,76 @@
+name: Monitor (social)
+
+# "Did we say something out there that is no longer true?" — once a day.
+#
+# This workflow exists because of one incident: a published Reddit comment was
+# still telling people screen share had no audio, weeks after that stopped being
+# true. It was found by chance. Nothing was watching, and the cost of a wrong
+# claim standing in public is paid by whoever reads it and gives up.
+#
+# THREE CHECKS, IN DESCENDING ORDER OF VALUE:
+#
+#   published-drift  Re-reads everything in scripts/monitor/published.json and
+#                    screens it against tools/support-bot/facts.md — the same
+#                    fact file the support bot answers from, so there is one
+#                    definition of what is true. Needs NO credential. This is
+#                    the one with a scar behind it.
+#   reddit-mentions  Anonymous RSS search for new mentions. `warn`, never
+#                    `fail`: a mention is something to go and read.
+#   x-mentions       SKIPs without X_BEARER_TOKEN. X has no anonymous read path
+#                    and recent search is not on the free tier, so this cannot
+#                    run at all until someone pays for it. Stated in the skip
+#                    message rather than discovered twice.
+#
+# Alerts land in the same place and dedupe the same way as the other two
+# monitors: one GitHub Issue per check, closed automatically on recovery.
+
+on:
+  schedule:
+    # 12:23 UTC ≈ 09:23 in São Paulo. Off the hour on purpose (GitHub queues a
+    # flood at :00), and after monitor-limits so two anonymous Reddit calls in
+    # the same minute cannot rate-limit each other.
+    - cron: "23 12 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Report only — do not open, comment on or close issues"
+        type: boolean
+        default: false
+
+concurrency:
+  group: monitor-social
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    name: Published claims and mentions
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Run social checks
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MONITOR_REPO: ${{ github.repository }}
+          # Comma-separated check keys to silence without disabling the monitor.
+          MONITOR_MUTED: ${{ vars.MONITOR_MUTED }}
+
+          # Optional. Absent means x-mentions SKIPs and says why.
+          X_BEARER_TOKEN: ${{ secrets.X_BEARER_TOKEN }}
+          MONITOR_X_HANDLE: ${{ vars.MONITOR_X_HANDLE || 'pqpdotgg' }}
+
+          # What to search for. A repo variable so widening it (say, to "pqp.gg
+          # OR pqpdotgg") does not need a commit.
+          MONITOR_SOCIAL_QUERY: ${{ vars.MONITOR_SOCIAL_QUERY || 'pqp.gg' }}
+        run: |
+          node scripts/monitor/run.mjs social --alert \
+            ${{ github.event.inputs.dry_run == 'true' && '--dry-run' || '' }}

@@ -82,6 +82,35 @@ An alert that fires spuriously gets muted, and then the real one is missed. So:
 | `clerk-users` | warn 70%, fail 85% | **50,000 monthly retained users** on the free Hobby plan, from [clerk.com/pricing](https://clerk.com/pricing). Note the unit: MRU, not MAU — a user only counts once they return ≥24h after signing up. | **Partly.** Clerk has no MRU endpoint, so this counts *total users* — always ≥ MRU, so it can warn early but cannot miss. Optional; `CLERK_SECRET_KEY` lives only on Fly. |
 | `uptime-24h` | warn below 99% | The app's own 24h component uptime from `/status.json` | **Yes**, no credential needed. Catches flapping: a dependency that dies for two minutes every hour is invisible to a 10-minute probe but shows up here. |
 
+### Published claims and mentions — daily at 12:23 UTC
+
+`.github/workflows/monitor-social.yml` → `node scripts/monitor/run.mjs social`
+
+**Why this group exists.** A published Reddit comment was still telling people
+screen share had no audio, weeks after that stopped being true. It was found by
+chance. The support bot stops the product saying something false *inside*
+pqp; this stops us leaving something false *outside* it.
+
+| Check | What it does | Automatable? |
+|---|---|---|
+| `published-drift` | Re-reads every URL in `scripts/monitor/published.json` and screens it against `tools/support-bot/facts.md` — the same fact file the support bot answers from, so there is one definition of what is true. `fail` on a match. | **Yes**, no credential needed. It can only re-read posts somebody wrote down, which is why an empty `published.json` is a `skip` with instructions and not a pass. |
+| `reddit-mentions` | Anonymous search for new mentions in the last 24h. `warn`, never `fail` — a mention is something to go and read, not a fault. | **Yes**, no credential. Uses `/search.rss`: `/search.json` now answers anonymous callers with a flat 403 and `old.reddit.com` 302s to a login page. RSS is rate-limited hard, which is survivable at one call a day and reported as `skip` on a 429. |
+| `x-mentions` | Recent mentions of `@pqpdotgg`. | **No, not today.** X has no anonymous read path and recent search is not on the free API tier, so this `skip`s until someone pays for it and sets `X_BEARER_TOKEN`. |
+
+**The claim table is cross-checked against the fact file.** `STALE_CLAIMS` in
+`social.mjs` is hand-written, and a claim listed there could become true again —
+so before screening anything, the check asks `facts.md`, and any claim the fact
+file now asserts is retired for that run rather than fired. That mechanism paid
+for itself on the first run: "the desktop app cannot share a screen" is true of
+v0.1.0 and false of v0.1.1, `facts.md` says exactly that, and the claim was
+removed rather than left as a row that retires every time and only *looks* like
+coverage.
+
+The matcher is the one piece of the monitor with real branching logic, so it is
+tested (`scripts/monitor/social.test.mjs`, run by CI). The first run of those
+tests found a live bug: the Portuguese `sem som` did not match, which is the
+most natural way to write the exact claim the check exists to catch.
+
 ---
 
 ## Setup

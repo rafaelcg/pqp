@@ -73,6 +73,18 @@ jobs:
       - name: Test
         run: pnpm test
 
+      # `scripts/` is outside the pnpm workspace, so `pnpm test` never saw it.
+      # That was fine while the monitor was only "fetch a URL, look at the
+      # status code", and stopped being fine when it grew a matcher that decides
+      # whether something we published in public is still true. The first run of
+      # these tests found a real bug: the Portuguese "sem som" did not match,
+      # which is the most natural way to write the exact claim the check exists
+      # to catch.
+      # A glob, not the directory. `node --test scripts/monitor/` collects one
+      # phantom test and fails; the glob collects all eleven and passes.
+      - name: Test monitor scripts
+        run: node --test scripts/monitor/*.test.mjs
+
       # Colour-contrast floors and the count of colour literals living outside
       # the token layer. Both are ratchets: they only move the right way.
       - name: Benchmark theme tokens

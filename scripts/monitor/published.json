@@ -1,0 +1,8 @@
+[
+  {
+    "url": "https://www.reddit.com/r/webdev/comments/EXAMPLE/",
+    "where": "reddit r/webdev",
+    "note": "EXAMPLE ROW — delete this and add real ones. `active: false` retires an entry without losing the record of having posted it.",
+    "active": false
+  }
+]
