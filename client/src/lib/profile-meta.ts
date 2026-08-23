@@ -8,7 +8,7 @@
  * that is worth nothing to the audience this feature exists for, because
  * WhatsApp, Instagram, Twitter, Discord and Google's first pass all read the
  * bytes and never run the script. So `pqp.gg/@rafa` pasted into a group chat
- * unfurls as "pqp — group chat you own" with a stock image: the same card for
+ * unfurls as "pqp: group chat you own" with a stock image: the same card for
  * every person on the service, which is precisely the opposite of the thing
  * being shared.
  *
@@ -145,7 +145,7 @@ export function profileCardText(
     ? "Me adiciona no pqp."
     : "Add me on pqp.";
   const description = parts.length
-    ? `${parts.join(" · ")} — ${tail}`
+    ? `${parts.join(" · ")}. ${tail}`
     : pt
       ? `Garanta o seu @ no pqp.gg. ${tail}`
       : `Claim your @ on pqp.gg. ${tail}`;

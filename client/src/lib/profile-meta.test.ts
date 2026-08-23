@@ -214,7 +214,7 @@ describe("injectProfileHead against the real index.html", () => {
   it("replaces the product's title rather than adding a second one", () => {
     expect(output.match(/<title>/g)).toHaveLength(1);
     expect(output).toContain("<title>Rafa (@rafa) no pqp</title>");
-    expect(output).not.toContain("pqp — group chat you own");
+    expect(output).not.toContain("pqp: group chat you own");
   });
 
   it("leaves exactly one of each social tag", () => {

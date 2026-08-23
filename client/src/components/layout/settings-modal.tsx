@@ -38,6 +38,7 @@ import {
   type UserBannerConfig,
   type UserPreferences,
 } from "@pqp/shared";
+import { SignOutButton } from "@/components/layout/sign-out-button";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -2374,6 +2375,10 @@ export function SettingsModal({
         onClose={onClose}
         footer={
           <>
+            {/* `mr-auto` pushes it away from Cancel and Save. Sign out is not a
+                third way to finish editing settings, and sitting next to the
+                two buttons that are would make it look like one. */}
+            <SignOutButton className="mr-auto" />
             <Button variant="ghost" onClick={onClose}>
               {t("settings.cancel")}
             </Button>
