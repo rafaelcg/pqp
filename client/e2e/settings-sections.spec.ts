@@ -15,6 +15,7 @@ import { openApp } from "./fixtures";
 /** Every section, in nav order. The list IS the assertion. */
 const SECTIONS = [
   "Profile",
+  "Connections",
   "Voice & Audio",
   "Notifications",
   "Appearance & Language",
@@ -56,7 +57,7 @@ test.describe("settings sections", () => {
     await page.getByRole("tab", { name: "Profile", exact: true }).focus();
     await page.keyboard.press("ArrowDown");
     await expect(
-      page.getByRole("tab", { name: "Voice & Audio", exact: true }),
+      page.getByRole("tab", { name: "Connections", exact: true }),
     ).toHaveAttribute("aria-selected", "true");
 
     await page.keyboard.press("End");

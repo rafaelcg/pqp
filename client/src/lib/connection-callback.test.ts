@@ -1,0 +1,74 @@
+import { beforeEach, describe, expect, it } from "vitest";
+import {
+  peekConnectionCallback,
+  stashConnectionCallback,
+  takeConnectionCallback,
+} from "./connection-callback";
+
+function memoryStorage(): Storage & { map: Map<string, string> } {
+  const map = new Map<string, string>();
+  return {
+    map,
+    getItem: (key: string) => map.get(key) ?? null,
+    setItem: (key: string, value: string) => void map.set(key, value),
+    removeItem: (key: string) => void map.delete(key),
+    clear: () => map.clear(),
+    key: (index: number) => [...map.keys()][index] ?? null,
+    get length() {
+      return map.size;
+    },
+  } as Storage & { map: Map<string, string> };
+}
+
+describe("connection callback stash", () => {
+  let storage: ReturnType<typeof memoryStorage>;
+
+  beforeEach(() => {
+    storage = memoryStorage();
+  });
+
+  it("keeps Steam OpenID fields across a later URL rewrite", () => {
+    stashConnectionCallback(
+      "/app/connections/callback/steam",
+      "?state=abc&openid.mode=id_res&openid.claimed_id=https://steamcommunity.com/openid/id/76561198000000001",
+      storage,
+    );
+    expect(peekConnectionCallback(storage)).toBe(true);
+    const taken = takeConnectionCallback(storage);
+    expect(taken).toEqual({
+      provider: "steam",
+      params: {
+        state: "abc",
+        "openid.mode": "id_res",
+        "openid.claimed_id":
+          "https://steamcommunity.com/openid/id/76561198000000001",
+      },
+    });
+    expect(takeConnectionCallback(storage)).toBeNull();
+  });
+
+  it("ignores a path that is not a callback", () => {
+    stashConnectionCallback("/app", "?code=stolen", storage);
+    expect(peekConnectionCallback(storage)).toBe(false);
+  });
+
+  it("survives storage throwing", () => {
+    const hostile = {
+      getItem() {
+        throw new Error("denied");
+      },
+      setItem() {
+        throw new Error("denied");
+      },
+      removeItem() {
+        throw new Error("denied");
+      },
+    };
+    stashConnectionCallback(
+      "/app/connections/callback/twitch",
+      "?code=abc&state=xyz",
+      hostile,
+    );
+    expect(takeConnectionCallback(hostile)).toBeNull();
+  });
+});

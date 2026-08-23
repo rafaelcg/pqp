@@ -38,6 +38,7 @@ import { pruneAuditLog } from "./services/audit.js";
 import { pruneResolvedReports } from "./services/reports.js";
 import { pruneExpiredTimeouts } from "./services/sanctions.js";
 import { sweepMessageRetention } from "./services/retention.js";
+import { sweepExpiredConnectionStates } from "./services/connections.js";
 import { sweepChannelAudiences } from "./services/servers.js";
 import {
   getStatusSummary,
@@ -422,6 +423,9 @@ statusPrune.unref?.();
 const retentionSweep = setInterval(() => {
   void sweepMessageRetention().catch((error) => {
     console.error("[retention] sweep failed:", error);
+  });
+  void sweepExpiredConnectionStates().catch((error) => {
+    console.error("[connections] state sweep failed:", error);
   });
 }, RETENTION_SWEEP_INTERVAL_MS);
 retentionSweep.unref?.();

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { visibleConnectionSchema } from "./connections.js";
 
 /**
  * Handles — `pqp.gg/@rafa` — and the thin public profile they address.
@@ -508,6 +509,15 @@ export const publicProfileSchema = z.object({
   depoimentos: z.array(publicDepoimentoSchema).default([]),
   /** `YYYY-MM`, or null on a row with no creation stamp. Month, never a day. */
   memberSince: z.string().regex(/^\d{4}-\d{2}$/).nullable().default(null),
+  /**
+   * Gaming accounts the holder chose to put on this page (`visibility = public`).
+   *
+   * Opt-in, not a default: a Steam profile URL is a stable identifier, and
+   * this page was designed to not be one. Empty for almost everybody. Defaulted
+   * so an older API still parses. Shape is `visibleConnectionSchema` — no
+   * provider user id of its own.
+   */
+  connections: z.array(visibleConnectionSchema).default([]),
 });
 
 export type PublicProfile = z.infer<typeof publicProfileSchema>;

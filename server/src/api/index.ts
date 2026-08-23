@@ -75,6 +75,8 @@ import {
   updateChannelSchema,
   updateMemberRoleSchema,
   updateMessageSchema,
+  completeConnectionSchema,
+  updateConnectionSchema,
   updateProfileSchema,
   updateServerSchema,
   USER_SEARCH_PAGE_SIZE,
@@ -274,6 +276,17 @@ import {
   searchGifs,
   trendingGifs,
 } from "../services/gifs.js";
+import {
+  completeConnection,
+  connectionsConfig,
+  disconnectConnection,
+  isProviderEnabled,
+  listOwnConnections,
+  listVisibleConnections,
+  parseConnectionProvider,
+  startConnection,
+  updateConnectionVisibility,
+} from "../services/connections.js";
 import { getIceServers } from "../services/ice.js";
 import {
   createReport,
@@ -381,6 +394,15 @@ const anonLimiter = createRateLimiter({ capacity: 240, refillPerSecond: 60 });
  * typing, not enough to burn the deployment's key.
  */
 const gifLimiter = createRateLimiter({ capacity: 20, refillPerSecond: 1 });
+/**
+ * Connecting a Steam / Battle.net / Twitch account hits those providers on
+ * the request path. A handful of attempts is a person clicking twice; a
+ * scripted flood would burn their keys and ours.
+ */
+const connectionLimiter = createRateLimiter({
+  capacity: 8,
+  refillPerSecond: 0.2,
+});
 /**
  * Search is also per-keystroke, but the expensive party is our own database
  * rather than a third party's quota: one query ranks every visible message in a
@@ -506,6 +528,7 @@ export function resetApiRateLimits(): void {
   writeLimiter.reset();
   anonLimiter.reset();
   gifLimiter.reset();
+  connectionLimiter.reset();
   searchLimiter.reset();
   uploadLimiter.reset();
   userSearchLimiter.reset();
@@ -1009,6 +1032,79 @@ router.patch("/api/me/preferences", async ({ req, user }) => {
   }
   return { preferences };
 });
+
+// ---------------------------------------------------------- connections
+//
+// Linked Steam / Battle.net / Twitch accounts. Off per provider until that
+// provider's env is set, same contract as GIFs and attachments. The OAuth
+// callback itself is a SPA route (`/app/connections/callback/:provider`);
+// these endpoints are authenticated POSTs that start the hop and finish it.
+
+router.get("/api/connections/config", async () => connectionsConfig());
+
+router.get("/api/me/connections", async ({ user }) => ({
+  connections: await listOwnConnections(user.id),
+}));
+
+router.post(
+  "/api/me/connections/:provider/start",
+  async ({ req, res, user }, { provider: raw }) => {
+    const provider = parseConnectionProvider(raw);
+    if (!isProviderEnabled(provider)) {
+      throw new HttpError(503, "That connection is not configured on this server");
+    }
+    const key = `user:${user.id}`;
+    if (!connectionLimiter.take(key)) {
+      res.setHeader("Retry-After", String(connectionLimiter.retryAfter(key)));
+      throw new HttpError(429, "Slow down");
+    }
+    const origin =
+      typeof req.headers.origin === "string" ? req.headers.origin : undefined;
+    return await startConnection(user, provider, origin);
+  },
+);
+
+router.post(
+  "/api/me/connections/:provider/complete",
+  async ({ req, res, user }, { provider: raw }) => {
+    const provider = parseConnectionProvider(raw);
+    const key = `user:${user.id}`;
+    if (!connectionLimiter.take(key, 2)) {
+      res.setHeader("Retry-After", String(connectionLimiter.retryAfter(key)));
+      throw new HttpError(429, "Slow down");
+    }
+    const body = completeConnectionSchema.parse(await readJsonBody(req));
+    const connection = await completeConnection(user, provider, body.params);
+    return { connection };
+  },
+);
+
+router.patch(
+  "/api/me/connections/:provider",
+  async ({ req, user }, { provider: raw }) => {
+    const provider = parseConnectionProvider(raw);
+    const body = updateConnectionSchema.parse(await readJsonBody(req));
+    const connection = await updateConnectionVisibility(
+      user,
+      provider,
+      body.visibility,
+    );
+    return { connection };
+  },
+);
+
+router.delete(
+  "/api/me/connections/:provider",
+  async ({ user }, { provider: raw }) => {
+    const provider = parseConnectionProvider(raw);
+    await disconnectConnection(user, provider);
+    return { ok: true };
+  },
+);
+
+router.get("/api/users/:userId/connections", async (_ctx, { userId }) => ({
+  connections: await listVisibleConnections(userId!, "shared"),
+}));
 
 // --------------------------------------------- LGPD art. 18 (own account)
 

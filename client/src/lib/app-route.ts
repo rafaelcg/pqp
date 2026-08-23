@@ -1,3 +1,9 @@
+import {
+  connectionCallbackPath,
+  connectionProviderFromPath,
+  type ConnectionProvider,
+} from "@pqp/shared";
+
 /**
  * Deep-link / shareable-URL routing for the app shell.
  *
@@ -13,6 +19,8 @@
  *   /app/dm/<channelId>                 → { kind: "conversation", channelId }
  *   /app/dm/<cid>/message/<mid>         → …and highlight that message
  *   /app/invite/<code>                  → { kind: "invite", code }
+ *   /app/connections/callback/<provider>
+ *                                       → { kind: "connection-callback", provider }
  *
  * A conversation is addressed by channel id alone. It has no server to scope it
  * with, which is exactly why it needs a form of its own: `/app/server/<sid>/…`
@@ -32,7 +40,8 @@ export type AppRouteTarget =
       channelId: string | null;
       messageId: string | null;
     }
-  | { kind: "invite"; code: string };
+  | { kind: "invite"; code: string }
+  | { kind: "connection-callback"; provider: ConnectionProvider };
 
 export function parseAppRoute(pathname: string): AppRouteTarget | null {
   const segments = pathname.replace(/^\/+|\/+$/g, "").split("/");
@@ -44,6 +53,15 @@ export function parseAppRoute(pathname: string): AppRouteTarget | null {
 
   if (section === "invite" && first) {
     return { kind: "invite", code: decodeURIComponent(first) };
+  }
+
+  if (section === "connections" && first === "callback" && nested && !second) {
+    const provider = connectionProviderFromPath(
+      `/app/connections/callback/${nested}`,
+    );
+    if (provider) {
+      return { kind: "connection-callback", provider };
+    }
   }
 
   if (section === "dm") {
@@ -142,6 +160,9 @@ export function signedOutRedirectPath(pathname: string): string {
   }
   if (target.kind === "invite") {
     return `/app/invite/${encodeURIComponent(target.code)}`;
+  }
+  if (target.kind === "connection-callback") {
+    return connectionCallbackPath(target.provider);
   }
   // Both remaining kinds can carry a message permalink, and that is the form
   // people actually paste at each other — dropping the message id here would

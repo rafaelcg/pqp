@@ -6,16 +6,7 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
-import {
-  Bell,
-  Bug,
-  Database,
-  Mic,
-  Palette,
-  ShieldCheck,
-  UserRound,
-  type LucideIcon,
-} from "lucide-react";
+import { Gamepad2, Bell, Bug, Database, Mic, Palette, ShieldCheck, UserRound, type LucideIcon } from "lucide-react";
 import {
   canRenameHandle,
   deleteConfirmationMatches,
@@ -42,6 +33,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { AvatarPicker } from "@/components/user/avatar-picker";
+import { ConnectionsSection } from "@/components/connections/connections-section";
 import { useNotificationSettings } from "@/hooks/use-notifications";
 import { useTheme } from "@/hooks/use-theme";
 import { KeyBindingField } from "@/components/voice/key-binding-field";
@@ -286,6 +278,7 @@ interface SettingsModalProps {
  */
 type SectionId =
   | "profile"
+  | "connections"
   | "voice"
   | "notifications"
   | "appearance"
@@ -309,6 +302,12 @@ const SECTIONS: SectionDef[] = [
     label: "settings.section.profile",
     description: "settings.profile.description",
     icon: UserRound,
+  },
+  {
+    id: "connections",
+    label: "settings.section.connections",
+    description: "settings.connections.description",
+    icon: Gamepad2,
   },
   {
     id: "voice",
@@ -353,8 +352,8 @@ const SECTIONS: SectionDef[] = [
  * horizontally scrolling strip above it on a phone.
  *
  * It is a real tablist: arrow keys move between sections and only the selected
- * tab is in the tab order, so a keyboard user crosses six sections with two
- * keystrokes rather than six. Both axes are accepted because the same control
+ * tab is in the tab order, so a keyboard user crosses the rail with two
+ * keystrokes rather than one per section. Both axes are accepted because the same control
  * is vertical at one width and horizontal at another, and a user should not
  * have to know which one the CSS picked.
  */
@@ -2414,6 +2413,8 @@ export function SettingsModal({
                 onUserUpdated={onUserUpdated}
               />
             )}
+
+            {section === "connections" && <ConnectionsSection />}
 
             {section === "voice" && (
               <VoiceSection

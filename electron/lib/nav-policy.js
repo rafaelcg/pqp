@@ -37,6 +37,14 @@ const AUTH_HOST_SUFFIXES = [
   "discord.com",
   "login.microsoftonline.com",
   "login.live.com",
+  // Game account linking (Settings → Connections). Same reason as Clerk
+  // social: the hop has to finish in-window or the session lands in the
+  // system browser and the callback never returns to the shell.
+  "steamcommunity.com",
+  "oauth.battle.net",
+  "battle.net",
+  "id.twitch.tv",
+  "passport.twitch.tv",
 ];
 
 function hostMatches(host, suffix) {

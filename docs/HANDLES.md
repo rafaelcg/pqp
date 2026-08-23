@@ -55,8 +55,9 @@ loser. Do not add a pre-check — it would look safer and be exactly as racy.
 The public profile route is one of the deliberately-unauthenticated routes in
 `server/src/api/index.ts` (see CLAUDE.md pitfall #8). It carries **only**:
 `handle`, `displayName`, `avatarUrl`, `bannerUrl`, public-community badges, an
-approved `depoimentoCount`, the newest six approved `depoimentos`, and
-`memberSince` as `YYYY-MM`. No id, no `name#1234` tag, no email, no presence, no
+approved `depoimentoCount`, the newest six approved `depoimentos`,
+`memberSince` as `YYYY-MM`, and **opt-in** game connections (`visibility =
+public` only). No id, no `name#1234` tag, no email, no presence, no
 message content, no private servers. Characters and webhook rows 404.
 
 **Why depoimentos are rendered rather than counted.** A depoimento is the one

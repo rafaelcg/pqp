@@ -5,6 +5,7 @@ export * from "./auth.js";
 export * from "./avatars.js";
 export * from "./chat.js";
 export * from "./communities.js";
+export * from "./connections.js";
 export * from "./depoimentos.js";
 export * from "./dm.js";
 export * from "./embeds.js";

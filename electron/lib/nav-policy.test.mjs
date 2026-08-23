@@ -29,6 +29,11 @@ describe("isAuthUrl", () => {
       "https://appleid.apple.com/auth/authorize",
       "https://discord.com/oauth2/authorize",
       "https://login.microsoftonline.com/common/oauth2/authorize",
+      "https://steamcommunity.com/openid/login",
+      "https://oauth.battle.net/authorize",
+      "https://eu.battle.net/login",
+      "https://id.twitch.tv/oauth2/authorize",
+      "https://passport.twitch.tv/authorize",
     ]) {
       assert.equal(isAuthUrl(url, APP), true, url);
     }

@@ -3,6 +3,7 @@ import { Lock, Menu, Phone, Users, Video, WifiOff } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
+  connectionProviderFromPath,
   joinIntentFromSearch,
   normalizeHandle,
   publicProfileDisplayUrl,
@@ -73,6 +74,7 @@ import {
 import { SanctionNoticeBar } from "@/components/layout/sanction-notice-bar";
 import { SsoServerSuggestions } from "@/components/layout/sso-server-suggestions";
 import { UserPanel } from "@/components/layout/user-panel";
+import { ConnectionCallbackOverlay } from "@/components/connections/connection-callback";
 import { ScreenShareView } from "@/components/voice/screen-share-view";
 import { VoiceAudioSinks } from "@/components/voice/voice-audio-sinks";
 import { VoicePanel } from "@/components/voice/voice-panel";
@@ -130,6 +132,10 @@ import {
   updatePreferences,
 } from "@/lib/api";
 import { parseAppRoute, signedOutRedirectPath } from "@/lib/app-route";
+import {
+  hasStashedConnectionCallback,
+  stashConnectionCallbackFromWindow,
+} from "@/lib/connection-callback";
 import {
   addIntentFromSearch,
   takeAddIntent,
@@ -216,6 +222,7 @@ function ClerkAppGate() {
   const { t } = useTranslation();
   const { isLoaded, isSignedIn } = useAuth();
   const location = useLocation();
+  stashConnectionCallbackFromWindow(location.pathname, location.search);
   /**
    * Come back to the URL they were trying to open, not to `/app`.
    *
@@ -360,9 +367,9 @@ function MainAppContent({
   const [connection, setConnection] = useState<RealtimeStatus>("idle");
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  // Non-null only while a caller wants a specific section on open — the user
-  // menu's "send feedback". The gear clears it so the dialog keeps its sticky
-  // last-visited section.
+  // Non-null while a caller wants a specific section on open — the user
+  // menu's "send feedback", and the Steam / Battle.net / Twitch callback.
+  // The gear clears it so the dialog keeps its sticky last-visited section.
   const [settingsSection, setSettingsSection] =
     useState<SettingsSectionId | null>(null);
   const [serverSettingsOpen, setServerSettingsOpen] = useState(false);
@@ -1501,6 +1508,12 @@ function MainAppContent({
    */
   const syncRoute = useCallback(
     (target: Selection, channelId: string | null) => {
+      // Steam / Battle.net / Twitch just bounced here with the proof in the
+      // query string. Rewriting to a channel URL would drop it before the
+      // overlay POSTs. The overlay navigates to `/app` when it is done.
+      if (connectionProviderFromPath(window.location.pathname)) {
+        return;
+      }
       const path = selectionRoutePath(target, channelId);
       if (routeRef.current === path) {
         return;
@@ -2083,6 +2096,9 @@ function MainAppContent({
     if (target.kind === "invite") {
       setArrivedOnInviteLink(true);
       void acceptInviteFromLink(target.code);
+      return;
+    }
+    if (target.kind === "connection-callback") {
       return;
     }
     if (target.kind === "conversation") {
@@ -3458,6 +3474,17 @@ function MainAppContent({
           voiceChannels={channels
             .filter((c) => c.type === "voice")
             .map((c) => ({ id: c.id, name: c.name }))}
+        />
+      )}
+
+      {bootstrapReady &&
+        (connectionProviderFromPath(location.pathname) ||
+          hasStashedConnectionCallback()) && (
+        <ConnectionCallbackOverlay
+          onFinished={() => {
+            setSettingsSection("connections");
+            setSettingsOpen(true);
+          }}
         />
       )}
 

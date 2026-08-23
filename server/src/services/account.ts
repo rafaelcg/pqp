@@ -81,6 +81,7 @@ const EXPORT_NOTES = [
   "Messages written by OTHER people are not included, including in your direct messages and group conversations. Those are their personal data, not yours, and exporting them would hand you a copy of somebody else's words. You can still read them in the app. `conversations` lists every conversation you took part in, who was in it, and how much of it was yours.",
   "For the same reason, a report you filed lists what you said and who you reported, but not a copy of the content you reported.",
   "Records that must survive your account being deleted — audit entries, bans, and reports filed about you — are described in the privacy policy and in docs/TRUST_AND_SAFETY.md.",
+  "Connected Steam, Battle.net and Twitch accounts are listed under `connections` with the provider id stored for each. Disconnecting one in settings deletes that row; this file is a snapshot of what was linked when you exported.",
   "If you need something this file does not contain, contact the encarregado (DPO) named in the privacy policy.",
 ];
 
@@ -172,12 +173,22 @@ export interface PersonalExportAuditEntry {
   changes: unknown;
 }
 
+export interface PersonalExportConnection {
+  provider: string;
+  providerUserId: string;
+  displayName: string;
+  profileUrl: string | null;
+  visibility: string;
+  connectedAt: string;
+}
+
 export interface PersonalDataExport {
   format: "pqp.personal-data-export.v1";
   exportedAt: string;
   notes: string[];
   account: PersonalExportAccount;
   preferences: UserPreferences;
+  connections: PersonalExportConnection[];
   servers: PersonalExportServer[];
   conversations: PersonalExportConversation[];
   messages: PersonalExportMessage[];
@@ -215,6 +226,34 @@ async function exportAccount(userId: string): Promise<AccountRow | null> {
     [userId],
   );
   return result.rows[0] ?? null;
+}
+
+async function exportConnections(
+  userId: string,
+): Promise<PersonalExportConnection[]> {
+  const result = await getPool().query<{
+    provider: string;
+    provider_user_id: string;
+    display_name: string;
+    profile_url: string | null;
+    visibility: string;
+    connected_at: Date;
+  }>(
+    `SELECT provider, provider_user_id, display_name, profile_url, visibility,
+            connected_at
+       FROM user_connections
+      WHERE user_id = $1
+      ORDER BY connected_at ASC`,
+    [userId],
+  );
+  return result.rows.map((row) => ({
+    provider: row.provider,
+    providerUserId: row.provider_user_id,
+    displayName: row.display_name,
+    profileUrl: row.profile_url,
+    visibility: row.visibility,
+    connectedAt: row.connected_at.toISOString(),
+  }));
 }
 
 async function exportMemberships(
@@ -516,6 +555,7 @@ export async function buildPersonalExport(
     blockedUsers,
     reports,
     audit,
+    connections,
   ] = await Promise.all([
     getPreferences(userId),
     exportMemberships(userId),
@@ -524,6 +564,7 @@ export async function buildPersonalExport(
     listBlocks(userId),
     exportReportsFiled(userId),
     exportAuditEntries(userId),
+    exportConnections(userId),
   ]);
 
   return {
@@ -548,6 +589,7 @@ export async function buildPersonalExport(
       },
     },
     preferences,
+    connections,
     servers,
     conversations,
     messages: messages.messages,

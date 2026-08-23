@@ -93,3 +93,24 @@ counted twice.
   — `papéis` is `papel` but `fáceis` is `fácil` — which the spellings people actually type do not
   carry. Doing it properly needs a hunspell pt_BR dictionary, i.e. dictionary files on the
   database host, which managed Postgres does not offer.
+
+## Game connections: Discord-style, not a second login (2026-08-23)
+
+Steam, Battle.net and Twitch are proven badges on a profile. Clerk stays how people sign in.
+
+**Why not Clerk social.** Clerk has no Steam provider. Using Battle.net or Twitch as a Clerk
+login would create a second way into the account. Disconnecting a Steam would then be an identity
+event, which is the wrong product. Valve documents OpenID 2.0 for third-party linking; Steamworks
+OAuth is partner-only. Twitch and Battle.net authorization-code grants are self-serve.
+
+**Why not Xbox / PSN / Riot / Epic / Nintendo in this cut.** Those are partner programmes or
+review-gated. A Connect button that 503s forever is worse than not offering it.
+
+**Implications.**
+- Tokens are used once to learn who the person is, then discarded. No refresh-token vault.
+- Visibility defaults to in-app (`shared`). `public` is an extra tap because a Steam profile URL
+  on `pqp.gg/@handle` is a stable identifier and that page was designed not to be one.
+- Off per provider until that provider's env is set (`GET /api/connections/config`).
+- The SPA keeps the session: Connect → provider → `/app/connections/callback/:provider` → POST
+  with the existing Bearer token.
+- See [`CONNECTIONS.md`](./CONNECTIONS.md).

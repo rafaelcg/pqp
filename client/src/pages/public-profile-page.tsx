@@ -16,6 +16,7 @@ import { MarketingNav } from "@/components/marketing/marketing-nav";
 import { Seo } from "@/components/marketing/seo";
 import { Button } from "@/components/ui/button";
 import { UserAvatar } from "@/components/user/user-avatar";
+import { ConnectionBadges } from "@/components/connections/connection-badges";
 import { fetchPublicProfile } from "@/lib/api";
 import { resolveUploadedImageUrl } from "@/lib/avatar";
 import { isDevAuthBypassEnabled } from "@/lib/dev-auth";
@@ -351,6 +352,8 @@ function ClaimedProfile({ profile }: { profile: PublicProfile }) {
           </div>
 
           <Achievements achievements={profile.achievements} />
+
+          <ConnectionBadges connections={profile.connections} />
 
           <CommunityBadges badges={profile.badges} />
 

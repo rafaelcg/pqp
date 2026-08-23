@@ -260,6 +260,7 @@ test.describe("public handles", () => {
       "avatarUrl",
       "badges",
       "bannerUrl",
+      "connections",
       "depoimentoCount",
       "depoimentos",
       "displayName",

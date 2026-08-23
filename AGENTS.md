@@ -12,3 +12,7 @@ Read [`docs/I18N.md`](./docs/I18N.md) before adding copy.
 4. Desktop permission copy: pass `{ context: "desktop" }` at the call site. Do not inject it in the wrapper.
 5. Electron menus live in `electron/locales/`. Do not put them in the client JSON.
 6. Leave Worker/OG meta, slash command **names**, `error-boundary.tsx`, and legal route files alone unless the task is those files.
+
+## Game connections
+
+Read [`docs/CONNECTIONS.md`](./docs/CONNECTIONS.md) before adding a provider. Steam is OpenID 2.0. Battle.net and Twitch are OAuth. None of those is a Clerk login.
