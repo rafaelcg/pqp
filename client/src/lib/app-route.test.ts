@@ -53,6 +53,19 @@ describe("parseAppRoute", () => {
     expect(parseAppRoute("/login")).toBeNull();
   });
 
+  it("reads a Steam / Battle.net / Twitch callback and nothing else", () => {
+    expect(parseAppRoute("/app/connections/callback/steam")).toEqual({
+      kind: "connection-callback",
+      provider: "steam",
+    });
+    expect(parseAppRoute("/app/connections/callback/twitch")).toEqual({
+      kind: "connection-callback",
+      provider: "twitch",
+    });
+    expect(parseAppRoute("/app/connections/callback/xbox")).toBeNull();
+    expect(parseAppRoute("/app/connections/callback/steam/extra")).toBeNull();
+  });
+
   it("round-trips what the permalink helper emits", () => {
     const path = messageRoutePath("s1", "c1", "m1");
     expect(path).toBe("/app/server/s1/channel/c1/message/m1");
@@ -164,6 +177,15 @@ describe("signedOutRedirectPath", () => {
   it("sends a bare /app back to /app", () => {
     expect(signedOutRedirectPath("/app")).toBe("/app");
     expect(signedOutRedirectPath("/app/")).toBe("/app");
+  });
+
+  it("keeps a connection callback so the OAuth hop can finish after sign-in", () => {
+    expect(signedOutRedirectPath("/app/connections/callback/steam")).toBe(
+      "/app/connections/callback/steam",
+    );
+    expect(signedOutRedirectPath("/app/connections/callback/xbox")).toBe(
+      "/app",
+    );
   });
 
   it("carries a shared channel link", () => {

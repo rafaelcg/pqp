@@ -14,6 +14,7 @@ import {
 import { getPool } from "../db.js";
 import { HttpError } from "../lib/http.js";
 import { listUserAchievements } from "./feedback.js";
+import { listVisibleConnections } from "./connections.js";
 
 /**
  * Handles and the thin public profile they address.
@@ -343,12 +344,13 @@ export async function getPublicProfileByHandle(
     return null;
   }
 
-  const [badges, achievements, depoimentoCount, depoimentos] =
+  const [badges, achievements, depoimentoCount, depoimentos, connections] =
     await Promise.all([
       listProfileBadges(row.id),
       listUserAchievements(row.id),
       countApprovedDepoimentos(row.id),
       listPublicDepoimentos(row.id),
+      listVisibleConnections(row.id, "public"),
     ]);
 
   return {
@@ -360,6 +362,7 @@ export async function getPublicProfileByHandle(
     achievements,
     depoimentoCount,
     depoimentos,
+    connections,
     // MONTH, NEVER A DAY, and the truncation happens here rather than in the
     // client so the day never leaves this process. "no pqp desde julho de 2026"
     // is a badge; a date is a timestamp, and a timestamp on a page served to

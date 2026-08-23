@@ -399,6 +399,13 @@ fly secrets set --app pqp-api --stage \
 fly secrets set --app pqp-api --stage \
   LIVEKIT_URL='<wss://...>' LIVEKIT_API_KEY='<...>' LIVEKIT_API_SECRET='<...>'
 
+# Game connections — see docs/CONNECTIONS.md. Off per provider until set.
+fly secrets set --app pqp-api --stage \
+  PUBLIC_APP_URL='https://pqp.gg' \
+  STEAM_WEB_API_KEY='<...>' \
+  BATTLENET_CLIENT_ID='<...>' BATTLENET_CLIENT_SECRET='<...>' \
+  TWITCH_CLIENT_ID='<...>' TWITCH_CLIENT_SECRET='<...>'
+
 # ICE via provider APIs, if you use these instead of static TURN
 fly secrets set --app pqp-api --stage \
   CLOUDFLARE_TURN_KEY_ID='<...>' CLOUDFLARE_TURN_API_TOKEN='<...>'

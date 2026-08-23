@@ -12,6 +12,11 @@ import type {
   CommunityPage,
   CommunitySettings,
   CommunitySummary,
+  ConnectionConfig,
+  ConnectionProvider,
+  ConnectionVisibility,
+  OwnConnection,
+  VisibleConnection,
   UpdateCommunityRequest,
   CreateAttachmentRequest,
   CreateAvatarUploadRequest,
@@ -619,6 +624,41 @@ export const updateServer = (
  */
 export const fetchCommunityConfig = () =>
   apiFetch<CommunityConfig>("/api/communities/config");
+
+export const fetchConnectionConfig = () =>
+  apiFetch<ConnectionConfig>("/api/connections/config");
+
+export const fetchMyConnections = () =>
+  apiFetch<{ connections: OwnConnection[] }>("/api/me/connections");
+
+export const fetchUserConnections = (userId: string) =>
+  apiFetch<{ connections: VisibleConnection[] }>(
+    `/api/users/${encodeURIComponent(userId)}/connections`,
+  );
+
+export const startConnection = (provider: ConnectionProvider) =>
+  post<{ url: string }>(`/api/me/connections/${provider}/start`);
+
+export const completeConnection = (
+  provider: ConnectionProvider,
+  params: Record<string, string>,
+) =>
+  post<{ connection: OwnConnection }>(
+    `/api/me/connections/${provider}/complete`,
+    { params },
+  );
+
+export const updateConnectionVisibility = (
+  provider: ConnectionProvider,
+  visibility: ConnectionVisibility,
+) =>
+  patch<{ connection: OwnConnection }>(`/api/me/connections/${provider}`, {
+    visibility,
+  });
+
+export const disconnectConnection = (provider: ConnectionProvider) =>
+  del<{ ok: true }>(`/api/me/connections/${provider}`);
+
 
 /**
  * One page of the directory.

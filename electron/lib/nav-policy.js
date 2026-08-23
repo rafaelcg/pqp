@@ -37,6 +37,16 @@ const AUTH_HOST_SUFFIXES = [
   "discord.com",
   "login.microsoftonline.com",
   "login.live.com",
+  // Game account linking (Settings → Connections). Same reason as Clerk
+  // social: the hop has to finish in-window or the session lands in the
+  // system browser and the callback never returns to the shell.
+  // Steam profile pages and the rest of Battle.net are not on this list;
+  // isAuthUrl allows only the OpenID / login paths for those hosts.
+  "login.steampowered.com",
+  "oauth.battle.net",
+  "account.battle.net",
+  "id.twitch.tv",
+  "passport.twitch.tv",
 ];
 
 function hostMatches(host, suffix) {
@@ -56,6 +66,65 @@ function hostMatches(host, suffix) {
 }
 
 /**
+ * Path used for Steam / Battle.net prefix checks.
+ *
+ * `new URL` already collapses literal `.` / `..` segments. Percent-encoded
+ * ones (`%2e%2e%2f`) survive in `pathname` and would still start with
+ * `/openid/` after a naive `decodeURIComponent`, while Chromium then
+ * navigates to a profile page. Decode, split, collapse `.` / `..`, then
+ * match. Malformed percent-encoding is not an auth hop.
+ *
+ * @param {string} pathname
+ * @returns {string | null}
+ */
+function resolvedPathname(pathname) {
+  let current = pathname;
+  for (let i = 0; i < 8; i++) {
+    let decoded;
+    try {
+      decoded = decodeURIComponent(current);
+    } catch {
+      return null;
+    }
+    const out = [];
+    for (const raw of decoded.split("/")) {
+      const segment = raw.toLowerCase();
+      if (segment === "" || segment === ".") {
+        continue;
+      }
+      if (segment === "..") {
+        out.pop();
+        continue;
+      }
+      out.push(segment);
+    }
+    const next = `/${out.join("/")}`;
+    if (next === current.toLowerCase()) {
+      return next;
+    }
+    current = next;
+  }
+  return current.toLowerCase();
+}
+
+function isSteamOpenIdPath(pathname) {
+  return (
+    pathname === "/openid" ||
+    pathname === "/openid/" ||
+    pathname === "/openid/login" ||
+    pathname === "/openid/login/"
+  );
+}
+
+function isBattleNetLoginPath(pathname) {
+  return (
+    pathname === "/login" ||
+    pathname.startsWith("/login/") ||
+    pathname.startsWith("/oauth/")
+  );
+}
+
+/**
  * @param {string} url
  * @param {string | null} appOrigin
  * @returns {boolean}
@@ -63,10 +132,12 @@ function hostMatches(host, suffix) {
 function isAuthUrl(url, appOrigin) {
   let host;
   let protocol;
+  let pathname;
   try {
     const parsed = new URL(url);
     host = parsed.hostname.toLowerCase();
     protocol = parsed.protocol;
+    pathname = parsed.pathname;
   } catch {
     return false;
   }
@@ -86,7 +157,24 @@ function isAuthUrl(url, appOrigin) {
     }
   }
 
-  return AUTH_HOST_SUFFIXES.some((suffix) => hostMatches(host, suffix));
+  if (AUTH_HOST_SUFFIXES.some((suffix) => hostMatches(host, suffix))) {
+    return true;
+  }
+
+  // Steam OpenID only. A profile page must not render in-window.
+  if (host === "steamcommunity.com" || host.endsWith(".steamcommunity.com")) {
+    const path = resolvedPathname(pathname);
+    return path !== null && isSteamOpenIdPath(path);
+  }
+
+  // Regional Battle.net login. oauth and account hosts are already on
+  // AUTH_HOST_SUFFIXES and do not need a path gate.
+  if (host === "battle.net" || host.endsWith(".battle.net")) {
+    const path = resolvedPathname(pathname);
+    return path !== null && isBattleNetLoginPath(path);
+  }
+
+  return false;
 }
 
 /**

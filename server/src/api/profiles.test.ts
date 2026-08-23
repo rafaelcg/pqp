@@ -317,12 +317,43 @@ describeDb("public handles and profiles", () => {
       "avatarUrl",
       "badges",
       "bannerUrl",
+      "connections",
       "depoimentoCount",
       "depoimentos",
       "displayName",
       "handle",
       "memberSince",
     ]);
+  });
+
+  it("puts only public connections on the public page, without the provider id", async () => {
+    await call(alice, "PATCH", "/api/me", { handle: "rafa" });
+    await getPool().query(
+      `INSERT INTO user_connections
+         (user_id, provider, provider_user_id, display_name, profile_url, visibility)
+       VALUES
+         ($1, 'steam', '76561198000000001', 'AliceSteam',
+          'https://steamcommunity.com/profiles/76561198000000001', 'public'),
+         ($1, 'twitch', '99', 'AliceTTV', 'https://www.twitch.tv/alicetv', 'shared')`,
+      [alice.id],
+    );
+    const response = await anonymous<{
+      profile: {
+        connections: Array<Record<string, unknown>>;
+      };
+    }>("/api/public/profiles/rafa");
+    expect(response.body.profile.connections).toEqual([
+      {
+        provider: "steam",
+        displayName: "AliceSteam",
+        avatarUrl: null,
+        profileUrl: "https://steamcommunity.com/profiles/76561198000000001",
+      },
+    ]);
+    expect(response.body.profile.connections[0]).not.toHaveProperty(
+      "providerUserId",
+    );
+    expect(JSON.stringify(response.body)).not.toContain("AliceTTV");
   });
 
   it("truncates the join date to a month before it leaves the process", async () => {

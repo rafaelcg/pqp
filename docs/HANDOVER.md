@@ -140,7 +140,8 @@ Do **not** put `CLERK_SECRET_KEY`, `DATABASE_URL`, or TURN credentials in Pages/
 - `METERED_API_KEY` (+ optional `METERED_DOMAIN`)
 
 Optional features, each off until its names are set: `GIPHY_API_KEY` (GIF search), `LIVEKIT_*`
-(SFU), `S3_*` (attachments — see [`ATTACHMENTS.md`](./ATTACHMENTS.md)).
+(SFU), `S3_*` (attachments — see [`ATTACHMENTS.md`](./ATTACHMENTS.md)), `STEAM_WEB_API_KEY` /
+`BATTLENET_*` / `TWITCH_*` plus `PUBLIC_APP_URL` (game connections — see [`CONNECTIONS.md`](./CONNECTIONS.md)).
 
 Do **not** put `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` in a `VITE_` variable or a Pages
 secret; they would ship in the public bundle.
@@ -161,6 +162,7 @@ secret; they would ship in the public bundle.
 | [`CLERK_SETUP.md`](./CLERK_SETUP.md) | Clerk CLI |
 | [`voice-backends.md`](./voice-backends.md) | SFU notes |
 | [`ATTACHMENTS.md`](./ATTACHMENTS.md) | File uploads: R2 in prod, MinIO locally, limits, sweeper |
+| [`CONNECTIONS.md`](./CONNECTIONS.md) | Steam / Battle.net / Twitch account linking |
 | [`CONTENT_SAFETY.md`](./CONTENT_SAFETY.md) | Image scanning, what is *not* scanned, CSAM runbook, what the operator must apply for |
 | [`billing.md`](./billing.md) | Future Plus/Pro |
 | [`PLAN_STATUS.md`](./PLAN_STATUS.md) | Phase checklist |
@@ -617,6 +619,28 @@ image is a square avatar and gets `summary`, a community banner is 3:1 and gets
 in the token layer; `client/src/lib/hero-tint.ts` emits custom properties and a gradient and never
 names a colour, which is what keeps `BENCH_MAX_LEAKS=0` at zero.
 
+## Game connections: Steam, Battle.net, Twitch (2026-08-23)
+
+Discord-style Connections, not a second login. Clerk stays how people sign in. Full setup:
+[`CONNECTIONS.md`](./CONNECTIONS.md). Decision: [`DECISIONS.md`](./DECISIONS.md).
+
+- **Off per provider** until that provider's credentials are set. `GET /api/connections/config`
+  is the same contract as GIFs and attachments.
+- **The SPA keeps the session.** Connect → provider → `/app/connections/callback/:provider` →
+  POST the query string with the existing Bearer token. Access tokens are discarded after the
+  identity snapshot. Refreshing a nick is Connect again.
+- **Visibility** defaults to `shared` (in-app profile card). `public` is opt-in on `pqp.gg/@handle`.
+  `hidden` is Settings only. One Steam (or Battle.net, or Twitch) per pqp user, and the reverse.
+- **In-app card audience** matches approved depoimentos: self, friends, or a shared server, and
+  never a blocked pair. A stranger gets `[]`, not 403. The public page still filters to `public`.
+- **Unconfigured providers** show as coming soon in Settings, with no Connect button.
+- **Reconnect** of the same provider account keeps visibility. A different account on that slot
+  resets it to `shared`. Steam OpenID `openid.signed` must include `claimed_id`.
+- **Callback errors** are stashed in `sessionStorage` (`pqp.connection.error`) and shown on
+  Settings → Connections after the overlay returns.
+- **Characters cannot connect.** Included in `GET /api/me/export` (with `avatarUrl`). iOS Settings
+  UI is not built. Electron only allows Steam OpenID and Battle.net login paths in-window.
+
 ## Verification status
 
 | Checked | How |
@@ -655,6 +679,8 @@ names a colour, which is what keeps `BENCH_MAX_LEAKS=0` at zero.
 | Depoimentos: friend gate, half-a-handshake, approve/refuse-deletes, replace-returns-to-pending, character exclusion, block both ways, unfriend withdraws only the pending one, audience, ordering, and the badge opt-out / suspended-community / ban / cap cases | 34 tests against real Postgres and the real router (`server/src/services/depoimentos.test.ts`), plus 16 contract tests in `packages/shared` and 14 client model tests |
 | Depoimentos in two real browsers | 3 Playwright specs (`client/e2e/depoimentos.spec.ts`): A writes from B's card → B's front door badges with no reload → B publishes from the two-tap preview → it renders on B's profile for A; the DM fork opens the conversation carrying the typed text *and writes no depoimento*; the community chip appears and the per-membership opt-out hides it. Screenshots at `/tmp/depo-*.png` |
 | **Depoimentos on iOS** | **Not verified** — `UserProfileSheet.swift` has no parity for either section yet |
+| Game connections: origin allowlist, uniqueness, visibility, Steam OpenID checks, config-off-until-env, public page key set and public-only filter | Unit + API tests in `packages/shared`, `server/src/services/connections*.test.ts`, `server/src/api/connections.test.ts`, `server/src/api/profiles.test.ts` |
+| **Game connections against live Steam / Battle.net / Twitch apps** | **Not verified** — needs operator keys on Fly and a real hop from Settings |
 
 ## Suggested next work (priority)
 

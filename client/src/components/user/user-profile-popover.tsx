@@ -17,6 +17,7 @@ import {
   type Depoimento,
   type DmSummary,
   type ProfileCommunityList,
+  type VisibleConnection,
 } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
 import { StatusDot } from "@/components/user/status-dot";
@@ -31,10 +32,12 @@ import {
   CommunityBadges,
   DepoimentosSection,
 } from "@/components/depoimentos/depoimentos-section";
+import { ConnectionBadges } from "@/components/connections/connection-badges";
 import {
   ApiError,
   banMember,
   createConversation,
+  fetchUserConnections,
   kickMember,
   liftTimeout,
   timeoutMember,
@@ -288,6 +291,9 @@ function UserProfileCard({
   const [communities, setCommunities] = useState<ProfileCommunityList | null>(
     null,
   );
+  const [connections, setConnections] = useState<VisibleConnection[] | null>(
+    null,
+  );
   /** Open while the composer is up. */
   const [writing, setWriting] = useState(false);
   /** The same fact, readable from listeners registered before it changes. */
@@ -367,15 +373,17 @@ function UserProfileCard({
     let alive = true;
     void (async () => {
       try {
-        const [list, badges] = await Promise.all([
+        const [list, badges, linked] = await Promise.all([
           fetchDepoimentos(subject.id),
           fetchProfileCommunities(subject.id),
+          fetchUserConnections(subject.id),
         ]);
         if (!alive) {
           return;
         }
         setDepoimentos(list.depoimentos);
         setCommunities(badges);
+        setConnections(linked.connections);
       } catch {
         // Silent. Both sections hide themselves when empty, so a failed read
         // degrades to "this person has none" — and neither is worth putting an
@@ -383,6 +391,7 @@ function UserProfileCard({
         if (alive) {
           setDepoimentos([]);
           setCommunities(null);
+          setConnections([]);
         }
       }
     })();
@@ -905,6 +914,7 @@ function UserProfileCard({
               : undefined
           }
         />
+        {connections && <ConnectionBadges connections={connections} />}
         {communities && <CommunityBadges communities={communities} />}
 
         {/* The timeout composer. Inline rather than a modal for the reason the

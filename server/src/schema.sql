@@ -2419,3 +2419,63 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS acquisition_gclid TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS acquisition_ref TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS acquisition_landing TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS acquisition_at TIMESTAMPTZ;
+
+-- --------------------------------------------------------------- connections
+--
+-- Linked Steam / Battle.net / Twitch accounts. Not a login: Clerk stays the
+-- identity, these rows are proven badges. Disconnecting one does not sign
+-- anyone out.
+--
+-- WHAT IS STORED. The stable id the provider returned (SteamID64, Battle.net
+-- numeric id, Twitch user id), a display name and optional avatar/profile URL
+-- snapshotted at link time, and a visibility. Access tokens are deliberately
+-- absent — we only needed them to learn who the person is, and keeping one
+-- would be a credential vault for a feature that does not call those APIs
+-- again. Refresh is "connect again".
+--
+-- UNIQUENESS. One row per (user, provider): a pqp account has at most one
+-- Steam. One row per (provider, provider_user_id): a Steam account belongs
+-- to at most one pqp user. The second index is what stops two people claiming
+-- the same BattleTag by racing the first.
+--
+-- ON DELETE CASCADE with the user row, so account deletion (LGPD art. 18)
+-- takes the links with it. The OAuth-state table below is the same.
+--
+-- `visibility`: hidden (settings only) / shared (in-app profile card) /
+-- public (also pqp.gg/@handle). Default shared — putting a Steam URL on a
+-- page served to the open internet is an extra, explicit tap.
+
+CREATE TABLE IF NOT EXISTS user_connections (
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL
+    CHECK (provider IN ('steam', 'battlenet', 'twitch')),
+  provider_user_id TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  avatar_url TEXT,
+  profile_url TEXT,
+  visibility TEXT NOT NULL DEFAULT 'shared'
+    CHECK (visibility IN ('hidden', 'shared', 'public')),
+  connected_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (user_id, provider)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_connections_provider_subject
+  ON user_connections (provider, provider_user_id);
+
+-- One-time OAuth / OpenID state. The nonce is the CSRF token in `state`
+-- (and in Steam's return_to). Consumed on complete, swept after 10 minutes
+-- if the person never came back. `pkce_verifier` is Twitch-only; Steam and
+-- Battle.net leave it NULL.
+
+CREATE TABLE IF NOT EXISTS connection_oauth_states (
+  nonce TEXT PRIMARY KEY,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL
+    CHECK (provider IN ('steam', 'battlenet', 'twitch')),
+  redirect_origin TEXT NOT NULL,
+  pkce_verifier TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_connection_oauth_states_created
+  ON connection_oauth_states (created_at);
