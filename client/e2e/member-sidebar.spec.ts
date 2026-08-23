@@ -160,11 +160,11 @@ test("at 1440 the roster is already open, in sections, with counts", async ({
   // The account driving the browser owns the server and is connected, so it is
   // under Owner; the guest has never opened a socket, so it is under Offline.
   await expect(section(page, "role:owner")).toBeVisible({ timeout: 20_000 });
-  await expect(section(page, "role:owner")).toContainText("Owner — 1");
+  await expect(section(page, "role:owner")).toContainText("Owner · 1");
   await expect(section(page, "role:owner")).toContainText(
     shared.owner.displayName,
   );
-  await expect(section(page, "offline")).toContainText("Offline — 1");
+  await expect(section(page, "offline")).toContainText("Offline · 1");
   await expect(section(page, "offline")).toContainText(
     shared.guest.displayName,
   );
@@ -236,7 +236,7 @@ test("below the column breakpoint it starts closed and opens as a drawer", async
     await toggle(page).click();
 
     await expect(sidebar(page)).toBeVisible();
-    await expect(section(page, "role:owner")).toContainText("Owner — 1");
+    await expect(section(page, "role:owner")).toContainText("Owner · 1");
     // A drawer, not a column: it sits over the transcript rather than pushing
     // it, so the composer still runs under it.
     const box = (await sidebar(page).boundingBox())!;
@@ -282,7 +282,7 @@ test("a second account coming online moves out of Offline while you watch", asyn
     await expect(
       section(page, "online").getByText(shared.guest.displayName),
     ).toBeVisible({ timeout: 25_000 });
-    await expect(section(page, "online")).toContainText("Online — 1");
+    await expect(section(page, "online")).toContainText("Online · 1");
     await expect(
       section(page, "offline").getByText(shared.guest.displayName),
     ).toHaveCount(0);
@@ -370,7 +370,7 @@ test("a big server starts with Offline folded away and a bounded DOM", async ({
 
   const offline = section(page, "offline");
   // The crowd plus the guest, none of them connected.
-  await expect(offline).toContainText(`Offline — ${CROWD + 1}`, {
+  await expect(offline).toContainText(`Offline · ${CROWD + 1}`, {
     timeout: 20_000,
   });
   // Folded: the heading is there, the hundred and eleven rows are not. This is
@@ -442,7 +442,7 @@ test("a group conversation gets a participant list; a 1:1 gets nothing", async (
   });
   await expect(sidebar(page)).toBeVisible();
   // Three, counting the reader — `participants` excludes them on the wire.
-  await expect(section(page, "all")).toContainText("Participants — 3");
+  await expect(section(page, "all")).toContainText("Participants · 3");
   await expect(section(page, "all")).toContainText(third.displayName);
 });
 

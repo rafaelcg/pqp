@@ -97,7 +97,7 @@ async function joinLobby(page: Page): Promise<void> {
 
 /** The hold-to-talk control, whichever of its three labels it is wearing. */
 const holdButton = (page: Page) =>
-  page.getByRole("button", { name: /Hold to talk|Transmitting|Muted —/ });
+  page.getByRole("button", { name: /Hold to talk|Transmitting|Muted/ });
 
 const isTransmitting = async (page: Page) =>
   (await holdButton(page).getAttribute("aria-pressed")) === "true";
