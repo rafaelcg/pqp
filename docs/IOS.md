@@ -202,9 +202,14 @@ online and does nothing.
 
 ## Screen sharing
 
-Both directions work. Receiving is the mesh's ordinary video path; **sending
-needs a ReplayKit broadcast upload extension**, because that is the only way iOS
-lets an app capture the system screen rather than its own window.
+Receiving works and is verified. Receiving is the mesh's ordinary video path;
+**sending needs a ReplayKit broadcast upload extension**, because that is the
+only way iOS lets an app capture the system screen rather than its own window.
+
+**The sending half is built and has never been run on a phone.** Read
+**Device-only** below before repeating anything about it: what is settled is
+that the code exists and is wired up, and that is a different claim from "it
+works".
 
 | Piece | Where |
 |---|---|
@@ -242,12 +247,35 @@ path, which is how the wire half is verified without a device: the far end must
 see a stream id of `pqp-screen-…`, a roster with `sharingScreen: true`, and real
 decoded frames.
 
-**Device-only.** ReplayKit broadcast has no simulator equivalent, so the
-extension itself, the App Group container socket, and the `.left`/`.right` ↔
-90°/270° rotation mapping can only be confirmed on hardware.
+**Device-only, and therefore unverified.** ReplayKit broadcast has no simulator
+equivalent, so the extension itself, the App Group container socket, and the
+`.left`/`.right` ↔ 90°/270° rotation mapping can only be confirmed on hardware.
+Nobody has pointed a real iPhone at this yet.
 
-Per-peer volume is done; screen share is done. Camera-in-voice-channels is not
-(neither client offers it).
+What that leaves is a wiring check, not a result. All of this is true and none
+of it is evidence the feature works:
+
+- the extension target exists, is embedded in the app (`embed: true` in
+  `project.yml`, without which the picker's sheet is empty), and declares
+  `RPBroadcastProcessModeSampleBuffer`;
+- both targets carry the `group.gg.pqp.app` App Group entitlement, which is the
+  only filesystem they share and where the frame socket lives;
+- the picker sets `preferredExtension` to `gg.pqp.app.broadcast`;
+- `-pqp.fakeScreenShare` proves the *app-side* publish path end to end, which
+  is the half after the socket.
+
+The simulator cannot even be used to poke at it by hand: its App Group container
+path does not fit `sockaddr_un`, so `isAvailable` is false there and the share
+affordance hides itself.
+
+**Do not write "iOS can share its screen" or "iOS cannot share its screen"
+anywhere** — a blog post, `tools/support-bot/facts.md`, a release note — until
+somebody has run a TestFlight build on a phone. Both sentences are currently
+unsupported. It is cheap to settle: one build, one phone, thirty seconds.
+
+Per-peer volume is done. Screen share receiving is done; screen share sending is
+written but untested. Camera-in-voice-channels is not built at all (neither
+client offers it).
 
 ## Writing UI tests here
 
@@ -420,8 +448,12 @@ between categories, but not dragged into a position).
 > Screen share used to be on that list and was left there by mistake. It landed
 > the day after this file was written (`e6027ba`, "See and send screen shares on
 > iOS"), which updated the detailed section above without updating this summary,
-> so the document spent two weeks contradicting itself one screen apart. Both
-> directions work: see **Screen sharing** above for what is verified where.
+> so the document spent two weeks contradicting itself one screen apart.
+>
+> What git settles is only that the code exists: `e6027ba` (8 Aug) is a
+> descendant of `f68bfcb` (7 Aug), which is where "still only on web" came from.
+> **Receiving is verified. Sending is written and has never run on a phone** and
+> must not be described either way. See **Screen sharing** above.
 
 ## Not built yet
 

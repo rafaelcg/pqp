@@ -85,6 +85,17 @@ enum CallPhase: Equatable, Sendable {
         case .idle, .ended: false
         }
     }
+
+    /// Actually in the voice room, which `isLive` is not: `.connecting` is a
+    /// microphone sheet and an ICE fetch, with nothing joined yet. The call
+    /// rating measures from here, so that a slow permission prompt cannot push
+    /// a ten-second call past the one-minute gate.
+    var isInRoom: Bool {
+        switch self {
+        case .ringing, .active: true
+        case .idle, .connecting, .ended: false
+        }
+    }
 }
 
 /// How long the server rings before it gives up and records a missed call

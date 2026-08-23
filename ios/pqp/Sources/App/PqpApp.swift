@@ -8,6 +8,11 @@ struct PqpApp: App {
     /// arrive while the user is anywhere, and the stage has to outlive whatever
     /// they navigate to mid-call.
     @State private var call = CallModel()
+    /// App-wide for the same reason the call is: a voice screen is popped off
+    /// the navigation stack at exactly the moment the call it hosted ended, so
+    /// a question owned by that screen would be destroyed before it could be
+    /// asked.
+    @State private var ratings = CallRatingModel()
     /// The only object iOS will hand an APNs device token to. SwiftUI owns its
     /// lifetime; `RootView` attaches the session to it.
     @UIApplicationDelegateAdaptor(PushDelegate.self) private var push
@@ -32,6 +37,7 @@ struct PqpApp: App {
             RootView(push: push)
                 .environment(session)
                 .environment(call)
+                .environment(ratings)
                 // Clerk's views read `@Environment(Clerk.self)`. Configuring is
                 // not enough — without this injection, presenting `AuthView`
                 // traps inside SwiftUI's environment lookup with a stack that
@@ -68,6 +74,7 @@ private struct ClerkEnvironment: ViewModifier {
 struct RootView: View {
     @Environment(SessionStore.self) private var session
     @Environment(CallModel.self) private var call
+    @Environment(CallRatingModel.self) private var ratings
     @Environment(\.scenePhase) private var scenePhase
 
     let push: PushDelegate
@@ -117,6 +124,26 @@ struct RootView: View {
             }
         }
         .animation(Motion.standard, value: call.incoming)
+        // "How was that call?", from the root for the same reason the stage is:
+        // the call may have ended by walking out of a voice channel, which pops
+        // the screen that hosted it. Bottom-aligned so it does not collide with
+        // an incoming ring, which owns the top.
+        .overlay(alignment: .bottom) {
+            if session.phase == .ready, let pending = ratings.pending {
+                CallRatingPrompt(call: pending, api: session.api) {
+                    ratings.dismiss()
+                }
+                // Clear of the bottom chrome rather than on top of it. At 24
+                // the card landed exactly over the hub's profile pill and
+                // friends button, which then peeked out from underneath and
+                // read as a rendering fault. This puts it above the dock here
+                // and above the composer on a chat screen, which are the two
+                // things that live at the bottom of this app.
+                .padding(.bottom, 76)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .animation(Motion.standard, value: ratings.pending)
         // Presented from the root rather than from the chat screen: a call
         // answered from the servers tab has to have somewhere to appear, and
         // collapsing it must not depend on which screen started it.
@@ -150,7 +177,14 @@ struct RootView: View {
         // somewhere to deliver its target as soon as the session exists.
         .task { push.attach(session: session) }
         .task { await session.restore() }
-        .task { call.attach(session: session) }
+        .task { call.attach(session: session, ratings: ratings) }
+        #if DEBUG
+        // Only ever fires under a launch argument. See
+        // `CallRatingModel.offerSyntheticCallIfRequested`.
+        .onChange(of: session.phase) { _, phase in
+            if phase == .ready { ratings.offerSyntheticCallIfRequested() }
+        }
+        #endif
         // Deep links. `onOpenURL` covers the custom scheme and a universal link
         // that arrives while the app is running; `onContinueUserActivity` is the
         // universal-link path on a cold launch, which does NOT come through
@@ -232,7 +266,7 @@ struct PushExplainerView: View {
                     .foregroundStyle(Palette.paper)
                     .multilineTextAlignment(.center)
 
-                Text("pqp can buzz your phone for direct messages, mentions, replies and incoming calls — and only those, only when you're not already online somewhere. No badges for every message in every channel.")
+                Text("pqp can buzz your phone for direct messages, mentions, replies and incoming calls, and only those, only when you're not already online somewhere. No badges for every message in every channel.")
                     .font(Typography.body)
                     .foregroundStyle(Palette.paperMuted)
                     .multilineTextAlignment(.center)

@@ -152,7 +152,7 @@ struct FirstRunCard: View {
             // what it is — and iOS never tells anybody, outside a dock subtitle
             // nobody reads as an identifier.
             if let tag {
-                Text("Add someone by their handle. Yours is \(tag) — hand it out.")
+                Text("Add someone by their handle. Yours is \(tag), hand it out.")
             } else {
                 Text("Add someone by their handle.")
             }

@@ -671,7 +671,7 @@ struct MessageRow: View {
                 }
 
                 if message.blocked {
-                    Text("Message hidden — you blocked this person.")
+                    Text("Message hidden. You blocked this person.")
                         .font(Typography.callout)
                         .italic()
                         .foregroundStyle(Palette.paperMuted)

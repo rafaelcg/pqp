@@ -2,6 +2,7 @@ import SwiftUI
 
 struct VoiceView: View {
     @Environment(SessionStore.self) private var session
+    @Environment(CallRatingModel.self) private var ratings
     @Environment(\.dismiss) private var dismiss
     let channel: Channel
 
@@ -39,7 +40,7 @@ struct VoiceView: View {
         }
         .navigationTitle(channel.name)
         .navigationBarTitleDisplayMode(.inline)
-        .task { await model.join(channel: channel, session: session) }
+        .task { await model.join(channel: channel, session: session, ratings: ratings) }
         .onDisappear { Task { await model.leave() } }
     }
 
