@@ -9,21 +9,40 @@ not part of the product and it is not linked from anywhere.
 
 ## What it shows
 
+A strip of **signals** sits directly under the header: one pill per thing that
+can need attention (health, message volume, call quality, voice load, house-cast
+share), coloured by state, so a scan does not have to read every figure below.
+Under it, one line of provenance: which account kinds the numbers exclude, the
+server's cache window, and the page's own refresh interval.
+
 Live, from `GET https://api.pqp.gg/api/admin/metrics` (proxied as `/metrics`):
 
 - users (total, new in 24h, new per hour), servers (total, new in 24h)
 - messages in 24h and per hour, last hour, delta against the previous 24h,
   distinct senders, active text channels
+- **automated messages in 24h** (webhooks + the house cast), drawn as a share
+  of raw traffic beside the human count and never folded into it
 - channel composition (text / voice / category / thread)
-- voice: rooms open now, people in them, largest room today (process-local;
-  the payload says since when it has been counting, and it resets on deploy
-  and at São Paulo midnight)
+- voice: rooms open now, people in them, the largest room *now* against the
+  practical mesh limit (the tile turns amber past 6), and the largest room today
+  (process-local; the payload says since when it has been counting, and it
+  resets on deploy and at São Paulo midnight)
+- **call quality, last 7 days**: the full 1-to-5 distribution as bars, the
+  average and the share that gave 4 or 5, the split by transport (mesh vs the
+  LiveKit SFU, both always listed so "no SFU calls yet" is visible), and the
+  notes people wrote, which the client only asks for on a 3 or less
 - the five most active servers of the last 24h: name, tagline, channel and
   member counts, messages
-- the deployed API commit (`APP_VERSION`)
+- first-touch acquisition and landing pages, with the window's start date
+- the deployed API commit (`APP_VERSION`), and which account kinds are excluded
+  from every count (`excludedAccounts`)
 
 Live, from `GET https://api.pqp.gg/status.json` (proxied as `/health`): the
 component health tiles, the headline pill, the database latency.
+
+The page reads in both light and dark (it follows the system setting; every
+colour is a token, so only the palette changes), and nothing scrolls the page
+sideways on a phone: wide tables and charts scroll inside their own box.
 
 Everything else on the page (recent voice rooms, moderation and feedback
 counts, the incident timeline) has no live source yet. It keeps the seed

@@ -31,10 +31,18 @@
     /* semantic status (kept distinct from accent) */
     --success: oklch(0.72 0.14 150);
     --success-dim: oklch(0.72 0.14 150 / 0.16);
+    --success-line: oklch(0.72 0.14 150 / 0.38);
     --warning: oklch(0.80 0.14 85);
     --warning-dim: oklch(0.80 0.14 85 / 0.16);
+    --warning-line: oklch(0.80 0.14 85 / 0.38);
     --danger:  oklch(0.65 0.20 25);
     --danger-dim: oklch(0.65 0.20 25 / 0.16);
+    --danger-line: oklch(0.65 0.20 25 / 0.38);
+    --accent-edge: oklch(0.88 0.19 125 / 0.32);
+    --accent-wash: oklch(0.88 0.19 125 / 0.05);
+    --hover: oklch(0.24 0.016 250 / 0.5);
+    /* second series colour, for text/voice and human/automated splits */
+    --series-2: oklch(0.62 0.09 250);
 
     --shadow-1: 0 1px 2px oklch(0 0 0 / 0.25), 0 2px 8px oklch(0 0 0 / 0.22);
     --shadow-2: 0 2px 6px oklch(0 0 0 / 0.30), 0 12px 32px oklch(0 0 0 / 0.30);
@@ -45,6 +53,52 @@
     --r-xs: 8px;
 
     --maxw: 1240px;
+  }
+
+  /* The same tokens under a light system theme. Only the palette changes:
+     every rule below reads these variables and nothing else, so the layout,
+     the charts and the semantic states are identical in both. */
+  @media (prefers-color-scheme: light) {
+    :root {
+      --surface-0: oklch(0.975 0.004 250);
+      --surface-1: oklch(1 0 0);
+      --surface-2: oklch(0.968 0.005 250);
+      --surface-3: oklch(0.925 0.008 250);
+      --border:    oklch(0.87 0.010 250);
+      --border-soft: oklch(0.87 0.010 250 / 0.9);
+
+      --text:  oklch(0.26 0.02 255);
+      --muted: oklch(0.47 0.02 255);
+      --faint: oklch(0.60 0.02 255);
+
+      --accent: oklch(0.55 0.16 140);
+      --accent-dim: oklch(0.55 0.16 140 / 0.12);
+      --accent-line: oklch(0.55 0.16 140 / 0.95);
+      --accent-edge: oklch(0.55 0.16 140 / 0.30);
+      --accent-wash: oklch(0.55 0.16 140 / 0.06);
+
+      --success: oklch(0.52 0.13 150);
+      --success-dim: oklch(0.52 0.13 150 / 0.12);
+      --success-line: oklch(0.52 0.13 150 / 0.30);
+      --warning: oklch(0.56 0.12 70);
+      --warning-dim: oklch(0.56 0.12 70 / 0.14);
+      --warning-line: oklch(0.56 0.12 70 / 0.30);
+      --danger:  oklch(0.52 0.19 25);
+      --danger-dim: oklch(0.52 0.19 25 / 0.10);
+      --danger-line: oklch(0.52 0.19 25 / 0.30);
+
+      --hover: oklch(0.93 0.008 250 / 0.7);
+      --series-2: oklch(0.55 0.10 255);
+
+      --shadow-1: 0 1px 2px oklch(0.45 0.03 255 / 0.08), 0 2px 8px oklch(0.45 0.03 255 / 0.06);
+      --shadow-2: 0 2px 6px oklch(0.45 0.03 255 / 0.10), 0 12px 32px oklch(0.45 0.03 255 / 0.10);
+    }
+    body {
+      background:
+        radial-gradient(1100px 600px at 82% -8%, oklch(0.55 0.16 140 / 0.05), transparent 60%),
+        radial-gradient(900px 520px at 6% 0%, oklch(0.52 0.13 150 / 0.04), transparent 55%),
+        var(--surface-0);
+    }
   }
 
   * { box-sizing: border-box; }
@@ -140,7 +194,7 @@
     padding: 8px 14px 8px 12px;
     border-radius: 999px;
     background: var(--success-dim);
-    border: 1px solid oklch(0.72 0.14 150 / 0.35);
+    border: 1px solid var(--success-line);
     color: var(--success);
     font-family: "Unbounded", sans-serif;
     font-weight: 500;
@@ -154,8 +208,8 @@
     box-shadow: 0 0 0 0 currentColor;
     flex: none;
   }
-  .pill.warn { background: var(--warning-dim); border-color: oklch(0.80 0.14 85 / 0.35); color: var(--warning); }
-  .pill.bad { background: var(--danger-dim); border-color: oklch(0.65 0.20 25 / 0.35); color: var(--danger); }
+  .pill.warn { background: var(--warning-dim); border-color: var(--warning-line); color: var(--warning); }
+  .pill.bad { background: var(--danger-dim); border-color: var(--danger-line); color: var(--danger); }
   .status-chip.off { color: var(--faint); }
   .seed-badge {
     display: inline-flex; align-items: center; gap: 5px;
@@ -182,7 +236,7 @@
     letter-spacing: 0.02em;
   }
   .live-chip .dot { width: 7px; height: 7px; }
-  .live-chip[data-state="live"] { color: var(--success); border-color: oklch(0.72 0.14 150 / 0.4); }
+  .live-chip[data-state="live"] { color: var(--success); border-color: var(--success-line); }
   .live-chip[data-state="seed"] { color: var(--faint); }
 
   /* ---------- section ---------- */
@@ -221,9 +275,12 @@
   .grid { display: grid; gap: 14px; }
   .g-health { grid-template-columns: repeat(6, minmax(0,1fr)); }
   .g-metrics { grid-template-columns: repeat(6, minmax(0,1fr)); }
-  .g-charts { grid-template-columns: 1fr 1fr; }
-  .g-2 { grid-template-columns: 1fr 1fr; }
-  .g-3 { grid-template-columns: 1.35fr 1fr; }
+  .g-charts { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .g-2 { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .g-3 { grid-template-columns: minmax(0,1.35fr) minmax(0,1fr); }
+  /* A card whose content has a floor (a table, a chart) must still be allowed
+     to be narrower than that floor: the floor lives on the scroller inside. */
+  .grid > * { min-width: 0; }
 
   /* ---------- health tile ---------- */
   .health {
@@ -263,7 +320,7 @@
   }
   .health .bar > i {
     display: block; height: 100%;
-    background: linear-gradient(90deg, oklch(0.72 0.14 150 / 0.7), var(--success));
+    background: linear-gradient(90deg, var(--success-line), var(--success));
     border-radius: 3px;
   }
 
@@ -275,7 +332,7 @@
     background: var(--surface-2); border: 1px solid var(--border-soft);
     color: var(--muted);
   }
-  .tag.accent { color: var(--accent); border-color: oklch(0.88 0.19 125 / 0.3); background: var(--accent-dim); }
+  .tag.accent { color: var(--accent); border-color: var(--accent-edge); background: var(--accent-dim); }
 
   /* ---------- metric tile ---------- */
   .metric {
@@ -323,13 +380,7 @@
   .chartcard .c-sum { font-size: 12px; color: var(--muted); }
   .chartcard .c-sum b { color: var(--accent); font-weight: 700; }
   .chart-scroll { overflow-x: auto; }
-  .chart-scroll svg { display: block; width: 100%; min-width: 460px; height: auto; }
-  .xaxis {
-    display: flex; justify-content: space-between;
-    font-size: 10.5px; color: var(--faint);
-    margin-top: 6px; padding: 0 2px;
-    min-width: 460px;
-  }
+  .chart-scroll svg { display: block; width: 100%; min-width: 300px; height: auto; }
 
   /* ---------- text/voice split ---------- */
   .split { display: flex; gap: 12px; }
@@ -362,7 +413,7 @@
   thead th.r, tbody td.r { text-align: right; }
   tbody td { padding: 10px 12px; border-bottom: 1px solid var(--border-soft); vertical-align: middle; }
   tbody tr:last-child td { border-bottom: 0; }
-  tbody tr:hover td { background: oklch(0.24 0.016 250 / 0.5); }
+  tbody tr:hover td { background: var(--hover); }
   .mono { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 12px; color: var(--muted); }
   .srv-name { font-weight: 600; }
   .srv-cat { font-size: 11px; color: var(--faint); }
@@ -381,13 +432,13 @@
     border: 1px solid var(--border-soft); background: var(--surface-2); color: var(--muted);
     white-space: nowrap;
   }
-  .badge.ok { color: var(--success); border-color: oklch(0.72 0.14 150 / 0.35); background: var(--success-dim); }
-  .badge.warn { color: var(--warning); border-color: oklch(0.80 0.14 85 / 0.35); background: var(--warning-dim); }
-  .badge.bad { color: var(--danger); border-color: oklch(0.65 0.20 25 / 0.35); background: var(--danger-dim); }
-  .badge.accent { color: var(--accent); border-color: oklch(0.88 0.19 125 / 0.3); background: var(--accent-dim); }
+  .badge.ok { color: var(--success); border-color: var(--success-line); background: var(--success-dim); }
+  .badge.warn { color: var(--warning); border-color: var(--warning-line); background: var(--warning-dim); }
+  .badge.bad { color: var(--danger); border-color: var(--danger-line); background: var(--danger-dim); }
+  .badge.accent { color: var(--accent); border-color: var(--accent-edge); background: var(--accent-dim); }
   .badge .dot { width: 6px; height: 6px; }
 
-  .live-tr td { background: oklch(0.88 0.19 125 / 0.05); }
+  .live-tr td { background: var(--accent-wash); }
 
   /* ---------- safety / feedback ---------- */
   .stat-row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
@@ -427,9 +478,9 @@
     width: 10px; height: 10px; border-radius: 50%;
     background: var(--surface-3); border: 2px solid var(--border);
   }
-  .timeline li.ok::before { background: var(--success); border-color: oklch(0.72 0.14 150 / 0.4); }
-  .timeline li.info::before { background: var(--accent); border-color: oklch(0.88 0.19 125 / 0.4); }
-  .timeline li.warnpt::before { background: var(--warning); border-color: oklch(0.80 0.14 85 / 0.4); }
+  .timeline li.ok::before { background: var(--success); border-color: var(--success-line); }
+  .timeline li.info::before { background: var(--accent); border-color: var(--accent-edge); }
+  .timeline li.warnpt::before { background: var(--warning); border-color: var(--warning-line); }
   .timeline .t-when { font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
   .timeline .t-title { font-weight: 600; font-size: 13.5px; margin: 1px 0 2px; }
   .timeline .t-body { font-size: 12.5px; color: var(--muted); }
@@ -457,15 +508,129 @@
     font-size: 12.5px; color: var(--muted); margin: 0 0 10px; letter-spacing: 0.01em;
   }
 
+  /* ---------- signals strip (the summary, above every detail) ---------- */
+  .signals {
+    display: flex; flex-wrap: wrap; gap: 10px;
+    margin: 2px 0 6px;
+  }
+  .sig {
+    display: inline-flex; align-items: center; gap: 9px;
+    padding: 9px 13px; border-radius: 999px;
+    background: var(--surface-1); border: 1px solid var(--border-soft);
+    box-shadow: var(--shadow-1);
+    font-size: 12.5px; color: var(--muted);
+    min-width: 0;
+  }
+  .sig .sig-k { color: var(--faint); white-space: nowrap; }
+  .sig .sig-v { font-weight: 700; color: var(--text); white-space: nowrap; }
+  /* the trailing detail is the only part allowed to wrap, so the label and the
+     number never break across lines on a phone */
+  .sig .sig-note { color: var(--faint); min-width: 0; }
+  .sig .dot { width: 8px; height: 8px; background: var(--faint); }
+  .sig.ok { border-color: var(--success-line); }
+  .sig.ok .dot { background: var(--success); }
+  .sig.ok .sig-v { color: var(--success); }
+  .sig.warn { border-color: var(--warning-line); background: var(--warning-dim); }
+  .sig.warn .dot { background: var(--warning); }
+  .sig.warn .sig-v { color: var(--warning); }
+  .sig.bad { border-color: var(--danger-line); background: var(--danger-dim); }
+  .sig.bad .dot { background: var(--danger); }
+  .sig.bad .sig-v { color: var(--danger); }
+
+  .provenance {
+    margin: 0 2px 4px; font-size: 11.5px; color: var(--faint);
+    display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline;
+  }
+  .provenance .mono { font-size: 11.5px; }
+
+  /* ---------- chart extras ---------- */
+  .chart-note { margin: 10px 0 0; }
+  .chart-note .hint { margin: 8px 0 0; font-size: 11px; color: var(--faint); }
+
+  /* ---------- call ratings ---------- */
+  .rating-head {
+    display: flex; flex-wrap: wrap; align-items: flex-start;
+    justify-content: space-between; gap: 14px; margin-bottom: 16px;
+  }
+  .rating-score { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; min-width: 0; }
+  .rs-val {
+    font-family: "Unbounded", sans-serif; font-weight: 700;
+    font-size: clamp(34px, 6vw, 44px); line-height: 1; letter-spacing: -0.02em;
+  }
+  .rs-val.none { font-size: 22px; color: var(--faint); font-family: "Instrument Sans", sans-serif; font-weight: 600; }
+  .rs-of { font-size: 14px; color: var(--faint); }
+  .rs-val.none + .rs-of { display: none; }
+  .tr-avg.none { font-family: "Instrument Sans", sans-serif; font-size: 12px; font-weight: 600; color: var(--faint); }
+  .rs-sub { flex: 1 1 100%; font-size: 12px; color: var(--muted); }
+  .stars { position: relative; display: inline-block; line-height: 1; font-size: 17px; letter-spacing: 2px; white-space: nowrap; }
+  .stars .s-bg { color: var(--surface-3); }
+  .stars .s-fg {
+    position: absolute; inset: 0 auto 0 0; overflow: hidden;
+    color: var(--accent); white-space: nowrap;
+  }
+  .rating-pills { display: flex; flex-wrap: wrap; gap: 8px; }
+
+  .dist { display: grid; gap: 7px; }
+  .dist-row {
+    display: grid; grid-template-columns: 34px 1fr 34px 44px;
+    align-items: center; gap: 10px;
+    font-size: 12.5px; color: var(--muted);
+  }
+  .dr-k { color: var(--text); font-weight: 600; white-space: nowrap; }
+  .dr-k .st { color: var(--faint); font-size: 11px; }
+  .dr-bar { height: 10px; border-radius: 6px; background: var(--surface-3); overflow: hidden; }
+  .dr-bar > i { display: block; height: 100%; border-radius: 6px; background: var(--faint); min-width: 0; }
+  .dr-bar > i.good { background: var(--success); }
+  .dr-bar > i.mid  { background: var(--warning); }
+  .dr-bar > i.bad  { background: var(--danger); }
+  .dr-n { text-align: right; color: var(--text); font-weight: 600; }
+  .dr-p { text-align: right; color: var(--faint); }
+  .dist-row.zero .dr-k, .dist-row.zero .dr-n { color: var(--faint); font-weight: 400; }
+
+  .tr-row { padding: 11px 0; border-bottom: 1px solid var(--border-soft); }
+  .tr-row:first-of-type { padding-top: 2px; }
+  .tr-row:last-of-type { border-bottom: 0; padding-bottom: 2px; }
+  .tr-top { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+  .tr-name { font-weight: 600; }
+  .tr-name .kind { font-weight: 400; color: var(--faint); font-size: 11.5px; margin-left: 6px; }
+  .tr-avg { font-family: "Unbounded", sans-serif; font-weight: 700; font-size: 17px; }
+  .tr-avg .u { font-size: 11px; color: var(--faint); font-weight: 500; font-family: "Instrument Sans", sans-serif; }
+  .tr-bar { display: block; height: 6px; border-radius: 4px; background: var(--surface-3); overflow: hidden; margin: 8px 0 6px; }
+  .tr-bar > i { display: block; height: 100%; border-radius: 4px; background: var(--accent-line); }
+  .tr-bar > i.mid { background: var(--warning); }
+  .tr-bar > i.bad { background: var(--danger); }
+  .tr-sub { font-size: 11.5px; color: var(--faint); }
+
+  .notes-list { display: grid; gap: 10px; }
+  .note-item {
+    display: flex; gap: 11px; align-items: flex-start;
+    padding: 12px 13px; border-radius: var(--r-md);
+    background: var(--surface-2); border: 1px solid var(--border-soft);
+    border-left: 3px solid var(--border);
+  }
+  .note-item.mid { border-left-color: var(--warning); }
+  .note-item.bad { border-left-color: var(--danger); }
+  .note-item .ni-body { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+  .note-item .ni-text { margin: 0; font-size: 13px; color: var(--text); overflow-wrap: anywhere; }
+  .note-item .ni-when { font-size: 11px; color: var(--faint); }
+  .empty {
+    padding: 16px 14px; border-radius: var(--r-md);
+    background: var(--surface-2); border: 1px dashed var(--border);
+    color: var(--faint); font-size: 12.5px;
+  }
+  .empty b { color: var(--muted); font-weight: 600; }
+
   /* ---------- responsive ---------- */
   @media (max-width: 1080px) {
     .g-health { grid-template-columns: repeat(3, minmax(0,1fr)); }
     .g-metrics { grid-template-columns: repeat(3, minmax(0,1fr)); }
   }
   @media (max-width: 860px) {
-    .g-charts, .g-2, .g-3 { grid-template-columns: 1fr; }
+    .g-charts, .g-2, .g-3 { grid-template-columns: minmax(0,1fr); }
   }
   @media (max-width: 620px) {
+    .rating-head { gap: 10px; }
+    .dist-row { grid-template-columns: 30px 1fr 30px 40px; gap: 8px; }
     .g-health { grid-template-columns: repeat(2, minmax(0,1fr)); }
     .g-metrics { grid-template-columns: repeat(2, minmax(0,1fr)); }
     .kv-grid { grid-template-columns: 1fr; }
@@ -504,6 +669,12 @@
     </div>
   </header>
 
+  <!-- ============ SIGNALS ============ -->
+  <!-- The summary, before any detail: one pill per thing that can need
+       attention, coloured by state so a scan does not have to read numbers. -->
+  <div class="signals" id="signals" aria-label="resumo do estado"><!-- injected --></div>
+  <p class="provenance" id="provenance"><span>o que estes números incluem: carregando</span></p>
+
   <!-- ============ HEALTH ============ -->
   <section aria-label="saúde dos serviços">
     <div class="sec-head">
@@ -538,120 +709,14 @@
           <span class="c-sum"><b id="usersSum">163</b> novos cadastros</span>
         </div>
         <div class="chart-scroll" id="chartUsers"></div>
-        <div class="xaxis"><span>-24h</span><span>-18h</span><span>-12h</span><span>-6h</span><span>agora</span></div>
       </div>
       <div class="card chartcard">
         <div class="c-head">
-          <span class="c-title">mensagens por hora</span>
+          <span class="c-title">mensagens por hora · de pessoas</span>
           <span class="c-sum"><b id="msgsSum">1.321</b> mensagens</span>
         </div>
         <div class="chart-scroll" id="chartMsgs"></div>
-        <div class="xaxis"><span>-24h</span><span>-18h</span><span>-12h</span><span>-6h</span><span>agora</span></div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ============ CHANNELS & SERVERS ============ -->
-  <section aria-label="origem dos cadastros">
-    <div class="sec-head">
-      <h2>de onde vêm os cadastros</h2>
-      <span class="rule"></span>
-      <span class="note" id="acqNote">carregando</span>
-    </div>
-    <div class="grid g-3">
-      <div class="card pad" style="grid-column:span 2">
-        <p class="subtle-title">primeiro toque · por campanha</p>
-        <div class="table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>origem</th>
-                <th>meio</th>
-                <th>campanha</th>
-                <th class="r">cadastros</th>
-                <th class="r">%</th>
-              </tr>
-            </thead>
-            <tbody id="acqBody"><!-- injected --></tbody>
-          </table>
-        </div>
-      </div>
-
-      <div class="card pad">
-        <p class="subtle-title">página de entrada</p>
-        <div class="table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>caminho</th>
-                <th class="r">cadastros</th>
-              </tr>
-            </thead>
-            <tbody id="acqLandingBody"><!-- injected --></tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <section aria-label="canais e servidores">
-    <div class="sec-head">
-      <h2>canais e servidores</h2>
-      <span class="rule"></span>
-      <span class="note" id="serversNote">69 servidores · 49 criados em 24h</span>
-    </div>
-    <div class="grid g-3">
-      <div class="card pad">
-        <p class="subtle-title">servidores mais ativos · 24h</p>
-        <div class="table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>servidor</th>
-                <th class="r">canais</th>
-                <th class="r">membros</th>
-                <th class="r">msgs 24h</th>
-              </tr>
-            </thead>
-            <tbody id="serversBody"><!-- injected --></tbody>
-          </table>
-        </div>
-      </div>
-
-      <div class="card pad">
-        <p class="subtle-title">composição de canais</p>
-        <div class="split">
-          <div class="seg">
-            <span class="k">texto</span>
-            <span class="v num" id="chText">154</span>
-            <span class="stackbar"><i id="chTextBarA" style="width:67.5%;background:var(--accent-line)"></i><i id="chTextBarB" style="width:32.5%;background:oklch(0.62 0.09 250)"></i></span>
-          </div>
-          <div class="seg">
-            <span class="k">voz</span>
-            <span class="v num" id="chVoice">74</span>
-            <span class="stackbar"><i style="width:100%;background:oklch(0.62 0.09 250)"></i></span>
-          </div>
-        </div>
-        <div class="legend">
-          <span><i class="swatch" style="background:var(--accent-line)"></i> <span id="legText">texto 154</span></span>
-          <span><i class="swatch" style="background:oklch(0.62 0.09 250)"></i> <span id="legVoice">voz 74</span></span>
-          <span><i class="swatch" style="background:var(--surface-3)"></i> <span id="legOther">categorias 1 · threads 1</span></span>
-        </div>
-
-        <div class="stat-row" style="margin-top:16px">
-          <div class="stat-mini">
-            <span class="k">total de canais</span>
-            <span class="v num" id="chTotal">230</span>
-          </div>
-          <div class="stat-mini">
-            <span class="k">novos servidores 24h</span>
-            <span class="v num" id="srvNew24h">49</span>
-          </div>
-          <div class="stat-mini">
-            <span class="k">canais de texto ativos 24h</span>
-            <span class="v num" id="chActive24h">39</span>
-          </div>
-        </div>
+        <div class="chart-note" id="msgSplit"><!-- injected --></div>
       </div>
     </div>
   </section>
@@ -694,21 +759,166 @@
             <span class="v num" id="vPeak">5</span>
           </div>
         </div>
-        <div class="stat-row" style="margin-top:12px;margin-bottom:0" data-seed="row">
+        <div class="stat-row" style="margin-top:12px;margin-bottom:0">
           <div class="stat-mini">
-            <span class="k">chamada mais longa</span>
-            <span class="v num" style="font-size:19px">2h28m</span>
-            <span class="k" style="color:var(--faint)">2 pessoas · papo geral</span>
+            <span class="k">pessoas em chamada agora</span>
+            <span class="v num" id="vPeople">0</span>
           </div>
-          <div class="stat-mini">
-            <span class="k">maior sala do dia</span>
-            <span class="v num" style="font-size:19px">4 pessoas</span>
-            <span class="k" style="color:var(--faint)">45min · treino cs2</span>
+          <div class="stat-mini" id="vLargestTile">
+            <span class="k">maior sala agora</span>
+            <span class="v num" id="vLargest">0</span>
+            <span class="k" style="color:var(--faint)" id="vLargestNote">limite prático do mesh: 5 a 8</span>
           </div>
         </div>
         <p class="m-note" style="font-size:11.5px;color:var(--faint);margin:14px 0 0">
           limite prático do mesh: ~5 a 8 pares por sala. sfu (livekit) fica pronto para quando uma sala passar disso.
         </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ CALL QUALITY ============ -->
+  <!-- The only unsolicited quality feedback the product gets. An average on
+       its own hides the shape, so the distribution is the headline and the
+       average sits next to it; notes exist only on scores of 3 or less. -->
+  <section aria-label="qualidade das chamadas">
+    <div class="sec-head">
+      <h2>qualidade das chamadas</h2>
+      <span class="rule"></span>
+      <span class="note" id="ratingsNote">avaliação pedida ao sair da chamada · últimos 7 dias</span>
+    </div>
+    <div class="grid g-3">
+      <div class="card pad">
+        <div class="rating-head">
+          <div class="rating-score">
+            <span class="rs-val num" id="ratingAvg">—</span>
+            <span class="rs-of">/ 5</span>
+            <span class="stars" id="ratingStars" aria-hidden="true"></span>
+            <span class="rs-sub" id="ratingCount">carregando</span>
+          </div>
+          <div class="rating-pills" id="ratingPills"></div>
+        </div>
+        <div class="dist" id="ratingDist"><!-- injected --></div>
+      </div>
+
+      <div class="card pad">
+        <p class="subtle-title">por transporte</p>
+        <div id="ratingTransport"><!-- injected --></div>
+        <p class="m-note" style="font-size:11.5px;color:var(--faint);margin:12px 0 0">
+          mesh é ponto a ponto entre os participantes; livekit é o sfu. a comparação só
+          fica honesta quando as duas colunas têm chamadas na janela.
+        </p>
+      </div>
+    </div>
+
+    <div class="card pad" style="margin-top:14px">
+      <p class="subtle-title">o que escreveram · só aparece em notas 3 ou menos</p>
+      <div id="ratingNotes"><!-- injected --></div>
+    </div>
+  </section>
+
+  <!-- ============ ACQUISITION ============ -->
+  <section aria-label="origem dos cadastros">
+    <div class="sec-head">
+      <h2>de onde vêm os cadastros</h2>
+      <span class="rule"></span>
+      <span class="note" id="acqNote">carregando</span>
+    </div>
+    <div class="grid g-3">
+      <div class="card pad">
+        <p class="subtle-title">primeiro toque · por campanha</p>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>origem</th>
+                <th>meio</th>
+                <th>campanha</th>
+                <th class="r">cadastros</th>
+                <th class="r">%</th>
+              </tr>
+            </thead>
+            <tbody id="acqBody"><!-- injected --></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card pad">
+        <p class="subtle-title">página de entrada</p>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>caminho</th>
+                <th class="r">cadastros</th>
+              </tr>
+            </thead>
+            <tbody id="acqLandingBody"><!-- injected --></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ CHANNELS & SERVERS ============ -->
+  <section aria-label="canais e servidores">
+    <div class="sec-head">
+      <h2>canais e servidores</h2>
+      <span class="rule"></span>
+      <span class="note" id="serversNote">69 servidores · 49 criados em 24h</span>
+    </div>
+    <div class="grid g-3">
+      <div class="card pad">
+        <p class="subtle-title">servidores mais ativos · 24h</p>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>servidor</th>
+                <th class="r">canais</th>
+                <th class="r">membros</th>
+                <th class="r">msgs 24h</th>
+              </tr>
+            </thead>
+            <tbody id="serversBody"><!-- injected --></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card pad">
+        <p class="subtle-title">composição de canais</p>
+        <div class="split">
+          <div class="seg">
+            <span class="k">texto</span>
+            <span class="v num" id="chText">154</span>
+            <span class="stackbar"><i id="chTextBarA" style="width:67.5%;background:var(--accent-line)"></i><i id="chTextBarB" style="width:32.5%;background:var(--series-2)"></i></span>
+          </div>
+          <div class="seg">
+            <span class="k">voz</span>
+            <span class="v num" id="chVoice">74</span>
+            <span class="stackbar"><i style="width:100%;background:var(--series-2)"></i></span>
+          </div>
+        </div>
+        <div class="legend">
+          <span><i class="swatch" style="background:var(--accent-line)"></i> <span id="legText">texto 154</span></span>
+          <span><i class="swatch" style="background:var(--series-2)"></i> <span id="legVoice">voz 74</span></span>
+          <span><i class="swatch" style="background:var(--surface-3)"></i> <span id="legOther">categorias 1 · threads 1</span></span>
+        </div>
+
+        <div class="stat-row" style="margin-top:16px">
+          <div class="stat-mini">
+            <span class="k">total de canais</span>
+            <span class="v num" id="chTotal">230</span>
+          </div>
+          <div class="stat-mini">
+            <span class="k">novos servidores 24h</span>
+            <span class="v num" id="srvNew24h">49</span>
+          </div>
+          <div class="stat-mini">
+            <span class="k">canais de texto ativos 24h</span>
+            <span class="v num" id="chActive24h">39</span>
+          </div>
+        </div>
       </div>
     </div>
   </section>
@@ -884,7 +1094,16 @@
   ];
 
   var seedChannels = { text: 154, voice: 74, category: 1, thread: 1, total: 230, newServers24h: 49, activeText24h: 39 };
-  var seedVoice = { activeRooms: 2, peak: 5, backend: "mesh" };
+  var seedRatings = {
+    total: 9, average: 4.4,
+    distribution: { "2": 1, "3": 1, "4": 1, "5": 6 },
+    byTransport: [{ transport: "mesh", total: 9, average: 4.4 }],
+    recentNotes: [
+      { rating: 3, note: "áudio cortando quando alguém compartilha a tela", createdAt: null }
+    ]
+  };
+  var seedAutomated = 0;
+  var seedVoice = { activeRooms: 2, peak: 5, participants: 4, largestNow: 3, backend: "mesh" };
   var seedServersNote = "69 servidores · 49 criados em 24h";
   var seedHost = { version: "v42", versionKnown: true };
 
@@ -912,6 +1131,14 @@
     if (typeof n !== "number" || !isFinite(n)) return String(n);
     return ptBR ? ptBR.format(n) : String(n);
   }
+  var ptBR1 = (typeof Intl !== "undefined" && Intl.NumberFormat)
+    ? new Intl.NumberFormat("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })
+    : null;
+  /** One decimal, comma separator. Used for averages, never for counts. */
+  function fmtDec(n) {
+    if (typeof n !== "number" || !isFinite(n)) return "—";
+    return ptBR1 ? ptBR1.format(n) : n.toFixed(1).replace(".", ",");
+  }
   function signed(n) {
     if (n > 0) return "+" + fmt(n);
     if (n < 0) return "−" + fmt(-n);
@@ -924,6 +1151,11 @@
   }
   function pct(n, d) {
     return d > 0 ? Math.round((n / d) * 1000) / 10 : 0;
+  }
+  /** A share, written the way the rest of the page writes numbers: "91,7%". */
+  function fmtPct(n, d) {
+    var v = pct(n, d);
+    return (Math.round(v) === v ? fmt(v) : fmtDec(v)) + "%";
   }
   function fmtTime(iso) {
     try {
@@ -948,6 +1180,31 @@
     }
   }
 
+  function fmtDay(iso) {
+    try {
+      var f = new Intl.DateTimeFormat("pt-BR", {
+        timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit",
+        hour: "2-digit", minute: "2-digit"
+      });
+      return f.format(new Date(iso)).replace(",", " ·");
+    } catch (e) {
+      return "";
+    }
+  }
+  /** "há 2 h", for note timestamps. Empty string for anything unparseable. */
+  function fmtRelative(iso) {
+    var t = Date.parse(iso);
+    if (!isFinite(t)) return "";
+    var secs = Math.round((Date.now() - t) / 1000);
+    if (secs < 0) return "agora";
+    if (secs < 90) return "agora há pouco";
+    var mins = Math.round(secs / 60);
+    if (mins < 60) return "há " + mins + " min";
+    var hours = Math.round(mins / 60);
+    if (hours < 36) return "há " + hours + " h";
+    return "há " + Math.round(hours / 24) + " dias";
+  }
+
   // smooth (Catmull-Rom -> cubic bezier) path from points
   function smoothPath(pts) {
     if (pts.length < 2) return "";
@@ -969,71 +1226,90 @@
   }
 
   var uid = 0;
-  function areaChart(values, opts) {
+
+  /**
+   * Hourly volume, as columns.
+   *
+   * Bars rather than the smoothed area this used to draw: the buckets are 24
+   * discrete counts, and a spline through them invents values between hours
+   * and can dip below zero on a series that goes 0, 0, 107. A column is exactly
+   * as tall as the hour it stands for and nothing more.
+   *
+   * The newest bucket is the hour in progress, so it is drawn lighter: it is
+   * not a drop in traffic, it is an hour that has not finished.
+   */
+  function barChart(values, opts) {
     opts = opts || {};
-    var W = opts.w || 720, H = opts.h || 210, pad = 26, padB = 20, padT = 16;
-    var min = 0; // baseline at zero for volume series
-    var max = Math.max.apply(null, values);
-    var range = (max - min) || 1;
+    var W = 720, H = 210, padL = 34, padR = 10, padT = 22, padB = 24;
     var n = values.length;
-    var innerW = W - pad * 2;
-    var innerH = H - padT - padB;
-    var xOf = function (i) { return pad + (i / (n - 1)) * innerW; };
-    var yOf = function (v) { return padT + innerH - ((v - min) / range) * innerH; };
-
-    var pts = values.map(function (v, i) { return { x: xOf(i), y: yOf(v) }; });
-    var line = smoothPath(pts);
+    var max = 0;
+    for (var i = 0; i < n; i++) max = Math.max(max, values[i] || 0);
+    var scaleMax = max || 1;
+    var innerW = W - padL - padR, innerH = H - padT - padB;
+    var slot = innerW / Math.max(n, 1);
+    var bw = Math.max(3, slot * 0.66);
     var baseY = padT + innerH;
-    var area = line + " L " + xOf(n - 1).toFixed(1) + " " + baseY.toFixed(1) +
-                      " L " + xOf(0).toFixed(1) + " " + baseY.toFixed(1) + " Z";
 
-    var id = "g" + (++uid);
-    var svg = svgEl("svg", { viewBox: "0 0 " + W + " " + H, role: "img", preserveAspectRatio: "none" });
-    svg.setAttribute("aria-label", opts.label || "gráfico de área");
+    var svg = svgEl("svg", { viewBox: "0 0 " + W + " " + H, role: "img" });
+    svg.setAttribute("aria-label", opts.label || "gráfico de barras por hora");
 
-    var defs = svgEl("defs", {});
-    var grad = svgEl("linearGradient", { id: id, x1: "0", y1: "0", x2: "0", y2: "1" });
-    grad.appendChild(svgEl("stop", { offset: "0%", "stop-color": "oklch(0.88 0.19 125)", "stop-opacity": "0.30" }));
-    grad.appendChild(svgEl("stop", { offset: "72%", "stop-color": "oklch(0.88 0.19 125)", "stop-opacity": "0.05" }));
-    grad.appendChild(svgEl("stop", { offset: "100%", "stop-color": "oklch(0.88 0.19 125)", "stop-opacity": "0" }));
-    defs.appendChild(grad);
-    svg.appendChild(defs);
-
-    // horizontal grid
-    for (var g = 0; g <= 3; g++) {
-      var gy = padT + (innerH / 3) * g;
+    // grid: zero, half, peak — the peak line labelled, so the tallest bar has a value
+    [0, 0.5, 1].forEach(function (frac) {
+      var gy = baseY - innerH * frac;
       svg.appendChild(svgEl("line", {
-        x1: pad, x2: W - pad, y1: gy, y2: gy,
-        stroke: "oklch(0.30 0.018 250)", "stroke-width": "1",
-        "stroke-dasharray": g === 3 ? "0" : "3 5", opacity: g === 3 ? "0.9" : "0.5"
+        x1: padL, x2: W - padR, y1: gy, y2: gy,
+        stroke: "var(--border)", "stroke-width": "1",
+        "stroke-dasharray": frac === 0 ? "0" : "3 5",
+        opacity: frac === 0 ? "0.9" : "0.55"
       }));
+      var lbl = svgEl("text", {
+        x: padL - 7, y: gy + 3.5, "text-anchor": "end", fill: "var(--faint)",
+        "font-size": "10", "font-family": "Instrument Sans, sans-serif"
+      });
+      lbl.textContent = frac === 0 ? "0" : fmt(Math.round(scaleMax * frac));
+      svg.appendChild(lbl);
+    });
+
+    for (var j = 0; j < n; j++) {
+      var v = values[j] || 0;
+      var h = (v / scaleMax) * innerH;
+      var x = padL + slot * j + (slot - bw) / 2;
+      var current = j === n - 1;
+      var rect = svgEl("rect", {
+        x: x.toFixed(1), width: bw.toFixed(1),
+        y: (baseY - Math.max(h, v > 0 ? 2 : 0)).toFixed(1),
+        height: Math.max(h, v > 0 ? 2 : 0).toFixed(1),
+        rx: Math.min(3, bw / 2).toFixed(1),
+        fill: "var(--accent)",
+        opacity: current ? "0.42" : (v === max && max > 0 ? "1" : "0.82")
+      });
+      var hoursAgo = n - 1 - j;
+      var title = svgEl("title", {});
+      title.textContent = (current ? "hora em curso" : hoursAgo === 1 ? "há 1 hora" : "há " + hoursAgo + " horas") +
+        " · " + fmt(v);
+      rect.appendChild(title);
+      svg.appendChild(rect);
     }
 
-    svg.appendChild(svgEl("path", { d: area, fill: "url(#" + id + ")" }));
-    svg.appendChild(svgEl("path", {
-      d: line, fill: "none", stroke: "oklch(0.88 0.19 125 / 0.92)",
-      "stroke-width": "2.4", "stroke-linecap": "round", "stroke-linejoin": "round"
-    }));
-
-    // emphasized endpoint
-    var lx = xOf(n - 1), ly = yOf(values[n - 1]);
-    svg.appendChild(svgEl("line", {
-      x1: lx, x2: lx, y1: ly, y2: baseY,
-      stroke: "oklch(0.88 0.19 125 / 0.4)", "stroke-width": "1.4", "stroke-dasharray": "2 4"
-    }));
-    svg.appendChild(svgEl("circle", { cx: lx, cy: ly, r: "7", fill: "oklch(0.88 0.19 125 / 0.18)" }));
-    svg.appendChild(svgEl("circle", {
-      cx: lx, cy: ly, r: "3.6", fill: "oklch(0.88 0.19 125)",
-      stroke: "oklch(0.16 0.012 250)", "stroke-width": "1.6"
-    }));
-
-    // max label
-    var mt = svgEl("text", {
-      x: pad, y: padT - 3, fill: "oklch(0.60 0.02 95)",
-      "font-size": "10", "font-family": "Instrument Sans, sans-serif"
+    // x labels every six hours, drawn in the chart so they cannot drift from it
+    [[0, "-24h"], [6, "-18h"], [12, "-12h"], [18, "-6h"], [n - 1, "agora"]].forEach(function (pair) {
+      if (pair[0] < 0 || pair[0] >= n) return;
+      var tx = padL + slot * pair[0] + slot / 2;
+      var t = svgEl("text", {
+        x: tx.toFixed(1), y: (baseY + 15).toFixed(1),
+        "text-anchor": pair[0] === n - 1 ? "end" : pair[0] === 0 ? "start" : "middle",
+        fill: "var(--faint)", "font-size": "10", "font-family": "Instrument Sans, sans-serif"
+      });
+      t.textContent = pair[1];
+      svg.appendChild(t);
     });
-    mt.textContent = "pico " + fmt(max) + "/h";
-    svg.appendChild(mt);
+
+    var peak = svgEl("text", {
+      x: padL, y: padT - 7, fill: "var(--muted)",
+      "font-size": "10.5", "font-family": "Instrument Sans, sans-serif"
+    });
+    peak.textContent = "pico " + fmt(max) + "/h · última barra é a hora em curso";
+    svg.appendChild(peak);
 
     return svg;
   }
@@ -1041,25 +1317,28 @@
   function sparkline(values, opts) {
     opts = opts || {};
     var W = 220, H = 40, pad = 4;
-    var svg = svgEl("svg", { class: "spark", viewBox: "0 0 " + W + " " + H, preserveAspectRatio: "none", "aria-hidden": "true" });
+    var svg = svgEl("svg", { class: "spark", viewBox: "0 0 " + W + " " + H, "aria-hidden": "true" });
     // No series for this tile: keep the box so the grid stays aligned, draw nothing.
     if (!values || values.length < 2) return svg;
     var min = Math.min.apply(null, values);
     var max = Math.max.apply(null, values);
     var range = (max - min) || 1;
     var n = values.length;
+    var lo = pad, hi = H - pad;
     var xOf = function (i) { return pad + (i / (n - 1)) * (W - pad * 2); };
-    var yOf = function (v) { return pad + (H - pad * 2) - ((v - min) / range) * (H - pad * 2); };
+    var yOf = function (v) {
+      var y = pad + (H - pad * 2) - ((v - min) / range) * (H - pad * 2);
+      return Math.min(hi, Math.max(lo, y));
+    };
     var pts = values.map(function (v, i) { return { x: xOf(i), y: yOf(v) }; });
     var line = smoothPath(pts);
-    var col = opts.flat ? "oklch(0.72 0.02 95)" : "oklch(0.88 0.19 125 / 0.9)";
-    var fillTop = opts.flat ? "oklch(0.72 0.02 95 / 0.16)" : "oklch(0.88 0.19 125 / 0.18)";
+    var col = opts.flat ? "var(--faint)" : "var(--accent)";
 
     var id = "s" + (++uid);
     var defs = svgEl("defs", {});
     var grad = svgEl("linearGradient", { id: id, x1: "0", y1: "0", x2: "0", y2: "1" });
-    grad.appendChild(svgEl("stop", { offset: "0%", "stop-color": fillTop.split(" / ")[0], "stop-opacity": opts.flat ? "0.16" : "0.20" }));
-    grad.appendChild(svgEl("stop", { offset: "100%", "stop-color": fillTop.split(" / ")[0], "stop-opacity": "0" }));
+    grad.appendChild(svgEl("stop", { offset: "0%", "stop-color": col, "stop-opacity": "0.20" }));
+    grad.appendChild(svgEl("stop", { offset: "100%", "stop-color": col, "stop-opacity": "0" }));
     defs.appendChild(grad);
     svg.appendChild(defs);
     var base = pad + (H - pad * 2);
@@ -1147,8 +1426,8 @@
   function renderCharts(usersHourly, messagesHourly) {
     var cu = $("chartUsers"), cm = $("chartMsgs");
     cu.innerHTML = ""; cm.innerHTML = "";
-    cu.appendChild(areaChart(usersHourly, { label: "novos usuários por hora nas últimas 24 horas" }));
-    cm.appendChild(areaChart(messagesHourly, { label: "mensagens por hora nas últimas 24 horas" }));
+    cu.appendChild(barChart(usersHourly, { label: "novos usuários por hora nas últimas 24 horas" }));
+    cm.appendChild(barChart(messagesHourly, { label: "mensagens por hora nas últimas 24 horas" }));
     setText("usersSum", fmt(sum(usersHourly)));
     setText("msgsSum", fmt(sum(messagesHourly)));
   }
@@ -1180,7 +1459,7 @@
           '<td>' + esc(r.medium || "—") + '</td>' +
           '<td>' + esc(r.campaign || "—") + '</td>' +
           '<td class="r num cell-strong">' + fmt(r.signups || 0) + '</td>' +
-          '<td class="r num">' + pct(r.signups || 0, total) + '%</td>';
+          '<td class="r num">' + fmtPct(r.signups || 0, total) + '</td>';
         body.appendChild(tr);
       });
     }
@@ -1188,8 +1467,10 @@
     rows.forEach(function (r) {
       if (r.source || r.medium || r.campaign || r.ref) tagged += (r.signups || 0);
     });
+    var sinceLabel = (acq && acq.since) ? fmtDay(acq.since) : "";
     setText("acqNote", total
-      ? fmt(tagged) + " de " + fmt(total) + " cadastros com origem conhecida (" + pct(tagged, total) + "%) · " + ((acq && acq.days) || 7) + " dias"
+      ? fmt(tagged) + " de " + fmt(total) + " cadastros com origem conhecida (" + fmtPct(tagged, total) + ") · " +
+        ((acq && acq.days) || 7) + " dias" + (sinceLabel ? " · desde " + sinceLabel : "")
       : "sem cadastros na janela");
 
     if (!lbody) return;
@@ -1245,11 +1526,306 @@
     setText("chActive24h", fmt(c.activeText24h));
   }
 
+  // Above this many people in one mesh room, every participant is uploading to
+  // every other one: the point where the SFU stops being optional.
+  var MESH_COMFORT = 6;
+
   function renderVoice(v) {
     setText("vActive", fmt(v.activeRooms));
     setText("vPeak", fmt(v.peak));
+    setText("vPeople", fmt(v.participants || 0));
+    setText("vLargest", fmt(v.largestNow || 0));
+    var mesh = v.backend !== "livekit";
+    var tight = mesh && (v.largestNow || 0) >= MESH_COMFORT;
+    var tile = $("vLargestTile");
+    if (tile) tile.className = "stat-mini" + (tight ? " attn" : "");
+    setText("vLargestNote", tight
+      ? "acima do confortável para o mesh (5 a 8)"
+      : "limite prático do mesh: 5 a 8 pares");
     setText("voiceNote", "pico de sala hoje: " + fmt(v.peak) + " pessoas · backend " +
-      (v.backend === "livekit" ? "livekit (sfu)" : "mesh (webrtc)"));
+      (mesh ? "mesh (webrtc)" : "livekit (sfu)"));
+  }
+
+  /* ---------------- render: call ratings ----------------
+     The average is the smallest part of this: twelve ratings averaging 4,8 can
+     be eleven 5s and a 3, or six 5s and six 4s, and only the distribution says
+     which. So the bars are the headline, the average sits beside them, and the
+     notes (which the client only asks for on a 3 or less) get their own block:
+     they are the only unsolicited quality feedback the product receives. */
+  var TRANSPORT_LABELS = {
+    mesh: { name: "mesh", kind: "ponto a ponto" },
+    livekit: { name: "livekit", kind: "sfu" }
+  };
+
+  function ratingClass(score) {
+    return score >= 4 ? "good" : score === 3 ? "mid" : "bad";
+  }
+
+  function renderCallRatings(cr) {
+    cr = cr || {};
+    var dist = (cr && typeof cr.distribution === "object" && cr.distribution) || {};
+    var counts = [];
+    var totalFromDist = 0, weighted = 0;
+    for (var score = 1; score <= 5; score++) {
+      var n = Number(dist[String(score)]);
+      n = isFinite(n) && n > 0 ? n : 0;
+      counts[score] = n;
+      totalFromDist += n;
+      weighted += n * score;
+    }
+    var total = (typeof cr.total === "number" && isFinite(cr.total) && cr.total > 0)
+      ? cr.total : totalFromDist;
+    var average = (typeof cr.average === "number" && isFinite(cr.average))
+      ? cr.average
+      : (totalFromDist > 0 ? Math.round((weighted / totalFromDist) * 10) / 10 : null);
+    var low = counts[1] + counts[2] + counts[3];
+    var high = counts[4] + counts[5];
+
+    // headline
+    var avgEl = $("ratingAvg");
+    if (avgEl) {
+      avgEl.className = "rs-val num" + (average === null ? " none" : "");
+      avgEl.textContent = average === null ? "sem nota" : fmtDec(average);
+    }
+    var stars = $("ratingStars");
+    if (stars) {
+      var fill = average === null ? 0 : Math.max(0, Math.min(100, (average / 5) * 100));
+      stars.innerHTML = '<span class="s-bg">★★★★★</span>' +
+        '<span class="s-fg" style="width:' + fill.toFixed(1) + '%">★★★★★</span>';
+    }
+    setText("ratingCount", total
+      ? fmt(total) + (total === 1 ? " avaliação nos últimos 7 dias" : " avaliações nos últimos 7 dias")
+      : "ninguém avaliou uma chamada nos últimos 7 dias");
+
+    var pills = $("ratingPills");
+    if (pills) {
+      if (!total) {
+        pills.innerHTML = '<span class="badge">sem amostra</span>';
+      } else {
+        var goodPct = pct(high, total);
+        var goodCls = goodPct >= 80 ? "ok" : goodPct >= 50 ? "warn" : "bad";
+        pills.innerHTML =
+          '<span class="badge ' + goodCls + '">' + fmtPct(high, total) + ' deram 4 ou 5</span>' +
+          '<span class="badge ' + (low ? "warn" : "ok") + '">' +
+            (low ? fmt(low) + (low === 1 ? " nota 3 ou menos" : " notas 3 ou menos") : "nenhuma nota baixa") +
+          '</span>';
+      }
+    }
+
+    // distribution: every score is a row, including the ones nobody gave
+    var distEl = $("ratingDist");
+    if (distEl) {
+      distEl.innerHTML = "";
+      if (!total) {
+        distEl.innerHTML = '<div class="empty">a distribuição aparece assim que a primeira ' +
+          'chamada for avaliada. o app pede a nota ao sair de uma chamada com mais de um minuto.</div>';
+      } else {
+        var peak = 1;
+        for (var k = 1; k <= 5; k++) peak = Math.max(peak, counts[k]);
+        for (var sc = 5; sc >= 1; sc--) {
+          var c = counts[sc];
+          var row = el("div", "dist-row" + (c ? "" : " zero"));
+          row.setAttribute("title", fmt(c) + " de " + fmt(total) + " avaliações deram " + sc);
+          row.innerHTML =
+            '<span class="dr-k">' + sc + '<span class="st"> ★</span></span>' +
+            '<span class="dr-bar"><i class="' + ratingClass(sc) + '" style="width:' +
+              (c ? Math.max(3, (c / peak) * 100) : 0).toFixed(1) + '%"></i></span>' +
+            '<span class="dr-n num">' + fmt(c) + '</span>' +
+            '<span class="dr-p num">' + fmtPct(c, total) + '</span>';
+          distEl.appendChild(row);
+        }
+      }
+    }
+
+    // per transport: both are always listed, so "no SFU calls" is visible
+    var trEl = $("ratingTransport");
+    if (trEl) {
+      trEl.innerHTML = "";
+      var rows = Array.isArray(cr.byTransport) ? cr.byTransport : [];
+      ["mesh", "livekit"].forEach(function (key) {
+        var found = null;
+        rows.forEach(function (r) { if (r && r.transport === key) found = r; });
+        var meta = TRANSPORT_LABELS[key];
+        var t = (found && Number(found.total)) || 0;
+        var avg = found && typeof found.average === "number" && isFinite(found.average) ? found.average : null;
+        var box = el("div", "tr-row");
+        box.innerHTML =
+          '<div class="tr-top">' +
+            '<span class="tr-name">' + meta.name + '<span class="kind">' + meta.kind + '</span></span>' +
+            '<span class="tr-avg num' + (avg === null ? " none" : "") + '">' +
+              (avg === null ? "sem nota" : fmtDec(avg) + '<span class="u"> /5</span>') + '</span>' +
+          '</div>' +
+          '<span class="tr-bar"><i class="' + (avg === null ? "" : ratingClass(Math.round(avg))) +
+            '" style="width:' + (avg === null ? 0 : (avg / 5) * 100).toFixed(1) + '%"></i></span>' +
+          '<span class="tr-sub">' + (t
+            ? fmt(t) + (t === 1 ? " avaliação" : " avaliações")
+            : "nenhuma chamada avaliada na janela") + '</span>';
+        trEl.appendChild(box);
+      });
+      // anything the API starts returning that this page does not know about
+      rows.forEach(function (r) {
+        if (!r || TRANSPORT_LABELS[r.transport]) return;
+        var box = el("div", "tr-row");
+        box.innerHTML =
+          '<div class="tr-top"><span class="tr-name">' + esc(r.transport) + '</span>' +
+          '<span class="tr-avg num">' + (typeof r.average === "number" ? fmtDec(r.average) : "—") +
+          '<span class="u"> /5</span></span></div>' +
+          '<span class="tr-bar"><i style="width:0%"></i></span>' +
+          '<span class="tr-sub">' + fmt(Number(r.total) || 0) + ' avaliações</span>';
+        trEl.appendChild(box);
+      });
+    }
+
+    // notes
+    var notesEl = $("ratingNotes");
+    if (notesEl) {
+      var notes = Array.isArray(cr.recentNotes) ? cr.recentNotes.slice(0, 8) : [];
+      notesEl.innerHTML = "";
+      if (!notes.length) {
+        notesEl.innerHTML = '<div class="empty">' + (total
+          ? 'nenhuma nota escrita na janela. <b>o campo só aparece para quem dá 3 ou menos</b>, ' +
+            'então um silêncio aqui com médias altas é bom sinal.'
+          : 'sem avaliações, sem notas.') + '</div>';
+      } else {
+        var list = el("div", "notes-list");
+        notes.forEach(function (item) {
+          if (!item || typeof item.note !== "string" || !item.note.trim()) return;
+          var score = Number(item.rating);
+          var cls = isFinite(score) ? ratingClass(score) : "";
+          var when = item.createdAt ? fmtRelative(item.createdAt) : "";
+          var day = item.createdAt ? fmtDay(item.createdAt) : "";
+          var badgeCls = cls === "bad" ? "badge bad" : cls === "mid" ? "badge warn" : "badge";
+          var row = el("div", "note-item " + cls);
+          row.innerHTML =
+            '<span class="' + badgeCls + '">' + (isFinite(score) ? score : "?") + ' ★</span>' +
+            '<div class="ni-body">' +
+              '<p class="ni-text">' + esc(item.note.trim()) + '</p>' +
+              (when || day ? '<span class="ni-when">' + esc([when, day].filter(Boolean).join(" · ")) + '</span>' : '') +
+            '</div>';
+          list.appendChild(row);
+        });
+        notesEl.appendChild(list);
+      }
+    }
+
+    setText("ratingsNote", total
+      ? "avaliação pedida ao sair da chamada · " + fmt(total) +
+        (total === 1 ? " resposta" : " respostas") + " em 7 dias"
+      : "avaliação pedida ao sair da chamada · últimos 7 dias");
+  }
+
+  /* ---------------- render: human vs automated messages ----------------
+     `messages.last24h` counts people. The house cast (character accounts) and
+     webhooks are counted separately and never folded in, so their chatter can
+     never be read as organic growth; the split is drawn rather than stated. */
+  function renderMessageSplit(human, automated) {
+    var box = $("msgSplit");
+    if (!box) return;
+    human = human || 0;
+    automated = automated || 0;
+    var totalRaw = human + automated;
+    if (!automated) {
+      box.innerHTML = '<p class="hint" style="margin-top:0">nenhuma mensagem automatizada nas últimas 24h. ' +
+        'contas de webhook e do elenco da casa ficam fora de todas as contagens acima.</p>';
+      return;
+    }
+    box.innerHTML =
+      '<span class="stackbar">' +
+        '<i style="width:' + pct(human, totalRaw) + '%;background:var(--accent-line)"></i>' +
+        '<i style="width:' + pct(automated, totalRaw) + '%;background:var(--series-2)"></i>' +
+      '</span>' +
+      '<div class="legend">' +
+        '<span><i class="swatch" style="background:var(--accent-line)"></i> ' + fmt(human) +
+          ' de pessoas · ' + fmtPct(human, totalRaw) + '</span>' +
+        '<span><i class="swatch" style="background:var(--series-2)"></i> ' + fmt(automated) +
+          ' do elenco da casa · ' + fmtPct(automated, totalRaw) + '</span>' +
+      '</div>' +
+      '<p class="hint">o gráfico e todos os números desta página contam só pessoas. ' +
+        'as mensagens do elenco da casa e de webhooks aparecem aqui, à parte, e em nenhum outro lugar.</p>';
+  }
+
+  /* ---------------- render: provenance ---------------- */
+  function renderProvenance(d) {
+    var box = $("provenance");
+    if (!box) return;
+    var known = d && Array.isArray(d.excludedAccounts);
+    var labels = { webhook: "webhooks", character: "elenco da casa" };
+    var names = known ? d.excludedAccounts.map(function (k) { return labels[k] || k; }) : [];
+    var parts = [];
+    parts.push('<span>contagens de pessoas' + (!known ? ''
+      : names.length ? ' · fora: ' + esc(names.join(", "))
+      : ' · nenhuma conta excluída') + '</span>');
+    var ttl = d && Number(d.cacheTtlSeconds);
+    if (isFinite(ttl) && ttl > 0) parts.push('<span>cache do servidor: ' + fmt(ttl) + ' s</span>');
+    parts.push('<span>página relê a cada 60 s</span>');
+    box.innerHTML = parts.join('<span aria-hidden="true">·</span>');
+  }
+
+  /* ---------------- render: signals strip ----------------
+     One pill per thing that can need attention. The colour is the message; the
+     number is the detail behind it. Anything with no live reading stays out. */
+  var sigState = { health: null, messages: null, ratings: null, voice: null, automated: null };
+
+  function paintSignals() {
+    var box = $("signals");
+    if (!box) return;
+    var order = ["health", "messages", "ratings", "voice", "automated"];
+    var html = "";
+    order.forEach(function (key) {
+      var sig = sigState[key];
+      if (!sig) return;
+      html += '<span class="sig ' + (sig.state || "") + '">' +
+        '<span class="dot"></span>' +
+        '<span class="sig-k">' + esc(sig.label) + '</span>' +
+        '<span class="sig-v">' + esc(sig.value) + '</span>' +
+        (sig.note ? '<span class="sig-note">' + esc(sig.note) + '</span>' : '') +
+        '</span>';
+    });
+    box.innerHTML = html || '<span class="sig"><span class="dot"></span>' +
+      '<span class="sig-k">resumo</span><span class="sig-v">carregando</span></span>';
+  }
+
+  function setMetricSignals(d) {
+    var msgs = d.messages || {}, voice = d.voice || {}, cr = d.callRatings || {};
+
+    var human = msgs.last24h || 0, prev = msgs.previous24h || 0;
+    var change = prev > 0 ? Math.round(((human - prev) / prev) * 100) : null;
+    sigState.messages = {
+      state: "", label: "mensagens 24h", value: fmt(human),
+      note: change === null ? "sem base anterior"
+        : (change >= 0 ? "+" : "−") + Math.abs(change) + "% vs 24h anteriores"
+    };
+
+    var total = (typeof cr.total === "number" && cr.total > 0) ? cr.total : 0;
+    var dist = cr.distribution || {};
+    var low = (Number(dist["1"]) || 0) + (Number(dist["2"]) || 0) + (Number(dist["3"]) || 0);
+    sigState.ratings = total
+      ? {
+          state: low ? "warn" : "ok",
+          label: "chamadas",
+          value: (typeof cr.average === "number" ? fmtDec(cr.average) : "—") + "/5",
+          note: low ? fmt(low) + (low === 1 ? " nota baixa em " : " notas baixas em ") + fmt(total)
+                    : fmt(total) + " avaliações, nenhuma baixa"
+        }
+      : { state: "", label: "chamadas", value: "sem avaliações", note: "últimos 7 dias" };
+
+    var largest = voice.largestRoomNow || 0;
+    var tight = voice.backend !== "livekit" && largest >= MESH_COMFORT;
+    sigState.voice = {
+      state: tight ? "warn" : "",
+      label: "voz agora",
+      value: fmt(voice.activeRooms || 0) + (voice.activeRooms === 1 ? " sala" : " salas"),
+      note: fmt(voice.participants || 0) + " pessoas · maior " + fmt(largest) +
+        (tight ? " (acima do mesh)" : "")
+    };
+
+    var auto = msgs.automated24h || 0;
+    sigState.automated = auto
+      ? { state: "", label: "elenco da casa", value: fmt(auto) + " msgs",
+          note: fmtPct(auto, auto + human) + " do tráfego bruto, fora das contagens" }
+      : null;
+
+    paintSignals();
   }
 
   /* ---------------- render: voice table (seed only) ---------------- */
@@ -1321,6 +1897,14 @@
   renderVoice(seedVoice);
   renderVoiceRooms(seedVoiceRooms);
   renderBugs(seedBugs);
+  renderCallRatings(seedRatings);
+  renderMessageSplit(sum(seedMessagesHourly), seedAutomated);
+  renderProvenance({ excludedAccounts: ["webhook", "character"], cacheTtlSeconds: 30 });
+  setMetricSignals({
+    messages: { last24h: sum(seedMessagesHourly), previous24h: 957, automated24h: seedAutomated },
+    voice: { activeRooms: 2, participants: 4, largestRoomNow: 3, backend: "mesh" },
+    callRatings: seedRatings
+  });
   setText("serversNote", seedServersNote);
 
   /* ---------------- last-updated clock ---------------- */
@@ -1417,7 +2001,18 @@
     renderChannels({ text: text, voice: vo, category: cat, thread: th,
       total: text + vo + cat + th, newServers24h: servers.last24h || 0, activeText24h: d.activeTextChannels24h || 0 });
 
-    renderVoice({ activeRooms: voice.activeRooms || 0, peak: voice.peakRoomSizeToday || 0, backend: voice.backend });
+    renderVoice({
+      activeRooms: voice.activeRooms || 0,
+      peak: voice.peakRoomSizeToday || 0,
+      participants: voice.participants || 0,
+      largestNow: voice.largestRoomNow || 0,
+      backend: voice.backend
+    });
+
+    renderCallRatings(d.callRatings);
+    renderMessageSplit(msgs.last24h || 0, msgs.automated24h || 0);
+    renderProvenance(d);
+    setMetricSignals(d);
 
     // Infra: the deployed commit, when the machine was stamped with one.
     // A git sha is shown short, the way `git log --oneline` would; anything else as-is.
@@ -1468,6 +2063,19 @@
     var headline = s.state === "down" ? "bad" : s.state === "degraded" ? "warn" : "ok";
     pill.className = "pill" + (headline === "ok" ? "" : " " + headline);
     setText("statusPillText", headline === "ok" ? "tudo operacional" : headline === "warn" ? "degradação parcial" : "incidente em andamento");
+
+    var degraded = comps.filter(function (c) {
+      return c.state === "degraded" || c.state === "down";
+    }).length;
+    sigState.health = {
+      state: headline === "ok" ? "ok" : headline,
+      label: "saúde",
+      value: headline === "ok" ? "tudo operacional" : headline === "warn" ? "degradação parcial" : "incidente",
+      note: degraded
+        ? fmt(degraded) + (degraded === 1 ? " componente fora do normal" : " componentes fora do normal")
+        : fmt(operational) + (operational === 1 ? " componente ok" : " componentes ok")
+    };
+    paintSignals();
 
     var db = comps.filter(function (c) { return c.key === "database"; })[0];
     if (db && typeof db.latencyMs === "number") setText("infraDb", "postgres · ~" + Math.round(db.latencyMs) + "ms");
