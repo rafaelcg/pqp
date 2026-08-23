@@ -42,13 +42,13 @@ const PROVIDER_PATH: Record<ConnectionGlyphProvider, string> = {
 };
 
 const PROVIDER_CHROME: Record<ConnectionGlyphProvider, string> = {
-  steam: "bg-[#1b2838] text-[#66c0f4]",
-  battlenet: "bg-[#148eff] text-white",
-  twitch: "bg-[#9146ff] text-white",
-  youtube: "bg-[#ff0000] text-white",
-  riot: "bg-[#eb0029] text-white",
-  roblox: "bg-black text-white",
-  github: "bg-[#181717] text-white",
+  steam: "bg-connection-steam text-connection-steam-mark",
+  battlenet: "bg-connection-battlenet text-white",
+  twitch: "bg-connection-twitch text-white",
+  youtube: "bg-connection-youtube text-white",
+  riot: "bg-connection-riot text-white",
+  roblox: "bg-connection-roblox text-white",
+  github: "bg-connection-github text-white",
 };
 
 export function ConnectionGlyph({

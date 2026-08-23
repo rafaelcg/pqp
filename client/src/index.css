@@ -63,6 +63,20 @@
   --color-panel-hover: var(--color-surface-2);
   --color-channel: var(--color-surface-1);
 
+  /*
+   * Third-party connection marks (Steam, Twitch, …). Identifiers, not pqp
+   * chrome: they stay the same in light mode so a Steam badge still looks
+   * like Steam.
+   */
+  --color-connection-steam: #1b2838;
+  --color-connection-steam-mark: #66c0f4;
+  --color-connection-battlenet: #148eff;
+  --color-connection-twitch: #9146ff;
+  --color-connection-youtube: #ff0000;
+  --color-connection-riot: #eb0029;
+  --color-connection-roblox: #000000;
+  --color-connection-github: #181717;
+
   --font-sans: "Instrument Sans", ui-sans-serif, system-ui, sans-serif;
   /*
    * WHY GABARITO AND NOT UNBOUNDED. Unbounded sets nearly every letter to the
