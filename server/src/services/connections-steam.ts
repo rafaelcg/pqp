@@ -75,15 +75,17 @@ export function steamIdFromClaimedId(claimedId: string | undefined): string | nu
 /**
  * Verify a Steam OpenID assertion.
  *
- * The six checks, in order, because a later one is meaningless if an earlier
+ * The seven checks, in order, because a later one is meaningless if an earlier
  * one already failed:
  *
  *  1. `openid.mode` is `id_res` (not `cancel`, not a crafted `checkid_setup`).
  *  2. `openid.op_endpoint` is Valve's, not a lookalike.
  *  3. `openid.return_to` equals the URL we put in the authorize request.
  *  4. `openid.claimed_id` is a SteamID64 in Valve's documented form.
- *  5. Steam itself says `is_valid:true` when we POST the assertion back.
- *  6. That POST is made with `openid.mode=check_authentication` and every
+ *  5. `openid.signed` names claimed_id, return_to, op_endpoint, and
+ *     response_nonce (the fields the signature must cover).
+ *  6. Steam itself says `is_valid:true` when we POST the assertion back.
+ *  7. That POST is made with `openid.mode=check_authentication` and every
  *     original field, because the signature covers `openid.signed`.
  */
 export async function verifySteamAssertion(
@@ -103,6 +105,11 @@ export async function verifySteamAssertion(
   const steamId = steamIdFromClaimedId(params["openid.claimed_id"]);
   if (!steamId) {
     throw new SteamAuthError("Steam assertion did not carry a SteamID");
+  }
+  if (!signedListCoversRequired(params["openid.signed"])) {
+    throw new SteamAuthError(
+      "Steam assertion did not sign the required OpenID fields",
+    );
   }
 
   const body = new URLSearchParams();
@@ -145,6 +152,26 @@ export async function verifySteamAssertion(
     throw new SteamAuthError("Steam rejected the OpenID assertion");
   }
   return steamId;
+}
+
+const REQUIRED_SIGNED_FIELDS = [
+  "claimed_id",
+  "return_to",
+  "op_endpoint",
+  "response_nonce",
+] as const;
+
+function signedListCoversRequired(signed: string | undefined): boolean {
+  if (!signed) {
+    return false;
+  }
+  const named = new Set(
+    signed
+      .split(",")
+      .map((part) => part.trim().toLowerCase())
+      .filter(Boolean),
+  );
+  return REQUIRED_SIGNED_FIELDS.every((field) => named.has(field));
 }
 
 function returnToEquals(actual: string, expected: string): boolean {

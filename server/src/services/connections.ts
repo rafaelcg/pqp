@@ -12,6 +12,8 @@ import {
 import type { DbUser } from "../db.js";
 import { getPool } from "../db.js";
 import { HttpError } from "../lib/http.js";
+import { noBlockBetweenSql } from "./blocks.js";
+import { areFriendsSql } from "./friends.js";
 import {
   battlenetAuthorizeUrl,
   exchangeBattlenetCode,
@@ -188,6 +190,37 @@ export async function listVisibleConnections(
     avatarUrl: row.avatar_url,
     profileUrl: row.profile_url,
   }));
+}
+
+/**
+ * In-app profile card. Same audience as approved depoimentos: self, friends,
+ * or a shared server, and never a blocked pair. Outside that, an empty list
+ * (not 403). The unauthenticated public page keeps `listVisibleConnections`
+ * with `"public"` and does not go through here.
+ */
+export async function listCardConnections(
+  viewerId: string,
+  subjectId: string,
+): Promise<VisibleConnection[]> {
+  if (viewerId !== subjectId) {
+    const visible = await getPool().query<{ visible: boolean }>(
+      `SELECT ${noBlockBetweenSql("$1::uuid", "$2::uuid")}
+              AND (${areFriendsSql("$1::uuid", "$2::uuid")}
+                   OR EXISTS (
+                     SELECT 1 FROM server_members mine
+                     JOIN server_members theirs
+                       ON theirs.server_id = mine.server_id
+                      AND theirs.user_id = $2
+                     WHERE mine.user_id = $1
+                   )) AS visible`,
+      [viewerId, subjectId],
+    );
+    if (!visible.rows[0]?.visible) {
+      return [];
+    }
+  }
+
+  return listVisibleConnections(subjectId, "shared");
 }
 
 export async function startConnection(
@@ -384,7 +417,7 @@ async function consumeState(
   return row;
 }
 
-async function upsertConnection(
+export async function upsertConnection(
   userId: string,
   provider: ConnectionProvider,
   identity: {
@@ -415,7 +448,12 @@ async function upsertConnection(
           display_name = EXCLUDED.display_name,
           avatar_url = EXCLUDED.avatar_url,
           profile_url = EXCLUDED.profile_url,
-          connected_at = NOW()
+          connected_at = NOW(),
+          visibility = CASE
+            WHEN user_connections.provider_user_id IS DISTINCT FROM EXCLUDED.provider_user_id
+            THEN EXCLUDED.visibility
+            ELSE user_connections.visibility
+          END
         RETURNING provider, provider_user_id, display_name, avatar_url, profile_url,
                   visibility, connected_at`,
       [

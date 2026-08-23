@@ -5,6 +5,7 @@ import {
   callbackParamsFromLocation,
   hasStashedConnectionCallback,
   stashConnectionCallbackFromWindow,
+  stashConnectionErrorFromWindow,
   takeConnectionCallbackFromWindow,
 } from "@/lib/connection-callback";
 import { connectionProviderFromPath } from "@pqp/shared";
@@ -42,18 +43,21 @@ export function ConnectionCallbackOverlay({
     inflight !== null;
 
   useEffect(() => {
+    const completeFailed = t("settings.connections.completeFailed");
     if (!inflight) {
       inflight = (async () => {
         const pending =
           takeConnectionCallbackFromWindow() ??
           fallbackFromLocation(location.pathname, location.search);
         if (!pending) {
+          stashConnectionErrorFromWindow(completeFailed);
           return "error" as const;
         }
         try {
           await completeConnection(pending.provider, pending.params);
           return "ok" as const;
         } catch {
+          stashConnectionErrorFromWindow(completeFailed);
           return "error" as const;
         }
       })();

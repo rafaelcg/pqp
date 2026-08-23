@@ -5,7 +5,8 @@ second login. Clerk stays how people sign in.
 
 Off per provider until that provider's credentials are set on the API. Same
 contract as GIF search and attachments: `GET /api/connections/config` tells
-the client which buttons to enable.
+the client which buttons to enable. pqp.gg is shipping Steam first. Twitch
+and Battle.net stay off until configured; Settings shows them as coming soon.
 
 ## Why this shape
 
@@ -60,17 +61,29 @@ used here.
 | Value | Where it appears |
 |---|---|
 | `hidden` | Settings only |
-| `shared` (default) | In-app profile card |
+| `shared` (default) | In-app profile card, for friends and people who share a server |
 | `public` | Also `pqp.gg/@handle` |
+
+A stranger who is not a friend and does not share a server gets an empty list
+on the in-app card, not a 403. The public page still uses `public` only.
 
 A Steam profile URL is a stable identifier. The public page does not get one
 unless the person opts in.
+
+Connecting the same account again keeps the visibility already chosen.
+Connecting a different account on that provider resets it to `shared`.
+
+Steam OpenID: `openid.signed` must include `claimed_id`, `return_to`,
+`op_endpoint`, and `response_nonce`. An assertion that omits `claimed_id` is
+refused before we POST it back to Steam.
 
 ## What is stored
 
 `user_connections`: provider, provider user id, display name, optional
 avatar/profile URL, visibility, connected-at. Cascade-deleted with the
 account. Included in `GET /api/me/export`.
+
+We do not keep access tokens. Linking is not account access.
 
 One Steam (or Battle.net, or Twitch) account per pqp user, and the reverse:
 one pqp user per SteamID.

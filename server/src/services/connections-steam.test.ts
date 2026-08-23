@@ -101,6 +101,21 @@ describe("verifySteamAssertion", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it("refuses an assertion whose signed list omits claimed_id", async () => {
+    vi.stubGlobal("fetch", vi.fn());
+    await expect(
+      verifySteamAssertion(
+        {
+          ...validParams,
+          "openid.signed":
+            "signed,op_endpoint,identity,return_to,response_nonce,assoc_handle",
+        },
+        "http://localhost:5173/app/connections/callback/steam?state=abc",
+      ),
+    ).rejects.toBeInstanceOf(SteamAuthError);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("refuses is_valid:false", async () => {
     vi.stubGlobal(
       "fetch",

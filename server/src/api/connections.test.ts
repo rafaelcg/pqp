@@ -171,4 +171,29 @@ describeDb("game connections API", () => {
     expect(JSON.stringify(res.body)).not.toContain("HiddenSteam");
     expect(JSON.stringify(res.body)).not.toContain("76561198000000001");
   });
+
+  it("returns an empty list to a stranger, not the shared nick", async () => {
+    await getPool().query(
+      `INSERT INTO user_connections
+         (user_id, provider, provider_user_id, display_name, visibility)
+       VALUES ($1, 'steam', '76561198000000001', 'AliceSteam', 'shared')`,
+      [user.id],
+    );
+    const strangerRow = await upsertUser({
+      clerkId: "clerk_conn_stranger",
+      displayName: "Stranger",
+      avatarUrl: null,
+    });
+    const stranger: Actor = {
+      id: strangerRow.id,
+      clerk_id: strangerRow.clerk_id,
+    };
+    const res = await call<{
+      connections: Array<{ provider: string; displayName: string }>;
+    }>(stranger, "GET", `/api/users/${user.id}/connections`);
+    expect(res.status).toBe(200);
+    expect(res.body.connections).toEqual([]);
+    expect(JSON.stringify(res.body)).not.toContain("AliceSteam");
+    expect(JSON.stringify(res.body)).not.toContain("76561198000000001");
+  });
 });

@@ -113,4 +113,7 @@ review-gated. A Connect button that 503s forever is worse than not offering it.
 - Off per provider until that provider's env is set (`GET /api/connections/config`).
 - The SPA keeps the session: Connect → provider → `/app/connections/callback/:provider` → POST
   with the existing Bearer token.
+- Unconfigured providers are coming soon in Settings, not a disabled Connect button.
+- The in-app card uses the same audience as depoimentos (friends or a shared server).
+- Reconnect of the same provider account keeps visibility; a different account resets it.
 - See [`CONNECTIONS.md`](./CONNECTIONS.md).

@@ -281,8 +281,8 @@ import {
   connectionsConfig,
   disconnectConnection,
   isProviderEnabled,
+  listCardConnections,
   listOwnConnections,
-  listVisibleConnections,
   parseConnectionProvider,
   startConnection,
   updateConnectionVisibility,
@@ -1102,8 +1102,8 @@ router.delete(
   },
 );
 
-router.get("/api/users/:userId/connections", async (_ctx, { userId }) => ({
-  connections: await listVisibleConnections(userId!, "shared"),
+router.get("/api/users/:userId/connections", async ({ user }, { userId }) => ({
+  connections: await listCardConnections(user.id, userId!),
 }));
 
 // --------------------------------------------- LGPD art. 18 (own account)

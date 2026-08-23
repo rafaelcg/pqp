@@ -12,11 +12,16 @@ const { getPool, initDb, closePool } = await import("../db.js");
 const { upsertUser } = await import("./users.js");
 const {
   disconnectConnection,
+  listCardConnections,
   listOwnConnections,
   listVisibleConnections,
   resolveRedirectOrigin,
   updateConnectionVisibility,
+  upsertConnection,
 } = await import("./connections.js");
+const { sendFriendRequest, acceptFriendRequest } = await import("./friends.js");
+const { createServer } = await import("./servers.js");
+const { blockUser } = await import("./blocks.js");
 
 describe("resolveRedirectOrigin", () => {
   const previousCors = process.env.CORS_ALLOWED_ORIGINS;
@@ -133,5 +138,88 @@ describeDb("user_connections", () => {
     expect(updated.visibility).toBe("public");
     await disconnectConnection(alice, "twitch");
     expect(await listOwnConnections(alice.id)).toEqual([]);
+  });
+
+  it("shows shared links to self, friends, and a shared server, not to a stranger", async () => {
+    await upsertConnection(alice.id, "steam", {
+      providerUserId: "76561198000000001",
+      displayName: "AliceSteam",
+      avatarUrl: null,
+      profileUrl: null,
+    });
+    const carol = await upsertUser({
+      clerkId: "clerk_conn_carol",
+      displayName: "Carol",
+      avatarUrl: null,
+    });
+    const dave = await upsertUser({
+      clerkId: "clerk_conn_dave",
+      displayName: "Dave",
+      avatarUrl: null,
+    });
+
+    expect(await listCardConnections(alice.id, alice.id)).toHaveLength(1);
+    expect(await listCardConnections(bob.id, alice.id)).toEqual([]);
+    expect(await listCardConnections(dave.id, alice.id)).toEqual([]);
+
+    await sendFriendRequest(alice.id, bob.id);
+    await acceptFriendRequest(bob.id, alice.id);
+    expect(await listCardConnections(bob.id, alice.id)).toHaveLength(1);
+
+    const { server } = await createServer("sala", alice.id);
+    await getPool().query(
+      `INSERT INTO server_members (server_id, user_id, role) VALUES ($1, $2, 'member')`,
+      [server.id, carol.id],
+    );
+    expect(await listCardConnections(carol.id, alice.id)).toHaveLength(1);
+    expect(await listCardConnections(dave.id, alice.id)).toEqual([]);
+  });
+
+  it("hides the card from a blocked pair even when they share a server", async () => {
+    await upsertConnection(alice.id, "steam", {
+      providerUserId: "76561198000000001",
+      displayName: "AliceSteam",
+      avatarUrl: null,
+      profileUrl: null,
+    });
+    const carol = await upsertUser({
+      clerkId: "clerk_conn_carol_block",
+      displayName: "Carol",
+      avatarUrl: null,
+    });
+    const { server } = await createServer("sala", alice.id);
+    await getPool().query(
+      `INSERT INTO server_members (server_id, user_id, role) VALUES ($1, $2, 'member')`,
+      [server.id, carol.id],
+    );
+    await blockUser(alice.id, carol.id);
+    expect(await listCardConnections(carol.id, alice.id)).toEqual([]);
+  });
+
+  it("keeps visibility when the same account reconnects, and resets when a different one does", async () => {
+    await upsertConnection(alice.id, "steam", {
+      providerUserId: "76561198000000001",
+      displayName: "AliceSteam",
+      avatarUrl: null,
+      profileUrl: null,
+    });
+    await updateConnectionVisibility(alice, "steam", "public");
+    const same = await upsertConnection(alice.id, "steam", {
+      providerUserId: "76561198000000001",
+      displayName: "AliceSteam2",
+      avatarUrl: null,
+      profileUrl: null,
+    });
+    expect(same.visibility).toBe("public");
+    expect(same.displayName).toBe("AliceSteam2");
+
+    const switched = await upsertConnection(alice.id, "steam", {
+      providerUserId: "76561198000000002",
+      displayName: "OtherSteam",
+      avatarUrl: null,
+      profileUrl: null,
+    });
+    expect(switched.visibility).toBe("shared");
+    expect(switched.providerUserId).toBe("76561198000000002");
   });
 });

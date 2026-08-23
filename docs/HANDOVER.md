@@ -631,7 +631,15 @@ Discord-style Connections, not a second login. Clerk stays how people sign in. F
   identity snapshot. Refreshing a nick is Connect again.
 - **Visibility** defaults to `shared` (in-app profile card). `public` is opt-in on `pqp.gg/@handle`.
   `hidden` is Settings only. One Steam (or Battle.net, or Twitch) per pqp user, and the reverse.
-- **Characters cannot connect.** Included in `GET /api/me/export`. iOS Settings UI is not built.
+- **In-app card audience** matches approved depoimentos: self, friends, or a shared server, and
+  never a blocked pair. A stranger gets `[]`, not 403. The public page still filters to `public`.
+- **Unconfigured providers** show as coming soon in Settings, with no Connect button.
+- **Reconnect** of the same provider account keeps visibility. A different account on that slot
+  resets it to `shared`. Steam OpenID `openid.signed` must include `claimed_id`.
+- **Callback errors** are stashed in `sessionStorage` (`pqp.connection.error`) and shown on
+  Settings → Connections after the overlay returns.
+- **Characters cannot connect.** Included in `GET /api/me/export` (with `avatarUrl`). iOS Settings
+  UI is not built. Electron only allows Steam OpenID and Battle.net login paths in-window.
 
 ## Verification status
 

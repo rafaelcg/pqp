@@ -30,7 +30,9 @@ describe("isAuthUrl", () => {
       "https://discord.com/oauth2/authorize",
       "https://login.microsoftonline.com/common/oauth2/authorize",
       "https://steamcommunity.com/openid/login",
+      "https://login.steampowered.com/openid/login",
       "https://oauth.battle.net/authorize",
+      "https://account.battle.net/",
       "https://eu.battle.net/login",
       "https://id.twitch.tv/oauth2/authorize",
       "https://passport.twitch.tv/authorize",
@@ -84,5 +86,16 @@ describe("isAuthUrl", () => {
 
   it("does not derive Clerk hosts when there is no app origin", () => {
     assert.equal(isAuthUrl("https://clerk.pqp.gg/v1/client", null), false);
+  });
+
+  it("refuses Steam profile pages and Battle.net destinations that are not login", () => {
+    for (const url of [
+      "https://steamcommunity.com/profiles/76561198000000001",
+      "https://steamcommunity.com/id/gaben",
+      "https://eu.battle.net/wow",
+      "https://www.battle.net/support",
+    ]) {
+      assert.equal(isAuthUrl(url, APP), false, url);
+    }
   });
 });

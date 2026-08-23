@@ -40,9 +40,11 @@ const AUTH_HOST_SUFFIXES = [
   // Game account linking (Settings → Connections). Same reason as Clerk
   // social: the hop has to finish in-window or the session lands in the
   // system browser and the callback never returns to the shell.
-  "steamcommunity.com",
+  // Steam profile pages and the rest of Battle.net are not on this list;
+  // isAuthUrl allows only the OpenID / login paths for those hosts.
+  "login.steampowered.com",
   "oauth.battle.net",
-  "battle.net",
+  "account.battle.net",
   "id.twitch.tv",
   "passport.twitch.tv",
 ];
@@ -68,19 +70,47 @@ function hostMatches(host, suffix) {
  * @param {string | null} appOrigin
  * @returns {boolean}
  */
+function decodedPathname(pathname) {
+  try {
+    return decodeURIComponent(pathname).toLowerCase();
+  } catch {
+    return pathname.toLowerCase();
+  }
+}
+
+function isSteamOpenIdPath(pathname) {
+  return (
+    pathname === "/openid" ||
+    pathname === "/openid/login" ||
+    pathname.startsWith("/openid/")
+  );
+}
+
+function isBattleNetLoginPath(pathname) {
+  return (
+    pathname === "/login" ||
+    pathname.startsWith("/login/") ||
+    pathname.startsWith("/oauth/")
+  );
+}
+
 function isAuthUrl(url, appOrigin) {
   let host;
   let protocol;
+  let pathname;
   try {
     const parsed = new URL(url);
     host = parsed.hostname.toLowerCase();
     protocol = parsed.protocol;
+    pathname = parsed.pathname;
   } catch {
     return false;
   }
   if (protocol !== "https:") {
     return false;
   }
+
+  const path = decodedPathname(pathname);
 
   if (appOrigin) {
     try {
@@ -94,7 +124,22 @@ function isAuthUrl(url, appOrigin) {
     }
   }
 
-  return AUTH_HOST_SUFFIXES.some((suffix) => hostMatches(host, suffix));
+  if (AUTH_HOST_SUFFIXES.some((suffix) => hostMatches(host, suffix))) {
+    return true;
+  }
+
+  // Steam OpenID only. A profile page must not render in-window.
+  if (host === "steamcommunity.com" || host.endsWith(".steamcommunity.com")) {
+    return isSteamOpenIdPath(path);
+  }
+
+  // Regional Battle.net login. oauth and account hosts are already on
+  // AUTH_HOST_SUFFIXES and do not need a path gate.
+  if (host === "battle.net" || host.endsWith(".battle.net")) {
+    return isBattleNetLoginPath(path);
+  }
+
+  return false;
 }
 
 /**

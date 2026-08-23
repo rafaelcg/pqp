@@ -2,7 +2,9 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   peekConnectionCallback,
   stashConnectionCallback,
+  stashConnectionError,
   takeConnectionCallback,
+  takeConnectionError,
 } from "./connection-callback";
 
 function memoryStorage(): Storage & { map: Map<string, string> } {
@@ -70,5 +72,37 @@ describe("connection callback stash", () => {
       hostile,
     );
     expect(takeConnectionCallback(hostile)).toBeNull();
+  });
+});
+
+describe("connection complete error stash", () => {
+  let storage: ReturnType<typeof memoryStorage>;
+
+  beforeEach(() => {
+    storage = memoryStorage();
+  });
+
+  it("keeps the message across a later URL rewrite, then consumes it", () => {
+    stashConnectionError("Could not finish that connection.", storage);
+    expect(takeConnectionError(storage)).toBe(
+      "Could not finish that connection.",
+    );
+    expect(takeConnectionError(storage)).toBeNull();
+  });
+
+  it("survives storage throwing", () => {
+    const hostile = {
+      getItem() {
+        throw new Error("denied");
+      },
+      setItem() {
+        throw new Error("denied");
+      },
+      removeItem() {
+        throw new Error("denied");
+      },
+    };
+    stashConnectionError("Could not finish that connection.", hostile);
+    expect(takeConnectionError(hostile)).toBeNull();
   });
 });

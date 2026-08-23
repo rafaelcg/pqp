@@ -16,6 +16,7 @@ import {
   startConnection,
   updateConnectionVisibility,
 } from "@/lib/api";
+import { takeConnectionErrorFromWindow } from "@/lib/connection-callback";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 
 const PROVIDER_NAME: Record<ConnectionProvider, MessageKey> = {
@@ -44,6 +45,13 @@ export function ConnectionsSection() {
     ]);
     setConfig(nextConfig);
     setConnections(mine.connections);
+  }, []);
+
+  useEffect(() => {
+    const stashed = takeConnectionErrorFromWindow();
+    if (stashed) {
+      setError(stashed);
+    }
   }, []);
 
   useEffect(() => {
@@ -142,6 +150,9 @@ export function ConnectionsSection() {
       <p className="text-sm text-paper-muted">
         {t("settings.connections.intro")}
       </p>
+      <p className="text-sm text-paper-muted">
+        {t("settings.connections.accessNote")}
+      </p>
       {!anyEnabled && config && (
         <p className="text-sm text-paper-muted">
           {t("settings.connections.unconfigured")}
@@ -170,7 +181,7 @@ export function ConnectionsSection() {
                     <p className="mt-0.5 text-xs text-paper-muted">
                       {enabled
                         ? t("settings.connections.notLinked")
-                        : t("settings.connections.providerOff")}
+                        : t("settings.connections.comingSoon")}
                     </p>
                   )}
                 </div>
@@ -184,16 +195,16 @@ export function ConnectionsSection() {
                   >
                     {t("settings.connections.disconnect")}
                   </Button>
-                ) : (
+                ) : enabled ? (
                   <Button
                     type="button"
                     size="sm"
-                    disabled={!enabled || busy === provider}
+                    disabled={busy === provider}
                     onClick={() => void connect(provider)}
                   >
                     {t("settings.connections.connect")}
                   </Button>
-                )}
+                ) : null}
               </div>
               {linked && (
                 <label className="mt-3 flex flex-col gap-1 text-xs text-paper-muted">

@@ -17,6 +17,7 @@ import {
  */
 
 const STORAGE_KEY = "pqp.connection.callback";
+const ERROR_KEY = "pqp.connection.error";
 
 type WritableStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 
@@ -34,12 +35,15 @@ function paramsFromSearch(search: string): Record<string, string> {
   return params;
 }
 
-function readStorage(storage: WritableStorage | null): string | null {
+function readStorage(
+  storage: WritableStorage | null,
+  key: string,
+): string | null {
   if (!storage) {
     return null;
   }
   try {
-    return storage.getItem(STORAGE_KEY);
+    return storage.getItem(key);
   } catch {
     return null;
   }
@@ -69,13 +73,13 @@ export function stashConnectionCallback(
 export function peekConnectionCallback(
   storage: WritableStorage | null,
 ): boolean {
-  return readStorage(storage) !== null;
+  return readStorage(storage, STORAGE_KEY) !== null;
 }
 
 export function takeConnectionCallback(
   storage: WritableStorage | null,
 ): StashedConnectionCallback | null {
-  const raw = readStorage(storage);
+  const raw = readStorage(storage, STORAGE_KEY);
   if (!raw) {
     return null;
   }
@@ -137,4 +141,49 @@ export function takeConnectionCallbackFromWindow(): StashedConnectionCallback | 
 
 export function callbackParamsFromLocation(search: string): Record<string, string> {
   return paramsFromSearch(search);
+}
+
+export function stashConnectionError(
+  message: string,
+  storage: WritableStorage | null,
+): void {
+  if (!storage) {
+    return;
+  }
+  try {
+    storage.setItem(ERROR_KEY, message);
+  } catch {
+    // Private mode, quota.
+  }
+}
+
+export function takeConnectionError(
+  storage: WritableStorage | null,
+): string | null {
+  const raw = readStorage(storage, ERROR_KEY);
+  if (!raw) {
+    return null;
+  }
+  try {
+    storage?.removeItem(ERROR_KEY);
+  } catch {
+    // Still return what we read.
+  }
+  return raw;
+}
+
+export function stashConnectionErrorFromWindow(message: string): void {
+  try {
+    stashConnectionError(message, sessionStorage);
+  } catch {
+    // sessionStorage missing or throwing.
+  }
+}
+
+export function takeConnectionErrorFromWindow(): string | null {
+  try {
+    return takeConnectionError(sessionStorage);
+  } catch {
+    return null;
+  }
 }

@@ -177,6 +177,7 @@ export interface PersonalExportConnection {
   provider: string;
   providerUserId: string;
   displayName: string;
+  avatarUrl: string | null;
   profileUrl: string | null;
   visibility: string;
   connectedAt: string;
@@ -235,12 +236,13 @@ async function exportConnections(
     provider: string;
     provider_user_id: string;
     display_name: string;
+    avatar_url: string | null;
     profile_url: string | null;
     visibility: string;
     connected_at: Date;
   }>(
-    `SELECT provider, provider_user_id, display_name, profile_url, visibility,
-            connected_at
+    `SELECT provider, provider_user_id, display_name, avatar_url, profile_url,
+            visibility, connected_at
        FROM user_connections
       WHERE user_id = $1
       ORDER BY connected_at ASC`,
@@ -250,6 +252,7 @@ async function exportConnections(
     provider: row.provider,
     providerUserId: row.provider_user_id,
     displayName: row.display_name,
+    avatarUrl: row.avatar_url,
     profileUrl: row.profile_url,
     visibility: row.visibility,
     connectedAt: row.connected_at.toISOString(),
