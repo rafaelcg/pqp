@@ -1,0 +1,114 @@
+# Fly.io configuration for the QG support bot.
+#
+# A THIRD TINY APP, alongside `pqp-api` and `pqp-ambient`. The reasoning is the
+# same one written at the top of `tools/ambient/fly.toml`, and it applies here
+# with one addition:
+#
+#   1. The API machine is single-by-design; a process group on it would restart
+#      chat for everybody every time somebody edits a fact.
+#   2. Blast radius. This holds a WebSocket and calls an external model API. If
+#      it wedges or gets rate-limited, support answers stop and the product does
+#      not.
+#   3. ITS OWN KILL SWITCH, reachable without touching either of the others:
+#      `fly secrets set SUPPORT_BOT_KILL_SWITCH=1 -a pqp-support`. "The support
+#      answers are wrong, take it down" and "the personas are misbehaving" are
+#      different problems that arrive on different days, and neither should
+#      require taking down the other. `AMBIENT_KILL_SWITCH` still stops this too,
+#      deliberately, so there is one switch that means "all automation off".
+#
+#   fly deploy --config tools/support-bot/fly.toml --dockerfile tools/support-bot/Dockerfile --ha=false
+#
+# ONE MACHINE, ALWAYS. Two bots on the same channel would answer every mention
+# twice, double every rate cap, and race on the budget ledger. None of that
+# raises an error; it just makes the room read as broken.
+# `fly scale count 1 -a pqp-support`, and check it after every deploy.
+
+app = "pqp-support"
+
+# Same region as the API. Every answer is a WebSocket round trip to `pqp-api`.
+primary_region = "gru"
+
+# SIGTERM engages the in-process kill switch rather than killing the process
+# where it stands, so a restart finishes the line being posted instead of
+# stopping halfway through delivering an answer.
+kill_signal = "SIGTERM"
+kill_timeout = 15
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  # Where it answers. The WebSocket URL is derived from this, so there is one
+  # variable to point at an environment rather than two to disagree.
+  PQP_API_URL = "https://api.pqp.gg"
+
+  # Mounted below, from a secret.
+  SUPPORT_TOKENS_FILE = "/secrets/bot.json"
+
+  # The volume. The budget ledger has to survive a restart or it is not a
+  # ceiling; the escalation list is the maintenance signal that says what to add
+  # to facts.md next.
+  SUPPORT_STATE_DIR = "/data"
+
+  # Read from the image. The fact file is content, and content ships with the
+  # code that screens it: the measurement grounding in `screen.js` is harvested
+  # from this exact file, so a fact file and a screen from different deploys
+  # would disagree about which numbers are allowed.
+  SUPPORT_FACTS = "/app/tools/support-bot/facts.md"
+
+  # Only #ajuda. Not #caca-bugs (a bug report should reach a human, not be
+  # triaged by a model), not #papo-reto (a bot in the off-topic channel is
+  # ambient chatter), not #avisos.
+  SUPPORT_CHANNELS = "ajuda"
+  SUPPORT_SERVER = "QG do pqp"
+
+  # Who gets @-mentioned when it does not know.
+  SUPPORT_OWNER_HANDLE = "rafa"
+
+  # Haiku 4.5. Correctness here comes from the fact file, the NAO_SEI sentinel
+  # and the deterministic screen, not from model strength. Measured at $0.0025
+  # an answer.
+  SUPPORT_MODEL = "claude-haiku-4-5"
+
+# The character token, as a file rather than an env var.
+#
+# `fly secrets set SUPPORT_CHARACTER_TOKEN="$(base64 < secrets/bot.json)"` and
+# Fly writes the decoded bytes here at boot. A file because that is what
+# `provision.mjs` writes and what `identity.js` reads, and because a secret in
+# the environment turns up in `fly ssh console`'s `env` and in any crash dump
+# that prints it.
+[[files]]
+  guest_path = "/secrets/bot.json"
+  secret_name = "SUPPORT_CHARACTER_TOKEN"
+
+# ALWAYS COME BACK.
+#
+# Not the default, and the default is actively wrong for this service. The
+# SIGTERM handler engages the kill switch and exits 0 on purpose, so that a
+# restart finishes the line being posted instead of stopping halfway through
+# delivering an answer. But a clean exit is exactly what Fly reads as "the job
+# finished" — so under the default policy the machine stops and STAYS stopped.
+# That is not hypothetical: it happened within three minutes of the first
+# deploy, silently, with the bot simply absent from #ajuda and nothing anywhere
+# saying so. A support bot that is quietly missing is worse than one that is
+# obviously broken, because nobody goes looking.
+#
+# `always` makes the graceful shutdown mean "restart cleanly" rather than
+# "retire". The kill switch is still the real way to stop it, and it works by
+# refusing to act rather than by exiting, so it survives a restart.
+[[restart]]
+  policy = "always"
+
+[mounts]
+  source = "support_state"
+  destination = "/data"
+
+# NO [[services]] BLOCK, DELIBERATELY. This process listens on nothing; it is a
+# WebSocket *client*. A public port would mean a health-checked empty listener
+# on the internet, and would let Fly's autostop machinery stop the machine
+# whenever nobody connects to it, which is every second of its life.
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
+  processes = ["app"]

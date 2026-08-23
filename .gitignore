@@ -1,5 +1,8 @@
 # Dependencies
-node_modules/
+# No trailing slash: `node_modules/` matches a directory only, and a symlinked
+# node_modules is a FILE to git, so it slips past and gets committed as a
+# 120000 entry pointing at somebody's home directory. Ask me how I know.
+node_modules
 
 # Build outputs
 dist/

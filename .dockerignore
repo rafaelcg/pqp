@@ -1,6 +1,21 @@
 .git
 .github
 **/node_modules
+
+# NEVER bake a credential into an image.
+#
+# Both `tools/ambient` and `tools/support-bot` keep their minted character
+# tokens in `secrets/`, and both Dockerfiles `COPY tools/<x>` wholesale from the
+# repo root, so without this line the plaintext tokens travel inside every image
+# built from a laptop that has provisioned. Neither service reads them from
+# there anyway: Fly writes them to `/secrets/...` at boot via a `[[files]]`
+# block, which is the whole reason that block exists.
+**/secrets
+
+# The support bot's ledger and audit log come from its volume, never the image.
+# (`tools/ambient/state` is deliberately NOT excluded: `servers.json` is a
+# matched pair with `personas.yaml` and travels in the image on purpose.)
+tools/support-bot/state
 **/dist
 **/release
 *.log

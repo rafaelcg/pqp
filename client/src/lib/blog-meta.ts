@@ -58,12 +58,12 @@ export function blogTargetFromMetaPath(pathname: string): BlogTarget | null {
 
 const INDEX_COPY: Record<BlogLocale, { title: string; description: string }> = {
   "pt-BR": {
-    title: "Notas de versão — pqp",
+    title: "Notas de versão · pqp",
     description:
       "O que mudou no pqp e quando. Cada nota conta o que passou a funcionar, o que ainda não funciona e por quê.",
   },
   en: {
-    title: "Release notes — pqp",
+    title: "Release notes · pqp",
     description:
       "What changed in pqp and when. Each note says what started working, what still does not, and why.",
   },
@@ -118,7 +118,7 @@ export function renderBlogHead(
     ? `${CANONICAL_ORIGIN}/blog/${target.post.slug}`
     : `${CANONICAL_ORIGIN}/blog`;
   const title = isPost
-    ? `${target.post.title[locale]} — pqp`
+    ? `${target.post.title[locale]} · pqp`
     : INDEX_COPY[locale].title;
   const description = isPost
     ? target.post.summary[locale]

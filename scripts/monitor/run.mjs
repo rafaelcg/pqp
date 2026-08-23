@@ -23,6 +23,7 @@
 import { reconcile } from "./alert.mjs";
 import { runAvailabilityChecks } from "./availability.mjs";
 import { LIMITS_NOT_AUTOMATED, runLimitChecks } from "./limits.mjs";
+import { SOCIAL_NOT_AUTOMATED, runSocialChecks } from "./social.mjs";
 
 const GROUPS = {
   availability: {
@@ -37,6 +38,14 @@ const GROUPS = {
     // Daily checks. A quota does not become more urgent by being restated, so
     // this only speaks up once every three days.
     reminderHours: Number(process.env.MONITOR_REMINDER_HOURS ?? 72),
+  },
+  social: {
+    run: runSocialChecks,
+    // Daily. Two of these three are "go and read something", which is a task
+    // for a person with a spare ten minutes, not an interrupt. The third
+    // (`published-drift`) is a real fault when it fires, and 24h of a wrong
+    // published claim is bad but not worse than being trained to ignore this.
+    reminderHours: Number(process.env.MONITOR_REMINDER_HOURS ?? 48),
   },
 };
 
@@ -74,12 +83,18 @@ async function main() {
   } else {
     console.log(`pqp monitor — ${group} — ${new Date().toISOString()}`);
     console.log(report(results));
-    if (group === "limits") {
-      // Printed every single run, on purpose. A gap that only lives in a
-      // markdown file is a gap that gets forgotten; this one is in front of
-      // whoever opens the run log.
+    // Printed every single run, on purpose. A gap that only lives in a
+    // markdown file is a gap that gets forgotten; this one is in front of
+    // whoever opens the run log.
+    const gaps =
+      group === "limits"
+        ? LIMITS_NOT_AUTOMATED
+        : group === "social"
+          ? SOCIAL_NOT_AUTOMATED
+          : null;
+    if (gaps) {
       console.log("\nNOT AUTOMATED — check these by hand:");
-      for (const gap of LIMITS_NOT_AUTOMATED) {
+      for (const gap of gaps) {
         console.log(`  - ${gap.what} (${gap.limit}) — ${gap.cadence}`);
       }
     }
