@@ -433,11 +433,26 @@ async function main() {
     lastAnswerAt: 0,
     allowedChannelIds: null,
     bot: { userId: null, username: null },
-    /** Fixture answers for `--canned`; the sentinel unless the facts obviously cover it. */
+    /**
+     * Fixture answers for `--canned`.
+     *
+     * The UNKNOWN list is checked first and mirrors the `## não sei` section of
+     * facts.md, which matters more than it looks: `--canned` is the demo path,
+     * and the first version matched "tela" before anything else, so "dá pra
+     * transmitir a tela do iphone?" confidently returned the screen-share
+     * answer. That is precisely the question the fact file marks as unresolved,
+     * so the demo was showing the exact failure the design exists to prevent.
+     * A fixture that lies about the shape of the behaviour is worse than no
+     * fixture.
+     */
     cannedAnswer: (question) =>
-      /tela|qualidade|resolu|som|[áa]udio|voz|desktop|c[óo]digo|aberto/i.test(question)
-        ? "a captura é 1080p30 e não tem ajuste manual de qualidade. quanto menos gente assistindo, mais nítido fica."
-        : "NAO_SEI",
+      /iphone|transmitir|quando|quantas pessoas|pre[çc]o|plano pago|banid|denunc|minha conta/i.test(
+        question,
+      )
+        ? "NAO_SEI"
+        : /tela|qualidade|resolu|som|[áa]udio|voz|desktop|c[óo]digo|aberto/i.test(question)
+          ? "a captura é 1080p30 e não tem ajuste manual de qualidade. quanto menos gente assistindo, mais nítido fica."
+          : "NAO_SEI",
   };
   runtime.escalate = makeEscalator(runtime);
 
