@@ -627,6 +627,7 @@
   "voice.error.micBlocked": "Microphone access was blocked. Allow it in your browser settings, then rejoin.",
   "voice.error.shareFailed": "Failed to start screen share",
   "voice.error.shareBlocked": "Screen share was blocked or cancelled.",
+  "voice.error.shareNeedsAppUpdate": "Update the pqp desktop app to share your screen.",
   "voice.error.noVideoTrack": "No video track from screen capture",
   "voice.error.transportUnsupported": "This call runs on a voice server this app build cannot use, so you have not joined it. Nobody in the call can hear you.",
   "voice.error.transportUnreachable": "Could not reach the voice server, so you have not joined this call. Check your network and try again.",

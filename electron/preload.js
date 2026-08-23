@@ -10,6 +10,24 @@ contextBridge.exposeInMainWorld("pqpDesktop", {
   /** True when the shell uses a custom in-app title / drag region (macOS hiddenInset). */
   hasCustomTitleBar: process.platform === "darwin",
 
+  /**
+   * This shell answers `setDisplayMediaRequestHandler` (see main.js).
+   *
+   * A VERSION SIGNAL, not a feature toggle — nothing reads it to decide what
+   * to do, only to explain what went wrong. `getDisplayMedia` exists in every
+   * Electron renderer, so the client's capability probe passes and the share
+   * button is shown; without the handler in the main process the call then
+   * rejects with `NotSupportedError`, which the client used to report as
+   * "screen sharing isn't supported in the app". That is false, and it is the
+   * exact wording a user hit on 23 Aug 2026 while running v0.1.0.
+   *
+   * Shells built before the handler landed simply do not define this key, so
+   * `undefined` means "too old" and the client can say "update the app"
+   * instead of "this is impossible". Do not remove it once the last old build
+   * is gone: absence is the whole signal.
+   */
+  canShareScreen: true,
+
   /** Subscribe to Cmd/Ctrl+Shift+M mute toggle from the app menu. */
   onToggleMute(callback) {
     if (typeof callback !== "function") {

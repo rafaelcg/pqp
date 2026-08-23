@@ -6,6 +6,12 @@ export interface PqpDesktop {
   /** In-app path under `/app` (main process maps `pqp://` → `/app/...`). */
   onDeepLink(cb: (appPath: string) => void): () => void;
   getPendingDeepLink(): Promise<string | null>;
+  /**
+   * Present only in shells that answer display-media requests. Older shells
+   * predate the handler, so absence means "too old to share a screen" rather
+   * than "unknown" — see `desktopPredatesScreenShare`.
+   */
+  canShareScreen?: true;
   /** Older shells predate theming, so this may be absent. */
   setTheme?(theme: "dark" | "light"): void;
   /** Persist the UI locale in the main process and rebuild the app menu. */
@@ -41,6 +47,32 @@ export function isDesktopApp(): boolean {
 /** i18next `context` for permission copy that must not say "browser" in Electron. */
 export function desktopContext(): { context: "desktop" } | undefined {
   return isDesktopApp() ? { context: "desktop" } : undefined;
+}
+
+/**
+ * True in a desktop shell too old to capture a screen.
+ *
+ * WHY ABSENCE IS THE TEST. The shell gained
+ * `setDisplayMediaRequestHandler` in 92ab7f7, which never reached a tagged
+ * release — so every installed build was one that Chromium happily gave a
+ * `getDisplayMedia` to and then had no embedder to answer it. The rejection
+ * looks identical to a browser that cannot capture at all, and the client
+ * said so, which was wrong and unactionable: the user's app *can* do this,
+ * theirs is just old.
+ *
+ * The shell loads the live web client, so a client deployed today runs inside
+ * a shell built weeks ago. Feature-detecting the shell is therefore the only
+ * honest way to tell those two failures apart, and a missing key is a
+ * perfectly good detector: old shells cannot have opted in to a flag that did
+ * not exist when they were built.
+ *
+ * False in a browser. A browser that cannot share is genuinely unsupported and
+ * already has its own wording; telling somebody on Firefox to update a desktop
+ * app they do not have would be worse than the bug this replaces.
+ */
+export function desktopPredatesScreenShare(): boolean {
+  const desktop = getDesktop();
+  return desktop !== undefined && desktop.canShareScreen !== true;
 }
 
 /**

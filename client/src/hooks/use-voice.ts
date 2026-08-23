@@ -10,7 +10,7 @@ import {
   screenShareUnavailableMessage,
   supportsScreenShare,
 } from "@/components/voice/capabilities";
-import { desktopContext } from "@/lib/desktop";
+import { desktopContext, desktopPredatesScreenShare } from "@/lib/desktop";
 import { translateMessage, type MessageKey } from "@/lib/i18n";
 import {
   buildAudioConstraints,
@@ -260,6 +260,15 @@ function screenShareErrorMessage(err: unknown): string {
     return translateMessage("voice.error.shareFailed");
   }
   if (err.name === "NotSupportedError" || err instanceof TypeError) {
+    // An out-of-date desktop shell lands here too, and it is NOT a platform
+    // limit — Chromium hands the renderer a `getDisplayMedia`, then rejects
+    // because the shell has no handler to answer with a source. Same error
+    // name, opposite meaning: the browser cannot, the old app merely has not
+    // been updated. Tell that user to update rather than that it is
+    // impossible, which is both false and something they cannot act on.
+    if (desktopPredatesScreenShare()) {
+      return translateMessage("voice.error.shareNeedsAppUpdate");
+    }
     // A browser without getDisplayMedia throws a TypeError from the call
     // itself. That is a platform limit, not a fault: say it plainly rather
     // than surfacing "…is not a function" as an alarm.
