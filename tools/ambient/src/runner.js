@@ -511,10 +511,17 @@ async function attempt(runtime, args, replyTo) {
 function screenHumanReply(runtime, message, now) {
   const { config, rateCap } = runtime;
 
+  // No `disclosure` is passed, deliberately. The ambient cast's only speech is
+  // generated, so it has nothing to say to an identity probe — see the probe
+  // branch in `screenInbound`. The `verdict.disclose` check below is the
+  // defence against somebody later wiring a disclosure through to here: a
+  // `disclose` verdict means "post your fixed disclosure sentence", this runner
+  // has no such sentence, and the fallback must be silence rather than a
+  // generated scene about being a bot.
   const verdict = screenInbound(message.body, {
     banned: config.community.banned,
   });
-  if (!verdict.reply) {
+  if (!verdict.reply || verdict.disclose) {
     return { ok: false, reason: verdict.reason };
   }
 

@@ -1,0 +1,19 @@
+{
+  "name": "@pqp/support-bot",
+  "version": "0.0.1",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "description": "The QG support bot: answers product questions from a human-maintained fact file, and says it does not know otherwise.",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test \"test/*.test.js\"",
+    "start": "node src/bot.js --watch",
+    "ask": "node src/bot.js --ask"
+  },
+  "optionalDependencies": {
+    "@anthropic-ai/sdk": "^0.70.0"
+  }
+}

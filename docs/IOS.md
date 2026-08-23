@@ -414,9 +414,14 @@ per-peer volume.
 Also done: **native push notifications** (APNs — see above) and invite links that
 open the app, by universal link or `pqp://`.
 
-Still only on web: **screen share** (needs a second video track through the
-existing mesh) and drag-to-reorder within a category (channels can be moved
+Still only on web: drag-to-reorder within a category (channels can be moved
 between categories, but not dragged into a position).
+
+> Screen share used to be on that list and was left there by mistake. It landed
+> the day after this file was written (`e6027ba`, "See and send screen shares on
+> iOS"), which updated the detailed section above without updating this summary,
+> so the document spent two weeks contradicting itself one screen apart. Both
+> directions work: see **Screen sharing** above for what is verified where.
 
 ## Not built yet
 

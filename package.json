@@ -20,7 +20,9 @@
     "clerk:doctor": "clerk doctor",
     "load:chat": "node scripts/chat-load.mjs",
     "ambient:test": "cd tools/ambient && npm test",
-    "ambient:scene": "cd tools/ambient && node src/runner.js --once --canned"
+    "ambient:scene": "cd tools/ambient && node src/runner.js --once --canned",
+    "support:test": "cd tools/support-bot && npm test",
+    "support:ask": "cd tools/support-bot && node src/bot.js --canned --dry-run --ask"
   },
   "devDependencies": {
     "@eslint/js": "^9.18.0",

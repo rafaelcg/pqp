@@ -30,19 +30,43 @@ const OFFPLATFORM_PATTERNS = [
 ];
 
 /**
- * A persona must not claim to be human, and must not out itself as software
- * unless disclosure says so — either one turns the character into a statement
- * about the product, which is a decision for the server description, not for a
- * line of improvised dialogue.
+ * Claiming to be a person. Forbidden to EVERY account, at every disclosure
+ * setting, forever — this is the floor the whole disclosure policy rests on.
+ *
+ * Kept apart from the software claims below because only one of the two is a
+ * lie. "Sou uma pessoa real" is false whoever says it; "sou um bot" is true
+ * whoever says it, and whether saying it is *allowed* is a product decision
+ * carried by `disclosure`. Folding them into one list, which is what this was
+ * until the support bot needed the second half, meant an account that discloses
+ * could only do so by switching off the rule that stops it lying.
+ *
+ * Exported because `tools/support-bot` screens its own output and must apply
+ * THIS rule rather than a copy of it. It deliberately does not reuse the rest of
+ * `screenLine`: that screen bans every URL, and a support bot whose whole job
+ * includes saying "github.com/rafaelcg/pqp" would fail it on a correct answer.
+ * The floor is shared; the room-specific rules are not.
  */
-const IDENTITY_PATTERNS = [
+export const HUMANITY_CLAIM_PATTERNS = [
   // `\b` is not usable as the closing guard here: `ô` and `ê` are not word
   // characters to a non-unicode regex, so `rob[ôo]\b` never matches "robô" —
   // the exact string this rule exists to catch. A negative lookahead for a
   // letter does the job for accented and unaccented spellings alike.
-  /\b(sou|somos)\s+(uma?\s+)?(ia|intelig[êe]ncia artificial|bot|rob[ôo]|chatbot|modelo de linguagem)(?![a-zà-ú])/i,
   /\bn[ãa]o\s+sou\s+(um\s+)?(rob[ôo]|bot|ia)(?![a-zà-ú])/i,
   /\bsou\s+(uma\s+)?pessoa\s+real(?![a-zà-ú])/i,
+];
+
+/**
+ * Outing itself as software. Forbidden UNLESS `disclosure` is `bot`.
+ *
+ * For an ambient persona this is a statement about the product made in the
+ * middle of improvised dialogue, which is a decision for the server description
+ * to make once rather than for a model to make per line. For an account whose
+ * name already ends in " [bot]" it is simply the truth restated, and forbidding
+ * it would force that account to dodge the question — which is the deception
+ * the rule exists to prevent, only pointed the other way.
+ */
+const SOFTWARE_CLAIM_PATTERNS = [
+  /\b(sou|somos)\s+(uma?\s+)?(ia|intelig[êe]ncia artificial|bot|rob[ôo]|chatbot|modelo de linguagem)(?![a-zà-ú])/i,
   /\bcomo\s+(uma?\s+)?(ia|assistente virtual)(?![a-zà-ú])/i,
 ];
 
@@ -104,10 +128,17 @@ const ADVICE_REQUEST_PATTERNS = [
  * asked to decline, and only one of the two still works when the model does
  * not. The fifth, hostility, exists because a reply is amplification.
  *
+ * `disclosure` is the account's own setting, not the room's, and it changes
+ * exactly one verdict: an identity probe. Default `undisclosed`, so every
+ * existing caller keeps the behaviour it had. See the probe branch below.
+ *
  * Pure. `now`, randomness and rate caps are the runner's problem — this
  * function answers only "is this message one to engage with".
  */
-export function screenInbound(body, { banned = [], minLength = 2 } = {}) {
+export function screenInbound(
+  body,
+  { banned = [], minLength = 2, disclosure = "undisclosed" } = {},
+) {
   const text = String(body ?? "").trim();
   if (text.length < minLength) {
     return { reply: false, reason: "too-short" };
@@ -126,6 +157,18 @@ export function screenInbound(body, { banned = [], minLength = 2 } = {}) {
   }
   for (const pattern of IDENTITY_PROBE_PATTERNS) {
     if (pattern.test(text)) {
+      if (disclosure === "bot") {
+        // The seam a disclosed bot goes through, and the reason it is not a
+        // weakening: the rule below is silence because the answer would have
+        // to be *generated*, and there is no sentence a persona can improvise
+        // here that is not either a lie or an unplanned product announcement.
+        // An account that already carries " [bot]" in its name has a third
+        // option the personas do not: a fixed sentence, written by a person,
+        // that says yes. `disclose` is the instruction to post THAT and not to
+        // call a model — a caller that cannot honour it must treat this as a
+        // refusal, which is what `tools/ambient/src/runner.js` does.
+        return { reply: true, reason: "identity-probe", disclose: true };
+      }
       // The one case where silence is the *policy* and not just caution. A
       // persona may not claim to be human and may not volunteer being
       // software, so there is no sentence it can say here. Not answering is
@@ -157,8 +200,15 @@ export function screenInbound(body, { banned = [], minLength = 2 } = {}) {
  * Returns `{ ok: true }` or `{ ok: false, reason }`. The reason is written into
  * the log for every dropped line — a guardrail that fires silently is a
  * guardrail nobody can tune.
+ *
+ * `disclosure: "bot"` permits one class of statement and one only: saying that
+ * the speaker is software. Claiming to be a person stays forbidden at every
+ * setting. Everything else on this screen is unaffected.
  */
-export function screenLine(body, { banned = [], maxLength = 180 } = {}) {
+export function screenLine(
+  body,
+  { banned = [], maxLength = 180, disclosure = "undisclosed" } = {},
+) {
   const text = String(body ?? "").trim();
   if (text.length === 0) {
     return { ok: false, reason: "empty" };
@@ -185,9 +235,18 @@ export function screenLine(body, { banned = [], maxLength = 180 } = {}) {
       return { ok: false, reason: "off-platform" };
     }
   }
-  for (const pattern of IDENTITY_PATTERNS) {
+  // Never conditional. Whatever `disclosure` says, no account here gets to
+  // claim it is a person.
+  for (const pattern of HUMANITY_CLAIM_PATTERNS) {
     if (pattern.test(text)) {
       return { ok: false, reason: "identity-claim" };
+    }
+  }
+  if (disclosure !== "bot") {
+    for (const pattern of SOFTWARE_CLAIM_PATTERNS) {
+      if (pattern.test(text)) {
+        return { ok: false, reason: "identity-claim" };
+      }
     }
   }
   return { ok: true };
