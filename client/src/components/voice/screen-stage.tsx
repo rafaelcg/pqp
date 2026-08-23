@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { RemotePeer } from "@/lib/peer-connection-manager";
 import { ScreenShareView } from "@/components/voice/screen-share-view";
 import { useLgUp } from "@/hooks/use-lg-up";
@@ -97,9 +97,28 @@ export function ScreenStage({
 }: ScreenStageProps) {
   const { t } = useTranslation();
   const wide = useLgUp();
+  // Which share is filling the viewport in-page, on the platforms with no
+  // element fullscreen (an iPhone). Owned here rather than by each view so two
+  // shares cannot both cover the screen, one buried under the other. Real
+  // element fullscreen needs no coordination: the browser only ever has one.
+  const [expandedPeerId, setExpandedPeerId] = useState<string | null>(null);
+  const tileKey = tiles.map((tile) => tile.peerId).join(",");
+  useEffect(() => {
+    const peerIds = tileKey === "" ? [] : tileKey.split(",");
+    setExpandedPeerId((current) =>
+      current !== null && !peerIds.includes(current) ? null : current,
+    );
+  }, [tileKey]);
   if (tiles.length === 0) {
     return null;
   }
+  const expansionProps = (peerId: string) => ({
+    expanded: expandedPeerId === peerId,
+    // Storing one id rather than a flag per tile is what makes "only one" true
+    // by construction: expanding the second share replaces the first.
+    onExpandedChange: (next: boolean) =>
+      setExpandedPeerId(next ? peerId : null),
+  });
   const focused =
     tiles.find((tile) => tile.peerId === focusedPeerId) ?? tiles[0]!;
   const splitTwo = screenShareStageLayout(tiles.length, wide) === "split";
@@ -116,6 +135,7 @@ export function ScreenStage({
               presenterName={tile.presenterName}
               isSelf={tile.isSelf}
               onStopSharing={tile.isSelf ? onStopSharing : undefined}
+              {...expansionProps(tile.peerId)}
             />
           ))}
         </div>
@@ -127,6 +147,7 @@ export function ScreenStage({
             presenterName={focused.presenterName}
             isSelf={focused.isSelf}
             onStopSharing={focused.isSelf ? onStopSharing : undefined}
+            {...expansionProps(focused.peerId)}
           />
         </div>
       )}

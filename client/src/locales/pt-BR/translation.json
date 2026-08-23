@@ -614,6 +614,7 @@
   "voice.share.focus": "Ver a tela de {name}",
   "voice.share.stop": "Parar de compartilhar",
   "voice.share.fullscreen": "Tela cheia",
+  "voice.share.fullscreenPeer": "Ver só a tela de {name} em tela cheia",
   "voice.share.exitFullscreen": "Sair da tela cheia",
   "voice.share.waiting": "Conectando na tela de quem está compartilhando…",
   "voice.share.noAudio": "Compartilhando sem som. Pra mandar o áudio junto, compartilha uma guia do Chrome e marca a caixinha de compartilhar áudio da guia.",

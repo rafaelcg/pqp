@@ -31,8 +31,18 @@ import {
   type FullscreenMode,
 } from "@/components/voice/capabilities";
 import {
+  NO_SCREEN_FULLSCREEN,
+  reconcileScreenFullscreen,
+  syncScreenFullscreen,
+  toggleScreenFullscreen,
+  toggleStageFullscreen,
+  type ScreenFullscreenState,
+  type ScreenFullscreenTransition,
+} from "@/components/voice/screen-fullscreen";
+import {
   collectScreenTiles,
   screenShareStageLayout,
+  type ScreenShareTile,
 } from "@/components/voice/screen-stage";
 import { VoiceAvatar } from "@/components/voice/voice-avatar";
 import { UserAvatar } from "@/components/user/user-avatar";
@@ -141,20 +151,32 @@ async function exitDocumentFullscreen(): Promise<void> {
 }
 
 /**
- * Fullscreen for the stage container, with the iOS video-only fallback.
+ * Fullscreen for the stage container, with the iOS in-page fallback.
  *
  * Capability *detection* is `detectFullscreenMode` from
  * `components/voice/capabilities.ts` — not re-derived here. The event wiring
  * follows `screen-share-view.tsx`, including the reattach-on-exit fix: iOS's
  * native player detaches a MediaStream on the way out, so the same stream is
  * re-set and replayed, both no-ops anywhere the detach did not happen.
+ *
+ * THE ELEMENT THAT GOES FULLSCREEN IS ALWAYS THE STAGE, even when the user
+ * asked for one particular shared screen. Which share is *alone* on that stage
+ * is separate state (`screen-fullscreen.ts`), so:
+ *   - a call with one sharer takes exactly the path it took before;
+ *   - swapping which screen is blown up is a re-render, not a second
+ *     `requestFullscreen` that would need a fresh gesture and would stack;
+ *   - the iPhone `expand` fallback keeps working unchanged, because it never
+ *     hands a <video> to the OS player (that is the PR #48 black-screen bug).
  */
 function useStageFullscreen(
   containerRef: RefObject<HTMLDivElement | null>,
   videoRef: RefObject<WebkitFullscreenVideo | null>,
   hasPrimaryVideo: boolean,
+  screenPeerIds: string[],
 ) {
-  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [state, setState] = useState<ScreenFullscreenState>(
+    NO_SCREEN_FULLSCREEN,
+  );
   // `expand` needs no platform support, so it is the safe starting point and
   // the detector only ever upgrades it.
   const [mode, setMode] = useState<FullscreenMode>("expand");
@@ -178,11 +200,12 @@ function useStageFullscreen(
   useEffect(() => {
     const video = videoRef.current;
     const onFullscreenChange = () => {
-      setIsFullscreen(currentFullscreenElement() === containerRef.current);
+      const active = currentFullscreenElement() === containerRef.current;
+      setState((was) => syncScreenFullscreen(was, active));
     };
-    const onBegin = () => setIsFullscreen(true);
+    const onBegin = () => setState((was) => syncScreenFullscreen(was, true));
     const onEnd = () => {
-      setIsFullscreen(false);
+      setState((was) => syncScreenFullscreen(was, false));
       const el = videoRef.current;
       if (el && el.srcObject) {
         const current = el.srcObject;
@@ -208,31 +231,82 @@ function useStageFullscreen(
     };
   }, [containerRef, videoRef, hasPrimaryVideo]);
 
-  const toggle = useCallback(() => {
-    if (mode === "element") {
+  // A presenter can stop sharing while their screen is the one blown up.
+  const screenPeerKey = screenPeerIds.join(",");
+  useEffect(() => {
+    const peerIds = screenPeerKey === "" ? [] : screenPeerKey.split(",");
+    setState((was) => reconcileScreenFullscreen(was, peerIds));
+  }, [screenPeerKey]);
+
+  const apply = useCallback(
+    (transition: ScreenFullscreenTransition) => {
+      if (mode !== "element") {
+        // `expand`: grow the stage inside the page. Replaces handing the
+        // <video> to the OS media player, which cannot render a MediaStream and
+        // left an iPhone showing a black rectangle with the audio still
+        // playing. Nothing can refuse it, so the state is the whole story.
+        setState(transition.next);
+        return;
+      }
       const container = containerRef.current;
       if (!container) {
         return;
       }
-      const active = currentFullscreenElement();
-      const request = active
-        ? exitDocumentFullscreen()
-        : requestElementFullscreen(container);
-      void request.catch((err: unknown) => {
+      if (transition.request === "none") {
+        // Already fullscreen; only *which* screen is alone on it changed.
+        setState(transition.next);
+        return;
+      }
+      if (transition.request === "exit") {
+        // `active` is confirmed by `fullscreenchange`, so do not pre-empt it:
+        // a refused exit would otherwise leave the control lying.
+        void exitDocumentFullscreen().catch((err: unknown) => {
+          console.warn("[call] fullscreen exit refused", err);
+        });
+        return;
+      }
+      // Record the target now so the `fullscreenchange` that follows renders
+      // the right screen; `active` still comes from the browser.
+      setState((was) => ({ ...was, soloPeerId: transition.next.soloPeerId }));
+      void requestElementFullscreen(container).catch((err: unknown) => {
         console.warn("[call] fullscreen refused", err);
       });
-      return;
-    }
-    // `expand`: grow the stage inside the page. Replaces handing the <video>
-    // to the OS media player, which cannot render a MediaStream and left an
-    // iPhone showing a black rectangle with the audio still playing.
-    setIsFullscreen((was) => !was);
-  }, [mode, containerRef]);
+    },
+    [mode, containerRef],
+  );
+
+  // The click handlers need the *current* state without being re-created (and
+  // re-bound) on every fullscreen change. A state updater cannot be used to
+  // read it: `apply` calls into the platform, and React is free to run an
+  // updater twice.
+  const stateRef = useRef(state);
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
+
+  const toggle = useCallback(() => {
+    apply(toggleStageFullscreen(stateRef.current));
+  }, [apply]);
+
+  const toggleScreen = useCallback(
+    (peerId: string) => {
+      apply(toggleScreenFullscreen(stateRef.current, peerId));
+    },
+    [apply],
+  );
 
   // Nothing to gate on any more: expanding needs no platform support, and
   // there is always a stage to expand even when the call is audio-only.
   const available = true;
-  return { isFullscreen, mode, available, toggle };
+  return {
+    isFullscreen: state.active,
+    /** The one share alone on the stage, or null for the whole stage. */
+    soloPeerId: state.active ? state.soloPeerId : null,
+    mode,
+    available,
+    toggle,
+    toggleScreen,
+  };
 }
 
 export function DmCallStage({
@@ -453,7 +527,20 @@ function ActiveCall({
     stageRef,
     primaryVideoRef,
     hasPrimaryVideo,
+    voiceState.screenSharePeerIds,
   );
+  // Which share, if any, is alone on the stage right now. `soloTile` is null
+  // for every call with a single sharer, which is what keeps that path
+  // identical to before.
+  const soloTile =
+    fullscreen.soloPeerId === null
+      ? null
+      : (screenTiles.find((tile) => tile.peerId === fullscreen.soloPeerId) ??
+        null);
+  // Two shares need a way to say "just that one". One does not: the stage
+  // control already fills the screen with it, and a second button on top of the
+  // video would be new chrome in the case that is live today.
+  const perScreenFullscreen = screenTiles.length > 1;
 
   // --- controls fade-on-idle ---------------------------------------------
   // Desktop pointer + video only: on touch there is no "pointer resting", and
@@ -616,28 +703,60 @@ function ActiveCall({
       {/* --- the stage's content, by layout --------------------------------- */}
       {layout === "screen" ? (
         <div className="flex h-full w-full flex-col bg-black">
-          {splitTwo ? (
+          {soloTile ? (
+            /* One share blown up on its own. The stage is already fullscreen;
+               this only decides what is on it, which is why switching between
+               the two shares costs no platform call. */
+            <ScreenTileFrame
+              tile={soloTile}
+              videoRef={primaryVideoRef}
+              isFullscreen
+              showName
+              onToggleFullscreen={() => fullscreen.toggleScreen(soloTile.peerId)}
+              className="min-h-0 flex-1"
+            />
+          ) : splitTwo ? (
             <div className="grid min-h-0 flex-1 grid-cols-2">
               {screenTiles.map((tile, index) => (
-                <StageVideo
+                <ScreenTileFrame
                   key={tile.peerId}
-                  stream={tile.stream}
+                  tile={tile}
                   videoRef={index === 0 ? primaryVideoRef : undefined}
-                  className="h-full min-h-0 object-contain"
+                  isFullscreen={false}
+                  showName
+                  onToggleFullscreen={() => fullscreen.toggleScreen(tile.peerId)}
+                  className="h-full min-h-0"
                 />
               ))}
             </div>
+          ) : perScreenFullscreen && focusedTile ? (
+            <ScreenTileFrame
+              tile={focusedTile}
+              videoRef={primaryVideoRef}
+              isFullscreen={false}
+              onToggleFullscreen={() =>
+                fullscreen.toggleScreen(focusedTile.peerId)
+              }
+              className="min-h-0 flex-1"
+            />
           ) : (
+            /* One sharer: untouched. No per-screen control, because the stage
+               control already fills the viewport with this very screen. */
             <StageVideo
               stream={screenStream}
               videoRef={primaryVideoRef}
               className="min-h-0 flex-1 object-contain"
             />
           )}
-          {!splitTwo && screenTiles.length > 1 && (
+          {/* The switcher. Kept while one share is blown up so the other one is
+              still reachable: swapping which screen is alone on the stage is
+              pure state, so it happens without leaving fullscreen at all. */}
+          {screenTiles.length > 1 && (soloTile !== null || !splitTwo) && (
             <div className="flex shrink-0 gap-1 overflow-x-auto p-1">
               {screenTiles.map((tile) => {
-                const selected = tile.peerId === focusedTile?.peerId;
+                const selected =
+                  tile.peerId ===
+                  (soloTile ? soloTile.peerId : focusedTile?.peerId);
                 return (
                   <button
                     key={tile.peerId}
@@ -649,7 +768,12 @@ function ActiveCall({
                         : "bg-ink-3 text-paper-muted",
                     )}
                     aria-pressed={selected}
-                    onClick={() => onFocusScreenShare?.(tile.peerId)}
+                    onClick={() => {
+                      onFocusScreenShare?.(tile.peerId);
+                      if (soloTile && tile.peerId !== soloTile.peerId) {
+                        fullscreen.toggleScreen(tile.peerId);
+                      }
+                    }}
                   >
                     {tile.isSelf
                       ? t("voice.share.youPresenting")
@@ -1238,6 +1362,71 @@ function OccupantFaces({
  * through `VoiceAudioSinks` at the app root, and playing it here too would
  * double every voice.
  */
+/**
+ * One shared screen with its own fullscreen control.
+ *
+ * The control is per *screen*, not per stage: pressing it puts this share
+ * alone on the stage instead of blowing up the two-up grid, which is the bug
+ * this component exists to fix. It is only rendered when there is more than one
+ * share to choose between, so a call with a single sharer keeps the exact
+ * markup and the single control it has today.
+ */
+function ScreenTileFrame({
+  tile,
+  videoRef,
+  isFullscreen,
+  showName = false,
+  onToggleFullscreen,
+  className,
+}: {
+  tile: ScreenShareTile;
+  videoRef?: RefObject<WebkitFullscreenVideo | null>;
+  isFullscreen: boolean;
+  showName?: boolean;
+  onToggleFullscreen?: () => void;
+  className?: string;
+}) {
+  const { t } = useTranslation();
+  const label = isFullscreen
+    ? t("voice.share.exitFullscreen")
+    : t("voice.share.fullscreenPeer", { name: tile.presenterName });
+  return (
+    <div className={cn("relative", className)}>
+      <StageVideo
+        stream={tile.stream}
+        videoRef={videoRef}
+        className="h-full w-full object-contain"
+      />
+      {/* Top *left*: the stage already floats everyone's camera tiles at the
+          top right, and on a split stage the right-hand share sits underneath
+          them. */}
+      <div className="absolute left-2 top-2 flex max-w-[80%] items-center gap-1.5">
+        {onToggleFullscreen && (
+          <button
+            type="button"
+            title={label}
+            aria-label={label}
+            aria-pressed={isFullscreen}
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink/70 text-paper hover:bg-ink-4"
+            onClick={onToggleFullscreen}
+          >
+            {isFullscreen ? (
+              <Minimize2 className="h-3.5 w-3.5" />
+            ) : (
+              <Maximize2 className="h-3.5 w-3.5" />
+            )}
+          </button>
+        )}
+        {showName && (
+          <span className="pointer-events-none truncate rounded bg-ink/70 px-1.5 py-0.5 text-[11px] text-paper-muted">
+            {tile.isSelf ? t("voice.share.youPresenting") : tile.presenterName}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function StageVideo({
   stream,
   mirrored = false,
