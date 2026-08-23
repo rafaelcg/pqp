@@ -39,8 +39,14 @@ const OFFPLATFORM_PATTERNS = [
  * carried by `disclosure`. Folding them into one list, which is what this was
  * until the support bot needed the second half, meant an account that discloses
  * could only do so by switching off the rule that stops it lying.
+ *
+ * Exported because `tools/support-bot` screens its own output and must apply
+ * THIS rule rather than a copy of it. It deliberately does not reuse the rest of
+ * `screenLine`: that screen bans every URL, and a support bot whose whole job
+ * includes saying "github.com/rafaelcg/pqp" would fail it on a correct answer.
+ * The floor is shared; the room-specific rules are not.
  */
-const HUMANITY_CLAIM_PATTERNS = [
+export const HUMANITY_CLAIM_PATTERNS = [
   // `\b` is not usable as the closing guard here: `ô` and `ê` are not word
   // characters to a non-unicode regex, so `rob[ôo]\b` never matches "robô" —
   // the exact string this rule exists to catch. A negative lookahead for a
