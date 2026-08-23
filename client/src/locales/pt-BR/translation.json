@@ -827,7 +827,7 @@
   "settings.profile.publicHandle.view": "Abrir",
   "settings.connections.description": "Steam, Battle.net e Twitch",
   "settings.connections.intro": "Prove que a conta é sua. Os nicks aparecem no seu cartão no pqp; na página pública só se você deixar. Isso não é o login do pqp.",
-  "settings.connections.accessNote": "O pqp não entra na sua conta e não muda nada na Steam, Battle.net ou Twitch. A gente não guarda um token de login.",
+  "settings.connections.accessNote": "O pqp não entra na sua conta e não muda nada na Steam, Battle.net ou Twitch. A gente não guarda um token de login. Conectar não mostra o que você está jogando. Um jogo aberto na Steam não aparece no pqp.",
   "settings.connections.unconfigured": "Este servidor ainda não configurou conexões de jogos.",
   "settings.connections.notLinked": "Não conectado",
   "settings.connections.comingSoon": "Em breve",

@@ -84,6 +84,8 @@ avatar/profile URL, visibility, connected-at. Cascade-deleted with the
 account. Included in `GET /api/me/export`.
 
 We do not keep access tokens. Linking is not account access.
+Connecting does not show what someone is playing. A game open on
+Steam does not appear on pqp.
 
 One Steam (or Battle.net, or Twitch) account per pqp user, and the reverse:
 one pqp user per SteamID.
