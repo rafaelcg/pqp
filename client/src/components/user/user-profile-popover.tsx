@@ -1,4 +1,4 @@
-import { Loader2, MoreHorizontal } from "lucide-react";
+import { Loader2, MoreHorizontal, Phone } from "lucide-react";
 import {
   createContext,
   useCallback,
@@ -21,6 +21,7 @@ import {
 } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
 import { StatusDot } from "@/components/user/status-dot";
+import { UserAvatar } from "@/components/user/user-avatar";
 import { useFriends } from "@/components/friends/use-friends";
 import { DepoimentoComposer } from "@/components/depoimentos/depoimento-composer";
 import {
@@ -46,6 +47,7 @@ import { useTranslation, type Translator } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import {
   canBlock,
+  canCall,
   canMessage,
   canRemoveFriend,
   canReport,
@@ -124,6 +126,18 @@ interface ProfilePopoverProviderProps {
   /** Message: the conversation was opened or reused — the app navigates. */
   onOpenConversation: (conversation: DmSummary) => void;
   /**
+   * Call: the same conversation, and then ring it.
+   *
+   * Handed the whole `DmSummary` rather than a channel id for the reason
+   * `onOpenConversation` is: the row may be brand new, and the app has to put
+   * it in the sidebar list before it navigates there.
+   *
+   * OPTIONAL, and the button is simply absent without it. A mount that cannot
+   * place a call has no phone, which is the failure this feature wants: a
+   * button that rings nobody is worse than no button.
+   */
+  onStartCall?: (conversation: DmSummary) => void;
+  /**
    * Drop text into whatever composer the app has just navigated to.
    *
    * Exists for exactly one caller: the depoimento composer's "mandar por DM"
@@ -148,6 +162,7 @@ export function ProfilePopoverProvider({
   blockedUserIds,
   moderation,
   onOpenConversation,
+  onStartCall,
   onComposeDraft,
   onBlockUser,
   onUnblockUser,
@@ -184,6 +199,7 @@ export function ProfilePopoverProvider({
           moderation={moderation}
           onClose={() => setState(null)}
           onOpenConversation={onOpenConversation}
+          onStartCall={onStartCall}
           onComposeDraft={onComposeDraft}
           onBlockUser={onBlockUser}
           onUnblockUser={onUnblockUser}
@@ -235,6 +251,7 @@ interface UserProfileCardProps {
   moderation: ProfileModerationContext | null;
   onClose: () => void;
   onOpenConversation: (conversation: DmSummary) => void;
+  onStartCall?: (conversation: DmSummary) => void;
   onComposeDraft?: (text: string) => void;
   onBlockUser: (userId: string) => void;
   onUnblockUser: (userId: string) => void;
@@ -249,6 +266,7 @@ function UserProfileCard({
   moderation,
   onClose,
   onOpenConversation,
+  onStartCall,
   onComposeDraft,
   onBlockUser,
   onUnblockUser,
@@ -490,6 +508,29 @@ function UserProfileCard({
   }
 
   /**
+   * Ring this person.
+   *
+   * The SAME `createConversation` the Message button uses, on purpose: a DM
+   * call is a conversation with a ring on it, there is exactly one 1:1 per
+   * pair, and a second path to it would be a second set of rules about who may
+   * open one. The app takes it from there — navigate to the conversation and
+   * either join the call already running in it or start ringing — which is the
+   * one path the DM list's phone and the conversation header already use.
+   *
+   * A refusal (`dm_privacy`, a block, a character account) comes back from that
+   * first request as an `ApiError` and lands in the card's error line in the
+   * server's own words. See `canCall` for why the button is not hidden for any
+   * of those.
+   */
+  function handleCall() {
+    void run(async () => {
+      const { conversation } = await createConversation([subject.id]);
+      onStartCall?.(conversation);
+      onClose();
+    });
+  }
+
+  /**
    * The fork out of the depoimento composer: open the DM instead, carrying what
    * they had already typed.
    *
@@ -700,19 +741,25 @@ function UserProfileCard({
 
       <div className="px-4 pb-4">
         <div className="relative -mt-8 mb-2 w-fit">
-          <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-full bg-ink-3 text-xl font-semibold ring-4 ring-ink-2">
-            {subject.avatarUrl ? (
-              <img
-                src={subject.avatarUrl}
-                alt=""
-                loading="lazy"
-                referrerPolicy="no-referrer"
-                className="h-full w-full object-cover"
-              />
-            ) : (
-              subject.displayName.slice(0, 1).toUpperCase()
-            )}
-          </div>
+          {/* `UserAvatar`, not an `<img>`. This card used to point an `<img>`
+              straight at `subject.avatarUrl`, and an UPLOADED avatar's URL is
+              root-relative (`/api/avatars/<id>?v=…` — `avatarPath` in
+              `@pqp/shared` is relative because the API does not know its own
+              public origin). The SPA and the API are two different origins on
+              every hosted deployment, so the browser resolved that path against
+              Pages, which has no `/api`, and drew a broken-image glyph in the
+              corner of the circle — while the same person's face in the member
+              list two inches away was fine, because that one goes through here.
+              `resolveAvatarUrl` is what prefixes the API base, and the
+              `onError` fallback is what turns a dead URL into the monogram
+              instead of a broken image. See `e2e/profile-popover-avatar.spec.ts`. */}
+          <UserAvatar
+            name={subject.displayName}
+            avatarUrl={subject.avatarUrl}
+            rounded="full"
+            className="h-16 w-16 ring-4 ring-ink-2"
+            fallbackClassName="bg-ink-3 text-xl text-paper"
+          />
           {presence && (
             <StatusDot
               status={presence}
@@ -764,8 +811,20 @@ function UserProfileCard({
             <span className="sr-only">{t("profile.loading")}</span>
           </div>
         ) : (
-          <div className="mt-3 flex items-center gap-1.5">
-            {/* The relationship is the wide primary; the thing you might do
+          <div className="mt-3 flex flex-wrap items-center gap-1.5">
+            {/* IT WRAPS, which it did not before. Five controls do not fit
+                across 288px in the one state that has five — an incoming
+                request draws Accept, Decline, Message, the phone and the
+                ellipsis — and without wrapping the row simply ran off the right
+                edge of the card. That was already true of the four it held
+                before the phone existed (`e2e/profile-popover-call.spec.ts`
+                measures it now); the phone only made it a third of a button
+                worse. Wrapping keeps the row self-adjusting rather than tuned
+                to whichever state somebody last looked at: every other state
+                still fits on one line, and the crowded one grows a second line
+                instead of spilling.
+
+                The relationship is the wide primary; the thing you might do
                 *with* somebody sits beside it; everything punitive is behind
                 the ellipsis, because a Block button the same size as Add
                 friend makes a profile card read as a moderation console. */}
@@ -809,6 +868,27 @@ function UserProfileCard({
                 onClick={handleMessage}
               >
                 {t("friends.message")}
+              </Button>
+            )}
+
+            {/* Icon-only, and beside Message rather than under it. The card is
+                288px wide and that row already holds a flexible primary, a
+                Decline in one state and the ellipsis; a fourth *labelled*
+                button is what makes "Accept" truncate to nothing. The phone
+                glyph is the same one the DM list and the conversation header
+                use for the same errand, so it is not a new vocabulary. */}
+            {canCall(state) && onStartCall && (
+              <Button
+                size="sm"
+                variant="secondary"
+                className="px-2"
+                title={t("profile.call")}
+                aria-label={t("profile.call")}
+                disabled={busy}
+                data-profile-call=""
+                onClick={handleCall}
+              >
+                <Phone aria-hidden className="h-4 w-4" />
               </Button>
             )}
 

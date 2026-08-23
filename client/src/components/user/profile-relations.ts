@@ -157,6 +157,48 @@ export function canMessage(state: FriendshipState): boolean {
   return state !== "self" && state !== "blocked";
 }
 
+/**
+ * Whether to offer the phone: exactly the set that may be messaged, and
+ * deliberately not a narrower one.
+ *
+ * A DM call is a conversation plus a ring, so the button walks the same two
+ * server gates the Message button walks (`POST /api/dms` → `assertReachable`,
+ * then the ring's own `resolveRingableConversation`). That makes the card's
+ * rule "hide it only where the client can be SURE it cannot ring", and there
+ * are two such cases, both already covered by `canMessage`:
+ *
+ *  - YOURSELF. The server has no self-pair and the card replaces the whole
+ *    action row with "this is you" anyway.
+ *  - SOMEBODY YOU BLOCKED. `isDmSendBlocked` refuses both the conversation and
+ *    the `call-ring` frame, so the phone provably rings nowhere. The DM list
+ *    hides its own phone on a blocked row for this exact reason.
+ *
+ * And the cases it deliberately does NOT hide, each because the client's
+ * evidence is worse than the server's:
+ *
+ *  - NOT A FRIEND. `dm_privacy` defaults to `server_members`, and seeing this
+ *    card at all normally means you share a server. Friendship is not the rule.
+ *  - DMs RESTRICTED (`dm_privacy = 'nobody'`, which is also every character
+ *    account's setting). The viewer is never told another person's setting —
+ *    that is the point of it — so the card cannot know. The server refuses with
+ *    its own wording and the card prints it in the error line, which is the
+ *    same treatment Message has always had.
+ *  - OFFLINE. Presence here is `null` (unknown) for anybody who is not a
+ *    friend, so gating on it would hide the phone from most people over a fact
+ *    we never looked up. It is also not true that calling an offline person
+ *    does nothing: an unanswered ring is written into the conversation as a
+ *    missed-call message, which is exactly what a phone is for. DND is handled
+ *    server-side, quietly, and does not belong in a stranger's UI either.
+ *  - ALREADY IN A CALL. Starting one is a MOVE in this app — the server drops
+ *    the socket's previous peer on the new join, the same as clicking another
+ *    voice channel — so the honest answer is to let it move you. The one thing
+ *    worth not doing is re-joining the call you are already in, and that is
+ *    handled where the app knows the channel id, not here.
+ */
+export function canCall(state: FriendshipState): boolean {
+  return canMessage(state);
+}
+
 export function canBlock(state: FriendshipState): boolean {
   return state !== "self" && state !== "blocked";
 }

@@ -2,6 +2,7 @@ import type { Friend, FriendRequestEntry, FriendsResponse } from "@pqp/shared";
 import { describe, expect, it } from "vitest";
 import {
   canBlock,
+  canCall,
   canMessage,
   canRemoveFriend,
   canReport,
@@ -163,6 +164,26 @@ describe("secondary affordances", () => {
     expect(canMessage("blocked")).toBe(false);
     expect(canMessage("none")).toBe(true);
     expect(canMessage("friends")).toBe(true);
+  });
+
+  it("offers the phone exactly where it offers the message", () => {
+    // One rule, not two: a DM call is a conversation plus a ring, and both
+    // halves are refused by the server in the same two cases the card can be
+    // sure about. See `canCall` for the cases it deliberately does not gate —
+    // offline, not a friend, DMs restricted, already in another call.
+    for (const state of [
+      "self",
+      "blocked",
+      "friends",
+      "pendingIncoming",
+      "pendingOutgoing",
+      "none",
+    ] as FriendshipState[]) {
+      expect(canCall(state)).toBe(canMessage(state));
+    }
+    expect(canCall("self")).toBe(false);
+    expect(canCall("blocked")).toBe(false);
+    expect(canCall("none")).toBe(true);
   });
 
   it("never offers to block yourself or to re-block", () => {
