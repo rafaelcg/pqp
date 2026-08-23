@@ -19,6 +19,16 @@ import type { BlogLocale } from "./posts";
  * to transform at build time and nothing new in the dependency tree.
  */
 const BODIES: Record<string, Record<BlogLocale, () => Promise<string>>> = {
+  "qualidade-de-video": {
+    "pt-BR": () =>
+      import("@/content/blog/qualidade-de-video.pt-BR.md?raw").then(
+        (m) => m.default,
+      ),
+    en: () =>
+      import("@/content/blog/qualidade-de-video.en.md?raw").then(
+        (m) => m.default,
+      ),
+  },
   "som-na-tela": {
     "pt-BR": () =>
       import("@/content/blog/som-na-tela.pt-BR.md?raw").then((m) => m.default),

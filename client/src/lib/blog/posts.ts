@@ -61,6 +61,20 @@ export interface BlogPost {
  */
 export const POSTS: readonly BlogPost[] = [
   {
+    slug: "qualidade-de-video",
+    date: "2026-08-24",
+    title: {
+      "pt-BR": "A sua câmera estava presa em 480p",
+      en: "Your camera was stuck at 480p",
+    },
+    summary: {
+      "pt-BR":
+        "A câmera nunca pedia tamanho nenhum, e o navegador respondia 640x480. Agora pede 720p, tem seletor de qualidade e mostra o que está saindo de verdade.",
+      en: "The camera never asked for a size, so the browser answered 640x480. It now asks for 720p, there is a quality selector, and it shows what is actually going out.",
+    },
+  },
+
+  {
     slug: "som-na-tela",
     date: "2026-08-22",
     title: {
