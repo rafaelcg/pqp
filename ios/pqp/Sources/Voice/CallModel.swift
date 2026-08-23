@@ -252,23 +252,40 @@ final class CallModel {
         conversationId == channelId && phase.isLive
     }
 
-    /// The one screen share on the stage, if anybody is presenting.
-    ///
-    /// Only one is possible — the server refuses a second `set-sharing-screen` —
-    /// so taking the first is not a guess.
+    /// Screens currently on the wire. The server caps concurrent shares (two
+    /// on mesh, four on LiveKit); the phone still shows one at a time.
+    var focusedScreenPeerId: String?
+
+    var screenPresenters: [(peerId: String, name: String, track: RTCVideoTrack)] {
+        peers.compactMap { peer in
+            guard let screen = video[peer.peerId]?.screen else { return nil }
+            return (peer.peerId, peer.displayName, screen)
+        }
+    }
+
+    var resolvedScreenFocus: String? {
+        if let focused = focusedScreenPeerId,
+           video[focused]?.screen != nil {
+            return focused
+        }
+        return screenPresenters.first?.peerId
+    }
+
     var remoteScreen: RTCVideoTrack? {
-        for peerId in peers.map(\.peerId) {
-            if let screen = video[peerId]?.screen { return screen }
+        if let focused = resolvedScreenFocus {
+            return video[focused]?.screen
         }
         return nil
     }
 
     /// Whose screen it is, for the presenter line.
     var presenterName: String? {
-        for peer in peers where video[peer.peerId]?.screen != nil {
-            return peer.displayName
-        }
-        return nil
+        guard let focused = resolvedScreenFocus else { return nil }
+        return screenPresenters.first(where: { $0.peerId == focused })?.name
+    }
+
+    func focusScreen(_ peerId: String) {
+        focusedScreenPeerId = peerId
     }
 
     var layout: CallStageLayout {
@@ -537,7 +554,7 @@ final class CallModel {
             guard voiceChannelId == conversationId else { return }
             Task {
                 await screenShare.refuse(message: String(
-                    localized: "Someone else is already sharing their screen."
+                    localized: "This call already has the maximum number of screen shares."
                 ))
             }
 

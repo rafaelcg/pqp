@@ -2792,6 +2792,16 @@
         }
       }
     },
+    "This call already has the maximum number of screen shares.": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Essa call já chegou no máximo de telas compartilhadas."
+          }
+        }
+      }
+    },
     "This cannot be undone. Type \"%@\" to confirm.": {
       "localizations": {
         "pt-BR": {

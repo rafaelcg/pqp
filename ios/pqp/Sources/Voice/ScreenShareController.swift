@@ -97,7 +97,7 @@ final class ScreenShareController {
         }
     }
 
-    /// The room refused it — one presenter at a time.
+    /// The room refused it — the call is already at the screen-share cap.
     func refuse(message: String) async {
         isRefused = true
         errorMessage = message

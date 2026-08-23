@@ -45,8 +45,19 @@ vi.mock("../voice/admin.js", () => ({
   evictSfuUsersExcept: vi.fn(() => Promise.resolve()),
 }));
 
-const { handleVoiceMessage, removeVoicePeerBySocket, resetVoiceRateLimits } =
-  await import("./voice.js");
+const backend = vi.hoisted(() => ({ configured: "mesh" as "mesh" | "livekit" }));
+
+vi.mock("../voice/backends.js", () => ({
+  getServerVoiceBackend: () => backend.configured,
+  isLiveKitConfigured: () => backend.configured === "livekit",
+}));
+
+const {
+  handleVoiceMessage,
+  removeVoicePeerBySocket,
+  resetVoiceRateLimits,
+  resetVoiceRoomTransports,
+} = await import("./voice.js");
 const { deleteAuthenticatedSocket, setAuthenticatedSocket } = await import(
   "./sockets.js"
 );
@@ -119,6 +130,8 @@ describe("voice roster carries mute/deafen state", () => {
       deleteAuthenticatedSocket(rec.socket);
     }
     resetVoiceRateLimits();
+    backend.configured = "mesh";
+    resetVoiceRoomTransports();
   });
 
   function track(rec: Recorder): Recorder {
@@ -284,5 +297,118 @@ describe("voice roster carries mute/deafen state", () => {
     expect(
       lastRoster(outside).participants![0]!.screenAudioStreamId,
     ).toBeNull();
+  });
+});
+
+describe("concurrent screen shares are capped per transport", () => {
+  const sockets: Recorder[] = [];
+  const viewers: Recorder[] = [];
+
+  beforeEach(() => {
+    for (const rec of sockets.splice(0)) {
+      removeVoicePeerBySocket(rec.socket);
+    }
+    for (const rec of viewers.splice(0)) {
+      deleteAuthenticatedSocket(rec.socket);
+    }
+    resetVoiceRateLimits();
+    backend.configured = "mesh";
+    resetVoiceRoomTransports();
+  });
+
+  function track(rec: Recorder): Recorder {
+    sockets.push(rec);
+    return rec;
+  }
+
+  function viewer(userId: string): Recorder {
+    const rec = recorder();
+    setAuthenticatedSocket(rec.socket, asUser(userId));
+    viewers.push(rec);
+    return rec;
+  }
+
+  function denials(rec: Recorder): unknown[] {
+    return rec.received
+      .map((raw) => JSON.parse(raw) as { type: string })
+      .filter((frame) => frame.type === "screen-share-denied");
+  }
+
+  async function share(rec: Recorder, userId: string, sharing = true) {
+    await handleVoiceMessage(
+      { socket: rec.socket, user: asUser(userId) },
+      { type: "set-sharing-screen", sharing },
+    );
+  }
+
+  it("lets two people share on mesh and refuses a third", async () => {
+    const outside = viewer("viewer");
+    const a = track(recorder());
+    const b = track(recorder());
+    const c = track(recorder());
+    await join(a, "a");
+    await join(b, "b");
+    await join(c, "c");
+
+    await share(a, "a");
+    await share(b, "b");
+    await share(c, "c");
+
+    expect(denials(c)).toHaveLength(1);
+    const sharing = lastRoster(outside).participants!.filter(
+      (p) => p.sharingScreen,
+    );
+    expect(sharing).toHaveLength(2);
+  });
+
+  it("frees a slot when a sharer stops", async () => {
+    const outside = viewer("viewer");
+    const a = track(recorder());
+    const b = track(recorder());
+    const c = track(recorder());
+    await join(a, "a");
+    await join(b, "b");
+    await join(c, "c");
+    await share(a, "a");
+    await share(b, "b");
+    await share(a, "a", false);
+    await share(c, "c");
+
+    expect(denials(c)).toHaveLength(0);
+    expect(
+      lastRoster(outside).participants!.filter((p) => p.sharingScreen),
+    ).toHaveLength(2);
+  });
+
+  it("does not refuse a live sharer who re-declares while the room is at cap", async () => {
+    const a = track(recorder());
+    const b = track(recorder());
+    await join(a, "a");
+    await join(b, "b");
+    await share(a, "a");
+    await share(b, "b");
+    const before = denials(a).length;
+    await share(a, "a");
+    expect(denials(a).length).toBe(before);
+  });
+
+  it("lets four people share on LiveKit and refuses a fifth", async () => {
+    backend.configured = "livekit";
+    resetVoiceRoomTransports();
+    const outside = viewer("viewer");
+    const people = ["a", "b", "c", "d", "e"].map((id) => {
+      const rec = track(recorder());
+      return { rec, id };
+    });
+    for (const person of people) {
+      await join(person.rec, person.id);
+    }
+    for (const person of people) {
+      await share(person.rec, person.id);
+    }
+    expect(denials(people[4]!.rec)).toHaveLength(1);
+    expect(
+      lastRoster(outside).participants!.filter((p) => p.sharingScreen),
+    ).toHaveLength(4);
   });
 });

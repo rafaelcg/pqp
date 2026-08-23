@@ -83,16 +83,12 @@ interface VoiceAudioSinksProps {
   outputDeviceId?: string;
   outputVolume?: number;
   /**
-   * Whoever the server says holds the presenter slot, or null.
-   *
-   * Screen audio is played only for them. On the mesh that is nearly implied
-   * already, because the roster is what classifies the track in the first
-   * place; on the SFU it is the only check there is, since a publication
-   * labelled `ScreenShareAudio` is whatever the publishing client chose to
-   * call it. Without this, a client that never won the slot would be heard by
-   * the whole room while its picture was correctly refused a place on stage.
+   * peerIds whose screen audio we should play. Comes from voice-hook state,
+   * not from whether the stage is mounted, so navigating to a text channel
+   * does not mute a live share. Unannounced SFU publications stay silent
+   * because they never make this list (the roster is the gate).
    */
-  screenSharePeerId?: string | null;
+  audibleScreenPeerIds?: string[];
 }
 
 /**
@@ -107,7 +103,7 @@ export function VoiceAudioSinks({
   isDeafened,
   outputDeviceId = "",
   outputVolume = 1,
-  screenSharePeerId = null,
+  audibleScreenPeerIds = [],
 }: VoiceAudioSinksProps) {
   return (
     <>
@@ -121,13 +117,14 @@ export function VoiceAudioSinks({
           isDeafened={isDeafened}
         />
       ))}
-      {/* The presenter's system audio, when their capture carried any. Mounted
-          only for the peer the roster names as the presenter, so the usual call
-          has exactly the elements it has always had and an unannounced
-          publication is inaudible rather than merely unwatchable. */}
+      {/* Screen audio for the shares the hook marked audible. The roster is
+          what put them on that list, so an unannounced publication stays
+          silent rather than merely unwatchable. */}
       {peers
         .filter(
-          (peer) => peer.screenAudioStream && peer.peerId === screenSharePeerId,
+          (peer) =>
+            peer.screenAudioStream &&
+            audibleScreenPeerIds.includes(peer.peerId),
         )
         .map((peer) => (
           <PeerAudio

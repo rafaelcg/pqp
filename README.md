@@ -25,7 +25,7 @@ Roles owner / admin / member. Handles are `name#1234`.
 |  |  |
 |---|---|
 | **Voice channels** | Peer-to-peer mesh (5–8 per channel), or a LiveKit SFU for bigger rooms. Push-to-talk, per-peer volume, device pickers. |
-| **Screen sharing** | One presenter per channel, from desktop or iPhone Safari. |
+| **Screen sharing** | Two presenters at once on mesh, four on LiveKit. Desktop or iPhone. |
 | **Chat** | Markdown, replies, reactions, pins, edits, typing, unread and mention badges. Link previews, GIF picker. |
 | **Search** | Full-text across the server, stemmed for Portuguese *and* English, accent-insensitive. |
 | **DMs and groups** | Direct messages and group DMs up to 10, found by handle. |

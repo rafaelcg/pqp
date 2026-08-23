@@ -66,6 +66,9 @@ struct ScreenShareStage: View {
     let track: RTCVideoTrack?
     let presenterName: String?
     var identifier: String = "voice.screenShare"
+    var presenters: [(peerId: String, name: String)] = []
+    var focusedPeerId: String? = nil
+    var onFocus: ((String) -> Void)? = nil
     @State private var isFullscreen = false
 
     var body: some View {
@@ -91,7 +94,31 @@ struct ScreenShareStage: View {
                                     ?? "Shared screen")
                 .accessibilityAddTraits(.isButton)
 
-            if let presenterName {
+            if presenters.count > 1 {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(presenters, id: \.peerId) { person in
+                            Button {
+                                onFocus?(person.peerId)
+                            } label: {
+                                Text(person.name)
+                                    .font(Typography.caption)
+                                    .foregroundStyle(person.peerId == focusedPeerId
+                                                     ? Palette.signal
+                                                     : Palette.paperMuted)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 5)
+                                    .background(
+                                        Capsule().fill(person.peerId == focusedPeerId
+                                                       ? Palette.signal.opacity(0.18)
+                                                       : Palette.surfaceRaised.opacity(0.9))
+                                    )
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+            } else if let presenterName {
                 Text("\(presenterName) is presenting")
                     .font(Typography.caption)
                     .foregroundStyle(Palette.paperMuted)

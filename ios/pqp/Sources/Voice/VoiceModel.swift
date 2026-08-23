@@ -84,23 +84,42 @@ final class VoiceModel {
 
     var participantCount: Int { peers.count + (status == .connected ? 1 : 0) }
 
-    /// The one screen on the wire, if anybody is presenting.
+    /// Screens currently on the wire, one per peer who is presenting.
     ///
-    /// Only one is possible: the server refuses a second `set-sharing-screen`
-    /// (`screen-share-denied`), so taking the first is not a guess.
+    /// The server allows two on mesh and four on LiveKit. Focus is local: the
+    /// phone shows one picture at a time and the chips switch who that is.
+    var focusedScreenPeerId: String?
+
+    var screenPresenters: [(peerId: String, name: String, track: RTCVideoTrack)] {
+        peers.compactMap { peer in
+            guard let screen = video[peer.peerId]?.screen else { return nil }
+            return (peer.peerId, peer.displayName, screen)
+        }
+    }
+
+    var resolvedScreenFocus: String? {
+        if let focused = focusedScreenPeerId,
+           video[focused]?.screen != nil {
+            return focused
+        }
+        return screenPresenters.first?.peerId
+    }
+
     var remoteScreen: RTCVideoTrack? {
-        for peer in peers {
-            if let screen = video[peer.peerId]?.screen { return screen }
+        if let focused = resolvedScreenFocus {
+            return video[focused]?.screen
         }
         return nil
     }
 
     /// Who that screen belongs to, for the presenter line.
     var presenterName: String? {
-        for peer in peers where video[peer.peerId]?.screen != nil {
-            return peer.displayName
-        }
-        return nil
+        guard let focused = resolvedScreenFocus else { return nil }
+        return screenPresenters.first(where: { $0.peerId == focused })?.name
+    }
+
+    func focusScreen(_ peerId: String) {
+        focusedScreenPeerId = peerId
     }
 
     func isMuted(_ peerId: String) -> Bool { roster[peerId]?.muted ?? false }
@@ -381,7 +400,7 @@ final class VoiceModel {
             guard voiceChannelId == channelId else { return }
             Task {
                 await screenShare.refuse(message: String(
-                    localized: "Someone else is already sharing their screen."
+                    localized: "This call already has the maximum number of screen shares."
                 ))
             }
 

@@ -167,7 +167,7 @@ Both transports carry it the same way the video is carried. Mesh adds the audio 
 
 Playback is a second `<audio>` element in `VoiceAudioSinks`, next to the one that plays that person's voice, so deafen, the output-device choice and their volume slider all apply to it. The `<video>` elements stay muted in both the presenter's preview and the viewer's stage.
 
-That element is mounted only for the peer the roster names as the presenter. On the mesh that is close to implied, since the roster is what classifies the track at all, but on the SFU it is the whole check: a LiveKit publication labelled `ScreenShareAudio` is labelled by the client that published it, and the presenter lock lives on the WS in `server/src/ws/voice.ts`, not in the LiveKit grant. Without the gate a client that never won the slot would be heard by the entire room while its picture was correctly kept off the stage.
+That element is mounted for every peer in `audibleScreenPeerIds` (hook state: both shares when two people are presenting, the focused share when there are three or more). The roster is still the gate: an unannounced LiveKit `ScreenShareAudio` publication never makes that list, so it stays silent. The list lives on the voice controller, not on whether the stage is mounted, so navigating to a text channel does not mute a live share.
 
 Feedback control is one rule: `selfBrowserSurface: "exclude"`, so the pqp tab itself is not offered in the picker. Sharing a whole Windows screen with system audio while listening on speakers is still a loop the app cannot break; headphones are the answer there, as they are for the microphone.
 
@@ -175,10 +175,11 @@ Feedback control is one rule: `selfBrowserSurface: "exclude"`, so the pqp tab it
 
 Publish/subscribe works: `publishScreen` tags the track `Track.Source.ScreenShare`, the far side subscribes it into `RemotePeer.screenStream`, and `unpublishScreen` clears it. Verified with two browsers against a live LiveKit.
 
-The one-presenter lock is enforced in `ws/voice.ts` on the `set-sharing-screen` frame, so it is transport-independent and it does work: a second claimant gets `screen-share-denied` and the roster keeps naming the first presenter. Two caveats, both verified:
+Concurrent presenters are capped in `ws/voice.ts` on the `set-sharing-screen` frame: **2 on mesh, 4 on LiveKit** (`SCREEN_SHARE_LIMIT`). A claimant past the cap gets `screen-share-denied` and the roster does not add them. Two caveats, both still true under a cap:
 
-- **The lock binds the roster, not the media.** A client that publishes a `ScreenShare` track without announcing it is not stopped by anything — LiveKit has no such rule and the server cannot see the track. Every other participant subscribes and decodes it. It is never *rendered*, because `ScreenShareView` is driven by `screenSharePeerId` from the roster, so this is a bandwidth-grief vector rather than a way to hijack the presenter slot.
-- **The honest client publishes before it is answered.** `startScreenShare()` sends `set-sharing-screen` and publishes to the SFU without waiting; on a denial, `screen-share-denied` arrives a round trip later and unpublishes. In the simultaneous-click race a second screen track is briefly live on the SFU.
+- **The cap binds the roster, not the media.** A client that publishes a `ScreenShare` track without announcing it is not stopped by anything — LiveKit has no such rule and the server cannot see the track. Every other participant subscribes and decodes it. It is never *rendered*, because `ScreenStage` is driven by `screenSharePeerIds` from the roster, so this is a bandwidth-grief vector rather than a way to hijack a slot.
+- **The honest client publishes before it is answered.** `startScreenShare()` sends `set-sharing-screen` and publishes to the SFU without waiting; on a denial, `screen-share-denied` arrives a round trip later and unpublishes. In the simultaneous-click race at the cap a spare screen track is briefly live on the SFU.
+- **Cap 4 without `adaptiveStream`:** a viewer can pull 4 × 2.5 Mbps = 10 Mbps down, all decoded at 30 fps, including thumbnail shares. That is the price of deferring `Track.attach()`. Mesh is unchanged: `tuneScreenSender` already budgets per presenter across the peer count, so a second presenter adds no encode cost to the first.
 
 ## Cloudflare Realtime SFU — still a stub
 
@@ -235,7 +236,7 @@ Verified end-to-end on 2026-08-07 against `livekit/livekit-server:latest` (v1.13
 | Two participants join the room and exchange audio | verified — peak RMS ~0.31 in **both** directions |
 | `setMuted` silences the far side and unmute restores it | verified (RMS 0 → 0.30) |
 | Screen share publish/subscribe/unpublish | verified |
-| One-presenter lock (roster) | verified; **media layer is not locked** — see above |
+| Presenter cap (roster: 2 mesh / 4 LiveKit) | unit-tested; **media layer is not locked** — see above |
 | Ban ejects from the live room | verified |
 | Ban survives a rejoin on the pre-ban token | **was broken**, now verified fixed via re-sweep (`revokeTokenTs` is Cloud-only) |
 | Banned user cannot mint a fresh token / re-enter over `/ws` | verified (403, no `welcome`) |

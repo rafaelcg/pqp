@@ -19,7 +19,15 @@ struct VoiceView: View {
                 // at thumbnail size and an avatar is not.
                 if let screen = model.remoteScreen {
                     compactHeader
-                    ScreenShareStage(track: screen, presenterName: model.presenterName)
+                    ScreenShareStage(
+                        track: screen,
+                        presenterName: model.presenterName,
+                        presenters: model.screenPresenters.map {
+                            ($0.peerId, $0.name)
+                        },
+                        focusedPeerId: model.resolvedScreenFocus,
+                        onFocus: { model.focusScreen($0) }
+                    )
                         .frame(maxHeight: 260)
                     participants
                 } else {

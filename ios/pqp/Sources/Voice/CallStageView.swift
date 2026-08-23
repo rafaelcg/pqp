@@ -64,7 +64,12 @@ struct CallStageView: View {
                 ScreenShareStage(
                     track: call.remoteScreen,
                     presenterName: call.presenterName,
-                    identifier: "call.screenShare"
+                    identifier: "call.screenShare",
+                    presenters: call.screenPresenters.map {
+                        ($0.peerId, $0.name)
+                    },
+                    focusedPeerId: call.resolvedScreenFocus,
+                    onFocus: { call.focusScreen($0) }
                 )
                 participantRail
                     .frame(height: 96)

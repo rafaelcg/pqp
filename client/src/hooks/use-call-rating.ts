@@ -54,7 +54,7 @@ interface VoiceShape {
   status: string;
   remotePeers: unknown[];
   usingSfu: boolean;
-  screenSharePeerId: string | null;
+  screenSharePeerIds: string[];
   voiceChannelId: string | null;
 }
 
@@ -73,7 +73,7 @@ export function useCallRating(voice: VoiceShape): {
   const snapshot: CallSnapshot = {
     peerCount: voice.remotePeers.length,
     usingSfu: voice.usingSfu,
-    screenSharing: voice.screenSharePeerId !== null,
+    screenSharing: voice.screenSharePeerIds.length > 0,
     channelId: voice.voiceChannelId,
   };
 
