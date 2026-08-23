@@ -54,12 +54,78 @@ jobs:
           # workflow_run checks out the default branch by default, which is not
           # necessarily the commit CI just passed on.
           ref: ${{ github.event.workflow_run.head_sha || github.ref }}
+          # Full history: the relevance check below diffs against whatever
+          # commit production is actually running, which can be many commits
+          # back. A shallow clone makes that diff impossible and would send us
+          # down the fail-open path on every single run.
+          fetch-depth: 0
 
       - name: Resolve commit
         id: commit
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
+      # WHY THIS EXISTS. Every merge to main redeployed this app, and a deploy
+      # replaces the single machine, which drops every live WebSocket at once.
+      # For a change to the marketing copy or a React component that is a
+      # user-visible outage bought for nothing: the API image does not contain
+      # the client, so the running server is byte-for-byte what it would have
+      # been. On the night this was written three PRs were queued behind a
+      # traffic window, and not one of them touched a server file.
+      #
+      # WHY IT DIFFS AGAINST PRODUCTION rather than against the previous commit.
+      # If it compared HEAD to HEAD~1, three client-only merges followed by a
+      # server merge would deploy only the last one's changes in isolation, and
+      # any skipped commit would be lost track of. Asking /health what commit is
+      # actually serving makes the check self-correcting: the diff always spans
+      # everything production has not yet received, however many merges were
+      # skipped in between.
+      #
+      # IT FAILS OPEN, ALWAYS, and that is the whole safety property. Unreachable
+      # host, malformed response, a SHA this clone does not contain (a force
+      # push, a rollback, a fresh machine reporting "dev"), a git error: every
+      # one of those deploys. A wrongly skipped deploy is a silent outage of new
+      # code that nobody notices for hours. A wrongly performed deploy costs a
+      # few seconds of reconnect. Those are not close.
+      - name: Does the API need this commit?
+        id: relevant
+        env:
+          HEALTH_URL: https://api.pqp.gg/health
+        run: |
+          set -uo pipefail
+          decide() {
+            echo "needed=$1" >> "$GITHUB_OUTPUT"
+            echo "::notice::API deploy needed=$1 ($2)"
+          }
+
+          body=$(curl -fsS --max-time 15 "$HEALTH_URL" 2>/dev/null) || {
+            decide true "could not reach $HEALTH_URL, failing open"; exit 0; }
+          deployed=$(printf '%s' "$body" | jq -r '.version // empty' 2>/dev/null) || deployed=""
+
+          case "$deployed" in
+            ?*[!0-9a-f]* | "" ) decide true "no usable commit in /health (got '${deployed:-empty}'), failing open"; exit 0 ;;
+          esac
+          if ! git cat-file -e "${deployed}^{commit}" 2>/dev/null; then
+            decide true "deployed commit $deployed is not in this clone, failing open"; exit 0
+          fi
+
+          changed=$(git diff --name-only "$deployed" HEAD) || {
+            decide true "git diff failed, failing open"; exit 0; }
+          if [ -z "$changed" ]; then
+            decide false "production is already on this tree"; exit 0
+          fi
+
+          # Everything baked into the API image, plus the files that decide how
+          # it is built and run. `packages/` is here in full because the server
+          # imports @pqp/shared and a Docker build copies the workspace.
+          if printf '%s\n' "$changed" | grep -qE '^(server/|packages/|Dockerfile|fly\.toml|pnpm-lock\.yaml|pnpm-workspace\.yaml|package\.json|\.github/workflows/deploy-api-fly\.yml)'; then
+            decide true "server-relevant files changed since $deployed"
+          else
+            decide false "only client-side files changed since ${deployed:0:7}; leaving the machine and its sockets alone"
+            printf '%s\n' "$changed" | sed 's/^/  skipped: /'
+          fi
+
       - name: Check deploy environment
+        if: steps.relevant.outputs.needed == 'true'
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
@@ -69,6 +135,7 @@ jobs:
           fi
 
       - name: Install flyctl
+        if: steps.relevant.outputs.needed == 'true'
         uses: superfly/flyctl-actions/setup-flyctl@master
 
       # --ha=false IS LOAD-BEARING, not a cost tweak. Without it Fly happily
@@ -85,6 +152,7 @@ jobs:
       # reads. A manual `fly deploy` without -e drops it back to "dev"; that is
       # a signal the deploy did not come from CI, not a bug.
       - name: Deploy
+        if: steps.relevant.outputs.needed == 'true'
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
@@ -103,6 +171,7 @@ jobs:
       # the deploy log and present to users as "my friend can't see my
       # messages". Cheap check, expensive failure.
       - name: Assert exactly one machine, in gru
+        if: steps.relevant.outputs.needed == 'true'
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
@@ -124,6 +193,7 @@ jobs:
       # indistinguishable from an unauthenticated request from the outside.
       # /health is the only surface that can tell you what code is running.
       - name: Verify the deployed commit
+        if: steps.relevant.outputs.needed == 'true'
         env:
           API_URL: ${{ secrets.VITE_API_URL }}
           EXPECTED: ${{ steps.commit.outputs.sha }}
