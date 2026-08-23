@@ -302,7 +302,7 @@ export const TELA_FAQ: Record<
     {
       question: "Quantas pessoas podem compartilhar tela numa sala?",
       answer:
-        "A voz é P2P, o que é ótimo pra grupo pequeno: 5 ou 6 pessoas por sala vai bem. Mais que isso a qualidade cai. Salas maiores estão em teste e ainda não são o padrão.",
+        "Duas pessoas podem passar a tela ao mesmo tempo, lado a lado, e cada uma tem o seu botão de tela cheia. A sala em si vai bem com 5 ou 6 pessoas na voz, que é P2P. Salas maiores estão em teste e ainda não são o padrão.",
     },
     {
       question: "É de graça?",
@@ -334,7 +334,7 @@ export const TELA_FAQ: Record<
     {
       question: "How many people can share a screen in one room?",
       answer:
-        "Voice is peer-to-peer, which is great for a small group: 5 or 6 people per room works well. Beyond that, quality drops. Bigger rooms are being tested and are not the default yet.",
+        "Two people can share a screen at the same time, side by side, and each one has its own fullscreen button. The room itself works well with 5 or 6 people on voice, which is peer-to-peer. Bigger rooms are being tested and are not the default yet.",
     },
     {
       question: "Is it free?",
