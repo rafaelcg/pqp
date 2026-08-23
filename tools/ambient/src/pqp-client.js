@@ -167,29 +167,62 @@ export class PqpApi {
 }
 
 /**
- * One persona's live socket.
+ * One live socket. ONE. It connects, it carries frames, and when it dies it
+ * says so — it does not come back.
  *
  * Deliberately thin — auth, join, typing, send, react, and a listener for
  * inbound broadcasts. The reconnect-with-backoff that `client/src/lib/realtime.ts`
- * grew (see pitfall #9 in CLAUDE.md) is *not* here: a persona whose socket drops
- * should go quiet and be re-cast on the next scene, which is both simpler and a
- * better imitation of a person who closed the tab.
+ * grew (see pitfall #9 in CLAUDE.md) is *not* here, and that is a decision about
+ * this class rather than about every caller: reconnect is a POLICY, and the two
+ * consumers of this file want opposite policies.
+ *
+ *   - The ambient cast wants "go quiet". A persona whose socket drops should
+ *     stay dropped and be re-cast on the next scene, which is both simpler and a
+ *     better imitation of a person who closed the tab. `runner.js` registers no
+ *     close handler, so it gets exactly the old behaviour, unchanged.
+ *
+ *   - The support bot wants "come back". It connects once at boot and then waits
+ *     to be mentioned, so a dropped socket makes it permanently, silently deaf
+ *     while every external signal — machine `started`, a clean lifecycle log
+ *     trail — still says healthy. That is not hypothetical: it is what happened
+ *     on 2026-08-23, and nothing anywhere reported it.
+ *     `tools/support-bot/src/socket.js` wraps this class to implement it.
+ *
+ * What changed here to make that possible is small and policy-free: a socket
+ * that dies now TELLS somebody (`onClose`) instead of dying in silence, and the
+ * error path no longer swallows the reason. A close handler nobody registers
+ * costs the cast nothing; a close nobody can observe costs the bot everything.
  */
 export class PqpSocket {
   #socket = null;
   #handlers = new Set();
+  #closeHandlers = new Set();
+  /** Guards `onClose` fan-out: error-then-close must not fire it twice. */
+  #closedNotified = false;
+  /** Whatever `onerror` saw, so the close that follows can carry a reason. */
+  #lastError = null;
 
-  constructor({ wsUrl, token, label }) {
+  /**
+   * `WebSocketImpl` exists for tests and for nothing else. Node's global
+   * `WebSocket` is the only implementation used in production; injecting a fake
+   * is what lets `tools/support-bot/test/socket.test.js` drive a close, an
+   * error, and a half-open socket deterministically, none of which a real
+   * server can be asked for on demand.
+   */
+  constructor({ wsUrl, token, label, WebSocketImpl = WebSocket }) {
     this.wsUrl = wsUrl;
     this.token = token;
     this.label = label;
     this.channelId = null;
+    this.WebSocketImpl = WebSocketImpl;
   }
 
   connect() {
     return new Promise((resolve, reject) => {
-      const socket = new WebSocket(this.wsUrl);
+      const socket = new this.WebSocketImpl(this.wsUrl);
       this.#socket = socket;
+      this.#closedNotified = false;
+      this.#lastError = null;
       let settled = false;
 
       const timer = setTimeout(() => {
@@ -233,16 +266,80 @@ export class PqpSocket {
               `${this.label}: socket closed before ready (${event.code})`,
             ),
           );
+          return;
         }
+        this.#notifyClosed({ code: event.code, reason: event.reason });
       };
 
-      socket.onerror = () => {};
+      // Not swallowed any more. `onerror = () => {}` is how a live socket
+      // failure became invisible: the error carried the only description of
+      // what went wrong, and some runtimes fire it WITHOUT a following close,
+      // which left an established socket dead with nothing logged and nobody
+      // told. Both paths now funnel into the same idempotent notification, the
+      // way `realtime.ts` learned to.
+      socket.onerror = (event) => {
+        this.#lastError = String(event?.message ?? event?.error?.message ?? "socket error");
+        if (settled) {
+          this.#notifyClosed({ code: 1006, reason: this.#lastError });
+          try {
+            socket.close();
+          } catch {
+            // already closing
+          }
+        }
+      };
     });
+  }
+
+  /**
+   * Called once when an ESTABLISHED socket goes away, with `{ code, reason }`.
+   *
+   * Never called for a connect that failed before `ready` — that is already
+   * reported by `connect()`'s rejection, and a caller that had to handle it in
+   * both places would handle it wrong in one of them.
+   */
+  #notifyClosed(event) {
+    if (this.#closedNotified) {
+      return;
+    }
+    this.#closedNotified = true;
+    const detail = {
+      code: event.code ?? 1006,
+      reason: event.reason || this.#lastError || "",
+      label: this.label,
+    };
+    for (const handler of this.#closeHandlers) {
+      try {
+        handler(detail);
+      } catch {
+        // A broken close handler must not take the process with it.
+      }
+    }
   }
 
   onFrame(handler) {
     this.#handlers.add(handler);
     return () => this.#handlers.delete(handler);
+  }
+
+  /**
+   * Observe the death of this socket. Registering nothing keeps the old
+   * behaviour exactly: the socket dies quietly and the caller goes quiet with
+   * it, which is what the ambient cast wants.
+   */
+  onClose(handler) {
+    this.#closeHandlers.add(handler);
+    return () => this.#closeHandlers.delete(handler);
+  }
+
+  /** True when frames can actually be sent right now. */
+  isOpen() {
+    return this.#socket?.readyState === 1;
+  }
+
+  /** Raw frame send, for keepalives that are not part of the chat protocol. */
+  sendFrame(frame) {
+    this.#send(frame);
   }
 
   #send(frame) {
@@ -279,7 +376,14 @@ export class PqpSocket {
     });
   }
 
+  /**
+   * Deliberate shutdown. Close handlers are NOT fired: they exist to report a
+   * socket that died on its own, and a caller that just asked for this already
+   * knows. Firing them here is how a wrapper ends up reconnecting the socket it
+   * was told to put down.
+   */
   close() {
+    this.#closedNotified = true;
     this.#socket?.close();
     this.#socket = null;
   }

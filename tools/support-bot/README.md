@@ -34,8 +34,11 @@ rather than configured:
 | `src/screen.js` | The outbound screen. The last thing between a generated answer and a public channel. Pure. |
 | `src/budget.js` | The daily ceiling, on disk, so a crash loop cannot reset it. |
 | `src/generate.js` | One question, one model call. Or a fixture under `--canned`. |
+| `src/socket.js` | The reconnect. The one place this bot's socket policy differs from the ambient cast's, and why. |
+| `src/heartbeat.js` | One line every five minutes saying whether it is actually connected. |
 | `src/bot.js` | The only file that touches the network, the clock or the disk. |
 | `scripts/provision.mjs` | Mint / rotate / revoke the one character account. **Not yet run.** |
+| `scripts/fake-pqp.mjs` | A fixture pqp server that can drop a socket on demand. Reproduces the 2026-08-23 outage. |
 
 ## Why a sibling of `tools/ambient` and not a mode inside it
 
@@ -174,9 +177,66 @@ DEV_AUTH_BYPASS=true node src/bot.js --watch --canned --dry-run
 
 Env: `PQP_API_URL`, `SUPPORT_TOKENS_FILE`, `SUPPORT_STATE_DIR`, `SUPPORT_MODEL`,
 `SUPPORT_OWNER_HANDLE`, `SUPPORT_CHANNELS`, `SUPPORT_IGNORE_USER_IDS`,
-`SUPPORT_MAX_*`, `ANTHROPIC_API_KEY`, and two kill switches:
+`SUPPORT_MAX_*`, `SUPPORT_HEARTBEAT_MS` (default 300000 — read the cadence note
+in `src/heartbeat.js` before lowering it), `ANTHROPIC_API_KEY`, and two kill
+switches:
 **`SUPPORT_BOT_KILL_SWITCH=1`** stops this bot, **`AMBIENT_KILL_SWITCH=1`** stops
 every automated account in the product including this one.
+
+## The socket, and why it now reconnects
+
+`manual [bot]` connects once at boot and then waits to be mentioned. That makes
+its WebSocket the service, not a per-task resource, and on **2026-08-23** the
+consequence arrived: it logged `bot.ready` and `bot.start` at 17:33:32Z and then
+nothing at all, for hours, in a 114-member community. The Fly machine said
+`started`, the log trail ended cleanly on a start, and in the app the account sat
+in the member list under **OFFLINE** — because `server/src/ws/status.ts` defines
+`online` as "there is a live socket" and there was no live socket.
+
+Three separately correct decisions composed into it:
+
+1. `tools/ambient/src/pqp-client.js` has no reconnect, on purpose. A persona
+   whose socket drops should go quiet and be re-cast on the next scene. **That
+   is still true and still the cast's behaviour.**
+2. `socket.onerror = () => {}` swallowed the reason.
+3. The process never exited, so `[[restart]] policy = "always"` never fired.
+
+The fix keeps (1) for the cast and gives this bot the opposite policy, in
+`src/socket.js`, because reconnect is a policy and the two consumers want
+opposite ones. `PqpSocket` gained only the ability to be *observed* — `onClose`,
+an error path that no longer swallows, `isOpen`. `ResilientSocket` wraps it with
+backoff, a fresh token per attempt, an application-level ping/pong keepalive that
+catches the half-open socket, and a re-join of the channel after every recovery.
+It follows `client/src/lib/realtime.ts`, which had already been through this
+(pitfall #9 in `CLAUDE.md`).
+
+Every transition is logged — `socket.closed`, `socket.reconnect`,
+`socket.reconnect.failed`, `socket.reconnected`, `socket.stale` — because
+silence is what made the outage invisible in the first place.
+
+### The heartbeat
+
+`src/heartbeat.js` prints one `bot.heartbeat` line every five minutes whether or
+not anybody asked anything:
+
+```
+bot.heartbeat connected=1 expected=1 reconnects=0 closes=0 downForS=0 idleForS=12 uptimeS=3600
+```
+
+It exists so that "the bot is deaf" stops looking like "the channel is quiet".
+`scripts/monitor/bot-heartbeat.mjs` reads it and imports the event name and
+cadence from this package, so the two cannot drift. Cadence is a trade against
+history: Fly's free retention is the ~100-line `fly logs --no-tail` buffer, and
+12 lines an hour still leaves it covering roughly eight hours.
+
+### Reproducing a dropped socket
+
+`scripts/fake-pqp.mjs` is a fixture pqp API and WebSocket server with a control
+plane that can drop a socket the way a proxy reap does — a TCP reset with no
+close frame, which neither production nor a local dev stack will produce on
+request. The exact commands are in its header. `test/socket.test.js` covers the
+same failures against a fake WebSocket, including the half-open case and an
+`error` with no `close` behind it.
 
 ## Before it is switched on
 

@@ -37,12 +37,21 @@
  * (character tokens or the dev bypass), `log.js` (JSONL audit trail and the
  * kill switch), `RateCap` from `schedule.js`, and the identity screens in
  * `guardrails.js`.
+ *
+ * What is NOT reused is the socket's failure policy, and that is the one place
+ * this bot's needs diverge from the cast's rather than merely differ. A persona
+ * whose socket drops should go quiet and be re-cast next scene. This account has
+ * no next scene: it connects at boot and waits to be mentioned, so a dropped
+ * socket makes it permanently, silently deaf while the machine still reports
+ * `started`. `src/socket.js` wraps `PqpSocket` with the reconnect the cast
+ * deliberately does without, and `src/heartbeat.js` publishes the resulting
+ * connection state on a timer so that "deaf" can never again look like "quiet".
  */
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { appendFileSync, mkdirSync } from "node:fs";
 
-import { PqpApi, PqpSocket, sleep } from "../../ambient/src/pqp-client.js";
+import { PqpApi, sleep } from "../../ambient/src/pqp-client.js";
 import { resolveIdentity } from "../../ambient/src/identity.js";
 import { createLogger, killSwitchEngaged, engageKillSwitch } from "../../ambient/src/log.js";
 import { RateCap } from "../../ambient/src/schedule.js";
@@ -54,6 +63,8 @@ import { screenAnswer } from "./screen.js";
 import { FIXED, cannedAnswerFor, fallbackAnswer, parseAnswer } from "./answer.js";
 import { Budget } from "./budget.js";
 import { generateAnswer, estimateCostUsd, DEFAULT_MODEL } from "./generate.js";
+import { ResilientSocket } from "./socket.js";
+import { startHeartbeat } from "./heartbeat.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, "..");
@@ -360,6 +371,30 @@ async function connect(args, log) {
   const token = identity.tokenFor(args.botId);
   const api = new PqpApi({ baseUrl: args.apiUrl, token });
 
+  /**
+   * A fresh credential for every socket attempt, not the one captured at boot.
+   *
+   * `realtime.ts` needs this because a Clerk JWT expires in a minute; here the
+   * character token is long-lived, so the thing it buys is different and still
+   * worth having: the secrets file is re-read, so a rotated token is picked up
+   * by the next reconnect instead of requiring a restart nobody will think to
+   * do while the bot appears to be running. A failed re-read falls back to the
+   * token that is currently working rather than turning a rotation typo into an
+   * outage.
+   */
+  const tokenProvider = () => {
+    try {
+      return resolveIdentity({
+        tokensFile: args.tokensFile,
+        devToken: args.devToken,
+        personaIds: [args.botId],
+      }).tokenFor(args.botId);
+    } catch (error) {
+      log("identity.reread.failed", { error: String(error.message) });
+      return token;
+    }
+  };
+
   if (identity.mode !== "character") {
     // Dev bypass only. A character account is minted with its gates cleared and
     // its display name already set (see scripts/provision.mjs), and this branch
@@ -408,7 +443,13 @@ async function connect(args, log) {
     channels: channels.map((c) => `#${c.name}`),
   });
 
-  return { api, bot: { userId: me.id, username: me.username }, server, channels, token };
+  return {
+    api,
+    bot: { userId: me.id, username: me.username },
+    server,
+    channels,
+    tokenProvider,
+  };
 }
 
 async function main() {
@@ -498,7 +539,7 @@ async function main() {
     });
   }
 
-  const { bot, channels, token } = await connect(args, log);
+  const { bot, channels, tokenProvider } = await connect(args, log);
   runtime.bot = bot;
   runtime.allowedChannelIds = new Set(channels.map((c) => c.id));
 
@@ -509,15 +550,22 @@ async function main() {
     ownerHandle: args.ownerHandle,
   });
 
-  // One socket per channel. `PqpSocket` pins itself to the channel it joined,
-  // so this is also what makes `socket.send` land in the right room without the
-  // runner having to track which channel a reply belongs to.
+  // One socket per channel. `ResilientSocket` pins itself to the channel it
+  // joined, so this is also what makes `socket.send` land in the right room
+  // without the runner having to track which channel a reply belongs to — and
+  // it re-joins that same channel after every reconnect, so the pin survives a
+  // dropped connection.
   const sockets = new Map();
   const queue = [];
   for (const channel of channels) {
-    const socket = new PqpSocket({ wsUrl: args.wsUrl, token, label: `#${channel.name}` });
-    await socket.connect();
-    socket.joinChannel(channel.id);
+    const socket = new ResilientSocket({
+      wsUrl: args.wsUrl,
+      label: `#${channel.name}`,
+      channelId: channel.id,
+      tokenProvider,
+      log,
+    });
+    await socket.start();
     socket.onFrame((frame) => {
       if (frame.type !== "message-broadcast") {
         return;
@@ -539,6 +587,10 @@ async function main() {
     });
     sockets.set(channel.id, socket);
   }
+
+  // The only line this process emits on a quiet day. Started after the sockets
+  // exist so the first beat reports a real connected count rather than zero.
+  const stopHeartbeat = startHeartbeat({ sockets: [...sockets.values()], log });
 
   for (;;) {
     if (stopped()) {
@@ -584,7 +636,22 @@ async function main() {
     // machine barging in and makes the room feel automated; the ambient runner
     // pads to a plausible typing speed, this one just refuses to be instant.
     await sleep(MIN_LATENCY_MS);
-    socket.send(result.post);
+    try {
+      socket.send(result.post);
+    } catch (error) {
+      // The socket dropped between composing the answer and posting it. Before
+      // reconnect existed this threw out of `main()` and took the process down;
+      // now it is a logged dropped answer and the reconnect loop is already
+      // working on the socket. The question survives in the escalation ledger
+      // when it was one, and the asker can ask again.
+      log("answer.dropped", {
+        reason: result.reason,
+        error: String(error.message),
+        author: message.authorName,
+        question: message.body,
+      });
+      continue;
+    }
     runtime.lastAnswerAt = Date.now();
     runtime.rateCap.record(`user:${message.authorId}`, runtime.lastAnswerAt);
     runtime.rateCap.record(`channel:${message.channelId}`, runtime.lastAnswerAt);
@@ -596,6 +663,7 @@ async function main() {
     });
   }
 
+  stopHeartbeat();
   for (const socket of sockets.values()) {
     socket.close();
   }
