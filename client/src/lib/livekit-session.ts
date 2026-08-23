@@ -1,5 +1,9 @@
 import type { VoiceSessionInfo } from "@pqp/shared";
 import type { PeerConnectionState, RemotePeer } from "./peer-connection-manager";
+import { cameraBitrateFor, DEFAULT_VIDEO_QUALITY } from "./video-quality";
+
+/** Where a session starts before anybody has chosen a quality. */
+const DEFAULT_CAMERA_MAX_BITRATE_BPS = cameraBitrateFor(DEFAULT_VIDEO_QUALITY);
 
 /**
  * LiveKit SFU media path (Phase 5).
@@ -29,6 +33,15 @@ export interface LiveKitSession {
   unpublishScreenAudio(): Promise<void>;
   /** Publish a camera video track (conversation calls). */
   publishCamera(stream: MediaStream): Promise<void>;
+  /**
+   * Change the camera's bitrate ceiling on an already-published track.
+   *
+   * The SFU twin of the mesh manager's method of the same name, so the quality
+   * selector means the same thing on both transports. Publishing is what
+   * carries the ceiling for a camera turned on *after* the choice; this is for
+   * one turned on before it.
+   */
+  setCameraMaxBitrate(maxBitrate: number): Promise<void>;
   /** Stop publishing the camera video track. */
   unpublishCamera(): Promise<void>;
   disconnect(): Promise<void>;
@@ -190,6 +203,8 @@ export async function connectLiveKit({
   let publishedScreenTrack: MediaStreamTrack | null = null;
   /** Raw camera track we published, kept so we can unpublish it later. */
   let publishedCameraTrack: MediaStreamTrack | null = null;
+  /** The ceiling the next camera publish will carry. See `setCameraMaxBitrate`. */
+  let cameraMaxBitrate = DEFAULT_CAMERA_MAX_BITRATE_BPS;
   /** The screen share's audio track, when the capture had one. Usually null. */
   let publishedScreenAudioTrack: MediaStreamTrack | null = null;
 
@@ -300,7 +315,44 @@ export async function connectLiveKit({
       await room.localParticipant.publishTrack(videoTrack, {
         source: Track.Source.Camera,
         simulcast: false,
+        // The camera half of the argument the screen share has been making
+        // since it was written: without these the encoder holds resolution and
+        // spends framerate, and a face is motion. The encoding is a ceiling,
+        // not a target, so a still person still costs almost nothing.
+        degradationPreference: "maintain-framerate",
+        videoEncoding: {
+          maxBitrate: cameraMaxBitrate,
+          maxFramerate: 30,
+        },
       });
+    },
+
+    async setCameraMaxBitrate(maxBitrate: number) {
+      cameraMaxBitrate = maxBitrate;
+      const publication = room.localParticipant.getTrackPublication(
+        Track.Source.Camera,
+      );
+      const sender = publication?.track?.sender;
+      if (!sender) {
+        return;
+      }
+      try {
+        const params = sender.getParameters();
+        if (!params.encodings || params.encodings.length === 0) {
+          params.encodings = [{}];
+        }
+        for (const encoding of params.encodings) {
+          encoding.maxBitrate = maxBitrate;
+        }
+        await sender.setParameters(params);
+      } catch (err) {
+        // Same promise as the mesh path: a refused ceiling leaves a working
+        // camera at the rate it already had, never a dead one.
+        console.warn(
+          "[pqp] SFU camera ceiling rejected; keeping the published one",
+          err,
+        );
+      }
     },
 
     async unpublishCamera() {
