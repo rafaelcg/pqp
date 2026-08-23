@@ -14,7 +14,7 @@
  */
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { asserts, STALE_CLAIMS } from "./social.mjs";
+import { asserts, lastSegment, STALE_CLAIMS } from "./social.mjs";
 
 const claim = (id) => {
   const found = STALE_CLAIMS.find((c) => c.id === id);
@@ -95,4 +95,32 @@ describe("the claim table itself", () => {
     const ids = STALE_CLAIMS.map((c) => c.id);
     assert.equal(new Set(ids).size, ids.length);
   });
+});
+
+
+test("lastSegment yields the proof-of-fetch marker for the URL shapes we post", () => {
+  // The marker is what stops a 200 login wall from screening clean. Reddit
+  // comment permalinks come in several shapes depending on who pasted them, so
+  // all of them have to resolve to the comment id.
+  assert.equal(
+    lastSegment("https://old.reddit.com/r/x/comments/1vr76ea/-/p51vgpj"),
+    "p51vgpj",
+  );
+  assert.equal(
+    lastSegment("https://www.reddit.com/r/x/comments/1vr76ea/comment/p51vgpj/"),
+    "p51vgpj",
+  );
+  assert.equal(
+    lastSegment("https://old.reddit.com/r/x/comments/1vr76ea/-/p51vgpj.json"),
+    "p51vgpj",
+  );
+  // A thread URL with no comment falls back to the slug, which is still a
+  // string the real page contains and a wall does not.
+  assert.equal(
+    lastSegment("https://old.reddit.com/r/x/comments/1vr76ea/alternativa_para_transmissao/"),
+    "alternativa_para_transmissao",
+  );
+  // Garbage in, empty marker out: the guard then does not fire, which is the
+  // right failure direction (we lose the check, we do not invent a pass).
+  assert.equal(lastSegment("not a url"), "");
 });

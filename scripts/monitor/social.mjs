@@ -37,6 +37,21 @@ const REPO = join(HERE, "..", "..");
 const FACTS_PATH = join(REPO, "tools", "support-bot", "facts.md");
 
 /** Where the things we have published are listed. See the header of that file. */
+/**
+ * Last meaningful path segment of a URL, used as the default proof-of-fetch
+ * marker. Trailing slashes and a `.json` suffix are stripped so the same entry
+ * works whichever form somebody pasted.
+ */
+export function lastSegment(url) {
+  try {
+    const path = new URL(url).pathname.replace(/\.json$/, "").replace(/\/+$/, "");
+    const seg = path.split("/").filter(Boolean).pop() ?? "";
+    return seg === "-" ? "" : seg;
+  } catch {
+    return "";
+  }
+}
+
 const PUBLISHED_PATH = join(HERE, "published.json");
 
 /** How far back a "new mention" counts. One day, matching the workflow cadence. */
@@ -205,12 +220,31 @@ async function checkPublishedDrift() {
         headers: { "user-agent": "pqp-monitor/1 (+https://pqp.gg)" },
       });
       if (res.status !== 200) {
-        unreachable.push(`${entry.url} — HTTP ${res.status}`);
+        unreachable.push(`${entry.url} \u2014 HTTP ${res.status}`);
         continue;
       }
       body = textOf(res.body);
+
+      // A 200 IS NOT PROOF WE READ THE POST, and on Reddit it usually is not.
+      // `old.reddit.com/.../-/<id>` answers 200 with a 320KB "Welcome to
+      // Reddit" login wall that contains none of the comment. Screening that
+      // finds no stale claim and the check reports PASS, which is the worst
+      // outcome available here: a green tick over a page we never read.
+      //
+      // So every entry must carry a `marker` that appears in its own body when
+      // the fetch really worked. Default is the last path segment, which for a
+      // Reddit comment permalink is the comment id and for most forums is the
+      // slug. Absent it, this is unreachable, not clean.
+      const marker = entry.marker ?? lastSegment(entry.url);
+      if (marker && !body.toLowerCase().includes(marker.toLowerCase())) {
+        unreachable.push(
+          `${entry.url} \u2014 fetched 200 but the body did not contain "${marker}", ` +
+            `so this is a wall or a redirect, not the post`,
+        );
+        continue;
+      }
     } catch (error) {
-      unreachable.push(`${entry.url} — ${error.message}`);
+      unreachable.push(`${entry.url} \u2014 ${error.message}`);
       continue;
     }
 
