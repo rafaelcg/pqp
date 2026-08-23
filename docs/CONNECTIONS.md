@@ -90,8 +90,8 @@ one pqp user per SteamID.
 
 ## Not built
 
-- Xbox Live, PlayStation, Riot, Epic, Nintendo (partner programmes or review
-  gates; see the conversation that scoped this feature)
+- YouTube, Riot, Roblox, and GitHub are Settings tiles only. Xbox,
+  PlayStation, and Nintendo are still not shown.
 - Live "now playing" / rich presence
 - Linked roles that gate channels on a connected account
 - iOS Settings UI (the web/PWA path works)

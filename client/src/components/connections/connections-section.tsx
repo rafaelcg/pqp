@@ -7,7 +7,11 @@ import {
   type OwnConnection,
 } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
-import { ConnectionGlyph } from "@/components/connections/connection-badges";
+import {
+  ConnectionGlyph,
+  UPCOMING_CONNECTION_PROVIDERS,
+  type UpcomingConnectionProvider,
+} from "@/components/connections/connection-badges";
 import {
   ApiError,
   disconnectConnection,
@@ -19,10 +23,17 @@ import {
 import { takeConnectionErrorFromWindow } from "@/lib/connection-callback";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 
-const PROVIDER_NAME: Record<ConnectionProvider, MessageKey> = {
+const PROVIDER_NAME: Record<
+  ConnectionProvider | UpcomingConnectionProvider,
+  MessageKey
+> = {
   steam: "connections.provider.steam",
   battlenet: "connections.provider.battlenet",
   twitch: "connections.provider.twitch",
+  youtube: "connections.provider.youtube",
+  riot: "connections.provider.riot",
+  roblox: "connections.provider.roblox",
+  github: "connections.provider.github",
 };
 
 const VISIBILITY_LABEL: Record<ConnectionVisibility, MessageKey> = {
@@ -231,6 +242,24 @@ export function ConnectionsSection() {
             </li>
           );
         })}
+        {UPCOMING_CONNECTION_PROVIDERS.map((provider) => (
+          <li
+            key={provider}
+            className="rounded-lg border border-ink-4 bg-ink-3/40 px-3 py-3"
+          >
+            <div className="flex items-start gap-3">
+              <ConnectionGlyph provider={provider} className="mt-0.5 h-6 w-6" />
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-medium text-paper">
+                  {t(PROVIDER_NAME[provider])}
+                </p>
+                <p className="mt-0.5 text-xs text-paper-muted">
+                  {t("settings.connections.comingSoon")}
+                </p>
+              </div>
+            </div>
+          </li>
+        ))}
       </ul>
       {error && (
         <p className="text-sm text-danger" role="alert">
