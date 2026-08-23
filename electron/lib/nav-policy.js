@@ -66,23 +66,53 @@ function hostMatches(host, suffix) {
 }
 
 /**
- * @param {string} url
- * @param {string | null} appOrigin
- * @returns {boolean}
+ * Path used for Steam / Battle.net prefix checks.
+ *
+ * `new URL` already collapses literal `.` / `..` segments. Percent-encoded
+ * ones (`%2e%2e%2f`) survive in `pathname` and would still start with
+ * `/openid/` after a naive `decodeURIComponent`, while Chromium then
+ * navigates to a profile page. Decode, split, collapse `.` / `..`, then
+ * match. Malformed percent-encoding is not an auth hop.
+ *
+ * @param {string} pathname
+ * @returns {string | null}
  */
-function decodedPathname(pathname) {
-  try {
-    return decodeURIComponent(pathname).toLowerCase();
-  } catch {
-    return pathname.toLowerCase();
+function resolvedPathname(pathname) {
+  let current = pathname;
+  for (let i = 0; i < 8; i++) {
+    let decoded;
+    try {
+      decoded = decodeURIComponent(current);
+    } catch {
+      return null;
+    }
+    const out = [];
+    for (const raw of decoded.split("/")) {
+      const segment = raw.toLowerCase();
+      if (segment === "" || segment === ".") {
+        continue;
+      }
+      if (segment === "..") {
+        out.pop();
+        continue;
+      }
+      out.push(segment);
+    }
+    const next = `/${out.join("/")}`;
+    if (next === current.toLowerCase()) {
+      return next;
+    }
+    current = next;
   }
+  return current.toLowerCase();
 }
 
 function isSteamOpenIdPath(pathname) {
   return (
     pathname === "/openid" ||
+    pathname === "/openid/" ||
     pathname === "/openid/login" ||
-    pathname.startsWith("/openid/")
+    pathname === "/openid/login/"
   );
 }
 
@@ -94,6 +124,11 @@ function isBattleNetLoginPath(pathname) {
   );
 }
 
+/**
+ * @param {string} url
+ * @param {string | null} appOrigin
+ * @returns {boolean}
+ */
 function isAuthUrl(url, appOrigin) {
   let host;
   let protocol;
@@ -109,8 +144,6 @@ function isAuthUrl(url, appOrigin) {
   if (protocol !== "https:") {
     return false;
   }
-
-  const path = decodedPathname(pathname);
 
   if (appOrigin) {
     try {
@@ -130,13 +163,15 @@ function isAuthUrl(url, appOrigin) {
 
   // Steam OpenID only. A profile page must not render in-window.
   if (host === "steamcommunity.com" || host.endsWith(".steamcommunity.com")) {
-    return isSteamOpenIdPath(path);
+    const path = resolvedPathname(pathname);
+    return path !== null && isSteamOpenIdPath(path);
   }
 
   // Regional Battle.net login. oauth and account hosts are already on
   // AUTH_HOST_SUFFIXES and do not need a path gate.
   if (host === "battle.net" || host.endsWith(".battle.net")) {
-    return isBattleNetLoginPath(path);
+    const path = resolvedPathname(pathname);
+    return path !== null && isBattleNetLoginPath(path);
   }
 
   return false;

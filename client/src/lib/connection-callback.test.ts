@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  messageFromCompleteFailure,
   peekConnectionCallback,
   stashConnectionCallback,
   stashConnectionError,
   takeConnectionCallback,
   takeConnectionError,
 } from "./connection-callback";
+import { ApiError } from "./api";
 
 function memoryStorage(): Storage & { map: Map<string, string> } {
   const map = new Map<string, string>();
@@ -104,5 +106,22 @@ describe("connection complete error stash", () => {
     };
     stashConnectionError("Could not finish that connection.", hostile);
     expect(takeConnectionError(hostile)).toBeNull();
+  });
+});
+
+describe("messageFromCompleteFailure", () => {
+  it("keeps a distinct API reason instead of the generic fallback", () => {
+    expect(
+      messageFromCompleteFailure(
+        new ApiError(409, "That account is already connected to another pqp user"),
+        "Could not finish that connection.",
+      ),
+    ).toBe("That account is already connected to another pqp user");
+  });
+
+  it("falls back when the failure is not an ApiError", () => {
+    expect(
+      messageFromCompleteFailure(new Error("network"), "Could not finish that connection."),
+    ).toBe("Could not finish that connection.");
   });
 });

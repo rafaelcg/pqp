@@ -3,6 +3,7 @@ import {
   connectionProviderSchema,
   type ConnectionProvider,
 } from "@pqp/shared";
+import { ApiError } from "./api";
 
 /**
  * Steam / Battle.net / Twitch bounce back to
@@ -141,6 +142,20 @@ export function takeConnectionCallbackFromWindow(): StashedConnectionCallback | 
 
 export function callbackParamsFromLocation(search: string): Record<string, string> {
   return paramsFromSearch(search);
+}
+
+/** Prefer the API's own reason (409 already linked, cancelled) over a generic fallback. */
+export function messageFromCompleteFailure(
+  caught: unknown,
+  fallback: string,
+): string {
+  if (caught instanceof ApiError) {
+    const message = caught.message.trim();
+    if (message.length > 0) {
+      return message;
+    }
+  }
+  return fallback;
 }
 
 export function stashConnectionError(

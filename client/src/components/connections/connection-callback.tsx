@@ -4,6 +4,7 @@ import { completeConnection } from "@/lib/api";
 import {
   callbackParamsFromLocation,
   hasStashedConnectionCallback,
+  messageFromCompleteFailure,
   stashConnectionCallbackFromWindow,
   stashConnectionErrorFromWindow,
   takeConnectionCallbackFromWindow,
@@ -56,8 +57,10 @@ export function ConnectionCallbackOverlay({
         try {
           await completeConnection(pending.provider, pending.params);
           return "ok" as const;
-        } catch {
-          stashConnectionErrorFromWindow(completeFailed);
+        } catch (caught) {
+          stashConnectionErrorFromWindow(
+            messageFromCompleteFailure(caught, completeFailed),
+          );
           return "error" as const;
         }
       })();

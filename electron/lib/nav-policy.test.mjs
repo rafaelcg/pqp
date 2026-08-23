@@ -98,4 +98,14 @@ describe("isAuthUrl", () => {
       assert.equal(isAuthUrl(url, APP), false, url);
     }
   });
+
+  it("refuses encoded dot-segments that would leave OpenID or Battle.net login", () => {
+    for (const url of [
+      "https://steamcommunity.com/openid/%2e%2e%2fprofiles/76561198000000001",
+      "https://steamcommunity.com/openid/login/%2e%2e%2fprofiles/1",
+      "https://eu.battle.net/login/%2e%2e%2fwow",
+    ]) {
+      assert.equal(isAuthUrl(url, APP), false, url);
+    }
+  });
 });
