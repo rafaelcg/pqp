@@ -451,7 +451,7 @@ async function main() {
       )
         ? "NAO_SEI"
         : /iphone|celular/i.test(question)
-          ? "no app do iphone dá pra assistir e transmitir a tela. no safari do iphone só dá pra assistir."
+          ? "no app do iphone dá pra assistir. transmitir a tela do iphone existe no código, mas ainda não foi testado num aparelho de verdade. no safari do iphone só dá pra assistir."
           : /tela|qualidade|resolu|som|[áa]udio|voz|desktop|c[óo]digo|aberto/i.test(question)
             ? "a captura é 1080p30 e não tem ajuste manual de qualidade. quanto menos gente assistindo, mais nítido fica."
             : "NAO_SEI",
