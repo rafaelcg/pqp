@@ -3,6 +3,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type KeyboardEvent,
   type ReactNode,
 } from "react";
@@ -72,6 +73,15 @@ import {
   adoptNotificationPreferences,
   type NotificationLevel,
 } from "@/lib/notifications";
+import {
+  adoptSoundPreferences,
+  getSoundState,
+  playCue,
+  setSoundCueEnabled,
+  setSoundEnabled,
+  subscribeSounds,
+  type SoundCue,
+} from "@/lib/sounds";
 import {
   disablePush,
   enablePush,
@@ -259,6 +269,7 @@ export function applyRemotePreferences(
     return local;
   }
   adoptNotificationPreferences(preferences.notifications);
+  adoptSoundPreferences(preferences.sounds);
   return {
     ...local,
     muteOnJoin: preferences.muteOnJoin ?? local.muteOnJoin,
@@ -1135,6 +1146,14 @@ const LEVEL_OPTIONS: { value: NotificationLevel; label: MessageKey }[] = [
   { value: "none", label: "settings.notifications.level.none" },
 ];
 
+const SOUND_CUE_OPTIONS: { cue: SoundCue; label: MessageKey }[] = [
+  { cue: "mention", label: "settings.notifications.sounds.mention" },
+  { cue: "voiceJoin", label: "settings.notifications.sounds.voiceJoin" },
+  { cue: "voiceLeave", label: "settings.notifications.sounds.voiceLeave" },
+  { cue: "incomingCall", label: "settings.notifications.sounds.incomingCall" },
+  { cue: "outgoingCall", label: "settings.notifications.sounds.outgoingCall" },
+];
+
 /**
  * The account-wide notification default, plus the opt-in itself.
  *
@@ -1146,6 +1165,11 @@ function NotificationsSection() {
   const { t } = useTranslation();
   const { state, permission, enable, disable, setDefaultLevel } =
     useNotificationSettings();
+  const sounds = useSyncExternalStore(
+    subscribeSounds,
+    getSoundState,
+    getSoundState,
+  );
   const active = state.desktop && permission === "granted";
 
   return (
@@ -1203,6 +1227,49 @@ function NotificationsSection() {
               </button>
             );
           })}
+        </div>
+      </Field>
+
+      <Field
+        label={t("settings.notifications.soundsLabel")}
+        hint={t("settings.notifications.soundsHint")}
+      >
+        <div className="space-y-2">
+          <label className="flex cursor-pointer items-start gap-3">
+            <input
+              type="checkbox"
+              className="mt-1 h-4 w-4 accent-[var(--color-signal)]"
+              checked={sounds.enabled}
+              onChange={(e) => setSoundEnabled(e.target.checked)}
+            />
+            <span className="text-sm">{t("settings.notifications.sounds.enabled")}</span>
+          </label>
+          {SOUND_CUE_OPTIONS.map((option) => (
+            <label
+              key={option.cue}
+              className="flex cursor-pointer items-center gap-3 pl-7"
+            >
+              <input
+                type="checkbox"
+                className="h-4 w-4 accent-[var(--color-signal)]"
+                checked={sounds[option.cue]}
+                disabled={!sounds.enabled}
+                onChange={(e) =>
+                  setSoundCueEnabled(option.cue, e.target.checked)
+                }
+              />
+              <span className="min-w-0 flex-1 text-sm">{t(option.label)}</span>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                disabled={!sounds.enabled || !sounds[option.cue]}
+                onClick={() => playCue(option.cue)}
+              >
+                {t("settings.notifications.sounds.preview")}
+              </Button>
+            </label>
+          ))}
         </div>
       </Field>
 

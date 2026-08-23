@@ -20,6 +20,7 @@ import { channelRoutePath, conversationRoutePath } from "@/lib/app-route";
 import { getDesktop } from "@/lib/desktop";
 import { translateMessage } from "@/lib/i18n";
 import { queuePreferenceSync } from "@/lib/preferences";
+import { playActivitySound } from "@/lib/sounds";
 
 export type { NotificationLevel };
 
@@ -563,7 +564,16 @@ function flush(channelId: string): void {
   if (burst.count === 0 && burst.mentions === 0) {
     return;
   }
-  deliver(burst);
+  // Sounds are independent of OS banners: Discord still pings when desktop
+  // notifications are off. The burst still coalesces so a busy channel is
+  // one ping per quiet window, not one per message. Ordinary messages have
+  // no cue; only a mention plays.
+  if (burst.mentions > 0) {
+    playActivitySound(burst.mentions);
+  }
+  if (state.desktop && notificationPermission() === "granted") {
+    deliver(burst);
+  }
   burst.count = 0;
   burst.mentions = 0;
   burst.lastFiredAt = Date.now();
@@ -612,9 +622,6 @@ export function notifyChannelActivity(
   if (doNotDisturb) {
     return;
   }
-  if (!state.desktop || notificationPermission() !== "granted") {
-    return;
-  }
 
   const level = resolveNotificationLevel(state, activity.serverId, activity.channelId);
   if (
@@ -651,6 +658,32 @@ export function notifyChannelActivity(
   if (burst.timer === null) {
     burst.timer = setTimeout(() => flush(activity.channelId), RENOTIFY_QUIET_MS - waited);
   }
+}
+
+/**
+ * A mention that landed in the channel already on screen.
+ *
+ * `notifyChannelActivity` stays quiet for that channel so OS banners do not
+ * announce what the user can already read. Plain messages are silent here
+ * too; only a name-check plays. DND and a muted channel still silence it.
+ */
+export function notifyOpenChannelMessage(
+  channelId: string,
+  mention: boolean,
+): void {
+  if (!mention || doNotDisturb) {
+    return;
+  }
+  const known = lookupChannel(channelId);
+  const level = resolveNotificationLevel(
+    state,
+    known?.serverId ?? null,
+    channelId,
+  );
+  if (level === "none") {
+    return;
+  }
+  playActivitySound(1);
 }
 
 /** Drop pending bursts, e.g. when the app shell unmounts on sign-out. */

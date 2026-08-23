@@ -1,0 +1,16 @@
+In-app cues
+-----------
+
+Copied from UI SFX (https://github.com/romainsimon/uisfx), `cinematic` pack:
+
+- message.ogg / message.mp3        ←  forward
+- mention.ogg / mention.mp3        ←  mention
+- voice-join.ogg / voice-join.mp3  ←  select
+- voice-leave.ogg / voice-leave.mp3 ←  deselect
+
+UI SFX audio is dedicated to the public domain under CC0 1.0.
+See https://github.com/romainsimon/uisfx/blob/main/LICENSE-AUDIO
+
+Call rings are not files. The client synthesises a dual-tone cadence at
+runtime (classic 440/480 Hz), because UI SFX has no ringtone — its loops
+are spinner beds (`connecting`, `loading`).

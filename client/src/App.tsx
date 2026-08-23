@@ -181,6 +181,7 @@ import {
   notifyChannelActivity,
   rememberServers,
 } from "@/lib/notifications";
+import { setSoundOutput } from "@/lib/sounds";
 import { useMemberSidebar } from "@/hooks/use-member-sidebar";
 import { useChannelNotifications } from "@/hooks/use-notifications";
 import { useUserStatus } from "@/hooks/use-status";
@@ -677,6 +678,13 @@ function MainAppContent({
   useEffect(() => {
     setLocalSettings(loadLocalSettings());
   }, []);
+
+  useEffect(() => {
+    setSoundOutput({
+      deviceId: localSettings.outputDeviceId,
+      volume: localSettings.outputVolume,
+    });
+  }, [localSettings.outputDeviceId, localSettings.outputVolume]);
 
   // Asked here as well as in the composer so the pane does not offer a drop
   // target on a deployment that has nowhere to put the bytes. The probe itself
@@ -1837,16 +1845,26 @@ function MainAppContent({
     }
   }
 
+  /**
+   * ICE is already fetched at session start. Refresh it in the background on
+   * join so TURN credentials can rotate, but do not make the click wait on
+   * another HTTP round-trip before the join cue and getUserMedia run.
+   */
+  function refreshIceServers() {
+    void fetchIceServers()
+      .then(({ iceServers }) => {
+        if (iceServers.length > 0) {
+          voice.setIceServers(iceServers);
+        }
+      })
+      .catch(() => {
+        // Keep previously fetched / default ICE servers
+      });
+  }
+
   async function handleJoinVoice(channelId: string) {
     voiceServerIdRef.current = selectedServerId;
-    try {
-      const { iceServers } = await fetchIceServers();
-      if (iceServers.length > 0) {
-        voice.setIceServers(iceServers);
-      }
-    } catch {
-      // Keep previously fetched / default ICE servers
-    }
+    refreshIceServers();
 
     await voice.join(channelId, {
       inputDeviceId: localSettings.inputDeviceId,
@@ -1880,14 +1898,7 @@ function MainAppContent({
     voiceServerIdRef.current = null;
     pendingVideoCallRef.current = withVideo ? channelId : null;
     void selectConversation(channelId);
-    try {
-      const { iceServers } = await fetchIceServers();
-      if (iceServers.length > 0) {
-        voice.setIceServers(iceServers);
-      }
-    } catch {
-      // Keep previously fetched / default ICE servers
-    }
+    refreshIceServers();
     const options = {
       inputDeviceId: localSettings.inputDeviceId,
       inputVolume: localSettings.inputVolume,

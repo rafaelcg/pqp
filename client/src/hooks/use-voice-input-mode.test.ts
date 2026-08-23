@@ -27,6 +27,12 @@ interface ManagerStub {
 
 const managers: ManagerStub[] = [];
 
+vi.mock("@/lib/sounds", () => ({
+  playCue: () => {},
+  stopAllSoundLoops: () => {},
+  whenCueSettled: async () => {},
+}));
+
 vi.mock("@/lib/peer-connection-manager", () => ({
   getDefaultIceServers: () => [],
   createPeerConnectionManager: vi.fn(() => {
@@ -317,6 +323,9 @@ describe("push-to-talk on the mesh", () => {
     voice.leave();
 
     expect(voice.getState().isTransmitting).toBe(false);
+    // Capture tracks stop immediately; the mic AudioContext closes after the
+    // leave cue (or 750ms) so tearing down capture cannot clip the sample.
+    await settle();
     expect(anyTrackOpen()).toBe(false);
     // The mode is a preference and survives; the press does not.
     expect(voice.getState().inputMode).toBe("push-to-talk");

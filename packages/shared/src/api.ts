@@ -79,6 +79,27 @@ export type NotificationPreferences = z.infer<
 >;
 
 /**
+ * In-app sound cues. Replaced as a whole on write, same as `notifications`:
+ * the preference store merges one level deep, so a patch of
+ * `{ sounds: { message: false } }` would drop every other cue. The client
+ * always sends the full object.
+ *
+ * Independent of `notifications.desktop`. Sounds still play when OS banners
+ * are off. Device ids stay out of this object.
+ */
+export const soundPreferencesSchema = z.object({
+  enabled: z.boolean().optional(),
+  message: z.boolean().optional(),
+  mention: z.boolean().optional(),
+  voiceJoin: z.boolean().optional(),
+  voiceLeave: z.boolean().optional(),
+  incomingCall: z.boolean().optional(),
+  outgoingCall: z.boolean().optional(),
+});
+
+export type SoundPreferences = z.infer<typeof soundPreferencesSchema>;
+
+/**
  * Settings that belong to the person rather than to the machine they are on,
  * stored as one JSONB blob so adding a preference stays a schema change here
  * instead of a database migration.
@@ -146,6 +167,7 @@ export const userPreferencesSchema = z.object({
   inputVolume: z.number().min(0).max(2).optional(),
   outputVolume: z.number().min(0).max(1).optional(),
   notifications: notificationPreferencesSchema.optional(),
+  sounds: soundPreferencesSchema.optional(),
   /**
    * Client-render-only: the server unfurls and caches a link regardless of
    * who has this off, since the cache is shared across every viewer. Turning

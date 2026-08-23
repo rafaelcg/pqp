@@ -50,6 +50,7 @@ import { useLgUp } from "@/hooks/use-lg-up";
 import { isScreenShareAtCap } from "@/lib/screen-share-roster";
 import { useTranslation } from "@/lib/i18n";
 import { conversationTitle } from "@/lib/conversations";
+import { startSoundLoop, stopSoundLoop } from "@/lib/sounds";
 import { cn } from "@/lib/utils";
 import {
   callStartKey,
@@ -429,6 +430,14 @@ function ActiveCall({
   // alone in the room. (Everybody-left lands here too, which reads the same.)
   const callingOut =
     voiceState.status === "connected" && voiceState.remotePeers.length === 0;
+  useEffect(() => {
+    if (callingOut) {
+      startSoundLoop("outgoingCall");
+    } else {
+      stopSoundLoop("outgoingCall");
+    }
+    return () => stopSoundLoop("outgoingCall");
+  }, [callingOut]);
   const roster = voiceState.occupancy[channelId] ?? [];
   const rosterByPeerId = new Map(roster.map((p) => [p.peerId, p]));
 
