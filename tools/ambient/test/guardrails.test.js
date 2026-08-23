@@ -2,6 +2,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import {
   screenLine,
+  screenInbound,
   similarity,
   isTooSimilar,
   disclosureLabel,
@@ -195,5 +196,124 @@ describe("normalizeConfig", () => {
     const raw = base();
     raw.version = 2;
     assert.throws(() => normalizeConfig(raw), /unsupported version/);
+  });
+});
+
+/**
+ * The disclosure seam.
+ *
+ * This block exists because `disclosure` stopped being decoration the day a
+ * second kind of account needed it. It used to pick a name suffix and a bio;
+ * it now also decides whether an account may say out loud what it is, and
+ * whether it answers when asked. That is honesty logic, so every branch of it
+ * is pinned here rather than left to the two callers to agree about.
+ *
+ * The invariant these tests are really guarding is asymmetric, and worth
+ * stating in one sentence: disclosure can only ever ADD truth. There is no
+ * value of it that lets any account claim to be a person, and there is no
+ * value of it that lets any account deny being software.
+ */
+describe("disclosure and identity", () => {
+  test("an undisclosed persona still cannot out itself as software", () => {
+    // The unchanged, pre-existing behaviour, restated so a future edit to the
+    // disclosed path cannot quietly take the default with it.
+    assert.equal(screenLine("sou uma IA, desculpa", {}).reason, "identity-claim");
+    assert.equal(
+      screenLine("sou um bot mesmo kkkk", { disclosure: "undisclosed" }).reason,
+      "identity-claim",
+    );
+    assert.equal(
+      screenLine("falo como uma IA", { disclosure: "character" }).reason,
+      "identity-claim",
+    );
+  });
+
+  test("a disclosed bot may say it is a bot", () => {
+    assert.equal(screenLine("sou um bot, sim", { disclosure: "bot" }).ok, true);
+    assert.equal(
+      screenLine("sou uma IA mantida pela casa", { disclosure: "bot" }).ok,
+      true,
+    );
+  });
+
+  test("no account at any disclosure may claim to be a person", () => {
+    // The floor. If any of these three ever passes, the disclosure flag has
+    // stopped being a way to add honesty and become a way to remove it.
+    for (const disclosure of ["undisclosed", "character", "bot"]) {
+      assert.equal(
+        screenLine("sou uma pessoa real viu", { disclosure }).reason,
+        "identity-claim",
+        `pessoa real slipped through at disclosure=${disclosure}`,
+      );
+      assert.equal(
+        screenLine("não sou robô não kkk", { disclosure }).reason,
+        "identity-claim",
+        `denial slipped through at disclosure=${disclosure}`,
+      );
+      assert.equal(
+        screenLine("não sou bot não", { disclosure }).reason,
+        "identity-claim",
+        `denial slipped through at disclosure=${disclosure}`,
+      );
+    }
+  });
+
+  test("the other outbound rules do not care about disclosure", () => {
+    // Disclosure buys exactly one sentence, not a general exemption. A bot that
+    // could suddenly hand out medical advice or a WhatsApp number because it
+    // admits being a bot would be a much worse trade than the one being made.
+    assert.equal(
+      screenLine("me chama no zap", { disclosure: "bot" }).reason,
+      "off-platform",
+    );
+    assert.equal(
+      screenLine("toma 500mg que passa", { disclosure: "bot" }).reason,
+      "advice",
+    );
+    assert.equal(
+      screenLine("isso é política pura", { banned: BANNED, disclosure: "bot" })
+        .reason,
+      "banned-topic:política",
+    );
+  });
+
+  test("an identity probe is silence for an undisclosed persona", () => {
+    for (const probe of ["é um bot?", "vcs são bot?", "isso aí é IA?"]) {
+      const verdict = screenInbound(probe, {});
+      assert.equal(verdict.reply, false, probe);
+      assert.equal(verdict.reason, "identity-probe");
+      assert.equal(verdict.disclose, undefined);
+    }
+  });
+
+  test("an identity probe is an answerable question for a disclosed bot", () => {
+    const verdict = screenInbound("é um bot?", { disclosure: "bot" });
+    assert.equal(verdict.reply, true);
+    assert.equal(verdict.reason, "identity-probe");
+    // `disclose` is not a boolean the caller may ignore in favour of `reply`.
+    // It means "post the fixed sentence, do not call a model", and the next
+    // test is the contract for a caller that cannot do that.
+    assert.equal(verdict.disclose, true);
+  });
+
+  test("a caller that cannot honour `disclose` must read it as a refusal", () => {
+    // This is the shape `screenHumanReply` in runner.js implements, copied here
+    // so the ambient runner's defence is a tested rule and not a comment. A
+    // runner whose only output is generated dialogue has no fixed sentence to
+    // post, so `disclose` has to collapse to silence rather than to a scene.
+    const verdict = screenInbound("vc é uma IA?", { disclosure: "bot" });
+    const wouldReply = verdict.reply && !verdict.disclose;
+    assert.equal(wouldReply, false);
+  });
+
+  test("disclosure does not rescue a message that fails an earlier gate", () => {
+    // Order matters: hostility is screened before the identity probe, so
+    // "seu bot de merda, é um bot?" stays silence at every setting. A probe
+    // wrapped in an insult is not a support question.
+    const verdict = screenInbound("vai se foder, é um bot?", {
+      disclosure: "bot",
+    });
+    assert.equal(verdict.reply, false);
+    assert.equal(verdict.reason, "hostile");
   });
 });
