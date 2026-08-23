@@ -1,0 +1,123 @@
+name: Monitor (errors)
+
+# "Is it throwing?" — every 15 minutes, reading the actual production logs.
+#
+# WHY THIS IS SEPARATE FROM Monitor (uptime)
+#
+# The uptime group is availability-shaped: /health answers, the WebSocket
+# upgrades, the app's own component probes are green. Every one of those can be
+# true while the API throws on every third request — /health does a `SELECT 1`
+# and returns 200; it does not know that a route has been 500ing for an hour.
+# Nothing read the logs, so nothing would have said so.
+#
+# The second check has its own scar. `pqp-support` went down three minutes
+# after its first deploy: it exited 0 on purpose (the SIGTERM handler does
+# that), Fly's default restart policy read a clean exit as "the job finished"
+# and retired the machine, and the bot was simply absent from #ajuda with
+# nothing anywhere saying so. A bot that is quietly missing is worse than one
+# that is obviously broken, because nobody goes looking.
+#
+# THE TRAP, WRITTEN DOWN SO NOBODY "FIXES" IT BACK
+#
+# `fly logs --no-tail` returns roughly the LAST 100 LINES, so the period it
+# covers is bounded by VOLUME, NOT TIME. Measured on 2026-08-23 in the same
+# minute: pqp-api's 100 records spanned 28 minutes, pqp-support's 79 spanned
+# 7 hours. A check phrased as "errors in the last 15 minutes" would silently
+# mean two hours at 03:00 and ninety seconds at peak. So the check measures a
+# RATE and derives its window from the first and last timestamps in the output,
+# and a window too short to be meaningful is a SKIP with the reason, never a
+# pass. THE 15-MINUTE CRON IS THE SAMPLING INTERVAL, NOT THE WINDOW. Do not
+# assume the two are related.
+#
+# WHY 15 MINUTES AND NOT 10
+#
+# An error rate is a trend, not an event. At current volume the buffer covers
+# ~30 minutes, so running every 10 would mostly re-read lines the previous run
+# already read. GitHub queues scheduled runs on public repos at low priority
+# and they are routinely 5-20 minutes late anyway, so treat detection as
+# "within 15-40 minutes".
+#
+# NEEDS AN ORG-SCOPED FLY TOKEN. `FLY_API_TOKEN` is a deploy token scoped to
+# `pqp-api`: it can read that app's logs and nothing else, so `support-bot-alive`
+# SKIPs on it with instructions rather than reporting a false outage.
+# `FLY_ORG_TOKEN` (already in this repo, created for the Postgres check) reads
+# both, and is preferred when present. See docs/MONITORING.md.
+
+on:
+  schedule:
+    # Offset from :00 and from the uptime cron's :3/:13/:23… so the two do not
+    # queue behind each other or hammer the Fly API in the same second.
+    - cron: "7,22,37,52 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Report only — do not open, comment on or close issues"
+        type: boolean
+        default: false
+
+# Never two at once: the reconciler dedupes against the list of open issues, so
+# overlapping runs are the one way it could open a duplicate.
+concurrency:
+  group: monitor-errors
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    name: Production log error rate
+    runs-on: ubuntu-latest
+    # Two flyctl calls plus one retry pass. Generous against the ~1 minute this
+    # takes, tight enough that a hung `fly logs` cannot sit on the concurrency
+    # group until the next run.
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # Dependency-free Node built-ins on purpose: no `pnpm install` step means
+      # nothing between the checkout and the probe can fail and turn the
+      # monitor into a false alarm about itself.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      # ONE run. Exit codes carry the meaning:
+      #   0/1 -> the checks ran; whatever they found is now a GitHub issue, and
+      #          the JOB stays green. A failing check must NOT redden the run:
+      #          that is a second notification for the same incident, and a
+      #          permanently-red Actions tab is how people stop looking.
+      #   2   -> the MONITOR is broken. That does fail the job, because GitHub
+      #          emails the owner about a failed scheduled workflow by default,
+      #          which is the only path left when the notifier itself is down.
+      - name: Run error checks
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Org-scoped first; the app-scoped deploy token is the fallback and
+          # can only read pqp-api, which makes support-bot-alive SKIP.
+          FLY_ORG_TOKEN: ${{ secrets.FLY_ORG_TOKEN }}
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          MONITOR_REPO: ${{ github.repository }}
+          # Comma-separated check keys to silence without disabling the monitor.
+          # `gh variable set MONITOR_MUTED --body "api-error-rate"`.
+          MONITOR_MUTED: ${{ vars.MONITOR_MUTED }}
+        run: |
+          set +e
+          node scripts/monitor/run.mjs errors --alert \
+            ${{ inputs.dry_run && '--dry-run' || '' }} 2>&1 | tee /tmp/monitor-errors.log
+          code=${PIPESTATUS[0]}
+          set -e
+          {
+            echo '### Error heartbeat'
+            echo '```'
+            cat /tmp/monitor-errors.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$code" = "2" ]; then
+            echo "::error::The monitor could not run. Nothing is reading the logs until this is fixed."
+            exit 1
+          fi
+          exit 0

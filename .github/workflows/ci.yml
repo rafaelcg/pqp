@@ -79,9 +79,11 @@ jobs:
       # whether something we published in public is still true. The first run of
       # these tests found a real bug: the Portuguese "sem som" did not match,
       # which is the most natural way to write the exact claim the check exists
-      # to catch.
+      # to catch. The error heartbeat added the second body of real logic —
+      # a log parser, an ignore-rule table and a set of thresholds — and its
+      # tests are in the same glob.
       # A glob, not the directory. `node --test scripts/monitor/` collects one
-      # phantom test and fails; the glob collects all eleven and passes.
+      # phantom test and fails; the glob collects every *.test.mjs and passes.
       - name: Test monitor scripts
         run: node --test scripts/monitor/*.test.mjs
 
