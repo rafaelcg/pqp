@@ -22,6 +22,15 @@ interface ManagerStub {
   screenStreams: (MediaStream | null)[];
 }
 
+const playCueMock = vi.hoisted(() => vi.fn());
+const whenCueSettledMock = vi.hoisted(() => vi.fn(async () => {}));
+
+vi.mock("@/lib/sounds", () => ({
+  playCue: (...args: unknown[]) => playCueMock(...args),
+  stopAllSoundLoops: () => {},
+  whenCueSettled: (...args: unknown[]) => whenCueSettledMock(...args),
+}));
+
 vi.mock("@/lib/peer-connection-manager", () => ({
   getDefaultIceServers: () => [],
   createPeerConnectionManager: vi.fn(() => {
@@ -728,5 +737,108 @@ describe("voice transport is the server's decision", () => {
       expect(managers).toHaveLength(0);
       expect(voice.getState().usingSfu).toBe(true);
     });
+  });
+});
+
+describe("lobby presence sounds", () => {
+  beforeEach(() => {
+    installBrowserStubs();
+    managers.length = 0;
+    playCueMock.mockReset();
+    whenCueSettledMock.mockReset();
+    whenCueSettledMock.mockImplementation(async () => {});
+  });
+
+  it("plays join as soon as you ask, not after welcome", async () => {
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    const joining = voice.join(CHANNEL);
+    expect(playCueMock).toHaveBeenCalledWith("voiceJoin");
+    await joining;
+    playCueMock.mockClear();
+    voice.handleSignaling(welcome("mesh"));
+    await settle();
+    expect(playCueMock).not.toHaveBeenCalled();
+  });
+
+  it("does not open the mic until the join cue has settled", async () => {
+    let releaseCue = () => {};
+    const cueGate = new Promise<void>((resolve) => {
+      releaseCue = resolve;
+    });
+    whenCueSettledMock.mockImplementation(() => cueGate);
+
+    const getUserMedia = vi.fn(async () => fakeStream("mic"));
+    Object.defineProperty(globalThis.navigator, "mediaDevices", {
+      configurable: true,
+      value: {
+        getUserMedia,
+        getDisplayMedia: async () => fakeCapture("screen", false),
+      },
+    });
+
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    const joining = voice.join(CHANNEL);
+    expect(playCueMock).toHaveBeenCalledWith("voiceJoin");
+    await Promise.resolve();
+    expect(getUserMedia).not.toHaveBeenCalled();
+    releaseCue();
+    await joining;
+    expect(getUserMedia).toHaveBeenCalled();
+  });
+
+  it("plays join when someone else enters the lobby, leave when they go", async () => {
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    await voice.join(CHANNEL);
+    voice.handleSignaling(welcome("mesh"));
+    await settle();
+    playCueMock.mockClear();
+
+    const other = {
+      peerId: "00000000-0000-4000-8000-0000000000dd",
+      userId: "00000000-0000-4000-8000-0000000000ee",
+      displayName: "Ana",
+      avatarUrl: null,
+      sharingScreen: false,
+      muted: false,
+      deafened: false,
+    };
+    voice.handleSignaling({ type: "peer-joined", peer: other } as never);
+    expect(playCueMock).toHaveBeenCalledWith("voiceJoin");
+    playCueMock.mockClear();
+    voice.handleSignaling({
+      type: "peer-left",
+      peerId: other.peerId,
+    } as never);
+    expect(playCueMock).toHaveBeenCalledWith("voiceLeave");
+  });
+
+  it("plays leave when you hang up", async () => {
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    await voice.join(CHANNEL);
+    voice.handleSignaling(welcome("mesh"));
+    await settle();
+    playCueMock.mockClear();
+    voice.leave();
+    expect(playCueMock).toHaveBeenCalledWith("voiceLeave");
+  });
+
+  it("plays leave then join immediately when you switch rooms", async () => {
+    const other = "00000000-0000-4000-8000-0000000000ee";
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    await voice.join(CHANNEL);
+    voice.handleSignaling(welcome("mesh"));
+    await settle();
+    playCueMock.mockClear();
+    const switching = voice.join(other);
+    expect(playCueMock.mock.calls.map((call) => call[0])).toEqual([
+      "voiceLeave",
+      "voiceJoin",
+    ]);
+    await switching;
   });
 });

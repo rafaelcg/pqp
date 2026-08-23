@@ -9,7 +9,12 @@ import type {
   ReactionBroadcast,
   ThreadSummary,
 } from "@pqp/shared";
-import { buildReplyExcerpt, MESSAGE_PAGE_SIZE } from "@pqp/shared";
+import {
+  buildReplyExcerpt,
+  extractMentionUsernames,
+  MESSAGE_PAGE_SIZE,
+} from "@pqp/shared";
+import { notifyOpenChannelMessage } from "@/lib/notifications";
 import {
   apiFetch,
   deleteMessage as deleteMessageRequest,
@@ -19,6 +24,21 @@ import {
 } from "@/lib/api";
 import { revokePreviewUrl, type OutgoingAttachment } from "@/lib/attachments";
 import type { RealtimeTransport } from "@/lib/realtime";
+
+function messageNamesUser(
+  body: string,
+  username: string | null,
+  replyAuthorId: string | null | undefined,
+  readerId: string | null,
+): boolean {
+  if (readerId && replyAuthorId === readerId) {
+    return true;
+  }
+  if (!username) {
+    return false;
+  }
+  return extractMentionUsernames(body).includes(username.toLowerCase());
+}
 
 /** A message plus the client-only state an optimistic bubble needs. */
 export interface ChatMessage extends Message {
@@ -213,6 +233,7 @@ export function createChatController(
   let presence: PresenceUpdate["users"] = [];
   let channelId: string | null = null;
   let currentUserId: string | null = null;
+  let currentUsername: string | null = null;
   let currentUser: { displayName: string; avatarUrl: string | null; tag: string | null } | null =
     null;
   let listener: (() => void) | null = null;
@@ -373,8 +394,10 @@ export function createChatController(
       displayName: string;
       avatarUrl: string | null;
       tag: string | null;
+      username?: string | null;
     } | null) {
       currentUserId = user?.id ?? null;
+      currentUsername = user?.username ?? null;
       currentUser = user
         ? {
             displayName: user.displayName,
@@ -655,6 +678,10 @@ export function createChatController(
         replyTo?.id,
         optimisticAttachments.map((attachment) => attachment.id),
       );
+      notifyOpenChannelMessage(
+        channelId,
+        messageNamesUser(body, currentUsername, replyTo?.authorId, currentUserId),
+      );
     },
 
     retryMessage(nonce: string) {
@@ -880,6 +907,17 @@ export function createChatController(
           messages = [...messages, incoming];
           newestLoadedId = incoming.id;
           emit();
+          if (incoming.authorId !== currentUserId) {
+            notifyOpenChannelMessage(
+              channelId,
+              messageNamesUser(
+                incoming.body,
+                currentUsername,
+                incoming.replyTo?.authorId,
+                currentUserId,
+              ),
+            );
+          }
           return;
         }
 

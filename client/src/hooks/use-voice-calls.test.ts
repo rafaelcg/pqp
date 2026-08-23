@@ -20,6 +20,12 @@ interface ManagerStub {
 
 const managers: ManagerStub[] = [];
 
+vi.mock("@/lib/sounds", () => ({
+  playCue: () => {},
+  stopAllSoundLoops: () => {},
+  whenCueSettled: async () => {},
+}));
+
 vi.mock("@/lib/peer-connection-manager", () => ({
   getDefaultIceServers: () => [],
   createPeerConnectionManager: vi.fn(() => {

@@ -105,6 +105,13 @@ const DEFAULT_PREFERENCES = {
   // Merged one level deep like everything else, so the whole object goes or the
   // levels it omits survive.
   notifications: { desktop: false, default: "all", servers: {}, channels: {} },
+  sounds: {
+    enabled: true,
+    message: true,
+    mention: true,
+    incomingCall: true,
+    outgoingCall: true,
+  },
 } as const;
 
 /**

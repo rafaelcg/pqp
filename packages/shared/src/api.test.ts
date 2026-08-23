@@ -180,6 +180,14 @@ describe("userPreferencesSchema", () => {
     );
   });
 
+  it("accepts a sounds patch without requiring every cue", () => {
+    expect(
+      userPreferencesSchema.safeParse({
+        sounds: { enabled: true, message: false },
+      }).success,
+    ).toBe(true);
+  });
+
   it("rejects a theme outside the three the stylesheet defines", () => {
     expect(userPreferencesSchema.safeParse({ theme: "neon" }).success).toBe(false);
   });

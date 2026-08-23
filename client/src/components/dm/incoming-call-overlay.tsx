@@ -1,7 +1,9 @@
 import { Phone, PhoneOff, X } from "lucide-react";
+import { useEffect } from "react";
 import type { IncomingCall } from "@/hooks/use-voice";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { useTranslation } from "@/lib/i18n";
+import { startSoundLoop, stopSoundLoop } from "@/lib/sounds";
 
 /**
  * The ringing surface: one card per conversation currently calling this
@@ -29,6 +31,14 @@ export function IncomingCallOverlay({
   onDismiss: (conversationId: string) => void;
 }) {
   const { t } = useTranslation();
+  useEffect(() => {
+    if (calls.length > 0) {
+      startSoundLoop("incomingCall");
+    } else {
+      stopSoundLoop("incomingCall");
+    }
+    return () => stopSoundLoop("incomingCall");
+  }, [calls.length]);
   if (calls.length === 0) {
     return null;
   }

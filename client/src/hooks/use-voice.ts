@@ -48,6 +48,7 @@ import {
   createStreamAnalyser,
   readAnalyserLevel,
 } from "@/lib/voice-audio";
+import { playCue, stopAllSoundLoops, whenCueSettled } from "@/lib/sounds";
 
 export type VoiceStatus = "idle" | "joining" | "connected";
 
@@ -263,14 +264,28 @@ async function createMicPipeline(
   };
 }
 
-function stopMicPipeline(pipeline: MicPipeline | null) {
+function stopMicTracks(pipeline: MicPipeline | null) {
   if (!pipeline) {
     return;
   }
   for (const track of pipeline.rawStream.getTracks()) {
     track.stop();
   }
+  for (const track of pipeline.processedStream.getTracks()) {
+    track.stop();
+  }
+}
+
+function closeMicContext(pipeline: MicPipeline | null) {
+  if (!pipeline) {
+    return;
+  }
   void pipeline.audioContext.close();
+}
+
+function stopMicPipeline(pipeline: MicPipeline | null) {
+  stopMicTracks(pipeline);
+  closeMicContext(pipeline);
 }
 
 function micErrorMessage(err: unknown): string {
@@ -1279,6 +1294,7 @@ export function createVoiceController(transport: RealtimeTransport) {
           message.peer.peerId,
           message.peer.screenAudioStreamId ?? null,
         );
+        playCue("voiceJoin");
         break;
       case "peer-left":
         knownPeerIds.delete(message.peerId);
@@ -1291,6 +1307,7 @@ export function createVoiceController(transport: RealtimeTransport) {
             remoteAnalysers.delete(message.peerId);
           }
         }
+        playCue("voiceLeave");
         break;
       case "offer":
         if (!knownPeerIds.has(message.from)) {
@@ -1400,6 +1417,19 @@ export function createVoiceController(transport: RealtimeTransport) {
     },
 
     async join(voiceChannelId: string, options?: VoiceAudioOptions) {
+      const fromIdle = state.status === "idle";
+      const switching =
+        state.status === "connected" &&
+        state.voiceChannelId !== null &&
+        state.voiceChannelId !== voiceChannelId;
+      // Rings outrank samples if they overlap; kill them before the click cue.
+      stopAllSoundLoops();
+      if (switching) {
+        playCue("voiceLeave");
+      }
+      if (fromIdle || switching) {
+        playCue("voiceJoin");
+      }
       state.error = null;
       state.transportFailure = null;
       state.status = "joining";
@@ -1442,6 +1472,10 @@ export function createVoiceController(transport: RealtimeTransport) {
       const generation = armJoinTimeout();
 
       try {
+        await whenCueSettled();
+        if (generation !== joinGeneration) {
+          return;
+        }
         stopMicPipeline(pipeline);
         let next: MicPipeline;
         try {
@@ -1487,19 +1521,27 @@ export function createVoiceController(transport: RealtimeTransport) {
     },
 
     leave() {
+      const wasInLobby =
+        state.status === "connected" || state.status === "joining";
+      stopAllSoundLoops();
+      if (wasInLobby) {
+        playCue("voiceLeave");
+      }
       clearJoinTimeout();
       joinGeneration++;
       intendedChannelId = null;
       ringOnWelcomeChannelId = null;
       knownPeerIds.clear();
       stopSpeakingLoop();
-      disposeRemoteAnalysers();
+      const closingAnalysers = [...remoteAnalysers.values()];
+      remoteAnalysers.clear();
       transport.sendVoice({ type: "leave-voice-room" });
       manager?.dispose();
       manager = null;
       void teardownSfu();
-      stopMicPipeline(pipeline);
+      const closingPipeline = pipeline;
       pipeline = null;
+      stopMicTracks(closingPipeline);
       releaseScreenCapture();
       releaseCameraCapture();
       pushToTalkHeld = false;
@@ -1535,6 +1577,12 @@ export function createVoiceController(transport: RealtimeTransport) {
         localCameraStream: null,
         callDeclinedUserIds: [],
       };
+      void whenCueSettled().then(() => {
+        closeMicContext(closingPipeline);
+        for (const entry of closingAnalysers) {
+          entry.dispose();
+        }
+      });
       emit();
     },
 

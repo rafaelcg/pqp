@@ -3,10 +3,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createChatController } from "./use-chat";
 import type { RealtimeTransport } from "@/lib/realtime";
 
+const notifyOpenChannelMessage = vi.fn();
+
 vi.mock("@/lib/api", () => ({
   apiFetch: vi.fn(),
   editMessage: vi.fn(),
   deleteMessage: vi.fn(),
+}));
+
+vi.mock("@/lib/notifications", () => ({
+  notifyOpenChannelMessage: (...args: unknown[]) =>
+    notifyOpenChannelMessage(...args),
 }));
 
 const api = await import("@/lib/api");
@@ -55,6 +62,7 @@ const ME = {
   displayName: "Me",
   avatarUrl: null,
   tag: "me#0001",
+  username: "me",
 };
 
 function serverMessage(overrides: Partial<Message> = {}): Message {
@@ -98,6 +106,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   vi.clearAllMocks();
+  notifyOpenChannelMessage.mockReset();
 });
 
 describe("optimistic sending", () => {
@@ -788,5 +797,57 @@ describe("applyProfileUpdate", () => {
       avatarUrl: null,
     });
     expect(chat.getMessages()[0]!.authorName).toBe("Me");
+  });
+});
+
+describe("open-channel sounds", () => {
+  const OTHER = "00000000-0000-4000-8000-000000000002";
+
+  it("does not ping when you send a plain message", () => {
+    const { chat } = setup();
+    chat.sendMessage("hello");
+    expect(notifyOpenChannelMessage).toHaveBeenCalledWith(CHANNEL, false);
+  });
+
+  it("plays the mention cue when you tag yourself", () => {
+    const { chat } = setup();
+    chat.sendMessage("ping @me");
+    expect(notifyOpenChannelMessage).toHaveBeenCalledWith(CHANNEL, true);
+  });
+
+  it("plays once for an incoming message, not again on the echo of your own send", () => {
+    const { chat } = setup();
+    chat.sendMessage("hello");
+    const nonce = chat.getMessages()[0]!.nonce!;
+    notifyOpenChannelMessage.mockClear();
+
+    chat.handleServerMessage({
+      type: "message-broadcast",
+      message: serverMessage({ body: "hello" }),
+      nonce,
+    } as never);
+    expect(notifyOpenChannelMessage).not.toHaveBeenCalled();
+
+    chat.handleServerMessage({
+      type: "message-broadcast",
+      message: serverMessage({
+        id: "00000000-0000-4000-8000-00000000000b",
+        authorId: OTHER,
+        body: "hey",
+      }),
+    } as never);
+    expect(notifyOpenChannelMessage).toHaveBeenCalledWith(CHANNEL, false);
+  });
+
+  it("plays the mention cue when someone else tags you in the open channel", () => {
+    const { chat } = setup();
+    chat.handleServerMessage({
+      type: "message-broadcast",
+      message: serverMessage({
+        authorId: OTHER,
+        body: "hey @me",
+      }),
+    } as never);
+    expect(notifyOpenChannelMessage).toHaveBeenCalledWith(CHANNEL, true);
   });
 });
