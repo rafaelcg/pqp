@@ -22,6 +22,7 @@
 
 import { reconcile } from "./alert.mjs";
 import { runAvailabilityChecks } from "./availability.mjs";
+import { ERRORS_NOT_AUTOMATED, runErrorChecks } from "./errors.mjs";
 import { LIMITS_NOT_AUTOMATED, runLimitChecks } from "./limits.mjs";
 import { SOCIAL_NOT_AUTOMATED, runSocialChecks } from "./social.mjs";
 
@@ -32,6 +33,15 @@ const GROUPS = {
     // Enough to keep an unread email thread alive, quiet enough to not train
     // anyone to ignore it.
     reminderHours: Number(process.env.MONITOR_REMINDER_HOURS ?? 6),
+  },
+  errors: {
+    run: runErrorChecks,
+    // Every 15 minutes. Longer than the uptime group on purpose: an error rate
+    // is a trend, and re-reading the same ~100-line buffer every ten minutes
+    // would mostly re-report the same lines. 12h between nags because an
+    // elevated error rate is a thing to sit down and read logs about, not a
+    // thing to be reminded of over lunch.
+    reminderHours: Number(process.env.MONITOR_REMINDER_HOURS ?? 12),
   },
   limits: {
     run: runLimitChecks,
@@ -91,7 +101,9 @@ async function main() {
         ? LIMITS_NOT_AUTOMATED
         : group === "social"
           ? SOCIAL_NOT_AUTOMATED
-          : null;
+          : group === "errors"
+            ? ERRORS_NOT_AUTOMATED
+            : null;
     if (gaps) {
       console.log("\nNOT AUTOMATED — check these by hand:");
       for (const gap of gaps) {

@@ -68,6 +68,73 @@ An alert that fires spuriously gets muted, and then the real one is missed. So:
 > minutes, but scheduled runs on public repos are queued at low priority and are
 > routinely late. Shortening the interval does not help.
 
+### Error heartbeat — every 15 minutes
+
+`.github/workflows/monitor-errors.yml` → `node scripts/monitor/run.mjs errors`
+
+**Why this group exists.** Everything in the availability group is
+*availability-shaped*: `/health` answers, the WebSocket upgrades, the app's own
+component probes are green. All of that can be true **while the API throws on
+every third request** — `/health` does a `SELECT 1` and returns 200; it does not
+know a route has been 500ing for an hour. Nothing read the logs, so nothing
+would have said so.
+
+| Check | Passes when | Why it exists |
+|---|---|---|
+| `api-error-rate` | fewer than 5% of `pqp-api` log lines are errors, and no process-level fault appears at all | The only check that reads what the server actually says. `fail` at 15%; `warn` at 5%; a single `[process] unhandled rejection` / `uncaught exception` fails on its own regardless of rate, because that is CLAUDE.md pitfall #9 — it crashes the process and drops every connected client. |
+| `support-bot-alive` | exactly one `pqp-support` machine, `started`, whose last `bot.*` lifecycle line is a start | The bot went down three minutes after its first deploy — clean exit, Fly retired the machine, absent from `#ajuda`, nothing said so. Machine state alone is not enough: with `restart policy = "always"` a bot that halts on every boot presents as a permanently `started` machine, so the lifecycle trail is read too. |
+
+#### The window is set by traffic, not by the clock
+
+`fly logs --no-tail` returns roughly the **last 100 lines**, so the period it
+covers is bounded by **volume, not time**. Measured on 2026-08-23, both in the
+same minute:
+
+| App | Records | Span |
+|---|---|---|
+| `pqp-api` | 100 | 28 minutes |
+| `pqp-support` | 79 | 7 hours |
+
+A check phrased as *"errors in the last 15 minutes"* would therefore silently
+mean two hours at 03:00 and ninety seconds at peak, and its threshold would mean
+something different every time it ran. So the check **measures a rate** and
+**derives the window from the first and last timestamps in the output**. The
+15-minute cron is the *sampling interval*, not the window; they are unrelated.
+
+A window too short to mean anything (under 120s, or under 25 records) is a
+**`skip` with the reason, never a pass** — a green taken from a twenty-second
+snapshot is not evidence. A short window that is *full of errors* still alerts:
+refusing to certify health is not the same as refusing to report a fire.
+
+#### The ignore list
+
+Known-benign noise is filtered by an explicit, commented rule table
+(`IGNORE_RULES` in `scripts/monitor/errors.mjs`), never by a regex buried in a
+condition. **Every run prints how many lines each rule swallowed**, on a pass as
+well as a failure, because a rule that has quietly started matching everything
+produces a permanent green and its climbing count is the only tell.
+
+| Rule | What it drops | Why that is not a fault |
+|---|---|---|
+| `pg-deprecation` | the boot-time `DeprecationWarning` from `pg` | a library's migration notice, emitted once per machine start |
+| `proxy-invalid-authority` | fly-proxy `invalid authority` | the edge refusing a junk `Host` before it reaches us; the app never saw it |
+| `naw-blocked` | `blocked by NAW:` | Fly's edge **blocking** an exploit probe. Counting it would make the check louder the better we are defended |
+| `token-rejected`, `ws-auth-failure` | a 401 on a bad JWT | the auth layer working. **Budgeted, not blanket-ignored** — see below |
+| `deploy-health-check` | Fly health-check errors | **conditional**: dropped only when the same buffer contains deploy markers. A rolling deploy on a single machine produces these on every release; a health check failing when *nothing is deploying* is exactly the thing worth waking up for, and stays an error |
+
+**Auth failures are budgeted rather than ignored**, because one stale client and
+a Clerk outage produce the identical log line and only the rate separates them.
+The measured background is ~7.5 lines/hour — one stale automated client retrying
+every ~25 minutes, logging *twice* per attempt (once from the HTTP path, once
+from the socket). The budget is 20/hour, scaled to the measured window;
+everything above it is counted as an error. A real auth outage is every
+connecting client failing at once, which is an order of magnitude clear of that.
+
+> **This needs `FLY_ORG_TOKEN`.** `FLY_API_TOKEN` is a *deploy* token scoped to
+> `pqp-api`, so it can read that app's logs and nothing else — `support-bot-alive`
+> would `SKIP` on it with instructions rather than reporting a false outage. The
+> org-scoped token already in this repo (created for `postgres-disk`) reads both.
+
 ### Certificates, domain and quotas — daily at 11:17 UTC
 
 `.github/workflows/monitor-limits.yml` → `node scripts/monitor/run.mjs limits`
@@ -132,6 +199,11 @@ gh secret set FLY_ORG_TOKEN            # paste it
 gh variable set MONITOR_MPG_CLUSTER --body 82ylg01v4n30zx19
 ```
 
+**The error heartbeat needs this same token.** `support-bot-alive` reads a
+*different app* (`pqp-support`), which the app-scoped deploy token cannot see.
+Without `FLY_ORG_TOKEN` that check `SKIP`s — visibly, with the fix in the
+message — and `api-error-rate` still runs on the deploy token.
+
 ### 2. R2 and Pages — check what the stored Cloudflare token can do
 
 `CLOUDFLARE_API_TOKEN` was created for deploys and its permissions are unknown
@@ -171,7 +243,17 @@ node scripts/monitor/run.mjs limits --json         # machine-readable
 node scripts/monitor/run.mjs availability --alert --dry-run   # show what it would do to issues
 
 MONITOR_FLY_LOCAL=1 node scripts/monitor/run.mjs availability   # include the Fly check using your own `fly auth`
+MONITOR_FLY_LOCAL=1 node scripts/monitor/run.mjs errors --json  # the log reader; --json shows the per-rule ignore counts
 ```
+
+The two groups with real branching logic are tested, and CI runs them:
+
+```bash
+node --test scripts/monitor/*.test.mjs    # 53 tests
+```
+
+> The **glob**, not the directory. `node --test scripts/monitor/` collects a
+> phantom test and fails.
 
 Useful environment variables:
 
@@ -181,6 +263,9 @@ Useful environment variables:
 | `MONITOR_API_ORIGIN`, `MONITOR_WEB_ORIGIN` | Point the probes elsewhere — how the failure paths get exercised. |
 | `MONITOR_RETRY_DELAY_MS` | Shorten the retry spacing when testing. Leave it alone in CI. |
 | `MONITOR_TLS_WARN_DAYS`, `MONITOR_WARN_FRACTION`, `MONITOR_UPTIME_FLOOR` | Threshold overrides. |
+| `MONITOR_ERROR_WARN_FRACTION`, `MONITOR_ERROR_FAIL_FRACTION`, `MONITOR_ERROR_MIN_COUNT` | Error-rate thresholds (0.05, 0.15, 3). |
+| `MONITOR_ERROR_MIN_RECORDS`, `MONITOR_ERROR_MIN_WINDOW_SECONDS` | The sample floors below which the check `skip`s instead of certifying health (25, 120). |
+| `MONITOR_AUTHFAIL_BUDGET_PER_HOUR` | Tolerated background auth-failure lines per hour (20). Raise only with a measurement. |
 | `MONITOR_MUTED` | See below. |
 
 ## Silencing an alert
@@ -216,6 +301,9 @@ These are printed at the end of every `limits` run as well.
 | **Clerk MRU** | 50,000 monthly retained users | The Backend API exposes a user count but not an MRU count. The automated check uses total users as a conservative proxy. | Quarterly |
 | **Fly spend** | Usage-billed; no free-tier wall | Fly bills rather than cutting off, so the failure mode is a surprise invoice, not an outage. Fly's own spend alert handles this better than a probe could. | Set the spend alert once, then glance monthly |
 | **Porkbun payment card** | — | No API. Auto-renew is on, and the way auto-renew fails is an expired card. The `domain-registration` check catches the *consequence*; only you can prevent the *cause*. | Yearly, in July, before the 7 August fee date |
+| **Any log line older than the last ~100** | `fly logs --no-tail` buffer | Fly's free log retention *is* that buffer. An error burst that started and ended between two runs of the error heartbeat is gone before anything reads it. The real fix is shipping logs somewhere with retention, which is a paid product and a separate decision. | accept it, or pay for retention |
+| **`pqp-ambient` error rate and liveness** | — | Nothing technical: the same two checks fit it unchanged. Deliberately not wired up, because the house cast going quiet costs nothing and one more alert key on day one is one more thing to learn to ignore. One line in `runErrorChecks` when it starts mattering. | revisit if the cast becomes load-bearing |
+| **Errors the server never logs** | — | The error heartbeat reads stdout. A route that 500s without a `console.error`, or anything that fails in the browser, is invisible to it. It measures what the server says about itself, which is not what users experience. | n/a |
 | **Scheduled workflows still enabled** | — | **GitHub disables scheduled workflows after 60 days with no repository activity.** A repo that goes quiet loses its monitoring silently. | Monthly: confirm `Monitor (uptime)` has run recently in the Actions tab |
 | **GitHub Actions minutes** | Unlimited | rafaelcg/pqp is a **public** repository and Actions minutes are free and unmetered for public repos. There is no quota to hit, so no alert was built — one would never fire. This becomes real only if the repo is ever made private. | Never, unless the repo goes private |
 | **LiveKit Cloud participant-minutes** | n/a | `LIVEKIT_*` is not configured; voice is full-mesh, so there is no SFU account to meter. Add a check here if that changes. | n/a |
@@ -261,10 +349,15 @@ currently bounces.
 | Path | Role |
 |---|---|
 | `.github/workflows/monitor-uptime.yml` | Every 10 min; availability |
+| `.github/workflows/monitor-errors.yml` | Every 15 min; production log error rate and support-bot liveness |
 | `.github/workflows/monitor-limits.yml` | Daily; certificates, domain, quotas |
+| `.github/workflows/monitor-social.yml` | Daily; published claims and mentions |
 | `scripts/monitor/run.mjs` | CLI entry point |
 | `scripts/monitor/net.mjs` | HTTP / TLS / WebSocket / WHOIS probes and the retry logic |
 | `scripts/monitor/availability.mjs` | The "is it down" checks |
+| `scripts/monitor/errors.mjs` | The "is it throwing" checks, the ignore-rule table, and the log parser |
+| `scripts/monitor/errors.test.mjs` | Tests for the parser, every ignore rule, the thresholds and the bot lifecycle |
+| `scripts/monitor/social.mjs`, `social.test.mjs` | The published-claim drift matcher and its tests |
 | `scripts/monitor/limits.mjs` | The daily checks, plus the not-automated list |
 | `scripts/monitor/alert.mjs` | GitHub Issue open / comment / close reconciliation |
 | `server/src/services/status.ts` | The app's own per-minute component probes, which `status-components` and `uptime-24h` read |
