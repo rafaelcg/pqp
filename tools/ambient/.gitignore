@@ -1,5 +1,11 @@
 # Standalone service — its own install, outside the pnpm workspace.
-node_modules/
+#
+# No trailing slash, deliberately. `node_modules/` matches a DIRECTORY only, and
+# a symlink is a file to git — so linking this at an installed copy (which is
+# what you do in a git worktree, to avoid a second npm install) sailed straight
+# past the ignore and got committed as a 120000 entry pointing at somebody's
+# home directory. Without the slash it matches both.
+node_modules
 package-lock.json
 
 # Runtime output. `state/` is per-community memory and the placement file the

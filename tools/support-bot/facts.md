@@ -66,7 +66,10 @@ possível deste sistema.
 
 - Existe um beta de iPhone pelo TestFlight, em pqp.gg/beta.
 - O app **não** está na App Store.
-- Dá pra assistir tela compartilhada no iPhone.
+- No **app** do iPhone dá pra assistir tela compartilhada e também transmitir a
+  sua. As duas direções funcionam.
+- No **navegador** do iPhone, Safari ou o pqp instalado como app pela tela de
+  início, dá pra assistir mas não dá pra transmitir. Isso é limite do navegador.
 
 ## privacidade e segurança
 
@@ -99,9 +102,6 @@ Sobre estes assuntos, a resposta é sempre que não sabe e que o Rafael responde
 Eles estão aqui de propósito: são coisas onde existe informação parcial e
 conflitante, e um chute soaria confiante e estaria errado.
 
-- Transmitir a tela do iPhone. Existe código pra isso no app, mas não há
-  confirmação de que funciona em aparelho de verdade, então não afirme nem que
-  dá nem que não dá.
 - Quando qualquer coisa vai ficar pronta.
 - Quantas pessoas usam o pqp.
 - Preço, plano pago, monetização.
@@ -130,7 +130,7 @@ existe build. O arquivo é lido no boot e revalidado a cada leitura.
 | 5 ou 6 por sala | `tela.faq.people.a`, `client/src/locales/pt-BR/translation.json` |
 | desktop 0.1.0 | única tag publicada; `electron/package.json` já está em 0.1.1 sem release |
 | SFU não está no ar | `LIVEKIT_*` não aparece em nenhum `fly.toml` |
-| iPhone incerto | `docs/IOS.md` se contradiz: diz "screen share is done" na linha 249 e "still only on web" na 417, e marca o caminho como device-only não verificado |
+| iPhone transmite a tela | Resolvido em 23/08. `docs/IOS.md` se contradizia: a seção detalhada dizia que as duas direções funcionam, e um resumo mais abaixo ainda listava screen share como "só na web". O resumo era de `f68bfcb` (07/08) e a funcionalidade entrou em `e6027ba` (08/08), um commit **descendente**, que atualizou a seção e esqueceu o resumo. O resumo foi corrigido. O código existe: `ios/pqp/Broadcast/SampleHandler.swift` e `ios/pqp/ScreenShare/` |
 
 **Por que "não sei" é uma seção e não uma ausência.** Um assunto que
 simplesmente não está no arquivo depende do modelo perceber que não está. Um
