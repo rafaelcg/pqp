@@ -1,6 +1,26 @@
-Your camera was stuck at 480p. It was not the webcam, it was us.
+Your camera now sends 720p, and you pick the quality.
 
-## What was happening
+## The selector
+
+In Settings, Voice and video:
+
+| Option | What it asks for |
+|---|---|
+| **Auto** (default) | 720p, handing resolution back when the connection needs it |
+| 1080p | 1920x1080 |
+| 720p | 1280x720 |
+| 480p | 854x480 |
+| 360p | 640x360 |
+
+**Auto does not mean "no opinion".** It asks for 720p and lets the connection take resolution back when it cannot carry it, in both directions: it drops when things tighten and climbs when they clear.
+
+The fixed options are for when you know something the browser does not. Hotel wifi, a metered connection, an old laptop running hot: pin it to 480p and forget about it.
+
+Changing it mid-call **does not turn the camera off**. The light does not blink and nobody disappears, because the change is applied to the track already in the air rather than capturing everything again.
+
+Next to the selector there is a number: what you are actually sending, right now, in size, frames and kbps. If the connection is holding you back, it says so. Better to show it than to let you guess why the picture looks bad.
+
+## Why 720p is news
 
 When pqp turned the camera on, it asked the browser for this:
 
@@ -14,29 +34,7 @@ So your 1080p webcam was sending 480p because nobody ever asked it for more. The
 
 The worse part comes after. From 480p, the first step down when the connection tightens is 320x240. So the network only had to dip slightly for the picture to turn into that blurry little square, because it started the call one step above the floor.
 
-Screen sharing never had this problem, because there we asked for 1080p properly. It was only the camera that had been left alone.
-
-## What changed
-
-The camera now asks for 720p at 30 frames, and the video has a real bandwidth ceiling instead of wrestling the screen share for whatever is left.
-
-There is also a selector, in Settings, Voice and video:
-
-| Option | What it asks for |
-|---|---|
-| **Auto** (default) | 720p, handing resolution back when the connection needs it |
-| 1080p | 1920x1080 |
-| 720p | 1280x720 |
-| 480p | 854x480 |
-| 360p | 640x360 |
-
-**Auto does not mean "no opinion".** No opinion is exactly what produced the 480p. It asks for 720p and lets the connection take resolution back when it cannot carry it, in both directions: it drops when things tighten and climbs when they clear.
-
-The fixed options are for when you know something the browser does not. Hotel wifi, a metered connection, an old laptop running hot: pin it to 480p and forget about it.
-
-Changing it mid-call **does not turn the camera off**. The light does not blink and nobody disappears, because the change is applied to the track already in the air rather than capturing everything again.
-
-Next to the selector there is a number: what you are actually sending, right now, in size, frames and kbps. If the connection is holding you back, it says so. Better to show it than to let you guess why the picture looks bad.
+Screen sharing never had this problem, because there we asked for 1080p properly. The camera needed the same treatment, and now it has it: 720p at 30 frames, with a bandwidth ceiling of its own instead of wrestling the screen share for whatever is left.
 
 ## Fullscreen with two screens
 

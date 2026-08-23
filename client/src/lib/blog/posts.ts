@@ -64,13 +64,13 @@ export const POSTS: readonly BlogPost[] = [
     slug: "qualidade-de-video",
     date: "2026-08-24",
     title: {
-      "pt-BR": "A sua câmera estava presa em 480p",
-      en: "Your camera was stuck at 480p",
+      "pt-BR": "Vídeo em 720p, e você escolhe a qualidade",
+      en: "720p video, and you pick the quality",
     },
     summary: {
       "pt-BR":
-        "A câmera nunca pedia tamanho nenhum, e o navegador respondia 640x480. Agora pede 720p, tem seletor de qualidade e mostra o que está saindo de verdade.",
-      en: "The camera never asked for a size, so the browser answered 640x480. It now asks for 720p, there is a quality selector, and it shows what is actually going out.",
+        "A câmera agora manda 720p, com seletor de automático a 360p, troca no meio da call sem desligar nada e um número mostrando o que está saindo de verdade.",
+      en: "The camera now sends 720p, with a selector from auto down to 360p, a mid-call switch that turns nothing off, and a number showing what is actually going out.",
     },
   },
 
