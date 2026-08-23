@@ -42,10 +42,10 @@ const argv = process.argv.slice(2);
 const args = {
   out: valueOf("--out") ?? process.env.SUPPORT_TOKENS_FILE ?? join(ROOT, "secrets", "bot.json"),
   /** The key the token file is written under, and the runner's `SUPPORT_BOT_ID`. */
-  id: valueOf("--id") ?? "pqpajuda",
+  id: valueOf("--id") ?? "manual_bot",
   /** The `character_accounts.label`, which is unique per account. */
   label: valueOf("--label") ?? "pqp-support-bot",
-  displayName: valueOf("--display-name") ?? "pqp ajuda",
+  displayName: valueOf("--display-name") ?? "manual",
   list: argv.includes("--list"),
   rotate: argv.includes("--rotate"),
   revoke: argv.includes("--revoke"),
@@ -81,11 +81,15 @@ const characters = await import(
 /**
  * The name, assembled from the disclosure label rather than written out.
  *
- * "pqp ajuda [bot]". If `disclosureLabel` ever changes what a bot is called,
+ * "manual [bot]". If `disclosureLabel` ever changes what a bot is called,
  * this account is renamed with everything else on its next provision, instead
  * of being the one account still carrying last year's suffix.
  */
 const label = disclosureLabel("bot");
+// "manual [bot]" -> @manual_bot. `deriveHandle` slugifies the display name, so
+// the disclosure suffix lands inside the mention handle and nobody can call this
+// account without typing the word bot. The username is printed below, because it
+// is the string that has to go into the channel topic.
 const displayName = `${args.displayName}${label.suffix}`;
 
 if (args.list) {

@@ -69,6 +69,27 @@ const ROOT = join(HERE, "..");
  */
 const DISCLOSURE = "bot";
 
+/**
+ * The account's name, and the reason its handle is obvious for free.
+ *
+ * "manual" is what this thing actually is: a fact file with a mouth. It answers
+ * from a written document and says it does not know for anything outside it,
+ * which is exactly what a manual does, so the name sets the right expectation
+ * before anybody asks the first question. Names that promise more - assistente,
+ * sabetudo - promise the one thing this bot is built NOT to do.
+ *
+ * What makes it work as a BOT name is `deriveHandle`: the username is slugified
+ * from the DISPLAY name, and the display name permanently carries
+ * `disclosureLabel("bot").suffix`. So "manual [bot]" becomes `@manual_bot`, and
+ * nobody can type the mention without typing the word bot.
+ *
+ * That is the disclosure suffix doing a second job nobody designed it for, and
+ * it is worth naming: any future rename that keeps the suffix keeps the
+ * disclosure in the handle, and one that drops the suffix cannot happen here,
+ * because there is no code path that produces a disclosure other than "bot".
+ */
+const BOT_NAME = "manual";
+
 /** How long the bot waits before answering. See `HUMAN_LATENCY` below. */
 const MIN_LATENCY_MS = 1200;
 
@@ -84,7 +105,7 @@ function parseArgs(argv) {
     devToken: process.env.SUPPORT_DEV_TOKEN ?? "dev-local-token",
     tokensFile: valueOf(argv, "--tokens") ?? process.env.SUPPORT_TOKENS_FILE ?? null,
     /** The persona id the token file is keyed by, and the dev-bypass suffix. */
-    botId: process.env.SUPPORT_BOT_ID ?? "pqpajuda",
+    botId: process.env.SUPPORT_BOT_ID ?? "manual_bot",
     serverName: valueOf(argv, "--server") ?? process.env.SUPPORT_SERVER ?? "QG do pqp",
     channels: (valueOf(argv, "--channels") ?? process.env.SUPPORT_CHANNELS ?? "ajuda")
       .split(",")
@@ -345,7 +366,7 @@ async function connect(args, log) {
     // is how a local checkout gets an account that looks the same without one.
     await api.ensureAgeGate();
     const label = disclosureLabel(DISCLOSURE);
-    await api.setProfile({ displayName: `pqp ajuda${label.suffix}` });
+    await api.setProfile({ displayName: `${BOT_NAME}${label.suffix}` });
   }
 
   const me = await api.call("/api/me");
@@ -427,13 +448,13 @@ async function main() {
   // without connecting to anything, which means a change can be checked against
   // fifty real questions in a second and without a running server.
   if (args.ask) {
-    runtime.bot = { userId: "bot", username: "pqpajuda" };
+    runtime.bot = { userId: "bot", username: "manual_bot" };
     const message = {
       id: "ask",
       channelId: "ask",
       authorId: "asker",
       authorName: "você",
-      body: `@pqpajuda ${args.ask}`,
+      body: `@manual_bot ${args.ask}`,
     };
     const result = await decideReply(message, runtime);
     console.log(`\n> ${args.ask}\n`);

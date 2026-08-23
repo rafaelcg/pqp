@@ -60,7 +60,7 @@ function runtime(reply, overrides = {}) {
     ignoreUserIds: new Set(),
     lastAnswerAt: 0,
     allowedChannelIds: new Set(["ch-ajuda"]),
-    bot: { userId: "bot-1", username: "pqpajuda" },
+    bot: { userId: "bot-1", username: "manual_bot" },
     cannedAnswer: () => reply,
     ...overrides,
   };
@@ -78,7 +78,7 @@ function ask(body, extra = {}) {
     channelId: "ch-ajuda",
     authorId: "user-1",
     authorName: "Bia",
-    body: `@pqpajuda ${body}`,
+    body: `@manual_bot ${body}`,
     isWebhook: false,
     replyTo: null,
     ...extra,

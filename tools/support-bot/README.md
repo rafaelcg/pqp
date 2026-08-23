@@ -15,7 +15,7 @@ as a different thing**, which here means three properties that are structural
 rather than configured:
 
 1. **It is permanently disclosed.** The account is minted with
-   `disclosureLabel("bot")`, so it is called `pqp ajuda [bot]`. There is no flag
+   `disclosureLabel("bot")`, so it is called `manual [bot]`, reachable as `@manual_bot`. There is no flag
    to turn that off. `scripts/provision.mjs` has no argument for it.
 2. **It answers "é um bot?" plainly**, from a sentence a person wrote, never
    from the model. See the disclosure seam below.

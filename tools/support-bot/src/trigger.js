@@ -71,7 +71,7 @@ const MAX_QUESTION_CHARS = 600;
  * `@username` is matched on the mention grammar the product actually uses
  * (`MENTION_PATTERN` in `@pqp/shared`: `@` plus 2 to 32 of `[A-Za-z0-9_]`),
  * lowercased on both sides. Matching on display name instead would be wrong:
- * the display name is "pqp ajuda [bot]", it contains a space and a bracket, and
+ * the display name is "manual [bot]", it contains a space and a bracket, and
  * it is not what the client inserts when somebody picks the bot from the
  * autocomplete.
  */
@@ -192,7 +192,7 @@ export function screenTrigger(message, context) {
  * The question without the bot's own name in it.
  *
  * Sent to the model rather than the raw body so the prompt does not spend its
- * first tokens teaching the model to ignore a mention token, and so "@pqpajuda"
+ * first tokens teaching the model to ignore a mention token, and so "@manual_bot"
  * never appears in a transcript the model might echo back into an answer.
  */
 export function stripMention(body, botUsername) {

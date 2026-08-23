@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { RateCap } from "../../ambient/src/schedule.js";
 import { screenTrigger, isAddressed, stripMention, SKIP } from "../src/trigger.js";
 
-const BOT = { botUserId: "bot-1", botUsername: "pqpajuda" };
+const BOT = { botUserId: "bot-1", botUsername: "manual_bot" };
 
 const LIMITS = {
   maxPerUserPerHour: 3,
@@ -17,7 +17,7 @@ function message(overrides = {}) {
     channelId: "ch-ajuda",
     authorId: "user-1",
     authorName: "Bia",
-    body: "@pqpajuda tem como aumentar a qualidade?",
+    body: "@manual_bot tem como aumentar a qualidade?",
     isWebhook: false,
     replyTo: null,
     ...overrides,
@@ -45,13 +45,13 @@ describe("isAddressed", () => {
   });
 
   test("case does not matter, because autocomplete is not the only way in", () => {
-    assert.equal(isAddressed(message({ body: "@PqpAjuda oi" }), BOT), "mention");
+    assert.equal(isAddressed(message({ body: "@Manual_Bot oi" }), BOT), "mention");
   });
 
   test("a longer username that merely starts the same does NOT count", () => {
-    // "@pqpajudante" is somebody else. Matching on a prefix would have the bot
+    // "@manual_botao" is somebody else. Matching on a prefix would have the bot
     // answering questions aimed at a different account.
-    assert.equal(isAddressed(message({ body: "@pqpajudante oi" }), BOT), null);
+    assert.equal(isAddressed(message({ body: "@manual_botao oi" }), BOT), null);
   });
 
   test("a reply to one of the bot's own messages counts", () => {
@@ -99,7 +99,7 @@ describe("screenTrigger: loops", () => {
     // the check that makes a self-loop impossible rather than unlikely, so it
     // runs first and nothing can be ordered in front of it.
     const verdict = screenTrigger(
-      message({ authorId: "bot-1", body: "@pqpajuda e aí" }),
+      message({ authorId: "bot-1", body: "@manual_bot e aí" }),
       context(),
     );
     assert.equal(verdict.reason, SKIP.SELF);
@@ -173,12 +173,12 @@ describe("screenTrigger: rate limits", () => {
 
 describe("screenTrigger: the question it extracts", () => {
   test("refuses a bare mention with nothing attached", () => {
-    assert.equal(screenTrigger(message({ body: "@pqpajuda" }), context()).reason, SKIP.EMPTY);
+    assert.equal(screenTrigger(message({ body: "@manual_bot" }), context()).reason, SKIP.EMPTY);
   });
 
   test("refuses a paste rather than a question", () => {
     const verdict = screenTrigger(
-      message({ body: `@pqpajuda ${"x".repeat(700)}` }),
+      message({ body: `@manual_bot ${"x".repeat(700)}` }),
       context(),
     );
     assert.equal(verdict.reason, SKIP.TOO_LONG);
@@ -187,11 +187,11 @@ describe("screenTrigger: the question it extracts", () => {
 
 describe("stripMention", () => {
   test("removes the bot's name and tidies the whitespace", () => {
-    assert.equal(stripMention("@pqpajuda  tem som?  ", "pqpajuda"), "tem som?");
-    assert.equal(stripMention("oi @pqpajuda tem som?", "pqpajuda"), "oi tem som?");
+    assert.equal(stripMention("@manual_bot  tem som?  ", "manual_bot"), "tem som?");
+    assert.equal(stripMention("oi @manual_bot tem som?", "manual_bot"), "oi tem som?");
   });
 
   test("leaves other people's mentions where they are", () => {
-    assert.equal(stripMention("@pqpajuda o @rafa some?", "pqpajuda"), "o @rafa some?");
+    assert.equal(stripMention("@manual_bot o @rafa some?", "manual_bot"), "o @rafa some?");
   });
 });
