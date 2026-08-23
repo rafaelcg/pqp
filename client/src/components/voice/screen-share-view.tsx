@@ -84,6 +84,16 @@ interface ScreenShareViewProps {
    * ScreenStage, which already owns the outer height.
    */
   variant?: "panel" | "tile";
+  /**
+   * In-page expansion, lifted to the parent so two shares cannot both cover the
+   * viewport. Without this, expanding both tiles stacked one `fixed inset-0`
+   * over the other and buried the lower one's exit control, which on an iPhone
+   * (the only place `expand` is the mode) is a fullscreen you cannot leave.
+   *
+   * Omit both to keep the old uncontrolled behaviour.
+   */
+  expanded?: boolean;
+  onExpandedChange?: (expanded: boolean) => void;
 }
 
 export function ScreenShareView({
@@ -92,16 +102,27 @@ export function ScreenShareView({
   isSelf,
   onStopSharing,
   variant = "panel",
+  expanded,
+  onExpandedChange,
 }: ScreenShareViewProps) {
   const { t } = useTranslation();
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const [isFullscreen, setIsFullscreen] = useState(false);
+  // Two separate truths. `elementFullscreen` belongs to the browser and only
+  // ever arrives as an event; `expanded` is the in-page fallback and is the
+  // parent's when the parent asked to own it.
+  const [elementFullscreen, setElementFullscreen] = useState(false);
+  const [localExpanded, setLocalExpanded] = useState(false);
+  const controlledExpansion = onExpandedChange !== undefined;
+  const isExpanded = controlledExpansion ? (expanded ?? false) : localExpanded;
   // `expand` until the refs exist, because it is the mode that needs no
   // platform support: the control is always safe to render, and the detector
   // below only ever upgrades it to real element fullscreen.
   const [fullscreenMode, setFullscreenMode] = useState<FullscreenMode>("expand");
   const [blocked, setBlocked] = useState(false);
+  // One name for "this share fills the viewport", whichever route got it there.
+  const isFullscreen =
+    fullscreenMode === "element" ? elementFullscreen : isExpanded;
 
   useEffect(() => {
     const video = videoRef.current;
@@ -138,11 +159,11 @@ export function ScreenShareView({
   useEffect(() => {
     const video = videoRef.current;
     const onFullscreenChange = () => {
-      setIsFullscreen(currentFullscreenElement() === containerRef.current);
+      setElementFullscreen(currentFullscreenElement() === containerRef.current);
     };
-    const onBegin = () => setIsFullscreen(true);
+    const onBegin = () => setElementFullscreen(true);
     const onEnd = () => {
-      setIsFullscreen(false);
+      setElementFullscreen(false);
       // iOS's native player detaches a MediaStream on the way out, leaving the
       // inline element rendering nothing — the reported "blank video after
       // coming back from fullscreen". Reattaching the same stream and playing
@@ -194,25 +215,41 @@ export function ScreenShareView({
       if (!container) {
         return;
       }
-      const active = currentFullscreenElement();
-      const request = active
-        ? exitDocumentFullscreen()
-        : requestElementFullscreen(container);
-      void request.catch((err: unknown) => {
+      const refused = (err: unknown) => {
         // The whole point of the change: a refused request used to be silent,
         // and "I clicked it and nothing happened" is not a report anyone can
         // act on.
         console.warn("[voice] fullscreen refused", err);
         setBlocked(true);
-      });
+      };
+      const active = currentFullscreenElement();
+      if (active === container) {
+        void exitDocumentFullscreen().catch(refused);
+        return;
+      }
+      if (active) {
+        // Another share owns the screen. Hand it over. The old test was "is
+        // *anything* fullscreen?", which meant pressing the other tile's
+        // button only ever dropped out of fullscreen instead of switching to
+        // the screen the person actually asked for.
+        void exitDocumentFullscreen()
+          .then(() => requestElementFullscreen(container))
+          .catch(refused);
+        return;
+      }
+      void requestElementFullscreen(container).catch(refused);
       return;
     }
     // `expand`: no platform call at all, so nothing can refuse it. The panel
     // grows to fill the viewport in the page. This is what an iPhone gets, and
     // it replaces handing the element to the OS media player, which cannot
     // render a MediaStream and showed a black rectangle instead.
-    setIsFullscreen((was) => !was);
-  }, [fullscreenMode]);
+    if (controlledExpansion) {
+      onExpandedChange?.(!isExpanded);
+      return;
+    }
+    setLocalExpanded((was) => !was);
+  }, [fullscreenMode, controlledExpansion, onExpandedChange, isExpanded]);
 
   return (
     <div
