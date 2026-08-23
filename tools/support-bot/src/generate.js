@@ -39,8 +39,27 @@ const PRICE_PER_MTOK = {
 };
 const FALLBACK_PRICE = { input: 15.0, output: 75.0 };
 
+/**
+ * `claude-haiku-4-5-20251001` and `claude-haiku-4-5` are the same model at the
+ * same price, and only one of them is what you asked for.
+ *
+ * The request sends an ALIAS; the response reports the DATED id it resolved to.
+ * Pricing off the response therefore missed the table on every single call and
+ * fell through to `FALLBACK_PRICE`, charging Opus rates for Haiku work: 14x
+ * high, which would have tripped the daily ceiling at about 26 answers instead
+ * of 150. The fallback behaved exactly as designed - an unknown model bills
+ * high, because overspending is the unrecoverable direction - it was just
+ * firing on a model that is not unknown at all.
+ *
+ * Stripping the date is the whole fix. A genuinely unknown family still misses
+ * the table and still bills at the conservative rate.
+ */
+export function normalizeModelId(model) {
+  return String(model ?? "").replace(/-\d{8}$/, "");
+}
+
 export function priceFor(model) {
-  return PRICE_PER_MTOK[model] ?? FALLBACK_PRICE;
+  return PRICE_PER_MTOK[normalizeModelId(model)] ?? FALLBACK_PRICE;
 }
 
 export function estimateCostUsd(usage, model = DEFAULT_MODEL) {

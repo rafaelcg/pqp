@@ -89,3 +89,31 @@ describe("localDate", () => {
     assert.equal(localDate(at, "UTC"), "2026-08-24");
   });
 });
+
+describe("model pricing", () => {
+  test("prices a dated model id the same as its alias", async () => {
+    // The bug the first live run found. The request sends an alias, the
+    // response reports the dated id it resolved to, so pricing off the response
+    // missed the table on every call and billed Opus rates for Haiku work.
+    const { priceFor, estimateCostUsd, normalizeModelId } = await import(
+      "../src/generate.js"
+    );
+    assert.equal(normalizeModelId("claude-haiku-4-5-20251001"), "claude-haiku-4-5");
+    assert.deepEqual(
+      priceFor("claude-haiku-4-5-20251001"),
+      priceFor("claude-haiku-4-5"),
+    );
+
+    // The real shape of a live call, measured: ~2300 in, ~70 out.
+    const usage = { input_tokens: 2300, output_tokens: 70 };
+    const cost = estimateCostUsd(usage, "claude-haiku-4-5-20251001");
+    assert.ok(cost > 0.002 && cost < 0.004, `got ${cost}`);
+  });
+
+  test("still bills an unknown model at the conservative rate", async () => {
+    // The fallback is not a bug and must survive the fix: overspending is the
+    // unrecoverable direction, so a model nobody priced bills high on purpose.
+    const { priceFor } = await import("../src/generate.js");
+    assert.equal(priceFor("claude-something-9-0-20991231").input, 15.0);
+  });
+});
