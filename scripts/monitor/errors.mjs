@@ -43,6 +43,7 @@
  * an open incident.
  */
 
+import { judgeHeartbeat } from "./bot-heartbeat.mjs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -665,11 +666,30 @@ export function judgeBot({ machines, records }) {
     }
   }
 
+  // THE LIFECYCLE TRAIL CANNOT CLOSE THIS OUT, so the heartbeat runs last.
+  //
+  // Everything above answers a question about the machine or about boot: is a
+  // VM up, was the last lifecycle line a start rather than a stop, is it
+  // looping. On 2026-08-23 every one of those said healthy for three and a half
+  // hours while the bot sat deaf in a 114-member community: the process was
+  // alive, the machine was `started`, and the last line really was `bot.start`.
+  // Nothing in a boot line expires, so it goes on proving the bot started long
+  // after it stopped working.
+  //
+  // `judgeHeartbeat` is the only check here that reads a signal which is
+  // emitted continuously and says something about the SOCKET. It goes after the
+  // others because "no machine" and "three machines" are better diagnoses of
+  // the same silence, and it should not mask them.
+  const beat = judgeHeartbeat({ records, lifecycle });
+  if (beat.status !== "ok") {
+    return { ...base, ...beat, detail: `${detail}\n${beat.detail}`, runbook };
+  }
+
   return {
     ...base,
     status: "ok",
-    summary: `Machine started in ${live[0].region}, last lifecycle line is \`bot.${last.event}\` at ${last.at}.`,
-    detail,
+    summary: `Machine started in ${live[0].region}, socket up (${beat.summary}).`,
+    detail: `${detail}\n${beat.detail}`,
   };
 }
 

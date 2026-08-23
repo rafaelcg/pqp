@@ -410,9 +410,27 @@ describe("judgeBot — is the support bot actually there", () => {
     }),
   ];
 
-  test("started machine with a start as its last lifecycle line is healthy", () => {
-    const r = judgeBot({ machines: started, records: boot });
+  // `boot` is the 2026-08-23 incident verbatim: ready, start, and nothing after
+  // it. Every machine-and-lifecycle check calls that healthy, which is exactly
+  // why the bot sat deaf for three and a half hours. It is a FAILING fixture
+  // now, deliberately, and `beating` is what healthy actually looks like.
+  const beating = [
+    ...boot,
+    rec("[2026-08-23T17:38:32.950Z] bot.heartbeat connected=1 expected=1 reconnects=0 closes=0 downForS=0 uptimeS=300", {
+      at: new Date(Date.now() - 60_000).toISOString(),
+    }),
+  ];
+
+  test("a started machine whose bot is still holding its socket is healthy", () => {
+    const r = judgeBot({ machines: started, records: beating });
     assert.equal(r.status, "ok");
+  });
+
+  test("ready + start with no heartbeat is the 2026-08-23 incident, and fails", () => {
+    // The regression this whole check exists for. If this ever goes green
+    // again, the monitor has gone back to proving the bot booted once.
+    const r = judgeBot({ machines: started, records: boot });
+    assert.notEqual(r.status, "ok");
   });
 
   test("a stopped machine fails — this is the incident that happened", () => {
@@ -492,7 +510,13 @@ describe("judgeBot — is the support bot actually there", () => {
     // #ajuda is quiet most days and the bot only logs when it answers. An
     // alert on "no output for two hours" would fire nightly and be muted
     // within a week.
-    const old = boot.map((r) => ({ ...r, timestamp: "2026-08-20T03:00:00Z" }));
-    assert.equal(judgeBot({ machines: started, records: old }).status, "ok");
+    // Silence in ANSWERS, not silence in heartbeats: the heartbeat is what
+    // separates "nobody asked anything tonight" from "the socket is gone".
+    const quiet = beating.map((r) =>
+      r.message.includes("bot.heartbeat")
+        ? r
+        : { ...r, timestamp: "2026-08-20T03:00:00Z" },
+    );
+    assert.equal(judgeBot({ machines: started, records: quiet }).status, "ok");
   });
 });
