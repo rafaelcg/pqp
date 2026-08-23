@@ -2,6 +2,7 @@
 /// <reference types="vite-plugin-pwa/client" />
 
 import type { PqpDesktop } from "./lib/desktop";
+import type { VoiceStatsConsole } from "./lib/voice-stats-probe";
 
 interface ImportMetaEnv {
   readonly VITE_CLERK_PUBLISHABLE_KEY: string;
@@ -21,6 +22,12 @@ interface ImportMeta {
 declare global {
   interface Window {
     pqpDesktop?: PqpDesktop;
+    /**
+     * Attached only once a mesh call has opened its first connection — see
+     * `lib/voice-stats-probe.ts`. Nothing in the app reads it; it exists so a
+     * live call can be measured from the console instead of described.
+     */
+    pqpVoiceStats?: VoiceStatsConsole;
   }
 }
 

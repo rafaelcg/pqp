@@ -1,4 +1,9 @@
 import type { ClientRelayMessage } from "@pqp/shared";
+import {
+  registerVoiceConnection,
+  unregisterVoiceConnection,
+  type VideoSenderRole,
+} from "./voice-stats-probe";
 
 export type PeerConnectionState = "connecting" | "connected" | "failed";
 
@@ -563,6 +568,18 @@ export function createPeerConnectionManager(
     };
     applyIdentity(managed, identity);
     wirePeerConnection(managed, remotePeerId);
+    // Console-only measurement (`lib/voice-stats-probe.ts`). The role lookup is
+    // resolved live rather than captured, because `replaceTrack` changes the
+    // track id under a sender that keeps its identity.
+    registerVoiceConnection(remotePeerId, pc, (trackId): VideoSenderRole => {
+      if (managed.cameraSender?.track?.id === trackId) {
+        return "camera";
+      }
+      if (managed.screenSender?.track?.id === trackId) {
+        return "screen";
+      }
+      return "unknown";
+    });
 
     if (localStream) {
       for (const track of localStream.getTracks()) {
@@ -964,6 +981,7 @@ export function createPeerConnectionManager(
         previous?.remoteScreenAudioStreamId ?? null;
       if (previous) {
         clearIceRestartTimer(previous);
+        unregisterVoiceConnection(previous.pc);
         previous.pc.close();
         peers.delete(remotePeerId);
       }
@@ -985,6 +1003,7 @@ export function createPeerConnectionManager(
       }
 
       clearIceRestartTimer(peer);
+      unregisterVoiceConnection(peer.pc);
       peer.pc.close();
       peers.delete(remotePeerId);
       // The room just shrank, so whoever is left can have the departed peer's
@@ -996,6 +1015,7 @@ export function createPeerConnectionManager(
     dispose() {
       for (const peer of peers.values()) {
         clearIceRestartTimer(peer);
+        unregisterVoiceConnection(peer.pc);
         peer.pc.close();
       }
       peers.clear();
