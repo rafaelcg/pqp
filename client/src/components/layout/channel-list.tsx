@@ -8,6 +8,7 @@ import {
   ScreenShare,
   Search,
   Settings,
+  UserPlus,
   Users,
   X,
 } from "lucide-react";
@@ -391,7 +392,10 @@ export function ChannelList({
               )}
             </div>
           </div>
-          <div className="flex items-center gap-1">
+          {/* `shrink-0`: these are all fixed-width controls, so letting flex
+              compress them only squeezes their tap targets while the name is
+              already truncating anyway. */}
+          <div className="flex shrink-0 items-center gap-1">
             {server && (
               <>
                 {canManage && (
@@ -414,12 +418,24 @@ export function ChannelList({
                 >
                   <Users className="h-4 w-4" />
                 </button>
+                {/* An icon, not the word.
+                    The column is a fixed 256px and this row also carries a
+                    36px server icon, two icon buttons and the name. Spelled
+                    out, "Convidar" took about 66 of those pixels and left the
+                    name roughly 48 — which is why "QG do pqp" rendered as
+                    "QG...". The label is the one thing here that could give
+                    the pixels back, and losing it costs least: invite is also
+                    in this header's context menu and in the rail's, both of
+                    them spelled out, and the signal colour keeps it reading as
+                    the action of the row rather than a third grey icon. */}
                 <button
                   type="button"
-                  className="rounded-md px-2 py-1 text-xs text-signal hover:bg-ink-3"
+                  className="rounded-md p-1.5 text-signal hover:bg-ink-3"
+                  title={t("chrome.invitePeople")}
+                  aria-label={t("chrome.invitePeople")}
                   onClick={onInvite}
                 >
-                  {t("chrome.invite")}
+                  <UserPlus className="h-4 w-4" />
                 </button>
               </>
             )}
