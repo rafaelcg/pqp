@@ -54,7 +54,7 @@ const FORBIDDEN_CLAIMS = [
     // in Brazil is not, and saying so in public is the kind of sentence that
     // gets quoted back at its author.
     pattern:
-      /\b(imune|acima da lei|fora do alcance|nem a (justi[çc]a|pol[íi]cia)|nenhum[a]? (ordem|juiz|governo)\s+\w*\s*(pode|consegue))\b/i,
+      /\b(imune|acima da lei|fora do alcance|nem a (justi[çc]a|pol[íi]cia)|(nenhum[a]?|nem\s+um[a]?)\s+(ordem|juiz|governo|mandado)\b)/i,
   },
   {
     reason: "competitor-comparison",
@@ -176,7 +176,11 @@ export function screenAnswer(body, { facts, ownerHandle = null, maxLength = 420 
 
 export function disallowedLink(text) {
   for (const match of String(text).matchAll(URLISH)) {
-    const found = match[1];
+    // Trailing sentence punctuation is part of the sentence, not of the host.
+    // Without this strip, "tá em github.com/rafaelcg/pqp." is rejected as an
+    // unknown link because of the full stop, which fails a correct answer about
+    // the single most linkable fact the bot has.
+    const found = match[1].replace(/[.,;:!?)]+$/, "");
     const bare = found.replace(/^https?:\/\//i, "").replace(/\/$/, "");
     if (NOT_A_LINK.test(bare)) {
       continue;

@@ -269,7 +269,7 @@ export async function decideReply(message, runtime) {
  * is the half that is rate-capped, because the file can absorb a hundred lines
  * in an evening and Rafael's notifications cannot.
  */
-function makeEscalator(runtime) {
+export function makeEscalator(runtime) {
   const { args, rateCap, log } = runtime;
   return (message, question, why) => {
     const now = Date.now();
