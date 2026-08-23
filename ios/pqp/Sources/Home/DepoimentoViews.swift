@@ -59,7 +59,13 @@ struct DepoimentosSection: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
 
                         HStack(spacing: 6) {
-                            Text("— \(one.author.tag ?? one.author.displayName), \(Depoimentos.stamp(one), format: .dateTime.month(.wide).year())")
+                            // No dash in front of the name, though that is how a
+                            // pull quote is usually attributed: the house rule
+                            // bans the character in anything a user reads, and an
+                            // exception for typography is how 184 of them got into
+                            // the web catalogues. The caption weight already says
+                            // this line is the byline and not more of the quote.
+                            Text("\(one.author.tag ?? one.author.displayName), \(Depoimentos.stamp(one), format: .dateTime.month(.wide).year())")
                                 .font(Typography.caption)
                                 .foregroundStyle(Palette.paperMuted)
                                 .lineLimit(1)
@@ -239,7 +245,7 @@ struct DepoimentoComposer: View {
                         onSendAsDm(text)
                         dismiss()
                     } label: {
-                        Label("This is private — send it as a DM", systemImage: "bubble.left")
+                        Label("This is private. Send it as a DM", systemImage: "bubble.left")
                     }
                     .buttonStyle(SecondaryButtonStyle())
                     .disabled(busy || body_.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)

@@ -42,7 +42,7 @@ struct AgeGateView: View {
                     .foregroundStyle(Palette.paper)
                     .multilineTextAlignment(.center)
 
-                Text("pqp is for people aged 18 and over. Enter your date of birth to continue — you can only answer once.")
+                Text("pqp is for people aged 18 and over. Enter your date of birth to continue. You can only answer once.")
                     .font(Typography.body)
                     .foregroundStyle(Palette.paperMuted)
                     .multilineTextAlignment(.center)

@@ -221,7 +221,7 @@ struct FriendsView: View {
             EmptyState(
                 icon: "tray",
                 title: "Nothing pending",
-                message: "Friend requests waiting on you — and the ones you've sent — land here."
+                message: "Friend requests waiting on you, and the ones you've sent, land here."
             )
             .padding(.top, 30)
         } else {

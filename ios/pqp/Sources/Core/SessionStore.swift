@@ -162,7 +162,7 @@ final class SessionStore {
                 // pk_test surviving into a pk_live build). Purge it so the
                 // next tap starts clean, and say so without alarm.
                 await purgeClerkSession()
-                lastError = String(localized: "Signed out — sign in again to continue.")
+                lastError = String(localized: "Signed out. Sign in again to continue.")
             }
             phase = .onboarding
         }

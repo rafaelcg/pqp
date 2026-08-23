@@ -664,7 +664,7 @@ enum HandleRules {
         case .length:
             String(localized: "Between 3 and 20 characters.")
         case .format:
-            String(localized: "Letters, numbers, dots, dashes and underscores — starting and ending with a letter or number.")
+            String(localized: "Letters, numbers, dots, dashes and underscores, starting and ending with a letter or number.")
         case .reserved:
             String(localized: "That one is reserved.")
         case .blocked:

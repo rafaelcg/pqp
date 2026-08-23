@@ -232,7 +232,7 @@ struct PushExplainerView: View {
                     .foregroundStyle(Palette.paper)
                     .multilineTextAlignment(.center)
 
-                Text("pqp can buzz your phone for direct messages, mentions, replies and incoming calls — and only those, only when you're not already online somewhere. No badges for every message in every channel.")
+                Text("pqp can buzz your phone for direct messages, mentions, replies and incoming calls, and only those, only when you're not already online somewhere. No badges for every message in every channel.")
                     .font(Typography.body)
                     .foregroundStyle(Palette.paperMuted)
                     .multilineTextAlignment(.center)
