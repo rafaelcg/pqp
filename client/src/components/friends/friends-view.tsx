@@ -16,6 +16,7 @@ import {
 } from "@/lib/first-run";
 import { Button } from "@/components/ui/button";
 import { StatusDot } from "@/components/user/status-dot";
+import { UserAvatar } from "@/components/user/user-avatar";
 import { UserSearch } from "@/components/user/user-search";
 import { ApiError, createConversation } from "@/lib/api";
 import { useTranslation } from "@/lib/i18n";
@@ -674,19 +675,16 @@ function FriendFace({
 }) {
   return (
     <div className="relative shrink-0">
-      <div className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-md bg-ink-3 text-sm font-semibold">
-        {person.avatarUrl ? (
-          <img
-            src={person.avatarUrl}
-            alt=""
-            loading="lazy"
-            referrerPolicy="no-referrer"
-            className="h-full w-full object-cover"
-          />
-        ) : (
-          person.displayName.slice(0, 1).toUpperCase()
-        )}
-      </div>
+      {/* `UserAvatar`, for the reason the profile card now uses it: an
+          uploaded avatar's URL is root-relative and only `resolveAvatarUrl`
+          turns it into one the SPA's origin can fetch. */}
+      <UserAvatar
+        name={person.displayName}
+        avatarUrl={person.avatarUrl}
+        rounded="md"
+        className="h-9 w-9"
+        fallbackClassName="bg-ink-3 text-sm text-paper"
+      />
       {status && (
         <StatusDot
           status={status}

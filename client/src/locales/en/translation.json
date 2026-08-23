@@ -710,6 +710,7 @@
   "profile.block": "Block",
   "profile.block.confirm": "Block {name}? This ends the friendship and hides their messages.",
   "profile.report": "Report",
+  "profile.call": "Call",
   "profile.more": "More",
   "profile.isYou": "This is you.",
   "profile.loading": "Loading",

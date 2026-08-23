@@ -1,5 +1,6 @@
 import { Phone, PhoneOff, X } from "lucide-react";
 import type { IncomingCall } from "@/hooks/use-voice";
+import { UserAvatar } from "@/components/user/user-avatar";
 import { useTranslation } from "@/lib/i18n";
 
 /**
@@ -44,21 +45,13 @@ export function IncomingCallOverlay({
           }`}
           className="pointer-events-auto flex w-full max-w-sm items-center gap-3 rounded-lg border border-ink-4/60 bg-ink-2 p-3 shadow-lg"
         >
-          {call.caller.avatarUrl ? (
-            <img
-              src={call.caller.avatarUrl}
-              alt=""
-              referrerPolicy="no-referrer"
-              className="h-10 w-10 shrink-0 rounded-full object-cover"
-            />
-          ) : (
-            <span
-              aria-hidden="true"
-              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-ink-4 text-sm font-semibold text-paper"
-            >
-              {call.caller.displayName.slice(0, 1).toUpperCase()}
-            </span>
-          )}
+          <UserAvatar
+            name={call.caller.displayName}
+            avatarUrl={call.caller.avatarUrl}
+            rounded="full"
+            className="h-10 w-10"
+            fallbackClassName="bg-ink-4 text-sm text-paper"
+          />
           <div className="min-w-0 flex-1">
             <p className="truncate text-sm font-semibold text-paper">
               {call.caller.displayName}

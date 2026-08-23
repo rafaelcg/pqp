@@ -1889,7 +1889,18 @@ function MainAppContent({
 
   /** The sidebar phone button: join a live call, otherwise start ringing. */
   function handleStartConversationCall(channelId: string) {
-    const live = (voice.getState().occupancy[channelId] ?? []).length > 0;
+    const state = voice.getState();
+    // Already in THIS call: the phone is a way back to the conversation, not a
+    // rejoin. Joining a room you are in is not an error — the server drops the
+    // socket's old peer and admits the new one — but it tears down the mesh and
+    // builds it again, which everybody else in the call hears. The profile
+    // card's phone made this reachable in one click, so it is guarded here,
+    // where the channel id is known, rather than in the card.
+    if (state.voiceChannelId === channelId && state.status !== "idle") {
+      void selectConversation(channelId);
+      return;
+    }
+    const live = (state.occupancy[channelId] ?? []).length > 0;
     void handleConversationCall(channelId, !live);
   }
 
@@ -2998,6 +3009,14 @@ function MainAppContent({
       onOpenConversation={(conversation) => {
         setConversations((prev) => upsertConversation(prev, conversation));
         void selectConversation(conversation.channelId);
+      }}
+      // The card's phone. The conversation has just been created or reused by
+      // the card itself, so all that is left is what the DM list's own phone
+      // does: put the row in the sidebar, then join the call already running in
+      // it or start ringing. One path, one set of rules about who may be rung.
+      onStartCall={(conversation) => {
+        setConversations((prev) => upsertConversation(prev, conversation));
+        handleStartConversationCall(conversation.channelId);
       }}
       // The depoimento composer's DM fork lands here: the conversation has just
       // been selected above, and the composer remounts per channel, so its

@@ -2,6 +2,7 @@ import { Check, X } from "lucide-react";
 import { useState } from "react";
 import type { Depoimento } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
+import { UserAvatar } from "@/components/user/user-avatar";
 import { useTranslation } from "@/lib/i18n";
 import { depoimentoDate } from "./depoimentos-model";
 
@@ -71,19 +72,13 @@ export function PendingDepoimentos({
             >
               {/* Name first. See the module note. */}
               <div className="flex items-center gap-2">
-                <div className="flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-full bg-ink-3 text-[10px] font-semibold">
-                  {one.author.avatarUrl ? (
-                    <img
-                      src={one.author.avatarUrl}
-                      alt=""
-                      loading="lazy"
-                      referrerPolicy="no-referrer"
-                      className="h-full w-full object-cover"
-                    />
-                  ) : (
-                    one.author.displayName.slice(0, 1).toUpperCase()
-                  )}
-                </div>
+                <UserAvatar
+                  name={one.author.displayName}
+                  avatarUrl={one.author.avatarUrl}
+                  rounded="full"
+                  className="h-6 w-6"
+                  fallbackClassName="bg-ink-3 text-[10px] text-paper"
+                />
                 <span className="truncate text-sm font-medium text-paper">
                   {one.author.displayName}
                 </span>

@@ -31,6 +31,7 @@ import {
   type FullscreenMode,
 } from "@/components/voice/capabilities";
 import { VoiceAvatar } from "@/components/voice/voice-avatar";
+import { UserAvatar } from "@/components/user/user-avatar";
 import { useTranslation } from "@/lib/i18n";
 import { conversationTitle } from "@/lib/conversations";
 import { cn } from "@/lib/utils";
@@ -1081,18 +1082,13 @@ function RingView({
               aria-hidden="true"
               className="absolute inset-0 animate-ping rounded-full bg-success/30 motion-reduce:animate-none"
             />
-            {person.avatarUrl ? (
-              <img
-                src={person.avatarUrl}
-                alt=""
-                referrerPolicy="no-referrer"
-                className="relative h-20 w-20 rounded-full object-cover ring-2 ring-ink-2 sm:h-24 sm:w-24"
-              />
-            ) : (
-              <span className="relative flex h-20 w-20 items-center justify-center rounded-full bg-ink-4 text-2xl font-semibold text-paper ring-2 ring-ink-2 sm:h-24 sm:w-24">
-                {person.displayName.slice(0, 1).toUpperCase()}
-              </span>
-            )}
+            <UserAvatar
+              name={person.displayName}
+              avatarUrl={person.avatarUrl}
+              rounded="full"
+              className="relative h-20 w-20 ring-2 ring-ink-2 sm:h-24 sm:w-24"
+              fallbackClassName="bg-ink-4 text-2xl text-paper"
+            />
           </span>
         ))}
       </div>
@@ -1165,24 +1161,16 @@ function OccupantFaces({
 }) {
   return (
     <span className="flex shrink-0 -space-x-2" aria-hidden="true">
-      {faces.slice(0, 3).map((person) =>
-        person.avatarUrl ? (
-          <img
-            key={person.key}
-            src={person.avatarUrl}
-            alt=""
-            referrerPolicy="no-referrer"
-            className="h-6 w-6 rounded-full object-cover ring-2 ring-ink-2"
-          />
-        ) : (
-          <span
-            key={person.key}
-            className="flex h-6 w-6 items-center justify-center rounded-full bg-ink-4 text-[10px] font-semibold text-paper ring-2 ring-ink-2"
-          >
-            {person.displayName.slice(0, 1).toUpperCase()}
-          </span>
-        ),
-      )}
+      {faces.slice(0, 3).map((person) => (
+        <UserAvatar
+          key={person.key}
+          name={person.displayName}
+          avatarUrl={person.avatarUrl}
+          rounded="full"
+          className="h-6 w-6 ring-2 ring-ink-2"
+          fallbackClassName="bg-ink-4 text-[10px] text-paper"
+        />
+      ))}
     </span>
   );
 }
