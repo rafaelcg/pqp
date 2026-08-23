@@ -66,8 +66,11 @@ possível deste sistema.
 
 - Existe um beta de iPhone pelo TestFlight, em pqp.gg/beta.
 - O app **não** está na App Store.
-- No **app** do iPhone dá pra assistir tela compartilhada e também transmitir a
-  sua. As duas direções funcionam.
+- No **app** do iPhone dá pra assistir tela compartilhada.
+- Transmitir a tela do iPhone: o app tem o código pra isso, mas **ninguém
+  confirmou em aparelho de verdade**. Se perguntarem, diga isso, com essas
+  palavras: existe, mas ainda não foi testado num iPhone real. Não afirme que
+  funciona e não afirme que não funciona.
 - No **navegador** do iPhone, Safari ou o pqp instalado como app pela tela de
   início, dá pra assistir mas não dá pra transmitir. Isso é limite do navegador.
 
