@@ -21,16 +21,33 @@ import WebRTC
 @MainActor
 @Observable
 final class CallModel {
-    private(set) var phase: CallPhase = .idle
+    /// `didSet` rather than a line in `hangUp`, because a call has more endings
+    /// than it has handlers: hanging up, the far end leaving, a ring that ran
+    /// out, being displaced by another voice room. Every one of them moves the
+    /// phase, so that is where the rating hangs.
+    private(set) var phase: CallPhase = .idle {
+        didSet {
+            guard phase != oldValue else { return }
+            if phase.isInRoom {
+                noteCallProgress()
+            } else if oldValue.isInRoom {
+                endCallRating()
+            }
+        }
+    }
     private(set) var conversationId: String?
     /// Who we are talking to, for the avatars and the title. Synthesised from
     /// the ring when we answer a call for a conversation this device has never
     /// opened.
     private(set) var conversation: DmSummary?
-    private(set) var peers: [VoicePeerState] = []
+    private(set) var peers: [VoicePeerState] = [] {
+        didSet { noteCallProgress() }
+    }
     /// Per-peer incoming video, already sorted into camera vs screen share by
     /// `VoiceClient`. Screen shares are view-only on iOS — see `toggleCamera`.
-    private(set) var video: [String: PeerVideo] = [:]
+    private(set) var video: [String: PeerVideo] = [:] {
+        didSet { noteCallProgress() }
+    }
     /// Our own capture, for the self preview. Never sent to a renderer twice.
     private(set) var localCamera: RTCVideoTrack?
     /// Rings arriving at this device, oldest first. Not call state of ours until
@@ -85,13 +102,19 @@ final class CallModel {
     private var knownPeerIds: Set<String> = []
     private var ringTimeout: Task<Void, Never>?
     private var endedReset: Task<Void, Never>?
+    /// Accumulates the shape of the call while it runs. Ignored by Observation
+    /// on purpose: it changes on nearly every peer event and nothing should
+    /// redraw because a high-water mark moved.
+    @ObservationIgnored private var ratingTracker = CallRatingTracker()
+    @ObservationIgnored private weak var ratings: CallRatingModel?
 
     // MARK: - Lifecycle
 
     /// Register the one long-lived handler. Idempotent: called from the root
     /// view's `task`, which re-runs on every re-entry into the signed-in shell.
-    func attach(session: SessionStore) {
+    func attach(session: SessionStore, ratings: CallRatingModel? = nil) {
         self.session = session
+        if let ratings { self.ratings = ratings }
         configureScreenShare()
         session.eventHandlers[Self.handlerKey] = { [weak self] event in
             self?.apply(event)
@@ -299,6 +322,31 @@ final class CallModel {
         }
     }
 
+    /// One moment of this call, for the rating that may follow it.
+    ///
+    /// The clock starts when we are actually in the room, not at `.connecting`:
+    /// that phase is the microphone sheet and an ICE fetch, and counting it
+    /// would let a slow permission prompt push a ten-second call over the
+    /// one-minute gate.
+    private var ratingSnapshot: CallSnapshot {
+        CallSnapshot(
+            peerCount: peers.count,
+            // The DM room is mesh like every other room this app joins.
+            usingSfu: false,
+            screenSharing: remoteScreen != nil || screenShare.isSharing,
+            channelId: conversationId
+        )
+    }
+
+    private func noteCallProgress() {
+        guard phase.isInRoom else { return }
+        ratingTracker.observe(ratingSnapshot)
+    }
+
+    private func endCallRating() {
+        ratings?.finish(&ratingTracker)
+    }
+
     /// Wires the ReplayKit bridge to the mesh. See `VoiceModel` for the twin —
     /// the two rooms differ in everything but this.
     private func configureScreenShare() {
@@ -316,6 +364,9 @@ final class CallModel {
                 guard let self else { return }
                 await self.session?.realtime.setSharingScreen(true)
                 _ = await self.voice.startScreenShare()
+                // Our own share never touches `video`, which is the far end's
+                // tracks, so this is the only place it can be recorded.
+                self.noteCallProgress()
             },
             onStop: { [weak self] in
                 guard let self else { return }

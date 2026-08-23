@@ -970,3 +970,43 @@ struct PushConfig: Decodable, Sendable {
     /// no prompt, and permission refused is refused for good.
     let apns: Bool
 }
+
+// MARK: - Call ratings
+
+extension APIClient {
+    /// How the last call went, one number, written and never read back.
+    ///
+    /// `POST /api/voice/ratings` answers `{ ok: true }` and there is
+    /// deliberately no route to read an individual rating: the operator sees
+    /// only the aggregate on `GET /api/admin/metrics`. So this returns nothing,
+    /// and the prompt has already thanked the user by the time it resolves.
+    ///
+    /// `channelId` is omitted rather than sent as null when there is none. The
+    /// server's schema is `z.string().uuid().optional()`, which refuses an
+    /// explicit null, and losing the whole rating over the one field that is
+    /// merely nice to have would be the wrong trade.
+    func submitCallRating(_ call: RatableCall, rating: Int, note: String?) async throws {
+        struct Body: Encodable {
+            let rating: Int
+            let note: String?
+            let durationSeconds: Int
+            let peerCount: Int
+            let transport: String
+            let hadScreenShare: Bool
+            let channelId: String?
+        }
+        let trimmed = note?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let _: EmptyResponse = try await post(
+            "/api/voice/ratings",
+            body: Body(
+                rating: rating,
+                note: (trimmed?.isEmpty ?? true) ? nil : trimmed,
+                durationSeconds: call.durationSeconds,
+                peerCount: call.peerCount,
+                transport: call.transport.rawValue,
+                hadScreenShare: call.hadScreenShare,
+                channelId: call.channelId
+            )
+        )
+    }
+}

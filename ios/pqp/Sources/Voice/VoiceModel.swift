@@ -16,16 +16,30 @@ enum VoiceStatus: Equatable, Sendable {
 @MainActor
 @Observable
 final class VoiceModel {
-    private(set) var status: VoiceStatus = .idle
+    /// `didSet` rather than a line in `join`/`leave`, because a voice channel
+    /// has more exits than it has handlers: the button, the socket dropping,
+    /// being displaced by another room, and popping the screen off the
+    /// navigation stack. Hanging the rating on the one state every one of them
+    /// has to pass through is the only version that cannot be forgotten.
+    private(set) var status: VoiceStatus = .idle {
+        didSet {
+            guard status != oldValue else { return }
+            if status == .connected { noteCallProgress() } else { endCallRating() }
+        }
+    }
     private(set) var channelId: String?
     private(set) var channelName: String?
-    private(set) var peers: [VoicePeerState] = []
+    private(set) var peers: [VoicePeerState] = [] {
+        didSet { noteCallProgress() }
+    }
     private(set) var selfPeerId: String?
     /// Per-peer incoming video, already sorted into camera vs screen by
     /// `VoiceClient`. A voice channel has no cameras — nobody publishes one into
     /// a server voice room — so in practice this is screen shares, which is
     /// exactly what a voice channel is used for.
-    private(set) var video: [String: PeerVideo] = [:]
+    private(set) var video: [String: PeerVideo] = [:] {
+        didSet { noteCallProgress() }
+    }
     /// The roster by peer id: who is muted, and who is presenting.
     private(set) var roster: [String: VoiceParticipant] = [:]
     /// Outgoing screen share, driven by the ReplayKit bridge.
@@ -59,6 +73,14 @@ final class VoiceModel {
     private let voice = VoiceClient()
     private var session: SessionStore?
     private let handlerKey = "voice-" + UUID().uuidString
+    /// Accumulates the shape of the call while it runs. Ignored by Observation
+    /// on purpose: it changes on nearly every peer event and nothing should
+    /// redraw because a high-water mark moved.
+    @ObservationIgnored private var ratingTracker = CallRatingTracker()
+    /// App-wide, because the prompt has to outlive this screen: `VoiceView` is
+    /// pushed on a navigation stack, and popping it is one of the ways a call
+    /// ends.
+    @ObservationIgnored private weak var ratings: CallRatingModel?
 
     var participantCount: Int { peers.count + (status == .connected ? 1 : 0) }
 
@@ -83,8 +105,9 @@ final class VoiceModel {
 
     func isMuted(_ peerId: String) -> Bool { roster[peerId]?.muted ?? false }
 
-    func join(channel: Channel, session: SessionStore) async {
+    func join(channel: Channel, session: SessionStore, ratings: CallRatingModel? = nil) async {
         self.session = session
+        self.ratings = ratings
         configureScreenShare()
         channelId = channel.id
         channelName = channel.name
@@ -151,6 +174,31 @@ final class VoiceModel {
         isDeafened = false
     }
 
+    /// One moment of this call, for the rating that may follow it.
+    ///
+    /// `peerCount` excludes us, matching the web's `remotePeers.length`, and the
+    /// screen-share flag counts anybody's screen including our own: the question
+    /// it eventually answers is "was a screen being shared", not "whose".
+    private var ratingSnapshot: CallSnapshot {
+        CallSnapshot(
+            peerCount: peers.count,
+            // This app declares `transports: ["mesh"]` and refuses a room pinned
+            // to anything else, so a connected call is always a mesh call.
+            usingSfu: false,
+            screenSharing: remoteScreen != nil || screenShare.isSharing,
+            channelId: channelId
+        )
+    }
+
+    private func noteCallProgress() {
+        guard status == .connected else { return }
+        ratingTracker.observe(ratingSnapshot)
+    }
+
+    private func endCallRating() {
+        ratings?.finish(&ratingTracker)
+    }
+
     /// Wires the bridge to the mesh. Both directions are here rather than in the
     /// controller so the controller stays about *when* to share, not how.
     private func configureScreenShare() {
@@ -171,6 +219,9 @@ final class VoiceModel {
                 // renegotiation to arrive.
                 await self.session?.realtime.setSharingScreen(true)
                 _ = await self.voice.startScreenShare()
+                // Our own share never touches `video`, which is the far end's
+                // tracks, so this is the only place it can be recorded.
+                self.noteCallProgress()
             },
             onStop: { [weak self] in
                 guard let self else { return }
