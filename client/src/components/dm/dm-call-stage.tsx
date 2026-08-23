@@ -30,8 +30,12 @@ import {
   supportsScreenShare,
   type FullscreenMode,
 } from "@/components/voice/capabilities";
-import { collectScreenTiles } from "@/components/voice/screen-stage";
+import {
+  collectScreenTiles,
+  screenShareStageLayout,
+} from "@/components/voice/screen-stage";
 import { VoiceAvatar } from "@/components/voice/voice-avatar";
+import { useLgUp } from "@/hooks/use-lg-up";
 import { isScreenShareAtCap } from "@/lib/screen-share-roster";
 import { useTranslation } from "@/lib/i18n";
 import { conversationTitle } from "@/lib/conversations";
@@ -343,6 +347,7 @@ function ActiveCall({
   onFocusScreenShare?: (peerId: string) => void;
 }) {
   const { t } = useTranslation();
+  const wide = useLgUp();
   const channelId = conversation.channelId;
   const joining = voiceState.status === "joining";
   // "Calling…" is a call we started that nobody has picked up: connected, but
@@ -393,6 +398,8 @@ function ActiveCall({
     ) ?? screenTiles[0];
   const screenStream = focusedTile?.stream ?? null;
   const presenterName = focusedTile?.presenterName;
+  const splitTwo =
+    screenShareStageLayout(screenTiles.length, wide) === "split";
 
   const layout = stageLayout(
     remotes.length,
@@ -608,26 +615,17 @@ function ActiveCall({
       {/* --- the stage's content, by layout --------------------------------- */}
       {layout === "screen" ? (
         <div className="flex h-full w-full flex-col bg-black">
-          {screenTiles.length === 2 ? (
-            <>
-              <div className="hidden min-h-0 flex-1 grid-cols-2 lg:grid">
-                {screenTiles.map((tile, index) => (
-                  <StageVideo
-                    key={tile.peerId}
-                    stream={tile.stream}
-                    videoRef={index === 0 ? primaryVideoRef : undefined}
-                    className="h-full min-h-0 object-contain"
-                  />
-                ))}
-              </div>
-              <div className="min-h-0 flex-1 lg:hidden">
+          {splitTwo ? (
+            <div className="grid min-h-0 flex-1 grid-cols-2">
+              {screenTiles.map((tile, index) => (
                 <StageVideo
-                  stream={screenStream}
-                  videoRef={primaryVideoRef}
+                  key={tile.peerId}
+                  stream={tile.stream}
+                  videoRef={index === 0 ? primaryVideoRef : undefined}
                   className="h-full min-h-0 object-contain"
                 />
-              </div>
-            </>
+              ))}
+            </div>
           ) : (
             <StageVideo
               stream={screenStream}
@@ -635,13 +633,8 @@ function ActiveCall({
               className="min-h-0 flex-1 object-contain"
             />
           )}
-          {screenTiles.length > 1 && (
-            <div
-              className={cn(
-                "flex shrink-0 gap-1 overflow-x-auto p-1",
-                screenTiles.length === 2 && "lg:hidden",
-              )}
-            >
+          {!splitTwo && screenTiles.length > 1 && (
+            <div className="flex shrink-0 gap-1 overflow-x-auto p-1">
               {screenTiles.map((tile) => {
                 const selected = tile.peerId === focusedTile?.peerId;
                 return (

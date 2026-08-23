@@ -1387,6 +1387,12 @@ export function createVoiceController(transport: RealtimeTransport) {
       state.error = null;
       state.transportFailure = null;
       state.status = "joining";
+      // A channel switch calls join() without leave(), so the previous room's
+      // share ids would otherwise leak into the welcome diff and look like
+      // newcomers. Empty previous is the locked "join into live shares" rule.
+      state.screenSharePeerIds = [];
+      state.focusedScreenPeerId = null;
+      state.audibleScreenPeerIds = [];
       // Known from the moment we start, not only once the server says welcome —
       // otherwise the UI cannot tell which channel is connecting.
       state.voiceChannelId = voiceChannelId;

@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { RemotePeer } from "@/lib/peer-connection-manager";
 import { ScreenShareView } from "@/components/voice/screen-share-view";
+import { useLgUp } from "@/hooks/use-lg-up";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
@@ -61,6 +62,19 @@ function ThumbVideo({ stream }: { stream: MediaStream | null }) {
   );
 }
 
+/**
+ * Two shares on a wide window sit side by side. Everything else is one large
+ * tile (with a strip when there is more than one). Kept as a function so the
+ * voice panel and the DM stage cannot drift, and so a test can pin it without
+ * mounting `<video>` elements.
+ */
+export function screenShareStageLayout(
+  tileCount: number,
+  wide: boolean,
+): "split" | "focus" {
+  return tileCount === 2 && wide ? "split" : "focus";
+}
+
 interface ScreenStageProps {
   tiles: ScreenShareTile[];
   focusedPeerId: string | null;
@@ -71,6 +85,9 @@ interface ScreenStageProps {
 /**
  * One share: today's stage. Two on a wide window: split. Three or more, and
  * any count on a narrow window: one large tile plus a strip to switch.
+ *
+ * Only the visible branch is mounted. A CSS-hidden live `<video>` still
+ * decodes, and on a phone that is two extra 1080p30 decodes per share.
  */
 export function ScreenStage({
   tiles,
@@ -79,17 +96,18 @@ export function ScreenStage({
   onStopSharing,
 }: ScreenStageProps) {
   const { t } = useTranslation();
+  const wide = useLgUp();
   if (tiles.length === 0) {
     return null;
   }
   const focused =
     tiles.find((tile) => tile.peerId === focusedPeerId) ?? tiles[0]!;
-  const splitTwo = tiles.length === 2;
+  const splitTwo = screenShareStageLayout(tiles.length, wide) === "split";
 
   return (
     <div className="flex max-h-[45%] min-h-[160px] shrink-0 flex-col border-b border-panel-hover bg-ink">
-      {splitTwo && (
-        <div className="hidden min-h-0 flex-1 grid-cols-2 lg:grid">
+      {splitTwo ? (
+        <div className="grid min-h-0 flex-1 grid-cols-2">
           {tiles.map((tile) => (
             <ScreenShareView
               key={tile.peerId}
@@ -101,23 +119,19 @@ export function ScreenStage({
             />
           ))}
         </div>
+      ) : (
+        <div className="min-h-0 flex-1">
+          <ScreenShareView
+            variant="tile"
+            stream={focused.stream}
+            presenterName={focused.presenterName}
+            isSelf={focused.isSelf}
+            onStopSharing={focused.isSelf ? onStopSharing : undefined}
+          />
+        </div>
       )}
-      <div className={cn("min-h-0 flex-1", splitTwo && "lg:hidden")}>
-        <ScreenShareView
-          variant="tile"
-          stream={focused.stream}
-          presenterName={focused.presenterName}
-          isSelf={focused.isSelf}
-          onStopSharing={focused.isSelf ? onStopSharing : undefined}
-        />
-      </div>
-      {tiles.length > 1 && (
-        <div
-          className={cn(
-            "flex shrink-0 gap-1 overflow-x-auto border-t border-panel-hover p-1",
-            splitTwo && "lg:hidden",
-          )}
-        >
+      {!splitTwo && tiles.length > 1 && (
+        <div className="flex shrink-0 gap-1 overflow-x-auto border-t border-panel-hover p-1">
           {tiles.map((tile) => {
             const selected = tile.peerId === focused.peerId;
             return (
