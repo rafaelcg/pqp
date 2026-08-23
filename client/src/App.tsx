@@ -643,6 +643,18 @@ function MainAppContent({
     voice,
   ]);
 
+  /**
+   * Carry a saved video quality into the controller.
+   *
+   * `handleAudioSettingsLive` covers every *change*, but a choice made in a
+   * previous session lives only in `localStorage` until something hands it
+   * over, and the controller starts on auto. Cheap and idempotent: the setter
+   * returns immediately when the value is already the current one.
+   */
+  useEffect(() => {
+    void voice.setVideoQuality(localSettings.videoQuality);
+  }, [localSettings.videoQuality, voice]);
+
   const refresh = useCallback(() => setTick((t) => t + 1), []);
   // Stable: the message list schedules the jump in a frame, and a fresh
   // identity every render would cancel and re-schedule it forever.
@@ -1925,6 +1937,10 @@ function MainAppContent({
     // Re-captures the track and swaps it into the live senders. Cheap to call
     // unconditionally — it returns immediately when nothing changed.
     void voice.setMicProcessing(next.micProcessing);
+    // Never re-captures: it re-shapes a camera that is already open and moves
+    // the encoder's ceiling. Safe mid-call by construction, and a no-op when
+    // the camera is off, where the next `toggleCamera` reads the new value.
+    void voice.setVideoQuality(next.videoQuality);
   }
 
   const refreshAfterJoin = useCallback(

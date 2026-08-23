@@ -247,6 +247,19 @@ export interface VoiceStatsConsole {
   dump(): Promise<string>;
 }
 
+/**
+ * One silent sample of every live connection.
+ *
+ * The same work `report()` does without the printing, so a UI readout and the
+ * console tool cannot disagree about what is being sent. Callers share the
+ * byte marks, which means two consumers sampling at different intervals will
+ * each see a bitrate measured from whichever sample came last. That is fine
+ * for a readout and would not be for billing.
+ */
+export function sampleVoiceStats(): Promise<VoiceStatsSnapshot> {
+  return sampleAll();
+}
+
 async function sampleAll(): Promise<VoiceStatsSnapshot> {
   const senders: VideoSenderSample[] = [];
   const paths: CandidatePairSample[] = [];

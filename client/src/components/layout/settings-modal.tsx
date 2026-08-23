@@ -38,6 +38,13 @@ import { ConnectionsSection } from "@/components/connections/connections-section
 import { useNotificationSettings } from "@/hooks/use-notifications";
 import { useTheme } from "@/hooks/use-theme";
 import { KeyBindingField } from "@/components/voice/key-binding-field";
+import { OutboundVideoReadout } from "@/components/voice/outbound-video-readout";
+import {
+  DEFAULT_VIDEO_QUALITY,
+  parseVideoQuality,
+  VIDEO_QUALITIES,
+  type VideoQuality,
+} from "@/lib/video-quality";
 import {
   defaultPushToTalkBinding,
   formatBinding,
@@ -114,7 +121,22 @@ export interface LocalSettings {
   pushToTalkKey: KeyBinding;
   /** getUserMedia processing flags. Also pending a shared-schema key. */
   micProcessing: MicProcessing;
+  /**
+   * What the camera is asked for. Device-local for the same reason the device
+   * ids are: it describes this machine's webcam and this machine's uplink, and
+   * syncing it to a phone would be meaningless.
+   */
+  videoQuality: VideoQuality;
 }
+
+/** Option labels, so the select and the catalogue cannot drift apart. */
+const VIDEO_QUALITY_LABELS: Record<VideoQuality, MessageKey> = {
+  auto: "settings.voice.videoQuality.auto",
+  "1080p": "settings.voice.videoQuality.1080p",
+  "720p": "settings.voice.videoQuality.720p",
+  "480p": "settings.voice.videoQuality.480p",
+  "360p": "settings.voice.videoQuality.360p",
+};
 
 const STORAGE_KEY = "pqp-local-settings";
 
@@ -131,6 +153,9 @@ export const defaultLocalSettings: LocalSettings = {
   inputMode: "voice-activity",
   pushToTalkKey: defaultPushToTalkBinding,
   micProcessing: defaultMicProcessing,
+  // Auto, always. A default that pins a size would be a default that is wrong
+  // on somebody's uplink.
+  videoQuality: DEFAULT_VIDEO_QUALITY,
 };
 
 export function loadLocalSettings(): LocalSettings {
@@ -171,6 +196,9 @@ export function loadLocalSettings(): LocalSettings {
         noiseSuppression: parsed.micProcessing?.noiseSuppression !== false,
         autoGainControl: parsed.micProcessing?.autoGainControl !== false,
       },
+      // Hand-edited storage, or a level a later build stopped offering, falls
+      // back to auto rather than to a size nothing knows how to ask for.
+      videoQuality: parseVideoQuality(parsed.videoQuality),
     };
   } catch {
     return defaultLocalSettings;
@@ -871,6 +899,33 @@ function VoiceSection({
           })}
         </span>
       </label>
+
+      <div>
+        <label className="block">
+          <span className="mb-2 block text-xs uppercase tracking-wide text-paper-muted">
+            {t("settings.voice.videoQuality")}
+          </span>
+          <select
+            value={draftLocal.videoQuality}
+            onChange={(e) =>
+              patchLocal({ videoQuality: parseVideoQuality(e.target.value) })
+            }
+            className={selectClass}
+          >
+            {VIDEO_QUALITIES.map((quality) => (
+              <option key={quality} value={quality}>
+                {t(VIDEO_QUALITY_LABELS[quality])}
+              </option>
+            ))}
+          </select>
+        </label>
+        {/* The number beside the control that asks for it. Without this a
+            person can pick 720p, receive 320x240 and have no way to know. */}
+        <OutboundVideoReadout />
+        <p className="mt-1 text-xs text-paper-muted">
+          {t("settings.voice.videoQuality.hint")}
+        </p>
+      </div>
 
       <label className="flex cursor-pointer items-center gap-3">
         <input

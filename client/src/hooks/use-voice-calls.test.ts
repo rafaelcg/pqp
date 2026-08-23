@@ -13,6 +13,8 @@ interface ManagerStub {
   peerIds: string[];
   cameraStreamIds: [string, string | null][];
   localCameraStreams: (MediaStream | null)[];
+  /** Ceilings handed to the manager, in order. See the video-quality tests. */
+  cameraMaxBitrates: number[];
   disposed: boolean;
 }
 
@@ -24,6 +26,7 @@ vi.mock("@/lib/peer-connection-manager", () => ({
     const stub: ManagerStub = {
       peerIds: [],
       cameraStreamIds: [],
+      cameraMaxBitrates: [],
       localCameraStreams: [],
       disposed: false,
     };
@@ -33,6 +36,9 @@ vi.mock("@/lib/peer-connection-manager", () => ({
       setLocalScreenStream: async () => {},
       setLocalCameraStream: async (stream: MediaStream | null) => {
         stub.localCameraStreams.push(stream);
+      },
+      setCameraMaxBitrate: (maxBitrate: number) => {
+        stub.cameraMaxBitrates.push(maxBitrate);
       },
       setPeerCameraStreamId: (peerId: string, streamId: string | null) => {
         stub.cameraStreamIds.push([peerId, streamId]);
@@ -63,6 +69,7 @@ vi.mock("@/lib/livekit-session", () => ({
     unpublishScreen: async () => {},
     unpublishScreenAudio: async () => {},
     publishCamera: async () => {},
+    setCameraMaxBitrate: async () => {},
     unpublishCamera: async () => {},
     disconnect: async () => {},
   })),
@@ -93,6 +100,15 @@ function fakeStream(label: string, kind: "audio" | "video" = "audio") {
   };
 }
 
+/** Every `video` constraint the controller asked for, in order. */
+const videoRequests: unknown[] = [];
+/**
+ * Makes the first *constrained* camera request fail, the way a webcam that
+ * cannot manage the requested size does. The bare retry still succeeds, which
+ * is the behaviour the fallback exists to guarantee.
+ */
+let refuseConstrainedCamera = false;
+
 function installBrowserStubs() {
   const g = globalThis as unknown as Record<string, unknown>;
   g.requestAnimationFrame = () => 1;
@@ -100,10 +116,18 @@ function installBrowserStubs() {
   Object.defineProperty(globalThis.navigator, "mediaDevices", {
     configurable: true,
     value: {
-      getUserMedia: async (constraints: { video?: unknown }) =>
-        constraints.video
-          ? fakeStream("camera", "video")
-          : fakeStream("mic", "audio"),
+      getUserMedia: async (constraints: { video?: unknown }) => {
+        if (!constraints.video) {
+          return fakeStream("mic", "audio");
+        }
+        videoRequests.push(constraints.video);
+        if (refuseConstrainedCamera && constraints.video !== true) {
+          const err = new Error("OverconstrainedError");
+          err.name = "OverconstrainedError";
+          throw err;
+        }
+        return fakeStream("camera", "video");
+      },
     },
   });
   g.AudioContext = class {
@@ -192,6 +216,9 @@ beforeEach(() => {
   installBrowserStubs();
   managers.length = 0;
   stoppedTracks.length = 0;
+  videoRequests.length = 0;
+  refuseConstrainedCamera = false;
+  vi.spyOn(console, "warn").mockImplementation(() => {});
 });
 
 describe("ringing out", () => {
@@ -368,6 +395,57 @@ describe("camera", () => {
     voice.leave();
     expect(stoppedTracks).toContain("camera");
     expect(voice.getState().isCameraOn).toBe(false);
+  });
+
+  it("asks the hardware for a real size instead of taking whatever it offers", async () => {
+    // The bug this replaced: `{ video: true }` resolves to 640x480 in every
+    // browser, so 480p was the ceiling of a pqp video call.
+    const { voice } = await connectedController();
+    await voice.toggleCamera();
+
+    expect(videoRequests).toHaveLength(1);
+    expect(videoRequests[0]).toMatchObject({
+      width: { ideal: 1280 },
+      height: { ideal: 720 },
+      frameRate: { ideal: 30 },
+    });
+  });
+
+  it("still opens the camera when the webcam refuses that size", async () => {
+    // A 480p webcam must give 480p video, never an error and a dead button.
+    refuseConstrainedCamera = true;
+    const { voice, sent } = await connectedController();
+    await voice.toggleCamera();
+
+    expect(voice.getState().isCameraOn).toBe(true);
+    expect(voice.getState().error).toBeNull();
+    expect(videoRequests[1]).toBe(true);
+    expect(sent.filter((m) => m.type === "set-camera")).toHaveLength(1);
+  });
+
+  it("moves the encoder ceiling mid-call without touching the capture", async () => {
+    const { voice } = await connectedController();
+    await voice.toggleCamera();
+    const before = managers[0]!.cameraMaxBitrates.length;
+
+    await voice.setVideoQuality("360p");
+
+    expect(managers[0]!.cameraMaxBitrates.at(-1)).toBe(400_000);
+    expect(managers[0]!.cameraMaxBitrates.length).toBeGreaterThan(before);
+    // No re-capture: the webcam light does not blink and no video is dropped.
+    expect(stoppedTracks).not.toContain("camera");
+    expect(voice.getState().isCameraOn).toBe(true);
+  });
+
+  it("opens a later camera at the chosen size", async () => {
+    const { voice } = await connectedController();
+    await voice.setVideoQuality("1080p");
+    await voice.toggleCamera();
+
+    expect(videoRequests.at(-1)).toMatchObject({
+      width: { ideal: 1920 },
+      height: { ideal: 1080 },
+    });
   });
 
   it("does not open a camera while not in a call", async () => {

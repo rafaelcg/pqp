@@ -1,5 +1,9 @@
 import type { ClientRelayMessage } from "@pqp/shared";
 import {
+  cameraBitrateFor,
+  DEFAULT_VIDEO_QUALITY,
+} from "./video-quality";
+import {
   registerVoiceConnection,
   unregisterVoiceConnection,
   type VideoSenderRole,
@@ -170,6 +174,14 @@ export interface PeerConnectionManager {
   /** Publish (stream set) or stop (null) a camera video track to every peer. */
   setLocalCameraStream(stream: MediaStream | null): Promise<void>;
   /**
+   * Change the camera's bitrate ceiling and re-apply it to every live sender.
+   *
+   * Separate from `setLocalCameraStream` because changing quality mid-call must
+   * not require re-capturing: a swap would blink the webcam light and drop a
+   * second of video, and `setParameters` alone is enough for the encoder half.
+   */
+  setCameraMaxBitrate(maxBitrate: number): void;
+  /**
    * Record which of a peer's video streams is their camera (from the roster).
    * Null means "camera off" — any remaining video is treated as screen share.
    */
@@ -222,11 +234,66 @@ const SCREEN_MIN_BITRATE_BPS = 600_000;
 const SCREEN_MAX_BITRATE_BPS = 2_500_000;
 const SCREEN_MAX_FRAMERATE = 30;
 
-function screenBitrateFor(peerCount: number): number {
+export function screenBitrateFor(peerCount: number): number {
   const share = SCREEN_UPLOAD_BUDGET_BPS / Math.max(1, peerCount);
   return Math.round(
     Math.min(SCREEN_MAX_BITRATE_BPS, Math.max(SCREEN_MIN_BITRATE_BPS, share)),
   );
+}
+
+/** The camera's own ceiling. Framerate is what the whole tuning protects. */
+const CAMERA_MAX_FRAMERATE = 30;
+
+/** Where a manager starts before anybody has chosen a quality. */
+const DEFAULT_CAMERA_MAX_BITRATE_BPS = cameraBitrateFor(DEFAULT_VIDEO_QUALITY);
+
+/**
+ * Point one camera-video sender at framerate rather than sharpness, and give
+ * it a ceiling.
+ *
+ * The camera twin of `tuneScreenSender`, and the reason it did not exist until
+ * now is simply that nobody wrote it: the camera sender was added with
+ * `addTrack` and never touched again, so it ran on encoder defaults with no
+ * bitrate ceiling of any kind. On a mesh call that also carries a screen share
+ * the two video senders then bid against each other for one bandwidth estimate
+ * with nothing arbitrating, which is how a camera ends up at 240p while the
+ * share looks fine.
+ *
+ * DIFFERS FROM THE SCREEN TWIN IN ONE WAY, DELIBERATELY: a rejection is logged
+ * rather than silently discarded. The outcome is the same — the camera keeps
+ * working on browser defaults, which is exactly today's behaviour, so the worst
+ * case of this whole change is "no improvement" rather than "no video" — but a
+ * silent `catch` is how nobody noticed the camera had no ceiling in the first
+ * place. Resolves to whether it took, for the tests and for the probe.
+ */
+async function tuneCameraSender(
+  sender: RTCRtpSender | null,
+  maxBitrate: number,
+): Promise<boolean> {
+  if (!sender) {
+    return false;
+  }
+  try {
+    const params = sender.getParameters();
+    // Same Firefox-before-first-negotiation guard as the screen path: an empty
+    // encodings array is legal, and writing one in is what the spec prescribes.
+    if (!params.encodings || params.encodings.length === 0) {
+      params.encodings = [{}];
+    }
+    params.degradationPreference = "maintain-framerate";
+    for (const encoding of params.encodings) {
+      encoding.maxBitrate = maxBitrate;
+      encoding.maxFramerate = CAMERA_MAX_FRAMERATE;
+    }
+    await sender.setParameters(params);
+    return true;
+  } catch (err) {
+    console.warn(
+      "[pqp] camera encoder tuning rejected; running on browser defaults",
+      err,
+    );
+    return false;
+  }
 }
 
 /**
@@ -282,19 +349,47 @@ export function createPeerConnectionManager(
    * every existing sender must give some bitrate back, and someone leaving
    * means the rest can have it. Without the leaving half, a call that started
    * at six and dropped to two would keep encoding at the six-way rate forever.
+   *
+   * `peerCount` is an argument rather than always `peers.size` because the
+   * joiner case is called from inside `createPeerConnection`, which runs
+   * *before* the new peer is put in the map. Reading `peers.size` there
+   * retuned everybody for a room one smaller than the one they were about to
+   * be in, and nothing recomputed it afterwards — so every existing sender
+   * stayed over budget for the rest of the call, which is the opposite of what
+   * the split exists to prevent.
    */
-  function retuneAllScreenSenders(): void {
+  function retuneAllScreenSenders(peerCount = peers.size): void {
     if (!localScreenStream) {
       return;
     }
     for (const peer of peers.values()) {
-      void tuneScreenSender(peer.screenSender, peers.size);
+      void tuneScreenSender(peer.screenSender, peerCount);
+    }
+  }
+
+  /**
+   * Re-apply the camera ceiling to every peer.
+   *
+   * Not budget-split the way the screen is: the camera's ceiling is a user
+   * choice, and dividing a chosen 720p by the room size would quietly turn
+   * "720p" into a setting that means something different in every call. The
+   * mesh's per-peer multiplication is a real cost, and the honest answer to it
+   * is the SFU, not a number that lies about what it does.
+   */
+  function retuneAllCameraSenders(): void {
+    if (!localCameraStream) {
+      return;
+    }
+    for (const peer of peers.values()) {
+      void tuneCameraSender(peer.cameraSender, cameraMaxBitrate);
     }
   }
 
   let localStream: MediaStream | null = null;
   let localScreenStream: MediaStream | null = null;
   let localCameraStream: MediaStream | null = null;
+  /** The chosen quality's ceiling, in bps. Replaced by `setCameraMaxBitrate`. */
+  let cameraMaxBitrate = DEFAULT_CAMERA_MAX_BITRATE_BPS;
   let stateHandler: PeerStateChangeHandler | null = null;
   let currentIceServers = iceServers;
 
@@ -596,7 +691,10 @@ export function createPeerConnectionManager(
         // was already here, and the room just grew, so this is also the moment
         // the existing senders need their share of the budget recomputed.
         void tuneScreenSender(managed.screenSender, peers.size + 1);
-        void retuneAllScreenSenders();
+        // `+ 1` for the same reason: this runs before the caller files the new
+        // peer, and the room everyone is about to be in is the one to budget
+        // for.
+        void retuneAllScreenSenders(peers.size + 1);
       }
       for (const track of localScreenStream.getAudioTracks()) {
         managed.screenAudioSender = pc.addTrack(track, localScreenStream);
@@ -605,6 +703,10 @@ export function createPeerConnectionManager(
     if (localCameraStream) {
       for (const track of localCameraStream.getTracks()) {
         managed.cameraSender = pc.addTrack(track, localCameraStream);
+        // Somebody joining mid-call gets the same ceiling as everybody who was
+        // already here. Unlike the screen budget this needs no re-split, so
+        // the existing senders are left alone.
+        void tuneCameraSender(managed.cameraSender, cameraMaxBitrate);
       }
     }
 
@@ -837,12 +939,24 @@ export function createPeerConnectionManager(
             peer.cameraSender = peer.pc.addTrack(nextTrack, stream!);
             await negotiate(peer);
           }
+          // After both branches: `replaceTrack` keeps the sender's parameters,
+          // but a camera re-opened at a new quality is exactly when the ceiling
+          // must follow it, and re-applying an unchanged one costs nothing.
+          await tuneCameraSender(peer.cameraSender, cameraMaxBitrate);
         } else if (peer.cameraSender) {
           peer.pc.removeTrack(peer.cameraSender);
           peer.cameraSender = null;
           await negotiate(peer);
         }
       }
+    },
+
+    setCameraMaxBitrate(maxBitrate: number) {
+      if (maxBitrate === cameraMaxBitrate) {
+        return;
+      }
+      cameraMaxBitrate = maxBitrate;
+      retuneAllCameraSenders();
     },
 
     setPeerCameraStreamId(remotePeerId: string, streamId: string | null) {

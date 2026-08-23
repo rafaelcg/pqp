@@ -37,6 +37,13 @@ import {
 } from "@/lib/peer-connection-manager";
 import type { RealtimeTransport } from "@/lib/realtime";
 import {
+  applyCameraQuality,
+  cameraBitrateFor,
+  captureCamera,
+  DEFAULT_VIDEO_QUALITY,
+  type VideoQuality,
+} from "@/lib/video-quality";
+import {
   createSpeakingTracker,
   createStreamAnalyser,
   readAnalyserLevel,
@@ -428,6 +435,12 @@ export function createVoiceController(transport: RealtimeTransport) {
   let ringOnWelcomeChannelId: string | null = null;
   /** Owns the camera capture; mirrored into state.localCameraStream. */
   let cameraCaptureStream: MediaStream | null = null;
+  /**
+   * The chosen video quality. A user preference, not call state: it survives
+   * leaving exactly as the input device and volume do, and it is what the next
+   * `toggleCamera` will ask the hardware for.
+   */
+  let videoQuality: VideoQuality = DEFAULT_VIDEO_QUALITY;
   let state: VoiceState = {
     status: "idle",
     peerId: null,
@@ -1060,6 +1073,9 @@ export function createVoiceController(transport: RealtimeTransport) {
 
   function startMeshSession(peerId: string, peers: VoiceParticipant[]) {
     manager = createPeerConnectionManager(peerId, sendRelay, iceServers);
+    // Before any track is published, so a camera carried across a reconnect
+    // gets the chosen ceiling on its first tune rather than the default one.
+    manager.setCameraMaxBitrate(cameraBitrateFor(videoQuality));
     if (pipeline) {
       manager.setLocalStream(pipeline.processedStream);
     }
@@ -1770,10 +1786,14 @@ export function createVoiceController(transport: RealtimeTransport) {
       }
       let stream: MediaStream;
       try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: true,
-          audio: false,
-        });
+        // Asks for the chosen quality with `ideal` constraints and falls back
+        // to the bare request on refusal — see `lib/video-quality.ts`. It used
+        // to be a plain `{ video: true }` here, which is why every call in this
+        // product was capped at 640x480.
+        stream = await captureCamera(
+          (constraints) => navigator.mediaDevices.getUserMedia(constraints),
+          videoQuality,
+        );
       } catch (err) {
         state.error =
           err instanceof Error && err.name === "NotAllowedError"
@@ -1792,6 +1812,16 @@ export function createVoiceController(transport: RealtimeTransport) {
         state.error = translateMessage("voice.error.cameraFailed");
         emit();
         return;
+      }
+      // The same argument the screen share makes, for the same reason: a face
+      // on a call is motion, not a document. Without the hint the encoder
+      // optimises for sharpness and pays with frame rate, which is what makes a
+      // talking head look like a slideshow the moment the link tightens.
+      // Guarded because the property is read-only on some older engines.
+      try {
+        track.contentHint = "motion";
+      } catch {
+        // Encoder defaults, working camera.
       }
       // The camera being unplugged (or revoked by the OS) must read as "off",
       // not as a frozen tile.
@@ -1819,6 +1849,37 @@ export function createVoiceController(transport: RealtimeTransport) {
         await stopCameraInternal();
         emit();
       }
+    },
+
+    /**
+     * Choose what the camera is asked for. `auto` is the default.
+     *
+     * SAFE BY CONSTRUCTION, because this is a setting a person can change in
+     * the middle of a live call. Nothing here can end with a dead camera:
+     * `applyCameraQuality` never rejects, `setCameraMaxBitrate` swallows an
+     * encoder that refuses, and neither re-captures — the track on the wire is
+     * the same track throughout, so the worst outcome is a picture that stayed
+     * the size it already was.
+     *
+     * The capture half only applies to a camera that is already open. A closed
+     * one needs nothing: `toggleCamera` reads `videoQuality` when it opens.
+     */
+    async setVideoQuality(next: VideoQuality) {
+      if (next === videoQuality) {
+        return;
+      }
+      videoQuality = next;
+      const maxBitrate = cameraBitrateFor(next);
+      manager?.setCameraMaxBitrate(maxBitrate);
+      await sfu?.setCameraMaxBitrate(maxBitrate);
+      const track = cameraCaptureStream?.getVideoTracks()[0];
+      if (track) {
+        await applyCameraQuality(track, next);
+      }
+    },
+
+    getVideoQuality(): VideoQuality {
+      return videoQuality;
     },
 
     // --- end conversation calls ---------------------------------------------
