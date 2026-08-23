@@ -3,6 +3,7 @@ import type { WebSocket } from "ws";
 import {
   isClientRelayMessage,
   MESH_VOICE_LIMIT,
+  SCREEN_SHARE_LIMIT,
   voiceClientMessageSchema,
   type VoiceParticipant,
   type VoiceRoomTransport,
@@ -710,14 +711,18 @@ export async function handleVoiceMessage(
     if (!peer) {
       return;
     }
-    // Mesh mode would otherwise multiply every peer's video-encode cost by the
-    // number of concurrent sharers; capping to one keeps the limit uniform
-    // across mesh and SFU rather than only enforcing it for mesh.
+    // Mesh encodes a screen once per peer connection; LiveKit forwards. The
+    // cap is per transport so a mesh room of eight cannot grow four 2.5 Mbps
+    // shares, while an SFU room can take Zoom's four. Count everyone else —
+    // a live sharer re-declaring (audio-id update, rejoin) must not be refused
+    // for occupying their own slot. Keep this check synchronous with the
+    // write: an await between them would let two clicks both pass.
     if (payload.sharing) {
-      const alreadySharing = getRoomPeers(peer.voiceChannelId).some(
+      const limit = SCREEN_SHARE_LIMIT[getRoomTransport(peer.voiceChannelId)];
+      const othersSharing = getRoomPeers(peer.voiceChannelId).filter(
         (p) => p.id !== peer.id && p.sharingScreen,
-      );
-      if (alreadySharing) {
+      ).length;
+      if (othersSharing >= limit) {
         send(peer.socket, {
           type: "screen-share-denied",
           voiceChannelId: peer.voiceChannelId,

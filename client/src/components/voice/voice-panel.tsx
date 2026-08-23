@@ -12,10 +12,16 @@ import {
   Volume2,
   VolumeX,
 } from "lucide-react";
-import { MESH_VOICE_WARNING, type VoiceParticipant } from "@pqp/shared";
+import {
+  MESH_VOICE_WARNING,
+  SCREEN_SHARE_LIMIT,
+  type VoiceParticipant,
+  type VoiceRoomTransport,
+} from "@pqp/shared";
 import type { VoiceInputMode } from "@/hooks/use-voice";
 import type { RemotePeer } from "@/lib/peer-connection-manager";
 import { Button } from "@/components/ui/button";
+import { isScreenShareAtCap } from "@/lib/screen-share-roster";
 import {
   screenShareUnavailableMessage,
   screenShareUnavailableReason,
@@ -304,8 +310,10 @@ interface VoicePanelProps {
   isSharingScreen?: boolean;
   /** Whether our own live share is carrying the machine's audio. */
   isSharingScreenAudio?: boolean;
-  /** peerId of whoever is presenting (self or remote), or null if nobody is. */
-  screenSharePeerId?: string | null;
+  /** peerIds currently sharing. */
+  screenSharePeerIds?: string[];
+  /** The room's stated transport, for the share cap. */
+  roomTransport?: VoiceRoomTransport | null;
   /**
    * The room's roster (`voice-roster` participants) for this channel. Carries
    * each peer's self-declared muted/deafened state, which is not part of the
@@ -344,7 +352,8 @@ export function VoicePanel({
   usingSfu = false,
   isSharingScreen = false,
   isSharingScreenAudio = false,
-  screenSharePeerId = null,
+  screenSharePeerIds = [],
+  roomTransport = null,
   participants = [],
   onJoin,
   onLeave,
@@ -357,8 +366,12 @@ export function VoicePanel({
 }: VoicePanelProps) {
   const { t } = useTranslation();
   const showWarning = !usingSfu && remotePeers.length >= MESH_VOICE_WARNING;
-  const someoneElseSharing =
-    !!screenSharePeerId && screenSharePeerId !== localPeerId;
+  const shareAtCap = isScreenShareAtCap(
+    screenSharePeerIds,
+    localPeerId,
+    roomTransport,
+  );
+  const shareLimit = SCREEN_SHARE_LIMIT[roomTransport ?? "mesh"];
   const speaking = new Set(speakingPeerIds);
   // Roster state by peer id — mute/deafen badges for the *other* tiles. Self
   // renders from local state instead, which is ahead of the roster echo.
@@ -513,7 +526,7 @@ export function VoicePanel({
                       isSpeaking={speaking.has(peer.peerId) && !isDeafened}
                       isMuted={roster?.muted ?? false}
                       isDeafened={roster?.deafened ?? false}
-                      isPresenting={peer.peerId === screenSharePeerId}
+                      isPresenting={screenSharePeerIds.includes(peer.peerId)}
                       avatarSize={avatarSize}
                       minHeightClass={minHeightClass}
                       connectionState={peer.connectionState}
@@ -674,10 +687,10 @@ export function VoicePanel({
                         : t("voice.control.share")
                     }
                     aria-pressed={isSharingScreen}
-                    disabled={someoneElseSharing}
+                    disabled={shareAtCap && !isSharingScreen}
                     title={
-                      someoneElseSharing
-                        ? t("voice.control.shareTaken")
+                      shareAtCap
+                        ? t("voice.control.shareLimit", { limit: shareLimit })
                         : undefined
                     }
                     onClick={() => {

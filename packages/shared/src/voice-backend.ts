@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { VoiceRoomTransport } from "./signaling.js";
 
 export type VoiceBackendType = "mesh" | "cloudflare-sfu" | "livekit";
 
@@ -13,6 +14,18 @@ export interface VoiceBackendConfig {
 
 export const MESH_VOICE_LIMIT = 8;
 export const MESH_VOICE_WARNING = 6;
+
+/**
+ * How many people may share a screen in one call at the same time.
+ *
+ * Mesh encodes a copy per peer connection, so two is the ceiling that still
+ * fits a small friend call. LiveKit forwards, so four matches Zoom's cap.
+ * The server and the client both key this map off the room's stated transport.
+ */
+export const SCREEN_SHARE_LIMIT: Record<VoiceRoomTransport, number> = {
+  mesh: 2,
+  livekit: 4,
+};
 
 export function getDefaultVoiceBackend(
   deployment: "hosted" | "selfhost",

@@ -32,6 +32,10 @@ possível deste sistema.
 ## compartilhar tela
 
 - A captura é 1080p a 30 quadros por segundo.
+- Dá pra mais de uma pessoa transmitir ao mesmo tempo: **duas** numa call em malha
+  (o padrão hoje), **quatro** se a call estiver no LiveKit.
+- Se a sala já está no máximo, o botão de compartilhar fica bloqueado e quem
+  tenta recebe um recado de que a call chegou no limite.
 - Não existe ajuste manual de qualidade. Não tem botão, não tem menu, não tem
   configuração escondida. Essa é a pergunta mais comum e a resposta é essa.
 - O que existe é automático: o envio tem um orçamento de mais ou menos 5 Mbps

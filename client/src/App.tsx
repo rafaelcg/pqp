@@ -75,7 +75,10 @@ import { SanctionNoticeBar } from "@/components/layout/sanction-notice-bar";
 import { SsoServerSuggestions } from "@/components/layout/sso-server-suggestions";
 import { UserPanel } from "@/components/layout/user-panel";
 import { ConnectionCallbackOverlay } from "@/components/connections/connection-callback";
-import { ScreenShareView } from "@/components/voice/screen-share-view";
+import {
+  ScreenStage,
+  collectScreenTiles,
+} from "@/components/voice/screen-stage";
 import { VoiceAudioSinks } from "@/components/voice/voice-audio-sinks";
 import { VoicePanel } from "@/components/voice/voice-panel";
 import {
@@ -2594,7 +2597,7 @@ function MainAppContent({
           // This widget only exists once you have navigated away from the voice
           // channel, so it is the only thing that can tell you a share is live
           // while you are somewhere else.
-          isPresenting={voiceState.screenSharePeerId !== null}
+          isPresenting={voiceState.screenSharePeerIds.length > 0}
           onOpen={() => void openVoiceChannel()}
           onToggleMute={() => voice.toggleMute()}
           onToggleDeafen={() => voice.toggleDeafen()}
@@ -2855,6 +2858,7 @@ function MainAppContent({
           onToggleCamera={() => void voice.toggleCamera()}
           onStartScreenShare={() => void voice.startScreenShare()}
           onStopScreenShare={() => void voice.stopScreenShare()}
+          onFocusScreenShare={(peerId) => voice.focusScreenShare(peerId)}
         />
       )}
       <MessageList
@@ -3025,7 +3029,7 @@ function MainAppContent({
         isDeafened={voiceState.isDeafened}
         outputDeviceId={localSettings.outputDeviceId}
         outputVolume={localSettings.outputVolume}
-        screenSharePeerId={voiceState.screenSharePeerId}
+        audibleScreenPeerIds={voiceState.audibleScreenPeerIds}
       />
 
       {/* At the root and over everything, because the directory is a mode
@@ -3382,11 +3386,12 @@ function MainAppContent({
                 participants={voiceState.occupancy[selectedChannel.id] ?? []}
                 isSharingScreen={voiceState.isSharingScreen}
                 isSharingScreenAudio={voiceState.isSharingScreenAudio}
-                screenSharePeerId={
+                screenSharePeerIds={
                   voiceState.voiceChannelId === selectedChannel.id
-                    ? voiceState.screenSharePeerId
-                    : null
+                    ? voiceState.screenSharePeerIds
+                    : []
                 }
+                roomTransport={voiceState.roomTransport}
                 onJoin={() => void handleJoinVoice(selectedChannel.id)}
                 onLeave={() => voice.leave()}
                 onToggleMute={() => voice.toggleMute()}
@@ -3403,21 +3408,19 @@ function MainAppContent({
             </div>
             <div className="flex min-h-0 flex-1 flex-col">
               {voiceState.voiceChannelId === selectedChannel.id &&
-                voiceState.screenSharePeerId && (
-                  <ScreenShareView
-                    stream={
-                      voiceState.screenSharePeerId === voiceState.peerId
-                        ? voiceState.localScreenStream
-                        : (voiceState.remotePeers.find(
-                            (p) => p.peerId === voiceState.screenSharePeerId,
-                          )?.screenStream ?? null)
-                    }
-                    presenterName={
-                      voiceState.remotePeers.find(
-                        (p) => p.peerId === voiceState.screenSharePeerId,
-                      )?.displayName ?? t("voice.share.someone")
-                    }
-                    isSelf={voiceState.screenSharePeerId === voiceState.peerId}
+                voiceState.screenSharePeerIds.length > 0 && (
+                  <ScreenStage
+                    tiles={collectScreenTiles({
+                      peerIds: voiceState.screenSharePeerIds,
+                      localPeerId: voiceState.peerId,
+                      localName:
+                        voiceState.self?.displayName ?? t("voice.share.someone"),
+                      localStream: voiceState.localScreenStream,
+                      remotePeers: voiceState.remotePeers,
+                      fallbackName: t("voice.share.someone"),
+                    })}
+                    focusedPeerId={voiceState.focusedScreenPeerId}
+                    onFocus={(peerId) => voice.focusScreenShare(peerId)}
                     onStopSharing={() => void voice.stopScreenShare()}
                   />
                 )}

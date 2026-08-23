@@ -79,6 +79,11 @@ interface ScreenShareViewProps {
   presenterName: string;
   isSelf: boolean;
   onStopSharing?: () => void;
+  /**
+   * `panel` is the standalone stage (today's chrome). `tile` sits inside
+   * ScreenStage, which already owns the outer height.
+   */
+  variant?: "panel" | "tile";
 }
 
 export function ScreenShareView({
@@ -86,6 +91,7 @@ export function ScreenShareView({
   presenterName,
   isSelf,
   onStopSharing,
+  variant = "panel",
 }: ScreenShareViewProps) {
   const { t } = useTranslation();
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -212,7 +218,9 @@ export function ScreenShareView({
     <div
       ref={containerRef}
       className={cn(
-        "flex shrink-0 flex-col border-b border-panel-hover bg-ink",
+        "flex min-h-0 flex-col bg-ink",
+        variant === "panel" && "shrink-0 border-b border-panel-hover",
+        variant === "tile" && "h-full min-h-0",
         isFullscreen &&
           (fullscreenMode === "element"
             ? "h-screen max-h-none w-screen"
@@ -221,7 +229,7 @@ export function ScreenShareView({
               // exit control under Safari's toolbar, which is how a person gets
               // stuck in a fullscreen they cannot leave.
               "fixed inset-0 z-50 h-auto max-h-none w-auto"),
-        !isFullscreen && "max-h-[45%] min-h-[160px]",
+        !isFullscreen && variant === "panel" && "max-h-[45%] min-h-[160px]",
       )}
     >
       <div className="flex shrink-0 items-center justify-between px-3 py-1.5">

@@ -1,11 +1,17 @@
 import {
   MESH_VOICE_WARNING,
+  SCREEN_SHARE_LIMIT,
   type ClientRelayMessage,
   type VoiceParticipant,
   type VoiceRoomTransport,
   type VoiceSessionInfo,
   type VoiceSignalingMessage,
 } from "@pqp/shared";
+import {
+  audibleScreenPeerIds,
+  isScreenShareAtCap,
+  nextScreenShareFocus,
+} from "@/lib/screen-share-roster";
 import {
   screenShareUnavailableMessage,
   supportsScreenShare,
@@ -130,10 +136,27 @@ export interface VoiceState {
    * apart from a mic failure or a dropped socket.
    */
   transportFailure: VoiceTransportFailure | null;
+  /**
+   * The room's media path, as stated on `welcome` / `voice-roster`. Null
+   * before the first join. The screen-share cap is keyed off this, not off
+   * `usingSfu`, which stays false until LiveKit actually connects.
+   */
+  roomTransport: VoiceRoomTransport | null;
   /** True when this client is the one presenting. */
   isSharingScreen: boolean;
-  /** peerId of whoever is presenting (self or remote), or null if nobody is. */
-  screenSharePeerId: string | null;
+  /** peerIds currently sharing, in roster order. */
+  screenSharePeerIds: string[];
+  /**
+   * Who occupies the large tile. Hook-owned so the audio sinks (mounted at
+   * the app root) and both stage mounts can read the same value.
+   */
+  focusedScreenPeerId: string | null;
+  /**
+   * Whose screen audio to play. Derived from the sharing set + focus, not
+   * from whether the stage is on screen — navigating to a text channel must
+   * not mute a live share.
+   */
+  audibleScreenPeerIds: string[];
   /** Our own outgoing capture, for a local preview of what's being shared. */
   localScreenStream: MediaStream | null;
   /**
@@ -422,8 +445,11 @@ export function createVoiceController(transport: RealtimeTransport) {
     peerVolumes: {},
     usingSfu: false,
     transportFailure: null,
+    roomTransport: null,
     isSharingScreen: false,
-    screenSharePeerId: null,
+    screenSharePeerIds: [],
+    focusedScreenPeerId: null,
+    audibleScreenPeerIds: [],
     localScreenStream: null,
     isSharingScreenAudio: false,
     incomingCalls: [],
@@ -801,6 +827,25 @@ export function createVoiceController(transport: RealtimeTransport) {
   }
 
   /**
+   * Rebuild who is sharing, who is focused, and whose audio plays from a
+   * roster snapshot. Stop and disconnect both show up as a missing id, so
+   * they share the same fallback.
+   */
+  function applyScreenShareRoster(participants: VoiceParticipant[]) {
+    const nextIds = participants
+      .filter((participant) => participant.sharingScreen)
+      .map((participant) => participant.peerId);
+    const focused = nextScreenShareFocus(
+      state.screenSharePeerIds,
+      nextIds,
+      state.focusedScreenPeerId,
+    );
+    state.screenSharePeerIds = nextIds;
+    state.focusedScreenPeerId = focused;
+    state.audibleScreenPeerIds = audibleScreenPeerIds(nextIds, focused);
+  }
+
+  /**
    * The capture lost its audio but kept its picture.
    *
    * Happens on its own when the shared tab stops producing sound the browser
@@ -1071,8 +1116,10 @@ export function createVoiceController(transport: RealtimeTransport) {
               knownPeerIds.add(participant.peerId);
             }
           }
-          state.screenSharePeerId =
-            message.participants.find((p) => p.sharingScreen)?.peerId ?? null;
+          if (message.transport) {
+            state.roomTransport = message.transport;
+          }
+          applyScreenShareRoster(message.participants);
           // Mesh camera classification rides the roster — see the banner.
           applyCameraStreamIds(message.participants);
           applyScreenAudioStreamIds(message.participants);
@@ -1084,7 +1131,9 @@ export function createVoiceController(transport: RealtimeTransport) {
           return;
         }
         void stopScreenShareInternal();
-        state.error = translateMessage("voice.error.shareTaken");
+        state.error = translateMessage("voice.error.shareLimit", {
+          limit: SCREEN_SHARE_LIMIT[state.roomTransport ?? "mesh"],
+        });
         emit();
         break;
       case "voice-room-full":
@@ -1116,11 +1165,13 @@ export function createVoiceController(transport: RealtimeTransport) {
         for (const peer of welcomePeers) {
           knownPeerIds.add(peer.peerId);
         }
+        applyScreenShareRoster([message.self, ...welcomePeers]);
         const channelId = message.voiceChannelId;
         const peerId = message.peerId;
         // The server owns this. We never re-derive it, and we never substitute
         // the other transport when ours fails.
         const roomTransport = message.transport ?? legacyRoomTransport;
+        state.roomTransport = roomTransport;
 
         // Rejoin/channel-switch: tear the previous session down before building
         // a new one, or its connections and ICE-restart timers leak.
@@ -1448,8 +1499,11 @@ export function createVoiceController(transport: RealtimeTransport) {
         peerVolumes: state.peerVolumes,
         usingSfu: false,
         transportFailure: null,
+        roomTransport: null,
         isSharingScreen: false,
-        screenSharePeerId: null,
+        screenSharePeerIds: [],
+        focusedScreenPeerId: null,
+        audibleScreenPeerIds: [],
         localScreenStream: null,
         isSharingScreenAudio: false,
         // Invitations from OTHER conversations are not our call state and
@@ -1531,12 +1585,16 @@ export function createVoiceController(transport: RealtimeTransport) {
       if (state.status !== "connected") {
         return;
       }
-      // Only one presenter per room (mesh and SFU alike — see the server-side
-      // comment in voice.ts). Checking the roster here skips the OS picker
-      // when we already know it'll be refused; the server call below is still
-      // the authoritative check for the rare simultaneous-click race.
-      if (state.screenSharePeerId && state.screenSharePeerId !== state.peerId) {
-        state.error = translateMessage("voice.error.shareTaken");
+      if (
+        isScreenShareAtCap(
+          state.screenSharePeerIds,
+          state.peerId,
+          state.roomTransport,
+        )
+      ) {
+        state.error = translateMessage("voice.error.shareLimit", {
+          limit: SCREEN_SHARE_LIMIT[state.roomTransport ?? "mesh"],
+        });
         emit();
         return;
       }
@@ -1628,6 +1686,19 @@ export function createVoiceController(transport: RealtimeTransport) {
 
     async stopScreenShare() {
       await stopScreenShareInternal();
+      emit();
+    },
+
+    /** Promote a share to the large tile. No-op if they are not sharing. */
+    focusScreenShare(peerId: string) {
+      if (!state.screenSharePeerIds.includes(peerId)) {
+        return;
+      }
+      state.focusedScreenPeerId = peerId;
+      state.audibleScreenPeerIds = audibleScreenPeerIds(
+        state.screenSharePeerIds,
+        peerId,
+      );
       emit();
     },
 

@@ -23,14 +23,16 @@ import {
   type PointerEvent as ReactPointerEvent,
   type RefObject,
 } from "react";
-import type { DmSummary } from "@pqp/shared";
+import { SCREEN_SHARE_LIMIT, type DmSummary } from "@pqp/shared";
 import type { VoiceState } from "@/hooks/use-voice";
 import {
   detectFullscreenMode,
   supportsScreenShare,
   type FullscreenMode,
 } from "@/components/voice/capabilities";
+import { collectScreenTiles } from "@/components/voice/screen-stage";
 import { VoiceAvatar } from "@/components/voice/voice-avatar";
+import { isScreenShareAtCap } from "@/lib/screen-share-roster";
 import { useTranslation } from "@/lib/i18n";
 import { conversationTitle } from "@/lib/conversations";
 import { cn } from "@/lib/utils";
@@ -238,6 +240,7 @@ export function DmCallStage({
   onToggleCamera,
   onStartScreenShare,
   onStopScreenShare,
+  onFocusScreenShare,
 }: {
   conversation: DmSummary;
   currentUser: { id: string; displayName: string; avatarUrl: string | null } | null;
@@ -248,6 +251,7 @@ export function DmCallStage({
   onToggleCamera: () => void;
   onStartScreenShare?: () => void;
   onStopScreenShare?: () => void;
+  onFocusScreenShare?: (peerId: string) => void;
 }) {
   const { t } = useTranslation();
   const channelId = conversation.channelId;
@@ -308,6 +312,7 @@ export function DmCallStage({
       onToggleCamera={onToggleCamera}
       onStartScreenShare={onStartScreenShare}
       onStopScreenShare={onStopScreenShare}
+      onFocusScreenShare={onFocusScreenShare}
     />
   );
 }
@@ -323,6 +328,7 @@ function ActiveCall({
   onToggleCamera,
   onStartScreenShare,
   onStopScreenShare,
+  onFocusScreenShare,
 }: {
   conversation: DmSummary;
   currentUser: { id: string; displayName: string; avatarUrl: string | null } | null;
@@ -334,6 +340,7 @@ function ActiveCall({
   onToggleCamera: () => void;
   onStartScreenShare?: () => void;
   onStopScreenShare?: () => void;
+  onFocusScreenShare?: (peerId: string) => void;
 }) {
   const { t } = useTranslation();
   const channelId = conversation.channelId;
@@ -372,21 +379,24 @@ function ActiveCall({
     isSelf: false,
   }));
 
-  // Whose screen fills the stage, if anyone's.
-  const screenStream = voiceState.isSharingScreen
-    ? voiceState.localScreenStream
-    : (voiceState.remotePeers.find(
-        (peer) => peer.peerId === voiceState.screenSharePeerId,
-      )?.screenStream ?? null);
-  const presenterName = voiceState.isSharingScreen
-    ? currentUser?.displayName
-    : voiceState.remotePeers.find(
-        (peer) => peer.peerId === voiceState.screenSharePeerId,
-      )?.displayName;
+  const screenTiles = collectScreenTiles({
+    peerIds: voiceState.screenSharePeerIds,
+    localPeerId: voiceState.peerId,
+    localName: currentUser?.displayName ?? t("voice.share.someone"),
+    localStream: voiceState.localScreenStream,
+    remotePeers: voiceState.remotePeers,
+    fallbackName: t("voice.share.someone"),
+  });
+  const focusedTile =
+    screenTiles.find(
+      (tile) => tile.peerId === voiceState.focusedScreenPeerId,
+    ) ?? screenTiles[0];
+  const screenStream = focusedTile?.stream ?? null;
+  const presenterName = focusedTile?.presenterName;
 
   const layout = stageLayout(
     remotes.length,
-    voiceState.screenSharePeerId !== null,
+    voiceState.screenSharePeerIds.length > 0,
   );
   const anyVideo =
     screenStream !== null ||
@@ -598,11 +608,63 @@ function ActiveCall({
       {/* --- the stage's content, by layout --------------------------------- */}
       {layout === "screen" ? (
         <div className="flex h-full w-full flex-col bg-black">
-          <StageVideo
-            stream={screenStream}
-            videoRef={primaryVideoRef}
-            className="min-h-0 flex-1 object-contain"
-          />
+          {screenTiles.length === 2 ? (
+            <>
+              <div className="hidden min-h-0 flex-1 grid-cols-2 lg:grid">
+                {screenTiles.map((tile, index) => (
+                  <StageVideo
+                    key={tile.peerId}
+                    stream={tile.stream}
+                    videoRef={index === 0 ? primaryVideoRef : undefined}
+                    className="h-full min-h-0 object-contain"
+                  />
+                ))}
+              </div>
+              <div className="min-h-0 flex-1 lg:hidden">
+                <StageVideo
+                  stream={screenStream}
+                  videoRef={primaryVideoRef}
+                  className="h-full min-h-0 object-contain"
+                />
+              </div>
+            </>
+          ) : (
+            <StageVideo
+              stream={screenStream}
+              videoRef={primaryVideoRef}
+              className="min-h-0 flex-1 object-contain"
+            />
+          )}
+          {screenTiles.length > 1 && (
+            <div
+              className={cn(
+                "flex shrink-0 gap-1 overflow-x-auto p-1",
+                screenTiles.length === 2 && "lg:hidden",
+              )}
+            >
+              {screenTiles.map((tile) => {
+                const selected = tile.peerId === focusedTile?.peerId;
+                return (
+                  <button
+                    key={tile.peerId}
+                    type="button"
+                    className={cn(
+                      "truncate rounded-md px-2 py-1 text-[11px]",
+                      selected
+                        ? "bg-signal/20 text-signal"
+                        : "bg-ink-3 text-paper-muted",
+                    )}
+                    aria-pressed={selected}
+                    onClick={() => onFocusScreenShare?.(tile.peerId)}
+                  >
+                    {tile.isSelf
+                      ? t("voice.share.youPresenting")
+                      : tile.presenterName}
+                  </button>
+                );
+              })}
+            </div>
+          )}
           {/* Everyone in the call, small, over the screen's top edge. */}
           <div className="pointer-events-none absolute right-3 top-3 flex max-h-[40%] flex-col gap-2 overflow-hidden">
             {[...(self ? [self] : []), ...remotes].map((person) => (
@@ -772,9 +834,12 @@ function CallControls({
   // Probed once per mount — whether the browser has getDisplayMedia never
   // changes mid-session. Same probe the channel voice panel uses.
   const canShare = useMemo(() => supportsScreenShare(), []);
-  const someoneElseSharing =
-    voiceState.screenSharePeerId !== null &&
-    voiceState.screenSharePeerId !== voiceState.peerId;
+  const shareAtCap = isScreenShareAtCap(
+    voiceState.screenSharePeerIds,
+    voiceState.peerId,
+    voiceState.roomTransport,
+  );
+  const shareLimit = SCREEN_SHARE_LIMIT[voiceState.roomTransport ?? "mesh"];
   const size = collapsed ? "h-8 w-8" : "h-10 w-10";
   const iconSize = collapsed ? "h-3.5 w-3.5" : "h-4 w-4";
 
@@ -839,8 +904,8 @@ function CallControls({
         <button
           type="button"
           title={
-            someoneElseSharing
-              ? t("voice.control.shareTaken")
+            shareAtCap && !voiceState.isSharingScreen
+              ? t("voice.control.shareLimit", { limit: shareLimit })
               : voiceState.isSharingScreen
                 ? t("voice.control.stopShare")
                 : t("voice.control.share")
@@ -851,7 +916,7 @@ function CallControls({
               : t("voice.control.share")
           }
           aria-pressed={voiceState.isSharingScreen}
-          disabled={someoneElseSharing}
+          disabled={shareAtCap && !voiceState.isSharingScreen}
           className={cn(
             "flex items-center justify-center rounded-full disabled:opacity-40",
             size,

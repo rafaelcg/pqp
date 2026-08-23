@@ -46,9 +46,7 @@ enum RealtimeEvent: Sendable {
     case voicePeerLeft(peerId: String)
     case voiceRoster(voiceChannelId: String, participants: [VoiceParticipant])
     case voiceRoomFull(limit: Int)
-    /// Somebody else is already presenting. The protocol allows exactly one
-    /// screen per room (`set-sharing-screen` in `server/src/ws/voice.ts`), and
-    /// this is the only refusal it explains — unicast to whoever tried.
+    /// The call is already at the screen-share cap. Unicast to whoever tried.
     case voiceScreenShareDenied(voiceChannelId: String)
     /// The server refused the join because this room is pinned to a transport
     /// we declared we cannot do. Nobody ever saw us in the roster.
@@ -511,7 +509,7 @@ actor RealtimeClient {
     ///
     /// Separate from the media: the track travels over WebRTC, this is what puts
     /// `sharingScreen` on everyone's roster — which is what draws "X is
-    /// presenting", and what the server checks to keep the room to one presenter.
+    /// presenting", and what the server checks against the per-transport cap.
     /// The web client sends exactly this (`use-voice.ts`), so a share announced
     /// any other way is invisible to it.
     func setSharingScreen(_ sharing: Bool) async {

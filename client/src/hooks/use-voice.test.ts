@@ -421,6 +421,86 @@ describe("screen share audio", () => {
   });
 });
 
+describe("concurrent screen shares", () => {
+  beforeEach(() => {
+    installBrowserStubs();
+    managers.length = 0;
+    stoppedTracks.length = 0;
+    sfuScreenPublishes.length = 0;
+    vi.mocked(connectLiveKit).mockClear();
+  });
+
+  function participant(peerId: string, sharingScreen: boolean) {
+    return {
+      peerId,
+      userId: "00000000-0000-4000-8000-0000000000dd",
+      displayName: peerId,
+      avatarUrl: null,
+      sharingScreen,
+      muted: false,
+      deafened: false,
+    };
+  }
+
+  async function connectedMesh() {
+    const { transport, sent } = createTransport();
+    const voice = createVoiceController(transport);
+    await voice.join(CHANNEL);
+    voice.handleSignaling(welcome("mesh"));
+    await settle();
+    return { voice, sent };
+  }
+
+  it("tracks every sharer and plays both when there are two", async () => {
+    const { voice } = await connectedMesh();
+    voice.handleSignaling({
+      type: "voice-roster",
+      voiceChannelId: CHANNEL,
+      transport: "mesh",
+      participants: [
+        participant(PEER, false),
+        participant("aaa", true),
+        participant("bbb", true),
+      ],
+    });
+    const state = voice.getState();
+    expect(state.screenSharePeerIds).toEqual(["aaa", "bbb"]);
+    expect(state.focusedScreenPeerId).toBe("aaa");
+    expect(state.audibleScreenPeerIds).toEqual(["aaa", "bbb"]);
+  });
+
+  it("skips the picker when the mesh cap is already full", async () => {
+    const { voice } = await connectedMesh();
+    voice.handleSignaling({
+      type: "voice-roster",
+      voiceChannelId: CHANNEL,
+      transport: "mesh",
+      participants: [
+        participant(PEER, false),
+        participant("aaa", true),
+        participant("bbb", true),
+      ],
+    });
+    await voice.startScreenShare();
+    expect(displayMediaCalls).toHaveLength(0);
+    expect(voice.getState().error).toMatch(/2/);
+    expect(voice.getState().isSharingScreen).toBe(false);
+  });
+
+  it("stops the capture when the server denies a share at the cap", async () => {
+    const { voice } = await connectedMesh();
+    await voice.startScreenShare();
+    expect(voice.getState().isSharingScreen).toBe(true);
+    voice.handleSignaling({
+      type: "screen-share-denied",
+      voiceChannelId: CHANNEL,
+    });
+    await settle();
+    expect(voice.getState().isSharingScreen).toBe(false);
+    expect(voice.getState().error).toMatch(/2/);
+  });
+});
+
 describe("voice transport is the server's decision", () => {
   beforeEach(() => {
     installBrowserStubs();
