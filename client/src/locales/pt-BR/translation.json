@@ -627,6 +627,7 @@
   "voice.error.micBlocked": "O acesso ao microfone foi bloqueado. Libera nas configurações do navegador e entra de novo.",
   "voice.error.shareFailed": "Não foi possível compartilhar a tela",
   "voice.error.shareBlocked": "O compartilhamento de tela foi bloqueado ou cancelado.",
+  "voice.error.shareNeedsAppUpdate": "Atualize o app do pqp pra compartilhar a tela.",
   "voice.error.noVideoTrack": "A captura de tela não trouxe vídeo",
   "voice.error.transportUnsupported": "Esta call roda num servidor de voz que esta versão do app não usa, então você não entrou. Ninguém na call te ouve.",
   "voice.error.transportUnreachable": "Não deu pra falar com o servidor de voz, então você não entrou nesta call. Verifique a sua conexão e tente de novo.",
