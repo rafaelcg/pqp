@@ -88,7 +88,7 @@ describe("communitySlugFromMetaPath", () => {
 describe("communityCardText", () => {
   it("leads with the tagline, because the tagline is the joke", () => {
     const { title, description } = communityCardText(VALORANT, "pt-BR");
-    expect(title).toBe("Valorant Brasil — comunidade no pqp");
+    expect(title).toBe("Valorant Brasil · comunidade no pqp");
     expect(description.startsWith("a gente perde junto")).toBe(true);
     expect(description).toContain("membros");
     expect(description).toContain("Games");
@@ -235,7 +235,7 @@ describe("injectCommunityHead", () => {
     const out = injectCommunityHead(INDEX_HTML, VALORANT, OPTIONS);
     expect(out.match(/property="og:title"/g)).toHaveLength(1);
     expect(out.match(/<title>/g)).toHaveLength(1);
-    expect(out).toContain("Valorant Brasil — comunidade no pqp");
+    expect(out).toContain("Valorant Brasil · comunidade no pqp");
   });
 
   it("leaves everything that is not the social vocabulary alone", () => {

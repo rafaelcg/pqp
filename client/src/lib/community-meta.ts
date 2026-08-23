@@ -124,8 +124,8 @@ export function communityCardText(
 ): { title: string; description: string } {
   const pt = locale === "pt-BR";
   const title = pt
-    ? `${community.name} — comunidade no pqp`
-    : `${community.name} — a community on pqp`;
+    ? `${community.name} · comunidade no pqp`
+    : `${community.name} · a community on pqp`;
 
   const members = community.memberCount.toLocaleString(pt ? "pt-BR" : "en-US");
   const facts = pt
@@ -136,7 +136,7 @@ export function communityCardText(
   const lead = community.tagline?.trim();
   const description = lead
     ? `${lead} · ${facts}`
-    : `${facts} — ${tail}`;
+    : `${facts}. ${tail}`;
 
   return { title, description };
 }

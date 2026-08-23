@@ -65,7 +65,7 @@ describe("renderBlogHead", () => {
   it("writes an article card with a date for a post", () => {
     const post = POSTS[0]!;
     const head = renderBlogHead({ kind: "post", post }, "pt-BR");
-    expect(head).toContain(`<title>${post.title["pt-BR"]} — pqp</title>`);
+    expect(head).toContain(`<title>${post.title["pt-BR"]} · pqp</title>`);
     expect(head).toContain(
       `<link rel="canonical" href="https://pqp.gg/blog/${post.slug}" />`,
     );

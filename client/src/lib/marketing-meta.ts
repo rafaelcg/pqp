@@ -102,13 +102,13 @@ const PAGE_COPY: Record<MarketingPage, PageCopy> = {
   "/": {
     canonicalPath: "/",
     title: {
-      "pt-BR": "pqp — o chat em grupo é seu",
-      en: "pqp — group chat you own",
+      "pt-BR": "pqp: o chat em grupo é seu",
+      en: "pqp: group chat you own",
     },
     description: {
       "pt-BR":
-        "Chat em grupo com comunidades, canais e voz que simplesmente funciona. Código aberto — hospede você mesmo ou use o pqp.gg.",
-      en: "Chaotic group chat with communities, channels, and voice that just works. Open source — self-host or use pqp.gg.",
+        "Chat em grupo com comunidades, canais e voz que simplesmente funciona. Código aberto, hospede você mesmo ou use o pqp.gg.",
+      en: "Chaotic group chat with communities, channels, and voice that just works. Open source, self-host or use pqp.gg.",
     },
   },
   "/vs-discord": {
@@ -139,8 +139,8 @@ const PAGE_COPY: Record<MarketingPage, PageCopy> = {
   "/beta": {
     canonicalPath: "/beta",
     title: {
-      "pt-BR": "Beta do iOS — pqp no iPhone",
-      en: "iOS beta — pqp on iPhone",
+      "pt-BR": "Beta do iOS · pqp no iPhone",
+      en: "iOS beta · pqp on iPhone",
     },
     description: {
       "pt-BR":
@@ -156,8 +156,8 @@ const PAGE_COPY: Record<MarketingPage, PageCopy> = {
     },
     description: {
       "pt-BR":
-        "pqp.gg/@você — um nome só, quem chegar primeiro leva. De graça, e é seu.",
-      en: "pqp.gg/@you — one name, first come, first served. Free, and yours.",
+        "pqp.gg/@você, um nome só, quem chegar primeiro leva. De graça, e é seu.",
+      en: "pqp.gg/@you, one name, first come, first served. Free, and yours.",
     },
   },
   "/claim": {
@@ -168,15 +168,15 @@ const PAGE_COPY: Record<MarketingPage, PageCopy> = {
     },
     description: {
       "pt-BR":
-        "pqp.gg/@você — um nome só, quem chegar primeiro leva. De graça, e é seu.",
-      en: "pqp.gg/@you — one name, first come, first served. Free, and yours.",
+        "pqp.gg/@você, um nome só, quem chegar primeiro leva. De graça, e é seu.",
+      en: "pqp.gg/@you, one name, first come, first served. Free, and yours.",
     },
   },
   "/privacy": {
     canonicalPath: "/privacy",
     title: {
-      "pt-BR": "Política de privacidade — pqp",
-      en: "Privacy policy — pqp",
+      "pt-BR": "Política de privacidade · pqp",
+      en: "Privacy policy · pqp",
     },
     description: {
       "pt-BR":
@@ -187,8 +187,8 @@ const PAGE_COPY: Record<MarketingPage, PageCopy> = {
   "/terms": {
     canonicalPath: "/terms",
     title: {
-      "pt-BR": "Termos de uso — pqp",
-      en: "Terms of service — pqp",
+      "pt-BR": "Termos de uso · pqp",
+      en: "Terms of service · pqp",
     },
     description: {
       "pt-BR": "Os termos para usar o serviço hospedado do pqp em pqp.gg.",
@@ -198,8 +198,8 @@ const PAGE_COPY: Record<MarketingPage, PageCopy> = {
   "/cookies": {
     canonicalPath: "/cookies",
     title: {
-      "pt-BR": "Cookies — pqp",
-      en: "Cookies — pqp",
+      "pt-BR": "Cookies · pqp",
+      en: "Cookies · pqp",
     },
     description: {
       "pt-BR": "Quais cookies o pqp usa e para que servem.",
@@ -209,8 +209,8 @@ const PAGE_COPY: Record<MarketingPage, PageCopy> = {
   "/status": {
     canonicalPath: "/status",
     title: {
-      "pt-BR": "Status — pqp",
-      en: "Status — pqp",
+      "pt-BR": "Status · pqp",
+      en: "Status · pqp",
     },
     description: {
       "pt-BR": "Status operacional do serviço hospedado do pqp, ao vivo.",
@@ -234,7 +234,7 @@ export const VS_DISCORD_FAQ: Record<
       question:
         "Por que o compartilhamento de tela do Discord está suspenso no Brasil?",
       answer:
-        "A Discord comunicou que tela compartilhada, vídeo e Go Live estão suspensos para usuários no Brasil desde 17 de agosto de 2026, cumprindo uma medida preventiva da ANPD, a autoridade brasileira de proteção de dados. É o comunicado da própria Discord — esta página é uma comparação de produto, não conselho jurídico.",
+        "A Discord comunicou que tela compartilhada, vídeo e Go Live estão suspensos para usuários no Brasil desde 17 de agosto de 2026, cumprindo uma medida preventiva da ANPD, a autoridade brasileira de proteção de dados. É o comunicado da própria Discord, esta página é uma comparação de produto, não conselho jurídico.",
     },
     {
       question:
@@ -245,19 +245,19 @@ export const VS_DISCORD_FAQ: Record<
     {
       question: "Como compartilhar tela com o meu grupo hoje?",
       answer:
-        "Cria uma comunidade no pqp.gg, manda o link do convite e compartilha a tela direto do navegador — o jogo, o código, os slides. De graça, sem instalar nada; também tem app pra desktop.",
+        "Cria uma comunidade no pqp.gg, manda o link do convite e compartilha a tela direto do navegador, o jogo, o código, os slides. De graça, sem instalar nada; também tem app pra desktop.",
     },
     {
       question: "O pqp é grátis mesmo? Qual é a pegadinha?",
       answer:
-        "Grátis e de código aberto. Usa o serviço hospedado no pqp.gg, ou roda a sua própria cópia nas suas máquinas — o código é público. É um beta aberto: novo, honesto sobre isso, e construído às claras.",
+        "Grátis e de código aberto. Usa o serviço hospedado no pqp.gg, ou roda a sua própria cópia nas suas máquinas, o código é público. É um beta aberto: novo, honesto sobre isso, e construído às claras.",
     },
   ],
   en: [
     {
       question: "Why is Discord screen share suspended in Brazil?",
       answer:
-        "Discord announced that screen share, video, and Go Live are suspended for users in Brazil since 17 August 2026, complying with a preventive order from the ANPD, Brazil's data-protection authority. That is Discord's own announcement — this page is a product comparison, not legal advice.",
+        "Discord announced that screen share, video, and Go Live are suspended for users in Brazil since 17 August 2026, complying with a preventive order from the ANPD, Brazil's data-protection authority. That is Discord's own announcement, this page is a product comparison, not legal advice.",
     },
     {
       question: "When does Discord screen share come back in Brazil?",
@@ -267,12 +267,12 @@ export const VS_DISCORD_FAQ: Record<
     {
       question: "How can my group share a screen today?",
       answer:
-        "Create a community on pqp.gg, send the invite link, and share your screen straight from the browser — the game, the code, the slides. Free, nothing to install; there's a desktop app too.",
+        "Create a community on pqp.gg, send the invite link, and share your screen straight from the browser, the game, the code, the slides. Free, nothing to install; there's a desktop app too.",
     },
     {
       question: "Is pqp really free? What's the catch?",
       answer:
-        "Free and open source. Use the hosted service at pqp.gg, or run your own copy on your own machines — the code is public. It's an open beta: young, honest about it, and built in the open.",
+        "Free and open source. Use the hosted service at pqp.gg, or run your own copy on your own machines, the code is public. It's an open beta: young, honest about it, and built in the open.",
     },
   ],
 };
