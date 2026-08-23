@@ -113,7 +113,9 @@ struct CallRatingPrompt: View {
         Button {
             pick(score)
         } label: {
-            Text("\(score)")
+            // `verbatim`, so a digit does not become a "%lld" key in the string
+            // catalogue for somebody to helpfully translate later.
+            Text(verbatim: "\(score)")
                 .font(.system(size: 15, weight: .semibold))
                 // Tabular so the row does not shift when the selection moves.
                 .monospacedDigit()

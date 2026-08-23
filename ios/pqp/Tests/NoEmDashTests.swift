@@ -8,12 +8,12 @@ import XCTest
  184 times before anyone counted. A rule nobody can enforce is a preference,
  and a preference loses to whoever is typing that day.
 
- WHY IT READS THE SOURCE TREE INSTEAD OF A CATALOGUE. The web can assert
- against two JSON files because every user-facing string lives in them. This
- app has no such file: copy is written inline in SwiftUI, as `Text("…")`,
- `String(localized:)`, `Label`, `Button`. So the only place the rule can be
- checked is the source, which a simulator test can read because `#filePath` is
- a host path and the simulator shares the host filesystem.
+ IT READS TWO PLACES, because the copy lives in two. The English source is
+ written inline in SwiftUI (`Text("…")`, `String(localized:)`, `Label`,
+ `Button`), so the only place that half can be checked is the source tree,
+ which a simulator test can read because `#filePath` is a host path and the
+ simulator shares the host filesystem. The Portuguese lives in
+ `Resources/Localizable.xcstrings`, which is checked directly.
 
  The en dash and the horizontal bar are banned too. They are not the character
  the rule names, but they are what a well-meaning search-and-replace reaches
@@ -28,6 +28,12 @@ import XCTest
    unadoptable and it would have been switched off within the week.
  - **`Tests/` and `UITests/`.** An `XCTAssert` message is read by whoever
    broke the build. Same reasoning as comments.
+
+ AND THE STRING CATALOGUE, which is the half that matters most. This app ships
+ pt-BR, and a Brazilian user reads the translation rather than the English
+ source. Scanning only Swift would have declared the copy clean while six pt-BR
+ strings still carried an em dash, which is exactly what happened: the first
+ version of this test passed on a catalogue full of them.
  */
 final class NoEmDashTests: XCTestCase {
     /// Character, and the name to print when it is found.
@@ -49,6 +55,37 @@ final class NoEmDashTests: XCTestCase {
     /// because `finishBroadcastWithError` surfaces its message in a system
     /// alert, which is as user-facing as anything in `Sources`.
     private static let scanned = ["Sources", "Broadcast", "ScreenShare"]
+
+    func testTranslatedCopyCarriesNoDashPunctuationEither() throws {
+        XCTAssertEqual(try Self.offencesInCatalogue(), [])
+    }
+
+    /// The keys are the English source strings, so a key that still contains a
+    /// dash is a Swift literal that was never repaired, and a *renamed* key
+    /// whose translation is missing is a repair that silently dropped the
+    /// Portuguese. Both are caught by scanning the catalogue's own contents.
+    func testEveryStringInTheCatalogueIsStillTranslated() throws {
+        let catalogue = try Self.catalogue()
+        let untranslated = catalogue.strings
+            .filter { $0.value.localizations["pt-BR"] == nil }
+            .keys
+            .sorted()
+        XCTAssertLessThanOrEqual(
+            untranslated.count, Self.untranslatedAllowance,
+            """
+            More strings are missing pt-BR than this file's allowance. Editing \
+            an English literal RENAMES its catalogue key and orphans the \
+            translation, which shows a Brazilian user English with no error \
+            anywhere. Move the translation across rather than leaving it \
+            behind. Missing: \(untranslated)
+            """
+        )
+    }
+
+    /// Every string in the catalogue currently has its pt-BR, so the allowance
+    /// is zero and any orphan is a failure. Raise it only to record a backlog
+    /// somebody has decided to accept, never to get a red run to go green.
+    private static let untranslatedAllowance = 0
 
     func testUserFacingCopyCarriesNoDashPunctuation() throws {
         let offences = try Self.offencesInAppSources()
@@ -79,6 +116,55 @@ final class NoEmDashTests: XCTestCase {
         XCTAssertEqual(
             Self.offences(in: "Text(\"a \u{2014} b\") // note", path: "x.swift").count, 1
         )
+    }
+
+    // MARK: - The string catalogue
+
+    /// Only the shape this test asks about. Decoding the whole `.xcstrings`
+    /// schema would be a second thing to keep in step with Xcode for no gain.
+    struct Catalogue: Decodable {
+        struct Entry: Decodable {
+            struct Localization: Decodable {
+                struct Unit: Decodable { let value: String }
+                let stringUnit: Unit?
+            }
+            let localizations: [String: Localization]
+
+            // Absent on a key with no translations at all, which is a valid
+            // catalogue and has to decode rather than throw.
+            init(from decoder: Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                localizations = try container.decodeIfPresent(
+                    [String: Localization].self, forKey: .localizations
+                ) ?? [:]
+            }
+
+            enum CodingKeys: String, CodingKey { case localizations }
+        }
+        let strings: [String: Entry]
+    }
+
+    static func catalogue() throws -> Catalogue {
+        let url = appRoot
+            .appendingPathComponent("Resources")
+            .appendingPathComponent("Localizable.xcstrings")
+        return try JSONDecoder().decode(Catalogue.self, from: Data(contentsOf: url))
+    }
+
+    private static func offencesInCatalogue() throws -> [String] {
+        var found: [String] = []
+        for (key, entry) in try catalogue().strings {
+            for (character, name) in banned where key.contains(character) {
+                found.append("key (\(name)): \(key)")
+            }
+            for (language, localization) in entry.localizations {
+                guard let value = localization.stringUnit?.value else { continue }
+                for (character, name) in banned where value.contains(character) {
+                    found.append("\(language) (\(name)): \(value)")
+                }
+            }
+        }
+        return found.sorted()
     }
 
     // MARK: - Scanning

@@ -212,12 +212,12 @@
         }
       }
     },
-    "Add someone by their handle. Yours is %@ — hand it out.": {
+    "Add someone by their handle. Yours is %@, hand it out.": {
       "localizations": {
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Adiciona alguém pelo @ dele. O seu é %@ — sai distribuindo."
+            "value": "Adiciona alguém pelo @ dele. O seu é %@, sai distribuindo."
           }
         }
       }
@@ -1152,6 +1152,16 @@
         }
       }
     },
+    "How was that call?": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Como foi essa call?"
+          }
+        }
+      }
+    },
     "How you met, what they're like, the thing nobody would guess…": {
       "localizations": {
         "pt-BR": {
@@ -1352,12 +1362,12 @@
         }
       }
     },
-    "Letters, numbers, dots, dashes and underscores — starting and ending with a letter or number.": {
+    "Letters, numbers, dots, dashes and underscores, starting and ending with a letter or number.": {
       "localizations": {
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Letras, números, ponto, traço e underline — começando e terminando com letra ou número."
+            "value": "Letras, números, ponto, traço e underline, começando e terminando com letra ou número."
           }
         }
       }
@@ -1452,12 +1462,12 @@
         }
       }
     },
-    "Message hidden — you blocked this person.": {
+    "Message hidden. You blocked this person.": {
       "localizations": {
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Mensagem oculta — você bloqueou essa pessoa."
+            "value": "Mensagem oculta. Você bloqueou essa pessoa."
           }
         }
       }
@@ -1952,6 +1962,16 @@
         }
       }
     },
+    "Perfect": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Perfeita"
+          }
+        }
+      }
+    },
     "Photo uploads are off here.": {
       "localizations": {
         "pt-BR": {
@@ -2078,6 +2098,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Publicar isso no seu perfil?"
+          }
+        }
+      }
+    },
+    "Rate %lld out of 5": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dar nota %lld de 5"
           }
         }
       }
@@ -2662,6 +2692,16 @@
         }
       }
     },
+    "Thanks. That helps.": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Valeu. Isso ajuda."
+          }
+        }
+      }
+    },
     "That handle cannot be used.": {
       "localizations": {
         "pt-BR": {
@@ -2762,12 +2802,12 @@
         }
       }
     },
-    "This is private — send it as a DM": {
+    "This is private. Send it as a DM": {
       "localizations": {
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Isso é privado — mandar por DM"
+            "value": "Isso é privado. Mandar por DM"
           }
         }
       }
@@ -2962,6 +3002,16 @@
         }
       }
     },
+    "Unusable": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não deu"
+          }
+        }
+      }
+    },
     "Violence or threats": {
       "localizations": {
         "pt-BR": {
@@ -2988,6 +3038,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "O que aconteceu?"
+          }
+        }
+      }
+    },
+    "What went wrong? (optional)": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O que deu errado? (opcional)"
           }
         }
       }
@@ -3152,22 +3212,22 @@
         }
       }
     },
-    "pqp can buzz your phone for direct messages, mentions, replies and incoming calls — and only those, only when you're not already online somewhere. No badges for every message in every channel.": {
+    "pqp can buzz your phone for direct messages, mentions, replies and incoming calls, and only those, only when you're not already online somewhere. No badges for every message in every channel.": {
       "localizations": {
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "O pqp pode avisar no seu celular sobre mensagens diretas, menções, respostas e chamadas — só isso, e só quando você não estiver online em outro lugar. Sem aviso para cada mensagem de cada canal."
+            "value": "O pqp pode avisar no seu celular sobre mensagens diretas, menções, respostas e chamadas, só isso, e só quando você não estiver online em outro lugar. Sem aviso para cada mensagem de cada canal."
           }
         }
       }
     },
-    "pqp is for people aged 18 and over. Enter your date of birth to continue — you can only answer once.": {
+    "pqp is for people aged 18 and over. Enter your date of birth to continue. You can only answer once.": {
       "localizations": {
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "O pqp é para maiores de 18 anos. Informe sua data de nascimento para continuar — você só pode responder uma vez."
+            "value": "O pqp é para maiores de 18 anos. Informe sua data de nascimento para continuar. Você só pode responder uma vez."
           }
         }
       }
