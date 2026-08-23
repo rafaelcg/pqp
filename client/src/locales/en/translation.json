@@ -274,7 +274,7 @@
   "tela.faq.vpn.q": "Do I need a VPN?",
   "tela.faq.vpn.a": "No. This is not a way around anything: pqp is a different app with its own servers in Brazil, and screen share is a feature it has. Nothing here touches Discord.",
   "tela.faq.people.q": "How many people can share a screen in one room?",
-  "tela.faq.people.a": "Voice is peer-to-peer, which is great for a small group: 5 or 6 people per room works well. Beyond that, quality drops. Bigger rooms are being tested and are not the default yet.",
+  "tela.faq.people.a": "Two people can share a screen at the same time, side by side, and each one has its own fullscreen button. The room itself works well with 5 or 6 people on voice, which is peer-to-peer. Bigger rooms are being tested and are not the default yet.",
   "tela.faq.free.q": "Is it free?",
   "tela.faq.free.a": "Yes. pqp is open source under the AGPL (github.com/rafaelcg/pqp). Use the hosted service at pqp.gg for free, or run your own copy.",
   "tela.faq.mobile.q": "Does it work on a phone?",

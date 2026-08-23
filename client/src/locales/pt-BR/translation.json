@@ -212,7 +212,7 @@
   "tela.faq.vpn.q": "Precisa de VPN?",
   "tela.faq.vpn.a": "Não. Isso não é um jeito de burlar nada: o pqp é outro app, com servidores próprios no Brasil, e compartilhar tela é um recurso que ele tem. Nada aqui mexe no Discord.",
   "tela.faq.people.q": "Quantas pessoas podem compartilhar tela numa sala?",
-  "tela.faq.people.a": "A voz é P2P, o que é ótimo pra grupo pequeno: 5 ou 6 pessoas por sala vai bem. Mais que isso a qualidade cai. Salas maiores estão em teste e ainda não são o padrão.",
+  "tela.faq.people.a": "Duas pessoas podem passar a tela ao mesmo tempo, lado a lado, e cada uma tem o seu botão de tela cheia. A sala em si vai bem com 5 ou 6 pessoas na voz, que é P2P. Salas maiores estão em teste e ainda não são o padrão.",
   "tela.faq.free.q": "É de graça?",
   "tela.faq.free.a": "Sim. O pqp é código aberto sob a AGPL (github.com/rafaelcg/pqp). Usa o serviço hospedado no pqp.gg de graça, ou roda a sua própria cópia.",
   "tela.faq.mobile.q": "Tem no celular?",
