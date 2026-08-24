@@ -18,7 +18,7 @@ import {
   publishToCluster,
   subscribeToCluster,
 } from "../lib/bus.js";
-import { createRateLimiter } from "../lib/rate-limit.js";
+import { createRateLimiter, limitFromEnv } from "../lib/rate-limit.js";
 import {
   extractFirstUrl,
   fetchAndCacheEmbed,
@@ -76,7 +76,10 @@ const connections = new Map<WebSocket, ChatConnection>();
 const channelPresence = new Map<string, Set<ChatConnection>>();
 
 /** Enough for fast typing and reaction spam, not enough to hammer the DB. */
-const messageLimiter = createRateLimiter({ capacity: 10, refillPerSecond: 2 });
+const messageLimiter = createRateLimiter({
+  capacity: limitFromEnv("RATE_LIMIT_WS_MESSAGE_CAPACITY", 10),
+  refillPerSecond: limitFromEnv("RATE_LIMIT_WS_MESSAGE_REFILL", 2),
+});
 const reactionLimiter = createRateLimiter({ capacity: 20, refillPerSecond: 5 });
 const typingLimiter = createRateLimiter({ capacity: 5, refillPerSecond: 1 });
 

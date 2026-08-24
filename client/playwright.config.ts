@@ -78,6 +78,11 @@ export default defineConfig({
         RATE_LIMIT_API_REFILL: "1000",
         RATE_LIMIT_WRITE_CAPACITY: "10000",
         RATE_LIMIT_WRITE_REFILL: "1000",
+        // Same account, same socket: the WS message bucket is 10 bursts at
+        // 2/s in production, which silently drops the 18-send fill used to
+        // park a row at the bottom of the window.
+        RATE_LIMIT_WS_MESSAGE_CAPACITY: "10000",
+        RATE_LIMIT_WS_MESSAGE_REFILL: "1000",
         // The Communities directory, ON for the suite and OFF everywhere else
         // (`.env.example` ships it false and production has never set it).
         //

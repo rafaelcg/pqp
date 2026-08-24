@@ -26,6 +26,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type MouseEvent as ReactMouseEvent,
   type ReactNode,
   type Ref,
 } from "react";
@@ -84,6 +85,25 @@ const JUMP_NOTICE_MS = 3_000;
 
 /** First three of `QUICK_REACTIONS`, shown on the hover bar. */
 const HOVER_QUICK_REACTIONS = QUICK_REACTIONS.slice(0, 3);
+
+/** Hover toolbar sits on top of the row; a right-click still belongs to it. */
+function forwardRowContextMenu(event: ReactMouseEvent) {
+  event.preventDefault();
+  event.stopPropagation();
+  const article = event.currentTarget.closest("article");
+  if (!(article instanceof HTMLElement)) {
+    return;
+  }
+  article.dispatchEvent(
+    new window.MouseEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      button: 2,
+    }),
+  );
+}
 
 /** Roster facts the transcript uses to colour a name and draw a presence pip. */
 export interface MessageAuthorInfo {
@@ -1894,6 +1914,7 @@ const MessageRow = memo(function MessageRow({
                   ? "flex"
                   : "hidden group-hover:flex group-focus-within:flex",
               )}
+              onContextMenu={forwardRowContextMenu}
             >
               {HOVER_QUICK_REACTIONS.map((emoji) => {
                 const mine = reactions.some((r) => r.emoji === emoji && r.me);

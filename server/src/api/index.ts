@@ -144,7 +144,11 @@ import {
   sendJson,
 } from "../lib/http.js";
 import { Etagged, etagged } from "../lib/etag.js";
-import { clientAddress, createRateLimiter } from "../lib/rate-limit.js";
+import {
+  clientAddress,
+  createRateLimiter,
+  limitFromEnv,
+} from "../lib/rate-limit.js";
 import { createRouter, type RequestContext } from "../lib/router.js";
 import {
   buildPersonalExport,
@@ -397,11 +401,6 @@ import {
  * self-host and a public instance want very different numbers, and an automated
  * suite driving one account needs headroom a human never would.
  */
-function limitFromEnv(name: string, fallback: number): number {
-  const parsed = Number(process.env[name]);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
-}
-
 const apiLimiter = createRateLimiter({
   capacity: limitFromEnv("RATE_LIMIT_API_CAPACITY", 120),
   refillPerSecond: limitFromEnv("RATE_LIMIT_API_REFILL", 10),
