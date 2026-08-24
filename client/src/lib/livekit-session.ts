@@ -1,9 +1,17 @@
 import type { VoiceSessionInfo } from "@pqp/shared";
 import type { PeerConnectionState, RemotePeer } from "./peer-connection-manager";
-import { cameraBitrateFor, DEFAULT_VIDEO_QUALITY } from "./video-quality";
+import {
+  cameraBitrateFor,
+  DEFAULT_VIDEO_QUALITY,
+  screenBitrateFor,
+} from "./video-quality";
 
 /** Where a session starts before anybody has chosen a quality. */
 const DEFAULT_CAMERA_MAX_BITRATE_BPS = cameraBitrateFor(DEFAULT_VIDEO_QUALITY);
+const DEFAULT_SCREEN_MAX_BITRATE_BPS = screenBitrateFor(DEFAULT_VIDEO_QUALITY);
+
+/** Both video senders hold 30 fps and pay in resolution. See `video-quality.ts`. */
+const VIDEO_MAX_FRAMERATE = 30;
 
 /**
  * LiveKit SFU media path (Phase 5).
@@ -42,6 +50,19 @@ export interface LiveKitSession {
    * one turned on before it.
    */
   setCameraMaxBitrate(maxBitrate: number): Promise<void>;
+  /**
+   * Change the screen share's bitrate ceiling on an already-published track.
+   *
+   * NO BUDGET SPLIT HERE, DELIBERATELY, and it is the difference that matters
+   * between the transports. A mesh presenter uploads one copy of the screen per
+   * peer, so its ceiling has to be divided by the room; an SFU presenter
+   * uploads exactly one copy however many people are watching, and dividing it
+   * would throw away the single biggest thing the SFU buys. The chosen ceiling
+   * therefore applies whole. What the *user* asked for means the same thing on
+   * both transports; what the room costs does not, because it genuinely is not
+   * the same.
+   */
+  setScreenMaxBitrate(maxBitrate: number): Promise<void>;
   /** Stop publishing the camera video track. */
   unpublishCamera(): Promise<void>;
   disconnect(): Promise<void>;
@@ -205,8 +226,50 @@ export async function connectLiveKit({
   let publishedCameraTrack: MediaStreamTrack | null = null;
   /** The ceiling the next camera publish will carry. See `setCameraMaxBitrate`. */
   let cameraMaxBitrate = DEFAULT_CAMERA_MAX_BITRATE_BPS;
+  /** The ceiling the next screen publish will carry. See `setScreenMaxBitrate`. */
+  let screenMaxBitrate = DEFAULT_SCREEN_MAX_BITRATE_BPS;
   /** The screen share's audio track, when the capture had one. Usually null. */
   let publishedScreenAudioTrack: MediaStreamTrack | null = null;
+
+  /**
+   * Move one published source's ceiling without republishing it.
+   *
+   * Shared by the camera and the screen because they are the same six lines and
+   * the same promise: a browser that refuses the new ceiling leaves the track
+   * publishing at the ceiling it already had, never a dead one. Republishing
+   * would be the obvious alternative and is much worse: it drops the track from
+   * every subscriber's view for as long as renegotiation takes, and for a screen
+   * share it can put the OS picker back on screen.
+   */
+  async function setSourceMaxBitrate(
+    // Spelled off the method rather than as `Track.Source`, because `Track` is
+    // destructured from a dynamic import in this scope: it is a local value,
+    // not a namespace, so it cannot be used in a type position.
+    source: Parameters<typeof room.localParticipant.getTrackPublication>[0],
+    maxBitrate: number,
+    label: string,
+  ): Promise<void> {
+    const publication = room.localParticipant.getTrackPublication(source);
+    const sender = publication?.track?.sender;
+    if (!sender) {
+      return;
+    }
+    try {
+      const params = sender.getParameters();
+      if (!params.encodings || params.encodings.length === 0) {
+        params.encodings = [{}];
+      }
+      for (const encoding of params.encodings) {
+        encoding.maxBitrate = maxBitrate;
+      }
+      await sender.setParameters(params);
+    } catch (err) {
+      console.warn(
+        `[pqp] SFU ${label} ceiling rejected; keeping the published one`,
+        err,
+      );
+    }
+  }
 
   async function publish(stream: MediaStream) {
     const [audioTrack] = stream.getAudioTracks();
@@ -257,8 +320,11 @@ export async function connectLiveKit({
         // ceiling, not a target, so a still screen still costs almost nothing.
         degradationPreference: "maintain-framerate",
         videoEncoding: {
-          maxBitrate: 2_500_000,
-          maxFramerate: 30,
+          // The chosen quality, not a constant. This used to be a hard-coded
+          // 2.5 Mbps that no setting could reach, which is why picking 1080p
+          // did nothing for a share on either transport.
+          maxBitrate: screenMaxBitrate,
+          maxFramerate: VIDEO_MAX_FRAMERATE,
         },
       });
 
@@ -322,37 +388,23 @@ export async function connectLiveKit({
         degradationPreference: "maintain-framerate",
         videoEncoding: {
           maxBitrate: cameraMaxBitrate,
-          maxFramerate: 30,
+          maxFramerate: VIDEO_MAX_FRAMERATE,
         },
       });
     },
 
     async setCameraMaxBitrate(maxBitrate: number) {
       cameraMaxBitrate = maxBitrate;
-      const publication = room.localParticipant.getTrackPublication(
-        Track.Source.Camera,
-      );
-      const sender = publication?.track?.sender;
-      if (!sender) {
-        return;
-      }
-      try {
-        const params = sender.getParameters();
-        if (!params.encodings || params.encodings.length === 0) {
-          params.encodings = [{}];
-        }
-        for (const encoding of params.encodings) {
-          encoding.maxBitrate = maxBitrate;
-        }
-        await sender.setParameters(params);
-      } catch (err) {
-        // Same promise as the mesh path: a refused ceiling leaves a working
-        // camera at the rate it already had, never a dead one.
-        console.warn(
-          "[pqp] SFU camera ceiling rejected; keeping the published one",
-          err,
-        );
-      }
+      await setSourceMaxBitrate(Track.Source.Camera, maxBitrate, "camera");
+    },
+
+    async setScreenMaxBitrate(maxBitrate: number) {
+      // Stored first and applied second, in that order, because the two halves
+      // answer different questions: the field is what a *later* publish will
+      // carry (a share started after the choice, or republished after a
+      // reconnect), and the call is what the share already on the wire gets.
+      screenMaxBitrate = maxBitrate;
+      await setSourceMaxBitrate(Track.Source.ScreenShare, maxBitrate, "screen");
     },
 
     async unpublishCamera() {

@@ -56,6 +56,7 @@ vi.mock("@/lib/peer-connection-manager", () => ({
       },
       setLocalCameraStream: async () => {},
       setCameraMaxBitrate: () => {},
+      setScreenQuality: () => {},
       setPeerCameraStreamId: () => {},
       setPeerScreenAudioStreamId: () => {},
       setPeerSharingScreen: (peerId: string, sharing: boolean) => {
@@ -94,6 +95,7 @@ vi.mock("@/lib/livekit-session", () => ({
     unpublishScreenAudio: async () => {},
     publishCamera: async () => {},
     setCameraMaxBitrate: async () => {},
+    setScreenMaxBitrate: async () => {},
     unpublishCamera: async () => {},
     disconnect: async () => {},
   })),

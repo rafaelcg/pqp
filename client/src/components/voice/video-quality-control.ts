@@ -21,21 +21,30 @@
 export interface VideoQualityControlContext {
   /** Whether this machine's camera is currently sending. */
   isCameraOn: boolean;
+  /** Whether this machine is currently presenting a screen. */
+  isSharingScreen: boolean;
   /** The stage's one-line collapsed strip, which carries only the essentials. */
   collapsed: boolean;
 }
 
 /**
- * HIDDEN, not disabled, when the camera is off.
+ * HIDDEN, not disabled, when this machine is sending no video at all.
  *
- * Three reasons, in order of weight. The bar is crowded and camera-off is the
- * state *everybody* is in by default, so hiding is what keeps the bar exactly
- * as it is today for the people who never touch video. The readout is the
- * whole reason the control is here at all, and with the camera off it has
- * nothing to report but "turn your camera on" — which is precisely the
+ * Three reasons, in order of weight. The bar is crowded and sending-nothing is
+ * the state *everybody* is in by default, so hiding is what keeps the bar
+ * exactly as it is today for the people who never touch video. The readout is
+ * the whole reason the control is here at all, and with nothing going out it
+ * has nothing to report but "turn your camera on" — which is precisely the
  * dead-end that made the Settings placement useless. And nothing is lost:
  * Settings still carries the same choice for anyone who wants to pin a size
  * before a call.
+ *
+ * SCREEN SHARE COUNTS, and it did not used to. The condition was `isCameraOn`
+ * alone, from when the setting genuinely only moved the camera. Now that the
+ * same choice governs the screen sender, camera-off-and-sharing is the single
+ * case where somebody most wants this control and is the exact situation the
+ * bug report came from: presenting, watching it go soft, with the one thing
+ * that would fix it hidden because their webcam happened to be off.
  *
  * Collapsed hides it for the same reason the share and fullscreen buttons are
  * already hidden there: that strip is a reminder that a call exists, not a
@@ -43,20 +52,25 @@ export interface VideoQualityControlContext {
  */
 export function showsVideoQualityControl({
   isCameraOn,
+  isSharingScreen,
   collapsed,
 }: VideoQualityControlContext): boolean {
-  return isCameraOn && !collapsed;
+  return (isCameraOn || isSharingScreen) && !collapsed;
 }
 
 /**
  * The menu is open only while its button is on screen.
  *
- * Derived rather than corrected after the fact. Turning the camera off with
- * the menu open (or collapsing the stage) removes the button it hangs from,
- * and a popover anchored to nothing is the visible bug this prevents in the
- * very render where the camera goes away. The caller still clears its
- * requested flag afterwards, so the menu cannot spring back open when the
- * camera returns; this function is what makes the intervening frame correct.
+ * Derived rather than corrected after the fact. Stopping the last outgoing
+ * video with the menu open (or collapsing the stage) removes the button it
+ * hangs from, and a popover anchored to nothing is the visible bug this
+ * prevents in the very render where that happens. The caller still clears its
+ * requested flag afterwards, so the menu cannot spring back open by itself
+ * later; this function is what makes the intervening frame correct.
+ *
+ * Note that it now takes *both* video terms, so ending a share while the
+ * camera is still on leaves the menu up rather than yanking it away: the
+ * control still governs something.
  */
 export function videoQualityMenuOpen(
   context: VideoQualityControlContext & { requested: boolean },

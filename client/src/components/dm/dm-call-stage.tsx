@@ -623,6 +623,7 @@ function ActiveCall({
   const qualityMenuOpen = videoQualityMenuOpen({
     requested: qualityMenuRequested,
     isCameraOn: voiceState.isCameraOn,
+    isSharingScreen: voiceState.isSharingScreen,
     collapsed,
   });
   // Cleared rather than merely ignored: a menu that was open when the camera
@@ -1110,11 +1111,13 @@ function CallControls({
           <VideoOff className={iconSize} />
         )}
       </button>
-      {/* The camera's setting, immediately to the right of the camera. Absent
-          until the camera is on, so an audio call's bar is the bar it has
-          always been. */}
+      {/* The setting for whatever video is going out, immediately to the right
+          of the camera. Absent until this machine is sending some, so an
+          audio-only call's bar is the bar it has always been. Screen share
+          counts: the same choice governs it now. */}
       {showsVideoQualityControl({
         isCameraOn: voiceState.isCameraOn,
+        isSharingScreen: voiceState.isSharingScreen,
         collapsed,
       }) && (
         <VideoQualityMenu
