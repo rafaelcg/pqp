@@ -9,6 +9,7 @@ const {
   session,
   systemPreferences,
   desktopCapturer,
+  dialog,
 } = require("electron");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -19,6 +20,10 @@ const { setLanguage, t } = require("./lib/i18n");
 const { startStaticServer } = require("./lib/static-server");
 const { waitForUrl, isLocalDevUrl } = require("./lib/wait-for-url");
 const { classifyNavigation } = require("./lib/nav-policy");
+const {
+  PASSKEY_HINT_DELAY_MS,
+  mayPromptForPasskey,
+} = require("./lib/passkey-hint");
 const { initAutoUpdate } = require("./lib/updater");
 
 const PROTOCOL = "pqp";
@@ -156,6 +161,94 @@ async function resolveAppUrl() {
     await waitForUrl(origin);
   }
   return url;
+}
+
+/**
+ * Tell somebody stuck on a Google passkey prompt where the escape hatch is.
+ *
+ * Electron has no platform authenticator, so the ceremony never completes and
+ * Google's page waits forever with no error. We cannot finish it and we will
+ * not inject anything into Google's page to try (see lib/passkey-hint.js), so
+ * the shell speaks from outside the page: it retitles the window, and if the
+ * page is still sitting there after a while it says plainly to use "Try
+ * another way".
+ *
+ * Everything here is best-effort and guarded. A hint that throws would take a
+ * working sign-in down with it, which is a far worse outcome than a passkey
+ * prompt nobody explained.
+ */
+function attachPasskeyHint(win) {
+  if (!win || win.isDestroyed()) {
+    return;
+  }
+  let timer = null;
+  let shown = false;
+
+  const clear = () => {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+  };
+
+  const onUrl = (url) => {
+    if (!mayPromptForPasskey(url)) {
+      // Moved on (consent screen, redirect back to Clerk). Whatever it is now,
+      // it is not the ceremony we cannot finish.
+      clear();
+      return;
+    }
+    try {
+      win.setTitle(t("passkey.windowTitle"));
+    } catch {
+      // A window that will not take a title still gets the dialog below.
+    }
+    if (shown || timer) {
+      return;
+    }
+    timer = setTimeout(() => {
+      timer = null;
+      if (shown || win.isDestroyed()) {
+        return;
+      }
+      // Re-check: 22 seconds is long enough to have left the page.
+      let current = "";
+      try {
+        current = win.webContents.getURL();
+      } catch {
+        return;
+      }
+      if (!mayPromptForPasskey(current)) {
+        return;
+      }
+      shown = true;
+      try {
+        dialog.showMessageBox(win, {
+          type: "info",
+          title: t("passkey.hintTitle"),
+          message: t("passkey.hintTitle"),
+          detail: t("passkey.hintBody"),
+          buttons: [t("passkey.hintDismiss")],
+          defaultId: 0,
+          noLink: true,
+        });
+      } catch {
+        // Nothing to fall back to; the window still carries the title.
+      }
+    }, PASSKEY_HINT_DELAY_MS);
+  };
+
+  // `did-navigate-in-page` matters: Google moves between challenge steps
+  // without a full navigation, and the passkey step is often one of those.
+  win.webContents.on("did-navigate", (_event, url) => onUrl(url));
+  win.webContents.on("did-navigate-in-page", (_event, url) => onUrl(url));
+  win.once("closed", clear);
+
+  try {
+    onUrl(win.webContents.getURL());
+  } catch {
+    // Not loaded yet; the navigation events will catch it.
+  }
 }
 
 function sendToRenderer(channel, ...args) {
@@ -526,6 +619,8 @@ function createWindow(appUrl, allowedOrigin) {
     mainWindow?.show();
   });
 
+  // Popups we opened for sign-in, so `did-create-window` can wire the passkey
+  // hint onto them and nothing else.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     // An auth popup has to stay inside the app: the session it establishes is
     // useless in the system browser. Everything else is a link, and a link
@@ -554,6 +649,12 @@ function createWindow(appUrl, allowedOrigin) {
       // ignore invalid URLs
     }
     return { action: "deny" };
+  });
+
+  // The passkey dead end. See lib/passkey-hint.js for why this is all we can
+  // do about it, and why we do not touch Google's page to do better.
+  mainWindow.webContents.on("did-create-window", (child) => {
+    attachPasskeyHint(child);
   });
 
   mainWindow.webContents.on("will-navigate", (event, url) => {
