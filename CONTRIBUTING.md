@@ -4,8 +4,8 @@ Thanks for wanting to. pqp is built in our spare time, so a good bug report is
 worth as much as a patch, and telling us something is confusing is worth more
 than both.
 
-**Português:** pode abrir issue e PR em português. A gente responde nos dois idiomas.
-O texto abaixo está em inglês só porque o resto do repositório está.
+> **[Leia em português](./CONTRIBUTING.pt-BR.md)** se preferir. Pode abrir issue
+> e PR em português tranquilamente, a gente responde nos dois idiomas.
 
 ## Before you write code
 

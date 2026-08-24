@@ -146,7 +146,8 @@ bilingual at [pqp.gg/terms](https://pqp.gg/terms) and
 ## Contributing
 
 Bug reports, questions and patches are all welcome, in English or Portuguese.
-Start with [`CONTRIBUTING.md`](./CONTRIBUTING.md): it covers setup, the handful
+Start with [`CONTRIBUTING.md`](./CONTRIBUTING.md) ([em português](./CONTRIBUTING.pt-BR.md)):
+it covers setup, the handful
 of things in this repo that will otherwise waste an hour of your time, and what
 the AGPL means for you if pqp ever charges money.
 
