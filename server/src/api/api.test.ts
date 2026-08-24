@@ -945,6 +945,39 @@ describeDb("API authorization", () => {
       expect(audience?.has(owner.id)).toBe(true);
     });
 
+    it("bumps the permissions snapshot version when an overwrite is saved", async () => {
+      const { serverId, textChannelId } = await makeServer();
+      const listed = await call<{
+        roles: Array<{ id: string; isEveryone: boolean }>;
+      }>(owner, "GET", `/api/servers/${serverId}/roles`);
+      const everyone = listed.body.roles.find((role) => role.isEveryone)!;
+      const before = await call<{ version: number }>(
+        owner,
+        "GET",
+        `/api/servers/${serverId}/permissions`,
+      );
+      expect(before.status).toBe(200);
+
+      expect(
+        (
+          await call(owner, "PUT", `/api/channels/${textChannelId}/overwrites`, {
+            targetType: "role",
+            targetId: everyone.id,
+            allow: "0",
+            deny: serializePermissions(Permission.SEND_MESSAGES),
+          })
+        ).status,
+      ).toBe(200);
+
+      const after = await call<{ version: number }>(
+        owner,
+        "GET",
+        `/api/servers/${serverId}/permissions`,
+      );
+      expect(after.status).toBe(200);
+      expect(after.body.version).toBeGreaterThan(before.body.version);
+    });
+
     it("logs deleting a channel overwrite", async () => {
       const { serverId, textChannelId } = await makeServer();
       const listed = await call<{

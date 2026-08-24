@@ -45,9 +45,9 @@ import {
 import { pushChannelActivity } from "../services/push.js";
 import { getChannel, getChannelAudience } from "../services/servers.js";
 import {
+  bumpPermissionsVersion,
   computeMemberPermissions,
   listServerMemberIds,
-  readPermissionsVersion,
 } from "../services/permissions.js";
 // --- threads ---
 import { getThreadInfo } from "../services/threads.js";
@@ -504,14 +504,16 @@ function deliverFriendActivity(
 
 /**
  * Tell every connected member of a server that their resolved bits may have
- * changed. Content-free: the payload is a version, and each client refetches
+ * changed. Bumps `permissions_version` first so the frame is always newer
+ * than the snapshot the client already holds; a same-version ping would be
+ * dropped. Content-free otherwise: each client refetches
  * `GET /api/servers/:id/permissions`. Same addressing as `friend-activity`
  * (per member, never a channel fan-out), same fire-and-forget.
  */
 export async function notifyPermissionsUpdate(
   serverId: string,
 ): Promise<void> {
-  const version = await readPermissionsVersion(serverId);
+  const version = await bumpPermissionsVersion(serverId);
   const memberIds = await listServerMemberIds(serverId);
   deliverPermissionsUpdate(serverId, version, memberIds);
   if (isBusEnabled()) {
