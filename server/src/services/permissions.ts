@@ -45,8 +45,8 @@ export async function seedDefaultRoles(
     [serverId, serializePermissions(PERMISSION_DEFAULT_EVERYONE)],
   );
   await db.query(
-    `INSERT INTO roles (server_id, name, permissions, position, is_everyone, system_key, mentionable)
-     VALUES ($1, 'Admin', $2, 1, FALSE, 'admin', FALSE)
+    `INSERT INTO roles (server_id, name, permissions, position, is_everyone, system_key, mentionable, hoist)
+     VALUES ($1, 'Admin', $2, 1, FALSE, 'admin', FALSE, TRUE)
      ON CONFLICT DO NOTHING`,
     [serverId, serializePermissions(PERMISSION_ALL)],
   );
@@ -61,6 +61,54 @@ async function everyoneRoleId(
     [serverId],
   );
   return result.rows[0]?.id ?? null;
+}
+
+export async function getEveryoneRoleId(
+  serverId: string,
+): Promise<string | null> {
+  return everyoneRoleId(getPool(), serverId);
+}
+
+/**
+ * @everyone's VIEW bit is owned by the private-channel toggle. An overwrite
+ * write must not desync `is_private` from the resolver.
+ */
+export function coerceEveryoneViewOverwrite(
+  isPrivate: boolean,
+  allow: bigint,
+  deny: bigint,
+): { allow: bigint; deny: bigint } {
+  if (isPrivate) {
+    return { allow: allow & ~VIEW, deny: deny | VIEW };
+  }
+  return { allow: allow & ~VIEW, deny: deny & ~VIEW };
+}
+
+export async function restorePrivateEveryoneViewOverwrite(
+  channelId: string,
+  serverId: string,
+): Promise<void> {
+  await applyPrivateChannelOverwrites(getPool(), channelId, serverId, true);
+}
+
+export async function readPermissionsVersion(
+  serverId: string,
+): Promise<number> {
+  const result = await getPool().query<{ permissions_version: number }>(
+    `SELECT permissions_version FROM servers WHERE id = $1`,
+    [serverId],
+  );
+  return result.rows[0]?.permissions_version ?? 0;
+}
+
+export async function listServerMemberIds(
+  serverId: string,
+): Promise<string[]> {
+  const result = await getPool().query<{ user_id: string }>(
+    `SELECT user_id FROM server_members WHERE server_id = $1`,
+    [serverId],
+  );
+  return result.rows.map((row) => row.user_id);
 }
 
 /**
@@ -331,10 +379,7 @@ export async function getPermissionsSnapshot(
   userId: string,
   channelIds: readonly string[],
 ): Promise<{ version: number; server: string; channels: Record<string, string> }> {
-  const versionRow = await getPool().query<{ permissions_version: number }>(
-    `SELECT permissions_version FROM servers WHERE id = $1`,
-    [serverId],
-  );
+  const version = await readPermissionsVersion(serverId);
   const server = await computeMemberPermissions(serverId, userId);
   const channels: Record<string, string> = {};
   await Promise.all(
@@ -345,7 +390,7 @@ export async function getPermissionsSnapshot(
     }),
   );
   return {
-    version: versionRow.rows[0]?.permissions_version ?? 0,
+    version,
     server: serializePermissions(server),
     channels,
   };

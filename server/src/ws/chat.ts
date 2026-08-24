@@ -7,6 +7,7 @@ import {
   hasPermission,
   isChatServerMessage,
   Permission,
+  permissionsUpdateSchema,
   profileUpdateSchema,
   type ChatServerMessage,
   type FriendActivity,
@@ -45,6 +46,8 @@ import { pushChannelActivity } from "../services/push.js";
 import { getChannel, getChannelAudience } from "../services/servers.js";
 import {
   computeMemberPermissions,
+  listServerMemberIds,
+  readPermissionsVersion,
 } from "../services/permissions.js";
 // --- threads ---
 import { getThreadInfo } from "../services/threads.js";
@@ -104,6 +107,7 @@ const ACTIVITY_TOPIC = "chat.activity";
 const EVICT_TOPIC = "chat.evict";
 const PROFILE_TOPIC = "chat.profile";
 const FRIEND_TOPIC = "chat.friend";
+const PERMISSIONS_TOPIC = "chat.permissions";
 
 interface PresenceUser {
   id: string;
@@ -493,6 +497,46 @@ function deliverFriendActivity(
   const payload = encode({ type: "friend-activity", kind } as const);
   forEachAuthenticatedSocket((socket, user) => {
     if (socket.readyState === 1 && user.id === userId) {
+      socket.send(payload);
+    }
+  });
+}
+
+/**
+ * Tell every connected member of a server that their resolved bits may have
+ * changed. Content-free: the payload is a version, and each client refetches
+ * `GET /api/servers/:id/permissions`. Same addressing as `friend-activity`
+ * (per member, never a channel fan-out), same fire-and-forget.
+ */
+export async function notifyPermissionsUpdate(
+  serverId: string,
+): Promise<void> {
+  const version = await readPermissionsVersion(serverId);
+  const memberIds = await listServerMemberIds(serverId);
+  deliverPermissionsUpdate(serverId, version, memberIds);
+  if (isBusEnabled()) {
+    publishToCluster(PERMISSIONS_TOPIC, {
+      type: "permissions-update",
+      serverId,
+      version,
+    });
+  }
+}
+
+/** Test seam and local half. Membership is passed in so unit tests need no DB. */
+export function deliverPermissionsUpdate(
+  serverId: string,
+  version: number,
+  memberIds: readonly string[],
+): void {
+  const allowed = new Set(memberIds);
+  const payload = encode({
+    type: "permissions-update",
+    serverId,
+    version,
+  } as const);
+  forEachAuthenticatedSocket((socket, user) => {
+    if (socket.readyState === 1 && allowed.has(user.id)) {
       socket.send(payload);
     }
   });
@@ -1376,6 +1420,24 @@ subscribeToCluster(FRIEND_TOPIC, (data) => {
     return;
   }
   deliverFriendActivity(userId, kind);
+});
+
+subscribeToCluster(PERMISSIONS_TOPIC, (data) => {
+  const parsed = permissionsUpdateSchema.safeParse(data);
+  if (!parsed.success) {
+    return;
+  }
+  void listServerMemberIds(parsed.data.serverId)
+    .then((memberIds) => {
+      deliverPermissionsUpdate(
+        parsed.data.serverId,
+        parsed.data.version,
+        memberIds,
+      );
+    })
+    .catch((error) => {
+      console.error("[ws] permissions-update relay failed:", error);
+    });
 });
 
 /** The enum, asked rather than restated — one list, in shared. */

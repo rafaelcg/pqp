@@ -152,6 +152,8 @@ export function RolesSettingsSection({ serverId }: { serverId: string }) {
   const [name, setName] = useState("");
   const [newName, setNewName] = useState("");
   const [mentionable, setMentionable] = useState(false);
+  const [hoist, setHoist] = useState(false);
+  const [color, setColor] = useState<string | null>(null);
   const [permissions, setPermissions] = useState(0n);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -196,6 +198,8 @@ export function RolesSettingsSection({ serverId }: { serverId: string }) {
     if (next) {
       setName(next.isEveryone ? "@everyone" : next.name);
       setMentionable(next.mentionable);
+      setHoist(next.hoist);
+      setColor(next.color);
       setPermissions(rolePermissions(next));
     }
   }
@@ -211,6 +215,8 @@ export function RolesSettingsSection({ serverId }: { serverId: string }) {
     setSelectedId(role.id);
     setName(role.isEveryone ? "@everyone" : role.name);
     setMentionable(role.mentionable);
+    setHoist(role.hoist);
+    setColor(role.color);
     setPermissions(rolePermissions(role));
     setError(null);
   }
@@ -225,6 +231,8 @@ export function RolesSettingsSection({ serverId }: { serverId: string }) {
       await updateRole(selected.id, {
         name: selected.isEveryone ? undefined : name.trim(),
         mentionable,
+        hoist: selected.isEveryone ? undefined : hoist,
+        color: selected.isEveryone ? undefined : color,
         permissions: serializePermissions(
           selected.isEveryone
             ? clampEveryonePermissions(permissions)
@@ -316,6 +324,13 @@ export function RolesSettingsSection({ serverId }: { serverId: string }) {
                       : "text-paper-muted hover:bg-ink-3 hover:text-paper"
                   }`}
                 >
+                  {role.color && (
+                    <span
+                      className="mr-1.5 inline-block h-2 w-2 rounded-full"
+                      style={{ backgroundColor: role.color }}
+                      aria-hidden
+                    />
+                  )}
                   {role.isEveryone ? "@everyone" : role.name}
                 </button>
                 {!role.isEveryone && (
@@ -383,6 +398,37 @@ export function RolesSettingsSection({ serverId }: { serverId: string }) {
             onCheckedChange={setMentionable}
             label={t("roles.mentionable")}
           />
+          {!selected.isEveryone && (
+            <>
+              <Switch
+                checked={hoist}
+                onCheckedChange={setHoist}
+                label={t("roles.hoist")}
+                description={t("roles.hoistHint")}
+              />
+              <div className="flex items-center gap-2 px-2 py-1">
+                <label className="flex items-center gap-2 text-sm text-paper">
+                  {t("roles.color")}
+                  <input
+                    type="color"
+                    value={color ?? "#5865f2"}
+                    onChange={(event) => setColor(event.target.value)}
+                    className="h-7 w-10 cursor-pointer rounded-md border border-ink-4 bg-ink-2"
+                  />
+                </label>
+                {color && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setColor(null)}
+                  >
+                    {t("roles.colorClear")}
+                  </Button>
+                )}
+              </div>
+            </>
+          )}
           <fieldset className="space-y-3">
             <legend className="mb-1 text-xs font-bold uppercase tracking-wider text-paper-muted">
               {t("roles.permissions")}

@@ -2706,6 +2706,19 @@ UPDATE roles
  WHERE is_everyone
    AND (permissions & 262158) <> 0;
 
+-- Seeded Admin is hoisted so the member list matches the old Owner/Admins
+-- headings without hardcoding rank names.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM data_migrations WHERE name = 'admin_role_hoist_2026_08'
+  ) THEN
+    RETURN;
+  END IF;
+  UPDATE roles SET hoist = TRUE WHERE system_key = 'admin' AND NOT hoist;
+  INSERT INTO data_migrations (name) VALUES ('admin_role_hoist_2026_08');
+END $$;
+
 -- Who may VIEW this channel (the effective row: parent for a thread).
 -- Conversations never call this; channelVisibleSql keeps that branch as
 -- channel_members only.

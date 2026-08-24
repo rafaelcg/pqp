@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  CHAT_SERVER_MESSAGE_TYPES,
+  isChatServerMessage,
+} from "./chat.js";
+import {
   actorOutranksTarget,
   computePermissions,
   grantablePermissions,
@@ -9,6 +13,7 @@ import {
   PERMISSION_DEFAULT_EVERYONE,
   clampEveryonePermissions,
   Permission,
+  permissionsUpdateSchema,
   serializePermissions,
 } from "./permissions.js";
 
@@ -246,5 +251,26 @@ describe("grantablePermissions", () => {
       Permission.MANAGE_ROLES | Permission.SEND_MESSAGES,
     );
     void held;
+  });
+});
+
+describe("permissions-update frame", () => {
+  it("is not a channel-relayable chat frame", () => {
+    expect(CHAT_SERVER_MESSAGE_TYPES).not.toContain("permissions-update");
+    expect(isChatServerMessage({ type: "permissions-update" })).toBe(false);
+  });
+
+  it("parses a version-only payload", () => {
+    expect(
+      permissionsUpdateSchema.parse({
+        type: "permissions-update",
+        serverId: "11111111-1111-1111-1111-111111111111",
+        version: 3,
+      }),
+    ).toEqual({
+      type: "permissions-update",
+      serverId: "11111111-1111-1111-1111-111111111111",
+      version: 3,
+    });
   });
 });

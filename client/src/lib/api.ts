@@ -988,6 +988,7 @@ export const updateRole = (
     name?: string;
     color?: string | null;
     mentionable?: boolean;
+    hoist?: boolean;
     permissions?: string;
   },
 ) => patch<{ role: ServerRole }>(`/api/roles/${roleId}`, body);
@@ -1142,6 +1143,32 @@ export const fetchChannelMembers = (channelId: string) =>
       tag: string | null;
     }>;
   }>(`/api/channels/${channelId}/members`);
+
+export interface ChannelOverwrite {
+  targetType: "role" | "member";
+  targetId: string;
+  allow: string;
+  deny: string;
+}
+
+export const fetchChannelOverwrites = (channelId: string) =>
+  apiFetch<{ overwrites: ChannelOverwrite[] }>(
+    `/api/channels/${channelId}/overwrites`,
+  );
+
+export const putChannelOverwrite = (
+  channelId: string,
+  body: ChannelOverwrite,
+) => put<{ ok: boolean }>(`/api/channels/${channelId}/overwrites`, body);
+
+export const deleteChannelOverwrite = (
+  channelId: string,
+  targetType: "role" | "member",
+  targetId: string,
+) =>
+  del<{ ok: boolean }>(
+    `/api/channels/${channelId}/overwrites/${targetType}/${targetId}`,
+  );
 
 export const fetchWebhooks = (channelId: string) =>
   apiFetch<{ webhooks: Webhook[] }>(`/api/channels/${channelId}/webhooks`);

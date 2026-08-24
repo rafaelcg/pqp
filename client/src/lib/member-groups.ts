@@ -11,9 +11,10 @@ import type { UserStatus } from "@pqp/shared";
  *
  * THE RULES, AND WHY.
  *
- *  1. A HOISTED ROLE GETS ITS OWN SECTION, most senior first. Today that is
- *     `owner` then `admin`; `member` is not hoisted, which is what makes the
- *     plain "Online" section the residue rather than a fourth role heading.
+ *  1. A HOISTED ROLE GETS ITS OWN SECTION, most senior first. Owner is always
+ *     first and is keyed off rank, not a role row. Custom hoisted roles follow
+ *     in the order the caller passed (position descending). @everyone never
+ *     hoists. A person lands in the first hoisted role they hold.
  *  2. A ROLE SECTION HOLDS ONLY PEOPLE WHO ARE AROUND. An offline admin is in
  *     Offline, not in Admins — otherwise "Admins — 4" is a claim about the org
  *     chart while every other heading is a claim about who you can talk to, and
@@ -21,18 +22,22 @@ import type { UserStatus } from "@pqp/shared";
  *  3. OFFLINE IS ONE SECTION AT THE BOTTOM, whatever anybody's rank.
  *  4. EMPTY SECTIONS DO NOT EXIST. A server with no admins online must not
  *     render "Admins — 0"; a heading with nothing under it is noise that scales
- *     with the number of roles, which is the direction this is about to grow.
+ *     with the number of roles.
  *  5. WITHIN A SECTION: display name, case- and accent-insensitively, then id.
  *     The id tie-break is not cosmetic — two people called "ana" would
  *     otherwise swap places between renders, and this list re-renders every
  *     time anybody's status changes.
  *
- * `hoistedRoles` is a parameter rather than a constant so that custom roles —
- * which this product does not have yet — arrive as a longer array and a label
- * lookup, not as a rewrite of this file.
+ * Rank promotion to `admin` does not write a `member_roles` row. Callers pass
+ * `effectiveRoleIds` so a rank-admin still lands in the seeded Admin section.
  */
 
 export type MemberRole = "owner" | "admin" | "member";
+
+export interface HoistedRole {
+  id: string;
+  name: string;
+}
 
 /** Everything this module needs to know about one person. */
 export interface GroupableMember {
@@ -40,6 +45,7 @@ export interface GroupableMember {
   displayName: string;
   nickname?: string | null;
   role: MemberRole;
+  roleIds?: readonly string[];
   /**
    * Absent means an API that predates status, or a payload that never carried
    * one (a conversation's participants). Read as "not around" — see `isAround`.
@@ -59,13 +65,27 @@ export interface MemberSection<T> {
   /** Stable across renders: React keys and the collapse state hang off it. */
   id: string;
   kind: MemberSectionKind;
-  /** Set only when `kind` is `"role"`. */
+  /** Set only when `kind` is `"role"` and the section is the owner bucket. */
   role?: MemberRole;
+  /** Heading for a hoisted custom role. Owner uses i18n instead. */
+  label?: string;
   members: T[];
 }
 
-/** Roles with a heading of their own, most senior first. */
-export const HOISTED_ROLES: readonly MemberRole[] = ["owner", "admin"];
+/**
+ * Rank `admin` does not grant the seeded Admin role. Fold that id in here so
+ * grouping and colour both see it, without `groupMembers` knowing about rank.
+ */
+export function effectiveRoleIds(
+  member: { role: MemberRole; roleIds?: readonly string[] },
+  adminRoleId: string | null,
+): string[] {
+  const ids = [...(member.roleIds ?? [])];
+  if (member.role === "admin" && adminRoleId && !ids.includes(adminRoleId)) {
+    ids.push(adminRoleId);
+  }
+  return ids;
+}
 
 /**
  * Past this many offline members the Offline section starts closed.
@@ -113,11 +133,12 @@ export function compareMembers(
 
 export function groupMembers<T extends GroupableMember>(
   members: readonly T[],
-  hoistedRoles: readonly MemberRole[] = HOISTED_ROLES,
+  hoistedRoles: readonly HoistedRole[] = [],
 ): MemberSection<T>[] {
-  const hoisted = new Map<MemberRole, T[]>(
-    hoistedRoles.map((role) => [role, []]),
+  const byHoisted = new Map<string, T[]>(
+    hoistedRoles.map((role) => [role.id, []]),
   );
+  const owners: T[] = [];
   const online: T[] = [];
   const offline: T[] = [];
 
@@ -126,22 +147,35 @@ export function groupMembers<T extends GroupableMember>(
       offline.push(member);
       continue;
     }
-    const bucket = hoisted.get(member.role);
-    if (bucket) {
-      bucket.push(member);
+    if (member.role === "owner") {
+      owners.push(member);
+      continue;
+    }
+    const held = new Set(member.roleIds ?? []);
+    const match = hoistedRoles.find((role) => held.has(role.id));
+    if (match) {
+      byHoisted.get(match.id)!.push(member);
     } else {
       online.push(member);
     }
   }
 
   const sections: MemberSection<T>[] = [];
+  if (owners.length > 0) {
+    sections.push({
+      id: "role:owner",
+      kind: "role",
+      role: "owner",
+      members: owners.sort(compareMembers),
+    });
+  }
   for (const role of hoistedRoles) {
-    const bucket = hoisted.get(role) ?? [];
+    const bucket = byHoisted.get(role.id) ?? [];
     if (bucket.length > 0) {
       sections.push({
-        id: `role:${role}`,
+        id: `role:${role.id}`,
         kind: "role",
-        role,
+        label: role.name,
         members: bucket.sort(compareMembers),
       });
     }

@@ -14,6 +14,7 @@ import {
 } from "./attachments.js";
 import { embedSchema } from "./embeds.js";
 import { friendActivitySchema } from "./friends.js";
+import { permissionsUpdateSchema } from "./permissions.js";
 import { sanctionNoticeSchema } from "./sanctions.js";
 import { setIdleMessageSchema } from "./status.js";
 // --- threads ---
@@ -259,6 +260,12 @@ export const chatServerMessageSchema = z.discriminatedUnion("type", [
   // see the note on `friendActivitySchema`, and its absence from the list
   // below.
   friendActivitySchema,
+  // Same addressing as `friend-activity`: each member's snapshot differs, so
+  // this is delivered per socket, never through the channel relay. Listing it
+  // in `CHAT_SERVER_MESSAGE_TYPES` would drop it (no channel id) or, worse,
+  // hand a server-wide version bump to whoever happened to be looking at a
+  // channel the frame named.
+  permissionsUpdateSchema,
 ]);
 
 /**
@@ -324,6 +331,11 @@ export const chatClientMessageSchema = z
  * topic (`chat.friend`) keyed by user id. Listing it here would hand a "you
  * have a friend request" nudge to a whole channel — content-free, so not a
  * disclosure, but a badge appearing on strangers' screens is still a bug.
+ *
+ * `permissions-update` is absent for the same reason as `friend-activity`: it
+ * is addressed to a server's members, names no channel, and travels on
+ * `chat.permissions`. The payload is a version number; each client refetches
+ * its own snapshot. Fanning it out via the channel relay would deliver nothing.
  */
 export const CHAT_SERVER_MESSAGE_TYPES = [
   "message-broadcast",

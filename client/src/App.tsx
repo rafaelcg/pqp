@@ -636,7 +636,11 @@ function MainAppContent({
   friendsRef.current = friends;
   /** The server the sidebar is showing, or null in the conversation view. */
   const selectedServerId = selectionServerId(selection);
+  const selectedServerIdRef = useRef<string | null>(null);
+  selectedServerIdRef.current = selectedServerId;
   const perms = usePermissions(selectedServerId);
+  const permsRef = useRef(perms);
+  permsRef.current = perms;
   /** Which server owns the active call — `channels` only holds the selected one. */
   const voiceServerIdRef = useRef<string | null>(null);
   /**
@@ -1538,6 +1542,64 @@ function MainAppContent({
           // whole answer to "B is looking at a channel; what do they see?".
           if (message.type === "friend-activity") {
             friendsRef.current.applyNudge(message.kind);
+            return;
+          }
+
+          if (message.type === "permissions-update") {
+            if (message.serverId !== selectedServerIdRef.current) {
+              return;
+            }
+            permsRef.current.refresh(message.version);
+            setMemberRosterNudge((n) => n + 1);
+            void Promise.all([
+              fetchChannels(message.serverId),
+              fetchRoles(message.serverId).then(
+                (res) => res,
+                () => null,
+              ),
+              fetchMembers(message.serverId).then(
+                (res) => res,
+                () => null,
+              ),
+            ])
+              .then(([{ channels: list }, rolesRes, membersRes]) => {
+                if (selectedServerIdRef.current !== message.serverId) {
+                  return;
+                }
+                setChannels(list);
+                if (rolesRes) {
+                  setServerRoles(rolesRes.roles);
+                  setMentionableRoles(
+                    rolesRes.roles.map((role) => ({
+                      id: role.id,
+                      name: role.name,
+                      mentionable: role.mentionable,
+                      isEveryone: role.isEveryone,
+                    })),
+                  );
+                }
+                if (membersRes) {
+                  setServerMembers(membersRes.members);
+                  setMentionMembers(membersRes.members);
+                  setMemberRoles(
+                    new Map(
+                      membersRes.members.map((member) => [member.id, member.role]),
+                    ),
+                  );
+                }
+                const current = selectedChannelIdRef.current;
+                if (current && !list.some((channel) => channel.id === current)) {
+                  const next =
+                    list.find((channel) => channel.type === "text") ?? list[0];
+                  if (next) {
+                    setSelectedChannelId(next.id);
+                    selectedChannelIdRef.current = next.id;
+                  }
+                }
+              })
+              .catch(() => {
+                // Next navigation will refetch.
+              });
             return;
           }
 
@@ -2842,6 +2904,7 @@ function MainAppContent({
     selectedServer?.role === "owner" ||
     selectedServer?.role === "admin" ||
     perms.can(Permission.MANAGE_CHANNELS);
+  const canManageRoles = perms.can(Permission.MANAGE_ROLES);
 
   const voiceChannel =
     voiceState.voiceChannelId
@@ -3098,13 +3161,16 @@ function MainAppContent({
               {t("chrome.topic")}
             </button>
           )}
-          {canManage && selectedChannel.isPrivate && (
+          {(canManageRoles || (canManage && selectedChannel.isPrivate)) &&
+            selectedChannel.kind === "server" && (
             <button
               type="button"
               className="rounded-md px-2 py-1 text-xs text-signal hover:bg-ink-3"
               onClick={() => setChannelMembersChannel(selectedChannel)}
             >
-              {t("chrome.access")}
+              {selectedChannel.isPrivate
+                ? t("chrome.access")
+                : t("channelPerms.title")}
             </button>
           )}
           {/* The roster toggle, last in the row — the same position and the
@@ -3521,6 +3587,7 @@ function MainAppContent({
           channels={channels}
           selectedChannelId={selectedChannelId}
           canManage={!!canManage}
+          canManageRoles={canManageRoles}
           isLoading={channelsLoading}
           voiceOccupancy={voiceState.occupancy}
           speakingPeerIds={voiceState.speakingPeerIds}
@@ -3834,6 +3901,7 @@ function MainAppContent({
           voiceChannels={channels
             .filter((c) => c.type === "voice")
             .map((c) => ({ id: c.id, name: c.name }))}
+          roles={serverRoles}
         />
       )}
 
@@ -4026,7 +4094,12 @@ function MainAppContent({
         open={channelMembersChannel !== null}
         channelId={channelMembersChannel?.id ?? null}
         channelName={channelMembersChannel?.name ?? null}
+        channelType={channelMembersChannel?.type ?? "text"}
+        isPrivate={channelMembersChannel?.isPrivate ?? false}
         serverId={selectedServerId}
+        roles={serverRoles}
+        canManageRoles={canManageRoles}
+        canManageAccess={!!canManage}
         onClose={() => setChannelMembersChannel(null)}
       />
 

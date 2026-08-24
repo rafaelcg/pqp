@@ -75,6 +75,7 @@ vi.mock("../services/threads.js", () => ({
 
 const {
   broadcastToChannel,
+  deliverPermissionsUpdate,
   handleChatMessage,
   notifyFriendActivity,
   resetChatRateLimits,
@@ -340,6 +341,72 @@ describe("notifyFriendActivity", () => {
     const other = connect(bystander);
 
     expect(() => notifyFriendActivity(asked, "request")).not.toThrow();
+    expect(other.received).toHaveLength(0);
+  });
+});
+
+/**
+ * Same addressing as the friend nudge: one server’s members, never a channel
+ * fan-out. Membership is passed in so this suite still runs without Postgres.
+ */
+describe("deliverPermissionsUpdate", () => {
+  const member = "11111111-1111-1111-1111-111111111111";
+  const bystander = "22222222-2222-2222-2222-222222222222";
+  const serverId = "33333333-3333-3333-3333-333333333333";
+  const open: Recorder[] = [];
+
+  function connect(userId: string, readyState = 1): Recorder {
+    const recorder = recordingSocket(readyState);
+    setAuthenticatedSocket(recorder.socket, asUser(userId));
+    open.push(recorder);
+    return recorder;
+  }
+
+  afterEach(() => {
+    for (const recorder of open) {
+      deleteAuthenticatedSocket(recorder.socket);
+    }
+    open.length = 0;
+  });
+
+  it("reaches every socket a member holds", () => {
+    const laptop = connect(member);
+    const phone = connect(member);
+
+    deliverPermissionsUpdate(serverId, 7, [member]);
+
+    for (const recorder of [laptop, phone]) {
+      expect(framesOfType(recorder.received, "permissions-update")).toEqual([
+        { type: "permissions-update", serverId, version: 7 },
+      ]);
+    }
+  });
+
+  it("reaches nobody else", () => {
+    const target = connect(member);
+    const other = connect(bystander);
+
+    deliverPermissionsUpdate(serverId, 4, [member]);
+
+    expect(framesOfType(target.received, "permissions-update")).toHaveLength(1);
+    expect(other.received).toHaveLength(0);
+  });
+
+  it("skips a socket that is not open rather than throwing at the route", () => {
+    const closing = connect(member, 3 /* CLOSED */);
+
+    expect(() =>
+      deliverPermissionsUpdate(serverId, 1, [member]),
+    ).not.toThrow();
+    expect(closing.received).toHaveLength(0);
+  });
+
+  it("is a no-op when nobody in the member list is connected", () => {
+    const other = connect(bystander);
+
+    expect(() =>
+      deliverPermissionsUpdate(serverId, 1, [member]),
+    ).not.toThrow();
     expect(other.received).toHaveLength(0);
   });
 });

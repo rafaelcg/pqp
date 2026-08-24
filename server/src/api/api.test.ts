@@ -64,6 +64,7 @@ const { getPool, initDb, closePool } = await import("../db.js");
 const { safeFetch } = await import("../lib/safe-fetch.js");
 const { upsertUser } = await import("../services/users.js");
 const { memberHasPermission } = await import("../services/permissions.js");
+const { getChannelAudience } = await import("../services/servers.js");
 const { handleChatMessage, resetChatRateLimits } = await import(
   "../ws/chat.js"
 );
@@ -802,6 +803,146 @@ describeDb("API authorization", () => {
           started.body.thread.channelId,
         ),
       ).toBe(false);
+    });
+
+    it("keeps @everyone VIEW locked to the private-channel toggle", async () => {
+      const { serverId, textChannelId } = await makeServer();
+      const listed = await call<{
+        roles: Array<{ id: string; isEveryone: boolean }>;
+      }>(owner, "GET", `/api/servers/${serverId}/roles`);
+      const everyone = listed.body.roles.find((role) => role.isEveryone)!;
+      expect(
+        (
+          await call(owner, "PATCH", `/api/channels/${textChannelId}`, {
+            isPrivate: true,
+          })
+        ).status,
+      ).toBe(200);
+
+      const overwritten = await call(
+        owner,
+        "PUT",
+        `/api/channels/${textChannelId}/overwrites`,
+        {
+          targetType: "role",
+          targetId: everyone.id,
+          allow: serializePermissions(Permission.VIEW_CHANNEL),
+          deny: "0",
+        },
+      );
+      expect(overwritten.status).toBe(200);
+
+      const rows = await call<{
+        overwrites: Array<{
+          targetId: string;
+          allow: string;
+          deny: string;
+        }>;
+      }>(owner, "GET", `/api/channels/${textChannelId}/overwrites`);
+      const everyoneRow = rows.body.overwrites.find(
+        (row) => row.targetId === everyone.id,
+      )!;
+      expect(BigInt(everyoneRow.deny) & Permission.VIEW_CHANNEL).toBe(
+        Permission.VIEW_CHANNEL,
+      );
+      expect(BigInt(everyoneRow.allow) & Permission.VIEW_CHANNEL).toBe(0n);
+    });
+
+    it("lets a staff role send while @everyone cannot", async () => {
+      const { serverId, textChannelId } = await makeServer();
+      const listed = await call<{
+        roles: Array<{ id: string; isEveryone: boolean }>;
+      }>(owner, "GET", `/api/servers/${serverId}/roles`);
+      const everyone = listed.body.roles.find((role) => role.isEveryone)!;
+      expect(
+        (
+          await call(owner, "PUT", `/api/channels/${textChannelId}/overwrites`, {
+            targetType: "role",
+            targetId: everyone.id,
+            allow: "0",
+            deny: serializePermissions(Permission.SEND_MESSAGES),
+          })
+        ).status,
+      ).toBe(200);
+
+      expect(
+        await memberHasPermission(
+          serverId,
+          member.id,
+          Permission.SEND_MESSAGES,
+          textChannelId,
+        ),
+      ).toBe(false);
+
+      const staff = await call<{ role: { id: string } }>(
+        owner,
+        "POST",
+        `/api/servers/${serverId}/roles`,
+        { name: "Staff", permissions: serializePermissions(Permission.SEND_MESSAGES) },
+      );
+      expect(staff.status).toBe(201);
+      expect(
+        (
+          await call(owner, "PUT", `/api/channels/${textChannelId}/overwrites`, {
+            targetType: "role",
+            targetId: staff.body.role.id,
+            allow: serializePermissions(Permission.SEND_MESSAGES),
+            deny: "0",
+          })
+        ).status,
+      ).toBe(200);
+      expect(
+        (
+          await call(
+            owner,
+            "PUT",
+            `/api/servers/${serverId}/members/${member.id}/roles/${staff.body.role.id}`,
+          )
+        ).status,
+      ).toBe(200);
+
+      expect(
+        await memberHasPermission(
+          serverId,
+          member.id,
+          Permission.SEND_MESSAGES,
+          textChannelId,
+        ),
+      ).toBe(true);
+    });
+
+    it("hides a channel from a role denied VIEW", async () => {
+      const { serverId, textChannelId } = await makeServer();
+      const colour = await call<{ role: { id: string } }>(
+        owner,
+        "POST",
+        `/api/servers/${serverId}/roles`,
+        { name: "colour" },
+      );
+      expect(colour.status).toBe(201);
+      expect(
+        (
+          await call(
+            owner,
+            "PUT",
+            `/api/servers/${serverId}/members/${member.id}/roles/${colour.body.role.id}`,
+          )
+        ).status,
+      ).toBe(200);
+      expect(
+        (
+          await call(owner, "PUT", `/api/channels/${textChannelId}/overwrites`, {
+            targetType: "role",
+            targetId: colour.body.role.id,
+            allow: "0",
+            deny: serializePermissions(Permission.VIEW_CHANNEL),
+          })
+        ).status,
+      ).toBe(200);
+
+      const audience = await getChannelAudience(textChannelId);
+      expect(audience?.has(member.id)).toBe(false);
+      expect(audience?.has(owner.id)).toBe(true);
     });
   });
 

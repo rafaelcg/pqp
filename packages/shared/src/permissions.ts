@@ -337,3 +337,15 @@ export const memberPermissionsSchema = z.object({
 });
 
 export type MemberPermissions = z.infer<typeof memberPermissionsSchema>;
+
+/**
+ * Content-free nudge that a member's resolved bits may have changed.
+ * Addressed to that server's members, never fanned out on a channel.
+ */
+export const permissionsUpdateSchema = z.object({
+  type: z.literal("permissions-update"),
+  serverId: z.string().uuid(),
+  version: z.number().int().nonnegative(),
+});
+
+export type PermissionsUpdate = z.infer<typeof permissionsUpdateSchema>;

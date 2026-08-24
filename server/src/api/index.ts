@@ -107,6 +107,7 @@ import {
   evictVoiceUser,
   evictVoiceUsersExcept,
   forEachAuthenticatedSocket,
+  notifyPermissionsUpdate,
   resolveEmbedInBackground,
   resolveStatuses,
 } from "../ws/index.js";
@@ -371,11 +372,15 @@ import {
 } from "../services/users.js";
 import {
   canActOnMember,
+  coerceEveryoneViewOverwrite,
   computeMemberPermissions,
+  bumpPermissionsVersion,
+  getEveryoneRoleId,
   getMemberHierarchy,
   getPermissionsSnapshot,
   memberHasPermission,
   Permission,
+  restorePrivateEveryoneViewOverwrite,
 } from "../services/permissions.js";
 import {
   assertCanEditRole,
@@ -2669,6 +2674,9 @@ router.patch("/api/channels/:channelId", async ({ req, user }, { channelId }) =>
       evictChannelViewers(threadId, { exceptUserIds: [...allowed] });
     }
   }
+  if (body.isPrivate !== undefined && body.isPrivate !== channel.is_private) {
+    pingPermissions(channel.server_id);
+  }
 
   // `channel` (read for the authorization check above) already carries the
   // pre-update row, so the diff costs nothing extra to compute here.
@@ -2791,6 +2799,8 @@ router.post(
       throw new HttpError(400, "User must be a server member");
     }
     await addChannelMember(channelId!, body.userId);
+    await bumpPermissionsVersion(channel.server_id);
+    pingPermissions(channel.server_id);
     return created({ ok: true });
   },
 );
@@ -2813,6 +2823,8 @@ router.delete(
         evictChannelViewers(threadId, { onlyUserIds: [userId!] });
       }
     }
+    await bumpPermissionsVersion(channel.server_id);
+    pingPermissions(channel.server_id);
     return { ok: true };
   },
 );
@@ -3301,15 +3313,16 @@ router.post("/api/servers/:serverId/roles", async ({ req, user }, { serverId }) 
     mentionable: body.mentionable,
     permissions,
   });
-  await logAudit({
-    serverId: serverId!,
-    actorId: user.id,
-    action: "role.create",
-    targetType: "role",
-    targetId: role.id,
-    changes: [{ key: "name", old: null, new: role.name }],
-  });
-  return created({ role: mapRole(role) });
+    await logAudit({
+      serverId: serverId!,
+      actorId: user.id,
+      action: "role.create",
+      targetType: "role",
+      targetId: role.id,
+      changes: [{ key: "name", old: null, new: role.name }],
+    });
+    pingPermissions(serverId!);
+    return created({ role: mapRole(role) });
 });
 
 router.patch(
@@ -3330,6 +3343,7 @@ router.patch(
       targetId: serverId!,
       changes: [{ key: "order", old: null, new: body.roleIds }],
     });
+    pingPermissions(serverId!);
     return { ok: true };
   },
 );
@@ -3367,6 +3381,7 @@ router.patch("/api/roles/:roleId", async ({ req, user }, { roleId }) => {
     targetId: role.id,
     changes: [{ key: "name", old: role.name, new: updated.name }],
   });
+  pingPermissions(role.server_id);
   return { role: mapRole(updated) };
 });
 
@@ -3385,6 +3400,7 @@ router.delete("/api/roles/:roleId", async ({ user }, { roleId }) => {
     targetId: role.id,
     changes: [{ key: "name", old: role.name, new: null }],
   });
+  pingPermissions(role.server_id);
   return { ok: true };
 });
 
@@ -3409,6 +3425,7 @@ router.put(
       targetId: userId!,
       changes: [{ key: "roleId", old: null, new: roleId }],
     });
+    pingPermissions(serverId!);
     return { ok: true };
   },
 );
@@ -3434,9 +3451,29 @@ router.delete(
       targetId: userId!,
       changes: [{ key: "roleId", old: roleId, new: null }],
     });
+    pingPermissions(serverId!);
     return { ok: true };
   },
 );
+
+async function evictViewersOutsideAudience(channelId: string): Promise<void> {
+  const audience = await getChannelAudience(channelId);
+  if (!audience) {
+    return;
+  }
+  const allowed = [...audience.userIds];
+  evictChannelViewers(channelId, { exceptUserIds: allowed });
+  evictVoiceUsersExcept(channelId, new Set(allowed));
+  for (const threadId of await listThreadChannelIds(channelId)) {
+    evictChannelViewers(threadId, { exceptUserIds: allowed });
+  }
+}
+
+function pingPermissions(serverId: string): void {
+  void notifyPermissionsUpdate(serverId).catch((error) => {
+    console.error("[api] permissions-update failed:", error);
+  });
+}
 
 router.get(
   "/api/channels/:channelId/overwrites",
@@ -3465,22 +3502,46 @@ router.put(
       channel.server_id,
       user.id,
     );
-    const allow = parsePermissions(body.allow);
-    const deny = parsePermissions(body.deny);
+    let allow = parsePermissions(body.allow);
+    let deny = parsePermissions(body.deny);
     if (
       (actorPerms & Permission.ADMINISTRATOR) !== Permission.ADMINISTRATOR &&
       ((allow & ~actorPerms) !== 0n || (deny & ~actorPerms) !== 0n)
     ) {
       throw new Forbidden("You can only overwrite permissions you have");
     }
-    await upsertChannelOverwrite(
-      channelId!,
-      channel.server_id,
-      body.targetType,
-      body.targetId,
-      allow,
-      deny,
-    );
+    const everyoneId = await getEveryoneRoleId(channel.server_id);
+    if (body.targetType === "role" && body.targetId === everyoneId) {
+      const coerced = coerceEveryoneViewOverwrite(
+        channel.is_private,
+        allow,
+        deny,
+      );
+      allow = coerced.allow;
+      deny = coerced.deny;
+    }
+    if (allow === 0n && deny === 0n) {
+      await deleteChannelOverwrite(
+        channelId!,
+        channel.server_id,
+        body.targetType,
+        body.targetId,
+      );
+    } else {
+      await upsertChannelOverwrite(
+        channelId!,
+        channel.server_id,
+        body.targetType,
+        body.targetId,
+        allow,
+        deny,
+      );
+    }
+    if (channel.is_private && body.targetType === "role" && body.targetId === everyoneId) {
+      await restorePrivateEveryoneViewOverwrite(channelId!, channel.server_id);
+    }
+    await evictViewersOutsideAudience(channelId!);
+    pingPermissions(channel.server_id);
     await logAudit({
       serverId: channel.server_id,
       actorId: user.id,
@@ -3515,6 +3576,14 @@ router.delete(
       targetType,
       targetId!,
     );
+    if (channel.is_private && targetType === "role") {
+      const everyoneId = await getEveryoneRoleId(channel.server_id);
+      if (targetId === everyoneId) {
+        await restorePrivateEveryoneViewOverwrite(channelId!, channel.server_id);
+      }
+    }
+    await evictViewersOutsideAudience(channelId!);
+    pingPermissions(channel.server_id);
     return { ok: true };
   },
 );
@@ -3584,6 +3653,7 @@ router.patch(
       targetId: userId!,
       changes: [{ key: "role", old: previousRole, new: body.role }],
     });
+    pingPermissions(serverId!);
     return { ok: true };
   },
 );

@@ -87,7 +87,7 @@ export function corsHeaders(req: IncomingMessage): Record<string, string> {
     // cross-origin JS can read the `ETag` back off the response.
     "Access-Control-Allow-Headers": "Content-Type, Authorization, If-None-Match",
     "Access-Control-Expose-Headers": "ETag",
-    "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
     "Access-Control-Max-Age": "600",
   };
 

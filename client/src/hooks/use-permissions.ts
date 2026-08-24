@@ -1,21 +1,26 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   hasPermission,
   parsePermissions,
   type PermissionBit,
 } from "@pqp/shared";
 import { fetchMemberPermissions } from "@/lib/api";
+import { shouldApplyPermissionsVersion } from "@/lib/permissions-refresh";
 
 export function usePermissions(serverId: string | null) {
   const [serverBits, setServerBits] = useState(0n);
   const [channelBits, setChannelBits] = useState<Record<string, bigint>>({});
   const [version, setVersion] = useState(0);
+  const [bump, setBump] = useState(0);
+  const versionRef = useRef(0);
+  versionRef.current = version;
 
   useEffect(() => {
     if (!serverId) {
       setServerBits(0n);
       setChannelBits({});
       setVersion(0);
+      versionRef.current = 0;
       return;
     }
     let cancelled = false;
@@ -31,18 +36,27 @@ export function usePermissions(serverId: string | null) {
         }
         setChannelBits(next);
         setVersion(snapshot.version);
+        versionRef.current = snapshot.version;
       })
       .catch(() => {
         if (!cancelled) {
           setServerBits(0n);
           setChannelBits({});
           setVersion(0);
+          versionRef.current = 0;
         }
       });
     return () => {
       cancelled = true;
     };
-  }, [serverId]);
+  }, [serverId, bump]);
+
+  const refresh = useCallback((incomingVersion?: number) => {
+    if (!shouldApplyPermissionsVersion(versionRef.current, incomingVersion)) {
+      return;
+    }
+    setBump((current) => current + 1);
+  }, []);
 
   const can = useCallback(
     (bit: PermissionBit | bigint, channelId?: string | null) => {
@@ -55,5 +69,5 @@ export function usePermissions(serverId: string | null) {
     [channelBits, serverBits],
   );
 
-  return { can, version, serverBits };
+  return { can, version, serverBits, refresh };
 }

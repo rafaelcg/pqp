@@ -331,7 +331,7 @@ One real bug surfaced by testing with a pre-existing top-level channel already a
 
 *high pain · large · permissions*
 
-**Shipped 2026-08-24.** Discord 8-step overwrites, 20 bits, seeded `@everyone` + Admin, nicknames, `@everyone`/`@here`. Still open: hoist UI, role colours, live `permissions-update` WS frame.
+**Shipped 2026-08-24.** Discord 8-step overwrites, 20 bits, seeded `@everyone` + Admin, nicknames, `@everyone`/`@here`. Channel overwrite editor, hoist UI, role colours, live `permissions-update` WS frame. Unenforced bits (`ATTACH_FILES`, `READ_MESSAGE_HISTORY`, `SPEAK`, `MANAGE_SERVER`) stay hidden in both editors.
 
 **Why it matters.** You cannot make someone a channel moderator without also handing them kick, ban and server settings, you cannot make a read-only announcement channel, and you cannot keep an admin out of a founders-only channel because the admin bypass is hardcoded.
 
