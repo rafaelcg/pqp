@@ -2558,6 +2558,28 @@ CREATE TABLE IF NOT EXISTS member_roles (
 CREATE INDEX IF NOT EXISTS idx_member_roles_user_server
   ON member_roles (user_id, server_id);
 
+-- Role grants are membership. Kick, ban, and leave delete server_members;
+-- without this FK those rows survived, so a rejoining moderator kept KICK /
+-- BAN / MANAGE_ROLES. Sweep orphans first so the constraint can land on a
+-- database that already ran the table create without it.
+DELETE FROM member_roles mr
+ WHERE NOT EXISTS (
+   SELECT 1 FROM server_members sm
+    WHERE sm.server_id = mr.server_id AND sm.user_id = mr.user_id
+ );
+
+DO $$
+BEGIN
+  ALTER TABLE member_roles DROP CONSTRAINT IF EXISTS member_roles_membership_fk;
+  ALTER TABLE member_roles
+    ADD CONSTRAINT member_roles_membership_fk
+    FOREIGN KEY (server_id, user_id)
+    REFERENCES server_members (server_id, user_id)
+    ON DELETE CASCADE;
+EXCEPTION
+  WHEN others THEN NULL;
+END $$;
+
 CREATE TABLE IF NOT EXISTS channel_overwrites (
   channel_id UUID NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
   target_type TEXT NOT NULL CHECK (target_type IN ('role', 'member')),

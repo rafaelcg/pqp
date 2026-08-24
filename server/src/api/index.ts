@@ -3396,6 +3396,9 @@ router.put(
       throw new NotFound("Role not found");
     }
     await assertCanEditRole(user.id, role);
+    if (!(await isServerMember(serverId!, userId!))) {
+      throw new NotFound("Member not found");
+    }
     await requireOutranked(serverId!, user.id, userId!, "kick");
     await assignRole(serverId!, userId!, roleId!);
     await logAudit({
@@ -3418,6 +3421,9 @@ router.delete(
       throw new NotFound("Role not found");
     }
     await assertCanEditRole(user.id, role);
+    if (!(await isServerMember(serverId!, userId!))) {
+      throw new NotFound("Member not found");
+    }
     await requireOutranked(serverId!, user.id, userId!, "kick");
     await unassignRole(serverId!, userId!, roleId!);
     await logAudit({

@@ -686,6 +686,74 @@ describeDb("API authorization", () => {
       expect(byOwner.status).toBe(200);
     });
 
+    it("drops role grants on kick so they do not return on rejoin", async () => {
+      const { serverId } = await makeServer();
+      const colour = await call<{ role: { id: string } }>(
+        owner,
+        "POST",
+        `/api/servers/${serverId}/roles`,
+        { name: "colour" },
+      );
+      expect(colour.status).toBe(201);
+      expect(
+        (
+          await call(
+            owner,
+            "PUT",
+            `/api/servers/${serverId}/members/${member.id}/roles/${colour.body.role.id}`,
+          )
+        ).status,
+      ).toBe(200);
+
+      expect(
+        (
+          await call(owner, "DELETE", `/api/servers/${serverId}/members/${member.id}`, {
+            ban: false,
+          })
+        ).status,
+      ).toBe(200);
+
+      const leftover = await getPool().query(
+        `SELECT 1 FROM member_roles WHERE server_id = $1 AND user_id = $2`,
+        [serverId, member.id],
+      );
+      expect(leftover.rowCount).toBe(0);
+
+      const invite = await call<{ invite: { code: string } }>(
+        owner,
+        "POST",
+        `/api/servers/${serverId}/invites`,
+        {},
+      );
+      expect(
+        (await call(member, "POST", `/api/invites/${invite.body.invite.code}/join`))
+          .status,
+      ).toBe(200);
+
+      const restored = await getPool().query(
+        `SELECT 1 FROM member_roles WHERE server_id = $1 AND user_id = $2`,
+        [serverId, member.id],
+      );
+      expect(restored.rowCount).toBe(0);
+    });
+
+    it("refuses to grant a role to someone who is not in the server", async () => {
+      const { serverId } = await makeServer();
+      const colour = await call<{ role: { id: string } }>(
+        owner,
+        "POST",
+        `/api/servers/${serverId}/roles`,
+        { name: "colour" },
+      );
+      expect(colour.status).toBe(201);
+      const granted = await call(
+        owner,
+        "PUT",
+        `/api/servers/${serverId}/members/${outsider.id}/roles/${colour.body.role.id}`,
+      );
+      expect(granted.status).toBe(404);
+    });
+
     it("applies a parent-channel send deny to that channel's threads", async () => {
       const { serverId, textChannelId } = await makeServer();
       const listed = await call<{
