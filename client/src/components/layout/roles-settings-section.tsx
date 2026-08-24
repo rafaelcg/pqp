@@ -20,7 +20,22 @@ import {
   updateRole,
   type ServerRole,
 } from "@/lib/api";
+import { cssColorToRgb, rgbToHex } from "@/lib/oklch";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
+
+/** Native colour input needs a six-digit hex. Read the accent, never a hex literal. */
+function pickerFace(color: string | null): string {
+  if (color) {
+    return color;
+  }
+  const raw =
+    typeof document === "undefined"
+      ? ""
+      : getComputedStyle(document.documentElement)
+          .getPropertyValue("--color-accent")
+          .trim();
+  return rgbToHex(cssColorToRgb(raw, { l: 0.88, c: 0.19, h: 125 }));
+}
 
 const FLAG_LABEL: Record<PermissionFlagKey, MessageKey> = {
   CREATE_INVITE: "roles.perm.CREATE_INVITE",
@@ -411,7 +426,7 @@ export function RolesSettingsSection({ serverId }: { serverId: string }) {
                   {t("roles.color")}
                   <input
                     type="color"
-                    value={color ?? "#5865f2"}
+                    value={pickerFace(color)}
                     onChange={(event) => setColor(event.target.value)}
                     className="h-7 w-10 cursor-pointer rounded-md border border-ink-4 bg-ink-2"
                   />

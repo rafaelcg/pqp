@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cssColorToRgb, oklchToRgb, parseOklch } from "./oklch";
+import { cssColorToRgb, oklchToRgb, parseOklch, rgbToHex } from "./oklch";
 
 /**
  * Pinned against a real browser.
@@ -87,6 +87,13 @@ describe("parseOklch", () => {
     expect(parseOklch("#baed4d")).toBeNull();
     expect(parseOklch("rebeccapurple")).toBeNull();
     expect(parseOklch("")).toBeNull();
+  });
+});
+
+describe("rgbToHex", () => {
+  it("writes the six-digit form a colour input can take", () => {
+    expect(rgbToHex(oklchToRgb({ l: 0, c: 0, h: 0 }))).toBe("#000000");
+    expect(rgbToHex(oklchToRgb({ l: 1, c: 0, h: 0 }))).toBe("#ffffff");
   });
 });
 
