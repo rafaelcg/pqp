@@ -107,6 +107,19 @@ interface MetricsBody {
     messages24h: number;
   }[];
   acquisition: { days: number; total: number; rows: unknown[] };
+  connections: {
+    ofUsers: number;
+    anyProvider: number;
+    anyProviderPublic: number;
+    providers: {
+      provider: string;
+      enabled: boolean;
+      linked: number;
+      public: number;
+      shared: number;
+      hidden: number;
+    }[];
+  };
 }
 
 describe("isAdminMetricsTokenValid", () => {
@@ -202,6 +215,28 @@ describeDb("GET /api/admin/metrics", () => {
          ($1, $3, 'deploy ok', now())`,
       [textChannelId, ana.id, webhook.id],
     );
+
+    // Game connections: Ana shows Steam publicly, the operator has Steam at
+    // the default visibility plus a hidden Twitch, and the webhook has a Steam
+    // row that must not be counted. No provider credentials are configured, so
+    // every provider reports as disabled.
+    for (const name of [
+      "STEAM_WEB_API_KEY",
+      "TWITCH_CLIENT_ID",
+      "TWITCH_CLIENT_SECRET",
+      "BATTLENET_CLIENT_ID",
+      "BATTLENET_CLIENT_SECRET",
+    ]) {
+      delete process.env[name];
+    }
+    await pool.query(
+      `INSERT INTO user_connections (user_id, provider, provider_user_id, display_name, visibility)
+       VALUES ($1, 'steam', '7656119800000001', 'a', 'public'),
+              ($2, 'steam', '7656119800000002', 'b', 'shared'),
+              ($2, 'twitch', 'tw-operator', 'c', 'hidden'),
+              ($3, 'steam', '7656119800000003', 'd', 'public')`,
+      [ana.id, operator.id, webhook.id],
+    );
   });
 
   it("answers 404 without any credential and to a signed-in non-moderator", async () => {
@@ -275,6 +310,20 @@ describeDb("GET /api/admin/metrics", () => {
 
     expect(body.acquisition.days).toBe(7);
     expect(body.acquisition.total).toBe(2);
+
+    // Two people have linked something, three links between them; the webhook
+    // row is not a person. The share is of `users.total`, so it is 2 of 2.
+    expect(body.connections.ofUsers).toBe(body.users.total);
+    expect(body.connections).toEqual({
+      ofUsers: 2,
+      anyProvider: 2,
+      anyProviderPublic: 1,
+      providers: [
+        { provider: "steam", enabled: false, linked: 2, public: 1, shared: 1, hidden: 0 },
+        { provider: "battlenet", enabled: false, linked: 0, public: 0, shared: 0, hidden: 0 },
+        { provider: "twitch", enabled: false, linked: 1, public: 0, shared: 0, hidden: 1 },
+      ],
+    });
 
     // Counts, never people.
     const text = JSON.stringify(body);
