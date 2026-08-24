@@ -15,48 +15,97 @@ share), coloured by state, so a scan does not have to read every figure below.
 Under it, one line of provenance: which account kinds the numbers exclude, the
 server's cache window, and the page's own refresh interval.
 
+Under that, **seven tabs**. The whole payload arrives in one read, so switching
+a tab is a pane toggle and never a request; the choice lives in the URL hash, so
+a reload or a link to yourself opens where you left off, and arrow keys move
+between them.
+
+| Tab | What is on it |
+|---|---|
+| **visão geral** | health tiles, the six headline metrics with sparklines, the two 24-hour charts, the five most active servers |
+| **usuários** | signups per day over 14 days, who is actually active (24h and 7d), the returning-writer share, what people filled in (handle / avatar / banner / game account / age check), plus first-touch acquisition and game connections |
+| **canais** | text-vs-voice composition, the eight busiest text channels of the last 24h, and the shape of the instance: direct and group conversations, private channels, channels that have never received a message |
+| **comunidades** | the directory: listed, suspended, addressed, by category, and the communities themselves. Off by default, and it says so (see below) |
+| **voz e chamadas** | the rooms open *right now* with who is sharing a screen, the voice summary against the mesh limit, and the full call-quality distribution with notes |
+| **moderação** | the report queue (open / actioned / dismissed / new today), bans, timeouts in force, and the feedback queue with the last eight entries. The tab carries a count badge when anything is open |
+| **infra** | deployed commit, region, database latency, worst-component uptime over 24h and 7d, and availability per component |
+
+### Nothing on this page is illustrative
+
+The page used to boot with a set of plausible seed numbers and swap them for
+live ones once `/metrics` answered. Sections with no live source kept them and
+were badged "dados representativos". **That is gone.** A plausible number on a
+dashboard gets read as a real one, it survives a screenshot, and at a glance it
+is indistinguishable from a stale reading.
+
+What happens instead:
+
+- **Before the first read:** skeletons. They draw the shape of the content and
+  never a digit.
+- **After a successful read:** real numbers only.
+- **If the read fails:** an explicit failure box naming the reason, with a retry
+  button. The skeletons stay. No figure appears anywhere on the page.
+- **If a read fails *after* a good one:** the last real numbers stay on screen
+  and the header chip says when they were read.
+- **If the API answers without a block this page knows about** — the dashboard
+  deploys in seconds and the API restarts every live call, so the two are
+  deliberately not released together — that section hides itself and says the
+  API is older than the field. It restores itself on the next poll once the
+  field arrives; no reload needed.
+
+Empty and off are also kept distinct from broken: "ninguém em chamada agora" is
+a result, and a `COMMUNITIES_ENABLED` that is unset gets its own panel
+explaining that the zeros mean the feature is off rather than unused.
+
+### Sources
+
 Live, from `GET https://api.pqp.gg/api/admin/metrics` (proxied as `/metrics`):
 
-- users (total, new in 24h, new per hour), servers (total, new in 24h)
+- users (total, new in 24h, new per hour, new per day over 14 days), servers
 - messages in 24h and per hour, last hour, delta against the previous 24h,
   distinct senders, active text channels
 - **automated messages in 24h** (webhooks + the house cast), drawn as a share
   of raw traffic beside the human count and never folded into it
-- channel composition (text / voice / category / thread)
-- voice: rooms open now, people in them, the largest room *now* against the
-  practical mesh limit (the tile turns amber past 6), and the largest room today
-  (process-local; the payload says since when it has been counting, and it
-  resets on deploy and at São Paulo midnight)
+- channel composition (text / voice / category / thread), plus the detail
+  behind the canais tab: conversations, private channels, never-used channels,
+  busiest channels
+- user adoption and activity: handle / avatar / banner / age check, active over
+  7 days, accounts in the art. 18 deletion window, and a returning-writer share
+  over accounts older than 24 hours. **Messages are the only per-user activity
+  this schema records**, so somebody who reads without posting counts as
+  inactive; the pane says so rather than letting it read as retention
+- voice: rooms open now (with names and who is screen-sharing), people in them,
+  the largest room now against the practical mesh limit (amber past 6), and the
+  largest room today (process-local; it resets on deploy and at São Paulo
+  midnight)
 - **call quality, last 7 days**: the full 1-to-5 distribution as bars, the
-  average and the share that gave 4 or 5, the split by transport (mesh vs the
+  average, the share that gave 4 or 5, the split by transport (mesh vs the
   LiveKit SFU, both always listed so "no SFU calls yet" is visible), and the
   notes people wrote, which the client only asks for on a 3 or less
-- the five most active servers of the last 24h: name, tagline, channel and
-  member counts, messages
-- first-touch acquisition and landing pages, with the window's start date
-- **game connections** (`connections`): per provider, how many accounts linked
-  Steam / Battle.net / Twitch and how many of those chose `public`, plus how
-  many accounts linked *anything* — which is not the sum of the rows, since one
-  person can link two providers. A provider with no credentials on the API is
-  labelled **desligado**, because a zero there means nobody could link rather
-  than nobody wanted to. Every share is over `connections.ofUsers`, which is
-  `users.total` in the same payload: all human accounts that exist, not a window
-  and not actives
-- the deployed API commit (`APP_VERSION`), and which account kinds are excluded
-  from every count (`excludedAccounts`)
+- the five most active servers of the last 24h
+- first-touch acquisition and landing pages
+- **game connections**: per provider, how many accounts linked Steam /
+  Battle.net / Twitch and how many chose `public`, plus how many accounts linked
+  *anything* — which is not the sum of the rows, since one person can link two
+  providers. A provider with no credentials on the API is labelled **desligado**,
+  because a zero there means nobody could link rather than nobody wanted to.
+  Every share is over `connections.ofUsers`, which is `users.total` in the same
+  payload: all human accounts that exist, not a window and not actives
+- **communities**: totals, per category, and the listed communities with member,
+  channel and message counts. Gated on `COMMUNITIES_ENABLED`
+- **moderation**: report and feedback queues by status, bans, unexpired
+  timeouts, and the last eight feedback bodies (truncated by the API, never
+  attributed)
+- the deployed API commit (`APP_VERSION`) and the excluded account kinds
 
 Live, from `GET https://api.pqp.gg/status.json` (proxied as `/health`): the
-component health tiles, the headline pill, the database latency.
+component health tiles, the headline pill, database latency, and the 24h/7d
+uptime behind the infra tab.
 
 The page reads in both light and dark (it follows the system setting; every
 colour is a token, so only the palette changes), and nothing scrolls the page
-sideways on a phone: wide tables and charts scroll inside their own box.
-
-Everything else on the page (recent voice rooms, moderation and feedback
-counts, the incident timeline) has no live source yet. It keeps the seed
-numbers and is badged **dados representativos** as soon as anything live
-arrives. If `/metrics` cannot be reached the whole page falls back to seed
-numbers and the header chip says so.
+sideways on a phone: wide tables and charts scroll inside their own box, and the
+tab bar scrolls rather than wrapping.
 
 Webhook pseudo-accounts and character (house cast) accounts are excluded from
 every user and message count, the same way the acquisition report excludes
@@ -64,10 +113,11 @@ them; their message volume is reported separately as `messages.automated24h`.
 
 ## Why it is behind a password
 
-The repo is open source and a `workers.dev` hostname is guessable. The page
-shows aggregate counts only, but the "most active servers" table carries the
-**names of private servers**, which is more than the public status page is
-ever allowed to say. So the Worker gates **every** request (the page, `/metrics`,
+The repo is open source and a `workers.dev` hostname is guessable. The page is
+aggregate counts and holds no id, handle or email, but it is not *only* counts:
+the "most active" tables carry the **names of private servers and channels**,
+and the call-rating notes and feedback entries are **free text people wrote**.
+All of that is more than the public status page is ever allowed to say. So the Worker gates **every** request (the page, `/metrics`,
 `/health`) behind HTTP Basic Auth, compared in constant time, and refuses to
 serve anything at all (503) while the password is unset. Every response is
 `Cache-Control: no-store`, `Referrer-Policy: no-referrer`, `X-Robots-Tag:

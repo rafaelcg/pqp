@@ -211,14 +211,6 @@
   .pill.warn { background: var(--warning-dim); border-color: var(--warning-line); color: var(--warning); }
   .pill.bad { background: var(--danger-dim); border-color: var(--danger-line); color: var(--danger); }
   .status-chip.off { color: var(--faint); }
-  .seed-badge {
-    display: inline-flex; align-items: center; gap: 5px;
-    margin-left: 8px; padding: 2px 8px; border-radius: 999px;
-    font-family: "Instrument Sans", sans-serif; font-size: 10.5px; font-weight: 600;
-    letter-spacing: 0.02em; text-transform: none;
-    border: 1px solid var(--border-soft); background: var(--surface-2); color: var(--faint);
-    vertical-align: middle;
-  }
   .dot.live { animation: pulse 2.4s ease-out infinite; }
   @keyframes pulse {
     0%   { box-shadow: 0 0 0 0 oklch(0.72 0.14 150 / 0.5); }
@@ -237,7 +229,7 @@
   }
   .live-chip .dot { width: 7px; height: 7px; }
   .live-chip[data-state="live"] { color: var(--success); border-color: var(--success-line); }
-  .live-chip[data-state="seed"] { color: var(--faint); }
+  .live-chip[data-state="waiting"] { color: var(--faint); }
 
   /* ---------- section ---------- */
   section { margin-top: 30px; }
@@ -276,6 +268,7 @@
   .g-health { grid-template-columns: repeat(6, minmax(0,1fr)); }
   .g-metrics { grid-template-columns: repeat(6, minmax(0,1fr)); }
   .g-charts { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .g-1 { grid-template-columns: minmax(0,1fr); }
   .g-2 { grid-template-columns: repeat(2, minmax(0,1fr)); }
   .g-3 { grid-template-columns: minmax(0,1.35fr) minmax(0,1fr); }
   /* A card whose content has a floor (a table, a chart) must still be allowed
@@ -451,6 +444,7 @@
   .stat-mini .v { font-family: "Unbounded", sans-serif; font-weight: 700; font-size: 22px; line-height: 1; }
   .stat-mini.good .v { color: var(--success); }
   .stat-mini.attn .v { color: var(--warning); }
+  .stat-mini.bad .v { color: var(--danger); }
 
   .bug { display: flex; flex-direction: column; gap: 3px; }
   .bug .b-title { font-weight: 600; }
@@ -588,6 +582,10 @@
   .dist-row.zero .dr-k, .dist-row.zero .dr-n { color: var(--faint); font-weight: 400; }
   /* Same rows, but the key is a word ("compartilhada") and not a single digit. */
   .conn-dist .dist-row { grid-template-columns: 92px 1fr 34px 44px; }
+  /* Word labels ('com @handle', 'idade verificada', a category name) need
+     room the rating dist does not: that one keys on a single digit. */
+  .wide-dist .dist-row { grid-template-columns: 132px 1fr 40px 46px; }
+  .wide-dist .dr-k { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
   .tr-row { padding: 11px 0; border-bottom: 1px solid var(--border-soft); }
   .tr-row:first-of-type { padding-top: 2px; }
@@ -634,6 +632,7 @@
     .rating-head { gap: 10px; }
     .dist-row { grid-template-columns: 30px 1fr 30px 40px; gap: 8px; }
     .conn-dist .dist-row { grid-template-columns: 82px 1fr 30px 40px; }
+    .wide-dist .dist-row { grid-template-columns: 104px 1fr 32px 42px; }
     .g-health { grid-template-columns: repeat(2, minmax(0,1fr)); }
     .g-metrics { grid-template-columns: repeat(2, minmax(0,1fr)); }
     .kv-grid { grid-template-columns: 1fr; }
@@ -643,6 +642,161 @@
   @media (max-width: 420px) {
     .g-health { grid-template-columns: 1fr; }
     .g-metrics { grid-template-columns: 1fr; }
+  }
+
+
+  /* ---------------- tabs ----------------
+     Panes, not pages: everything is in one payload, so switching is a class
+     toggle and never a fetch. The bar scrolls sideways on a phone rather than
+     wrapping into two rows that push the content below the fold. */
+  .tabs {
+    display: flex;
+    gap: 4px;
+    margin: 0 0 22px;
+    padding: 4px;
+    background: var(--surface-1);
+    border: 1px solid var(--border-soft);
+    border-radius: var(--r-md);
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tab {
+    flex: 0 0 auto;
+    appearance: none;
+    border: 0;
+    background: transparent;
+    color: var(--muted);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    letter-spacing: 0.01em;
+    padding: 8px 14px;
+    border-radius: var(--r-sm);
+    cursor: pointer;
+    white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    transition: background 0.15s, color 0.15s;
+  }
+  .tab:hover { background: var(--hover); color: var(--text); }
+  .tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .tab[aria-selected="true"] {
+    background: var(--accent-dim);
+    color: var(--text);
+    box-shadow: inset 0 0 0 1px var(--accent-edge);
+  }
+  /* Count badge on a tab. Deliberately quiet: it is orientation, not a metric. */
+  .tab .tcount {
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    color: var(--faint);
+    background: var(--surface-3);
+    border-radius: 999px;
+    padding: 1px 6px;
+  }
+  .tab[aria-selected="true"] .tcount { color: var(--accent); background: var(--accent-dim); }
+  .tab .tcount[data-attn="1"] { color: var(--warning); background: var(--warning-dim); }
+  .pane[hidden] { display: none; }
+
+  /* ---------------- skeletons ----------------
+     What the page shows before the first successful read. It draws the SHAPE
+     of the content and never a number: an illustrative figure that looks real
+     is worse than an obvious placeholder, because it survives a screenshot. */
+  .skel {
+    display: block;
+    background: linear-gradient(
+      90deg,
+      var(--surface-2) 0%,
+      var(--surface-3) 50%,
+      var(--surface-2) 100%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 1.4s ease-in-out infinite;
+    border-radius: var(--r-xs);
+    height: 12px;
+  }
+  .skel + .skel { margin-top: 8px; }
+  .skel-line { height: 12px; }
+  .skel-num { height: 26px; width: 62%; border-radius: var(--r-sm); }
+  .skel-sm { height: 10px; width: 45%; }
+  .skel-chart { height: 130px; border-radius: var(--r-sm); }
+  .skel-bar { height: 34px; border-radius: var(--r-sm); }
+  @keyframes shimmer {
+    0%   { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .skel { animation: none; background: var(--surface-2); }
+  }
+  /* A skeleton row inside a table keeps the column count, so the header above
+     it does not jump sideways when the real rows arrive. */
+  tr.skel-row td { padding-top: 12px; padding-bottom: 12px; }
+  tr.skel-row .skel { height: 10px; }
+
+  /* ---------------- error / empty states ---------------- */
+  .errbox {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    align-items: flex-start;
+    padding: 18px 20px;
+    background: var(--danger-dim);
+    border: 1px solid var(--danger-line);
+    border-radius: var(--r-md);
+    margin: 0 0 22px;
+  }
+  .errbox b { font-size: 14px; color: var(--text); }
+  .errbox p { margin: 0; font-size: 13px; color: var(--muted); max-width: 68ch; }
+  .errbox button {
+    appearance: none;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    padding: 7px 14px;
+    border-radius: var(--r-sm);
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--text);
+    cursor: pointer;
+  }
+  .errbox button:hover { background: var(--surface-3); }
+  .errbox button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  /* "Nothing here", which is a result, unlike the error above. */
+  .emptybox {
+    padding: 22px 20px;
+    text-align: center;
+    color: var(--faint);
+    font-size: 13px;
+    border: 1px dashed var(--border);
+    border-radius: var(--r-md);
+    background: var(--surface-1);
+  }
+  .emptybox b { display: block; color: var(--muted); font-size: 13.5px; margin-bottom: 4px; }
+  td.empty-cell { text-align: center; color: var(--faint); padding: 20px 12px; font-size: 12.5px; }
+
+  /* An off-by-configuration state, which is neither empty nor broken. */
+  .offbox {
+    padding: 22px 20px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    background: var(--surface-1);
+  }
+  .offbox b { display: block; font-size: 14px; margin-bottom: 6px; }
+  .offbox p { margin: 0 0 8px; font-size: 13px; color: var(--muted); max-width: 70ch; }
+  .offbox code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    background: var(--surface-3);
+    padding: 1px 5px;
+    border-radius: 5px;
+  }
+
+  @media (max-width: 620px) {
+    .tabs { margin-bottom: 16px; }
+    .tab { padding: 8px 11px; font-size: 12.5px; }
   }
 
   @media (prefers-reduced-motion: reduce) {
@@ -662,8 +816,8 @@
     <span class="spacer"></span>
     <div class="top-right">
       <span class="pill" id="statusPill"><span class="dot live"></span> <span id="statusPillText">tudo operacional</span></span>
-      <span class="live-chip" id="liveChip" data-state="seed" title="fonte dos dados de saúde">
-        <span class="dot"></span> dados representativos
+      <span class="live-chip" id="liveChip" data-state="waiting" title="fonte dos dados">
+        <span class="dot"></span> aguardando a api
       </span>
       <div class="updated">
         <b id="updatedAt">carregando</b>
@@ -677,6 +831,26 @@
        attention, coloured by state so a scan does not have to read numbers. -->
   <div class="signals" id="signals" aria-label="resumo do estado"><!-- injected --></div>
   <p class="provenance" id="provenance"><span>o que estes números incluem: carregando</span></p>
+
+  <!-- ============ TABS ============ -->
+  <!-- The whole payload arrives in one read, so a tab is a pane toggle and
+       never a request. The choice is kept in the URL hash so a reload, or a
+       link pasted to yourself, opens where you left off. -->
+  <div class="tabs" role="tablist" id="tabs" aria-label="seções do painel">
+    <button class="tab" role="tab" id="tab-geral" aria-controls="pane-geral" aria-selected="true" data-tab="geral">visão geral</button>
+    <button class="tab" role="tab" id="tab-usuarios" aria-controls="pane-usuarios" aria-selected="false" data-tab="usuarios">usuários</button>
+    <button class="tab" role="tab" id="tab-canais" aria-controls="pane-canais" aria-selected="false" data-tab="canais">canais</button>
+    <button class="tab" role="tab" id="tab-comunidades" aria-controls="pane-comunidades" aria-selected="false" data-tab="comunidades">comunidades</button>
+    <button class="tab" role="tab" id="tab-voz" aria-controls="pane-voz" aria-selected="false" data-tab="voz">voz e chamadas</button>
+    <button class="tab" role="tab" id="tab-moderacao" aria-controls="pane-moderacao" aria-selected="false" data-tab="moderacao">moderação<span class="tcount" id="tabModCount" hidden>0</span></button>
+    <button class="tab" role="tab" id="tab-infra" aria-controls="pane-infra" aria-selected="false" data-tab="infra">infra</button>
+  </div>
+
+  <!-- Where a failed read is reported. Never replaced by illustrative
+       numbers: an empty panel that says why is honest, a fake one is not. -->
+  <div id="loadError" hidden></div>
+
+  <div class="pane" id="pane-geral" role="tabpanel" aria-labelledby="tab-geral">
 
   <!-- ============ HEALTH ============ -->
   <section aria-label="saúde dos serviços">
@@ -724,99 +898,90 @@
     </div>
   </section>
 
-  <!-- ============ VOICE ACTIVITY ============ -->
-  <section aria-label="atividade de voz">
+  <!-- ============ TOP SERVERS ============ -->
+  <section aria-label="servidores mais ativos">
     <div class="sec-head">
-      <h2>atividade de voz</h2>
+      <h2>servidores mais ativos</h2>
       <span class="rule"></span>
-      <span class="note" id="voiceNote">pico de sala hoje: 5 pessoas · backend mesh (webrtc)</span>
+      <span class="note" id="serversNote">carregando</span>
     </div>
-    <div class="grid g-3">
+    <div class="grid g-1">
       <div class="card pad">
-        <p class="subtle-title" data-seed="card">salas recentes</p>
+        <p class="subtle-title">servidores mais ativos · 24h</p>
         <div class="table-scroll">
           <table>
             <thead>
               <tr>
-                <th>sala</th>
-                <th>canal</th>
-                <th class="r">pessoas</th>
-                <th class="r">duração</th>
-                <th>início</th>
-                <th>estado</th>
+                <th>servidor</th>
+                <th class="r">canais</th>
+                <th class="r">membros</th>
+                <th class="r">msgs 24h</th>
               </tr>
             </thead>
-            <tbody id="voiceBody"><!-- injected --></tbody>
+            <tbody id="serversBody"><!-- injected --></tbody>
           </table>
         </div>
-      </div>
-      <div class="card pad">
-        <p class="subtle-title">resumo de voz · hoje</p>
-        <div class="stat-row" style="margin-bottom:0">
-          <div class="stat-mini">
-            <span class="k">salas ativas agora</span>
-            <span class="v num" id="vActive">2</span>
-          </div>
-          <div class="stat-mini">
-            <span class="k">pico de sala</span>
-            <span class="v num" id="vPeak">5</span>
-          </div>
-        </div>
-        <div class="stat-row" style="margin-top:12px;margin-bottom:0">
-          <div class="stat-mini">
-            <span class="k">pessoas em chamada agora</span>
-            <span class="v num" id="vPeople">0</span>
-          </div>
-          <div class="stat-mini" id="vLargestTile">
-            <span class="k">maior sala agora</span>
-            <span class="v num" id="vLargest">0</span>
-            <span class="k" style="color:var(--faint)" id="vLargestNote">limite prático do mesh: 5 a 8</span>
-          </div>
-        </div>
-        <p class="m-note" style="font-size:11.5px;color:var(--faint);margin:14px 0 0">
-          limite prático do mesh: ~5 a 8 pares por sala. sfu (livekit) fica pronto para quando uma sala passar disso.
-        </p>
       </div>
     </div>
   </section>
 
-  <!-- ============ CALL QUALITY ============ -->
-  <!-- The only unsolicited quality feedback the product gets. An average on
-       its own hides the shape, so the distribution is the headline and the
-       average sits next to it; notes exist only on scores of 3 or less. -->
-  <section aria-label="qualidade das chamadas">
+  </div>
+
+  <div class="pane" id="pane-usuarios" role="tabpanel" aria-labelledby="tab-usuarios" hidden>
+
+  <!-- ============ USER DETAIL ============ -->
+  <section aria-label="perfil da base de usuários" id="secUserDetail">
     <div class="sec-head">
-      <h2>qualidade das chamadas</h2>
+      <h2>base de usuários</h2>
       <span class="rule"></span>
-      <span class="note" id="ratingsNote">avaliação pedida ao sair da chamada · últimos 7 dias</span>
+      <span class="note" id="usersNote">carregando</span>
     </div>
-    <div class="grid g-3">
+    <div class="grid g-2">
       <div class="card pad">
-        <div class="rating-head">
-          <div class="rating-score">
-            <span class="rs-val num" id="ratingAvg">—</span>
-            <span class="rs-of">/ 5</span>
-            <span class="stars" id="ratingStars" aria-hidden="true"></span>
-            <span class="rs-sub" id="ratingCount">carregando</span>
-          </div>
-          <div class="rating-pills" id="ratingPills"></div>
-        </div>
-        <div class="dist" id="ratingDist"><!-- injected --></div>
+        <p class="subtle-title">cadastros por dia · 14 dias</p>
+        <div class="chart-scroll" id="chartSignups"></div>
+        <p class="m-note" style="font-size:11.5px;color:var(--faint);margin:12px 0 0">
+          dias de são paulo. o último é o dia corrente e ainda está contando.
+        </p>
       </div>
 
       <div class="card pad">
-        <p class="subtle-title">por transporte</p>
-        <div id="ratingTransport"><!-- injected --></div>
-        <p class="m-note" style="font-size:11.5px;color:var(--faint);margin:12px 0 0">
-          mesh é ponto a ponto entre os participantes; livekit é o sfu. a comparação só
-          fica honesta quando as duas colunas têm chamadas na janela.
+        <p class="subtle-title">atividade</p>
+        <div class="stat-row" style="margin-bottom:0">
+          <div class="stat-mini">
+            <span class="k">enviaram mensagem · 24h</span>
+            <span class="v num" id="uActive24h">—</span>
+          </div>
+          <div class="stat-mini">
+            <span class="k">enviaram mensagem · 7 dias</span>
+            <span class="v num" id="uActive7d">—</span>
+          </div>
+        </div>
+        <div class="stat-row" style="margin-top:12px;margin-bottom:0">
+          <div class="stat-mini" id="uReturnTile">
+            <span class="k">voltaram a escrever · 7 dias</span>
+            <span class="v num" id="uReturn">—</span>
+            <span class="k" style="color:var(--faint)" id="uReturnNote">—</span>
+          </div>
+          <div class="stat-mini">
+            <span class="k">contas em exclusão</span>
+            <span class="v num" id="uDeleting">—</span>
+          </div>
+        </div>
+        <p class="m-note" style="font-size:11.5px;color:var(--muted);margin:14px 0 0">
+          "voltaram a escrever" conta quem criou a conta há mais de 24h e mandou alguma mensagem nos últimos 7 dias. quem só lê aparece como inativo: mensagem é o único sinal de atividade por pessoa que este banco guarda.
         </p>
       </div>
     </div>
 
-    <div class="card pad" style="margin-top:14px">
-      <p class="subtle-title">o que escreveram · só aparece em notas 3 ou menos</p>
-      <div id="ratingNotes"><!-- injected --></div>
+    <div class="grid g-1" style="margin-top:18px">
+      <div class="card pad">
+        <p class="subtle-title">o que as pessoas preencheram</p>
+        <div class="dist wide-dist" id="adoptionDist"><!-- injected --></div>
+        <p class="m-note" style="font-size:11.5px;color:var(--faint);margin:14px 0 0">
+          proporção sobre todas as contas humanas que existem, não sobre ativos.
+        </p>
+      </div>
     </div>
   </section>
 
@@ -921,71 +1086,287 @@
     </div>
   </section>
 
-  <!-- ============ CHANNELS & SERVERS ============ -->
-  <section aria-label="canais e servidores">
-    <div class="sec-head">
-      <h2>canais e servidores</h2>
-      <span class="rule"></span>
-      <span class="note" id="serversNote">69 servidores · 49 criados em 24h</span>
-    </div>
-    <div class="grid g-3">
-      <div class="card pad">
-        <p class="subtle-title">servidores mais ativos · 24h</p>
-        <div class="table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>servidor</th>
-                <th class="r">canais</th>
-                <th class="r">membros</th>
-                <th class="r">msgs 24h</th>
-              </tr>
-            </thead>
-            <tbody id="serversBody"><!-- injected --></tbody>
-          </table>
-        </div>
-      </div>
+  </div>
 
+  <div class="pane" id="pane-canais" role="tabpanel" aria-labelledby="tab-canais" hidden>
+
+  <!-- ============ CHANNEL COMPOSITION ============ -->
+  <section aria-label="composição de canais">
+    <div class="sec-head">
+      <h2>composição de canais</h2>
+      <span class="rule"></span>
+      <span class="note" id="channelsNote">carregando</span>
+    </div>
+    <div class="grid g-2">
       <div class="card pad">
-        <p class="subtle-title">composição de canais</p>
+        <p class="subtle-title">texto e voz</p>
         <div class="split">
           <div class="seg">
             <span class="k">texto</span>
-            <span class="v num" id="chText">154</span>
-            <span class="stackbar"><i id="chTextBarA" style="width:67.5%;background:var(--accent-line)"></i><i id="chTextBarB" style="width:32.5%;background:var(--series-2)"></i></span>
+            <span class="v num" id="chText">—</span>
+            <span class="stackbar"><i id="chTextBarA" style="width:0%;background:var(--accent-line)"></i><i id="chTextBarB" style="width:0%;background:var(--series-2)"></i></span>
           </div>
           <div class="seg">
             <span class="k">voz</span>
-            <span class="v num" id="chVoice">74</span>
+            <span class="v num" id="chVoice">—</span>
             <span class="stackbar"><i style="width:100%;background:var(--series-2)"></i></span>
           </div>
         </div>
         <div class="legend">
-          <span><i class="swatch" style="background:var(--accent-line)"></i> <span id="legText">texto 154</span></span>
-          <span><i class="swatch" style="background:var(--series-2)"></i> <span id="legVoice">voz 74</span></span>
-          <span><i class="swatch" style="background:var(--surface-3)"></i> <span id="legOther">categorias 1 · threads 1</span></span>
+          <span><i class="swatch" style="background:var(--accent-line)"></i> <span id="legText">texto</span></span>
+          <span><i class="swatch" style="background:var(--series-2)"></i> <span id="legVoice">voz</span></span>
+          <span><i class="swatch" style="background:var(--surface-3)"></i> <span id="legOther">—</span></span>
         </div>
 
         <div class="stat-row" style="margin-top:16px">
           <div class="stat-mini">
             <span class="k">total de canais</span>
-            <span class="v num" id="chTotal">230</span>
+            <span class="v num" id="chTotal">—</span>
           </div>
           <div class="stat-mini">
             <span class="k">novos servidores 24h</span>
-            <span class="v num" id="srvNew24h">49</span>
+            <span class="v num" id="srvNew24h">—</span>
           </div>
           <div class="stat-mini">
             <span class="k">canais de texto ativos 24h</span>
-            <span class="v num" id="chActive24h">39</span>
+            <span class="v num" id="chActive24h">—</span>
           </div>
+        </div>
+      </div>
+
+      <div class="card pad">
+        <p class="subtle-title">forma da instância</p>
+        <div class="stat-row" style="margin-bottom:0">
+          <div class="stat-mini">
+            <span class="k">conversas diretas</span>
+            <span class="v num" id="chDm">—</span>
+          </div>
+          <div class="stat-mini">
+            <span class="k">conversas em grupo</span>
+            <span class="v num" id="chGroup">—</span>
+          </div>
+        </div>
+        <div class="stat-row" style="margin-top:12px;margin-bottom:0">
+          <div class="stat-mini">
+            <span class="k">canais privados</span>
+            <span class="v num" id="chPrivate">—</span>
+          </div>
+          <div class="stat-mini" id="chEmptyTile">
+            <span class="k">canais de texto sem nenhuma mensagem</span>
+            <span class="v num" id="chEmpty">—</span>
+          </div>
+        </div>
+        <div class="stat-row" style="margin-top:12px;margin-bottom:0">
+          <div class="stat-mini">
+            <span class="k">maior servidor · canais</span>
+            <span class="v num" id="chMax">—</span>
+          </div>
+          <div class="stat-mini">
+            <span class="k">servidores com canais</span>
+            <span class="v num" id="chServers">—</span>
+          </div>
+        </div>
+        <p class="m-note" style="font-size:11.5px;color:var(--muted);margin:14px 0 0">
+          uma conversa direta é um canal sem servidor, então ela não entra na composição ao lado, que conta só canais de servidor.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ CHANNEL DETAIL ============ -->
+  <section aria-label="detalhe de canais" id="secChannelDetail">
+    <div class="sec-head">
+      <h2>onde se conversa</h2>
+      <span class="rule"></span>
+      <span class="note">últimas 24h · só canais de texto de servidor</span>
+    </div>
+    <div class="grid g-1">
+      <div class="card pad">
+        <p class="subtle-title">canais de texto mais ativos · 24h</p>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>canal</th>
+                <th>servidor</th>
+                <th class="r">msgs</th>
+                <th class="r">pessoas</th>
+              </tr>
+            </thead>
+            <tbody id="topChannelsBody"><!-- injected --></tbody>
+          </table>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  </div>
+
+  <div class="pane" id="pane-comunidades" role="tabpanel" aria-labelledby="tab-comunidades" hidden>
+
+  <!-- ============ COMMUNITIES ============ -->
+  <!-- Behind COMMUNITIES_ENABLED on the API. With the flag off every count
+       here is zero because the feature is off, which is a different thing
+       from nobody using it, so the pane says which one it is. -->
+  <section aria-label="comunidades" id="secCommunities">
+    <div class="sec-head">
+      <h2>comunidades</h2>
+      <span class="rule"></span>
+      <span class="note" id="commNote">carregando</span>
+    </div>
+    <div id="commOff" hidden></div>
+    <div id="commLive" hidden>
+      <div class="stat-row">
+        <div class="stat-mini">
+          <span class="k">no diretório</span>
+          <span class="v num" id="commListed">—</span>
+        </div>
+        <div class="stat-mini" id="commSuspTile">
+          <span class="k">suspensas</span>
+          <span class="v num" id="commSusp">—</span>
+        </div>
+        <div class="stat-mini">
+          <span class="k">com endereço público</span>
+          <span class="v num" id="commSlug">—</span>
+        </div>
+      </div>
+      <div class="grid g-1" style="margin-top:18px">
+        <div class="card pad">
+          <p class="subtle-title">comunidades listadas</p>
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>comunidade</th>
+                  <th>categoria</th>
+                  <th>endereço</th>
+                  <th class="r">membros</th>
+                  <th class="r">canais</th>
+                  <th class="r">msgs 24h</th>
+                </tr>
+              </thead>
+              <tbody id="commBody"><!-- injected --></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      <div class="grid g-1" style="margin-top:18px">
+        <div class="card pad">
+          <p class="subtle-title">por categoria</p>
+          <div class="dist wide-dist" id="commCatDist"><!-- injected --></div>
         </div>
       </div>
     </div>
   </section>
 
+  </div>
+
+  <div class="pane" id="pane-voz" role="tabpanel" aria-labelledby="tab-voz" hidden>
+
+  <!-- ============ VOICE ACTIVITY ============ -->
+  <section aria-label="atividade de voz">
+    <div class="sec-head">
+      <h2>atividade de voz</h2>
+      <span class="rule"></span>
+      <span class="note" id="voiceNote">pico de sala hoje: 5 pessoas · backend mesh (webrtc)</span>
+    </div>
+    <div class="grid g-3">
+      <div class="card pad">
+        <p class="subtle-title">salas abertas agora</p>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>canal</th>
+                <th>servidor</th>
+                <th class="r">pessoas</th>
+                <th class="r">tela</th>
+              </tr>
+            </thead>
+            <tbody id="voiceBody"><!-- injected --></tbody>
+          </table>
+        </div>
+        <p class="m-note" style="font-size:11.5px;color:var(--faint);margin:12px 0 0">
+          estado do processo, não histórico: a lista existe enquanto a chamada existe e some quando a última pessoa sai.
+        </p>
+      </div>
+      <div class="card pad">
+        <p class="subtle-title">resumo de voz · hoje</p>
+        <div class="stat-row" style="margin-bottom:0">
+          <div class="stat-mini">
+            <span class="k">salas ativas agora</span>
+            <span class="v num" id="vActive">2</span>
+          </div>
+          <div class="stat-mini">
+            <span class="k">pico de sala</span>
+            <span class="v num" id="vPeak">5</span>
+          </div>
+        </div>
+        <div class="stat-row" style="margin-top:12px;margin-bottom:0">
+          <div class="stat-mini">
+            <span class="k">pessoas em chamada agora</span>
+            <span class="v num" id="vPeople">0</span>
+          </div>
+          <div class="stat-mini" id="vLargestTile">
+            <span class="k">maior sala agora</span>
+            <span class="v num" id="vLargest">0</span>
+            <span class="k" style="color:var(--faint)" id="vLargestNote">limite prático do mesh: 5 a 8</span>
+          </div>
+        </div>
+        <p class="m-note" style="font-size:11.5px;color:var(--faint);margin:14px 0 0">
+          limite prático do mesh: ~5 a 8 pares por sala. sfu (livekit) fica pronto para quando uma sala passar disso.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ CALL QUALITY ============ -->
+  <!-- The only unsolicited quality feedback the product gets. An average on
+       its own hides the shape, so the distribution is the headline and the
+       average sits next to it; notes exist only on scores of 3 or less. -->
+  <section aria-label="qualidade das chamadas">
+    <div class="sec-head">
+      <h2>qualidade das chamadas</h2>
+      <span class="rule"></span>
+      <span class="note" id="ratingsNote">avaliação pedida ao sair da chamada · últimos 7 dias</span>
+    </div>
+    <div class="grid g-3">
+      <div class="card pad">
+        <div class="rating-head">
+          <div class="rating-score">
+            <span class="rs-val num" id="ratingAvg">—</span>
+            <span class="rs-of">/ 5</span>
+            <span class="stars" id="ratingStars" aria-hidden="true"></span>
+            <span class="rs-sub" id="ratingCount">carregando</span>
+          </div>
+          <div class="rating-pills" id="ratingPills"></div>
+        </div>
+        <div class="dist" id="ratingDist"><!-- injected --></div>
+      </div>
+
+      <div class="card pad">
+        <p class="subtle-title">por transporte</p>
+        <div id="ratingTransport"><!-- injected --></div>
+        <p class="m-note" style="font-size:11.5px;color:var(--faint);margin:12px 0 0">
+          mesh é ponto a ponto entre os participantes; livekit é o sfu. a comparação só
+          fica honesta quando as duas colunas têm chamadas na janela.
+        </p>
+      </div>
+    </div>
+
+    <div class="card pad" style="margin-top:14px">
+      <p class="subtle-title">o que escreveram · só aparece em notas 3 ou menos</p>
+      <div id="ratingNotes"><!-- injected --></div>
+    </div>
+  </section>
+
+  </div>
+
+  <div class="pane" id="pane-moderacao" role="tabpanel" aria-labelledby="tab-moderacao" hidden>
+
   <!-- ============ SAFETY & FEEDBACK ============ -->
-  <section aria-label="segurança e feedback">
+  <section aria-label="segurança e feedback" id="secModeration">
     <div class="sec-head">
       <h2>segurança e feedback</h2>
       <span class="rule"></span>
@@ -993,42 +1374,57 @@
     </div>
     <div class="grid g-2">
       <div class="card pad">
-        <p class="subtle-title" data-seed="card">moderação</p>
+        <p class="subtle-title">fila de denúncias</p>
         <div class="stat-row">
-          <div class="stat-mini good">
-            <span class="k">denúncias abertas</span>
-            <span class="v num">0</span>
-          </div>
-          <div class="stat-mini good">
-            <span class="k">bans ativos</span>
-            <span class="v num">0</span>
+          <div class="stat-mini" id="modOpenTile">
+            <span class="k">abertas</span>
+            <span class="v num" id="modOpen">—</span>
           </div>
           <div class="stat-mini">
-            <span class="k">badges caça-bugs</span>
-            <span class="v num">1</span>
+            <span class="k">novas · 24h</span>
+            <span class="v num" id="modNew24h">—</span>
+          </div>
+          <div class="stat-mini">
+            <span class="k">já resolvidas</span>
+            <span class="v num" id="modResolved">—</span>
+            <span class="k" style="color:var(--faint)" id="modResolvedNote">—</span>
           </div>
         </div>
-        <p class="m-note" style="font-size:12px;color:var(--muted);margin:2px 0 0">
-          instância privada de mensagens: comunidades públicas seguem desligadas, então a fila de denúncias vai só para o operador da instância. nada pendente no momento.
+        <div class="stat-row" style="margin-top:12px;margin-bottom:0">
+          <div class="stat-mini">
+            <span class="k">bans</span>
+            <span class="v num" id="modBans">—</span>
+          </div>
+          <div class="stat-mini">
+            <span class="k">castigos em vigor</span>
+            <span class="v num" id="modTimeouts">—</span>
+          </div>
+        </div>
+        <p class="m-note" style="font-size:12px;color:var(--muted);margin:14px 0 0" id="modNote">
+          carregando
         </p>
       </div>
 
       <div class="card pad">
-        <p class="subtle-title" data-seed="card">caça-bugs · fila de feedback</p>
+        <p class="subtle-title">caça-bugs · fila de feedback</p>
         <div class="stat-row">
-          <div class="stat-mini attn">
+          <div class="stat-mini" id="fbOpenTile">
             <span class="k">abertos</span>
-            <span class="v num">2</span>
+            <span class="v num" id="fbOpen">—</span>
           </div>
-          <div class="stat-mini good">
-            <span class="k">resolvidos hoje</span>
-            <span class="v num">1</span>
+          <div class="stat-mini">
+            <span class="k">confirmados</span>
+            <span class="v num" id="fbConfirmed">—</span>
+          </div>
+          <div class="stat-mini">
+            <span class="k">novos · 24h</span>
+            <span class="v num" id="fbNew24h">—</span>
           </div>
         </div>
         <div class="table-scroll">
           <table>
             <thead>
-              <tr><th>relato</th><th>prioridade</th><th>estado</th></tr>
+              <tr><th>relato</th><th>tipo</th><th>estado</th></tr>
             </thead>
             <tbody id="bugsBody"><!-- injected --></tbody>
           </table>
@@ -1036,6 +1432,10 @@
       </div>
     </div>
   </section>
+
+  </div>
+
+  <div class="pane" id="pane-infra" role="tabpanel" aria-labelledby="tab-infra" hidden>
 
   <!-- ============ INFRA & DEPLOYS ============ -->
   <section aria-label="infraestrutura e deploys">
@@ -1055,42 +1455,36 @@
           <div class="kv"><span class="k">spa estática</span><span class="v mono">cloudflare pages</span></div>
           <div class="kv"><span class="k">banco</span><span class="v" id="infraDb">postgres · ~6ms</span></div>
         </div>
-        <div class="stat-row" style="margin:14px 0 0" data-seed="row">
-          <div class="stat-mini good" style="flex:1 1 100%">
-            <span class="k">janela sem incidentes</span>
-            <span class="v num" style="font-size:19px">13h desde o último deploy</span>
-            <span class="k" style="color:var(--faint)">nenhum reinício não planejado registrado</span>
+        <div class="stat-row" style="margin:14px 0 0">
+          <div class="stat-mini" id="infraUp24Tile">
+            <span class="k">pior uptime · 24h</span>
+            <span class="v num" id="infraUp24">—</span>
+            <span class="k" style="color:var(--faint)" id="infraUp24Note">—</span>
+          </div>
+          <div class="stat-mini" id="infraUp7Tile">
+            <span class="k">pior uptime · 7 dias</span>
+            <span class="v num" id="infraUp7">—</span>
+            <span class="k" style="color:var(--faint)" id="infraUp7Note">—</span>
           </div>
         </div>
       </div>
 
       <div class="card pad">
-        <p class="subtle-title" data-seed="card">eventos recentes</p>
-        <ul class="timeline">
-          <li class="ok">
-            <span class="t-when">21 ago · 01:31 brt</span>
-            <div class="t-title">deploy v42 · correção paced-flush do websocket</div>
-            <div class="t-body">flood de reconexão do /app resolvido: o flush passou a ser ritmado no cliente. sem novos loops de reconexão desde então.</div>
-          </li>
-          <li class="warnpt">
-            <span class="t-when">a cada ~30 a 40 min</span>
-            <div class="t-title">probe de jwt inválido no websocket</div>
-            <div class="t-body">é a sonda externa de uptime batendo no /ws sem token. comportamento benigno e esperado, não conta como erro real.</div>
-          </li>
-          <li class="info">
-            <span class="t-when">últimas ~28h</span>
-            <div class="t-title">crescimento pós-lançamento</div>
-            <div class="t-body">de ~11 para 203 usuários e de poucos para 69 servidores. carga tranquila para a máquina única no gru.</div>
-          </li>
-        </ul>
+        <p class="subtle-title">disponibilidade por componente · 7 dias</p>
+        <div class="dist wide-dist" id="uptimeDist"><!-- injected --></div>
+        <p class="m-note" style="font-size:11.5px;color:var(--muted);margin:14px 0 0">
+          medido pelas amostras que a própria api guarda em <code style="font-size:11px">status_samples</code>. uma barra cheia quer dizer que nenhuma amostra da janela pegou o componente fora do ar, não que nada aconteceu entre duas amostras.
+        </p>
       </div>
     </div>
   </section>
 
+  </div>
+
   <!-- ============ FOOTER ============ -->
   <footer class="foot">
     <span class="fm">pqp<span class="dot">.</span>gg · painel interno</span>
-    <span class="disclaimer"><span class="dot" style="width:6px;height:6px;background:var(--faint)"></span> <span id="footDisclaimer">números seed representativos · uso apenas do operador</span></span>
+    <span class="disclaimer"><span class="dot" style="width:6px;height:6px;background:var(--faint)"></span> <span id="footDisclaimer">aguardando a api · uso apenas do operador</span></span>
   </footer>
 
 </div>
@@ -1099,74 +1493,15 @@
 (function () {
   "use strict";
 
-  /* ---------------- seed data (fallback: "dados representativos") ---------------- */
-  // Everything below is illustrative. It is what the page shows when /metrics
-  // (the API, through the Worker) cannot be reached, and it is always labelled
-  // as such. Sections with no live source yet keep it and are badged.
-  var seedHealth = [
-    { name: "api",      val: "0",   unit: "ms", sub: "resposta média · 200 ok", uptime: 99.99, state: "ok" },
-    { name: "postgres", val: "6",   unit: "ms", sub: "query de leitura · pool ok", uptime: 99.98, state: "ok" },
-    { name: "storage (r2)", val: "220", unit: "ms", sub: "put/get assinados · 99,93% sucesso", uptime: 99.93, state: "ok" },
-    { name: "voz (ws)", val: "0",   unit: "ms", sub: "sinalização webrtc no /ws", uptime: 99.97, state: "ok" },
-    { name: "gifs",     val: "0",   unit: "ms", sub: "proxy de busca · cache quente", uptime: 99.99, state: "ok" }
-  ];
+  /* ---------------- no seed data ----------------
+     This page used to boot with a set of illustrative numbers and swap them
+     for live ones when /metrics answered. It was labelled, but a plausible
+     number on a dashboard is read as a real one, survives a screenshot, and
+     is indistinguishable from a stale reading at a glance.
 
-  var seedMetrics = [
-    { label: "usuários", val: "203", delta: "+163", note: "de ~11 no lançamento (~28h)",
-      spark: [11,24,38,55,74,96,121,149,172,190,203] },
-    { label: "servidores", val: "69", delta: "+49", note: "49 criados nas últimas 24h",
-      spark: [20,24,29,35,41,48,54,59,63,66,69] },
-    { label: "mensagens · 24h", val: "1.321", delta: "+364", note: "72 na última hora",
-      spark: [30,24,18,32,58,66,54,70,104,142,113,72] },
-    { label: "remetentes distintos · 24h", val: "114", delta: "+71", note: "de 39 canais de texto ativos",
-      spark: [12,22,34,45,58,70,82,93,102,109,114] },
-    { label: "salas de voz ativas", val: "2", delta: "estável", flat: true, note: "pico hoje: 5 pessoas",
-      spark: [0,1,2,1,3,2,4,5,3,2,2] },
-    { label: "pico de sala · hoje", val: "5", delta: "+1", note: "vs 4 ontem",
-      spark: [2,2,3,3,4,4,4,5,5,5,5] }
-  ];
-
-  // hourly series, oldest -> newest (last bucket = current hour)
-  var seedNewUsersHourly = [3,2,1,1,0,0,1,2,3,5,7,8,9,7,6,7,9,13,16,20,18,12,9,4]; // sum 163
-  var seedMessagesHourly = [30,24,16,10,6,4,6,10,18,32,46,58,66,60,54,58,70,86,104,128,142,113,108,72]; // sum 1321
-
-  var seedServers = [
-    { rank: 1, name: "várzea fc", cat: "futebol e zoeira", ch: 14, mem: 47, msg: 312 },
-    { rank: 2, name: "cs2 brasil", cat: "fps · scrims", ch: 11, mem: 41, msg: 268 },
-    { rank: 3, name: "lofi & estudos", cat: "foco · pomodoro", ch: 8, mem: 33, msg: 176 },
-    { rank: 4, name: "quebrada gamer", cat: "geral · games", ch: 9, mem: 38, msg: 141 },
-    { rank: 5, name: "dev br", cat: "código e carreira", ch: 12, mem: 29, msg: 118 },
-    { rank: 6, name: "rpg mesa noturna", cat: "rpg de mesa", ch: 7, mem: 18, msg: 93 },
-    { rank: 7, name: "resenha da firma", cat: "papo geral", ch: 6, mem: 22, msg: 61 }
-  ];
-
-  var seedVoiceRooms = [
-    { id: "vc-5a90", ch: "resenha",     ppl: 2, dur: "6min",  start: "14:26", live: true,  size: "pequena" },
-    { id: "vc-7c2a", ch: "papo geral",  ppl: 5, dur: "1h12m", start: "12:44", live: false, size: "pico" },
-    { id: "vc-3f81", ch: "só nós dois", ppl: 2, dur: "2h28m", start: "10:02", live: false, size: "longa" },
-    { id: "vc-9d04", ch: "treino cs2",  ppl: 4, dur: "44min", start: "09:15", live: false, size: "média" },
-    { id: "vc-1b6e", ch: "estudos",     ppl: 3, dur: "18min", start: "08:40", live: false, size: "curta" }
-  ];
-
-  var seedBugs = [
-    { title: "avatar não atualiza sem dar refresh", meta: "reportado por 2 pessoas · #caça-bugs", prio: "média", pstate: "warn", est: "aberto", sstate: "warn" },
-    { title: "menção não some no badge do mobile", meta: "pwa · android · 1 relato", prio: "baixa", pstate: "", est: "triado", sstate: "" },
-    { title: "flood de reconexão do websocket no /app", meta: "correção paced-flush · deploy v42 01:31", prio: "alta", pstate: "bad", est: "corrigido", sstate: "ok" }
-  ];
-
-  var seedChannels = { text: 154, voice: 74, category: 1, thread: 1, total: 230, newServers24h: 49, activeText24h: 39 };
-  var seedRatings = {
-    total: 9, average: 4.4,
-    distribution: { "2": 1, "3": 1, "4": 1, "5": 6 },
-    byTransport: [{ transport: "mesh", total: 9, average: 4.4 }],
-    recentNotes: [
-      { rating: 3, note: "áudio cortando quando alguém compartilha a tela", createdAt: null }
-    ]
-  };
-  var seedAutomated = 0;
-  var seedVoice = { activeRooms: 2, peak: 5, participants: 4, largestNow: 3, backend: "mesh" };
-  var seedServersNote = "69 servidores · 49 criados em 24h";
-  var seedHost = { version: "v42", versionKnown: true };
+     So: skeletons until the first successful read, real numbers after it, and
+     an explicit failure box if the read does not come. The page never shows a
+     figure it did not get from the API. */
 
   /* ---------------- helpers ---------------- */
   function el(tag, cls, html) {
@@ -1412,9 +1747,24 @@
   function $(id) { return document.getElementById(id); }
   function setText(id, text) { var e = $(id); if (e) e.textContent = text; }
 
+  /**
+   * Set the semantic state of a stat tile: "" (neutral), "good", "attn", "bad".
+   * The tile keeps every other class it has, so layout modifiers survive.
+   */
+  function tone(id, state) {
+    var e = $(id);
+    if (!e) return;
+    e.className = e.className.replace(/\b(good|attn|bad)\b/g, "").replace(/\s+/g, " ").trim();
+    if (state) e.className += " " + state;
+  }
+
   /* ---------------- render: health ---------------- */
   function renderHealth(health, host) {
     var hg = $("healthGrid");
+    // Called from applyMetrics too (the version tag lives on the host tile).
+    // With no health read yet there is nothing to draw and the skeleton is
+    // still the honest thing to leave on screen.
+    if (!health || !health.length) return;
     hg.innerHTML = "";
     health.forEach(function (h) {
       var card = el("div", "health");
@@ -1980,85 +2330,557 @@
     paintSignals();
   }
 
-  /* ---------------- render: voice table (seed only) ---------------- */
-  function renderVoiceRooms(voiceRooms) {
+  /* ---------------- render: voice rooms (live) ----------------
+     The snapshot is process state, so this is the calls that exist right now
+     and never a history. A DM call has no server channel behind it: the API
+     sends null for both names rather than guessing, and it renders as a
+     conversation instead of as a blank row. */
+  function renderVoiceRooms(rooms) {
     var vb = $("voiceBody");
+    if (!vb) return;
     vb.innerHTML = "";
-    voiceRooms.forEach(function (v) {
-      var tr = el("tr", v.live ? "live-tr" : "");
-      var stateBadge = v.live
-        ? '<span class="badge ok"><span class="dot live"></span>ativa</span>'
-        : '<span class="badge">encerrada</span>';
-      var sizeBadge = v.size === "pico" ? '<span class="badge accent">pico</span>'
-        : v.size === "longa" ? '<span class="badge">mais longa</span>' : "";
+    if (!Array.isArray(rooms)) {
+      vb.innerHTML = '<tr><td colspan="4" class="empty-cell">esta api ainda não envia a lista de salas</td></tr>';
+      return;
+    }
+    if (!rooms.length) {
+      vb.innerHTML = '<tr><td colspan="4" class="empty-cell">ninguém em chamada agora</td></tr>';
+      return;
+    }
+    rooms.forEach(function (r) {
+      var tr = el("tr", "live-tr");
+      var isConversation = !r.channel;
+      var name = isConversation
+        ? '<span class="srv-name">conversa direta</span>'
+        : '<span class="srv-name">' + esc(r.channel) + '</span>';
+      var where = isConversation
+        ? '<span style="color:var(--faint)">fora de servidor</span>'
+        : esc(r.server || "—");
+      var screens = Number(r.sharingScreen) || 0;
       tr.innerHTML =
-        '<td class="mono">' + v.id + '</td>' +
-        '<td>' + v.ch + ' ' + sizeBadge + '</td>' +
-        '<td class="r num cell-strong">' + v.ppl + '</td>' +
-        '<td class="r num">' + v.dur + '</td>' +
-        '<td class="num" style="color:var(--muted)">' + v.start + '</td>' +
-        '<td>' + stateBadge + '</td>';
+        '<td>' + name + '</td>' +
+        '<td>' + where + '</td>' +
+        '<td class="r num cell-strong">' + fmt(Number(r.participants) || 0) + '</td>' +
+        '<td class="r">' + (screens
+          ? '<span class="badge accent">' + fmt(screens) + '</span>'
+          : '<span style="color:var(--faint)">—</span>') + '</td>';
       vb.appendChild(tr);
     });
   }
 
-  /* ---------------- render: bugs table (seed only) ---------------- */
-  function renderBugs(bugs) {
+  /* ---------------- render: feedback queue ----------------
+     The bodies are what people typed, truncated by the API. No author travels
+     with them and none is shown. */
+  var FEEDBACK_KIND = { bug: "bug", idea: "ideia", other: "outro" };
+  var FEEDBACK_STATUS = {
+    open: { label: "aberto", cls: "badge warn" },
+    confirmed: { label: "confirmado", cls: "badge bad" },
+    closed: { label: "fechado", cls: "badge ok" }
+  };
+  function renderBugs(items) {
     var bb = $("bugsBody");
+    if (!bb) return;
     bb.innerHTML = "";
-    bugs.forEach(function (b) {
+    items = Array.isArray(items) ? items : [];
+    if (!items.length) {
+      bb.innerHTML = '<tr><td colspan="3" class="empty-cell">ninguém mandou feedback ainda</td></tr>';
+      return;
+    }
+    items.forEach(function (b) {
+      var st = FEEDBACK_STATUS[b.status] || { label: String(b.status || "?"), cls: "badge" };
+      var when = b.createdAt ? fmtStamp(new Date(b.createdAt)) : "";
       var tr = el("tr");
-      var pcls = b.pstate === "bad" ? "badge bad" : b.pstate === "warn" ? "badge warn" : "badge";
-      var scls = b.sstate === "ok" ? "badge ok" : b.sstate === "warn" ? "badge warn" : "badge";
-      var sdot = b.sstate === "ok" ? '<span class="dot"></span>' : "";
       tr.innerHTML =
-        '<td><div class="bug"><span class="b-title">' + b.title + '</span>' +
-          '<span class="b-meta">' + b.meta + '</span></div></td>' +
-        '<td><span class="' + pcls + '">' + b.prio + '</span></td>' +
-        '<td><span class="' + scls + '">' + sdot + b.est + '</span></td>';
+        '<td><div class="bug"><span class="b-title">' + esc(b.body || "") + '</span>' +
+          (when ? '<span class="b-meta">' + esc(when) + '</span>' : '') + '</div></td>' +
+        '<td><span class="badge">' + esc(FEEDBACK_KIND[b.kind] || b.kind || "?") + '</span></td>' +
+        '<td><span class="' + st.cls + '">' + esc(st.label) + '</span></td>';
       bb.appendChild(tr);
     });
   }
 
-  /* ---------------- seed badges ---------------- */
-  // Once anything is live, every block that is still seed says so, next to
-  // its own title, so nobody reads an illustrative number as a real one.
-  function markSeedSections() {
-    Array.prototype.forEach.call(document.querySelectorAll("[data-seed]"), function (node) {
-      if (node.getAttribute("data-seed-marked")) return;
-      node.setAttribute("data-seed-marked", "1");
-      var badge = el("span", "seed-badge", '<span class="dot" style="width:5px;height:5px;background:var(--faint)"></span> dados representativos');
-      if (node.getAttribute("data-seed") === "row") {
-        var wrap = el("div", "", "");
-        wrap.style.cssText = "flex:1 1 100%;margin:-4px 0 0;font-size:11px;color:var(--faint)";
-        wrap.appendChild(badge);
-        node.appendChild(wrap);
+  /* ---------------- a section whose data this API does not send yet ----------
+     The dashboard ships ahead of the API: the Worker deploys in seconds and
+     the API restarts every live call, so the two are deliberately not released
+     together. Between the two, a pane whose block is missing says so. It must
+     not fall through to `|| 0`, which would draw a row of confident zeroes and
+     be indistinguishable from a real empty instance. */
+  function sectionUnavailable(sectionId, what) {
+    var sec = $(sectionId);
+    if (!sec || sec.getAttribute("data-unavailable") === "1") return true;
+    sec.setAttribute("data-unavailable", "1");
+    // Hidden, not removed. The API is deployed while this page is open, so the
+    // block can start arriving on any poll; a section that destroyed its own
+    // markup would stay blank until somebody thought to reload.
+    Array.prototype.forEach.call(sec.querySelectorAll(".grid, .stat-row"), function (n) {
+      n.setAttribute("data-hidden-by-unavailable", "1");
+      n.style.display = "none";
+    });
+    var box = el("div", "offbox");
+    box.setAttribute("data-unavailable-notice", "1");
+    box.innerHTML =
+      '<b>' + esc(what) + ' ainda não vem desta api</b>' +
+      '<p>a api respondeu, mas sem este bloco: ela é anterior ao deploy que o adicionou. ' +
+      'nada é mostrado aqui em vez de zeros, que seriam indistinguíveis de uma instância vazia de verdade. ' +
+      'assim que a api atualizar, esta aba volta sozinha na próxima leitura.</p>';
+    sec.appendChild(box);
+    return true;
+  }
+
+  /**
+   * Undo the above, for the poll on which the block finally shows up.
+   * Returns false when there was nothing to undo.
+   */
+  function sectionRestore(sectionId) {
+    var sec = $(sectionId);
+    if (!sec || sec.getAttribute("data-unavailable") !== "1") return false;
+    sec.removeAttribute("data-unavailable");
+    Array.prototype.forEach.call(sec.querySelectorAll('[data-hidden-by-unavailable="1"]'), function (n) {
+      n.removeAttribute("data-hidden-by-unavailable");
+      n.style.display = "";
+    });
+    Array.prototype.forEach.call(sec.querySelectorAll('[data-unavailable-notice="1"]'), function (n) {
+      n.parentNode.removeChild(n);
+    });
+    return true;
+  }
+
+  /* ---------------- render: user detail ---------------- */
+  function renderUserDetail(d) {
+    if (!d.userDetail) return sectionUnavailable("secUserDetail", "o perfil da base de usuários");
+    sectionRestore("secUserDetail");
+    var ud = d.userDetail;
+    var users = d.users || {};
+    var total = Number(users.total) || 0;
+
+    var days = Array.isArray(ud.signupsByDay) ? ud.signupsByDay : [];
+    var chart = $("chartSignups");
+    if (chart) {
+      chart.innerHTML = "";
+      if (days.length) {
+        chart.appendChild(barChart(days.map(function (x) { return Number(x.n) || 0; }),
+          { label: "novos cadastros por dia nos últimos 14 dias" }));
       } else {
-        node.appendChild(badge);
+        chart.innerHTML = '<div class="emptybox">nenhum cadastro nos últimos 14 dias</div>';
       }
+    }
+
+    setText("uActive24h", fmt(Number(d.distinctSenders24h) || 0));
+    setText("uActive7d", fmt(Number(ud.active7d) || 0));
+    setText("uDeleting", fmt(Number(ud.deletionPending) || 0));
+
+    var ret = ud.returning7d || {};
+    var eligible = Number(ret.eligible) || 0;
+    var active = Number(ret.active) || 0;
+    setText("uReturn", eligible ? fmtPct(active, eligible) : "—");
+    setText("uReturnNote", eligible
+      ? fmt(active) + " de " + fmt(eligible) + " contas com mais de 24h"
+      : "nenhuma conta tem mais de 24h ainda");
+    // Amber below a third, because at this size the number is noisy and a
+    // colour that shouts on a small sample teaches the operator to ignore it.
+    tone("uReturnTile", !eligible ? "" : (active / eligible) >= 0.34 ? "good" : "attn");
+
+    var rows = [
+      { label: "com @handle", n: Number(ud.withHandle) || 0, cls: "" },
+      { label: "com avatar", n: Number(ud.withAvatar) || 0, cls: "" },
+      { label: "com capa", n: Number(ud.withBanner) || 0, cls: "" },
+      { label: "conta de jogo", n: Number((d.connections || {}).anyProvider) || 0, cls: "" },
+      { label: "idade verificada", n: Number(ud.ageChecked) || 0, cls: "" }
+    ];
+    var peak = 1;
+    rows.forEach(function (r) { if (r.n > peak) peak = r.n; });
+    var dist = $("adoptionDist");
+    if (dist) {
+      dist.innerHTML = "";
+      rows.forEach(function (r) {
+        var row = el("div", "dist-row" + (r.n ? "" : " zero"));
+        row.setAttribute("title", fmt(r.n) + " de " + fmt(total) + " contas");
+        row.innerHTML =
+          '<span class="dr-k">' + esc(r.label) + '</span>' +
+          '<span class="dr-bar"><i style="width:' +
+            (r.n ? Math.max(3, (r.n / peak) * 100) : 0).toFixed(1) + '%"></i></span>' +
+          '<span class="dr-n num">' + fmt(r.n) + '</span>' +
+          '<span class="dr-p num">' + (total ? fmtPct(r.n, total) : "—") + '</span>';
+        dist.appendChild(row);
+      });
+    }
+
+    setText("usersNote", fmt(total) + (total === 1 ? " conta humana" : " contas humanas") +
+      " · " + fmt(Number(users.last24h) || 0) + " nas últimas 24h");
+  }
+
+  /* ---------------- render: channel detail ---------------- */
+  function renderChannelDetail(d) {
+    if (!d.channelDetail) return sectionUnavailable("secChannelDetail", "o detalhe de canais");
+    sectionRestore("secChannelDetail");
+    var cd = d.channelDetail;
+    var conv = cd.conversations || {};
+    setText("chDm", fmt(Number(conv.dm) || 0));
+    setText("chGroup", fmt(Number(conv.group) || 0));
+    setText("chPrivate", fmt(Number(cd.privateText) || 0));
+    setText("chMax", fmt(Number(cd.maxChannelsInServer) || 0));
+    setText("chServers", fmt(Number(cd.serversWithChannels) || 0));
+
+    var empty = Number(cd.emptyText) || 0;
+    var text = Number((d.channels || {}).text) || 0;
+    setText("chEmpty", fmt(empty));
+    // Most channels never used is a product signal, not an incident: flag it
+    // only once it is the majority, and only when there are enough to mean it.
+    tone("chEmptyTile", text >= 10 && empty / text > 0.5 ? "attn" : "");
+
+    var body = $("topChannelsBody");
+    if (!body) return;
+    var top = Array.isArray(cd.topText24h) ? cd.topText24h : [];
+    body.innerHTML = "";
+    if (!top.length) {
+      body.innerHTML = '<tr><td colspan="4" class="empty-cell">nenhuma mensagem em canais de servidor nas últimas 24h</td></tr>';
+      return;
+    }
+    top.forEach(function (c) {
+      var tr = el("tr");
+      tr.innerHTML =
+        '<td><span class="srv-name">' + esc(c.channel) + '</span></td>' +
+        '<td style="color:var(--muted)">' + esc(c.server) + '</td>' +
+        '<td class="r num cell-strong">' + fmt(Number(c.messages24h) || 0) + '</td>' +
+        '<td class="r num">' + fmt(Number(c.senders24h) || 0) + '</td>';
+      body.appendChild(tr);
     });
   }
 
-  /* ---------------- initial render: seed ---------------- */
-  renderHealth(seedHealth, seedHost);
-  renderMetrics(seedMetrics);
-  renderCharts(seedNewUsersHourly, seedMessagesHourly);
-  renderAcquisition({ days: 7, total: 0, rows: [], landings: [] });
-  renderConnections({ ofUsers: 0, anyProvider: 0, anyProviderPublic: 0, providers: [] });
-  renderServers(seedServers);
-  renderChannels(seedChannels);
-  renderVoice(seedVoice);
-  renderVoiceRooms(seedVoiceRooms);
-  renderBugs(seedBugs);
-  renderCallRatings(seedRatings);
-  renderMessageSplit(sum(seedMessagesHourly), seedAutomated);
-  renderProvenance({ excludedAccounts: ["webhook", "character"], cacheTtlSeconds: 30 });
-  setMetricSignals({
-    messages: { last24h: sum(seedMessagesHourly), previous24h: 957, automated24h: seedAutomated },
-    voice: { activeRooms: 2, participants: 4, largestRoomNow: 3, backend: "mesh" },
-    callRatings: seedRatings
-  });
-  setText("serversNote", seedServersNote);
+  /* ---------------- render: communities ----------------
+     Off and empty are different answers and the pane gives whichever is true:
+     with COMMUNITIES_ENABLED unset the zeros mean the feature does not exist
+     on this instance, not that nobody made one. */
+  function renderCommunities(d) {
+    if (!d.communities) return sectionUnavailable("secCommunities", "o quadro de comunidades");
+    sectionRestore("secCommunities");
+    var c = d.communities;
+    var off = $("commOff"), live = $("commLive");
+    if (!off || !live) return;
+
+    if (!c.enabled) {
+      live.hidden = true;
+      off.hidden = false;
+      // Clear the skeletons inside the hidden half too: a shimmer keyframe on
+      // display:none content still runs, and there is nothing coming for it.
+      var body = $("commBody"), dist = $("commCatDist");
+      if (body) body.innerHTML = "";
+      if (dist) dist.innerHTML = "";
+      off.innerHTML =
+        '<div class="offbox">' +
+          '<b>comunidades estão desligadas nesta instância</b>' +
+          '<p>o diretório público inteiro fica atrás de <code>COMMUNITIES_ENABLED</code>, ' +
+          'que não está ligado na api. os números aqui seriam zero porque a função não existe, ' +
+          'não porque ninguém usou.</p>' +
+          '<p>ligar isso tira a instância da isenção de responsabilidade de mensageria privada ' +
+          '(STF, art. 19, 26/06/2025). ver <code>docs/CONTENT_SAFETY.md</code> §Communities antes.</p>' +
+        '</div>';
+      setText("commNote", "desligadas · COMMUNITIES_ENABLED sem valor na api");
+      return;
+    }
+
+    off.hidden = true;
+    live.hidden = false;
+    var total = Number(c.total) || 0;
+    var susp = Number(c.suspended) || 0;
+    setText("commListed", fmt(Number(c.listed) || 0));
+    setText("commSusp", fmt(susp));
+    setText("commSlug", fmt(Number(c.withSlug) || 0));
+    tone("commSuspTile", susp ? "attn" : "");
+    setText("commNote", total
+      ? fmt(total) + (total === 1 ? " comunidade" : " comunidades") + " no total"
+      : "nenhuma comunidade criada ainda");
+
+    var body2 = $("commBody");
+    var list = Array.isArray(c.list) ? c.list : [];
+    if (body2) {
+      body2.innerHTML = "";
+      if (!list.length) {
+        body2.innerHTML = '<tr><td colspan="6" class="empty-cell">ninguém abriu uma comunidade ainda</td></tr>';
+      }
+      list.forEach(function (row) {
+        var tr = el("tr");
+        tr.innerHTML =
+          '<td><span class="srv-name">' + esc(row.name) + '</span>' +
+            (row.suspended ? ' <span class="badge bad">suspensa</span>' : '') + '</td>' +
+          '<td style="color:var(--muted)">' + esc(row.category || "—") + '</td>' +
+          '<td class="mono" style="color:var(--muted)">' +
+            (row.slug ? "/c/" + esc(row.slug) : '<span style="color:var(--faint)">sem endereço</span>') + '</td>' +
+          '<td class="r num cell-strong">' + fmt(Number(row.members) || 0) + '</td>' +
+          '<td class="r num">' + fmt(Number(row.channels) || 0) + '</td>' +
+          '<td class="r num">' + fmt(Number(row.messages24h) || 0) + '</td>';
+        body2.appendChild(tr);
+      });
+    }
+
+    var cats = Array.isArray(c.byCategory) ? c.byCategory : [];
+    var dist2 = $("commCatDist");
+    if (!dist2) return;
+    dist2.innerHTML = "";
+    if (!cats.length) {
+      dist2.innerHTML = '<div class="emptybox">nada para agrupar ainda</div>';
+      return;
+    }
+    var peak = 1;
+    cats.forEach(function (x) { if ((Number(x.n) || 0) > peak) peak = Number(x.n) || 0; });
+    cats.forEach(function (x) {
+      var n = Number(x.n) || 0;
+      var row = el("div", "dist-row" + (n ? "" : " zero"));
+      row.innerHTML =
+        '<span class="dr-k">' + esc(x.category) + '</span>' +
+        '<span class="dr-bar"><i style="width:' + Math.max(3, (n / peak) * 100).toFixed(1) + '%"></i></span>' +
+        '<span class="dr-n num">' + fmt(n) + '</span>' +
+        '<span class="dr-p num">' + fmtPct(n, total) + '</span>';
+      dist2.appendChild(row);
+    });
+  }
+
+  /* ---------------- render: moderation ---------------- */
+  function renderModeration(d) {
+    if (!d.moderation) return sectionUnavailable("secModeration", "a fila de moderação");
+    sectionRestore("secModeration");
+    var mod = d.moderation;
+    var rep = mod.reports || {}, fb = mod.feedback || {};
+    var open = Number(rep.open) || 0;
+    var resolved = (Number(rep.actioned) || 0) + (Number(rep.dismissed) || 0);
+
+    setText("modOpen", fmt(open));
+    setText("modNew24h", fmt(Number(rep.last24h) || 0));
+    setText("modResolved", fmt(resolved));
+    setText("modResolvedNote", resolved
+      ? fmt(Number(rep.actioned) || 0) + " com ação · " + fmt(Number(rep.dismissed) || 0) + " arquivadas"
+      : "nada resolvido ainda");
+    setText("modBans", fmt(Number(mod.bans) || 0));
+    setText("modTimeouts", fmt(Number(mod.activeTimeouts) || 0));
+    // An open report is the one thing on this page that wants a human today.
+    tone("modOpenTile", open ? "attn" : "good");
+
+    setText("modNote", (d.communities || {}).enabled
+      ? "comunidades públicas ligadas: denúncias sobre uma comunidade vêm para a fila da instância, nunca para o dono dela."
+      : "instância privada de mensagens: comunidades públicas estão desligadas, então a fila é só de denúncias entre pessoas e vai direto para o operador.");
+
+    var fbOpen = Number(fb.open) || 0;
+    setText("fbOpen", fmt(fbOpen));
+    setText("fbConfirmed", fmt(Number(fb.confirmed) || 0));
+    setText("fbNew24h", fmt(Number(fb.last24h) || 0));
+    tone("fbOpenTile", fbOpen ? "attn" : "good");
+
+    renderBugs(mod.recentFeedback);
+
+    var badge = $("tabModCount");
+    if (badge) {
+      var attn = open + fbOpen;
+      badge.hidden = !attn;
+      badge.textContent = String(attn);
+      badge.setAttribute("data-attn", open ? "1" : "0");
+    }
+  }
+
+  /* ---------------- render: uptime per component ---------------- */
+  function renderUptime(comps) {
+    var dist = $("uptimeDist");
+    if (!dist) return;
+    dist.innerHTML = "";
+    comps = Array.isArray(comps) ? comps : [];
+    var withSamples = comps.filter(function (c) { return typeof c.uptime7d === "number"; });
+    if (!withSamples.length) {
+      dist.innerHTML = '<div class="emptybox">a api ainda não guardou amostras suficientes</div>';
+      setText("infraUp24", "—");
+      setText("infraUp7", "—");
+      setText("infraUp24Note", "sem amostras");
+      setText("infraUp7Note", "sem amostras");
+      return;
+    }
+    withSamples.forEach(function (c) {
+      var pct = c.uptime7d * 100;
+      var cls = pct >= 99.9 ? "good" : pct >= 99 ? "mid" : "bad";
+      var row = el("div", "dist-row");
+      row.setAttribute("title", (HEALTH_KEYS[c.key] || c.key) + " · " + pct.toFixed(3).replace(".", ",") + "% em 7 dias");
+      row.innerHTML =
+        '<span class="dr-k">' + esc(HEALTH_KEYS[c.key] || c.label || c.key) + '</span>' +
+        '<span class="dr-bar"><i class="' + cls + '" style="width:' + Math.max(3, pct).toFixed(2) + '%"></i></span>' +
+        '<span class="dr-p num" style="grid-column:span 2">' + pct.toFixed(2).replace(".", ",") + '%</span>';
+      dist.appendChild(row);
+    });
+
+    // The headline is the WORST component, not the mean: an average over five
+    // components hides one of them being down for an hour.
+    function worst(key) {
+      var vals = comps.filter(function (c) { return typeof c[key] === "number"; });
+      if (!vals.length) return null;
+      return vals.reduce(function (a, b) { return b[key] < a[key] ? b : a; });
+    }
+    [["uptime24h", "infraUp24", "infraUp24Note", "infraUp24Tile"],
+     ["uptime7d", "infraUp7", "infraUp7Note", "infraUp7Tile"]].forEach(function (spec) {
+      var w = worst(spec[0]);
+      if (!w) {
+        setText(spec[1], "—");
+        setText(spec[2], "sem amostras");
+        return;
+      }
+      var pct = w[spec[0]] * 100;
+      setText(spec[1], pct.toFixed(2).replace(".", ",") + "%");
+      setText(spec[2], HEALTH_KEYS[w.key] || w.label || w.key);
+      tone(spec[3], pct >= 99.9 ? "good" : pct >= 99 ? "attn" : "bad");
+    });
+  }
+
+  /* ---------------- tabs ----------------
+     One payload, seven panes. Switching never touches the network, so the
+     hash is the only state: it survives a reload and can be pasted to
+     yourself, and an unknown one falls back to the first pane rather than
+     leaving the page with nothing visible. */
+  var TABS = ["geral", "usuarios", "canais", "comunidades", "voz", "moderacao", "infra"];
+
+  function showTab(name, opts) {
+    if (TABS.indexOf(name) === -1) name = TABS[0];
+    TABS.forEach(function (t) {
+      var btn = $("tab-" + t), pane = $("pane-" + t);
+      var on = t === name;
+      if (btn) {
+        btn.setAttribute("aria-selected", on ? "true" : "false");
+        btn.tabIndex = on ? 0 : -1;
+      }
+      if (pane) pane.hidden = !on;
+    });
+    if (!opts || !opts.silent) {
+      try {
+        if (window.history && history.replaceState) {
+          history.replaceState(null, "", "#" + name);
+        } else {
+          location.hash = name;
+        }
+      } catch (e) { /* a hash we cannot write is not worth failing over */ }
+    }
+  }
+
+  (function wireTabs() {
+    var bar = $("tabs");
+    if (!bar) return;
+    bar.addEventListener("click", function (ev) {
+      var btn = ev.target && ev.target.closest ? ev.target.closest(".tab") : null;
+      if (btn && btn.getAttribute("data-tab")) showTab(btn.getAttribute("data-tab"));
+    });
+    // Arrow keys move between tabs, which is what a tablist is expected to do.
+    bar.addEventListener("keydown", function (ev) {
+      var i = TABS.indexOf(
+        (document.activeElement && document.activeElement.getAttribute)
+          ? document.activeElement.getAttribute("data-tab")
+          : null
+      );
+      if (i === -1) return;
+      var next = null;
+      if (ev.key === "ArrowRight") next = TABS[(i + 1) % TABS.length];
+      else if (ev.key === "ArrowLeft") next = TABS[(i - 1 + TABS.length) % TABS.length];
+      else if (ev.key === "Home") next = TABS[0];
+      else if (ev.key === "End") next = TABS[TABS.length - 1];
+      if (!next) return;
+      ev.preventDefault();
+      showTab(next);
+      var btn = $("tab-" + next);
+      if (btn) btn.focus();
+    });
+    window.addEventListener("hashchange", function () {
+      showTab(String(location.hash || "").replace(/^#/, ""), { silent: true });
+    });
+    showTab(String(location.hash || "").replace(/^#/, ""), { silent: true });
+  })();
+
+  /* ---------------- initial render: skeletons ----------------
+     Shapes, never numbers. See the note where the seed data used to live. */
+  function skel(cls, style) {
+    return '<span class="skel ' + (cls || "skel-line") + '"' +
+      (style ? ' style="' + style + '"' : '') + '></span>';
+  }
+  function fillSkel(id, html) {
+    var e = $(id);
+    if (e) e.innerHTML = html;
+  }
+  function skelRows(id, cols, rows) {
+    var e = $(id);
+    if (!e) return;
+    var out = "";
+    for (var r = 0; r < rows; r++) {
+      out += '<tr class="skel-row">';
+      for (var c = 0; c < cols; c++) {
+        out += '<td>' + skel("skel-line", "width:" + (c === 0 ? 70 : 40) + "%") + '</td>';
+      }
+      out += '</tr>';
+    }
+    e.innerHTML = out;
+  }
+
+  function paintSkeletons() {
+    var cards = "";
+    for (var i = 0; i < 6; i++) {
+      cards += '<div class="metric">' + skel("skel-sm", "width:52%") +
+        '<div style="height:10px"></div>' + skel("skel-num") +
+        '<div style="height:10px"></div>' + skel("skel-sm", "width:70%") + '</div>';
+    }
+    fillSkel("metricGrid", cards);
+
+    var health = "";
+    for (var h = 0; h < 6; h++) {
+      health += '<div class="health">' + skel("skel-sm", "width:46%") +
+        '<div style="height:12px"></div>' + skel("skel-num", "width:40%") +
+        '<div style="height:12px"></div>' + skel("skel-line", "width:100%") + '</div>';
+    }
+    fillSkel("healthGrid", health);
+
+    ["chartUsers", "chartMsgs", "chartSignups"].forEach(function (id) {
+      fillSkel(id, skel("skel-chart"));
+    });
+    ["ratingDist", "connDist", "adoptionDist", "commCatDist", "uptimeDist", "ratingTransport"].forEach(function (id) {
+      fillSkel(id, skel("skel-bar") + skel("skel-bar") + skel("skel-bar"));
+    });
+    fillSkel("signals", skel("skel-bar", "width:180px;display:inline-block") +
+      skel("skel-bar", "width:150px;display:inline-block;margin-left:8px") +
+      skel("skel-bar", "width:170px;display:inline-block;margin-left:8px"));
+
+    skelRows("serversBody", 4, 4);
+    skelRows("acqBody", 4, 4);
+    skelRows("acqLandingBody", 3, 3);
+    skelRows("connBody", 4, 3);
+    skelRows("voiceBody", 4, 2);
+    skelRows("topChannelsBody", 4, 5);
+    skelRows("commBody", 6, 3);
+    skelRows("bugsBody", 3, 3);
+  }
+  paintSkeletons();
+
+  /* ---------------- failure state ----------------
+     If /metrics never answers, the page says so and offers a retry. It does
+     not fall back to illustrative numbers: an operator glancing at a screen
+     cannot tell those from a stale reading, which is the whole failure this
+     dashboard exists to avoid. */
+  var errBox = $("loadError");
+  function showLoadError(reason) {
+    if (!errBox) return;
+    errBox.hidden = false;
+    errBox.innerHTML =
+      '<div class="errbox">' +
+        '<b>a api não respondeu</b>' +
+        '<p>este painel lê <code>/metrics</code> e <code>/health</code> através do próprio worker. ' +
+        'nenhum número é mostrado enquanto a leitura não voltar, de propósito: um valor plausível ' +
+        'na tela é indistinguível de um valor real.' +
+        (reason ? ' motivo: <code>' + esc(reason) + '</code>.' : '') + '</p>' +
+        '<button type="button" id="retryBtn">tentar de novo</button>' +
+      '</div>';
+    var btn = $("retryBtn");
+    if (btn) {
+      btn.addEventListener("click", function () {
+        btn.disabled = true;
+        btn.textContent = "tentando...";
+        refresh();
+      });
+    }
+  }
+  function clearLoadError() {
+    if (errBox && !errBox.hidden) {
+      errBox.hidden = true;
+      errBox.innerHTML = "";
+    }
+  }
 
   /* ---------------- last-updated clock ---------------- */
   var upEl = $("updatedAt");
@@ -2078,18 +2900,20 @@
 
   function paintChip() {
     var live = state.metrics || state.health;
-    chip.setAttribute("data-state", live ? "live" : "seed");
+    chip.setAttribute("data-state", live ? "live" : "waiting");
     var label;
     if (state.metrics && state.health) label = "ao vivo · api.pqp.gg";
     else if (state.metrics) label = "ao vivo · api.pqp.gg (saúde indisponível)";
-    else if (state.health) label = "saúde ao vivo · números representativos";
-    else label = "dados representativos";
+    else if (state.health) label = "saúde ao vivo · métricas indisponíveis";
+    else label = "sem leitura da api";
     if (live && state.failedOnce) label += " · última leitura " + fmtTime(lastLiveAt || new Date());
     chip.innerHTML = (live ? '<span class="dot live"></span> ' : '<span class="dot"></span> ') + esc(label);
-    chip.title = live ? "lido de /metrics e /health neste worker" : "a api não respondeu; mostrando números seed";
+    chip.title = live
+      ? "lido de /metrics e /health neste worker"
+      : "a api não respondeu; o painel não inventa números para preencher";
     setText("footDisclaimer", state.metrics
-      ? "números ao vivo da api · blocos sem fonte marcados como representativos · uso apenas do operador"
-      : "números seed representativos · uso apenas do operador");
+      ? "números ao vivo da api · uso apenas do operador"
+      : "aguardando a api · uso apenas do operador");
   }
 
   function fetchJson(path) {
@@ -2154,6 +2978,8 @@
     var text = ch.text || 0, vo = ch.voice || 0, cat = ch.category || 0, th = ch.thread || 0;
     renderChannels({ text: text, voice: vo, category: cat, thread: th,
       total: text + vo + cat + th, newServers24h: servers.last24h || 0, activeText24h: d.activeTextChannels24h || 0 });
+    setText("channelsNote", fmt(text + vo + cat + th) + " canais de servidor · " +
+      fmt(d.activeTextChannels24h || 0) + " de texto ativos em 24h");
 
     renderVoice({
       activeRooms: voice.activeRooms || 0,
@@ -2164,9 +2990,18 @@
     });
 
     renderCallRatings(d.callRatings);
+    renderVoiceRooms(voice.rooms);
     renderMessageSplit(msgs.last24h || 0, msgs.automated24h || 0);
     renderProvenance(d);
     setMetricSignals(d);
+
+    // The tab panes. Each guards its own missing block, so a dashboard talking
+    // to an API that predates these fields shows an empty pane rather than
+    // throwing halfway through and leaving the page half painted.
+    renderUserDetail(d);
+    renderChannelDetail(d);
+    renderCommunities(d);
+    renderModeration(d);
 
     // Infra: the deployed commit, when the machine was stamped with one.
     // A git sha is shown short, the way `git log --oneline` would; anything else as-is.
@@ -2185,8 +3020,10 @@
     api: "resposta do /status.json", database: "SELECT 1 · pool ok", storage: "HEAD assinado no bucket",
     voice: "sinalização webrtc no /ws", gifs: "proxy de busca"
   };
-  var lastHealth = seedHealth;
-  var lastHost = seedHost;
+  // Nothing to draw until /health answers; renderHealth is only ever called
+  // with real tiles, so an empty list here means the skeleton stays put.
+  var lastHealth = null;
+  var lastHost = { version: "", versionKnown: false };
 
   function applyHealth(s) {
     var comps = Array.isArray(s.components) ? s.components : [];
@@ -2231,24 +3068,32 @@
     };
     paintSignals();
 
+    renderUptime(comps);
+
     var db = comps.filter(function (c) { return c.key === "database"; })[0];
     if (db && typeof db.latencyMs === "number") setText("infraDb", "postgres · ~" + Math.round(db.latencyMs) + "ms");
   }
 
   function refresh() {
+    var lastReason = "";
     var metricsReq = fetchJson("/metrics").then(function (d) {
       if (!d || typeof d !== "object" || !d.users) throw new Error("payload inesperado");
       applyMetrics(d);
       state.metrics = true;
-    }).catch(function () {
+      clearLoadError();
+    }).catch(function (e) {
+      lastReason = (e && e.message) ? e.message : "erro desconhecido";
+      // A read that fails after a good one leaves the last real numbers on
+      // screen and says when they were read; a read that never succeeded
+      // leaves the skeletons and explains itself.
       if (state.metrics) state.failedOnce = true;
+      else showLoadError(lastReason);
     });
     var healthReq = fetchJson("/health").then(function (s) {
       applyHealth(s);
       state.health = true;
     }).catch(function () { /* keep whatever is on screen */ });
     return Promise.all([metricsReq, healthReq]).then(function () {
-      if (state.metrics || state.health) markSeedSections();
       paintChip();
       if (!state.metrics) paintUpdated();
     });
