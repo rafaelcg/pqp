@@ -114,6 +114,18 @@ type GroupsCoverEveryFlag = [MissingFromGroups] extends [never] ? true : never;
 const _groupsCoverEveryFlag: GroupsCoverEveryFlag = true;
 void _groupsCoverEveryFlag;
 
+/**
+ * Bits that exist on the wire and in the default masks, but are not yet
+ * checked on a server path. Showing a toggle would let an operator turn them
+ * off and believe a restriction exists. Hide until each one is enforced.
+ */
+const UNENFORCED_FLAGS = new Set<PermissionFlagKey>([
+  "MANAGE_SERVER",
+  "ATTACH_FILES",
+  "READ_MESSAGE_HISTORY",
+  "SPEAK",
+]);
+
 const EVERYONE_LOCKED_KEYS = new Set<PermissionFlagKey>([
   "ADMINISTRATOR",
   "KICK_MEMBERS",
@@ -389,13 +401,18 @@ export function RolesSettingsSection({ serverId }: { serverId: string }) {
                 description={t("roles.permHint.ADMINISTRATOR")}
               />
             </div>
-            {PERMISSION_GROUPS.map((group) => (
+            {PERMISSION_GROUPS.map((group) => {
+              const keys = group.keys.filter((key) => !UNENFORCED_FLAGS.has(key));
+              if (keys.length === 0) {
+                return null;
+              }
+              return (
               <div key={group.heading}>
                 <p className="mb-1 px-2 text-xs uppercase tracking-wide text-paper-muted">
                   {t(group.heading)}
                 </p>
                 <div className="space-y-0.5">
-                  {group.keys.map((key) => {
+                  {keys.map((key) => {
                     const lockedOnEveryone =
                       selected.isEveryone && EVERYONE_LOCKED_KEYS.has(key);
                     const hint = FLAG_HINT[key];
@@ -421,7 +438,8 @@ export function RolesSettingsSection({ serverId }: { serverId: string }) {
                   })}
                 </div>
               </div>
-            ))}
+              );
+            })}
           </fieldset>
           {error && <p className="text-sm text-danger">{error}</p>}
           <div className="flex gap-2">

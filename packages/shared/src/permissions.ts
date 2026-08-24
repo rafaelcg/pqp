@@ -264,11 +264,21 @@ export const roleNameSchema = z
   )
   .refine((value) => !isReservedMentionName(value), "Role name is reserved");
 
+function nicknameHasControlChars(value: string): boolean {
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code <= 31 || code === 127) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export const nicknameSchema = z
   .string()
   .min(1)
   .max(32)
-  .refine((value) => !/[\u0000-\u001F\u007F]/.test(value), "Invalid characters");
+  .refine((value) => !nicknameHasControlChars(value), "Invalid characters");
 
 export const roleColorSchema = z
   .string()

@@ -219,7 +219,7 @@ export function InvitePanel({
   }
 
   async function handleRevoke(inviteId: string) {
-    if (!serverId) {
+    if (!serverId || !canManage) {
       return;
     }
     setPendingId(inviteId);

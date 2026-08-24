@@ -3419,6 +3419,7 @@ router.delete(
       throw new NotFound("Role not found");
     }
     await assertCanEditRole(user.id, role);
+    await requireOutranked(serverId!, user.id, userId!, "kick");
     await unassignRole(serverId!, userId!, roleId!);
     await logAudit({
       serverId: serverId!,

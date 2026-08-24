@@ -15,6 +15,7 @@ export function usePermissions(serverId: string | null) {
     if (!serverId) {
       setServerBits(0n);
       setChannelBits({});
+      setVersion(0);
       return;
     }
     let cancelled = false;
@@ -34,6 +35,8 @@ export function usePermissions(serverId: string | null) {
       .catch(() => {
         if (!cancelled) {
           setServerBits(0n);
+          setChannelBits({});
+          setVersion(0);
         }
       });
     return () => {

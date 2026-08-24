@@ -269,10 +269,22 @@ export async function computeMemberPermissions(
   let memberOverwrite: PermissionOverwrite | null = null;
 
   if (channelId) {
+    // Threads have no overwrite rows of their own. Privacy and send/react
+    // gates follow the parent, the same way `channelVisibleSql` does.
+    const effective = await getPool().query<{ id: string }>(
+      `SELECT CASE
+         WHEN type = 'thread' AND parent_id IS NOT NULL THEN parent_id
+         ELSE id
+       END AS id
+         FROM channels
+        WHERE id = $1`,
+      [channelId],
+    );
+    const overwriteChannelId = effective.rows[0]?.id ?? channelId;
     const overwrites = await getPool().query<OverwriteRow>(
       `SELECT target_type, target_id, allow::text AS allow, deny::text AS deny
          FROM channel_overwrites WHERE channel_id = $1`,
-      [channelId],
+      [overwriteChannelId],
     );
     const heldIds = new Set(ctx.heldRoles.map((role) => role.id));
     for (const row of overwrites.rows) {
