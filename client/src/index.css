@@ -412,12 +412,13 @@ h2,
 }
 
 .pqp-message-mention {
-  background: color-mix(in oklch, var(--color-accent) 12%, transparent);
-  box-shadow: inset 3px 0 0 var(--color-accent);
+  /* Wash only. Consecutive pings in a group share one block via
+     mentionJoinTop / mentionJoinBottom on the row, not a left bar. */
+  background: color-mix(in oklch, var(--color-accent) 14%, transparent);
 }
 
 .pqp-message-mention:hover {
-  background: color-mix(in oklch, var(--color-accent) 18%, transparent);
+  background: color-mix(in oklch, var(--color-accent) 20%, transparent);
 }
 
 @keyframes rise-in {

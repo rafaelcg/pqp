@@ -817,16 +817,12 @@ describe("applyProfileUpdate", () => {
 describe("open-channel sounds", () => {
   const OTHER = "00000000-0000-4000-8000-000000000002";
 
-  it("does not ping when you send a plain message", () => {
+  it("does not ping when you send a message, even a self-mention", () => {
     const { chat } = setup();
     chat.sendMessage("hello");
-    expect(notifyOpenChannelMessage).toHaveBeenCalledWith(CHANNEL, false);
-  });
-
-  it("plays the mention cue when you tag yourself", () => {
-    const { chat } = setup();
+    expect(notifyOpenChannelMessage).not.toHaveBeenCalled();
     chat.sendMessage("ping @me");
-    expect(notifyOpenChannelMessage).toHaveBeenCalledWith(CHANNEL, true);
+    expect(notifyOpenChannelMessage).not.toHaveBeenCalled();
   });
 
   it("plays once for an incoming message, not again on the echo of your own send", () => {
@@ -863,5 +859,44 @@ describe("open-channel sounds", () => {
       }),
     } as never);
     expect(notifyOpenChannelMessage).toHaveBeenCalledWith(CHANNEL, true);
+  });
+
+  it("plays the mention cue when someone else fires @everyone or @here", () => {
+    const { chat } = setup();
+    chat.handleServerMessage({
+      type: "message-broadcast",
+      message: serverMessage({
+        id: "00000000-0000-4000-8000-00000000000c",
+        authorId: OTHER,
+        body: "hey @everyone",
+        mentionEveryone: true,
+      }),
+    } as never);
+    expect(notifyOpenChannelMessage).toHaveBeenCalledWith(CHANNEL, true);
+
+    notifyOpenChannelMessage.mockClear();
+    chat.handleServerMessage({
+      type: "message-broadcast",
+      message: serverMessage({
+        id: "00000000-0000-4000-8000-00000000000d",
+        authorId: OTHER,
+        body: "hey @here",
+        mentionHere: true,
+      }),
+    } as never);
+    expect(notifyOpenChannelMessage).toHaveBeenCalledWith(CHANNEL, true);
+  });
+
+  it("stays silent for a typed @everyone that was not allowed to fire", () => {
+    const { chat } = setup();
+    chat.handleServerMessage({
+      type: "message-broadcast",
+      message: serverMessage({
+        authorId: OTHER,
+        body: "hey @everyone",
+        mentionEveryone: false,
+      }),
+    } as never);
+    expect(notifyOpenChannelMessage).toHaveBeenCalledWith(CHANNEL, false);
   });
 });

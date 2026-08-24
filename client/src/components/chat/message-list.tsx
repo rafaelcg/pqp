@@ -233,6 +233,47 @@ function buildRows(messages: ChatMessage[]): Row[] {
   });
 }
 
+/** Consecutive pings in a group share one wash, not a stack of rounded cards. */
+function mentionJoins(
+  rows: Row[],
+  mentions: readonly boolean[],
+  index: number,
+  firstUnreadId: string | null,
+): { joinTop: boolean; joinBottom: boolean } {
+  if (!mentions[index]) {
+    return { joinTop: false, joinBottom: false };
+  }
+  const row = rows[index]!;
+  const next = rows[index + 1];
+  const joinTop = Boolean(
+    mentions[index - 1] &&
+      !row.startsGroup &&
+      !row.dayLabel &&
+      row.message.id !== firstUnreadId,
+  );
+  const joinBottom = Boolean(
+    next &&
+      mentions[index + 1] &&
+      !next.startsGroup &&
+      !next.dayLabel &&
+      next.message.id !== firstUnreadId,
+  );
+  return { joinTop, joinBottom };
+}
+
+function mentionRowRadius(joinTop: boolean, joinBottom: boolean): string {
+  if (joinTop && joinBottom) {
+    return "rounded-none";
+  }
+  if (joinTop) {
+    return "rounded-b-md";
+  }
+  if (joinBottom) {
+    return "rounded-t-md";
+  }
+  return "rounded-md";
+}
+
 export function MessageList({
   messages,
   currentUserId,
@@ -352,6 +393,13 @@ export function MessageList({
   const [liveAnnouncement, setLiveAnnouncement] = useState("");
 
   const rows = useMemo(() => buildRows(messages), [messages]);
+  const mentionMask = useMemo(
+    () =>
+      rows.map((row) =>
+        messageMentionsYou(row.message, currentUsername, currentUserId),
+      ),
+    [rows, currentUsername, currentUserId],
+  );
   const rowIds = useMemo(() => rows.map((row) => row.message.id), [rows]);
   const firstUnreadId = useMemo(
     () => findFirstUnreadMessageId(messages, unreadSince),
@@ -885,10 +933,19 @@ export function MessageList({
         {messages.length === 0 ? (
           <EmptyState />
         ) : (
-          rows.map((row) => (
+          rows.map((row, index) => {
+            const { joinTop, joinBottom } = mentionJoins(
+              rows,
+              mentionMask,
+              index,
+              firstUnreadId,
+            );
+            return (
             <MessageRow
               key={row.message.id}
               row={row}
+              mentionJoinTop={joinTop}
+              mentionJoinBottom={joinBottom}
               currentUserId={currentUserId}
               currentUsername={currentUsername}
               serverId={serverId}
@@ -1001,7 +1058,8 @@ export function MessageList({
                 row.message.id === firstUnreadId ? unreadDividerRef : undefined
               }
             />
-          ))
+            );
+          })
         )}
 
         {hasNewer && (
@@ -1325,6 +1383,10 @@ interface MessageRowProps {
   onMarkRead?: () => void;
   showUnreadDivider?: boolean;
   unreadDividerRef?: Ref<HTMLDivElement>;
+  /** This ping sits against the previous row's wash. */
+  mentionJoinTop?: boolean;
+  /** This ping sits against the next row's wash. */
+  mentionJoinBottom?: boolean;
 }
 
 const MessageRow = memo(function MessageRow({
@@ -1372,12 +1434,18 @@ const MessageRow = memo(function MessageRow({
   onMarkRead,
   showUnreadDivider = false,
   unreadDividerRef,
+  mentionJoinTop = false,
+  mentionJoinBottom = false,
 }: MessageRowProps) {
   const { t } = useTranslation();
   const openProfile = useProfilePopover();
   const { message, startsGroup, dayLabel } = row;
   const authorInfo = authors.get(message.authorId);
-  const mentionsYou = messageMentionsYou(message, currentUsername);
+  const mentionsYou = messageMentionsYou(
+    message,
+    currentUsername,
+    currentUserId,
+  );
   const moreRef = useRef<HTMLDivElement>(null);
   const [moreOpen, setMoreOpen] = useState(false);
   useEffect(() => {
@@ -1683,8 +1751,13 @@ const MessageRow = memo(function MessageRow({
           // gets from the keyboard Menu key / Shift+F10.
           onContextMenu={onMenuOpenRow}
           className={cn(
-            "group relative flex gap-3 rounded-md px-1 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60",
-            startsGroup ? "mt-3 py-0.5" : "py-px",
+            "group relative flex gap-3 px-1 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60",
+            startsGroup ? "mt-3" : null,
+            mentionJoinTop ? "pt-0" : startsGroup ? "pt-0.5" : "pt-px",
+            mentionJoinBottom ? "pb-0" : startsGroup ? "pb-0.5" : "pb-px",
+            mentionsYou && !isFlashing
+              ? mentionRowRadius(mentionJoinTop, mentionJoinBottom)
+              : "rounded-md",
             message.pending && "opacity-60",
             isFlashing && "bg-accent/15 ring-1 ring-accent/50",
             mentionsYou && !isFlashing && "pqp-message-mention",
@@ -1812,7 +1885,7 @@ const MessageRow = memo(function MessageRow({
                 {/* A message carrying attachments is allowed to say nothing, so
                     an empty body renders as nothing rather than an empty line. */}
                 {message.body && (
-                  <div className="markdown-body text-[15px] leading-relaxed text-paper/90">
+                  <div className="markdown-body text-[15px] leading-normal text-paper/90">
                     <MessageBody
                       body={message.body}
                       currentUsername={currentUsername}

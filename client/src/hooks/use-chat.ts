@@ -9,12 +9,9 @@ import type {
   ReactionBroadcast,
   ThreadSummary,
 } from "@pqp/shared";
-import {
-  buildReplyExcerpt,
-  extractMentionUsernames,
-  MESSAGE_PAGE_SIZE,
-} from "@pqp/shared";
+import { buildReplyExcerpt, MESSAGE_PAGE_SIZE } from "@pqp/shared";
 import { notifyOpenChannelMessage } from "@/lib/notifications";
+import { messagePingsYou } from "@/lib/message-mentions-you";
 import {
   apiFetch,
   deleteMessage as deleteMessageRequest,
@@ -24,21 +21,6 @@ import {
 } from "@/lib/api";
 import { revokePreviewUrl, type OutgoingAttachment } from "@/lib/attachments";
 import type { RealtimeTransport } from "@/lib/realtime";
-
-function messageNamesUser(
-  body: string,
-  username: string | null,
-  replyAuthorId: string | null | undefined,
-  readerId: string | null,
-): boolean {
-  if (readerId && replyAuthorId === readerId) {
-    return true;
-  }
-  if (!username) {
-    return false;
-  }
-  return extractMentionUsernames(body).includes(username.toLowerCase());
-}
 
 /** A message plus the client-only state an optimistic bubble needs. */
 export interface ChatMessage extends Message {
@@ -707,10 +689,6 @@ export function createChatController(
         replyTo?.id,
         optimisticAttachments.map((attachment) => attachment.id),
       );
-      notifyOpenChannelMessage(
-        channelId,
-        messageNamesUser(body, currentUsername, replyTo?.authorId, currentUserId),
-      );
     },
 
     retryMessage(nonce: string) {
@@ -939,12 +917,7 @@ export function createChatController(
           if (incoming.authorId !== currentUserId) {
             notifyOpenChannelMessage(
               channelId,
-              messageNamesUser(
-                incoming.body,
-                currentUsername,
-                incoming.replyTo?.authorId,
-                currentUserId,
-              ),
+              messagePingsYou(incoming, currentUsername, currentUserId),
             );
           }
           return;
