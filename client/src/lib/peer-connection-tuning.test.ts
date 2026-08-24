@@ -242,6 +242,21 @@ describe("screen budget across a growing room", () => {
     }
   });
 
+  it("gives a re-share the same ceiling as the first one", async () => {
+    // The reported bug was a *second* share, so the peer count the second
+    // `setLocalScreenStream` tunes with is worth pinning: a stop-and-restart
+    // must not leave the new sender budgeted for a room that is not there.
+    const manager = createPeerConnectionManager("z-local", () => {});
+    manager.connectToPeer("a-remote");
+    await manager.setLocalScreenStream(fakeStream("screen"));
+    await manager.setLocalScreenStream(null);
+    await manager.setLocalScreenStream(fakeStream("screen"));
+
+    expect(lastParams(screenSenders().at(-1)!)?.encodings[0]?.maxBitrate).toBe(
+      screenBitrateFor(1),
+    );
+  });
+
   it("clamps a two-person call to the maximum rather than the raw share", () => {
     // Which is why the peer-count arithmetic could never explain a bad DM.
     expect(screenBitrateFor(1)).toBe(2_500_000);
