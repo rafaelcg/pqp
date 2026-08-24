@@ -188,6 +188,7 @@ import { useUserStatus } from "@/hooks/use-status";
 import { createRealtimeTransport, type RealtimeStatus } from "@/lib/realtime";
 import { adoptThemePreference } from "@/lib/theme";
 import { isMeshForced } from "@/lib/voice-backend";
+import type { VideoQuality } from "@/lib/video-quality";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -1954,6 +1955,25 @@ function MainAppContent({
     void voice.setVideoQuality(next.videoQuality);
   }
 
+  /**
+   * The in-call quality menu, writing to the same place the Settings dialog
+   * writes to.
+   *
+   * There is one stored value (`LocalSettings.videoQuality`) and one live
+   * setter, so the two surfaces cannot drift: the menu on the call and the
+   * select in Settings are both views of this state, and either one moving
+   * re-renders the other with the new choice already selected. The controller
+   * is reached through the same `setVideoQuality` path Settings uses, which
+   * re-shapes the track already on the wire rather than re-capturing, so the
+   * camera does not blink when somebody changes this mid-call.
+   */
+  function handleVideoQualityChange(quality: VideoQuality) {
+    const next = { ...localSettings, videoQuality: quality };
+    setLocalSettings(next);
+    saveLocalSettings(next);
+    void voice.setVideoQuality(quality);
+  }
+
   const refreshAfterJoin = useCallback(
     async (serverId: string) => {
       const { servers: serverList } = await fetchServers();
@@ -2888,12 +2908,14 @@ function MainAppContent({
             avatarUrl: user.avatarUrl,
           }}
           voiceState={voiceState}
+          videoQuality={localSettings.videoQuality}
           onJoinCall={() =>
             void handleConversationCall(activeConversation.channelId, false)
           }
           onLeave={() => voice.leave()}
           onToggleMute={() => voice.toggleMute()}
           onToggleCamera={() => void voice.toggleCamera()}
+          onVideoQualityChange={handleVideoQualityChange}
           onStartScreenShare={() => void voice.startScreenShare()}
           onStopScreenShare={() => void voice.stopScreenShare()}
           onFocusScreenShare={(peerId) => voice.focusScreenShare(peerId)}
