@@ -219,20 +219,45 @@ export interface VoiceActivitySnapshot {
   peakTrackedSince: string;
   /** The transport a room opened now would get. */
   backend: VoiceRoomTransport;
+  /**
+   * One entry per room that has somebody in it, largest first.
+   *
+   * Channel *ids* only. Resolving them to a channel and server name is the
+   * caller's job (services/metrics.ts does it against the database), because
+   * this module holds sockets, not rows, and a name it cached here would go
+   * stale the moment somebody renamed the channel mid-call.
+   */
+  rooms: {
+    voiceChannelId: string;
+    participants: number;
+    /** Peers in this room with a screen capture live right now. */
+    sharingScreen: number;
+  }[];
 }
 
 export function getVoiceActivitySnapshot(): VoiceActivitySnapshot {
   rollPeakDay();
-  const sizes = new Map<string, number>();
+  const sizes = new Map<string, { participants: number; sharingScreen: number }>();
   for (const peer of peers.values()) {
-    sizes.set(peer.voiceChannelId, (sizes.get(peer.voiceChannelId) ?? 0) + 1);
-  }
-  let largestRoomNow = 0;
-  for (const size of sizes.values()) {
-    if (size > largestRoomNow) {
-      largestRoomNow = size;
+    let room = sizes.get(peer.voiceChannelId);
+    if (!room) {
+      room = { participants: 0, sharingScreen: 0 };
+      sizes.set(peer.voiceChannelId, room);
+    }
+    room.participants += 1;
+    if (peer.sharingScreen) {
+      room.sharingScreen += 1;
     }
   }
+  let largestRoomNow = 0;
+  for (const room of sizes.values()) {
+    if (room.participants > largestRoomNow) {
+      largestRoomNow = room.participants;
+    }
+  }
+  const rooms = [...sizes.entries()]
+    .map(([voiceChannelId, room]) => ({ voiceChannelId, ...room }))
+    .sort((a, b) => b.participants - a.participants);
   return {
     activeRooms: sizes.size,
     participants: peers.size,
@@ -240,6 +265,7 @@ export function getVoiceActivitySnapshot(): VoiceActivitySnapshot {
     peakRoomSizeToday: Math.max(peakRoomSizeToday, largestRoomNow),
     peakTrackedSince,
     backend: configuredTransport(),
+    rooms,
   };
 }
 
