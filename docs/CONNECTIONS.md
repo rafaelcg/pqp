@@ -83,6 +83,12 @@ refused before we POST it back to Steam.
 avatar/profile URL, visibility, connected-at. Cascade-deleted with the
 account. Included in `GET /api/me/export`.
 
+Adoption is on the operator dashboard: per provider, accounts linked and how
+many of those are `public`, plus accounts that linked anything, all as a share
+of every human account. Aggregate counts only, no names or ids
+(`connectionAdoption` in `server/src/services/connections.ts`, surfaced through
+`GET /api/admin/metrics`; see `tools/admin-dashboard/README.md`).
+
 We do not keep access tokens. Linking is not account access.
 Connecting does not show what someone is playing. A game open on
 Steam does not appear on pqp.

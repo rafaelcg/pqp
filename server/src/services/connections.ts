@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import {
   connectionCallbackPath,
   connectionProviderSchema,
+  CONNECTION_PROVIDERS,
   DEFAULT_CONNECTION_VISIBILITY,
   type ConnectionConfig,
   type ConnectionProvider,
@@ -508,4 +509,102 @@ export function parseConnectionProvider(
     throw new HttpError(404, "Not found");
   }
   return parsed.data;
+}
+
+// --------------------------------------------------------------- adoption
+
+export interface ConnectionProviderAdoption {
+  provider: ConnectionProvider;
+  /** Whether this provider's credentials are set on this instance. */
+  enabled: boolean;
+  /** Accounts with this provider linked, at any visibility. */
+  linked: number;
+  /** Of those, the visibility each one chose. The three sum to `linked`. */
+  public: number;
+  shared: number;
+  hidden: number;
+}
+
+export interface ConnectionAdoption {
+  /**
+   * Accounts with at least one provider linked. NOT the sum of the rows: one
+   * person who links Steam and Twitch is one account here and two there.
+   */
+  anyProvider: number;
+  /** Of those, how many put at least one connection on their public page. */
+  anyProviderPublic: number;
+  /** One row per provider, in `CONNECTION_PROVIDERS` order, zeros included. */
+  providers: ConnectionProviderAdoption[];
+}
+
+/**
+ * Connection adoption for the operator dashboard: aggregate counts only.
+ *
+ * Per provider AND as "any provider", because those answer different questions
+ * and the second is not the sum of the first. The visibility split is the
+ * other half: `linked` is how many people bothered, `public` is how many are
+ * willing to be findable, and the gap between them is the number that says
+ * whether the public profile page is doing anything.
+ *
+ * ONE QUERY, ONE PASS. `GROUPING SETS ((provider), ())` returns the per-
+ * provider rows and the rollup from the same scan; `provider` is NOT NULL in
+ * the table, so the row that comes back with a null provider is unambiguously
+ * the rollup. `COUNT(DISTINCT user_id)` instead of `COUNT(*)` changes nothing
+ * within a provider (the primary key is `(user_id, provider)`) and is exactly
+ * what makes the rollup a count of people rather than a count of links.
+ *
+ * Webhook pseudo-accounts and the house cast are excluded so the numerator
+ * matches the denominator the dashboard divides by — `users.total` in the same
+ * payload, which excludes them too. `requirePerson` already refuses a character
+ * account at the API, so that join keeps the two populations identical rather
+ * than filtering rows we expect to exist.
+ *
+ * The caller caches; see services/metrics.ts.
+ */
+export async function connectionAdoption(): Promise<ConnectionAdoption> {
+  const result = await getPool().query<{
+    provider: ConnectionProvider | null;
+    linked: string;
+    public_count: string;
+    shared_count: string;
+    hidden_count: string;
+  }>(
+    `SELECT uc.provider,
+            COUNT(DISTINCT uc.user_id)::text AS linked,
+            COUNT(DISTINCT uc.user_id) FILTER (WHERE uc.visibility = 'public')::text AS public_count,
+            COUNT(DISTINCT uc.user_id) FILTER (WHERE uc.visibility = 'shared')::text AS shared_count,
+            COUNT(DISTINCT uc.user_id) FILTER (WHERE uc.visibility = 'hidden')::text AS hidden_count
+       FROM user_connections uc
+       JOIN users u ON u.id = uc.user_id
+      WHERE NOT u.is_webhook AND NOT u.is_character
+      GROUP BY GROUPING SETS ((uc.provider), ())`,
+  );
+
+  const byProvider = new Map<ConnectionProvider, (typeof result.rows)[number]>();
+  let rollup: (typeof result.rows)[number] | null = null;
+  for (const row of result.rows) {
+    if (row.provider === null) {
+      rollup = row;
+    } else {
+      byProvider.set(row.provider, row);
+    }
+  }
+
+  const config = connectionsConfig();
+
+  return {
+    anyProvider: Number(rollup?.linked ?? 0),
+    anyProviderPublic: Number(rollup?.public_count ?? 0),
+    providers: CONNECTION_PROVIDERS.map((provider) => {
+      const row = byProvider.get(provider);
+      return {
+        provider,
+        enabled: config[provider],
+        linked: Number(row?.linked ?? 0),
+        public: Number(row?.public_count ?? 0),
+        shared: Number(row?.shared_count ?? 0),
+        hidden: Number(row?.hidden_count ?? 0),
+      };
+    }),
+  };
 }

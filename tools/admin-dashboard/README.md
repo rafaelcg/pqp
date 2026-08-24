@@ -34,6 +34,14 @@ Live, from `GET https://api.pqp.gg/api/admin/metrics` (proxied as `/metrics`):
 - the five most active servers of the last 24h: name, tagline, channel and
   member counts, messages
 - first-touch acquisition and landing pages, with the window's start date
+- **game connections** (`connections`): per provider, how many accounts linked
+  Steam / Battle.net / Twitch and how many of those chose `public`, plus how
+  many accounts linked *anything* — which is not the sum of the rows, since one
+  person can link two providers. A provider with no credentials on the API is
+  labelled **desligado**, because a zero there means nobody could link rather
+  than nobody wanted to. Every share is over `connections.ofUsers`, which is
+  `users.total` in the same payload: all human accounts that exist, not a window
+  and not actives
 - the deployed API commit (`APP_VERSION`), and which account kinds are excluded
   from every count (`excludedAccounts`)
 
