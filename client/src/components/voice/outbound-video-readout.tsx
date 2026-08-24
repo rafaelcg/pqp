@@ -63,8 +63,19 @@ export function OutboundVideoReadout({
         // The first camera sender on any peer. In a mesh the same camera goes
         // to everybody, so one row answers the question for all of them, and
         // listing one line per peer would say the same thing several times.
+        //
+        // FALLS BACK TO THE SCREEN, because the setting this sits under now
+        // governs the screen sender too. Somebody presenting with their camera
+        // off used to be told there was nothing to measure, which is the same
+        // dead end that made the whole readout worthless in Settings, and it
+        // landed on exactly the person the sharpness complaint came from.
+        // Camera first when both exist: it is the smaller of the two numbers
+        // and the one people misread as "the call is broken".
+        const senders = snapshot.senders;
         setCamera(
-          snapshot.senders.find((sender) => sender.role === "camera") ?? null,
+          senders.find((sender) => sender.role === "camera") ??
+            senders.find((sender) => sender.role === "screen") ??
+            null,
         );
       });
     };

@@ -39,6 +39,7 @@ import type { RealtimeTransport } from "@/lib/realtime";
 import {
   applyCameraQuality,
   cameraBitrateFor,
+  screenBitrateFor,
   captureCamera,
   DEFAULT_VIDEO_QUALITY,
   type VideoQuality,
@@ -1087,6 +1088,12 @@ export function createVoiceController(transport: RealtimeTransport) {
         // room without the key down must be published muted.
         await sfu.setMuted(!state.isTransmitting);
       }
+      // Before anything is published, so a camera or a share carried across a
+      // reconnect is republished at the chosen quality. Without this a session
+      // rebuilt after a WS drop silently reverted both to the defaults, and
+      // nothing recomputed them until the user next touched the menu.
+      await sfu.setCameraMaxBitrate(cameraBitrateFor(videoQuality));
+      await sfu.setScreenMaxBitrate(screenBitrateFor(videoQuality));
       // A screen share started before a reconnect rebuilds the session — the
       // capture itself survives the WS drop (it's a browser-level grant, not
       // tied to the connection), only the publish needs redoing.
@@ -1117,6 +1124,9 @@ export function createVoiceController(transport: RealtimeTransport) {
     // Before any track is published, so a camera carried across a reconnect
     // gets the chosen ceiling on its first tune rather than the default one.
     manager.setCameraMaxBitrate(cameraBitrateFor(videoQuality));
+    // Same reason, for the screen: a share carried across a reconnect must be
+    // rebuilt at the chosen quality, not at the default one.
+    manager.setScreenQuality(videoQuality);
     if (pipeline) {
       manager.setLocalStream(pipeline.processedStream);
     }
@@ -1954,6 +1964,11 @@ export function createVoiceController(transport: RealtimeTransport) {
       const maxBitrate = cameraBitrateFor(next);
       manager?.setCameraMaxBitrate(maxBitrate);
       await sfu?.setCameraMaxBitrate(maxBitrate);
+      // The screen half, on both transports, and unconditionally: the mesh
+      // manager and the SFU session each hold the choice for a share that has
+      // not started yet, so this is not only about the sender on the wire.
+      manager?.setScreenQuality(next);
+      await sfu?.setScreenMaxBitrate(screenBitrateFor(next));
       const track = cameraCaptureStream?.getVideoTracks()[0];
       if (track) {
         await applyCameraQuality(track, next);
