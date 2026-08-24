@@ -20,6 +20,14 @@ interface ManagerStub {
   disposed: boolean;
   /** Every capture handed to the mesh, in order. `null` means "stop sharing". */
   screenStreams: (MediaStream | null)[];
+  /**
+   * Every "peer X is/is not presenting" the roster forwarded to the mesh.
+   *
+   * The mesh cannot work this out for itself — a share announces no stream id,
+   * and the sender's `removeTrack` only mutes the receiver's track — so this
+   * wiring is the whole of how a receiver learns a share ended.
+   */
+  sharingScreen: [string, boolean][];
 }
 
 const playCueMock = vi.hoisted(() => vi.fn());
@@ -38,6 +46,7 @@ vi.mock("@/lib/peer-connection-manager", () => ({
       peerIds: [],
       disposed: false,
       screenStreams: [],
+      sharingScreen: [],
     };
     managers.push(stub);
     return {
@@ -47,8 +56,12 @@ vi.mock("@/lib/peer-connection-manager", () => ({
       },
       setLocalCameraStream: async () => {},
       setCameraMaxBitrate: () => {},
+      setScreenQuality: () => {},
       setPeerCameraStreamId: () => {},
       setPeerScreenAudioStreamId: () => {},
+      setPeerSharingScreen: (peerId: string, sharing: boolean) => {
+        stub.sharingScreen.push([peerId, sharing]);
+      },
       onPeerStateChange: () => {},
       connectToPeer: (peerId: string) => stub.peerIds.push(peerId),
       removePeer: () => {},
@@ -82,6 +95,7 @@ vi.mock("@/lib/livekit-session", () => ({
     unpublishScreenAudio: async () => {},
     publishCamera: async () => {},
     setCameraMaxBitrate: async () => {},
+    setScreenMaxBitrate: async () => {},
     unpublishCamera: async () => {},
     disconnect: async () => {},
   })),
@@ -479,6 +493,32 @@ describe("concurrent screen shares", () => {
     expect(state.screenSharePeerIds).toEqual(["aaa", "bbb"]);
     expect(state.focusedScreenPeerId).toBe("aaa");
     expect(state.audibleScreenPeerIds).toEqual(["aaa", "bbb"]);
+  });
+
+  it("tells the mesh when a peer stops presenting", async () => {
+    // The half of the re-share fix that lives up here. A share announces no
+    // stream id and the sender's `removeTrack` only *mutes* the receiver's
+    // track, so if this hand-off is missing the dead capture stays filed as
+    // that peer's screen and their next share renders black behind it.
+    const { voice } = await connectedMesh();
+    const mesh = managers.at(-1)!;
+    voice.handleSignaling({
+      type: "voice-roster",
+      voiceChannelId: CHANNEL,
+      transport: "mesh",
+      participants: [participant(PEER, false), participant("aaa", true)],
+    });
+    voice.handleSignaling({
+      type: "voice-roster",
+      voiceChannelId: CHANNEL,
+      transport: "mesh",
+      participants: [participant(PEER, false), participant("aaa", false)],
+    });
+
+    expect(mesh.sharingScreen).toContainEqual(["aaa", true]);
+    expect(mesh.sharingScreen).toContainEqual(["aaa", false]);
+    // Never about ourselves: our own preview does not come off the mesh.
+    expect(mesh.sharingScreen.map(([peerId]) => peerId)).not.toContain(PEER);
   });
 
   it("skips the picker when the mesh cap is already full", async () => {

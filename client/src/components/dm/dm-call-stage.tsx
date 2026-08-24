@@ -25,11 +25,13 @@ import {
 } from "react";
 import { SCREEN_SHARE_LIMIT, type DmSummary } from "@pqp/shared";
 import type { VoiceState } from "@/hooks/use-voice";
+import type { VideoQuality } from "@/lib/video-quality";
 import {
   detectFullscreenMode,
   supportsScreenShare,
   type FullscreenMode,
 } from "@/components/voice/capabilities";
+import { attemptElementFullscreen } from "@/components/voice/element-fullscreen";
 import {
   NO_SCREEN_FULLSCREEN,
   reconcileScreenFullscreen,
@@ -44,6 +46,12 @@ import {
   screenShareStageLayout,
   type ScreenShareTile,
 } from "@/components/voice/screen-stage";
+import {
+  callControlsMayIdle,
+  showsVideoQualityControl,
+  videoQualityMenuOpen,
+} from "@/components/voice/video-quality-control";
+import { VideoQualityMenu } from "@/components/voice/video-quality-menu";
 import { VoiceAvatar } from "@/components/voice/voice-avatar";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { useLgUp } from "@/hooks/use-lg-up";
@@ -181,8 +189,17 @@ function useStageFullscreen(
   // `expand` needs no platform support, so it is the safe starting point and
   // the detector only ever upgrades it.
   const [mode, setMode] = useState<FullscreenMode>("expand");
+  // Set once a platform that *claims* element fullscreen turns out not to
+  // honour it (an Electron shell whose embedder denies the permission). It
+  // pins the mode to `expand`, which the detector below must then stop
+  // undoing: it re-runs whenever the stage gains or loses a video, and an
+  // upgrade back to `element` would re-break the button mid-call.
+  const refusedElementRef = useRef(false);
 
   useEffect(() => {
+    if (refusedElementRef.current) {
+      return;
+    }
     const doc = fullscreenDocument();
     setMode(
       detectFullscreenMode({
@@ -269,8 +286,24 @@ function useStageFullscreen(
       // Record the target now so the `fullscreenchange` that follows renders
       // the right screen; `active` still comes from the browser.
       setState((was) => ({ ...was, soloPeerId: transition.next.soloPeerId }));
-      void requestElementFullscreen(container).catch((err: unknown) => {
-        console.warn("[call] fullscreen refused", err);
+      void attemptElementFullscreen({
+        request: () => requestElementFullscreen(container),
+        isActive: () => currentFullscreenElement() === container,
+        onRefusal: (err) => console.warn("[call] fullscreen refused", err),
+      }).then((entered) => {
+        if (entered) {
+          return;
+        }
+        // The platform did not take it, and on an Electron shell it did not
+        // even say so — see `element-fullscreen.ts`. Fill the viewport in the
+        // page instead, and stop asking for the rest of the session: leaving
+        // the mode on `element` would strand the user, because the exit press
+        // would call `exitFullscreen` on a document that is not fullscreen and
+        // the state would never clear.
+        console.warn("[call] element fullscreen unavailable; expanding in page");
+        refusedElementRef.current = true;
+        setMode("expand");
+        setState(transition.next);
       });
     },
     [mode, containerRef],
@@ -314,10 +347,12 @@ export function DmCallStage({
   conversation,
   currentUser,
   voiceState,
+  videoQuality,
   onJoinCall,
   onLeave,
   onToggleMute,
   onToggleCamera,
+  onVideoQualityChange,
   onStartScreenShare,
   onStopScreenShare,
   onFocusScreenShare,
@@ -325,10 +360,18 @@ export function DmCallStage({
   conversation: DmSummary;
   currentUser: { id: string; displayName: string; avatarUrl: string | null } | null;
   voiceState: VoiceState;
+  /**
+   * The one stored choice, straight from `LocalSettings.videoQuality`. Passed
+   * in rather than read from the voice controller so that this menu and the
+   * Settings dialog are two views of the same value: whichever you touch, the
+   * other one is already showing the result next time you look.
+   */
+  videoQuality: VideoQuality;
   onJoinCall: () => void;
   onLeave: () => void;
   onToggleMute: () => void;
   onToggleCamera: () => void;
+  onVideoQualityChange: (quality: VideoQuality) => void;
   onStartScreenShare?: () => void;
   onStopScreenShare?: () => void;
   onFocusScreenShare?: (peerId: string) => void;
@@ -385,11 +428,13 @@ export function DmCallStage({
       conversation={conversation}
       currentUser={currentUser}
       voiceState={voiceState}
+      videoQuality={videoQuality}
       collapsed={collapsed}
       onSetCollapsed={setCollapsedRemembered}
       onLeave={onLeave}
       onToggleMute={onToggleMute}
       onToggleCamera={onToggleCamera}
+      onVideoQualityChange={onVideoQualityChange}
       onStartScreenShare={onStartScreenShare}
       onStopScreenShare={onStopScreenShare}
       onFocusScreenShare={onFocusScreenShare}
@@ -401,11 +446,13 @@ function ActiveCall({
   conversation,
   currentUser,
   voiceState,
+  videoQuality,
   collapsed,
   onSetCollapsed,
   onLeave,
   onToggleMute,
   onToggleCamera,
+  onVideoQualityChange,
   onStartScreenShare,
   onStopScreenShare,
   onFocusScreenShare,
@@ -413,11 +460,13 @@ function ActiveCall({
   conversation: DmSummary;
   currentUser: { id: string; displayName: string; avatarUrl: string | null } | null;
   voiceState: VoiceState;
+  videoQuality: VideoQuality;
   collapsed: boolean;
   onSetCollapsed: (collapsed: boolean) => void;
   onLeave: () => void;
   onToggleMute: () => void;
   onToggleCamera: () => void;
+  onVideoQualityChange: (quality: VideoQuality) => void;
   onStartScreenShare?: () => void;
   onStopScreenShare?: () => void;
   onFocusScreenShare?: (peerId: string) => void;
@@ -566,7 +615,30 @@ function ActiveCall({
   }, []);
   const [controlsIdle, setControlsIdle] = useState(false);
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const shouldAutoHide = autoHide && anyVideo && !collapsed;
+  // --- video quality menu -------------------------------------------------
+  // "Requested" rather than "open": the open state is derived, so turning the
+  // camera off (or collapsing) takes the menu down with the button it hangs
+  // from instead of leaving a popover anchored to nothing.
+  const [qualityMenuRequested, setQualityMenuRequested] = useState(false);
+  const qualityMenuOpen = videoQualityMenuOpen({
+    requested: qualityMenuRequested,
+    isCameraOn: voiceState.isCameraOn,
+    isSharingScreen: voiceState.isSharingScreen,
+    collapsed,
+  });
+  // Cleared rather than merely ignored: a menu that was open when the camera
+  // went off must not spring back open by itself when the camera returns.
+  useEffect(() => {
+    if (qualityMenuRequested && !qualityMenuOpen) {
+      setQualityMenuRequested(false);
+    }
+  }, [qualityMenuRequested, qualityMenuOpen]);
+  const shouldAutoHide = callControlsMayIdle({
+    autoHide,
+    anyVideo,
+    collapsed,
+    menuOpen: qualityMenuOpen,
+  });
   const wakeControls = useCallback(() => {
     setControlsIdle(false);
     if (idleTimerRef.current) {
@@ -647,6 +719,10 @@ function ActiveCall({
       onToggleFullscreen={fullscreen.toggle}
       onToggleMute={onToggleMute}
       onToggleCamera={onToggleCamera}
+      videoQuality={videoQuality}
+      onVideoQualityChange={onVideoQualityChange}
+      qualityMenuOpen={qualityMenuOpen}
+      onQualityMenuOpenChange={setQualityMenuRequested}
       onStartScreenShare={onStartScreenShare}
       onStopScreenShare={onStopScreenShare}
       onToggleCollapsed={() => onSetCollapsed(!collapsed)}
@@ -940,6 +1016,10 @@ function CallControls({
   onToggleFullscreen,
   onToggleMute,
   onToggleCamera,
+  videoQuality,
+  onVideoQualityChange,
+  qualityMenuOpen,
+  onQualityMenuOpenChange,
   onStartScreenShare,
   onStopScreenShare,
   onToggleCollapsed,
@@ -952,6 +1032,10 @@ function CallControls({
   onToggleFullscreen: () => void;
   onToggleMute: () => void;
   onToggleCamera: () => void;
+  videoQuality: VideoQuality;
+  onVideoQualityChange: (quality: VideoQuality) => void;
+  qualityMenuOpen: boolean;
+  onQualityMenuOpenChange: (open: boolean) => void;
   onStartScreenShare?: () => void;
   onStopScreenShare?: () => void;
   onToggleCollapsed: () => void;
@@ -1027,6 +1111,24 @@ function CallControls({
           <VideoOff className={iconSize} />
         )}
       </button>
+      {/* The setting for whatever video is going out, immediately to the right
+          of the camera. Absent until this machine is sending some, so an
+          audio-only call's bar is the bar it has always been. Screen share
+          counts: the same choice governs it now. */}
+      {showsVideoQualityControl({
+        isCameraOn: voiceState.isCameraOn,
+        isSharingScreen: voiceState.isSharingScreen,
+        collapsed,
+      }) && (
+        <VideoQualityMenu
+          value={videoQuality}
+          open={qualityMenuOpen}
+          onOpenChange={onQualityMenuOpenChange}
+          onChange={onVideoQualityChange}
+          buttonClassName={size}
+          iconClassName={iconSize}
+        />
+      )}
       {!collapsed && canShare && (onStartScreenShare || onStopScreenShare) && (
         <button
           type="button"

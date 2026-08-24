@@ -1,6 +1,6 @@
 {
   "name": "@pqp/electron",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "license": "AGPL-3.0-only",
   "description": "Desktop shell for pqp",
@@ -34,7 +34,7 @@
   "build": {
     "appId": "gg.pqp.app",
     "productName": "pqp",
-    "copyright": "Copyright \u00a9 pqp contributors",
+    "copyright": "Copyright © pqp contributors",
     "extraMetadata": {
       "name": "pqp"
     },

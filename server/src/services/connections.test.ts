@@ -11,6 +11,7 @@ if (DATABASE_URL) {
 const { getPool, initDb, closePool } = await import("../db.js");
 const { upsertUser } = await import("./users.js");
 const {
+  connectionAdoption,
   disconnectConnection,
   listCardConnections,
   listOwnConnections,
@@ -221,5 +222,155 @@ describeDb("user_connections", () => {
     });
     expect(switched.visibility).toBe("shared");
     expect(switched.providerUserId).toBe("76561198000000002");
+  });
+
+  /**
+   * The operator dashboard's numbers. The cases that matter are the ones where
+   * a naive `COUNT(*) GROUP BY provider` would lie: one person on two
+   * providers, and accounts that are not people.
+   */
+  describe("connectionAdoption", () => {
+    const providerEnv = [
+      "STEAM_WEB_API_KEY",
+      "TWITCH_CLIENT_ID",
+      "TWITCH_CLIENT_SECRET",
+      "BATTLENET_CLIENT_ID",
+      "BATTLENET_CLIENT_SECRET",
+    ] as const;
+    const saved = new Map<string, string | undefined>();
+
+    beforeEach(() => {
+      for (const name of providerEnv) {
+        saved.set(name, process.env[name]);
+        delete process.env[name];
+      }
+    });
+
+    afterAll(() => {
+      for (const [name, value] of saved) {
+        if (value === undefined) {
+          delete process.env[name];
+        } else {
+          process.env[name] = value;
+        }
+      }
+    });
+
+    async function link(
+      userId: string,
+      provider: "steam" | "battlenet" | "twitch",
+      providerUserId: string,
+      visibility: "hidden" | "shared" | "public",
+    ): Promise<void> {
+      await getPool().query(
+        `INSERT INTO user_connections (user_id, provider, provider_user_id, display_name, visibility)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [userId, provider, providerUserId, `${provider}-name`, visibility],
+      );
+    }
+
+    it("reports every provider with zeros when nobody has linked anything", async () => {
+      const adoption = await connectionAdoption();
+      expect(adoption.anyProvider).toBe(0);
+      expect(adoption.anyProviderPublic).toBe(0);
+      expect(adoption.providers.map((p) => p.provider)).toEqual([
+        "steam",
+        "battlenet",
+        "twitch",
+      ]);
+      for (const row of adoption.providers) {
+        expect(row).toMatchObject({ linked: 0, public: 0, shared: 0, hidden: 0 });
+      }
+    });
+
+    it("counts people once across providers and splits them by visibility", async () => {
+      const carol = await upsertUser({
+        clerkId: "clerk_conn_carol_adoption",
+        displayName: "Carol",
+        avatarUrl: null,
+      });
+
+      // Alice links two providers: one account, two links, one of them public.
+      await link(alice.id, "steam", "76561198000000001", "public");
+      await link(alice.id, "twitch", "twitch-alice", "hidden");
+      // Bob links Steam only, at the default visibility.
+      await link(bob.id, "steam", "76561198000000002", "shared");
+      // Carol links Twitch only, and shows it.
+      await link(carol.id, "twitch", "twitch-carol", "public");
+
+      const adoption = await connectionAdoption();
+
+      // Three accounts have linked something, not four links.
+      expect(adoption.anyProvider).toBe(3);
+      // Alice and Carol show something publicly; Bob does not.
+      expect(adoption.anyProviderPublic).toBe(2);
+
+      const byProvider = Object.fromEntries(
+        adoption.providers.map((row) => [row.provider, row]),
+      );
+      expect(byProvider.steam).toMatchObject({
+        linked: 2,
+        public: 1,
+        shared: 1,
+        hidden: 0,
+      });
+      expect(byProvider.twitch).toMatchObject({
+        linked: 2,
+        public: 1,
+        shared: 0,
+        hidden: 1,
+      });
+      expect(byProvider.battlenet).toMatchObject({ linked: 0, public: 0 });
+
+      // The visibility split always accounts for every linked person.
+      for (const row of adoption.providers) {
+        expect(row.public + row.shared + row.hidden).toBe(row.linked);
+      }
+    });
+
+    it("excludes webhook pseudo-accounts and the house cast", async () => {
+      const bot = await upsertUser({
+        clerkId: "clerk_conn_webhook",
+        displayName: "Deploy bot",
+        avatarUrl: null,
+      });
+      const npc = await upsertUser({
+        clerkId: "clerk_conn_character",
+        displayName: "Casa",
+        avatarUrl: null,
+      });
+      await getPool().query(`UPDATE users SET is_webhook = TRUE WHERE id = $1`, [
+        bot.id,
+      ]);
+      await getPool().query(
+        `UPDATE users SET is_character = TRUE WHERE id = $1`,
+        [npc.id],
+      );
+      await link(alice.id, "steam", "76561198000000001", "public");
+      await link(bot.id, "steam", "76561198000000009", "public");
+      await link(npc.id, "twitch", "twitch-npc", "public");
+
+      const adoption = await connectionAdoption();
+      expect(adoption.anyProvider).toBe(1);
+      expect(adoption.anyProviderPublic).toBe(1);
+      const steam = adoption.providers.find((p) => p.provider === "steam");
+      expect(steam).toMatchObject({ linked: 1, public: 1 });
+      const twitch = adoption.providers.find((p) => p.provider === "twitch");
+      expect(twitch).toMatchObject({ linked: 0 });
+    });
+
+    it("marks a provider enabled only when its credentials are configured", async () => {
+      const off = await connectionAdoption();
+      expect(off.providers.map((p) => p.enabled)).toEqual([false, false, false]);
+
+      process.env.STEAM_WEB_API_KEY = "steam-key";
+      const on = await connectionAdoption();
+      expect(
+        on.providers.find((p) => p.provider === "steam")?.enabled,
+      ).toBe(true);
+      expect(
+        on.providers.find((p) => p.provider === "twitch")?.enabled,
+      ).toBe(false);
+    });
   });
 });

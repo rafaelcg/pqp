@@ -6,6 +6,7 @@ import {
   registerServiceWorker,
   type ServiceWorkerControls,
 } from "@/lib/register-sw";
+import { snoozeRemainingMs } from "@/lib/update-snooze";
 
 /**
  * "A new version is ready" — the visible half of `registerType: "prompt"`.
@@ -13,12 +14,18 @@ import {
  * The reload is never taken automatically. This client holds a live WebSocket,
  * unsent composer drafts, and possibly an active call; swapping the bundle out
  * from under any of those is a worse outcome than running yesterday's build for
- * another minute. So it asks, and it can be dismissed.
+ * another minute. So it asks.
+ *
+ * "Later" SNOOZES, it does not dismiss. Under `registerType: "prompt"` the
+ * waiting build never takes over on its own, not even on a hard reload, so a
+ * permanent dismissal was the difference between "running yesterday's build for
+ * another minute" and running it until every tab of the origin is closed. See
+ * `update-snooze.ts` for the incident that made the distinction matter.
  */
 export function UpdatePrompt() {
   const { t } = useTranslation();
   const [needsRefresh, setNeedsRefresh] = useState(false);
-  const [dismissed, setDismissed] = useState(false);
+  const [snoozedAt, setSnoozedAt] = useState<number | null>(null);
   const [updating, setUpdating] = useState(false);
   const controlsRef = useRef<ServiceWorkerControls | null>(null);
 
@@ -28,7 +35,18 @@ export function UpdatePrompt() {
     return () => controls.dispose();
   }, []);
 
-  if (!needsRefresh || dismissed) {
+  useEffect(() => {
+    if (snoozedAt === null) {
+      return;
+    }
+    const timer = setTimeout(
+      () => setSnoozedAt(null),
+      snoozeRemainingMs(snoozedAt, Date.now()),
+    );
+    return () => clearTimeout(timer);
+  }, [snoozedAt]);
+
+  if (!needsRefresh || snoozedAt !== null) {
     return null;
   }
 
@@ -57,7 +75,7 @@ export function UpdatePrompt() {
         size="sm"
         variant="ghost"
         aria-label={t("update.dismiss")}
-        onClick={() => setDismissed(true)}
+        onClick={() => setSnoozedAt(Date.now())}
       >
         {t("update.later")}
       </Button>

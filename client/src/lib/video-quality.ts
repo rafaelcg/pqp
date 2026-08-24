@@ -73,6 +73,71 @@ export function cameraProfileFor(quality: VideoQuality): CameraProfile {
 }
 
 /**
+ * The same five choices, applied to the screen sender.
+ *
+ * WHY THIS EXISTS. The control has been labelled "video quality" since it
+ * shipped and has only ever moved the camera. Somebody picked 1080p, shared
+ * their screen, and got the same soft picture as before, because the screen
+ * sender was governed by one hard-coded constant that no setting could reach.
+ * A control that silently governs half of what its name claims is worse than
+ * no control: the user has been told the thing is already as good as it goes.
+ *
+ * WHY THE NUMBERS ARE NOT THE CAMERA'S. "1080p" names a picture, not a
+ * bitrate, and the bitrate that picture costs depends entirely on what is in
+ * it. A talking head is a static background with a moving oval in the middle
+ * and inter-frame prediction eats it alive; 2.5 Mbps is generous. A shared
+ * screen is a game, a film, a scrolling page: full-frame motion, hard edges,
+ * and text the codec cannot blur without it becoming unreadable. The same
+ * 1080p30 costs roughly twice as much. Handing the screen the camera's ladder
+ * would keep the label honest and the picture blurry, which is the bug.
+ *
+ * WHY CAPTURE SIZE IS NOT ON THIS LADDER. The screen is always captured at
+ * 1080p30 (`SCREEN_CAPTURE_OPTIONS` in `use-voice.ts`) whatever is chosen
+ * here, and that is deliberate. Capture size is a floor you cannot climb back
+ * up: a screen grabbed at 640x360 has lost the pixels that made the text
+ * legible, permanently, even in the moments when the link has room to spare.
+ * The bitrate ceiling is the reversible lever. Under
+ * `degradationPreference: "maintain-framerate"` the encoder scales 1080p down
+ * on its own when the ceiling is tight and scales it back up the moment it is
+ * not, continuously, which is the behaviour a person actually wants from a
+ * setting called "quality".
+ */
+const SCREEN_BITRATES: Record<Exclude<VideoQuality, "auto">, number> = {
+  "1080p": 4_000_000,
+  "720p": 2_000_000,
+  "480p": 1_000_000,
+  "360p": 600_000,
+};
+
+/**
+ * What `auto` spends on a screen.
+ *
+ * 3 Mbps, which is above the 2.5 Mbps every share used to get and below the
+ * 4 Mbps a deliberate 1080p now asks for. Auto has to be the number that is
+ * right for somebody who has never opened this menu and never will, on an
+ * uplink nobody has measured, so it buys a visibly better share than today
+ * without being the most expensive thing the product can do behind their back.
+ * Choosing 1080p is how you say "I have the upload, spend it".
+ */
+const AUTO_SCREEN_BITRATE = 3_000_000;
+
+/**
+ * The chosen ceiling for a screen sender, in bits per second.
+ *
+ * A CEILING, NOT A TARGET, and this is the sentence that keeps getting
+ * optimised away. Nothing here makes anybody send 4 Mbps. It is the maximum
+ * the encoder is *permitted* to reach; WebRTC's congestion controller has its
+ * own estimate of what the link can actually carry and sends the lower of the
+ * two, revised several times a second. On a link that cannot do 4 Mbps this
+ * number is inert. Lowering it "to be safe" does nothing for the person on a
+ * weak uplink (the estimator already had them covered) and takes the sharp
+ * picture away from the person on a good one, which is the whole ask.
+ */
+export function screenBitrateFor(quality: VideoQuality): number {
+  return quality === "auto" ? AUTO_SCREEN_BITRATE : SCREEN_BITRATES[quality];
+}
+
+/**
  * Capture constraints for a quality. **Every field is `ideal`.**
  *
  * This is the most important line in the file and the one most likely to be

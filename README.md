@@ -143,6 +143,14 @@ content-safety runbook and moderation posture live in
 bilingual at [pqp.gg/terms](https://pqp.gg/terms) and
 [pqp.gg/privacy](https://pqp.gg/privacy).
 
+## Contributing
+
+Bug reports, questions and patches are all welcome, in English or Portuguese.
+Start with [`CONTRIBUTING.md`](./CONTRIBUTING.md) ([em português](./CONTRIBUTING.pt-BR.md)):
+it covers setup, the handful
+of things in this repo that will otherwise waste an hour of your time, and what
+the AGPL means for you if pqp ever charges money.
+
 ## License
 
 Copyright (C) 2026 [rafaelcg](https://github.com/rafaelcg).

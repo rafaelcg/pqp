@@ -18,6 +18,36 @@ First deploy priority: **dev / marketing website** on Pages. Point `VITE_API_URL
 
 ## GitHub Actions
 
+### Which changes restart the API, and therefore drop every call
+
+`deploy-api-fly.yml` only deploys when the commit touches something the server
+actually runs. The gate is an **allowlist**, so anything not on it is left
+alone and a new top-level directory defaults to *not* restarting production:
+
+```
+server/  packages/  Dockerfile  fly.toml  pnpm-lock.yaml
+pnpm-workspace.yaml  package.json  .github/workflows/deploy-api-fly.yml
+```
+
+**`packages/` is on that list in full, and this is the one that surprises
+people.** The server compiles `@pqp/shared` into itself, so a change there is a
+server change no matter how client-side the feature feels. On 24 Aug 2026 a PR
+that added in-app notification sounds touched `packages/shared/src/api.ts` and
+restarted `pqp-api`, disconnecting everyone who was in a voice call at the time.
+Nothing was broken and the gate behaved correctly; the PR simply did not look
+like a server change to anyone reading it.
+
+A Fly deploy is a rolling restart of a single machine, so every WebSocket goes
+with it: open chats reconnect on their own, and anyone in a call is cut off
+mid-sentence. Voice does not follow the message curve, either. Traffic
+overnight in Brazil is mostly *calls*, so "it is 2am, nobody is around" is a
+bad instinct: on 24 Aug there were 26 people in 12 rooms at 02:20Z while text
+had fallen to 11 messages an hour. Read `GET /api/admin/metrics` (`voice.participants`)
+before merging something server-relevant, rather than guessing from the clock.
+
+Client-only changes skip all of this and can ship whenever.
+
+
 | Workflow | Path | Triggers | Purpose |
 |---|---|---|---|
 | CI | `.github/workflows/ci.yml` | PR + push to `main` | pnpm install, build shared/server/client |

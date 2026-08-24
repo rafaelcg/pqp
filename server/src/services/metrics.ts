@@ -3,6 +3,7 @@ import { getPool } from "../db.js";
 import { getVoiceActivitySnapshot } from "../ws/voice.js";
 import { acquisitionReport, type AcquisitionReport } from "./acquisition.js";
 import { callRatingSummary } from "./call-ratings.js";
+import { connectionAdoption, type ConnectionAdoption } from "./connections.js";
 import type { CallRatingSummary } from "@pqp/shared";
 
 /**
@@ -83,6 +84,15 @@ export interface AdminMetrics {
   acquisition: AcquisitionReport;
   /** Prompted call quality, last 7 days. Counts only; see call-ratings.ts. */
   callRatings: CallRatingSummary;
+  /**
+   * Linked Steam / Battle.net / Twitch accounts; see connections.ts.
+   *
+   * `ofUsers` is the denominator for every share drawn from this block, and it
+   * is `users.total` above, from the same snapshot: all human accounts that
+   * exist, not accounts created in some window and not accounts that were
+   * active. "12 of 400" here means twelve of everyone who ever signed up.
+   */
+  connections: ConnectionAdoption & { ofUsers: number };
 }
 
 // ------------------------------------------------------------------- token
@@ -158,6 +168,7 @@ async function computeAdminMetrics(): Promise<AdminMetrics> {
     topServers,
     acquisition,
     callRatings,
+    connections,
   ] = await Promise.all([
     pool.query<{ total: string; last24h: string }>(
       `SELECT COUNT(*)::text AS total,
@@ -249,6 +260,7 @@ async function computeAdminMetrics(): Promise<AdminMetrics> {
     ),
     acquisitionReport(7),
     callRatingSummary(7),
+    connectionAdoption(),
   ]);
 
   const channelCounts = { text: 0, voice: 0, category: 0, thread: 0 };
@@ -302,6 +314,9 @@ async function computeAdminMetrics(): Promise<AdminMetrics> {
     })),
     acquisition,
     callRatings,
+    // The denominator travels with the numerators rather than leaving the
+    // dashboard to pick one: it is the users total in this same payload.
+    connections: { ...connections, ofUsers: Number(users.rows[0]?.total ?? 0) },
   };
 }
 

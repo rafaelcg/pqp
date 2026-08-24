@@ -586,6 +586,8 @@
   .dr-n { text-align: right; color: var(--text); font-weight: 600; }
   .dr-p { text-align: right; color: var(--faint); }
   .dist-row.zero .dr-k, .dist-row.zero .dr-n { color: var(--faint); font-weight: 400; }
+  /* Same rows, but the key is a word ("compartilhada") and not a single digit. */
+  .conn-dist .dist-row { grid-template-columns: 92px 1fr 34px 44px; }
 
   .tr-row { padding: 11px 0; border-bottom: 1px solid var(--border-soft); }
   .tr-row:first-of-type { padding-top: 2px; }
@@ -631,6 +633,7 @@
   @media (max-width: 620px) {
     .rating-head { gap: 10px; }
     .dist-row { grid-template-columns: 30px 1fr 30px 40px; gap: 8px; }
+    .conn-dist .dist-row { grid-template-columns: 82px 1fr 30px 40px; }
     .g-health { grid-template-columns: repeat(2, minmax(0,1fr)); }
     .g-metrics { grid-template-columns: repeat(2, minmax(0,1fr)); }
     .kv-grid { grid-template-columns: 1fr; }
@@ -856,6 +859,64 @@
             <tbody id="acqLandingBody"><!-- injected --></tbody>
           </table>
         </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ GAME CONNECTIONS ============ -->
+  <!-- Steam / Battle.net / Twitch linking. Two numbers per provider, not one:
+       `vinculadas` is how many people bothered, `públicas` is how many are
+       willing to be found by it on pqp.gg/@handle, and the gap between them is
+       the answer to "is the public profile page doing anything". Every share
+       here is over EVERY human account that exists — not a window, not actives
+       — so the denominator is printed next to the percentage. -->
+  <section aria-label="contas de jogo conectadas">
+    <div class="sec-head">
+      <h2>contas de jogo conectadas</h2>
+      <span class="rule"></span>
+      <span class="note" id="connNote">carregando</span>
+    </div>
+    <div class="grid g-3">
+      <div class="card pad">
+        <p class="subtle-title">por provedor</p>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>provedor</th>
+                <th class="r">vinculadas</th>
+                <th class="r">públicas</th>
+                <th class="r">% das contas</th>
+              </tr>
+            </thead>
+            <tbody id="connBody"><!-- injected --></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card pad">
+        <p class="subtle-title">resumo</p>
+        <div class="stat-row" style="margin-bottom:0">
+          <div class="stat-mini">
+            <span class="k">contas com alguma conexão</span>
+            <span class="v num" id="connAny">0</span>
+            <span class="k" style="color:var(--faint)" id="connAnyNote">—</span>
+          </div>
+          <div class="stat-mini">
+            <span class="k">com algo no perfil público</span>
+            <span class="v num" id="connPublic">0</span>
+            <span class="k" style="color:var(--faint)" id="connPublicNote">—</span>
+          </div>
+        </div>
+        <p class="subtle-title" style="margin-top:16px">visibilidade escolhida · por vínculo</p>
+        <div class="dist conn-dist" id="connDist"><!-- injected --></div>
+        <p class="m-note" style="font-size:11.5px;color:var(--faint);margin:14px 0 0">
+          quem vincula steam e twitch conta uma vez em "contas com alguma conexão" e uma vez
+          em cada provedor, então as linhas não somam. o padrão é <b>compartilhada</b> (só o
+          cartão dentro do app); <b>pública</b> é um toque a mais e é o que aparece em
+          pqp.gg/@handle. provedor sem credencial na api aparece como desligado: zero ali
+          significa que ninguém pôde vincular, não que ninguém quis.
+        </p>
       </div>
     </div>
   </section>
@@ -1489,6 +1550,97 @@
     });
   }
 
+  /* ---------------- render: game connections ----------------
+     `ofUsers` is the denominator and it comes from the same payload as the
+     numerators, so no percentage on this panel is computed against a number
+     from a different moment. A provider with no credentials on the API is
+     labelled desligado rather than shown as a plain zero: those two zeros mean
+     opposite things. */
+  var CONN_LABELS = {
+    steam: { name: "steam", kind: "openid 2.0" },
+    battlenet: { name: "battle.net", kind: "oauth 2.0" },
+    twitch: { name: "twitch", kind: "oauth 2.0" }
+  };
+  var CONN_VISIBILITY = [
+    { key: "public", label: "pública", cls: "good", hint: "aparece em pqp.gg/@handle" },
+    { key: "shared", label: "compartilhada", cls: "", hint: "só o cartão dentro do app" },
+    { key: "hidden", label: "oculta", cls: "", hint: "só nas configurações da pessoa" }
+  ];
+
+  function renderConnections(conn) {
+    conn = conn || {};
+    var body = $("connBody");
+    if (!body) return;
+    var providers = Array.isArray(conn.providers) ? conn.providers : [];
+    var ofUsers = Number(conn.ofUsers) || 0;
+    var any = Number(conn.anyProvider) || 0;
+    var anyPublic = Number(conn.anyProviderPublic) || 0;
+
+    body.innerHTML = "";
+    if (!providers.length) {
+      body.innerHTML = '<tr><td colspan="4" style="color:var(--faint)">sem dados de conexões</td></tr>';
+    }
+    var links = { public: 0, shared: 0, hidden: 0 };
+    providers.forEach(function (p) {
+      var meta = CONN_LABELS[p.provider] || { name: String(p.provider || "?"), kind: "" };
+      var linked = Number(p.linked) || 0;
+      var pub = Number(p.public) || 0;
+      links.public += pub;
+      links.shared += Number(p.shared) || 0;
+      links.hidden += Number(p.hidden) || 0;
+      var tr = el("tr");
+      tr.innerHTML =
+        '<td><span class="srv-name">' + esc(meta.name) + '</span>' +
+          '<div class="srv-cat">' + (p.enabled === false
+            ? 'desligado · sem credencial na api'
+            : esc(meta.kind)) + '</div></td>' +
+        '<td class="r num cell-strong">' + fmt(linked) + '</td>' +
+        '<td class="r num">' + fmt(pub) + '</td>' +
+        '<td class="r num">' + (ofUsers ? fmtPct(linked, ofUsers) : "—") + '</td>';
+      body.appendChild(tr);
+    });
+
+    setText("connAny", fmt(any));
+    setText("connPublic", fmt(anyPublic));
+    setText("connAnyNote", ofUsers ? fmtPct(any, ofUsers) + " de " + fmt(ofUsers) + " contas" : "sem contas");
+    setText("connPublicNote", any
+      ? fmtPct(anyPublic, any) + " de quem conectou algo"
+      : "ninguém conectou nada ainda");
+
+    var enabled = providers.filter(function (p) { return p.enabled !== false; });
+    var enabledNames = enabled.map(function (p) {
+      return (CONN_LABELS[p.provider] || { name: p.provider }).name;
+    });
+    setText("connNote", (enabledNames.length
+      ? "ligados: " + enabledNames.join(", ")
+      : "nenhum provedor configurado nesta api") +
+      " · " + fmt(any) + (any === 1 ? " conta conectada" : " contas conectadas") +
+      (ofUsers ? " de " + fmt(ofUsers) : ""));
+
+    var distEl = $("connDist");
+    if (!distEl) return;
+    distEl.innerHTML = "";
+    var totalLinks = links.public + links.shared + links.hidden;
+    if (!totalLinks) {
+      distEl.innerHTML = '<div class="empty">nenhuma conta de jogo vinculada ainda. ' +
+        'a visibilidade aparece aqui assim que a primeira for.</div>';
+      return;
+    }
+    var peak = Math.max(links.public, links.shared, links.hidden, 1);
+    CONN_VISIBILITY.forEach(function (v) {
+      var n = links[v.key];
+      var row = el("div", "dist-row" + (n ? "" : " zero"));
+      row.setAttribute("title", fmt(n) + " de " + fmt(totalLinks) + " vínculos · " + v.hint);
+      row.innerHTML =
+        '<span class="dr-k">' + v.label + '</span>' +
+        '<span class="dr-bar"><i class="' + v.cls + '" style="width:' +
+          (n ? Math.max(3, (n / peak) * 100) : 0).toFixed(1) + '%"></i></span>' +
+        '<span class="dr-n num">' + fmt(n) + '</span>' +
+        '<span class="dr-p num">' + fmtPct(n, totalLinks) + '</span>';
+      distEl.appendChild(row);
+    });
+  }
+
   function renderServers(servers) {
     var sb = $("serversBody");
     sb.innerHTML = "";
@@ -1892,6 +2044,7 @@
   renderMetrics(seedMetrics);
   renderCharts(seedNewUsersHourly, seedMessagesHourly);
   renderAcquisition({ days: 7, total: 0, rows: [], landings: [] });
+  renderConnections({ ofUsers: 0, anyProvider: 0, anyProviderPublic: 0, providers: [] });
   renderServers(seedServers);
   renderChannels(seedChannels);
   renderVoice(seedVoice);
@@ -1990,6 +2143,7 @@
     renderCharts(usersHourly, msgsHourly);
 
     renderAcquisition(d.acquisition);
+    renderConnections(d.connections);
 
     var top = Array.isArray(d.topServers24h) ? d.topServers24h : [];
     renderServers(top.map(function (s, i) {
