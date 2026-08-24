@@ -7,7 +7,11 @@
   "menu.toggleMuteHelp": "Toggle Mute (Cmd/Ctrl+Shift+M)",
   "updater.title": "Update ready",
   "updater.message": "pqp {version} is ready to install.",
-  "updater.detail": "Restarting takes a few seconds. If you are in a call, choose Later — the update installs the next time you quit.",
+  "updater.detail": "Restarting takes a few seconds. If you are in a call, choose Later, and the update installs the next time you quit.",
   "updater.restart": "Restart now",
-  "updater.later": "Later"
+  "updater.later": "Later",
+  "passkey.windowTitle": "Sign in with Google",
+  "passkey.hintTitle": "Stuck on a passkey prompt?",
+  "passkey.hintBody": "Passkey sign-in cannot complete here in the app. In this Google window, click \"Try another way\" and choose your password instead, which works normally.",
+  "passkey.hintDismiss": "Got it"
 }
