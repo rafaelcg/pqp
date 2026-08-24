@@ -40,6 +40,7 @@ vi.mock("../services/blocks.js", () => ({
 // test here.
 vi.mock("../services/servers.js", () => ({
   getChannelAudience: async () => null,
+  getChannel: async () => ({ kind: "dm", server_id: null }),
 }));
 
 vi.mock("../services/embeds.js", () => ({
