@@ -362,7 +362,7 @@ describe("screen share audio", () => {
     displayMedia = async () => {
       // Raised after the user has already chosen a surface. Asking again would
       // put a second picker on screen with nothing to explain it.
-      const err = new Error("could not start");
+      const err = new Error("Could not start audio source");
       err.name = "NotReadableError";
       throw err;
     };
@@ -372,6 +372,28 @@ describe("screen share audio", () => {
     expect(displayMediaCalls).toHaveLength(1);
     expect(voice.getState().isSharingScreen).toBe(false);
     expect(voice.getState().error).not.toBeNull();
+  });
+
+  it("explains a failed audio capture instead of quoting the browser", async () => {
+    // A real report from the QG, 24 Aug 2026: "Could not start audio source",
+    // in English, with no clue attached, and the share dropped even though the
+    // video was fine. The person worked out on their own that unticking the
+    // audio box fixed it, which is a thing the product should have told them.
+    displayMedia = async () => {
+      const err = new Error("Could not start audio source");
+      err.name = "NotReadableError";
+      throw err;
+    };
+    const { voice } = await connectedMesh();
+    await voice.startScreenShare();
+
+    const message = voice.getState().error ?? "";
+    // The specific failure this regressed into: passing the browser's own
+    // string through untranslated.
+    expect(message).not.toBe("Could not start audio source");
+    expect(message).not.toContain("Could not start");
+    // And it has to name the fix, not just the symptom.
+    expect(message.toLowerCase()).toMatch(/aba|guia|tab/);
   });
 
   it("does not reopen the picker when the user dismissed it", async () => {
