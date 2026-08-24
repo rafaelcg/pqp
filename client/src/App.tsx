@@ -6,8 +6,10 @@ import {
   connectionProviderFromPath,
   joinIntentFromSearch,
   normalizeHandle,
+  Permission,
   publicProfileDisplayUrl,
   validateHandle,
+  buildReplyExcerpt,
 } from "@pqp/shared";
 import type {
   AgeGateStatus,
@@ -24,7 +26,8 @@ import type {
   VoiceRoomTransport,
 } from "@pqp/shared";
 import { MessageComposer } from "@/components/chat/message-composer";
-import { MessageList } from "@/components/chat/message-list";
+import { MessageList, type MessageAuthorInfo } from "@/components/chat/message-list";
+import { ForwardDialog, type ForwardTarget } from "@/components/chat/forward-dialog";
 import { ThreadPanel } from "@/components/chat/thread-panel";
 import {
   ReportDialog,
@@ -90,6 +93,7 @@ import { useVoiceStateSync } from "@/components/voice/voice-state-sync";
 import { VoiceStatusBar } from "@/components/voice/voice-status-bar";
 import { CallRatingPrompt } from "@/components/voice/call-rating-prompt";
 import { useCallRating } from "@/hooks/use-call-rating";
+import { usePermissions } from "@/hooks/use-permissions";
 import { ShareHandleButton } from "@/components/handle/share-handle-button";
 import { BetaTag } from "@/components/ui/beta-tag";
 import { Dialog } from "@/components/ui/dialog";
@@ -115,6 +119,7 @@ import {
   fetchIceServers,
   fetchMe,
   fetchMembers,
+  fetchRoles,
   listTimeouts,
   fetchMessages,
   fetchServers,
@@ -133,8 +138,10 @@ import {
   updateChannel,
   updateMe,
   updatePreferences,
+  type ServerMember,
+  type ServerRole,
 } from "@/lib/api";
-import { parseAppRoute, signedOutRedirectPath } from "@/lib/app-route";
+import { parseAppRoute, signedOutRedirectPath, messageRoutePath } from "@/lib/app-route";
 import {
   hasStashedConnectionCallback,
   stashConnectionCallbackFromWindow,
@@ -162,6 +169,8 @@ import {
   unreadFromConversations,
   upsertConversation,
 } from "@/lib/conversations";
+import { findLastOwnEditableMessage } from "@/lib/edit-last-message";
+import { findFirstUnreadMessageId } from "@/lib/unread-divider";
 import {
   HOME_SELECTION,
   selectionRoutePath,
@@ -174,6 +183,7 @@ import {
   loadAttachmentConfig,
 } from "@/lib/attachments";
 import type { MentionCandidate } from "@/lib/mention-autocomplete";
+import { usernameFromTag } from "@/lib/author-display";
 import { devAuthToken, getAuthToken, isDevAuthBypassEnabled } from "@/lib/dev-auth";
 import { getDesktop } from "@/lib/desktop";
 import {
@@ -505,13 +515,28 @@ function MainAppContent({
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [unread, setUnread] = useState<Record<string, UnreadState>>({});
   const [replyTarget, setReplyTarget] = useState<ChatMessage | null>(null);
-  const [mentionCandidates, setMentionCandidates] = useState<
-    MentionCandidate[]
+  const [mentionMembers, setMentionMembers] = useState<MentionCandidate[]>([]);
+  const [mentionableRoles, setMentionableRoles] = useState<
+    Array<Pick<ServerRole, "id" | "name" | "mentionable" | "isEveryone">>
   >([]);
+  const [serverMembers, setServerMembers] = useState<ServerMember[]>([]);
+  const [serverRoles, setServerRoles] = useState<ServerRole[]>([]);
+  const [forwardMessage, setForwardMessage] = useState<ChatMessage | null>(null);
+  const unreadHoldRef = useRef(new Set<string>());
+  const [unreadHeldIds, setUnreadHeldIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  /** Last-read cursor from before this visit, for the NEW rule. */
+  const [unreadSince, setUnreadSince] = useState<string | null>(null);
+  const [threadUnreadSince, setThreadUnreadSince] = useState<string | null>(
+    null,
+  );
+  const unreadCursorByChannelRef = useRef<Record<string, string>>({});
+  const [editMessageId, setEditMessageId] = useState<string | null>(null);
   /**
    * The selected server's roster as rank only — what the profile card needs to
    * know whether it may offer a timeout, and to whom. Filled from the same fetch
-   * as `mentionCandidates`, so no surface pays a second request for it.
+   * as `mentionMembers`, so no surface pays a second request for it.
    */
   const [memberRoles, setMemberRoles] = useState<Map<string, MemberRole>>(
     () => new Map(),
@@ -610,6 +635,7 @@ function MainAppContent({
   friendsRef.current = friends;
   /** The server the sidebar is showing, or null in the conversation view. */
   const selectedServerId = selectionServerId(selection);
+  const perms = usePermissions(selectedServerId);
   /** Which server owns the active call — `channels` only holds the selected one. */
   const voiceServerIdRef = useRef<string | null>(null);
   /**
@@ -748,7 +774,9 @@ function MainAppContent({
     });
   }, [voice]);
 
-  const clearUnread = useCallback((channelId: string) => {
+  const clearUnread = useCallback(async (channelId: string): Promise<string | null> => {
+    unreadHoldRef.current.delete(channelId);
+    setUnreadHeldIds(new Set(unreadHoldRef.current));
     setUnread((prev) => {
       if (!prev[channelId]) {
         return prev;
@@ -757,9 +785,13 @@ function MainAppContent({
       delete next[channelId];
       return next;
     });
-    void markChannelRead(channelId).catch(() => {
+    try {
+      const result = await markChannelRead(channelId);
+      return result.previousLastReadAt ?? null;
+    } catch {
       // A missed read receipt only means a stale badge; not worth surfacing.
-    });
+      return null;
+    }
   }, []);
 
   const loadUnread = useCallback(async (serverId: string) => {
@@ -768,12 +800,14 @@ function MainAppContent({
       setUnread((prev) => {
         const next = { ...prev };
         for (const row of rows) {
-          if (row.count > 0 && row.channelId !== selectedChannelIdRef.current) {
+          const isOpen = row.channelId === selectedChannelIdRef.current;
+          const held = unreadHoldRef.current.has(row.channelId);
+          if (row.count > 0 && (!isOpen || held)) {
             next[row.channelId] = {
               count: row.count,
               mentions: row.mentions,
             };
-          } else {
+          } else if (!held) {
             delete next[row.channelId];
           }
         }
@@ -805,9 +839,10 @@ function MainAppContent({
         setConversations(sorted);
         conversationsRef.current = sorted;
         setUnread((prev) => {
+          const openId = selectedChannelIdRef.current;
           const seeded = unreadFromConversations(
             sorted,
-            selectedChannelIdRef.current,
+            openId && unreadHoldRef.current.has(openId) ? null : openId,
           );
           if (!trustSnapshot) {
             // The live map is spread last so it wins: it has counted
@@ -866,24 +901,39 @@ function MainAppContent({
   // only place a handle can be learned from without asking for it.
   useEffect(() => {
     if (conversationParticipants) {
-      setMentionCandidates([...conversationParticipants]);
+      setMentionMembers([...conversationParticipants]);
+      setMentionableRoles([]);
+      setServerMembers([]);
+      setServerRoles([]);
       return;
     }
     if (!selectedServerId) {
-      setMentionCandidates([]);
+      setMentionMembers([]);
+      setMentionableRoles([]);
+      setServerMembers([]);
+      setServerRoles([]);
       return;
     }
     let cancelled = false;
-    void fetchMembers(selectedServerId)
-      .then(({ members }) => {
+    void Promise.all([
+      fetchMembers(selectedServerId),
+      fetchRoles(selectedServerId).catch(() => ({ roles: [] as ServerRole[] })),
+    ])
+      .then(([{ members }, { roles }]) => {
         if (!cancelled) {
-          setMentionCandidates(members);
-          // The same roster, kept a second time as rank only. This is what lets
-          // the profile card offer moderation from a *message author* without a
-          // request of its own: `MentionCandidate` narrows `role` away, and the
-          // card needs it to know whether the server would refuse the action.
+          setMentionMembers(members);
+          setServerMembers(members);
+          setServerRoles(roles);
           setMemberRoles(
             new Map(members.map((member) => [member.id, member.role])),
+          );
+          setMentionableRoles(
+            roles.map((role) => ({
+              id: role.id,
+              name: role.name,
+              mentionable: role.mentionable,
+              isEveryone: role.isEveryone,
+            })),
           );
         }
       })
@@ -894,6 +944,102 @@ function MainAppContent({
       cancelled = true;
     };
   }, [conversationParticipants, selectedServerId]);
+
+  const mentionCandidates = useMemo(() => {
+    if (conversationParticipants) {
+      return mentionMembers;
+    }
+    const extra: MentionCandidate[] = [];
+    const canMass = perms.can(Permission.MENTION_EVERYONE);
+    if (canMass) {
+      extra.push({
+        id: "mention:everyone",
+        username: "everyone",
+        displayName: t("composer.mentionEveryone"),
+        avatarUrl: null,
+        mentionKind: "mass",
+      });
+      extra.push({
+        id: "mention:here",
+        username: "here",
+        displayName: t("composer.mentionHere"),
+        avatarUrl: null,
+        mentionKind: "mass",
+      });
+    }
+    for (const role of mentionableRoles) {
+      if (role.isEveryone) {
+        continue;
+      }
+      if (role.mentionable || canMass) {
+        extra.push({
+          id: `role:${role.id}`,
+          username: role.name,
+          displayName: role.name,
+          avatarUrl: null,
+          mentionKind: "role",
+        });
+      }
+    }
+    return [
+      ...mentionMembers.map((member) => ({
+        ...member,
+        mentionKind: "member" as const,
+      })),
+      ...extra,
+    ];
+  }, [
+    conversationParticipants,
+    mentionMembers,
+    mentionableRoles,
+    perms,
+    t,
+  ]);
+
+  const messageAuthors = useMemo(() => {
+    const map = new Map<string, MessageAuthorInfo>();
+    for (const member of serverMembers) {
+      map.set(member.id, {
+        rank: member.role,
+        roleIds: member.roleIds,
+        status: member.status ?? null,
+        username: member.username ?? usernameFromTag(member.tag),
+      });
+    }
+    for (const person of conversationParticipants ?? []) {
+      if (map.has(person.id)) {
+        continue;
+      }
+      map.set(person.id, {
+        username: person.username,
+      });
+    }
+    return map;
+  }, [conversationParticipants, serverMembers]);
+
+  const forwardTargets = useMemo((): ForwardTarget[] => {
+    const currentId = selectedChannelId;
+    const targets: ForwardTarget[] = [];
+    for (const channel of channels) {
+      if (channel.type === "text" && channel.id !== currentId) {
+        targets.push({
+          id: channel.id,
+          label: channel.name,
+          kind: "channel",
+        });
+      }
+    }
+    for (const conversation of conversations) {
+      if (conversation.channelId !== currentId) {
+        targets.push({
+          id: conversation.channelId,
+          label: conversationTitle(conversation.participants),
+          kind: "conversation",
+        });
+      }
+    }
+    return targets;
+  }, [channels, conversations, selectedChannelId]);
 
   /**
    * The selected server, but only when this account can manage it — the one
@@ -974,16 +1120,31 @@ function MainAppContent({
       setReplyTarget(null);
       // --- threads --- the panel belongs to the channel it was opened from.
       closeThreadPanelRef.current();
-      clearUnread(channelId);
+      setUnreadSince(null);
+      setEditMessageId(null);
+      const held = unreadHoldRef.current.has(channelId);
       setMessagesLoading(true);
       chat.joinChannel(channelId);
 
       try {
-        const page = await fetchMessages(channelId);
+        const [page, previousLastReadAt] = await Promise.all([
+          fetchMessages(channelId),
+          held
+            ? Promise.resolve(
+                unreadCursorByChannelRef.current[channelId] ?? null,
+              )
+            : clearUnread(channelId),
+        ]);
         if (selectedChannelIdRef.current !== channelId) {
           return;
         }
         chat.setMessages(page.messages, page.hasMore);
+        setUnreadSince(
+          previousLastReadAt &&
+            findFirstUnreadMessageId(page.messages, previousLastReadAt)
+            ? previousLastReadAt
+            : null,
+        );
         refresh();
       } catch (error) {
         setAppError(
@@ -1018,9 +1179,12 @@ function MainAppContent({
     // The read cursor moves on close, not per message: the panel was on
     // screen, so everything it showed is read, and this is what keeps the
     // chip's unread dot honest after the next reload.
-    clearUnread(openThreadChannelIdRef.current);
+    if (!unreadHoldRef.current.has(openThreadChannelIdRef.current)) {
+      void clearUnread(openThreadChannelIdRef.current);
+    }
     threadChat.leaveChannel();
     setOpenThread(null);
+    setThreadUnreadSince(null);
   }, [clearUnread, threadChat]);
   // openChannel is declared above this callback and must close the panel on
   // every channel switch, so it reaches it through a ref.
@@ -1031,14 +1195,28 @@ function MainAppContent({
     async (thread: ThreadSummary, origin: ChatMessage | null) => {
       setOpenThread({ thread, origin });
       setThreadLoading(true);
+      setThreadUnreadSince(null);
       threadChat.joinChannel(thread.channelId);
-      clearUnread(thread.channelId);
+      const held = unreadHoldRef.current.has(thread.channelId);
       try {
-        const page = await fetchMessages(thread.channelId);
+        const [page, previousLastReadAt] = await Promise.all([
+          fetchMessages(thread.channelId),
+          held
+            ? Promise.resolve(
+                unreadCursorByChannelRef.current[thread.channelId] ?? null,
+              )
+            : clearUnread(thread.channelId),
+        ]);
         if (openThreadChannelIdRef.current !== thread.channelId) {
           return;
         }
         threadChat.setMessages(page.messages, page.hasMore);
+        setThreadUnreadSince(
+          previousLastReadAt &&
+            findFirstUnreadMessageId(page.messages, previousLastReadAt)
+            ? previousLastReadAt
+            : null,
+        );
         refresh();
       } catch {
         // The panel opens empty; live traffic and sending still work, and
@@ -1070,6 +1248,50 @@ function MainAppContent({
     },
     [chat, openThreadPanel],
   );
+
+  const handleMarkUnread = useCallback(
+    (message: ChatMessage) => {
+      const created = Date.parse(message.createdAt);
+      if (!Number.isFinite(created)) {
+        return;
+      }
+      const channelId = message.channelId;
+      const lastReadAt = new Date(created - 1).toISOString();
+      unreadHoldRef.current.add(channelId);
+      unreadCursorByChannelRef.current[channelId] = lastReadAt;
+      setUnreadHeldIds(new Set(unreadHoldRef.current));
+      setUnread((prev) => ({
+        ...prev,
+        [channelId]: {
+          count: Math.max(1, prev[channelId]?.count ?? 1),
+          mentions: prev[channelId]?.mentions ?? 0,
+        },
+      }));
+      if (selectedChannelIdRef.current === channelId) {
+        setUnreadSince(lastReadAt);
+      }
+      if (openThreadChannelIdRef.current === channelId) {
+        setThreadUnreadSince(lastReadAt);
+      }
+      void markChannelRead(channelId, lastReadAt)
+        .then(() => {
+          if (selectedServerId) {
+            void loadUnread(selectedServerId);
+          }
+        })
+        .catch(() => {
+          // Badge is best-effort.
+        });
+    },
+    [loadUnread, selectedServerId],
+  );
+
+  const handleMarkRead = useCallback(() => {
+    const channelId = selectedChannelIdRef.current;
+    if (channelId) {
+      clearUnread(channelId);
+    }
+  }, [clearUnread]);
 
   // The thread controller renders optimistic bubbles for the same account.
   useEffect(() => {
@@ -1573,6 +1795,34 @@ function MainAppContent({
       await openChannel(channelId);
     },
     [openChannel, syncRoute],
+  );
+
+  const handleForwardPick = useCallback(
+    async (target: ForwardTarget) => {
+      const message = forwardMessage;
+      setForwardMessage(null);
+      if (!message) {
+        return;
+      }
+      const excerpt = buildReplyExcerpt(message.body) || "…";
+      const quote = t("chat.forward.quote", {
+        name: message.authorName,
+        excerpt,
+      });
+      const link = `${window.location.origin}${messageRoutePath(
+        selectedServerId,
+        message.channelId,
+        message.id,
+      )}`;
+      const draft = `${quote}\n${link}`;
+      if (target.kind === "channel") {
+        await selectChannel(target.id);
+      } else {
+        await selectConversation(target.id);
+      }
+      setComposerInsert(draft);
+    },
+    [forwardMessage, selectChannel, selectConversation, selectedServerId, t],
   );
 
   /** Leave the conversation view open with nothing selected in it. */
@@ -2569,7 +2819,9 @@ function MainAppContent({
       : undefined;
   const selectedServer = servers.find((s) => s.id === selectedServerId);
   const canManage =
-    selectedServer?.role === "owner" || selectedServer?.role === "admin";
+    selectedServer?.role === "owner" ||
+    selectedServer?.role === "admin" ||
+    perms.can(Permission.MANAGE_CHANNELS);
 
   const voiceChannel =
     voiceState.voiceChannelId
@@ -2951,6 +3203,15 @@ function MainAppContent({
         }
         unreadThreadIds={unreadThreadIds}
         activeThreadId={openThread?.thread.channelId ?? null}
+        authors={messageAuthors}
+        roles={serverRoles}
+        unreadHeld={unreadHeldIds.has(selectedChannel.id)}
+        unreadSince={unreadSince}
+        editMessageId={editMessageId}
+        onEditMessageHandled={() => setEditMessageId(null)}
+        onForward={setForwardMessage}
+        onMarkUnread={handleMarkUnread}
+        onMarkRead={handleMarkRead}
       />
       {/* --- threads --- overlaid on the pane (full width on mobile, a right
           column on desktop) so the parent stays where it was underneath. */}
@@ -2974,6 +3235,18 @@ function MainAppContent({
               subjectName: message.authorName,
             })
           }
+          authors={messageAuthors}
+          roles={serverRoles}
+          unreadHeld={unreadHeldIds.has(openThread.thread.channelId)}
+          unreadSince={threadUnreadSince}
+          onForward={setForwardMessage}
+          onMarkUnread={handleMarkUnread}
+          onMarkRead={() => clearUnread(openThread.thread.channelId)}
+          onSent={() => {
+            if (unreadHoldRef.current.has(openThread.thread.channelId)) {
+              clearUnread(openThread.thread.channelId);
+            }
+          }}
         />
       )}
       {/* Against the composer it explains, not floating in a corner: the frame
@@ -2991,6 +3264,9 @@ function MainAppContent({
         // from the wrong audience.
         key={selectedChannel.id}
         onSend={(body, attachments) => {
+          if (unreadHoldRef.current.has(selectedChannel.id)) {
+            clearUnread(selectedChannel.id);
+          }
           chat.sendMessage(body, replyTarget, attachments);
           setReplyTarget(null);
         }}
@@ -3003,6 +3279,17 @@ function MainAppContent({
         replyTarget={replyTarget}
         onCancelReply={() => setReplyTarget(null)}
         mentionCandidates={mentionCandidates}
+        onEditLastOwn={() => {
+          const last = findLastOwnEditableMessage(
+            chat.getMessages(),
+            user?.id ?? null,
+          );
+          if (!last) {
+            return false;
+          }
+          setEditMessageId(last.id);
+          return true;
+        }}
         slashContext={{
           updateDisplayName: async (name: string) => {
             const updated = await updateMe({ displayName: name });
@@ -3053,6 +3340,8 @@ function MainAppContent({
       // been selected above, and the composer remounts per channel, so its
       // insert effect picks this up on mount with the text already in it.
       onComposeDraft={(text) => setComposerInsert(text)}
+      onMention={(username) => setComposerInsert(`@${username}`)}
+      roles={serverRoles}
       onBlockUser={(userId) => void handleBlockUser(userId)}
       onUnblockUser={(userId) => void handleUnblockUser(userId)}
       onReportUser={(subject) =>
@@ -3631,6 +3920,11 @@ function MainAppContent({
         serverId={selectedServerId}
         serverName={selectedServer?.name ?? null}
         canManage={!!canManage}
+        canCreateInvite={
+          perms.can(Permission.CREATE_INVITE) ||
+          selectedServer?.role === "owner" ||
+          selectedServer?.role === "admin"
+        }
         initialCode={inviteCodeFromUrl}
         initialError={inviteErrorFromUrl}
         onClose={() => {
@@ -3687,6 +3981,13 @@ function MainAppContent({
       <ReportDialog
         target={reportTarget}
         onClose={() => setReportTarget(null)}
+      />
+
+      <ForwardDialog
+        open={forwardMessage !== null}
+        targets={forwardTargets}
+        onPick={(target) => void handleForwardPick(target)}
+        onClose={() => setForwardMessage(null)}
       />
 
       <NewDmDialog

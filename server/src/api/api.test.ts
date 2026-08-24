@@ -11,7 +11,7 @@ import {
   vi,
 } from "vitest";
 import type { WebSocket } from "ws";
-import { parseSearchSnippet } from "@pqp/shared";
+import { parseSearchSnippet, Permission, serializePermissions } from "@pqp/shared";
 import type { DbUser } from "../db.js";
 
 /**
@@ -496,14 +496,135 @@ describeDb("API authorization", () => {
       expect(exhausted.status).toBe(400);
     });
 
-    it("only lets managers create and list invites", async () => {
+    it("lets members create invites but not list them", async () => {
       const { serverId } = await makeServer();
       expect(
         (await call(member, "POST", `/api/servers/${serverId}/invites`, {})).status,
-      ).toBe(403);
+      ).toBe(201);
       expect(
         (await call(member, "GET", `/api/servers/${serverId}/invites`)).status,
       ).toBe(403);
+    });
+  });
+
+  describe("permissions and nicknames", () => {
+    it("seeds @everyone and Admin, and lets a member read the snapshot", async () => {
+      const { serverId } = await makeServer();
+      const roles = await call<{
+        roles: Array<{ name: string; isEveryone: boolean; systemKey: string | null }>;
+      }>(member, "GET", `/api/servers/${serverId}/roles`);
+      expect(roles.status).toBe(200);
+      expect(roles.body.roles.some((role) => role.isEveryone)).toBe(true);
+      expect(roles.body.roles.some((role) => role.systemKey === "admin")).toBe(
+        true,
+      );
+
+      const snap = await call<{ server: string; version: number }>(
+        member,
+        "GET",
+        `/api/servers/${serverId}/permissions`,
+      );
+      expect(snap.status).toBe(200);
+      expect(snap.body.server).toMatch(/^\d+$/);
+
+      expect(
+        (
+          await call(member, "POST", `/api/servers/${serverId}/roles`, {
+            name: "mods",
+          })
+        ).status,
+      ).toBe(403);
+    });
+
+    it("lets a member set their own nickname", async () => {
+      const { serverId } = await makeServer();
+      const res = await call(
+        member,
+        "PATCH",
+        `/api/servers/${serverId}/members/${member.id}`,
+        { nickname: "apelido" },
+      );
+      expect(res.status).toBe(200);
+      const list = await call<{
+        members: Array<{ id: string; nickname: string | null }>;
+      }>(owner, "GET", `/api/servers/${serverId}/members`);
+      const row = list.body.members.find((one) => one.id === member.id);
+      expect(row?.nickname).toBe("apelido");
+    });
+
+    it("strips kick, ban, timeout and Administrator from @everyone", async () => {
+      const { serverId } = await makeServer();
+      const listed = await call<{
+        roles: Array<{
+          id: string;
+          isEveryone: boolean;
+          permissions: string;
+        }>;
+      }>(owner, "GET", `/api/servers/${serverId}/roles`);
+      const everyone = listed.body.roles.find((role) => role.isEveryone)!
+      const dirty = serializePermissions(
+        BigInt(everyone.permissions) |
+          Permission.KICK_MEMBERS |
+          Permission.BAN_MEMBERS |
+          Permission.MODERATE_MEMBERS |
+          Permission.ADMINISTRATOR,
+      );
+      const saved = await call<{ role: { permissions: string } }>(
+        owner,
+        "PATCH",
+        `/api/roles/${everyone.id}`,
+        { permissions: dirty },
+      );
+      expect(saved.status).toBe(200);
+      const bits = BigInt(saved.body.role.permissions);
+      expect(bits & Permission.KICK_MEMBERS).toBe(0n);
+      expect(bits & Permission.BAN_MEMBERS).toBe(0n);
+      expect(bits & Permission.MODERATE_MEMBERS).toBe(0n);
+      expect(bits & Permission.ADMINISTRATOR).toBe(0n);
+    });
+
+    it("inserts a new role just above @everyone and lets the owner reorder", async () => {
+      const { serverId } = await makeServer();
+      const created = await call<{
+        role: { id: string; position: number };
+      }>(owner, "POST", `/api/servers/${serverId}/roles`, { name: "mods" });
+      expect(created.status).toBe(201);
+      expect(created.body.role.position).toBe(1);
+
+      const afterCreate = await call<{
+        roles: Array<{
+          id: string;
+          name: string;
+          position: number;
+          isEveryone: boolean;
+          systemKey: string | null;
+        }>;
+      }>(owner, "GET", `/api/servers/${serverId}/roles`);
+      const everyone = afterCreate.body.roles.find((role) => role.isEveryone)!;
+      const adminRole = afterCreate.body.roles.find(
+        (role) => role.systemKey === "admin",
+      )!;
+      const mods = afterCreate.body.roles.find((role) => role.name === "mods")!;
+      expect(everyone.position).toBe(0);
+      expect(mods.position).toBe(1);
+      expect(adminRole.position).toBe(2);
+
+      const reordered = await call(
+        owner,
+        "PATCH",
+        `/api/servers/${serverId}/roles/order`,
+        { roleIds: [adminRole.id, mods.id] },
+      );
+      expect(reordered.status).toBe(200);
+      const afterOrder = await call<{
+        roles: Array<{ id: string; position: number }>;
+      }>(owner, "GET", `/api/servers/${serverId}/roles`);
+      const byId = Object.fromEntries(
+        afterOrder.body.roles.map((role) => [role.id, role.position]),
+      );
+      expect(byId[everyone.id]).toBe(0);
+      expect(byId[adminRole.id]).toBe(1);
+      expect(byId[mods.id]).toBe(2);
     });
   });
 
@@ -1316,9 +1437,21 @@ describeDb("API authorization", () => {
         authorView.body.unread.find((u) => u.channelId === textChannelId)?.count,
       ).toBe(0);
 
-      expect(
-        (await call(member, "POST", `/api/channels/${textChannelId}/read`)).status,
-      ).toBe(200);
+      const marked = await call<{
+        ok: boolean;
+        previousLastReadAt: string | null;
+        lastReadAt: string;
+      }>(member, "POST", `/api/channels/${textChannelId}/read`);
+      expect(marked.status).toBe(200);
+      expect(marked.body.previousLastReadAt).toBeNull();
+      expect(marked.body.lastReadAt).toBeTruthy();
+
+      const second = await call<{ previousLastReadAt: string | null }>(
+        member,
+        "POST",
+        `/api/channels/${textChannelId}/read`,
+      );
+      expect(second.body.previousLastReadAt).toBe(marked.body.lastReadAt);
 
       const after = await call<{
         unread: Array<{ channelId: string; count: number }>;
@@ -1326,6 +1459,39 @@ describeDb("API authorization", () => {
       expect(
         after.body.unread.find((u) => u.channelId === textChannelId)?.count,
       ).toBe(0);
+    });
+
+    it("rewinds the read cursor so later messages count as unread", async () => {
+      const { serverId, textChannelId } = await makeServer();
+      await getPool().query(
+        `INSERT INTO messages (channel_id, author_id, body, created_at)
+         VALUES ($1, $2, 'older', NOW() - INTERVAL '2 minutes'),
+                ($1, $2, 'newer', NOW() - INTERVAL '1 minute')`,
+        [textChannelId, owner.id],
+      );
+      const newer = await getPool().query<{ created_at: Date }>(
+        `SELECT created_at FROM messages
+          WHERE channel_id = $1 AND body = 'newer'`,
+        [textChannelId],
+      );
+      const justBefore = new Date(
+        newer.rows[0]!.created_at.getTime() - 1,
+      ).toISOString();
+
+      expect(
+        (
+          await call(member, "POST", `/api/channels/${textChannelId}/read`, {
+            lastReadAt: justBefore,
+          })
+        ).status,
+      ).toBe(200);
+
+      const unread = await call<{
+        unread: Array<{ channelId: string; count: number }>;
+      }>(member, "GET", `/api/servers/${serverId}/unread`);
+      expect(
+        unread.body.unread.find((u) => u.channelId === textChannelId)?.count,
+      ).toBe(1);
     });
   });
 

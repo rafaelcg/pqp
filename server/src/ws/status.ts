@@ -195,6 +195,10 @@ export function resolveStatus(userId: string): UserStatus {
   return externalStatus(mergedFor(userId));
 }
 
+export function isPresentForHere(userId: string): boolean {
+  return resolveStatus(userId) !== "offline";
+}
+
 /**
  * The bulk form, for a member list. Builds the cluster-wide view once and then
  * looks each id up in it, so a 500-member server costs one pass over the remote

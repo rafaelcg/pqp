@@ -8,7 +8,7 @@ Cold-start status for agents and humans. Companion: [`../CLAUDE.md`](../CLAUDE.m
 
 - **Repo:** https://github.com/rafaelcg/pqp
 - **Model:** servers (invite codes) → public/private channels → text chat + full-mesh voice
-- **Roles:** `owner` / `admin` / `member` · usernames `name#1234`
+- **Roles:** `owner` / `admin` / `member` rank plus bitfield roles (`@everyone`, Admin, custom). Nicknames are display-only.
 
 ## Live endpoints (hosted)
 
@@ -52,7 +52,7 @@ Detail and “still open” list: [`PLAN_STATUS.md`](./PLAN_STATUS.md).
 
 ## Recent shipped work (context for next agents)
 
-- **i18n (en + pt-BR):** i18next core, JSON catalogues, lazy Portuguese, Electron menus. See [`I18N.md`](./I18N.md).
+- **Chat log: NEW divider, mention rows, composer ArrowUp / `:emoji:` (2026-08-24):** Opening a channel snapshots the previous read cursor (`POST /read` returns `previousLastReadAt`) and keeps a NEW rule on the first unread message until you leave. Rows that mention you, `@everyone`, or `@here` get a left bar. Empty composer ArrowUp edits your last message. Typing `:fire` autocompletes (and `:fire:` expands as you type).
 - **In-app sounds (2026-08-23, demo on `feat/in-app-sounds`):** cinematic UI SFX (CC0): mention = `mention`, voice join/leave = `select`/`deselect`. No ping for ordinary messages. Incoming/outgoing call rings are still synthesised dual-tone. OS banners stay silent. Settings → Notifications has a Sounds block. DND still mutes mention. Your own join/leave play on the click, not after mic/welcome; the mic pipeline waits until that cue finishes (or 750ms) so opening capture cannot cut the tail. One sample at a time so join cannot stack on leave or the outgoing ring. Mentions also play in the open channel. Other people joining/leaving the lobby you are in still play.
 - **More than one person can share a screen (2026-08-23):** the exclusive presenter lock is gone. Caps are **2 concurrent shares on mesh, 4 on LiveKit** (`SCREEN_SHARE_LIMIT`). The web layout auto-shows every share (split on a wide window for two; focus + chips otherwise). Screen audio follows hook state: one share is that share, two are both, three-plus is the focused share only. Old clients that still take the first `sharingScreen` roster entry see only that first sharer.
 

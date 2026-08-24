@@ -407,6 +407,19 @@ h2,
   background: color-mix(in oklch, var(--color-accent) 26%, transparent);
 }
 
+.pqp-mention-mass {
+  font-weight: 600;
+}
+
+.pqp-message-mention {
+  background: color-mix(in oklch, var(--color-accent) 12%, transparent);
+  box-shadow: inset 3px 0 0 var(--color-accent);
+}
+
+.pqp-message-mention:hover {
+  background: color-mix(in oklch, var(--color-accent) 18%, transparent);
+}
+
 @keyframes rise-in {
   from {
     opacity: 0;
@@ -559,6 +572,7 @@ h2,
   --font-family: var(--font-sans);
   border: none;
   height: 340px;
+  max-height: 100%;
 }
 
 /*

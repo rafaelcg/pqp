@@ -38,6 +38,7 @@ export type MemberRole = "owner" | "admin" | "member";
 export interface GroupableMember {
   id: string;
   displayName: string;
+  nickname?: string | null;
   role: MemberRole;
   /**
    * Absent means an API that predates status, or a payload that never carried
@@ -102,7 +103,9 @@ export function compareMembers(
   a: GroupableMember,
   b: GroupableMember,
 ): number {
-  const byName = a.displayName.localeCompare(b.displayName, undefined, {
+  const nameA = a.nickname?.trim() || a.displayName;
+  const nameB = b.nickname?.trim() || b.displayName;
+  const byName = nameA.localeCompare(nameB, undefined, {
     sensitivity: "base",
   });
   return byName !== 0 ? byName : a.id.localeCompare(b.id);

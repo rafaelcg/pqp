@@ -57,6 +57,11 @@ vi.mock("../services/messages.js", () => ({
 vi.mock("../services/reactions.js", () => ({
   getMessageChannelId: async () => null,
   toggleReaction: async () => ({ added: true }),
+  resolveChannelMemberName: async (
+    _channelId: string,
+    _userId: string,
+    fallback: string,
+  ) => fallback,
 }));
 
 // --- threads --- "not a thread" keeps the chip-refresh tail of the message

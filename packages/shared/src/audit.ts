@@ -92,6 +92,12 @@ export const AUDIT_ACTIONS = [
   "member.voice_move",
   "member.voice_mute",
   "member.voice_unmute",
+  "role.create",
+  "role.update",
+  "role.delete",
+  "member.nickname_update",
+  "member.roles_update",
+  "channel.overwrite_update",
 ] as const;
 
 export const auditActionSchema = z.enum(AUDIT_ACTIONS);

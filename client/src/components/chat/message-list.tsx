@@ -10,12 +10,12 @@ import {
   CornerUpLeft,
   ImagePlay,
   Loader2,
+  MoreHorizontal,
   Pencil,
   Pin,
   Play,
   Reply,
   SmilePlus,
-  Trash2,
 } from "lucide-react";
 import {
   memo,
@@ -25,10 +25,14 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type ReactNode,
+  type Ref,
 } from "react";
+import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import { UserAvatar } from "@/components/user/user-avatar";
+import { StatusDot } from "@/components/user/status-dot";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import { AttachmentGrid } from "@/components/chat/attachment-grid";
@@ -42,10 +46,19 @@ import { Button } from "@/components/ui/button";
 import { useProfilePopover } from "@/components/user/user-profile-popover";
 import type { ProfileSubject } from "@/components/user/profile-relations";
 import type { ChatMessage, TypingUser } from "@/hooks/use-chat";
+import type { MemberRole, UserStatus } from "@pqp/shared";
 import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
 import { messageRoutePath } from "@/lib/app-route";
 import { QUICK_REACTIONS } from "@/lib/emoji-shortcodes";
+import { messageMentionsYou } from "@/lib/message-mentions-you";
+import { findFirstUnreadMessageId } from "@/lib/unread-divider";
+import { highestRoleColor, usernameFromTag } from "@/lib/author-display";
 import { gifMessageMedia, type GifMedia } from "@/lib/gif-media";
+import {
+  ANCHORED_PANEL_PAD,
+  placeAnchoredPanel,
+} from "@/lib/anchored-panel";
+import { formatReactionWho } from "@/lib/reaction-who";
 import { remarkMentions } from "@/lib/remark-mentions";
 import { translateMessage, useTranslation } from "@/lib/i18n";
 import {
@@ -69,8 +82,27 @@ const HIGHLIGHT_MS = 2_000;
 /** How long the "not loaded" answer to a jump stays on screen. */
 const JUMP_NOTICE_MS = 3_000;
 
+/** First three of `QUICK_REACTIONS`, shown on the hover bar. */
+const HOVER_QUICK_REACTIONS = QUICK_REACTIONS.slice(0, 3);
+
+/** Roster facts the transcript uses to colour a name and draw a presence pip. */
+export interface MessageAuthorInfo {
+  rank?: MemberRole | null;
+  roleIds?: string[];
+  status?: UserStatus | null;
+  username?: string | null;
+}
+
+export interface MessageRoleColor {
+  id: string;
+  color: string | null;
+  position: number;
+}
+
 /** Shared identity, so the default prop does not remount every row each render. */
 const EMPTY_BLOCKED: ReadonlySet<string> = new Set<string>();
+const EMPTY_AUTHORS: ReadonlyMap<string, MessageAuthorInfo> = new Map();
+const EMPTY_ROLES: readonly MessageRoleColor[] = [];
 
 interface MessageListProps {
   messages: ChatMessage[];
@@ -134,6 +166,23 @@ interface MessageListProps {
   unreadThreadIds?: ReadonlySet<string>;
   /** The thread the panel is currently showing, so its chip reads as open. */
   activeThreadId?: string | null;
+  /** Roster lookup for name colour, rank chips, and presence. */
+  authors?: ReadonlyMap<string, MessageAuthorInfo>;
+  /** Painted roles, for the highest-position colour on a name. */
+  roles?: readonly MessageRoleColor[];
+  /** True while Mark unread is holding this channel's read cursor. */
+  unreadHeld?: boolean;
+  onForward?: (message: ChatMessage) => void;
+  onMarkUnread?: (message: ChatMessage) => void;
+  onMarkRead?: () => void;
+  /**
+   * Last-read cursor from *before* this visit marked the channel read. The NEW
+   * rule sits on the first message after it and stays until the channel changes.
+   */
+  unreadSince?: string | null;
+  /** Composer ArrowUp: start editing this id, then call `onEditMessageHandled`. */
+  editMessageId?: string | null;
+  onEditMessageHandled?: () => void;
 }
 
 interface Row {
@@ -198,6 +247,15 @@ export function MessageList({
   onOpenThread,
   unreadThreadIds = EMPTY_BLOCKED,
   activeThreadId = null,
+  authors = EMPTY_AUTHORS,
+  roles = EMPTY_ROLES,
+  unreadHeld = false,
+  onForward,
+  onMarkUnread,
+  onMarkRead,
+  unreadSince = null,
+  editMessageId = null,
+  onEditMessageHandled,
 }: MessageListProps) {
   const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -275,6 +333,13 @@ export function MessageList({
 
   const rows = useMemo(() => buildRows(messages), [messages]);
   const rowIds = useMemo(() => rows.map((row) => row.message.id), [rows]);
+  const firstUnreadId = useMemo(
+    () => findFirstUnreadMessageId(messages, unreadSince),
+    [messages, unreadSince],
+  );
+  const unreadDividerRef = useRef<HTMLDivElement>(null);
+  /** `${channelId}::${unreadSince}` once this visit has been scrolled into place. */
+  const unreadLandedRef = useRef<string | null>(null);
   const activeIndex = activeMessageId ? rowIds.indexOf(activeMessageId) : -1;
   const effectiveActiveId =
     activeIndex >= 0 ? activeMessageId : (rowIds[rowIds.length - 1] ?? null);
@@ -491,13 +556,20 @@ export function MessageList({
   // New content: follow it only when the reader is already at the bottom.
   // Yanking someone away from history they are reading is the classic chat bug.
   useEffect(() => {
-    const added = messages.length - lastCountRef.current;
+    const previousCount = lastCountRef.current;
+    const added = messages.length - previousCount;
     lastCountRef.current = messages.length;
 
     const prepended = prependedRef.current;
     prependedRef.current = 0;
     const appended = appendedRef.current;
     appendedRef.current = 0;
+    // The first page of a visit is not an "arrival". The landing effect below
+    // puts the viewport on the NEW rule (or the tail) without treating the
+    // whole history as missed messages.
+    if (previousCount === 0 && added > 0 && !highlightRef.current) {
+      return;
+    }
     const arrived = added - prepended - appended;
     if (arrived <= 0) {
       return;
@@ -584,7 +656,8 @@ export function MessageList({
     container.scrollTop = container.scrollHeight - saved.height + saved.top;
   }, [messages.length]);
 
-  // Channel switch: jump straight to the newest message.
+  // Channel switch: reset visit-scoped UI. Where the viewport lands is the
+  // layout effect below (NEW rule, permalink, or tail).
   useEffect(() => {
     setIsPinned(true);
     setMissedCount(0);
@@ -602,16 +675,75 @@ export function MessageList({
     setLiveAnnouncement("");
     rowNodes.current.clear();
     lastCountRef.current = messages.length;
-    requestAnimationFrame(() => {
-      // A permalink opened this channel to look at one specific message —
-      // slamming the view to the newest one would undo exactly that.
-      if (highlightRef.current) {
-        return;
-      }
-      scrollToBottom("auto");
-    });
+    unreadLandedRef.current = null;
+    setEditingId(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [channelId]);
+
+  // Open a channel: sit on the NEW rule when this visit has unread, otherwise
+  // the tail. Skipped for a permalink, which already owns the scroll.
+  useLayoutEffect(() => {
+    if (highlightRef.current) {
+      return;
+    }
+    if (pendingTailRef.current) {
+      return;
+    }
+    if (messages.length === 0) {
+      return;
+    }
+    const key = `${channelId ?? ""}::${unreadSince ?? "none"}`;
+    if (unreadLandedRef.current === key) {
+      return;
+    }
+    const unreadId = firstUnreadId;
+    if (unreadSince && unreadId) {
+      const node =
+        unreadDividerRef.current ?? rowNodes.current.get(unreadId) ?? null;
+      if (!node) {
+        const frame = requestAnimationFrame(() => {
+          if (unreadLandedRef.current === key) {
+            return;
+          }
+          const later =
+            unreadDividerRef.current ?? rowNodes.current.get(unreadId) ?? null;
+          if (!later) {
+            return;
+          }
+          unreadLandedRef.current = key;
+          setIsPinned(false);
+          later.scrollIntoView({ block: "center", behavior: "auto" });
+        });
+        return () => cancelAnimationFrame(frame);
+      }
+      unreadLandedRef.current = key;
+      setIsPinned(false);
+      node.scrollIntoView({ block: "center", behavior: "auto" });
+      return;
+    }
+    unreadLandedRef.current = key;
+    setIsPinned(true);
+    scrollToBottom("auto");
+  }, [channelId, unreadSince, firstUnreadId, messages.length, scrollToBottom]);
+
+  useEffect(() => {
+    if (!editMessageId) {
+      return;
+    }
+    if (!messages.some((message) => message.id === editMessageId)) {
+      onEditMessageHandled?.();
+      return;
+    }
+    setEditingId(editMessageId);
+    setActiveMessageId(editMessageId);
+    requestAnimationFrame(() => {
+      rowNodes.current.get(editMessageId)?.scrollIntoView({
+        block: "center",
+        behavior: "smooth",
+      });
+    });
+    onEditMessageHandled?.();
+  }, [editMessageId, messages, onEditMessageHandled]);
 
   const loadOlder = useCallback(() => {
     const container = scrollRef.current;
@@ -836,6 +968,18 @@ export function MessageList({
                   });
                 }
               }}
+              authors={authors}
+              roles={roles}
+              unreadHeld={unreadHeld}
+              onForward={onForward ? () => onForward(row.message) : undefined}
+              onMarkUnread={
+                onMarkUnread ? () => onMarkUnread(row.message) : undefined
+              }
+              onMarkRead={onMarkRead}
+              showUnreadDivider={row.message.id === firstUnreadId}
+              unreadDividerRef={
+                row.message.id === firstUnreadId ? unreadDividerRef : undefined
+              }
             />
           ))
         )}
@@ -1021,6 +1165,8 @@ function buildMessageAriaLabel(
   message: ChatMessage,
   isMine: boolean,
   gifMedia: GifMedia | null,
+  currentUserId: string | null,
+  mentionsYou: boolean,
 ): string {
   const parts: string[] = [];
   const who = isMine ? translateMessage("chat.you") : message.authorName;
@@ -1063,6 +1209,10 @@ function buildMessageAriaLabel(
     );
   }
 
+  if (mentionsYou) {
+    parts.push(translateMessage("chat.mentionsYou"));
+  }
+
   if (message.editedAt) {
     parts.push(translateMessage("chat.edited"));
   }
@@ -1081,10 +1231,17 @@ function buildMessageAriaLabel(
   const reactions = message.reactions ?? [];
   if (reactions.length > 0) {
     const summary = reactions
-      .map(
-        (r) =>
-          `${r.emoji} ${r.count}${r.me ? translateMessage("chat.youReacted") : ""}`,
-      )
+      .map((r) => {
+        const who =
+          formatReactionWho(
+            r.users,
+            r.count,
+            currentUserId,
+            translateMessage,
+          ) ||
+          `${r.count}${r.me ? translateMessage("chat.youReacted") : ""}`;
+        return `${r.emoji} ${who}`;
+      })
       .join("; ");
     parts.push(translateMessage("chat.reactionsSummary", { summary }));
   }
@@ -1140,6 +1297,14 @@ interface MessageRowProps {
   /** The menu closed. `refocus` is false for actions that already send focus
    * somewhere more useful (reply, edit, add-reaction all move it themselves). */
   onMenuClose: (refocus: boolean) => void;
+  authors: ReadonlyMap<string, MessageAuthorInfo>;
+  roles: readonly MessageRoleColor[];
+  unreadHeld: boolean;
+  onForward?: () => void;
+  onMarkUnread?: () => void;
+  onMarkRead?: () => void;
+  showUnreadDivider?: boolean;
+  unreadDividerRef?: Ref<HTMLDivElement>;
 }
 
 const MessageRow = memo(function MessageRow({
@@ -1179,10 +1344,44 @@ const MessageRow = memo(function MessageRow({
   onNavigate,
   onMenuOpenRow,
   onMenuClose,
+  authors,
+  roles,
+  unreadHeld,
+  onForward,
+  onMarkUnread,
+  onMarkRead,
+  showUnreadDivider = false,
+  unreadDividerRef,
 }: MessageRowProps) {
   const { t } = useTranslation();
   const openProfile = useProfilePopover();
   const { message, startsGroup, dayLabel } = row;
+  const authorInfo = authors.get(message.authorId);
+  const mentionsYou = messageMentionsYou(message, currentUsername);
+  const moreRef = useRef<HTMLDivElement>(null);
+  const [moreOpen, setMoreOpen] = useState(false);
+  useEffect(() => {
+    if (!moreOpen) {
+      return;
+    }
+    function onPointerDown(event: PointerEvent) {
+      if (moreRef.current?.contains(event.target as Node)) {
+        return;
+      }
+      setMoreOpen(false);
+    }
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setMoreOpen(false);
+      }
+    }
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [moreOpen]);
   // A body that is nothing but a GIF link is media, not prose — the URL is the
   // message, so it renders instead of the text rather than beside it.
   const gifMedia = useMemo(() => gifMessageMedia(message.body), [message.body]);
@@ -1196,8 +1395,15 @@ const MessageRow = memo(function MessageRow({
   // control on every message — see `isActive` on MessageRowProps.
   const controlTabIndex = isActive ? 0 : -1;
   const ariaLabel = useMemo(
-    () => buildMessageAriaLabel(message, isMine, gifMedia),
-    [message, isMine, gifMedia],
+    () =>
+      buildMessageAriaLabel(
+        message,
+        isMine,
+        gifMedia,
+        currentUserId,
+        mentionsYou,
+      ),
+    [message, isMine, gifMedia, currentUserId, mentionsYou],
   );
   // Mirrors the server's own gate: a conversation has no moderators, so
   // `serverId` being null means anyone already in it — proven just by being
@@ -1207,6 +1413,9 @@ const MessageRow = memo(function MessageRow({
   const canPin =
     isReal && (serverId ? canModerate : true) && (onPin || onUnpin);
   const canReport = isReal && !isMine && !!onReport;
+  const roleColor = message.isWebhook
+    ? null
+    : highestRoleColor(authorInfo?.roleIds, roles);
 
   function confirmDelete() {
     if (window.confirm(t("chat.deleteConfirm"))) {
@@ -1323,6 +1532,27 @@ const MessageRow = memo(function MessageRow({
           },
         ]
       : []),
+    ...(isReal && onForward
+      ? [
+          {
+            id: "forward",
+            label: t("chat.forward"),
+            onSelect: selectAndClose(onForward, false),
+          },
+        ]
+      : []),
+    ...(isReal && (unreadHeld ? onMarkRead : onMarkUnread)
+      ? [
+          {
+            id: unreadHeld ? "mark-read" : "mark-unread",
+            label: unreadHeld ? t("chat.markRead") : t("chat.markUnread"),
+            onSelect: selectAndClose(
+              unreadHeld ? onMarkRead : onMarkUnread,
+              true,
+            ),
+          },
+        ]
+      : []),
     ...(isMine && isReal
       ? [
           { id: "sep-edit", label: "", separator: true },
@@ -1401,6 +1631,12 @@ const MessageRow = memo(function MessageRow({
   return (
     <>
       {dayLabel && <DaySeparator label={dayLabel} />}
+      {showUnreadDivider && (
+        <UnreadSeparator
+          dividerRef={unreadDividerRef}
+          label={t("chat.unread.new")}
+        />
+      )}
 
       <ContextMenu
         items={items}
@@ -1427,26 +1663,38 @@ const MessageRow = memo(function MessageRow({
           // gets from the keyboard Menu key / Shift+F10.
           onContextMenu={onMenuOpenRow}
           className={cn(
-            "group relative flex gap-3 rounded-md px-1 transition-colors hover:bg-ink-3/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60",
+            "group relative flex gap-3 rounded-md px-1 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60",
             startsGroup ? "mt-3 py-0.5" : "py-px",
             message.pending && "opacity-60",
             isFlashing && "bg-accent/15 ring-1 ring-accent/50",
+            mentionsYou && !isFlashing && "pqp-message-mention",
+            !mentionsYou && !isFlashing && "hover:bg-ink-3/40",
           )}
         >
           {startsGroup ? (
-            <AuthorButton
-              message={message}
-              tabIndex={controlTabIndex}
-              onOpenProfile={openProfile}
-              className="h-9 w-9 shrink-0 overflow-hidden rounded-md"
-            >
-              <UserAvatar
-                name={message.authorName}
-                avatarUrl={message.authorAvatarUrl}
-                className="h-9 w-9"
-                fallbackClassName="bg-ink-3 text-sm"
-              />
-            </AuthorButton>
+            <div className="relative h-9 w-9 shrink-0">
+              <AuthorButton
+                message={message}
+                author={authorInfo}
+                tabIndex={controlTabIndex}
+                onOpenProfile={openProfile}
+                className="h-9 w-9 shrink-0 overflow-hidden rounded-md"
+              >
+                <UserAvatar
+                  name={message.authorName}
+                  avatarUrl={message.authorAvatarUrl}
+                  className="h-9 w-9"
+                  fallbackClassName="bg-ink-3 text-sm"
+                />
+              </AuthorButton>
+              {!message.isWebhook && authorInfo?.status && (
+                <StatusDot
+                  status={authorInfo.status}
+                  className="absolute -bottom-0.5 -right-0.5"
+                  ringClassName="rounded-full bg-ink ring-2 ring-ink"
+                />
+              )}
+            </div>
           ) : (
             <time
               className="w-9 shrink-0 pt-0.5 text-right text-[10px] leading-5 text-paper-muted opacity-0 group-hover:opacity-100"
@@ -1468,12 +1716,14 @@ const MessageRow = memo(function MessageRow({
               <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
                 <AuthorButton
                   message={message}
+                  author={authorInfo}
                   tabIndex={controlTabIndex}
                   onOpenProfile={openProfile}
                   className={cn(
                     "rounded font-semibold",
-                    isMine ? "text-signal" : "text-paper",
+                    !roleColor && (isMine ? "text-signal" : "text-paper"),
                   )}
+                  style={roleColor ? { color: roleColor } : undefined}
                 >
                   {message.authorName}
                 </AuthorButton>
@@ -1483,6 +1733,16 @@ const MessageRow = memo(function MessageRow({
                     title={t("chat.webhookPosted")}
                   >
                     Webhook
+                  </span>
+                )}
+                {!message.isWebhook && authorInfo?.rank === "owner" && (
+                  <span className="rounded bg-ink-4 px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-paper-muted">
+                    {t("chat.badge.owner")}
+                  </span>
+                )}
+                {!message.isWebhook && authorInfo?.rank === "admin" && (
+                  <span className="rounded bg-ink-4 px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-paper-muted">
+                    {t("chat.badge.admin")}
                   </span>
                 )}
                 {message.authorTag && (
@@ -1598,6 +1858,7 @@ const MessageRow = memo(function MessageRow({
             {isReal && (
               <ReactionBar
                 reactions={reactions}
+                currentUserId={currentUserId}
                 isPickerOpen={isPickerOpen}
                 onToggle={(emoji) => onToggleReaction(message.id, emoji)}
                 onOpenPicker={onOpenPicker}
@@ -1626,7 +1887,35 @@ const MessageRow = memo(function MessageRow({
               path rather than duplicating it four buttons at a time on
               every row's tab stop. */}
           {isReal && !isEditing && (
-            <div className="absolute -top-3 right-2 hidden items-center gap-0.5 rounded-md border border-ink-4 bg-ink-2 p-0.5 shadow-sm group-hover:flex group-focus-within:flex">
+            <div
+              className={cn(
+                "absolute -top-3 right-2 z-10 items-center gap-0.5 rounded-md border border-ink-4 bg-ink-2 p-0.5 shadow-sm",
+                moreOpen
+                  ? "flex"
+                  : "hidden group-hover:flex group-focus-within:flex",
+              )}
+            >
+              {HOVER_QUICK_REACTIONS.map((emoji) => {
+                const mine = reactions.some((r) => r.emoji === emoji && r.me);
+                return (
+                  <Button
+                    key={emoji}
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    tabIndex={-1}
+                    aria-label={
+                      mine
+                        ? t("chat.removeReaction", { emoji })
+                        : t("chat.reactWith", { emoji })
+                    }
+                    className={cn("h-6 w-6 text-sm", mine && "bg-ink-3")}
+                    onClick={() => onToggleReaction(message.id, emoji)}
+                  >
+                    {emoji}
+                  </Button>
+                );
+              })}
               <Button
                 type="button"
                 variant="ghost"
@@ -1664,19 +1953,104 @@ const MessageRow = memo(function MessageRow({
                   <Pencil className="h-3.5 w-3.5" />
                 </Button>
               )}
-              {canDelete && (
+              <div ref={moreRef} className="relative">
                 <Button
                   type="button"
                   variant="ghost"
                   size="icon"
                   tabIndex={-1}
-                  aria-label={t("chat.delete")}
-                  className="h-6 w-6 text-danger hover:text-danger"
-                  onClick={confirmDelete}
+                  aria-haspopup="menu"
+                  aria-expanded={moreOpen}
+                  aria-label={t("chat.more")}
+                  className="h-6 w-6"
+                  onClick={() => setMoreOpen((open) => !open)}
                 >
-                  <Trash2 className="h-3.5 w-3.5" />
+                  <MoreHorizontal className="h-3.5 w-3.5" />
                 </Button>
-              )}
+                {moreOpen && (
+                  <div
+                    role="menu"
+                    aria-label={t("chat.more")}
+                    className="absolute right-0 top-full z-20 mt-0.5 max-h-[18rem] w-48 overflow-y-auto rounded-md border border-ink-4 bg-ink-2 p-1 shadow-[var(--shadow-popover)]"
+                  >
+                    {canPin && (
+                      <MoreMenuItem
+                        onSelect={() => {
+                          (isMessagePinned ? onUnpin : onPin)?.();
+                          setMoreOpen(false);
+                        }}
+                      >
+                        {isMessagePinned ? t("chat.unpin") : t("chat.pin")}
+                      </MoreMenuItem>
+                    )}
+                    <MoreMenuItem
+                      onSelect={() => {
+                        const link = `${window.location.origin}${messageRoutePath(
+                          serverId,
+                          channelId ?? message.channelId,
+                          message.id,
+                        )}`;
+                        void navigator.clipboard.writeText(link);
+                        setMoreOpen(false);
+                      }}
+                    >
+                      {t("chat.copyLink")}
+                    </MoreMenuItem>
+                    {onForward && (
+                      <MoreMenuItem
+                        onSelect={() => {
+                          onForward();
+                          setMoreOpen(false);
+                        }}
+                      >
+                        {t("chat.forward")}
+                      </MoreMenuItem>
+                    )}
+                    {(unreadHeld ? onMarkRead : onMarkUnread) && (
+                      <MoreMenuItem
+                        onSelect={() => {
+                          (unreadHeld ? onMarkRead : onMarkUnread)?.();
+                          setMoreOpen(false);
+                        }}
+                      >
+                        {unreadHeld ? t("chat.markRead") : t("chat.markUnread")}
+                      </MoreMenuItem>
+                    )}
+                    {canReport && (
+                      <MoreMenuItem
+                        danger
+                        onSelect={() => {
+                          onReport?.();
+                          setMoreOpen(false);
+                        }}
+                      >
+                        {t("chat.report")}
+                      </MoreMenuItem>
+                    )}
+                    {onStartThread && !message.thread && (
+                      <MoreMenuItem
+                        onSelect={() => {
+                          onStartThread();
+                          setMoreOpen(false);
+                        }}
+                      >
+                        {t("thread.start")}
+                      </MoreMenuItem>
+                    )}
+                    {canDelete && (
+                      <MoreMenuItem
+                        danger
+                        onSelect={() => {
+                          setMoreOpen(false);
+                          confirmDelete();
+                        }}
+                      >
+                        {t("chat.delete")}
+                      </MoreMenuItem>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </article>
@@ -1698,13 +2072,17 @@ const MessageRow = memo(function MessageRow({
  */
 function AuthorButton({
   message,
+  author,
   className,
+  style,
   tabIndex,
   onOpenProfile,
   children,
 }: {
   message: ChatMessage;
+  author?: MessageAuthorInfo;
   className?: string;
+  style?: CSSProperties;
   tabIndex: number;
   onOpenProfile: (subject: ProfileSubject, anchor: HTMLElement) => void;
   children: ReactNode;
@@ -1712,7 +2090,11 @@ function AuthorButton({
   const { t } = useTranslation();
   const isReal = !message.pending && !message.failed;
   if (message.isWebhook || !isReal) {
-    return <span className={className}>{children}</span>;
+    return (
+      <span className={className} style={style}>
+        {children}
+      </span>
+    );
   }
   return (
     <button
@@ -1720,6 +2102,7 @@ function AuthorButton({
       tabIndex={tabIndex}
       title={t("profile.open", { name: message.authorName })}
       data-author-trigger={message.authorId}
+      style={style}
       className={cn(
         "text-left hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60",
         className,
@@ -1734,6 +2117,11 @@ function AuthorButton({
             displayName: message.authorName,
             tag: message.authorTag ?? null,
             avatarUrl: message.authorAvatarUrl ?? null,
+            status: author?.status ?? null,
+            username:
+              author?.username ?? usernameFromTag(message.authorTag),
+            roleIds: author?.roleIds,
+            rank: author?.rank,
           },
           event.currentTarget,
         );
@@ -1757,6 +2145,53 @@ function DaySeparator({ label }: { label: string }) {
   );
 }
 
+/** The NEW rule: first unread message of this visit. */
+function UnreadSeparator({
+  label,
+  dividerRef,
+}: {
+  label: string;
+  dividerRef?: Ref<HTMLDivElement>;
+}) {
+  return (
+    <div
+      ref={dividerRef}
+      className="my-2 flex items-center gap-3"
+      role="separator"
+      aria-label={label}
+    >
+      <span className="h-px flex-1 bg-danger" />
+      <span className="text-[11px] font-semibold uppercase tracking-wider text-danger">
+        {label}
+      </span>
+    </div>
+  );
+}
+
+function MoreMenuItem({
+  children,
+  onSelect,
+  danger = false,
+}: {
+  children: ReactNode;
+  onSelect: () => void;
+  danger?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      className={cn(
+        "flex w-full items-center rounded-md px-2.5 py-1.5 text-left text-sm outline-none hover:bg-ink-3 focus-visible:bg-ink-3",
+        danger ? "text-danger" : "text-paper",
+      )}
+      onClick={onSelect}
+    >
+      {children}
+    </button>
+  );
+}
+
 function EditedMarker({ editedAt }: { editedAt: string | null | undefined }) {
   if (!editedAt) {
     return null;
@@ -1766,7 +2201,7 @@ function EditedMarker({ editedAt }: { editedAt: string | null | undefined }) {
       className="ml-1 align-baseline text-[10px] text-paper-muted"
       title={formatFullTimestamp(editedAt)}
     >
-      (edited)
+      ({translateMessage("chat.edited")})
     </span>
   );
 }
@@ -2107,6 +2542,7 @@ function EditComposer({
 
 interface ReactionBarProps {
   reactions: MessageReaction[];
+  currentUserId: string | null;
   isPickerOpen: boolean;
   onToggle: (emoji: string) => void;
   onOpenPicker: () => void;
@@ -2115,8 +2551,129 @@ interface ReactionBarProps {
   tabIndex: number;
 }
 
+function ReactionWhoTip({
+  anchor,
+  children,
+}: {
+  anchor: DOMRect;
+  children: string;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [size, setSize] = useState<{ width: number; height: number } | null>(
+    null,
+  );
+
+  useLayoutEffect(() => {
+    if (!ref.current) {
+      return;
+    }
+    const box = ref.current.getBoundingClientRect();
+    setSize({ width: box.width, height: box.height });
+  }, [children]);
+
+  const viewport = { width: window.innerWidth, height: window.innerHeight };
+  const placed = size
+    ? placeAnchoredPanel(anchor, size, viewport, "above")
+    : null;
+  const left = size
+    ? Math.min(
+        Math.max(
+          ANCHORED_PANEL_PAD,
+          anchor.left + (anchor.right - anchor.left) / 2 - size.width / 2,
+        ),
+        Math.max(ANCHORED_PANEL_PAD, viewport.width - size.width - ANCHORED_PANEL_PAD),
+      )
+    : 0;
+
+  return createPortal(
+    <div
+      ref={ref}
+      role="tooltip"
+      style={{
+        position: "fixed",
+        top: placed?.top ?? 0,
+        left,
+        visibility: placed ? "visible" : "hidden",
+      }}
+      className="z-[130] max-w-64 rounded-md border border-ink-4 bg-ink-2 px-2 py-1 text-xs text-paper shadow-[var(--shadow-popover)]"
+    >
+      {children}
+    </div>,
+    document.body,
+  );
+}
+
+function ReactionChip({
+  reaction,
+  currentUserId,
+  onToggle,
+  tabIndex,
+}: {
+  reaction: MessageReaction;
+  currentUserId: string | null;
+  onToggle: (emoji: string) => void;
+  tabIndex: number;
+}) {
+  const { t } = useTranslation();
+  const [anchor, setAnchor] = useState<DOMRect | null>(null);
+  const named = formatReactionWho(
+    reaction.users,
+    reaction.count,
+    currentUserId,
+    t,
+  );
+  const who = named || t("chat.reaction.people", { count: reaction.count });
+  const tooltip = t("chat.reaction.tooltip", {
+    names: who,
+    emoji: reaction.emoji,
+    count: reaction.count,
+  });
+  const ariaLabel = named
+    ? t(reaction.me ? "chat.reaction.ariaWhoMine" : "chat.reaction.ariaWho", {
+        emoji: reaction.emoji,
+        names: named,
+      })
+    : t(reaction.me ? "chat.reaction.ariaMine" : "chat.reaction.aria", {
+        emoji: reaction.emoji,
+        people: who,
+      });
+
+  return (
+    <>
+      <button
+        type="button"
+        tabIndex={tabIndex}
+        onClick={() => onToggle(reaction.emoji)}
+        onPointerEnter={(event) =>
+          setAnchor(event.currentTarget.getBoundingClientRect())
+        }
+        onPointerLeave={() => setAnchor(null)}
+        onFocus={(event) =>
+          setAnchor(event.currentTarget.getBoundingClientRect())
+        }
+        onBlur={() => setAnchor(null)}
+        aria-pressed={reaction.me}
+        aria-label={ariaLabel}
+        className={cn(
+          "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60",
+          reaction.me
+            ? "border-signal/50 bg-signal/15 text-signal"
+            : "border-ink-4 bg-ink-3/80 text-paper-muted hover:border-ink-4 hover:text-paper",
+        )}
+      >
+        <span className="text-sm leading-none" aria-hidden>
+          {reaction.emoji}
+        </span>
+        <span className="font-medium tabular-nums">{reaction.count}</span>
+      </button>
+      {anchor && <ReactionWhoTip anchor={anchor}>{tooltip}</ReactionWhoTip>}
+    </>
+  );
+}
+
 function ReactionBar({
   reactions,
+  currentUserId,
   isPickerOpen,
   onToggle,
   onOpenPicker,
@@ -2133,31 +2690,13 @@ function ReactionBar({
   return (
     <div className="relative mt-1.5 flex w-fit max-w-full flex-wrap items-center gap-1">
       {reactions.map((reaction) => (
-        <button
+        <ReactionChip
           key={reaction.emoji}
-          type="button"
+          reaction={reaction}
+          currentUserId={currentUserId}
+          onToggle={onToggle}
           tabIndex={tabIndex}
-          onClick={() => onToggle(reaction.emoji)}
-          aria-pressed={reaction.me}
-          aria-label={t(
-            reaction.me ? "chat.reaction.ariaMine" : "chat.reaction.aria",
-            {
-              emoji: reaction.emoji,
-              people: t("chat.reaction.people", { count: reaction.count }),
-            },
-          )}
-          className={cn(
-            "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60",
-            reaction.me
-              ? "border-signal/50 bg-signal/15 text-signal"
-              : "border-ink-4 bg-ink-3/80 text-paper-muted hover:border-ink-4 hover:text-paper",
-          )}
-        >
-          <span className="text-sm leading-none" aria-hidden>
-            {reaction.emoji}
-          </span>
-          <span className="font-medium tabular-nums">{reaction.count}</span>
-        </button>
+        />
       ))}
       <button
         type="button"
@@ -2170,7 +2709,6 @@ function ReactionBar({
       </button>
       {isPickerOpen && (
         <EmojiPickerPanel
-          className="absolute bottom-full left-0 mb-2"
           onSelect={(emoji) => {
             onToggle(emoji);
             onClosePicker();

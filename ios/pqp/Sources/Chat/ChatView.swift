@@ -917,9 +917,18 @@ struct ReactionRow: View {
                 )
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(reactionWhoLabel(reaction))
             }
         }
         .padding(.top, 2)
         .animation(Motion.press, value: reactions)
     }
+}
+
+private func reactionWhoLabel(_ reaction: MessageReaction) -> String {
+    let names = reaction.users.map(\.displayName).filter { !$0.isEmpty }
+    if names.isEmpty {
+        return "\(reaction.emoji), \(reaction.count)"
+    }
+    return "\(reaction.emoji), \(names.joined(separator: ", "))"
 }

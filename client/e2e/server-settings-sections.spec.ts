@@ -18,6 +18,7 @@ import { openApp } from "./fixtures";
 const SECTIONS = [
   "Overview",
   "Access",
+  "Roles",
   "Moderation",
   "Audit log",
   "Danger zone",

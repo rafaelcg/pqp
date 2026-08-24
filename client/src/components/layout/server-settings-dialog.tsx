@@ -13,6 +13,7 @@ import {
   ScrollText,
   ShieldCheck,
   TriangleAlert,
+  Users,
   type LucideIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -21,6 +22,7 @@ import { Input } from "@/components/ui/input";
 import { ReportsSection } from "@/components/layout/reports-section";
 import { ServerIdentitySection } from "@/components/layout/server-identity-section";
 import { CommunitySettingsSection } from "@/components/communities/community-settings-section";
+import { RolesSettingsSection } from "@/components/layout/roles-settings-section";
 import { useCommunitiesEnabled } from "@/components/communities/use-communities-enabled";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -74,6 +76,14 @@ const AUDIT_ACTION_KEYS: Record<string, MessageKey> = {
   "webhook.create": "serverSettings.audit.action.webhook.create",
   "webhook.delete": "serverSettings.audit.action.webhook.delete",
   "report.resolve": "serverSettings.audit.action.report.resolve",
+  "role.create": "serverSettings.audit.action.role.create",
+  "role.update": "serverSettings.audit.action.role.update",
+  "role.delete": "serverSettings.audit.action.role.delete",
+  "member.nickname_update":
+    "serverSettings.audit.action.member.nickname_update",
+  "member.roles_update": "serverSettings.audit.action.member.roles_update",
+  "channel.overwrite_update":
+    "serverSettings.audit.action.channel.overwrite_update",
 };
 
 /* ------------------------------------------------------------------ layout */
@@ -106,7 +116,13 @@ const AUDIT_ACTION_KEYS: Record<string, MessageKey> = {
  * their own dialogs already, reached from the rail and the channel row. Adding
  * a door here that opens another dialog would be a worse version of both.
  */
-type SectionId = "overview" | "access" | "moderation" | "audit" | "danger";
+type SectionId =
+  | "overview"
+  | "access"
+  | "roles"
+  | "moderation"
+  | "audit"
+  | "danger";
 
 interface SectionDef {
   id: SectionId;
@@ -131,6 +147,13 @@ const SECTIONS: SectionDef[] = [
     description: "serverSettings.access.description",
     icon: KeyRound,
     ownerOnly: true,
+  },
+  {
+    id: "roles",
+    label: "serverSettings.section.roles",
+    description: "serverSettings.roles.description",
+    icon: Users,
+    ownerOnly: false,
   },
   {
     id: "moderation",
@@ -858,6 +881,10 @@ export function ServerSettingsDialog({
                 </p>
               )}
             </Block>
+          )}
+
+          {active.id === "roles" && serverId && (
+            <RolesSettingsSection serverId={serverId} />
           )}
 
           {active.id === "moderation" && (

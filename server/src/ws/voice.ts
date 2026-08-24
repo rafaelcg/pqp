@@ -4,6 +4,8 @@ import {
   isClientRelayMessage,
   MESH_VOICE_LIMIT,
   SCREEN_SHARE_LIMIT,
+  hasPermission,
+  Permission,
   voiceClientMessageSchema,
   type VoiceParticipant,
   type VoiceRoomTransport,
@@ -21,6 +23,7 @@ import { createMessage, mapMessage } from "../services/messages.js";
 import { pushChannelActivity, pushIncomingCall } from "../services/push.js";
 import { findTimeoutForChannel } from "../services/sanctions.js";
 import { getChannel, getChannelAudience } from "../services/servers.js";
+import { computeMemberPermissions } from "../services/permissions.js";
 import { canAccessChannel } from "../services/users.js";
 import { broadcastToChannel } from "./chat.js";
 import { resolveStatus } from "./status.js";
@@ -570,6 +573,16 @@ export async function handleVoiceMessage(
     }
     if (channel.kind === "server" && channel.type !== "voice") {
       return;
+    }
+    if (channel.kind === "server" && channel.server_id) {
+      const perms = await computeMemberPermissions(
+        channel.server_id,
+        user.id,
+        payload.voiceChannelId,
+      );
+      if (!hasPermission(perms, Permission.CONNECT)) {
+        return;
+      }
     }
 
     // The awaits above mean the socket may have closed, or the client may have

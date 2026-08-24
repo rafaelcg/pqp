@@ -64,6 +64,22 @@ describe("filterMentionCandidates", () => {
     ]);
   });
 
+  it("matches a nickname prefix", () => {
+    const withNick: MentionCandidate[] = [
+      ...members,
+      {
+        id: "5",
+        displayName: "Carla",
+        username: "carla",
+        nickname: "Ju",
+        avatarUrl: null,
+      },
+    ];
+    expect(
+      filterMentionCandidates(withNick, "ju").map((m) => m.id),
+    ).toEqual(["3", "5"]);
+  });
+
   it("ranks a username prefix above a display-name prefix", () => {
     expect(
       filterMentionCandidates(members, "ju").map((m) => m.username),

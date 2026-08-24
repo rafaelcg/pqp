@@ -158,14 +158,33 @@ function applyReactionBroadcast(
 ): MessageReaction[] {
   const existing = reactions.find((r) => r.emoji === broadcast.emoji);
   const isMe = broadcast.userId === currentUserId;
+  const users = existing?.users ?? [];
+  const already = users.some((user) => user.id === broadcast.userId);
+  const reactor = {
+    id: broadcast.userId,
+    displayName: broadcast.displayName ?? "",
+  };
 
   if (broadcast.added) {
     if (!existing) {
-      return [...reactions, { emoji: broadcast.emoji, count: 1, me: isMe }];
+      return [
+        ...reactions,
+        {
+          emoji: broadcast.emoji,
+          count: 1,
+          me: isMe,
+          users: [reactor],
+        },
+      ];
     }
     return reactions.map((r) =>
       r.emoji === broadcast.emoji
-        ? { ...r, count: r.count + 1, me: r.me || isMe }
+        ? {
+            ...r,
+            count: already ? r.count : r.count + 1,
+            me: r.me || isMe,
+            users: already ? users : [...users, reactor],
+          }
         : r,
     );
   }
@@ -174,13 +193,19 @@ function applyReactionBroadcast(
     return reactions;
   }
 
+  const nextUsers = users.filter((user) => user.id !== broadcast.userId);
   if (existing.count <= 1) {
     return reactions.filter((r) => r.emoji !== broadcast.emoji);
   }
 
   return reactions.map((r) =>
     r.emoji === broadcast.emoji
-      ? { ...r, count: r.count - 1, me: isMe ? false : r.me }
+      ? {
+          ...r,
+          count: r.count - 1,
+          me: isMe ? false : r.me,
+          users: nextUsers,
+        }
       : r,
   );
 }
@@ -193,6 +218,8 @@ function toChatMessage(message: MessageBroadcast["message"]): ChatMessage {
     reactions: message.reactions ?? [],
     replyTo: message.replyTo ?? null,
     attachments: message.attachments ?? [],
+    mentionEveryone: message.mentionEveryone ?? false,
+    mentionHere: message.mentionHere ?? false,
   };
 }
 
@@ -653,6 +680,8 @@ export function createChatController(
         // webhook — an optimistic bubble is never one.
         isWebhook: false,
         webhookEmbeds: [],
+        mentionEveryone: false,
+        mentionHere: false,
         // A message is never born with a thread either.
         thread: null,
         // Built with the same helper the server uses, so the bubble does not

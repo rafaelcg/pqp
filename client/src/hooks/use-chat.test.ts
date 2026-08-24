@@ -84,6 +84,8 @@ function serverMessage(overrides: Partial<Message> = {}): Message {
     embeds: [],
     isWebhook: false,
     webhookEmbeds: [],
+    mentionEveryone: false,
+    mentionHere: false,
     thread: null,
     ...overrides,
   };
@@ -287,9 +289,15 @@ describe("reactions", () => {
       emoji: "🔥",
       userId: ME.id,
       added: true,
+      displayName: "Me",
     } as never);
     expect(chat.getMessages()[0]!.reactions).toEqual([
-      { emoji: "🔥", count: 1, me: true },
+      {
+        emoji: "🔥",
+        count: 1,
+        me: true,
+        users: [{ id: ME.id, displayName: "Me" }],
+      },
     ]);
 
     chat.handleServerMessage({
@@ -299,10 +307,15 @@ describe("reactions", () => {
       emoji: "🔥",
       userId: "someone-else",
       added: true,
+      displayName: "Alice",
     } as never);
     expect(chat.getMessages()[0]!.reactions[0]).toMatchObject({
       count: 2,
       me: true,
+      users: [
+        { id: ME.id, displayName: "Me" },
+        { id: "someone-else", displayName: "Alice" },
+      ],
     });
 
     chat.handleServerMessage({
@@ -316,6 +329,7 @@ describe("reactions", () => {
     expect(chat.getMessages()[0]!.reactions[0]).toMatchObject({
       count: 1,
       me: false,
+      users: [{ id: "someone-else", displayName: "Alice" }],
     });
 
     chat.handleServerMessage({

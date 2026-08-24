@@ -125,6 +125,8 @@ const broadcastMessageSchema = z.object({
   pinnedBy: messagePinnedBySchema.nullable().default(null),
   embeds: z.array(embedSchema).default([]),
   isWebhook: z.boolean().default(false),
+  mentionEveryone: z.boolean().default(false),
+  mentionHere: z.boolean().default(false),
   webhookEmbeds: z.array(webhookEmbedSchema).default([]),
   // --- threads ---
   thread: threadSummarySchema.nullable().default(null),
@@ -187,6 +189,8 @@ export const reactionBroadcastSchema = z.object({
   emoji: z.string(),
   userId: z.string().uuid(),
   added: z.boolean(),
+  /** Server nickname when there is one, otherwise the account display name. */
+  displayName: z.string().min(1).optional(),
 });
 
 export const messageDeletedBroadcastSchema = z.object({

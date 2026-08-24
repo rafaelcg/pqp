@@ -2,6 +2,7 @@ import { z } from "zod";
 import { attachmentSchema } from "./attachments.js";
 import { embedSchema } from "./embeds.js";
 import { handleSchema } from "./profiles.js";
+import { nicknameSchema } from "./permissions.js";
 import { manualStatusSchema } from "./status.js";
 // --- threads ---
 import { threadSummarySchema } from "./threads.js";
@@ -42,7 +43,11 @@ export const usernameSchema = z
   .string()
   .min(2)
   .max(32)
-  .regex(/^[a-z0-9_]+$/, "Username must be lowercase letters, numbers, or _");
+  .regex(/^[a-z0-9_]+$/, "Username must be lowercase letters, numbers, or _")
+  .refine(
+    (value) => value !== "everyone" && value !== "here",
+    "That username is reserved",
+  );
 
 export const themePreferenceSchema = z.enum(["light", "dark", "system"]);
 export type ThemePreference = z.infer<typeof themePreferenceSchema>;
@@ -461,10 +466,17 @@ export const reactionEmojiSchema = z
   .refine((value) => !/\s/.test(value), "Invalid emoji")
   .refine((value) => !CONTROL_CHARS.test(value), "Invalid emoji");
 
+export const reactionUserSchema = z.object({
+  id: z.string().uuid(),
+  displayName: z.string().min(1),
+});
+
 export const messageReactionSchema = z.object({
   emoji: z.string(),
   count: z.number().int().positive(),
   me: z.boolean(),
+  /** First reactors, capped by the server. `count` is the full total. */
+  users: z.array(reactionUserSchema).default([]),
 });
 
 /** How much of a replied-to message travels with the reply. */
@@ -555,6 +567,12 @@ export const messageSchema = z.object({
    * account — the client shows a "Webhook" tag next to the name instead of
    * treating it as someone to @mention or open a DM with. */
   isWebhook: z.boolean().default(false),
+  /** True when the body contained `@everyone` and the sender was allowed to
+   * fire it. Defaulted so an older API still parses. */
+  mentionEveryone: z.boolean().default(false),
+  /** True when the body contained `@here` and the sender was allowed to fire
+   * it. Same defaulting as `mentionEveryone`. */
+  mentionHere: z.boolean().default(false),
   /** The rich-embed subset a webhook payload supplied — see the schema
    * comment on `messages.webhook_embeds`, an entirely different concept
    * from `embeds` above (that is this server's own automatic link unfurl). */
@@ -855,8 +873,12 @@ export const iceServerSchema = z.object({
 export type IceServerConfig = z.infer<typeof iceServerSchema>;
 
 export const updateMemberRoleSchema = z.object({
-  role: z.enum(["admin", "member"]),
-});
+  role: z.enum(["admin", "member"]).optional(),
+  nickname: nicknameSchema.nullable().optional(),
+}).refine(
+  (value) => value.role !== undefined || value.nickname !== undefined,
+  "Provide a role or a nickname",
+);
 
 export const addChannelMemberSchema = z.object({
   userId: z.string().uuid(),
@@ -890,26 +912,85 @@ export const removeMemberSchema = z.object({
 
 /**
  * Mentions are written as `@username` (the unique slug half of `name#1234`).
+ * `@everyone` and `@here` are literal tokens, not usernames — those two names
+ * are reserved on the username schema for exactly this reason. Role names use
+ * the same character class, and a username always wins when both match.
+ *
  * Kept in shared so the server's notification counting and the client's
  * highlighting can never disagree about what counts as a mention.
  */
 export const MENTION_PATTERN = /@([A-Za-z0-9_]{2,32})/g;
 
-export function extractMentionUsernames(body: string): string[] {
-  const found = new Set<string>();
+export interface ParsedMentions {
+  usernames: string[];
+  everyone: boolean;
+  here: boolean;
+  /** Lowercased tokens that are not everyone/here. Intersected with role names. */
+  roleNames: string[];
+}
+
+export function extractMentions(body: string): ParsedMentions {
+  const usernames = new Set<string>();
+  const roleNames = new Set<string>();
+  let everyone = false;
+  let here = false;
   for (const match of body.matchAll(MENTION_PATTERN)) {
-    const name = match[1];
-    if (name) {
-      found.add(name.toLowerCase());
+    const name = match[1]?.toLowerCase();
+    if (!name) {
+      continue;
     }
+    if (name === "everyone") {
+      everyone = true;
+      continue;
+    }
+    if (name === "here") {
+      here = true;
+      continue;
+    }
+    usernames.add(name);
+    roleNames.add(name);
   }
-  return [...found];
+  return {
+    usernames: [...usernames],
+    everyone,
+    here,
+    roleNames: [...roleNames],
+  };
+}
+
+export function extractMentionUsernames(body: string): string[] {
+  return extractMentions(body).usernames;
 }
 
 export const banMemberSchema = z.object({
   userId: z.string().uuid(),
   reason: z.string().max(500).nullable().optional(),
 });
+
+/**
+ * Optional body on `POST /api/channels/:id/read`. Empty means "read up to now"
+ * (opening the channel). `lastReadAt` is how Mark unread rewinds the cursor
+ * to just before a chosen message.
+ */
+export const markChannelReadSchema = z.object({
+  lastReadAt: z
+    .string()
+    .refine((value) => Number.isFinite(Date.parse(value)), "Invalid timestamp")
+    .optional(),
+});
+
+/**
+ * `POST /api/channels/:id/read` answers with both cursors so the client can
+ * draw a NEW divider at the previous one after opening has moved it forward.
+ * Both fields default so an older API still parses as "no divider".
+ */
+export const markChannelReadResultSchema = z.object({
+  ok: z.literal(true).optional(),
+  previousLastReadAt: z.string().nullable().optional(),
+  lastReadAt: z.string().optional(),
+});
+
+export type MarkChannelReadResult = z.infer<typeof markChannelReadResultSchema>;
 
 export type User = z.infer<typeof userSchema>;
 export type Server = z.infer<typeof serverSchema>;

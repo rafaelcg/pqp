@@ -62,6 +62,8 @@
 | Game connections (Steam, Battle.net, Twitch) | Done as Discord-style Connections, not as a second login (`docs/CONNECTIONS.md`). Off per provider until that provider's env is set. Visibility defaults to in-app only; the public page is opt-in. |
 | In-app sounds | Demo on `feat/in-app-sounds`. Cinematic UI SFX (CC0): mention=`mention`, voice join/leave=`select`/`deselect`. Join/leave play on click; the mic pipeline waits so capture cannot cut the cue. Samples exclusive; outgoing ring waits. No ordinary-message ping. Synthesised call ring. Settings → Notifications. |
 | Ambient life — the five launch communities | Done, canned-verified (`tools/ambient/`: 25 personas across Resenha FC / Maratona / Fone com Fio / Sala de Espera do Ranked / Véspera de Prova; provisioning + seed scripts, multi-community scheduling from one process, inbound reply screening with a per-human cap, JSONL audit log, kill switch honoured mid-scene — `docs/ambient-deploy.md`). **No live Claude generation has been made** since the spike; every run so far is `--canned` |
+| Roles, nicknames, `@everyone` / `@here` | Done locally (2026-08-24). Discord 8-step overwrites, 20 permission bits as decimal strings / `bigint`, seeded `@everyone` + Admin, nicknames display-only (mentions stay `@username`), mass mentions gated on `MENTION_EVERYONE`. Message names pick up the highest painted role colour. Hoist UI and a live `permissions-update` WS frame are still open. |
+| NEW divider, mention rows, `:emoji:` / ArrowUp | Done locally (2026-08-24). `POST /read` returns the previous cursor so the log can keep a NEW rule for the visit. Mentioned rows get a left bar. Composer ArrowUp edits last own message; `:name` autocompletes. |
 
 ## Product roadmap
 
@@ -75,7 +77,8 @@ levels, file/image attachments, user search by handle, direct and group messages
 with DM privacy controls, pinned messages, channel categories with drag-to-reorder, link
 and image embeds (unfurling), a per-server audit log, message retention policies, per-server
 data export, incoming webhooks (#23, Discord wire-compatible), screen share (#11), and
-SSO/SAML readiness, a public status page, and the mobile PWA.
+SSO/SAML readiness, a public status page, and the mobile PWA. Role bitfields,
+nicknames, and `@everyone`/`@here` (#22) shipped 2026-08-24.
 
 Two subsystems landed alongside those features and shape what comes next:
 

@@ -662,6 +662,8 @@ export interface ChannelPushEvent {
   repliedToUserId: string | null;
   /** Users who blocked the author — they get no notification of any kind. */
   blockerIds: ReadonlySet<string>;
+  mentionEveryone?: boolean;
+  mentionHereUserIds?: readonly string[];
 }
 
 /**
@@ -714,6 +716,16 @@ export async function sendChannelPush(event: ChannelPushEvent): Promise<void> {
       if (audience.has(row.id)) {
         mentioned.add(row.id);
       }
+    }
+  }
+  if (event.mentionEveryone) {
+    for (const userId of audience.userIds) {
+      mentioned.add(userId);
+    }
+  }
+  for (const userId of event.mentionHereUserIds ?? []) {
+    if (audience.has(userId)) {
+      mentioned.add(userId);
     }
   }
   const replied =

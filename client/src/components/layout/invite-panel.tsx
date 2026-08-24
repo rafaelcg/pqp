@@ -19,6 +19,8 @@ interface InvitePanelProps {
   serverId: string | null;
   serverName: string | null;
   canManage: boolean;
+  /** Create an invite. Distinct from listing/revoking every invite. */
+  canCreateInvite?: boolean;
   /** Code from an `/app/invite/<code>` link or `pqp://invite/<code>` deep link. */
   initialCode?: string | null;
   /**
@@ -82,6 +84,7 @@ export function InvitePanel({
   serverId,
   serverName,
   canManage,
+  canCreateInvite,
   initialCode = null,
   initialError = null,
   onClose,
@@ -97,6 +100,7 @@ export function InvitePanel({
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
   const copyTimer = useRef<number | null>(null);
+  const canCreate = canCreateInvite ?? canManage;
 
   useEffect(() => {
     if (open && mode === "join") {
@@ -275,7 +279,7 @@ export function InvitePanel({
             <Button variant="ghost" onClick={onClose}>
               {t("invite.close")}
             </Button>
-            {canManage && (
+            {canCreate && (
               <Button onClick={() => void handleCreate()} disabled={busy}>
                 {busy ? t("invite.create.creating") : t("invite.create.action")}
               </Button>
@@ -297,13 +301,13 @@ export function InvitePanel({
       }
     >
       <div className="space-y-4 px-5 py-4">
-        {isCreate && !canManage && (
+        {isCreate && !canCreate && (
           <p className="text-sm text-paper-muted">
             {t("invite.create.notAllowed")}
           </p>
         )}
 
-        {isCreate && canManage && (
+        {isCreate && canCreate && (
           <section>
             <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-paper-muted">
               {t("invite.create.activeTitle")}
@@ -388,6 +392,7 @@ export function InvitePanel({
                           <Copy className="h-4 w-4" />
                         )}
                       </Button>
+                      {canManage && (
                       <Button
                         size="icon"
                         variant="ghost"
@@ -400,6 +405,7 @@ export function InvitePanel({
                       >
                         <Trash2 className="h-4 w-4 text-danger" />
                       </Button>
+                      )}
                     </div>
                     <p className="mt-2 text-xs text-paper-muted">
                       <span className="font-mono text-paper">

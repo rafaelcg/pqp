@@ -26,7 +26,10 @@ export interface MentionCandidate {
   id: string;
   displayName: string;
   username?: string | null;
+  nickname?: string | null;
   avatarUrl: string | null;
+  /** Members win ties with @everyone/@here, which win ties with roles. */
+  mentionKind?: "member" | "mass" | "role";
 }
 
 /**
@@ -77,28 +80,56 @@ export function filterMentionCandidates<T extends MentionCandidate>(
     }
     const username = candidate.username.toLowerCase();
     const displayName = candidate.displayName.toLowerCase();
+    const nickname = (candidate.nickname ?? "").toLowerCase();
 
     if (!needle) {
-      scored.push({ candidate, rank: 2 });
+      const rank =
+        candidate.mentionKind === "mass"
+          ? 0
+          : candidate.mentionKind === "role"
+            ? 2
+            : 1;
+      scored.push({ candidate, rank });
       continue;
     }
     if (username.startsWith(needle)) {
       scored.push({ candidate, rank: 0 });
-    } else if (displayName.startsWith(needle)) {
+    } else if (nickname.startsWith(needle) || displayName.startsWith(needle)) {
       scored.push({ candidate, rank: 1 });
-    } else if (username.includes(needle) || displayName.includes(needle)) {
+    } else if (
+      username.includes(needle) ||
+      displayName.includes(needle) ||
+      nickname.includes(needle)
+    ) {
       scored.push({ candidate, rank: 2 });
     }
   }
 
   return scored
-    .sort(
-      (a, b) =>
-        a.rank - b.rank ||
-        a.candidate.displayName.localeCompare(b.candidate.displayName),
-    )
+    .sort((a, b) => {
+      const byRank = a.rank - b.rank;
+      if (byRank !== 0) {
+        return byRank;
+      }
+      const byKind =
+        kindOrder(a.candidate.mentionKind) - kindOrder(b.candidate.mentionKind);
+      if (byKind !== 0) {
+        return byKind;
+      }
+      return a.candidate.displayName.localeCompare(b.candidate.displayName);
+    })
     .slice(0, limit)
     .map((entry) => entry.candidate);
+}
+
+function kindOrder(kind: MentionCandidate["mentionKind"]): number {
+  if (kind === "mass") {
+    return 1;
+  }
+  if (kind === "role") {
+    return 2;
+  }
+  return 0;
 }
 
 export interface MentionInsertion {
