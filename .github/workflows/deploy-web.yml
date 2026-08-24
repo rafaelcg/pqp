@@ -68,6 +68,12 @@ jobs:
           VITE_API_URL: ${{ secrets.VITE_API_URL }}
           VITE_WS_URL: ${{ secrets.VITE_WS_URL }}
           VITE_DEV_AUTH_BYPASS: "false"
+          # Not a secret: the Umami website id is visible in the page source of
+          # every site running it. It lives here rather than in repository
+          # secrets so it is greppable, and so a fork that has not set it up
+          # simply builds without the tag (see the `umami` plugin in
+          # client/vite.config.ts).
+          VITE_UMAMI_WEBSITE_ID: "7ac342b9-238a-43ae-a7e2-13b338a52990"
           # Optional — public TestFlight join link. Empty is fine; the site then
           # points "Join the iOS beta" at /vs-discord#ios-beta instead.
           VITE_TESTFLIGHT_URL: ${{ secrets.VITE_TESTFLIGHT_URL }}

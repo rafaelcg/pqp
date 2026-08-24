@@ -216,6 +216,20 @@ export const privacyEn: LegalDocument = {
             into the app, so you will not find it in our source code. Blocking
             it with a browser extension breaks nothing.
           </p>
+          <p>
+            The same pages also load <strong>Umami</strong>, hosted by its
+            makers in the EU, for the same purpose: counting visits and seeing
+            which pages people arrive on. It is cookieless too, stores nothing
+            on your device, and uses no persistent identifier. It records the
+            page address, the referring page, and your country, browser and
+            device type, all of it aggregate. It never sees your account, and
+            blocking it also breaks nothing.
+          </p>
+          <p>
+            Two of them, because they answer slightly different questions and
+            neither costs you anything to be measured by. If that changes, this
+            paragraph changes with it.
+          </p>
         </>
       ),
     },
