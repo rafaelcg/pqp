@@ -98,6 +98,12 @@ export const AUDIT_ACTIONS = [
   "member.nickname_update",
   "member.roles_update",
   "channel.overwrite_update",
+  /**
+   * Removing a row can widen access (a VIEW deny disappearing). PUT already
+   * logs `overwrite_update`, including when it clears both masks and deletes
+   * the row. The DELETE route is a separate action.
+   */
+  "channel.overwrite_delete",
 ] as const;
 
 export const auditActionSchema = z.enum(AUDIT_ACTIONS);

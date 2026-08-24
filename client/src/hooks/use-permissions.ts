@@ -5,7 +5,10 @@ import {
   type PermissionBit,
 } from "@pqp/shared";
 import { fetchMemberPermissions } from "@/lib/api";
-import { shouldApplyPermissionsVersion } from "@/lib/permissions-refresh";
+import {
+  shouldApplyPermissionsVersion,
+  shouldWipePermissionsOnFetchFailure,
+} from "@/lib/permissions-refresh";
 
 export function usePermissions(serverId: string | null) {
   const [serverBits, setServerBits] = useState(0n);
@@ -14,6 +17,7 @@ export function usePermissions(serverId: string | null) {
   const [bump, setBump] = useState(0);
   const versionRef = useRef(0);
   versionRef.current = version;
+  const heldServerIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!serverId) {
@@ -21,6 +25,7 @@ export function usePermissions(serverId: string | null) {
       setChannelBits({});
       setVersion(0);
       versionRef.current = 0;
+      heldServerIdRef.current = null;
       return;
     }
     let cancelled = false;
@@ -37,14 +42,25 @@ export function usePermissions(serverId: string | null) {
         setChannelBits(next);
         setVersion(snapshot.version);
         versionRef.current = snapshot.version;
+        heldServerIdRef.current = serverId;
       })
       .catch(() => {
-        if (!cancelled) {
-          setServerBits(0n);
-          setChannelBits({});
-          setVersion(0);
-          versionRef.current = 0;
+        if (cancelled) {
+          return;
         }
+        if (
+          !shouldWipePermissionsOnFetchFailure(
+            heldServerIdRef.current,
+            serverId,
+          )
+        ) {
+          return;
+        }
+        setServerBits(0n);
+        setChannelBits({});
+        setVersion(0);
+        versionRef.current = 0;
+        heldServerIdRef.current = null;
       });
     return () => {
       cancelled = true;

@@ -944,6 +944,40 @@ describeDb("API authorization", () => {
       expect(audience?.has(member.id)).toBe(false);
       expect(audience?.has(owner.id)).toBe(true);
     });
+
+    it("logs deleting a channel overwrite", async () => {
+      const { serverId, textChannelId } = await makeServer();
+      const listed = await call<{
+        roles: Array<{ id: string; isEveryone: boolean }>;
+      }>(owner, "GET", `/api/servers/${serverId}/roles`);
+      const everyone = listed.body.roles.find((role) => role.isEveryone)!;
+      expect(
+        (
+          await call(owner, "PUT", `/api/channels/${textChannelId}/overwrites`, {
+            targetType: "role",
+            targetId: everyone.id,
+            allow: "0",
+            deny: serializePermissions(Permission.SEND_MESSAGES),
+          })
+        ).status,
+      ).toBe(200);
+
+      const deleted = await call(
+        owner,
+        "DELETE",
+        `/api/channels/${textChannelId}/overwrites/role/${everyone.id}`,
+      );
+      expect(deleted.status).toBe(200);
+
+      const log = await call<{
+        entries: Array<{ action: string; targetId: string | null }>;
+      }>(owner, "GET", `/api/servers/${serverId}/audit-log`);
+      expect(log.status).toBe(200);
+      expect(log.body.entries[0]).toMatchObject({
+        action: "channel.overwrite_delete",
+        targetId: textChannelId,
+      });
+    });
   });
 
   describe("messages", () => {

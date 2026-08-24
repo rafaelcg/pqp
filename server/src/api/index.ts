@@ -3584,6 +3584,17 @@ router.delete(
     }
     await evictViewersOutsideAudience(channelId!);
     pingPermissions(channel.server_id);
+    await logAudit({
+      serverId: channel.server_id,
+      actorId: user.id,
+      action: "channel.overwrite_delete",
+      targetType: "channel",
+      targetId: channelId!,
+      changes: [
+        { key: "targetType", old: targetType, new: null },
+        { key: "targetId", old: targetId, new: null },
+      ],
+    });
     return { ok: true };
   },
 );

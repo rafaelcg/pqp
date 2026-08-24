@@ -84,6 +84,8 @@ const AUDIT_ACTION_KEYS: Record<string, MessageKey> = {
   "member.roles_update": "serverSettings.audit.action.member.roles_update",
   "channel.overwrite_update":
     "serverSettings.audit.action.channel.overwrite_update",
+  "channel.overwrite_delete":
+    "serverSettings.audit.action.channel.overwrite_delete",
 };
 
 /* ------------------------------------------------------------------ layout */

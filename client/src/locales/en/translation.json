@@ -1093,6 +1093,7 @@
   "serverSettings.audit.action.member.nickname_update": "changed a nickname",
   "serverSettings.audit.action.member.roles_update": "changed a member's roles",
   "serverSettings.audit.action.channel.overwrite_update": "changed channel permissions",
+  "serverSettings.audit.action.channel.overwrite_delete": "removed a channel permission overwrite",
   "serverSettings.export.title": "Export data",
   "serverSettings.export.description": "Download every channel, member, and message in {server} as a JSON file. Attachment bytes are not included, only their filenames and sizes.",
   "serverSettings.export.action": "Export server data",

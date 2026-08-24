@@ -1093,6 +1093,7 @@
   "serverSettings.audit.action.member.nickname_update": "mudou um apelido",
   "serverSettings.audit.action.member.roles_update": "mudou os cargos de um membro",
   "serverSettings.audit.action.channel.overwrite_update": "mudou as permissões de um canal",
+  "serverSettings.audit.action.channel.overwrite_delete": "removeu uma overwrite de permissões de um canal",
   "serverSettings.export.title": "Exportar dados",
   "serverSettings.export.description": "Baixe todos os canais, membros e mensagens de {server} num arquivo JSON. Os arquivos anexados não vão junto, só o nome e o tamanho deles.",
   "serverSettings.export.action": "Exportar dados do servidor",
