@@ -1,8 +1,8 @@
 # Contributing to pqp
 
-Thanks for wanting to. pqp is built by two brothers in their spare time, so a
-good bug report is worth as much as a patch, and telling us something is
-confusing is worth more than both.
+Thanks for wanting to. pqp is built in our spare time, so a good bug report is
+worth as much as a patch, and telling us something is confusing is worth more
+than both.
 
 **Português:** pode abrir issue e PR em português. A gente responde nos dois idiomas.
 O texto abaixo está em inglês só porque o resto do repositório está.
@@ -152,10 +152,10 @@ asking for that permission in advance.
 
 ## Review, and the honest part about "no"
 
-Two of us maintain this, Rafael and his brother, and **every PR is reviewed and
-merged by one of us**. Nothing lands on `main` automatically, including our own
-work. Expect days rather than hours, and nudge us if it goes quiet. That is not
-rudeness, it is helpful.
+**Every PR is reviewed and merged by a maintainer.** Nothing lands on `main`
+automatically, including our own work. This is a side project, so expect days
+rather than hours, and nudge us if it goes quiet. That is not rudeness, it is
+helpful.
 
 **Some PRs will be declined, and it is worth saying why in advance.** Almost
 never because the code is bad. Usually because the feature pulls pqp somewhere
