@@ -345,6 +345,21 @@ function createAppMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
+/**
+ * `fullscreen` is in here for the same reason `display-capture` is, and it was
+ * missing for the same reason: Chromium does not decide it, the embedder does.
+ *
+ * `element.requestFullscreen()` arrives here as a permission request. An
+ * embedder that answers `false` does not reject the renderer's promise — it
+ * leaves it **pending forever**. No `fullscreenerror`, no `fullscreenchange`,
+ * no rejection, so every `catch` in the client is dead code and the button
+ * does nothing at all. Reported verbatim as "the new full screen buttons work
+ * great on web, but dont work on electron", and reproduced by handing this
+ * exact set to a bare BrowserWindow.
+ *
+ * `automatic-fullscreen` is deliberately NOT here: that is fullscreen with no
+ * user gesture, and every fullscreen in this app is a button press.
+ */
 const ALLOWED_PERMISSIONS = new Set([
   "media",
   "mediaKeySystem",
@@ -352,6 +367,7 @@ const ALLOWED_PERMISSIONS = new Set([
   "clipboard-sanitized-write",
   "clipboard-read",
   "display-capture",
+  "fullscreen",
 ]);
 
 /**

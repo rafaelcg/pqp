@@ -30,6 +30,7 @@ import {
   supportsScreenShare,
   type FullscreenMode,
 } from "@/components/voice/capabilities";
+import { attemptElementFullscreen } from "@/components/voice/element-fullscreen";
 import {
   NO_SCREEN_FULLSCREEN,
   reconcileScreenFullscreen,
@@ -181,8 +182,17 @@ function useStageFullscreen(
   // `expand` needs no platform support, so it is the safe starting point and
   // the detector only ever upgrades it.
   const [mode, setMode] = useState<FullscreenMode>("expand");
+  // Set once a platform that *claims* element fullscreen turns out not to
+  // honour it (an Electron shell whose embedder denies the permission). It
+  // pins the mode to `expand`, which the detector below must then stop
+  // undoing: it re-runs whenever the stage gains or loses a video, and an
+  // upgrade back to `element` would re-break the button mid-call.
+  const refusedElementRef = useRef(false);
 
   useEffect(() => {
+    if (refusedElementRef.current) {
+      return;
+    }
     const doc = fullscreenDocument();
     setMode(
       detectFullscreenMode({
@@ -269,8 +279,24 @@ function useStageFullscreen(
       // Record the target now so the `fullscreenchange` that follows renders
       // the right screen; `active` still comes from the browser.
       setState((was) => ({ ...was, soloPeerId: transition.next.soloPeerId }));
-      void requestElementFullscreen(container).catch((err: unknown) => {
-        console.warn("[call] fullscreen refused", err);
+      void attemptElementFullscreen({
+        request: () => requestElementFullscreen(container),
+        isActive: () => currentFullscreenElement() === container,
+        onRefusal: (err) => console.warn("[call] fullscreen refused", err),
+      }).then((entered) => {
+        if (entered) {
+          return;
+        }
+        // The platform did not take it, and on an Electron shell it did not
+        // even say so — see `element-fullscreen.ts`. Fill the viewport in the
+        // page instead, and stop asking for the rest of the session: leaving
+        // the mode on `element` would strand the user, because the exit press
+        // would call `exitFullscreen` on a document that is not fullscreen and
+        // the state would never clear.
+        console.warn("[call] element fullscreen unavailable; expanding in page");
+        refusedElementRef.current = true;
+        setMode("expand");
+        setState(transition.next);
       });
     },
     [mode, containerRef],
