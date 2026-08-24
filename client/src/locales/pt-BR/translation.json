@@ -1521,7 +1521,7 @@
   "update.ready": "Uma nova versão do pqp está pronta.",
   "update.reload": "Recarregar",
   "update.updating": "Atualizando…",
-  "update.dismiss": "Dispensar aviso de atualização",
+  "update.dismiss": "Me lembra depois",
   "update.later": "Depois",
   "update.dismiss.label": "Fechar aviso de atualização",
   "claim.edition": "ago 2026",

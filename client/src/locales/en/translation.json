@@ -1521,7 +1521,7 @@
   "update.ready": "A new version of pqp is ready.",
   "update.reload": "Reload",
   "update.updating": "Updating…",
-  "update.dismiss": "Dismiss update notice",
+  "update.dismiss": "Remind me later",
   "update.later": "Later",
   "update.dismiss.label": "Dismiss update notice",
   "claim.edition": "aug 2026",
