@@ -326,6 +326,20 @@ function screenShareErrorMessage(err: unknown): string {
     // a permissions problem in the usual sense, but the copy still fits.
     return translateMessage("voice.error.shareBlocked");
   }
+  if (err.name === "NotReadableError") {
+    // "Could not start audio source", verbatim, in English, is what a user hit
+    // in the QG on 24 Aug 2026. It is thrown when the picked surface's audio
+    // cannot be opened, and it rejects the WHOLE capture: the video was fine
+    // and they still got nothing, which is why the same person found that
+    // sharing without ticking the audio box works.
+    //
+    // Almost always the surface, not the machine. Chromium can only hand over
+    // audio for a *tab*; a window share has none to give, and a whole-screen
+    // share only does on Windows, never on macOS. Ticking "share audio" on a
+    // source that has no audio to share is the common way to land here, so the
+    // copy names the fix rather than the error.
+    return translateMessage("voice.error.shareAudioUnavailable");
+  }
   return err.message;
 }
 

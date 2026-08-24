@@ -630,6 +630,7 @@
   "voice.error.micBlocked": "O acesso ao microfone foi bloqueado. Libera nas configurações do navegador e entra de novo.",
   "voice.error.shareFailed": "Não foi possível compartilhar a tela",
   "voice.error.shareBlocked": "O compartilhamento de tela foi bloqueado ou cancelado.",
+  "voice.error.shareAudioUnavailable": "Não deu pra pegar o áudio dessa tela, então nada foi compartilhado. Só aba do Chrome tem áudio pra dar: escolha \"Guia do Chrome\", marque \"Também compartilhar áudio da guia\" e tente de novo. Janela nunca tem som, e tela inteira só no Windows.",
   "voice.error.shareNeedsAppUpdate": "Atualize o app do pqp pra compartilhar a tela.",
   "voice.error.noVideoTrack": "A captura de tela não trouxe vídeo",
   "voice.error.transportUnsupported": "Esta call roda num servidor de voz que esta versão do app não usa, então você não entrou. Ninguém na call te ouve.",

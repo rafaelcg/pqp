@@ -630,6 +630,7 @@
   "voice.error.micBlocked": "Microphone access was blocked. Allow it in your browser settings, then rejoin.",
   "voice.error.shareFailed": "Failed to start screen share",
   "voice.error.shareBlocked": "Screen share was blocked or cancelled.",
+  "voice.error.shareAudioUnavailable": "That screen's audio could not be opened, so nothing was shared. Only a Chrome tab has audio to give: pick \"Chrome Tab\", tick \"Also share tab audio\" and try again. A window never has sound, and a whole screen only does on Windows.",
   "voice.error.shareNeedsAppUpdate": "Update the pqp desktop app to share your screen.",
   "voice.error.noVideoTrack": "No video track from screen capture",
   "voice.error.transportUnsupported": "This call runs on a voice server this app build cannot use, so you have not joined it. Nobody in the call can hear you.",
