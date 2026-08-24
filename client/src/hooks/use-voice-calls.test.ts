@@ -50,6 +50,7 @@ vi.mock("@/lib/peer-connection-manager", () => ({
         stub.cameraStreamIds.push([peerId, streamId]);
       },
       setPeerScreenAudioStreamId: () => {},
+      setPeerSharingScreen: () => {},
       onPeerStateChange: () => {},
       connectToPeer: (peerId: string) => stub.peerIds.push(peerId),
       removePeer: () => {},

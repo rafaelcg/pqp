@@ -338,3 +338,86 @@ describe("receiving a peer's screen audio", () => {
     expect(ctx.peers()[0]!.screenAudioStream).toBeNull();
   });
 });
+
+/**
+ * The re-share, reported verbatim as "tried to reshare and the share was all
+ * black".
+ *
+ * A screen share is the one incoming stream this manager identifies
+ * negatively — video from a peer that is not their announced camera — so
+ * unlike the camera and the screen audio, nothing about a share *ending* is
+ * announced. The receiver's own track is not the answer either: the sender's
+ * `removeTrack` mutes it rather than ending it, so `onended` does not fire.
+ *
+ * That leaves the dead capture in `videoStreams`, and `classifyVideo` is
+ * first-wins, so the *next* share renders behind a stream with no frames in
+ * it. Everything below is that sequence.
+ */
+describe("receiving a peer's screen share", () => {
+  function arriveVideo(pc: FakePeerConnection, streamId: string) {
+    const incoming = track("video", `${streamId}:video`);
+    pc.ontrack?.({
+      track: incoming,
+      streams: [fakeStream(streamId, [incoming])],
+    });
+    return incoming;
+  }
+
+  it("shows the second share, not the dead first one", () => {
+    const ctx = setup();
+    ctx.manager.connectToPeer(REMOTE);
+    ctx.manager.setPeerSharingScreen(REMOTE, true);
+    arriveVideo(ctx.pc(), "share-1");
+    expect(ctx.peers()[0]!.screenStream?.id).toBe("share-1");
+
+    // They press Stop. No `onended` here on purpose: that is exactly what the
+    // real receiver does not get.
+    ctx.manager.setPeerSharingScreen(REMOTE, false);
+    expect(ctx.peers()[0]!.screenStream).toBeNull();
+
+    // They share again. A fresh capture, so a fresh stream id.
+    arriveVideo(ctx.pc(), "share-2");
+    expect(ctx.peers()[0]!.screenStream?.id).toBe("share-2");
+  });
+
+  it("keeps the camera when a share ends", () => {
+    const ctx = setup();
+    ctx.manager.connectToPeer(REMOTE);
+    ctx.manager.setPeerCameraStreamId(REMOTE, "their-cam");
+    arriveVideo(ctx.pc(), "their-cam");
+    ctx.manager.setPeerSharingScreen(REMOTE, true);
+    arriveVideo(ctx.pc(), "share-1");
+
+    ctx.manager.setPeerSharingScreen(REMOTE, false);
+
+    const peer = ctx.peers()[0]!;
+    expect(peer.screenStream).toBeNull();
+    expect(peer.cameraStream?.id).toBe("their-cam");
+  });
+
+  it("does not drop a live share on a roster frame that repeats itself", () => {
+    const ctx = setup();
+    ctx.manager.connectToPeer(REMOTE);
+    ctx.manager.setPeerSharingScreen(REMOTE, true);
+    arriveVideo(ctx.pc(), "share-1");
+
+    // Every roster frame carries every participant, so "still sharing" is the
+    // common case and must cost nothing.
+    ctx.manager.setPeerSharingScreen(REMOTE, true);
+    ctx.manager.setPeerSharingScreen(REMOTE, true);
+
+    expect(ctx.peers()[0]!.screenStream?.id).toBe("share-1");
+  });
+
+  it("survives a stop the roster announces before the track ever arrived", () => {
+    const ctx = setup();
+    ctx.manager.connectToPeer(REMOTE);
+    // Roster first, no media yet: the two race on every real call.
+    ctx.manager.setPeerSharingScreen(REMOTE, true);
+    ctx.manager.setPeerSharingScreen(REMOTE, false);
+    ctx.manager.setPeerSharingScreen(REMOTE, true);
+    arriveVideo(ctx.pc(), "share-1");
+
+    expect(ctx.peers()[0]!.screenStream?.id).toBe("share-1");
+  });
+});

@@ -984,6 +984,32 @@ export function createVoiceController(transport: RealtimeTransport) {
     }
   }
 
+  /**
+   * Who is presenting, from the roster → the mesh manager.
+   *
+   * The one incoming media slot with no stream id to null out, so this flag is
+   * the only thing that tells a receiver a share ended. Without it the dead
+   * capture stays filed as that peer's screen and their *next* share renders
+   * black behind it — see `setPeerSharingScreen`.
+   *
+   * Runs after `applyCameraStreamIds` on purpose: the manager keeps the
+   * announced camera stream and drops the rest, so it has to know which one
+   * the camera is before it drops anything.
+   */
+  function applySharingScreen(participants: VoiceParticipant[]) {
+    if (!manager) {
+      return;
+    }
+    for (const participant of participants) {
+      if (participant.peerId !== state.peerId) {
+        manager.setPeerSharingScreen(
+          participant.peerId,
+          participant.sharingScreen,
+        );
+      }
+    }
+  }
+
   /** The same trip for screen audio, and a no-op on the SFU path for the same reason. */
   function applyScreenAudioStreamIds(participants: VoiceParticipant[]) {
     if (!manager) {
@@ -1120,6 +1146,7 @@ export function createVoiceController(transport: RealtimeTransport) {
         peer.peerId,
         peer.screenAudioStreamId ?? null,
       );
+      manager.setPeerSharingScreen(peer.peerId, peer.sharingScreen);
     }
   }
 
@@ -1154,6 +1181,9 @@ export function createVoiceController(transport: RealtimeTransport) {
           // Mesh camera classification rides the roster — see the banner.
           applyCameraStreamIds(message.participants);
           applyScreenAudioStreamIds(message.participants);
+          // Last: it drops every video stream that is not the camera, so the
+          // camera has to be announced by the time it runs.
+          applySharingScreen(message.participants);
         }
         emit();
         break;
@@ -1293,6 +1323,10 @@ export function createVoiceController(transport: RealtimeTransport) {
         manager?.setPeerScreenAudioStreamId(
           message.peer.peerId,
           message.peer.screenAudioStreamId ?? null,
+        );
+        manager?.setPeerSharingScreen(
+          message.peer.peerId,
+          message.peer.sharingScreen,
         );
         playCue("voiceJoin");
         break;

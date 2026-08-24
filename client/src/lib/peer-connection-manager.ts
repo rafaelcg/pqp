@@ -142,6 +142,14 @@ interface ManagedPeer {
   remoteCameraStreamId: string | null;
   /** The screen-audio stream id this peer announced over the WS, or null. */
   remoteScreenAudioStreamId: string | null;
+  /**
+   * Whether the roster currently says this peer is presenting.
+   *
+   * Unlike the camera and the screen *audio*, a screen share announces no
+   * stream id, so this flag is the only thing that can tell us a share ended —
+   * see `setPeerSharingScreen` for why nothing else can.
+   */
+  remoteSharingScreen: boolean;
   /** Our own outgoing video senders on this connection, one per purpose —
    *  looked up by role, never by `track.kind`, because both are video. */
   screenSender: RTCRtpSender | null;
@@ -194,6 +202,16 @@ export interface PeerConnectionManager {
     remotePeerId: string,
     streamId: string | null,
   ): void;
+  /**
+   * Record whether a peer is presenting (from the roster).
+   *
+   * The screen share is the one incoming stream with no announced id — it is
+   * defined negatively, as "video that is not the camera" — so a share ending
+   * has nothing to null out the way the camera and the screen audio do. That
+   * is what this is for, and without it a re-share is a black rectangle: see
+   * the implementation.
+   */
+  setPeerSharingScreen(remotePeerId: string, sharing: boolean): void;
   setIceServers(servers: RTCIceServer[]): void;
   connectToPeer(remotePeerId: string, identity?: PeerIdentity): void;
   setPeerIdentity(remotePeerId: string, identity: PeerIdentity): void;
@@ -653,6 +671,7 @@ export function createPeerConnectionManager(
       audioStreams: new Map(),
       remoteCameraStreamId: null,
       remoteScreenAudioStreamId: null,
+      remoteSharingScreen: false,
       screenSender: null,
       cameraSender: null,
       screenAudioSender: null,
@@ -993,6 +1012,66 @@ export function createPeerConnectionManager(
       emitState();
     },
 
+    /**
+     * A peer started or stopped presenting, per the roster.
+     *
+     * WHY A SHARE ENDING NEEDS ITS OWN SIGNAL. The other three incoming media
+     * slots are announced by stream id, so each has a natural "it is over":
+     * the id goes null and the stream is dropped. The screen *video* is the
+     * one defined negatively — "video from this peer that is not the announced
+     * camera" — so it announces nothing, and nothing here ever learned that a
+     * share stopped.
+     *
+     * That was invisible until somebody shared twice:
+     *
+     *   1. First share arrives. `videoStreams` holds `{ share-1 }`, and
+     *      `classifyVideo` picks it. Correct.
+     *   2. They press Stop. `removeTrack` on their side only *mutes* our
+     *      receiver's track — the spec is explicit that it does not end it —
+     *      so `onended` never fires and `share-1` stays in the map. Harmless
+     *      so far: the roster drops them from `screenSharePeerIds`, so no tile
+     *      is rendered.
+     *   3. They share again. A fresh `getDisplayMedia` capture means a fresh
+     *      stream id, so `videoStreams` becomes `{ share-1, share-2 }`.
+     *      `classifyVideo` takes the *first* non-camera stream, which is the
+     *      dead `share-1` — and the tile the roster just brought back renders
+     *      a stream with no frames in it. A black rectangle, permanently:
+     *      nothing recomputes it, and the live `share-2` is never looked at.
+     *
+     * The camera has the same hazard and the same cure a few lines up ("the
+     * sender's removeTrack does not reliably end the receiver-side track"); the
+     * screen simply never got one.
+     *
+     * Dropping only fires on the true -> false edge, so a roster frame that
+     * repeats `sharing: true` cannot take a live share away, and the camera's
+     * own stream is left alone.
+     */
+    setPeerSharingScreen(remotePeerId: string, sharing: boolean) {
+      const peer = peers.get(remotePeerId);
+      if (!peer || peer.remoteSharingScreen === sharing) {
+        return;
+      }
+      peer.remoteSharingScreen = sharing;
+      if (sharing) {
+        return;
+      }
+      let dropped = false;
+      for (const id of [...peer.videoStreams.keys()]) {
+        // Never the camera: it is announced, it is classified by that
+        // announcement, and it outlives any number of screen shares.
+        if (id === peer.remoteCameraStreamId) {
+          continue;
+        }
+        peer.videoStreams.delete(id);
+        dropped = true;
+      }
+      if (!dropped) {
+        return;
+      }
+      classifyVideo(peer);
+      emitState();
+    },
+
     setIceServers(servers: RTCIceServer[]) {
       if (servers.length === 0) {
         return;
@@ -1093,6 +1172,7 @@ export function createPeerConnectionManager(
       const preservedCameraStreamId = previous?.remoteCameraStreamId ?? null;
       const preservedScreenAudioStreamId =
         previous?.remoteScreenAudioStreamId ?? null;
+      const preservedSharingScreen = previous?.remoteSharingScreen ?? false;
       if (previous) {
         clearIceRestartTimer(previous);
         unregisterVoiceConnection(previous.pc);
@@ -1105,6 +1185,9 @@ export function createPeerConnectionManager(
       // without this the re-arriving camera track would classify as a screen.
       managed.remoteCameraStreamId = preservedCameraStreamId;
       managed.remoteScreenAudioStreamId = preservedScreenAudioStreamId;
+      // Same reason: a rebuild that forgot the peer was presenting would treat
+      // the next `sharing: false` as a no-op and keep the dead stream.
+      managed.remoteSharingScreen = preservedSharingScreen;
       peers.set(remotePeerId, managed);
       emitState();
       await negotiate(managed, true);
