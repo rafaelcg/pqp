@@ -5,6 +5,7 @@ import {
   detectFullscreenMode,
   type FullscreenMode,
 } from "@/components/voice/capabilities";
+import { attemptElementFullscreen } from "@/components/voice/element-fullscreen";
 import { desktopContext } from "@/lib/desktop";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -210,6 +211,13 @@ export function ScreenShareView({
 
   const toggleFullscreen = useCallback(() => {
     setBlocked(false);
+    const setExpanded = (next: boolean) => {
+      if (controlledExpansion) {
+        onExpandedChange?.(next);
+        return;
+      }
+      setLocalExpanded(next);
+    };
     if (fullscreenMode === "element") {
       const container = containerRef.current;
       if (!container) {
@@ -222,6 +230,36 @@ export function ScreenShareView({
         console.warn("[voice] fullscreen refused", err);
         setBlocked(true);
       };
+      /**
+       * Ask, then *check*, then fall back.
+       *
+       * An Electron shell whose embedder denies the `fullscreen` permission
+       * never settles the promise at all, so a refusal arrives there as
+       * silence rather than as an error — see `element-fullscreen.ts`. The
+       * in-page expansion is the honest answer to a platform that will not do
+       * the real thing, and it is the path an iPhone has always taken.
+       */
+      const enter = () => {
+        void attemptElementFullscreen({
+          request: () => requestElementFullscreen(container),
+          isActive: () => currentFullscreenElement() === container,
+          onRefusal: (err) =>
+            console.warn("[voice] fullscreen refused", err),
+        }).then((entered) => {
+          if (entered) {
+            return;
+          }
+          // Pinned for the session, not just for this press: with the mode
+          // left on `element` the exit press would call `exitFullscreen` on a
+          // document that is not fullscreen, and the panel would never come
+          // back down.
+          console.warn(
+            "[voice] element fullscreen unavailable; expanding in page",
+          );
+          setFullscreenMode("expand");
+          setExpanded(true);
+        });
+      };
       const active = currentFullscreenElement();
       if (active === container) {
         void exitDocumentFullscreen().catch(refused);
@@ -232,23 +270,17 @@ export function ScreenShareView({
         // *anything* fullscreen?", which meant pressing the other tile's
         // button only ever dropped out of fullscreen instead of switching to
         // the screen the person actually asked for.
-        void exitDocumentFullscreen()
-          .then(() => requestElementFullscreen(container))
-          .catch(refused);
+        void exitDocumentFullscreen().then(enter).catch(refused);
         return;
       }
-      void requestElementFullscreen(container).catch(refused);
+      enter();
       return;
     }
     // `expand`: no platform call at all, so nothing can refuse it. The panel
     // grows to fill the viewport in the page. This is what an iPhone gets, and
     // it replaces handing the element to the OS media player, which cannot
     // render a MediaStream and showed a black rectangle instead.
-    if (controlledExpansion) {
-      onExpandedChange?.(!isExpanded);
-      return;
-    }
-    setLocalExpanded((was) => !was);
+    setExpanded(!isExpanded);
   }, [fullscreenMode, controlledExpansion, onExpandedChange, isExpanded]);
 
   return (

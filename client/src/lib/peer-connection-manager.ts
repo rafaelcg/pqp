@@ -2,6 +2,8 @@ import type { ClientRelayMessage } from "@pqp/shared";
 import {
   cameraBitrateFor,
   DEFAULT_VIDEO_QUALITY,
+  screenBitrateFor,
+  type VideoQuality,
 } from "./video-quality";
 import {
   registerVoiceConnection,
@@ -142,6 +144,14 @@ interface ManagedPeer {
   remoteCameraStreamId: string | null;
   /** The screen-audio stream id this peer announced over the WS, or null. */
   remoteScreenAudioStreamId: string | null;
+  /**
+   * Whether the roster currently says this peer is presenting.
+   *
+   * Unlike the camera and the screen *audio*, a screen share announces no
+   * stream id, so this flag is the only thing that can tell us a share ended —
+   * see `setPeerSharingScreen` for why nothing else can.
+   */
+  remoteSharingScreen: boolean;
   /** Our own outgoing video senders on this connection, one per purpose —
    *  looked up by role, never by `track.kind`, because both are video. */
   screenSender: RTCRtpSender | null;
@@ -182,6 +192,17 @@ export interface PeerConnectionManager {
    */
   setCameraMaxBitrate(maxBitrate: number): void;
   /**
+   * Change the screen share's quality and re-apply it to every live sender.
+   *
+   * Takes a quality rather than a bitrate, unlike its camera twin, because the
+   * screen's ceiling is not the chosen number on its own: it is that number
+   * intersected with the mesh budget, which moves whenever the room does. The
+   * manager is the only place that knows both, so it is the only place that can
+   * do the intersection. Same mid-call promise as the camera: no re-capture, so
+   * the share never blinks and the picker never reopens.
+   */
+  setScreenQuality(quality: VideoQuality): void;
+  /**
    * Record which of a peer's video streams is their camera (from the roster).
    * Null means "camera off" — any remaining video is treated as screen share.
    */
@@ -194,6 +215,16 @@ export interface PeerConnectionManager {
     remotePeerId: string,
     streamId: string | null,
   ): void;
+  /**
+   * Record whether a peer is presenting (from the roster).
+   *
+   * The screen share is the one incoming stream with no announced id — it is
+   * defined negatively, as "video that is not the camera" — so a share ending
+   * has nothing to null out the way the camera and the screen audio do. That
+   * is what this is for, and without it a re-share is a black rectangle: see
+   * the implementation.
+   */
+  setPeerSharingScreen(remotePeerId: string, sharing: boolean): void;
   setIceServers(servers: RTCIceServer[]): void;
   connectToPeer(remotePeerId: string, identity?: PeerIdentity): void;
   setPeerIdentity(remotePeerId: string, identity: PeerIdentity): void;
@@ -231,13 +262,63 @@ export interface PeerConnectionManager {
  */
 const SCREEN_UPLOAD_BUDGET_BPS = 5_000_000;
 const SCREEN_MIN_BITRATE_BPS = 600_000;
-const SCREEN_MAX_BITRATE_BPS = 2_500_000;
+/**
+ * The most any single screen sender may be given, whatever else is agreed.
+ *
+ * RAISED FROM 2.5 Mbps, ON PURPOSE, AND IT IS NOT AN OVERSIGHT. 2.5 Mbps was
+ * never enough for the 1080p30 this code asks the browser to capture. Moving
+ * screen content at that size wants somewhere around 4 to 6 Mbps, and
+ * `contentHint = "motion"` plus `maintain-framerate` means the encoder pays
+ * the shortfall in resolution: it holds 30 fps and quietly scales 1080p down
+ * until the picture fits. That is the entire explanation for "I selected 1080p
+ * and it was blurry". Nothing was broken; the ceiling simply said no.
+ *
+ * WHY 4 Mbps AND NOT MORE. Two limits, and both are real:
+ *
+ *  - `SCREEN_UPLOAD_BUDGET_BPS` is 5 Mbps and is divided by the peer count, so
+ *    a two-person call is already capped at 5 Mbps by the budget alone. Going
+ *    past 4 here would only push a 1:1 call toward saturating the 5 to 10 Mbps
+ *    uplink a great many Brazilian home connections actually have, and a
+ *    saturated uplink is not a sharper picture, it is a stalled one.
+ *  - The budget still binds from two remote peers upward (5 / 2 = 2.5 Mbps),
+ *    which is exactly the number every share got before this change. So this
+ *    raise is surgical: it reaches the 1:1 and small calls where there is
+ *    headroom to spend, and changes nothing at all about a crowded room.
+ *
+ * A CEILING IS NOT A DEMAND. Read this before "optimising" it back down. This
+ * number never obliges anyone to send 4 Mbps. WebRTC's bandwidth estimator
+ * measures the path continuously and sends the lower of (estimate, ceiling);
+ * on a 3 Mbps uplink the ceiling is inert and the estimate governs, exactly as
+ * it did at 2.5. Lowering it protects nobody who was not already protected and
+ * costs the picture for everybody who was not at risk.
+ */
+const SCREEN_MAX_BITRATE_BPS = 4_000_000;
 const SCREEN_MAX_FRAMERATE = 30;
 
-export function screenBitrateFor(peerCount: number): number {
+/**
+ * What one screen sender is allowed, given the room and the chosen quality.
+ *
+ * Three terms, in the order they matter:
+ *
+ *  - the **chosen ceiling**, which is the user's answer to "how much upload am
+ *    I willing to spend on video". It is an upper bound and always wins as one:
+ *    picking 480p cannot be overruled into sending 4 Mbps by an empty room.
+ *  - the **mesh budget share**, which is the room's answer. A full mesh uploads
+ *    a separate copy per peer, so a per-peer rate multiplies; the split is what
+ *    stops a six-way call asking one domestic uplink for 24 Mbps.
+ *  - the **floor**, which only ever lifts the *budget share*, never the chosen
+ *    ceiling. It exists so the division cannot produce something unwatchable
+ *    in a big room. It is not a licence to exceed what the user asked for,
+ *    which is why the chosen ceiling is the outermost `min`.
+ */
+export function meshScreenBitrate(
+  peerCount: number,
+  quality: VideoQuality = DEFAULT_VIDEO_QUALITY,
+): number {
   const share = SCREEN_UPLOAD_BUDGET_BPS / Math.max(1, peerCount);
+  const chosen = Math.min(screenBitrateFor(quality), SCREEN_MAX_BITRATE_BPS);
   return Math.round(
-    Math.min(SCREEN_MAX_BITRATE_BPS, Math.max(SCREEN_MIN_BITRATE_BPS, share)),
+    Math.min(chosen, Math.max(SCREEN_MIN_BITRATE_BPS, share)),
   );
 }
 
@@ -312,6 +393,7 @@ async function tuneCameraSender(
 async function tuneScreenSender(
   sender: RTCRtpSender | null,
   peerCount: number,
+  quality: VideoQuality,
 ): Promise<void> {
   if (!sender) {
     return;
@@ -326,7 +408,7 @@ async function tuneScreenSender(
     }
     params.degradationPreference = "maintain-framerate";
     for (const encoding of params.encodings) {
-      encoding.maxBitrate = screenBitrateFor(peerCount);
+      encoding.maxBitrate = meshScreenBitrate(peerCount, quality);
       encoding.maxFramerate = SCREEN_MAX_FRAMERATE;
     }
     await sender.setParameters(params);
@@ -363,7 +445,7 @@ export function createPeerConnectionManager(
       return;
     }
     for (const peer of peers.values()) {
-      void tuneScreenSender(peer.screenSender, peerCount);
+      void tuneScreenSender(peer.screenSender, peerCount, screenQuality);
     }
   }
 
@@ -390,6 +472,15 @@ export function createPeerConnectionManager(
   let localCameraStream: MediaStream | null = null;
   /** The chosen quality's ceiling, in bps. Replaced by `setCameraMaxBitrate`. */
   let cameraMaxBitrate = DEFAULT_CAMERA_MAX_BITRATE_BPS;
+  /**
+   * The chosen quality, for the screen sender.
+   *
+   * Held as the quality rather than as a bitrate, unlike the camera's, because
+   * the screen's number is not a constant: it is the chosen ceiling intersected
+   * with a budget that moves every time the room's size does. Storing the
+   * resolved bitrate would freeze one of those two inputs.
+   */
+  let screenQuality: VideoQuality = DEFAULT_VIDEO_QUALITY;
   let stateHandler: PeerStateChangeHandler | null = null;
   let currentIceServers = iceServers;
 
@@ -653,6 +744,7 @@ export function createPeerConnectionManager(
       audioStreams: new Map(),
       remoteCameraStreamId: null,
       remoteScreenAudioStreamId: null,
+      remoteSharingScreen: false,
       screenSender: null,
       cameraSender: null,
       screenAudioSender: null,
@@ -690,7 +782,7 @@ export function createPeerConnectionManager(
         // Somebody joining mid-share gets the same treatment as everybody who
         // was already here, and the room just grew, so this is also the moment
         // the existing senders need their share of the budget recomputed.
-        void tuneScreenSender(managed.screenSender, peers.size + 1);
+        void tuneScreenSender(managed.screenSender, peers.size + 1, screenQuality);
         // `+ 1` for the same reason: this runs before the caller files the new
         // peer, and the room everyone is about to be in is the one to budget
         // for.
@@ -901,7 +993,7 @@ export function createPeerConnectionManager(
             peer.screenSender = peer.pc.addTrack(nextVideo, stream!);
             needsOffer = true;
           }
-          await tuneScreenSender(peer.screenSender, peers.size);
+          await tuneScreenSender(peer.screenSender, peers.size, screenQuality);
         } else if (peer.screenSender) {
           peer.pc.removeTrack(peer.screenSender);
           peer.screenSender = null;
@@ -959,6 +1051,14 @@ export function createPeerConnectionManager(
       retuneAllCameraSenders();
     },
 
+    setScreenQuality(quality: VideoQuality) {
+      if (quality === screenQuality) {
+        return;
+      }
+      screenQuality = quality;
+      retuneAllScreenSenders();
+    },
+
     setPeerCameraStreamId(remotePeerId: string, streamId: string | null) {
       const peer = peers.get(remotePeerId);
       if (!peer || peer.remoteCameraStreamId === streamId) {
@@ -990,6 +1090,66 @@ export function createPeerConnectionManager(
         peer.audioStreams.delete(previous);
       }
       classifyAudio(peer);
+      emitState();
+    },
+
+    /**
+     * A peer started or stopped presenting, per the roster.
+     *
+     * WHY A SHARE ENDING NEEDS ITS OWN SIGNAL. The other three incoming media
+     * slots are announced by stream id, so each has a natural "it is over":
+     * the id goes null and the stream is dropped. The screen *video* is the
+     * one defined negatively — "video from this peer that is not the announced
+     * camera" — so it announces nothing, and nothing here ever learned that a
+     * share stopped.
+     *
+     * That was invisible until somebody shared twice:
+     *
+     *   1. First share arrives. `videoStreams` holds `{ share-1 }`, and
+     *      `classifyVideo` picks it. Correct.
+     *   2. They press Stop. `removeTrack` on their side only *mutes* our
+     *      receiver's track — the spec is explicit that it does not end it —
+     *      so `onended` never fires and `share-1` stays in the map. Harmless
+     *      so far: the roster drops them from `screenSharePeerIds`, so no tile
+     *      is rendered.
+     *   3. They share again. A fresh `getDisplayMedia` capture means a fresh
+     *      stream id, so `videoStreams` becomes `{ share-1, share-2 }`.
+     *      `classifyVideo` takes the *first* non-camera stream, which is the
+     *      dead `share-1` — and the tile the roster just brought back renders
+     *      a stream with no frames in it. A black rectangle, permanently:
+     *      nothing recomputes it, and the live `share-2` is never looked at.
+     *
+     * The camera has the same hazard and the same cure a few lines up ("the
+     * sender's removeTrack does not reliably end the receiver-side track"); the
+     * screen simply never got one.
+     *
+     * Dropping only fires on the true -> false edge, so a roster frame that
+     * repeats `sharing: true` cannot take a live share away, and the camera's
+     * own stream is left alone.
+     */
+    setPeerSharingScreen(remotePeerId: string, sharing: boolean) {
+      const peer = peers.get(remotePeerId);
+      if (!peer || peer.remoteSharingScreen === sharing) {
+        return;
+      }
+      peer.remoteSharingScreen = sharing;
+      if (sharing) {
+        return;
+      }
+      let dropped = false;
+      for (const id of [...peer.videoStreams.keys()]) {
+        // Never the camera: it is announced, it is classified by that
+        // announcement, and it outlives any number of screen shares.
+        if (id === peer.remoteCameraStreamId) {
+          continue;
+        }
+        peer.videoStreams.delete(id);
+        dropped = true;
+      }
+      if (!dropped) {
+        return;
+      }
+      classifyVideo(peer);
       emitState();
     },
 
@@ -1093,6 +1253,7 @@ export function createPeerConnectionManager(
       const preservedCameraStreamId = previous?.remoteCameraStreamId ?? null;
       const preservedScreenAudioStreamId =
         previous?.remoteScreenAudioStreamId ?? null;
+      const preservedSharingScreen = previous?.remoteSharingScreen ?? false;
       if (previous) {
         clearIceRestartTimer(previous);
         unregisterVoiceConnection(previous.pc);
@@ -1105,6 +1266,9 @@ export function createPeerConnectionManager(
       // without this the re-arriving camera track would classify as a screen.
       managed.remoteCameraStreamId = preservedCameraStreamId;
       managed.remoteScreenAudioStreamId = preservedScreenAudioStreamId;
+      // Same reason: a rebuild that forgot the peer was presenting would treat
+      // the next `sharing: false` as a no-op and keep the dead stream.
+      managed.remoteSharingScreen = preservedSharingScreen;
       peers.set(remotePeerId, managed);
       emitState();
       await negotiate(managed, true);
