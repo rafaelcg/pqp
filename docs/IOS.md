@@ -277,6 +277,43 @@ Per-peer volume is done. Screen share receiving is done; screen share sending is
 written but untested. Camera-in-voice-channels is not built at all (neither
 client offers it).
 
+## Copy and pt-BR
+
+All UI copy lives inline in Swift and is collected into
+`pqp/Resources/Localizable.xcstrings`, which is **keyed on the English source
+string**. Three checks cover it, and each sees something the other two cannot:
+
+| Check | Where | Catches |
+|---|---|---|
+| Every catalogue key still has its pt-BR | `NoEmDashTests` | a translation orphaned by editing the English literal, which renames its key |
+| Every English literal is *in* the catalogue | `Check localisation coverage` build phase (`Scripts/check-localization.py`) | copy that never reached the catalogue at all |
+| The compiled bundle answers in Portuguese | `LocalizationCoverageTests`, `LocalizationUITests` | a catalogue that is in the repo and not in the app |
+
+The middle one is the one with no Xcode equivalent, and it is why
+`SWIFT_EMIT_LOC_STRINGS` is on: the compiler writes one `.stringsdata` per file
+naming every localised literal it saw, which is the only authority on which
+strings are copy. Nothing else can tell `Text("Hang up")` from `Text(name)`. It
+found **126** untranslated strings the first time it ran, on an app whose
+catalogue was 100% translated by the other measure: the whole Friends screen,
+the whole DM call UI, threads, screen share and every audit-log phrase.
+
+Two ways to be wrong, both silent before that phase existed:
+
+- **A new literal with no catalogue entry.** `Text("Hang up")` falls back to its
+  own key, so a Brazilian reader gets English and nothing anywhere says so. The
+  build phase now fails with the file, the line and the string.
+- **A translation that is never asked for.** `Text(someString)` is the
+  *verbatim* initialiser, so a picker built from a `[(String, String)]` renders
+  English however good the translation is. Four settings pickers and all
+  nineteen audit-log phrases were in this state. The fix is `String(localized:)`
+  at the point the literal is written, and the symptom to watch for is a
+  catalogue key that no `.stringsdata` mentions.
+
+Anything that is a value rather than words takes `Text(verbatim:)`: a reaction
+count, a separator, an already-localised phrase being joined to another. Left as
+`Text("\(count)")` it mints a catalogue key of `%lld` that no translator can do
+anything with.
+
 ## Writing UI tests here
 
 Three things this suite learned the hard way.

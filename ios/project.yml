@@ -94,6 +94,11 @@ targets:
         PQP_API_HOST: ""
         PRODUCT_NAME: pqp
         INFOPLIST_FILE: pqp/Info.plist
+        # Makes the compiler write one .stringsdata per file listing every
+        # localised literal it saw. That is the only authoritative answer to
+        # "which strings are copy", and it is what the postCompileScript below
+        # checks the string catalogue against.
+        SWIFT_EMIT_LOC_STRINGS: YES
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         TARGETED_DEVICE_FAMILY: "1"
@@ -117,6 +122,19 @@ targets:
           # TestFlight builds talk to production, so they need the live key —
           # it is publishable by design, same one the web bundle ships.
           CLERK_PUBLISHABLE_KEY: pk_live_Y2xlcmsucHFwLmdnJA
+    postCompileScripts:
+      # English copy that never reached Localizable.xcstrings renders in
+      # English for a pt-BR reader, with no error anywhere. See the script's
+      # header for why this cannot be a test.
+      - script: |
+          "$SRCROOT/Scripts/check-localization.py" \
+            "$SRCROOT/pqp/Resources/Localizable.xcstrings" \
+            "$OBJECT_FILE_DIR_normal"
+        name: Check localisation coverage
+        basedOnDependencyAnalysis: false
+        inputFiles:
+          - $(SRCROOT)/pqp/Resources/Localizable.xcstrings
+          - $(SRCROOT)/Scripts/check-localization.py
     dependencies:
       # ClerkKit is the client; ClerkKitUI supplies the prebuilt auth flow.
       # The auth UI is used as-shipped rather than rebuilt: it covers email

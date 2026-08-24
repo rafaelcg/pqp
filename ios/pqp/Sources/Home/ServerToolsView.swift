@@ -296,7 +296,7 @@ private struct SearchResultRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 6) {
-                Text("#\(result.channelName)")
+                Text(verbatim: "#\(result.channelName)")
                     .font(Typography.caption)
                     .foregroundStyle(Palette.signal)
                 Text(result.authorName)
@@ -310,7 +310,7 @@ private struct SearchResultRow: View {
 
             // The server marks matches with control characters rather than
             // markup; they are turned into styling here and never rendered.
-            result.runs.reduce(Text("")) { partial, run in
+            result.runs.reduce(Text(verbatim: "")) { partial, run in
                 partial + Text(run.text)
                     .foregroundColor(run.isMatch ? Palette.signal : Palette.paper)
                     .fontWeight(run.isMatch ? .semibold : .regular)

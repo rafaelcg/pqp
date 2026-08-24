@@ -14,13 +14,21 @@ struct AccountSettingsView: View {
     @State private var saved = false
     @State private var error: String?
 
+    // Resolved through `String(localized:)` rather than left as bare literals:
+    // `Text(someString)` is the *verbatim* initialiser, so a picker built from
+    // a `[(String, String)]` renders English however good the translation is.
+    // These three lists had translations in the catalogue that no user ever saw.
     private let privacyOptions = [
-        ("everyone", "Anyone"),
-        ("server_members", "People I share a community with"),
-        ("nobody", "Nobody"),
+        ("everyone", String(localized: "Anyone")),
+        ("server_members", String(localized: "People I share a community with")),
+        ("nobody", String(localized: "Nobody")),
     ]
 
-    private let levels = [("all", "All messages"), ("mentions", "Only @mentions"), ("none", "Nothing")]
+    private let levels = [
+        ("all", String(localized: "All messages")),
+        ("mentions", String(localized: "Only @mentions")),
+        ("none", String(localized: "Nothing")),
+    ]
 
     var body: some View {
         NavigationStack {
@@ -439,8 +447,13 @@ struct ServerSettingsView: View {
 
     private var isOwner: Bool { server.role == "owner" }
 
+    // Same verbatim trap as the pickers in `AccountSettingsView`: see the
+    // comment there.
     private let retentionOptions: [(Int?, String)] = [
-        (nil, "Keep forever"), (30, "30 days"), (90, "90 days"), (365, "1 year"),
+        (nil, String(localized: "Keep forever")),
+        (30, String(localized: "30 days")),
+        (90, String(localized: "90 days")),
+        (365, String(localized: "1 year")),
     ]
 
     var body: some View {
@@ -487,7 +500,8 @@ struct ServerSettingsView: View {
                     }
                     ForEach(audit.prefix(30)) { entry in
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("\(entry.actorName ?? "A departed account") \(AuditLabels.describe(entry.action))")
+                            Text(verbatim: "\(entry.actorName ?? String(localized: "A departed account")) "
+                             + AuditLabels.describe(entry.action))
                                 .font(Typography.callout)
                             Text(entry.createdAt, format: .dateTime.day().month().hour().minute())
                                 .font(Typography.caption)
@@ -639,26 +653,29 @@ struct ServerSettingsView: View {
 /// Kept in one place because the web client learned the hard way that adding an
 /// action without adding its label renders the raw enum string to users.
 enum AuditLabels {
+    // `String(localized:)` per phrase, not bare literals: a `[String: String]`
+    // never reaches the string catalogue, so the whole log rendered in English
+    // however complete the translation looked.
     private static let map: [String: String] = [
-        "member.kick": "kicked a member",
-        "member.ban": "banned a member",
-        "member.unban": "unbanned a member",
-        "member.role_update": "changed a member's role",
-        "member.sso_join": "joined via SSO email domain",
-        "channel.create": "created a channel",
-        "channel.update": "updated a channel",
-        "channel.delete": "deleted a channel",
-        "channel.move": "reordered a channel",
-        "message.delete": "deleted someone's message",
-        "server.update": "renamed the community",
-        "server.retention_update": "changed message retention",
-        "server.sso_domain_update": "changed the SSO email domain",
-        "server.ownership_transfer": "transferred ownership",
-        "server.data_export": "exported the community's data",
-        "invite.create": "created an invite",
-        "invite.delete": "revoked an invite",
-        "webhook.create": "created a webhook",
-        "webhook.delete": "deleted a webhook",
+        "member.kick": String(localized: "kicked a member"),
+        "member.ban": String(localized: "banned a member"),
+        "member.unban": String(localized: "unbanned a member"),
+        "member.role_update": String(localized: "changed a member's role"),
+        "member.sso_join": String(localized: "joined via SSO email domain"),
+        "channel.create": String(localized: "created a channel"),
+        "channel.update": String(localized: "updated a channel"),
+        "channel.delete": String(localized: "deleted a channel"),
+        "channel.move": String(localized: "reordered a channel"),
+        "message.delete": String(localized: "deleted someone's message"),
+        "server.update": String(localized: "renamed the community"),
+        "server.retention_update": String(localized: "changed message retention"),
+        "server.sso_domain_update": String(localized: "changed the SSO email domain"),
+        "server.ownership_transfer": String(localized: "transferred ownership"),
+        "server.data_export": String(localized: "exported the community's data"),
+        "invite.create": String(localized: "created an invite"),
+        "invite.delete": String(localized: "revoked an invite"),
+        "webhook.create": String(localized: "created a webhook"),
+        "webhook.delete": String(localized: "deleted a webhook"),
     ]
 
     static func describe(_ action: String) -> String {

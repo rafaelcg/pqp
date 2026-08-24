@@ -1022,7 +1022,7 @@ struct UnreadBadge: View {
     var isMention: Bool = false
 
     var body: some View {
-        Text(count > 99 ? "99+" : "\(count)")
+        Text(verbatim: count > 99 ? "99+" : "\(count)")
             .font(.system(size: 12, weight: .bold))
             .foregroundStyle(Palette.inkDeep)
             .padding(.horizontal, 7)

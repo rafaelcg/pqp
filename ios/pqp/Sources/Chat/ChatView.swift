@@ -899,7 +899,7 @@ struct ReactionRow: View {
                 Button { onTap(reaction.emoji) } label: {
                 HStack(spacing: 4) {
                     Text(reaction.emoji).font(.system(size: 13))
-                    Text("\(reaction.count)")
+                    Text(verbatim: "\(reaction.count)")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(reaction.me ? Palette.signal : Palette.paperMuted)
                 }
