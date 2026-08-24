@@ -25,6 +25,7 @@ import {
 } from "react";
 import { SCREEN_SHARE_LIMIT, type DmSummary } from "@pqp/shared";
 import type { VoiceState } from "@/hooks/use-voice";
+import type { VideoQuality } from "@/lib/video-quality";
 import {
   detectFullscreenMode,
   supportsScreenShare,
@@ -45,6 +46,12 @@ import {
   screenShareStageLayout,
   type ScreenShareTile,
 } from "@/components/voice/screen-stage";
+import {
+  callControlsMayIdle,
+  showsVideoQualityControl,
+  videoQualityMenuOpen,
+} from "@/components/voice/video-quality-control";
+import { VideoQualityMenu } from "@/components/voice/video-quality-menu";
 import { VoiceAvatar } from "@/components/voice/voice-avatar";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { useLgUp } from "@/hooks/use-lg-up";
@@ -340,10 +347,12 @@ export function DmCallStage({
   conversation,
   currentUser,
   voiceState,
+  videoQuality,
   onJoinCall,
   onLeave,
   onToggleMute,
   onToggleCamera,
+  onVideoQualityChange,
   onStartScreenShare,
   onStopScreenShare,
   onFocusScreenShare,
@@ -351,10 +360,18 @@ export function DmCallStage({
   conversation: DmSummary;
   currentUser: { id: string; displayName: string; avatarUrl: string | null } | null;
   voiceState: VoiceState;
+  /**
+   * The one stored choice, straight from `LocalSettings.videoQuality`. Passed
+   * in rather than read from the voice controller so that this menu and the
+   * Settings dialog are two views of the same value: whichever you touch, the
+   * other one is already showing the result next time you look.
+   */
+  videoQuality: VideoQuality;
   onJoinCall: () => void;
   onLeave: () => void;
   onToggleMute: () => void;
   onToggleCamera: () => void;
+  onVideoQualityChange: (quality: VideoQuality) => void;
   onStartScreenShare?: () => void;
   onStopScreenShare?: () => void;
   onFocusScreenShare?: (peerId: string) => void;
@@ -411,11 +428,13 @@ export function DmCallStage({
       conversation={conversation}
       currentUser={currentUser}
       voiceState={voiceState}
+      videoQuality={videoQuality}
       collapsed={collapsed}
       onSetCollapsed={setCollapsedRemembered}
       onLeave={onLeave}
       onToggleMute={onToggleMute}
       onToggleCamera={onToggleCamera}
+      onVideoQualityChange={onVideoQualityChange}
       onStartScreenShare={onStartScreenShare}
       onStopScreenShare={onStopScreenShare}
       onFocusScreenShare={onFocusScreenShare}
@@ -427,11 +446,13 @@ function ActiveCall({
   conversation,
   currentUser,
   voiceState,
+  videoQuality,
   collapsed,
   onSetCollapsed,
   onLeave,
   onToggleMute,
   onToggleCamera,
+  onVideoQualityChange,
   onStartScreenShare,
   onStopScreenShare,
   onFocusScreenShare,
@@ -439,11 +460,13 @@ function ActiveCall({
   conversation: DmSummary;
   currentUser: { id: string; displayName: string; avatarUrl: string | null } | null;
   voiceState: VoiceState;
+  videoQuality: VideoQuality;
   collapsed: boolean;
   onSetCollapsed: (collapsed: boolean) => void;
   onLeave: () => void;
   onToggleMute: () => void;
   onToggleCamera: () => void;
+  onVideoQualityChange: (quality: VideoQuality) => void;
   onStartScreenShare?: () => void;
   onStopScreenShare?: () => void;
   onFocusScreenShare?: (peerId: string) => void;
@@ -592,7 +615,29 @@ function ActiveCall({
   }, []);
   const [controlsIdle, setControlsIdle] = useState(false);
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const shouldAutoHide = autoHide && anyVideo && !collapsed;
+  // --- video quality menu -------------------------------------------------
+  // "Requested" rather than "open": the open state is derived, so turning the
+  // camera off (or collapsing) takes the menu down with the button it hangs
+  // from instead of leaving a popover anchored to nothing.
+  const [qualityMenuRequested, setQualityMenuRequested] = useState(false);
+  const qualityMenuOpen = videoQualityMenuOpen({
+    requested: qualityMenuRequested,
+    isCameraOn: voiceState.isCameraOn,
+    collapsed,
+  });
+  // Cleared rather than merely ignored: a menu that was open when the camera
+  // went off must not spring back open by itself when the camera returns.
+  useEffect(() => {
+    if (qualityMenuRequested && !qualityMenuOpen) {
+      setQualityMenuRequested(false);
+    }
+  }, [qualityMenuRequested, qualityMenuOpen]);
+  const shouldAutoHide = callControlsMayIdle({
+    autoHide,
+    anyVideo,
+    collapsed,
+    menuOpen: qualityMenuOpen,
+  });
   const wakeControls = useCallback(() => {
     setControlsIdle(false);
     if (idleTimerRef.current) {
@@ -673,6 +718,10 @@ function ActiveCall({
       onToggleFullscreen={fullscreen.toggle}
       onToggleMute={onToggleMute}
       onToggleCamera={onToggleCamera}
+      videoQuality={videoQuality}
+      onVideoQualityChange={onVideoQualityChange}
+      qualityMenuOpen={qualityMenuOpen}
+      onQualityMenuOpenChange={setQualityMenuRequested}
       onStartScreenShare={onStartScreenShare}
       onStopScreenShare={onStopScreenShare}
       onToggleCollapsed={() => onSetCollapsed(!collapsed)}
@@ -966,6 +1015,10 @@ function CallControls({
   onToggleFullscreen,
   onToggleMute,
   onToggleCamera,
+  videoQuality,
+  onVideoQualityChange,
+  qualityMenuOpen,
+  onQualityMenuOpenChange,
   onStartScreenShare,
   onStopScreenShare,
   onToggleCollapsed,
@@ -978,6 +1031,10 @@ function CallControls({
   onToggleFullscreen: () => void;
   onToggleMute: () => void;
   onToggleCamera: () => void;
+  videoQuality: VideoQuality;
+  onVideoQualityChange: (quality: VideoQuality) => void;
+  qualityMenuOpen: boolean;
+  onQualityMenuOpenChange: (open: boolean) => void;
   onStartScreenShare?: () => void;
   onStopScreenShare?: () => void;
   onToggleCollapsed: () => void;
@@ -1053,6 +1110,22 @@ function CallControls({
           <VideoOff className={iconSize} />
         )}
       </button>
+      {/* The camera's setting, immediately to the right of the camera. Absent
+          until the camera is on, so an audio call's bar is the bar it has
+          always been. */}
+      {showsVideoQualityControl({
+        isCameraOn: voiceState.isCameraOn,
+        collapsed,
+      }) && (
+        <VideoQualityMenu
+          value={videoQuality}
+          open={qualityMenuOpen}
+          onOpenChange={onQualityMenuOpenChange}
+          onChange={onVideoQualityChange}
+          buttonClassName={size}
+          iconClassName={iconSize}
+        />
+      )}
       {!collapsed && canShare && (onStartScreenShare || onStopScreenShare) && (
         <button
           type="button"

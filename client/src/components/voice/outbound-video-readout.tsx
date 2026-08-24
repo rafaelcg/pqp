@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useTranslation } from "@/lib/i18n";
+import { useTranslation, type MessageKey } from "@/lib/i18n";
 import {
   sampleVoiceStats,
   type VideoSenderSample,
@@ -33,7 +33,20 @@ function limitKey(reason: string) {
   return "settings.voice.videoQuality.limit.other" as const;
 }
 
-export function OutboundVideoReadout() {
+export function OutboundVideoReadout({
+  /**
+   * What to say when there is no camera sender to read at all.
+   *
+   * The default is written for the Settings dialog, where the honest answer is
+   * "turn your camera on during a call". The in-call menu only exists while the
+   * camera *is* on, so that sentence would be a flat contradiction there: with
+   * a camera running and no sample, what is actually true is that this call
+   * cannot be measured from here (an SFU room keeps no local sender registry).
+   */
+  idleKey = "settings.voice.videoQuality.idle",
+}: {
+  idleKey?: MessageKey;
+} = {}) {
   const { t } = useTranslation();
   const [camera, setCamera] = useState<VideoSenderSample | null>(null);
 
@@ -66,7 +79,7 @@ export function OutboundVideoReadout() {
   if (!camera) {
     return (
       <p className="mt-1 text-xs text-paper-muted">
-        {t("settings.voice.videoQuality.idle")}
+        {t(idleKey)}
       </p>
     );
   }
