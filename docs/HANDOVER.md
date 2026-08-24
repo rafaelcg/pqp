@@ -694,14 +694,25 @@ Discord-style Connections, not a second login. Clerk stays how people sign in. F
    one that was minted and check it is refused. It holds on MinIO; Cloudflare's edge may re-frame
    the request, and if it does the mint-time size cap is decoration and only the claim-time HEAD
    is real. Ten minutes with a scratch bucket settles it.
-4. **Close the CSAM gap — the highest-consequence item on this list.** Nothing scans uploads
-   today (`CONTENT_SCAN_PROVIDER` is empty). Three of these cost nothing and one is a legal duty
-   that already commenced: register on the **NCA CSEA-IRP** (OSA 2023 s.66, live 7 Apr 2026, no
-   size threshold), write the **illegal content risk assessment** (was due 16 Mar 2025), enable
-   **Cloudflare's CSAM Scanning Tool** (free, email-only onboarding), and apply for **IWF Image
-   Intercept** (free under 1M checks/month — the only one that gives upload-path hash matching).
-   Then set `CONTENT_SCAN_PROVIDER=openai` for the classifier half. Full detail, costs and the
-   runbook: [`CONTENT_SAFETY.md`](./CONTENT_SAFETY.md).
+4. **Close the CSAM gap — the highest-consequence item on this list.** Partly done as of
+   **24 Aug 2026**, and the remaining part is not what it looks like.
+
+   Done: `CONTENT_SCAN_PROVIDER` **is set** on the production API, so claim-time classifier
+   scanning is live and fail-closed. The **illegal content risk assessment** is written
+   ([`RISK_ASSESSMENT.md`](./RISK_ASSESSMENT.md)). **Cloudflare's CSAM Scanning Tool is
+   enabled** on the `pqp.gg` zone.
+
+   Still open, and this is the trap: **the Cloudflare tool cannot see the attachments.** It
+   scans what Cloudflare serves for the zone, and `S3_PUBLIC_BASE_URL` is unset, so
+   `presignGet` hands out bucket-endpoint URLs that never traverse `pqp.gg`
+   (`server/src/lib/s3.ts:242`). Separately, the OpenAI provider's `sexual/minors` category is
+   text-only and scores zero on image input, so the classifier gives **no CSAM coverage** either.
+   **Upload-path CSAM detection is therefore still absent.** The cheap fix is to point
+   `S3_PUBLIC_BASE_URL` at a Cloudflare-proxied custom domain on the bucket; the real fix is
+   **IWF Image Intercept** (free under 1M checks/month, the only one that hash-matches on the
+   upload path). Also still outstanding: register on the **NCA CSEA-IRP** (OSA 2023 s.66, live
+   7 Apr 2026, no size threshold). Full detail, costs and the runbook:
+   [`CONTENT_SAFETY.md`](./CONTENT_SAFETY.md).
 5. **Set `CORS_ALLOWED_ORIGINS` on Railway** to the Pages origin (and pqp.gg when it exists).
 6. **pqp.gg is unregistered** — canonical/OG tags in `client/index.html` and `SITE_URL` in `seo.tsx` point at a domain nobody owns, so shared links render a broken preview. Buy the domain or repoint the metadata.
 7. **Electron app icon** — no `electron/build` icons; packaged apps use the default Electron icon.

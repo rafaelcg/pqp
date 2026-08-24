@@ -348,7 +348,7 @@ effect they had on the assigned risk level. Every row below is code that exists.
 | C5 | **Blocking, and DM privacy defaulting to `server_members`** | `server/src/services/blocks.ts`, `server/src/services/dms.ts:76` | Harassment, cyberflashing, unsolicited approach by strangers | Genuinely effective, and enforced server-side at every point. The default matters more than the feature: a stranger found by handle search cannot open a DM unless they share a server |
 | C6 | **Closed discovery** | Absence of code, verified | Drugs, weapons, trafficking, sexual exploitation, fraud reach, foreign interference | The strongest mitigation pqp has, and the cheapest to lose |
 | C7 | **18+ age gate**, one attempt, refusals recorded and permanent | `server/src/services/age-gate.ts`, `schema.sql:60` | Children on an adult service | **Real but limited, and must never be described as more.** It is self-declaration. It is **not highly effective age assurance** within the meaning of the Act, it checks no document, and it does not detect lying. It makes the declaration meaningful and final; it does not make it true. Wherever a lower risk level would depend on children being absent, this control was given **no** credit |
-| C8 | **Claim-time image scanning** (OpenAI omni-moderation, Sightengine, or an operator webhook), fail-closed | `server/src/services/content-scan.ts`, `attachments.ts:506` | Images depicting apparent minors, gore, and — via the webhook adapter — anything the operator wires in | Real, and well placed: it runs **before** the image is visible to anyone, so the exposure window is zero. Three hard limits: it scans **only five raster image types**; **video, audio and PDF are recorded `skipped` and never examined**; and with the default OpenAI provider the `sexual/minors` category is **text-only and scores zero on image input**, so it gives **no CSAM coverage at all**. Also: whether it is switched on in production is an environment variable, not a code fact — `CONTENT_SCAN_PROVIDER` is empty by default and an unconfigured provider records `unscanned` and lets the image through |
+| C8 | **Claim-time image scanning** (OpenAI omni-moderation, Sightengine, or an operator webhook), fail-closed | `server/src/services/content-scan.ts`, `attachments.ts:506` | Images depicting apparent minors, gore, and — via the webhook adapter — anything the operator wires in | Real, and well placed: it runs **before** the image is visible to anyone, so the exposure window is zero. Three hard limits: it scans **only five raster image types**; **video, audio and PDF are recorded `skipped` and never examined**; and with the default OpenAI provider the `sexual/minors` category is **text-only and scores zero on image input**, so it gives **no CSAM coverage at all**. Also: whether it is switched on in production is an environment variable, not a code fact. `CONTENT_SCAN_PROVIDER` is empty by default and an unconfigured provider records `unscanned` and lets the image through. **Verified 24 Aug 2026: it is set on the production API**, alongside `OPENAI_API_KEY`, so claim-time scanning is live. That closes the switched-off risk and does not touch the `sexual/minors` limitation above |
 | C9 | **Quarantine and evidence preservation** | `attachments.ts:836` | Destroying evidence of a hit before a human sees it | Rows labelled `illegal` or `csam_suspected` are **never auto-deleted at any age**, and are excluded from the hourly orphan sweeper. This is the one technical control that serves the s.66 reporting duty |
 | C10 | **Per-server audit log**, 21 action types, 90-day retention | `server/src/services/audit.ts` | Accountability for moderator action; evidence for later | Good within a server. Records nothing platform-level, and nothing about DMs |
 | C11 | **Per-server message retention**, owner-set, pinned messages exempt | `server/src/services/retention.ts` | Data minimisation | Not a moderation tool. **Never touches DMs**, by construction |
@@ -366,7 +366,7 @@ verified absence, not a suspicion.
 | # | Gap | Consequence |
 |---|---|---|
 | G1 | **No UI for the instance moderation queue.** The endpoint `GET /api/reports/instance` exists; nothing in `client/src` calls it. Access is gated on `INSTANCE_MODERATOR_CLERK_IDS` — **if that env var is unset, nobody can read the queue at all** | Every DM report — grooming, harassment, cyberflashing, CSAM in a DM — lands somewhere only reachable by `curl`, and only if an env var was set. **This is the highest-priority fix in this document** |
-| G2 | **No CSAM hash matching.** No PhotoDNA, no IWF, no Arachnid, no Cloudflare CSAM Scanning. The `webhook` adapter is a wired extension point with nothing on the other end | The CSAM control on this service is a user report, the operator's own eyes, and a classifier that scores zero on the category that matters |
+| G2 | **No CSAM hash matching on the upload path.** No PhotoDNA, no IWF, no Arachnid. Cloudflare's CSAM Scanning Tool **is enabled on the `pqp.gg` zone** (verified in the dashboard 24 Aug 2026), but it scans content Cloudflare serves for that zone, and attachments are not served through it: `S3_PUBLIC_BASE_URL` is unset on the production API, so `presignGet` falls back to the bucket endpoint (`server/src/lib/s3.ts:242`) and attachment reads never traverse the zone. The `webhook` adapter is a wired extension point with nothing on the other end | The CSAM control on the upload path is a user report, the operator's own eyes, and a classifier that scores zero on the category that matters. Setting `S3_PUBLIC_BASE_URL` to a Cloudflare-proxied custom domain on the bucket would bring attachment reads into the tool's scope and is the cheapest available improvement |
 | G3 | **Video, audio and PDF are never scanned** | An entire class of attachment is unexamined. Recorded `skipped`, which the code correctly refuses to treat as `pass` |
 | G4 | **Voice and screen share cannot be moderated at all** | Structural. Only a user report can surface anything |
 | G5 | **No timeouts, mutes or slowmode.** The enforcement ladder goes from "delete the message" straight to "ban" | No graduated response. A borderline case gets nothing or everything |
@@ -1174,11 +1174,23 @@ for him:
    operator who has to defend them. A level he does not actually believe is
    worse than a level he argued for.
 2. **Check the facts that depend on the live environment, not the repository.**
-   Whether `CONTENT_SCAN_PROVIDER` is set in production; whether
-   `INSTANCE_MODERATOR_CLERK_IDS` is set; whether `contato@pqp.gg` actually
-   receives mail; which host and which storage bucket are live. **This document
-   could not verify any of them** and has assumed the least favourable answer
-   where it mattered.
+   Most of these were verified against the running system on **24 Aug 2026** and
+   the results are recorded here so the next reader does not have to assume:
+
+   | Fact | State on 24 Aug 2026 |
+   |---|---|
+   | `CONTENT_SCAN_PROVIDER` | **Set** on the production API, with `OPENAI_API_KEY` alongside it. Claim-time image scanning is live |
+   | `INSTANCE_MODERATOR_CLERK_IDS` | **Set**. There are configured instance moderators |
+   | `S3_*` | **Set**. Attachments are live on the bucket |
+   | `S3_PUBLIC_BASE_URL` | **Not set.** Attachment reads go to the bucket endpoint, not a Cloudflare-proxied domain. This is what keeps them outside the CSAM tool's scope (G2) |
+   | Cloudflare CSAM Scanning Tool | **Enabled** on the `pqp.gg` zone, confirmed in the dashboard at Caching then Configuration |
+   | Host | Fly.io, app `pqp-api`, region `gru`, deliberately one machine |
+   | `contato@pqp.gg` receives mail | **Still unverified.** Nobody has sent a test message and watched it arrive |
+
+   The remaining unknown is the mailbox, and it is not a small one: the terms and
+   the appeal route both publish that address, so a report that arrives there and
+   is never read is worse than no address at all. **Send a message to it and
+   confirm it lands.**
 3. **Decide the two questions this record deliberately leaves open**: whether
    the terms page satisfies ICU G1 clause by clause, and whether the children's
    access assessment has been done — because if the service is likely to be
