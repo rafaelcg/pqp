@@ -268,7 +268,18 @@ async function sampleAll(): Promise<VoiceStatsSnapshot> {
       const report = await registration.pc.getStats();
       const snapshot = summariseStats(
         registration.peerId,
-        report as unknown as Iterable<RtcStatLike>,
+        // `.values()`, NOT the report itself, and the difference is the whole
+        // of a bug that shipped. `RTCStatsReport` is Map-shaped: iterating it
+        // directly yields `[id, stat]` PAIRS, so `stat.type` is `undefined` on
+        // every one of them, nothing matches `outbound-rtp`, and the sampler
+        // returns an empty snapshot from a call that is sending perfectly well.
+        // The old `as unknown as Iterable<RtcStatLike>` was what let that past
+        // the compiler, and the unit tests could not see it because they pass a
+        // plain array — which iterates the way this code assumed a report did.
+        // Visible as `pqpVoiceStats.report()` printing "not in a call?" during
+        // a call, and as the in-call readout saying it has nothing to measure
+        // beside a camera that is plainly running.
+        report.values() as Iterable<RtcStatLike>,
         registration.roleOfTrack,
         byteMarks,
       );

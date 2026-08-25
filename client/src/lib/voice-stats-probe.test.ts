@@ -1,5 +1,11 @@
-import { describe, expect, it } from "vitest";
-import { summariseStats, type RtcStatLike } from "./voice-stats-probe";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  registerVoiceConnection,
+  sampleVoiceStats,
+  summariseStats,
+  unregisterVoiceConnection,
+  type RtcStatLike,
+} from "./voice-stats-probe";
 
 /**
  * The joining is the whole of this module's risk.
@@ -139,5 +145,69 @@ describe("summariseStats", () => {
     const orphaned = report().filter((stat) => stat.id !== "SV1");
     const { senders } = summariseStats(PEER, orphaned, roles, new Map());
     expect(senders[0]!.role).toBe("unknown");
+  });
+});
+
+/**
+ * The sampler against a report shaped like a real one.
+ *
+ * WHY THIS IS A SEPARATE SUITE AND NOT ANOTHER `summariseStats` CASE. Every
+ * test above hands the summariser a plain **array**, which iterates to stat
+ * objects. `RTCStatsReport` does not: it is Map-shaped, so iterating it yields
+ * `[id, stat]` pairs. `sampleVoiceStats` fed the report straight in behind an
+ * `as unknown as` cast, so `stat.type` was `undefined` on every entry, nothing
+ * ever matched `outbound-rtp`, and a live call reported nothing at all — the
+ * console probe printed "not in a call?" during a call, and the readout under
+ * the in-call quality menu said it had nothing to measure next to a camera
+ * that was plainly running.
+ *
+ * The array cases could not catch it, by construction. This one can, because
+ * the double it registers returns a `Map`, which is exactly the shape the
+ * browser hands back.
+ */
+describe("sampling a registered connection", () => {
+  const roles = () => "camera" as const;
+
+  function fakePeerConnection(stats: RtcStatLike[]): RTCPeerConnection {
+    const map = new Map(stats.map((stat) => [stat.id as string, stat]));
+    return {
+      getStats: async () => map,
+    } as unknown as RTCPeerConnection;
+  }
+
+  const registered: RTCPeerConnection[] = [];
+
+  afterEach(() => {
+    for (const pc of registered.splice(0)) {
+      unregisterVoiceConnection(pc);
+    }
+  });
+
+  it("reads a Map-shaped report, the way a browser actually hands one back", async () => {
+    const pc = fakePeerConnection(report());
+    registered.push(pc);
+    registerVoiceConnection(PEER, pc, roles);
+
+    const snapshot = await sampleVoiceStats();
+
+    expect(snapshot.senders).toHaveLength(1);
+    expect(snapshot.senders[0]).toMatchObject({
+      role: "camera",
+      width: 1280,
+      height: 720,
+      limitedBy: "bandwidth",
+    });
+    expect(snapshot.paths).toHaveLength(1);
+  });
+
+  it("reports nothing once the connection is unregistered", async () => {
+    const pc = fakePeerConnection(report());
+    registerVoiceConnection(PEER, pc, roles);
+    unregisterVoiceConnection(pc);
+
+    await expect(sampleVoiceStats()).resolves.toEqual({
+      senders: [],
+      paths: [],
+    });
   });
 });
