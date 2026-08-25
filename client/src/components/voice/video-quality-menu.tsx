@@ -40,6 +40,7 @@ export function VideoQualityMenu({
   onChange,
   buttonClassName,
   iconClassName,
+  tone = "call",
 }: {
   value: VideoQuality;
   open: boolean;
@@ -47,6 +48,12 @@ export function VideoQualityMenu({
   onChange: (quality: VideoQuality) => void;
   buttonClassName?: string;
   iconClassName?: string;
+  /**
+   * `call` is the DM stage's round pill. `panel` is the channel voice bar's
+   * square secondary icon, so the same menu does not look like a second
+   * product when it sits next to mute and share.
+   */
+  tone?: "call" | "panel";
 }) {
   const { t } = useTranslation();
   const rootRef = useRef<HTMLDivElement>(null);
@@ -134,7 +141,10 @@ export function VideoQualityMenu({
         aria-haspopup="menu"
         aria-expanded={open}
         className={cn(
-          "flex items-center justify-center rounded-full",
+          "flex items-center justify-center",
+          tone === "panel"
+            ? "h-9 w-9 rounded-md border border-ink-4"
+            : "rounded-full",
           buttonClassName,
           // Pinned reads as "on", exactly like the camera and share buttons.
           // Auto is the default everybody has, so it stays a resting control.

@@ -55,6 +55,7 @@
 | Public status page | Done (`/status` + unauthenticated `/status.json`; per-component probes sampled once a minute, real 24h/7d uptime kept 30 days) |
 | SSO / SAML readiness | Done (Clerk federates; app adds verified-email-domain joining per server, owner-only, exact-match, bans still apply — `docs/SSO.md`) |
 | Screen share | Done (mesh: second video track + manual renegotiation per peer; SFU: LiveKit `Track.Source.ScreenShare`; concurrent presenters capped at 2 on mesh / 4 on LiveKit) |
+| In-call video quality | Done (Auto / 1080 / 720 / 480 / 360 on DM calls, Settings, and channel voice while camera or screen is sending) |
 | Native iOS push notifications | Done, unverified on device (APNs as a second leg of the existing push fan-out — same triggers, same content-free defaults, HTTP/2 + ES256 JWT with no new dependency; VoIP/PushKit deliberately out of scope — `docs/IOS.md`) |
 | Invite links that open the iOS app | Done, universal links unverified until the web deploy lands (`applinks:pqp.gg` + an AASA claiming only `/app/invite/*`, `pqp://invite/<code>` fallback, pending invite survives sign-in) |
 | Character accounts | Done, unverified against a deploy (`character_accounts` + one gated branch in `verifyAuthHeader`; hashed 256-bit token, constant-time compare, one-UPDATE revoke; a character cannot DM, be DMed, join voice, be friended, be found outside a shared server, or delete/export itself — all enforced server-side. Off unless `CHARACTER_ACCOUNTS_ENABLED=true`) |

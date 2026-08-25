@@ -20,12 +20,18 @@ import {
 } from "@pqp/shared";
 import type { VoiceInputMode } from "@/hooks/use-voice";
 import type { RemotePeer } from "@/lib/peer-connection-manager";
+import type { VideoQuality } from "@/lib/video-quality";
 import { Button } from "@/components/ui/button";
 import { isScreenShareAtCap } from "@/lib/screen-share-roster";
 import {
   screenShareUnavailableMessage,
   screenShareUnavailableReason,
 } from "@/components/voice/capabilities";
+import {
+  showsVideoQualityControl,
+  videoQualityMenuOpen,
+} from "@/components/voice/video-quality-control";
+import { VideoQualityMenu } from "@/components/voice/video-quality-menu";
 import {
   VoiceAvatar,
   type VoiceAvatarSize,
@@ -330,6 +336,14 @@ interface VoicePanelProps {
   onRetryPeer?: (peerId: string) => void;
   onStartScreenShare?: () => void;
   onStopScreenShare?: () => void;
+  /**
+   * Same stored choice Settings and DM calls write. Absent until this
+   * machine is sending camera or screen, so an audio-only lounge stays
+   * the bar it has always been.
+   */
+  isCameraOn?: boolean;
+  videoQuality?: VideoQuality;
+  onVideoQualityChange?: (quality: VideoQuality) => void;
 }
 
 export function VoicePanel({
@@ -363,6 +377,9 @@ export function VoicePanel({
   onRetryPeer,
   onStartScreenShare,
   onStopScreenShare,
+  isCameraOn = false,
+  videoQuality = "auto",
+  onVideoQualityChange,
 }: VoicePanelProps) {
   const { t } = useTranslation();
   const showWarning = !usingSfu && remotePeers.length >= MESH_VOICE_WARNING;
@@ -383,6 +400,18 @@ export function VoicePanel({
   // mid-session, and this must not be re-evaluated on every keystroke elsewhere.
   const screenShareBlocked = useMemo(() => screenShareUnavailableReason(), []);
   const [hint, setHint] = useState<string | null>(null);
+  const [qualityMenuRequested, setQualityMenuRequested] = useState(false);
+  const qualityContext = {
+    isCameraOn,
+    isSharingScreen,
+    collapsed: false,
+  };
+  const qualityMenuOpen = videoQualityMenuOpen({
+    ...qualityContext,
+    requested: qualityMenuRequested,
+  });
+  const showQualityMenu =
+    !!onVideoQualityChange && showsVideoQualityControl(qualityContext);
   const pushToTalk = inputMode === "push-to-talk";
   // Muted or deafened outranks the key, so the button says so rather than
   // inviting a press that would do nothing.
@@ -396,6 +425,15 @@ export function VoicePanel({
     const timer = setTimeout(() => setHint(null), 6000);
     return () => clearTimeout(timer);
   }, [hint]);
+
+  // Same contract as the DM stage: stopping the last outgoing video with the
+  // menu open must not leave a popover hanging, and must not spring back
+  // open when the next share starts.
+  useEffect(() => {
+    if (qualityMenuRequested && !qualityMenuOpen) {
+      setQualityMenuRequested(false);
+    }
+  }, [qualityMenuRequested, qualityMenuOpen]);
 
   // A silent share is a live state, not an answer to a tap, so it does not go
   // through `hint` and does not fade. The presenter is the one person who
@@ -714,6 +752,16 @@ export function VoicePanel({
                     )}
                   </Button>
                 ))}
+              {showQualityMenu && onVideoQualityChange && (
+                <VideoQualityMenu
+                  value={videoQuality}
+                  open={qualityMenuOpen}
+                  onOpenChange={setQualityMenuRequested}
+                  onChange={onVideoQualityChange}
+                  iconClassName="h-4 w-4"
+                  tone="panel"
+                />
+              )}
               <Button variant="danger" size="sm" onClick={onLeave}>
                 <PhoneOff className="h-4 w-4" aria-hidden="true" />
                 {t("voice.control.leave")}

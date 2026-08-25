@@ -52,6 +52,8 @@ Detail and “still open” list: [`PLAN_STATUS.md`](./PLAN_STATUS.md).
 
 ## Recent shipped work (context for next agents)
 
+- **Video quality on server voice (2026-08-25):** the Auto / 1080 / 720 / 480 / 360 menu that already sat on DM calls and in Settings now appears on a channel voice bar while this machine is sending camera or a screen. Same stored choice, same live setter. The bar stays as it was for audio-only lounges.
+
 - **Channel permissions, hoist, colours (2026-08-24):** Access on any server channel opens a three-state overwrite editor (allow / inherit / deny) for the bits the server actually enforces. A VIEW deny evicts live viewers and drops the channel from their sidebar through a `permissions-update` frame. Roles can hoist into member-list sections. Role colours tint message names and the member sidebar. The private-channel checkbox and member allowlist are unchanged.
 
 - **Chat log: NEW divider, mention rows, composer ArrowUp / `:emoji:` (2026-08-24):** Opening a channel snapshots the previous read cursor (`POST /read` returns `previousLastReadAt`) and keeps a NEW rule on the first unread message until you leave. Rows that mention you, `@everyone`, or `@here` get an accent wash. Your own messages do not wash or ping. A fired `@everyone` / `@here` from someone else does. Empty composer ArrowUp edits your last message. Typing `:fire` autocompletes (and `:fire:` expands as you type).

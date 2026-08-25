@@ -3828,6 +3828,12 @@ function MainAppContent({
                 }}
                 onStartScreenShare={() => void voice.startScreenShare()}
                 onStopScreenShare={() => void voice.stopScreenShare()}
+                isCameraOn={
+                  voiceState.voiceChannelId === selectedChannel.id &&
+                  voiceState.isCameraOn
+                }
+                videoQuality={localSettings.videoQuality}
+                onVideoQualityChange={handleVideoQualityChange}
               />
             </div>
             <div className="flex min-h-0 flex-1 flex-col">
