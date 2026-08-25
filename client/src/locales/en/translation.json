@@ -619,7 +619,7 @@
   "voice.share.focus": "Watch {name}",
   "voice.share.stop": "Stop sharing",
   "voice.share.fullscreen": "View fullscreen",
-  "voice.share.fullscreenPeer": "View only {name}'s screen fullscreen",
+  "voice.share.fullscreenPeer": "View {name}'s screen fullscreen",
   "voice.share.exitFullscreen": "Exit fullscreen",
   "voice.share.waiting": "Connecting to presenter's screen…",
   "voice.share.noAudio": "Sharing without sound. To send the audio too, share a Chrome tab and tick the share-tab-audio box.",

@@ -595,10 +595,18 @@ function ActiveCall({
       ? null
       : (screenTiles.find((tile) => tile.peerId === fullscreen.soloPeerId) ??
         null);
-  // Two shares need a way to say "just that one". One does not: the stage
-  // control already fills the screen with it, and a second button on top of the
-  // video would be new chrome in the case that is live today.
-  const perScreenFullscreen = screenTiles.length > 1;
+  // EVERY share carries its own control, including the only one in the call.
+  //
+  // This used to be `screenTiles.length > 1`, on the reasoning that a single
+  // sharer already has the stage control and a second button would be new
+  // chrome. What that left behind is a call where the only way to enlarge
+  // somebody's screen is a small icon down in the control bar, and that bar
+  // fades to `opacity-0` after three seconds of the pointer resting, which is
+  // precisely what a person does while watching a screen share. Reported
+  // verbatim as "nem consigo ampliar os compartilhamentos de tela de outros
+  // usuarios". The channel stage never had this gap: `screen-share-view.tsx`
+  // puts a fullscreen button on every share and answers a double click on the
+  // video, and this is the same call in a different room.
 
   // --- controls fade-on-idle ---------------------------------------------
   // Desktop pointer + video only: on touch there is no "pointer resting", and
@@ -814,7 +822,7 @@ function ActiveCall({
                 />
               ))}
             </div>
-          ) : perScreenFullscreen && focusedTile ? (
+          ) : focusedTile ? (
             <ScreenTileFrame
               tile={focusedTile}
               videoRef={primaryVideoRef}
@@ -825,8 +833,6 @@ function ActiveCall({
               className="min-h-0 flex-1"
             />
           ) : (
-            /* One sharer: untouched. No per-screen control, because the stage
-               control already fills the viewport with this very screen. */
             <StageVideo
               stream={screenStream}
               videoRef={primaryVideoRef}
@@ -1478,9 +1484,12 @@ function OccupantFaces({
  *
  * The control is per *screen*, not per stage: pressing it puts this share
  * alone on the stage instead of blowing up the two-up grid, which is the bug
- * this component exists to fix. It is only rendered when there is more than one
- * share to choose between, so a call with a single sharer keeps the exact
- * markup and the single control it has today.
+ * this component exists to fix.
+ *
+ * A double click on the video does the same thing, which is the gesture people
+ * reach for first and the one the channel stage has always answered
+ * (`screen-share-view.tsx`). It sits on the <video> rather than on the frame so
+ * that double clicking the button itself is not counted twice.
  */
 function ScreenTileFrame({
   tile,
@@ -1500,12 +1509,16 @@ function ScreenTileFrame({
   const { t } = useTranslation();
   const label = isFullscreen
     ? t("voice.share.exitFullscreen")
-    : t("voice.share.fullscreenPeer", { name: tile.presenterName });
+    : tile.isSelf
+      ? // Naming yourself in your own button reads like somebody else's screen.
+        t("voice.share.fullscreen")
+      : t("voice.share.fullscreenPeer", { name: tile.presenterName });
   return (
     <div className={cn("relative", className)}>
       <StageVideo
         stream={tile.stream}
         videoRef={videoRef}
+        onDoubleClick={onToggleFullscreen}
         className="h-full w-full object-contain"
       />
       {/* Top *left*: the stage already floats everyone's camera tiles at the
@@ -1515,6 +1528,9 @@ function ScreenTileFrame({
         {onToggleFullscreen && (
           <button
             type="button"
+            // The control bar carries a fullscreen button too, so the label
+            // alone cannot tell a test which one it pressed.
+            data-testid="share-fullscreen"
             title={label}
             aria-label={label}
             aria-pressed={isFullscreen}
@@ -1543,11 +1559,14 @@ function StageVideo({
   mirrored = false,
   className,
   videoRef,
+  onDoubleClick,
 }: {
   stream: MediaStream | null;
   mirrored?: boolean;
   className?: string;
   videoRef?: RefObject<WebkitFullscreenVideo | null>;
+  /** Only shares pass this; a camera tile has nothing to enlarge. */
+  onDoubleClick?: () => void;
 }) {
   const ownRef = useRef<HTMLVideoElement>(null);
   const ref = (videoRef ?? ownRef) as RefObject<HTMLVideoElement | null>;
@@ -1567,6 +1586,7 @@ function StageVideo({
       autoPlay
       playsInline
       muted
+      onDoubleClick={onDoubleClick}
       className={cn(className, mirrored && "-scale-x-100")}
     />
   );
