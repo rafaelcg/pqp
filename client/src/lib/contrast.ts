@@ -122,8 +122,19 @@ export function syncSystemContrast(): void {
   commit("system");
 }
 
+function followSystemContrast(): void {
+  const query = prefersMoreContrastQuery();
+  query?.addEventListener("change", () => {
+    syncSystemContrast();
+  });
+}
+
 if (typeof document !== "undefined") {
   if (!document.documentElement.dataset.contrast && state.resolved === "more") {
     applyContrast("more");
   }
+  // Must live at module scope. `useContrast` only mounts inside Settings, and
+  // `system` is the default, so an OS "Increase contrast" flip would otherwise
+  // apply only while that modal is open (or at the next reload).
+  followSystemContrast();
 }

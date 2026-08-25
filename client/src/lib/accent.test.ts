@@ -10,6 +10,7 @@ import {
   adoptAccentHuePreference,
   effectiveAccentHue,
   getAccentHue,
+  hydrateAccentHue,
   parseStoredAccentHue,
   readStoredAccentHue,
   setAccentHuePreference,
@@ -84,5 +85,29 @@ describe("stored accent hue", () => {
       { accentHue: "default" },
       { immediate: true },
     );
+  });
+
+  it("probes the picker rgb when the boot script already set a custom hue", () => {
+    const setProperty = vi.fn();
+    const dataset: Record<string, string | undefined> = { accent: "custom" };
+    vi.stubGlobal("document", {
+      documentElement: {
+        dataset,
+        style: { setProperty, removeProperty: () => {} },
+      },
+      createElement: () => ({ style: {}, remove: () => {} }),
+      body: { appendChild: () => {} },
+    });
+    vi.stubGlobal("getComputedStyle", () => ({ color: "rgb(10, 20, 30)" }));
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      cb(0);
+      return 0;
+    });
+
+    adoptAccentHuePreference(210);
+    setProperty.mockClear();
+    hydrateAccentHue();
+
+    expect(setProperty).toHaveBeenCalledWith("--rgb-picker-accent", "10, 20, 30");
   });
 });

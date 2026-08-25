@@ -108,6 +108,9 @@
  */
 :root {
   color-scheme: dark;
+  /* Light and dark native scrollbars are different widths. Without a reserved
+     gutter, picking Dark (or leaving it) shifts the whole page a few pixels. */
+  scrollbar-gutter: stable;
 
   --overlay: oklch(0.1 0.02 250 / 0.8);
   --shadow-popover: 0 12px 40px oklch(0.1 0.02 250 / 0.55);

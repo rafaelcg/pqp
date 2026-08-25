@@ -137,8 +137,14 @@ function commit(preference: ThemePreference): void {
 
 /** A choice the user just made here: apply it, keep it, and send it on. */
 export function setThemePreference(preference: ThemePreference): void {
+  const already = preference === state.preference;
   storeTheme(preference);
   commit(preference);
+  // Night locks the radios to Dark. Arrow keys would otherwise re-PATCH
+  // `{theme:"dark"}` on every press of the only enabled option.
+  if (already) {
+    return;
+  }
   queuePreferenceSync({ theme: preference }, { immediate: true });
 }
 

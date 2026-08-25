@@ -71,7 +71,11 @@ export function effectiveAccentHue(
 }
 
 function syncPickerAccentRgb(): void {
-  if (typeof document === "undefined" || !document.body) {
+  if (
+    typeof document === "undefined" ||
+    !document.body ||
+    typeof getComputedStyle !== "function"
+  ) {
     return;
   }
   const probe = document.createElement("div");
@@ -89,6 +93,24 @@ function syncPickerAccentRgb(): void {
   }
 }
 
+function schedulePickerAccentRgb(): void {
+  if (typeof document === "undefined") {
+    return;
+  }
+  const run = () => {
+    syncPickerAccentRgb();
+  };
+  if (!document.body) {
+    document.addEventListener("DOMContentLoaded", run, { once: true });
+    return;
+  }
+  if (typeof requestAnimationFrame === "function") {
+    requestAnimationFrame(run);
+    return;
+  }
+  run();
+}
+
 export function applyAccentHue(preference: AccentHuePreference): void {
   if (typeof document === "undefined") {
     return;
@@ -103,14 +125,33 @@ export function applyAccentHue(preference: AccentHuePreference): void {
   root.dataset.accent = "custom";
   root.style.setProperty("--accent-hue", String(preference));
   // The stylesheet has to apply first; the picker reads a computed rgb triplet.
-  if (typeof requestAnimationFrame === "function") {
-    requestAnimationFrame(syncPickerAccentRgb);
-  }
+  schedulePickerAccentRgb();
 }
 
 const listeners = new Set<() => void>();
 
 let state: AccentHuePreference = readStoredAccentHue() ?? DEFAULT_ACCENT_HUE;
+
+/**
+ * Finish what the boot script started.
+ *
+ * `index.html` can already have `data-accent="custom"` and `--accent-hue` on
+ * the root. Calling `applyAccentHue` again is unnecessary; the emoji picker's
+ * `--rgb-picker-accent` probe still has to run. Call this on load whenever a
+ * custom hue is already on the document or only in storage.
+ */
+export function hydrateAccentHue(): void {
+  if (typeof document === "undefined" || state === "default") {
+    return;
+  }
+  if (!document.documentElement.dataset.accent) {
+    applyAccentHue(state);
+    return;
+  }
+  if (document.documentElement.dataset.accent === "custom") {
+    schedulePickerAccentRgb();
+  }
+}
 
 export function getAccentHue(): AccentHuePreference {
   return state;
@@ -149,7 +190,5 @@ export function adoptAccentHuePreference(preference: AccentHuePreference): void 
 }
 
 if (typeof document !== "undefined") {
-  if (!document.documentElement.dataset.accent && state !== "default") {
-    applyAccentHue(state);
-  }
+  hydrateAccentHue();
 }

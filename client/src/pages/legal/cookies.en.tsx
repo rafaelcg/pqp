@@ -64,7 +64,7 @@ export const cookiesEn: LegalDocument = {
               <code>pqp-theme</code> — light, dark, or follow-the-system.
             </li>
             <li>
-              <code>pqp-appearance</code> — Signal, Harmony, Hearth, or Night.
+              <code>pqp-appearance</code> — Classic, Harmony, Hearth, or Night.
               The named look, separate from light and dark.
             </li>
             <li>

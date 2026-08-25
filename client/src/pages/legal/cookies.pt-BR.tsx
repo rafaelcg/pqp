@@ -61,7 +61,7 @@ export const cookiesPtBr: LegalDocument = {
     },
     {
       id: "local-storage",
-      sourceRev: "6fa647e0",
+      sourceRev: "9f7e464a",
       heading: "Armazenamento local",
       body: (
         <>
@@ -75,7 +75,7 @@ export const cookiesPtBr: LegalDocument = {
               <code>pqp-theme</code> — claro, escuro ou seguir o sistema.
             </li>
             <li>
-              <code>pqp-appearance</code> — Sinal, Harmonia, Lareira ou Noite.
+              <code>pqp-appearance</code> — Clássico, Harmonia, Lareira ou Noite.
               O visual escolhido, separado do claro e do escuro.
             </li>
             <li>

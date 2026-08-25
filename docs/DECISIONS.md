@@ -127,13 +127,14 @@ User-facing looks are named token skins (`signal`, `harmony`, `hearth`,
 (`light` | `dark`). Stuffing skins into it would break System, the marketing
 dark pin, Clerk, emoji-mart, and the Electron window background.
 
-**Why these names.** Signal is the existing chartreuse look, named after the
-old `--color-signal` token. Harmony / Harmonia is the pun on the other big
-community chat app, without using that app's name. Acordo was rejected: in
-Portuguese it also reads as "I wake up". Hearth is the warm workspace look.
-Night / Noite is the near-black skin. Not Onyx: that name belongs to another
-product. Night is dark-only. Light Night is a contradiction, so the look pins
-brightness to dark.
+**Why these names.** The default look's id stays `signal` (the old
+`--color-signal` token). The picker label is Classic / Clássico, because
+"Signal" / "Sinal" is an internal token name and does not describe the look.
+Harmony / Harmonia is the pun on the other big community chat app, without
+using that app's name. Acordo was rejected: in Portuguese it also reads as
+"I wake up". Hearth is the warm workspace look. Night / Noite is the
+near-black skin. Not Onyx: that name belongs to another product. Night is
+dark-only. Light Night is a contradiction, so the look pins brightness to dark.
 
 **Why not a two-tone Hearth sidebar.** Channel-list text uses `--color-text`,
 which the message pane also uses. Painting the channel column a saturated wine

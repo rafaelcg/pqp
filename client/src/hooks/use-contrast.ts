@@ -1,10 +1,8 @@
-import { useCallback, useEffect, useSyncExternalStore } from "react";
+import { useCallback, useSyncExternalStore } from "react";
 import {
   getContrastState,
-  prefersMoreContrastQuery,
   setContrastPreference,
   subscribeContrast,
-  syncSystemContrast,
   type ContrastPreference,
   type ResolvedContrast,
 } from "@/lib/contrast";
@@ -21,23 +19,6 @@ export function useContrast(): UseContrast {
     getContrastState,
     getContrastState,
   );
-
-  useEffect(() => {
-    if (state.preference !== "system") {
-      return;
-    }
-    const query = prefersMoreContrastQuery();
-    if (!query) {
-      return;
-    }
-    const onChange = () => {
-      syncSystemContrast();
-    };
-    query.addEventListener("change", onChange);
-    return () => {
-      query.removeEventListener("change", onChange);
-    };
-  }, [state.preference]);
 
   const setPreference = useCallback((preference: ContrastPreference) => {
     setContrastPreference(preference);

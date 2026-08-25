@@ -83,4 +83,14 @@ describe("stored appearance", () => {
       { immediate: true },
     );
   });
+
+  it("picking Night pins dark on the same write", () => {
+    setAppearancePreference("night");
+
+    expect(queuePreferenceSync).toHaveBeenCalledWith(
+      { appearance: "night", theme: "dark" },
+      { immediate: true },
+    );
+    expect(queuePreferenceSync).toHaveBeenCalledTimes(1);
+  });
 });

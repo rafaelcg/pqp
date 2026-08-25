@@ -13,6 +13,7 @@ import {
   readStoredContrast,
   resolveContrast,
   setContrastPreference,
+  syncSystemContrast,
 } from "./contrast";
 
 describe("stored contrast", () => {
@@ -88,5 +89,26 @@ describe("stored contrast", () => {
       }),
     });
     expect(resolveContrast("system")).toBe("more");
+  });
+
+  it("re-resolves system when the OS contrast changes", () => {
+    let matches = false;
+    vi.stubGlobal("window", {
+      matchMedia: () => ({
+        get matches() {
+          return matches;
+        },
+        addEventListener: () => {},
+        removeEventListener: () => {},
+      }),
+    });
+    adoptContrastPreference("system");
+    expect(getContrastState().resolved).toBe("default");
+
+    matches = true;
+    syncSystemContrast();
+    expect(getContrastState().resolved).toBe("more");
+    expect(dataset.contrast).toBe("more");
+    expect(queuePreferenceSync).not.toHaveBeenCalled();
   });
 });

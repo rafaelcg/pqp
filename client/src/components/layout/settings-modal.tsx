@@ -991,7 +991,7 @@ function SettingBlock({
       <div>
         <h4 className="text-sm font-medium text-text">{label}</h4>
         {hint ? (
-          <p className="mt-0.5 text-xs text-text-muted">{hint}</p>
+          <p className="mt-0.5 min-h-[2.5rem] text-xs text-text-muted">{hint}</p>
         ) : null}
       </div>
       {children}
@@ -1001,7 +1001,7 @@ function SettingBlock({
 
 function segmentClass(selected: boolean, disabled = false): string {
   return cn(
-    "rounded-md px-3 py-1.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent",
+    "flex h-9 items-center justify-center rounded-md px-3 text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent",
     selected
       ? "bg-surface-0 text-text shadow-sm"
       : "text-text-muted hover:text-text",
@@ -1102,7 +1102,11 @@ function AppearancePicker() {
               </span>
               <span className="flex items-center justify-between gap-2">
                 <span className="text-sm font-medium">{t(option.label)}</span>
-                {darkOnly ? (
+                {option.value === "signal" ? (
+                  <span className="rounded bg-surface-3 px-1.5 py-0.5 text-[10px] font-medium text-text-muted">
+                    {t("settings.appearance.preset.signalDefault")}
+                  </span>
+                ) : darkOnly ? (
                   <span className="rounded bg-surface-3 px-1.5 py-0.5 text-[10px] font-medium text-text-muted">
                     {t("settings.appearance.preset.nightOnly")}
                   </span>
@@ -1127,7 +1131,9 @@ function AccentHuePicker() {
     <SettingBlock
       label={t("settings.appearance.accent")}
       hint={
-        isCustom ? undefined : t("settings.appearance.accentDefaultHint")
+        isCustom
+          ? t("settings.appearance.accentCustomHint")
+          : t("settings.appearance.accentDefaultHint")
       }
     >
       <div className="flex flex-col gap-2.5">
@@ -1230,7 +1236,11 @@ function ThemePicker() {
                     : "settings.appearance.resolved.dark",
                 ),
               })
-            : undefined
+            : t(
+                preference === "light"
+                  ? "settings.appearance.themeAlwaysLight"
+                  : "settings.appearance.themeAlwaysDark",
+              )
       }
     >
       <div
@@ -2872,7 +2882,7 @@ export function SettingsModal({
             role="tabpanel"
             aria-labelledby={`${tabIdPrefix}-${section}`}
             tabIndex={0}
-            className="min-w-0 flex-1 overflow-y-auto overscroll-contain px-5 py-5 focus-visible:outline-none"
+            className="min-w-0 flex-1 overflow-y-auto overscroll-contain [scrollbar-gutter:stable] px-5 py-5 focus-visible:outline-none"
           >
             <SectionHeader section={active} />
 

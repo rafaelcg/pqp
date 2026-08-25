@@ -151,7 +151,7 @@ A second axis, not a second `data-theme` value. Brightness stays
 `light | dark | system`. The skin is `signal | harmony | hearth | night`, stored as
 `pqp-appearance` and `user_preferences.settings.appearance`.
 
-`signal` is the default pqp look. `harmony` and `hearth` retint role tokens only.
+`signal` is the default pqp look (labelled Classic / Clássico in the picker). `harmony` and `hearth` retint role tokens only.
 `night` is a near-black look (true black page and rail, lifted panels). It is
 dark-only: picking it pins brightness to dark, and Light / System stay off
 until another look is chosen. They do not change layout. They do not use another product's

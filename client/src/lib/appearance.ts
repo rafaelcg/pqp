@@ -32,7 +32,8 @@ export function isAppearance(value: string | null): value is AppearancePreferenc
   );
 }
 
-/** `guild` and `accord` were earlier ids for harmony. */
+/** `guild` and `accord` were earlier ids for harmony. The boot script in
+ * `client/index.html` repeats this mapping and cannot import it. */
 export function normalizeAppearance(
   value: string | null,
 ): AppearancePreference | null {
@@ -96,7 +97,15 @@ function commit(appearance: AppearancePreference): void {
 export function setAppearancePreference(appearance: AppearancePreference): void {
   storeAppearance(appearance);
   commit(appearance);
-  queuePreferenceSync({ appearance }, { immediate: true });
+  // Night also pins brightness. One PATCH so the account learns both keys
+  // without a second immediate write. Local theme persist is theme.ts's
+  // appearance subscription, which must not import this module.
+  queuePreferenceSync(
+    appearanceForcesDark(appearance)
+      ? { appearance, theme: "dark" }
+      : { appearance },
+    { immediate: true },
+  );
 }
 
 /**

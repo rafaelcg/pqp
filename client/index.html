@@ -73,6 +73,8 @@
           theme = "dark";
         }
         document.documentElement.dataset.theme = theme;
+        // Keep in lockstep with `normalizeAppearance` in client/src/lib/appearance.ts
+        // (and the Zod preprocess). This script cannot import that module.
         const storedAppearance = localStorage.getItem("pqp-appearance");
         const appearance =
           storedAppearance === "guild" || storedAppearance === "accord"
