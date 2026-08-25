@@ -178,6 +178,15 @@ needs a reference to each remote track, which is why they are captured on
 `didAdd stream` — WebRTC plays received audio automatically, so without one
 there is no way to turn it off short of tearing the connection down.
 
+**A peer can send more than one audio track.** Sharing a screen with its sound
+publishes the machine's audio alongside the microphone, under the screen
+capture's own stream id, which the web client has done since 2026-08-22. Remote
+audio is therefore filed per peer *and per track* (`RemoteAudioMixer`, covered by
+`RemoteAudioTests`). Keyed by peer alone, the second track overwrote the first
+and took the only handle on the microphone with it: deafen then silenced the
+screen and left the presenter's voice playing, and the per-person slider reached
+half of what that person was sending. Neither logged anything.
+
 A call survives a socket drop by being **rebuilt, not resumed**. The server
 drops the voice peer when the socket closes and a reconnect mints a *new* peer
 id, so the old mesh is unusable; `ready` tears everything down and rejoins.
