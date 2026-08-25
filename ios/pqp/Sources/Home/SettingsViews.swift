@@ -121,7 +121,10 @@ struct AccountSettingsView: View {
     private func load() async {
         displayName = session.currentUser?.displayName ?? ""
         dmPrivacy = session.currentUser?.dmPrivacy ?? "server_members"
-        preferences = (try? await session.api.preferences()) ?? UserPreferences()
+        // From the session rather than a second `GET /api/me`: the account in
+        // memory has carried its preferences since it was identified, and the
+        // extra round trip only bought a chance for the two to disagree.
+        preferences = session.preferences
         blocked = (try? await session.api.blocks()) ?? []
     }
 
@@ -136,7 +139,12 @@ struct AccountSettingsView: View {
                 displayName: displayName.trimmingCharacters(in: .whitespacesAndNewlines),
                 dmPrivacy: dmPrivacy
             )
-            preferences = try await session.api.updatePreferences(preferences)
+            // Through the session, so what the server stored is what the next
+            // voice join reads. Saving straight to the API left the account in
+            // memory holding the *old* preferences, which is the shape of the
+            // bug this fixes: "mute microphone when joining" was written here
+            // and read nowhere.
+            preferences = try await session.savePreferences(preferences)
             await session.refreshCurrentUser()
             saved = true
         } catch {

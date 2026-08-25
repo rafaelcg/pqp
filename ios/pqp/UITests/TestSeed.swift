@@ -83,6 +83,14 @@ enum TestSeed {
         let name: String
     }
 
+    /// The bearer for a dev-bypass identity. `nil` is the shared account every
+    /// other test uses; a suffix is the separate one the deletion test needs,
+    /// and is the same string the app is launched with in `PQP_DEV_USER`.
+    static func token(_ devUser: String? = nil) -> String {
+        guard let devUser, !devUser.isEmpty else { return "dev-local-token" }
+        return "dev-local-token:\(devUser)"
+    }
+
     /// Answers the 18+ gate for the dev-bypass user.
     ///
     /// The gate outranks every other route — a freshly reset database leaves
@@ -90,17 +98,17 @@ enum TestSeed {
     /// 403 until a date of birth is on file. Idempotent by design: a 200 means
     /// it just passed, a 409 means it was already answered; both are fine and
     /// anything else will surface as the seed failure it causes.
-    static func passAgeGate(_ test: XCTestCase) {
+    static func passAgeGate(_ test: XCTestCase, devUser: String? = nil) {
         var request = URLRequest(url: URL(string: "\(apiBase)/api/me/age-check")!)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer dev-local-token", forHTTPHeaderField: "Authorization")
+        request.setValue("Bearer \(token(devUser))", forHTTPHeaderField: "Authorization")
         request.httpBody = try? JSONSerialization.data(withJSONObject: ["dateOfBirth": "1990-01-01"])
 
         let done = XCTestExpectation(description: "pass age gate")
         URLSession.shared.dataTask(with: request) { _, _, _ in done.fulfill() }.resume()
         test.wait(for: [done], timeout: 15)
-        dismissFirstRun(test)
+        dismissFirstRun(test, devUser: devUser)
     }
 
     /// Put the hub's first-run checklist away for the dev-bypass account.
@@ -114,11 +122,11 @@ enum TestSeed {
     ///
     /// Best effort and unasserted: a failure here costs a card on a screen, not a
     /// wrong result.
-    static func dismissFirstRun(_ test: XCTestCase) {
+    static func dismissFirstRun(_ test: XCTestCase, devUser: String? = nil) {
         var request = URLRequest(url: URL(string: "\(apiBase)/api/me/preferences")!)
         request.httpMethod = "PATCH"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer dev-local-token", forHTTPHeaderField: "Authorization")
+        request.setValue("Bearer \(token(devUser))", forHTTPHeaderField: "Authorization")
         request.httpBody = try? JSONSerialization.data(withJSONObject: [
             "firstRunDismissedAt": "2026-01-01T00:00:00.000Z"
         ])

@@ -64,6 +64,33 @@ final class SessionStore {
     /// server's own refusal sentence, verbatim. Cleared by whoever shows it.
     var linkError: String?
 
+    /// The account's settings, as the server last stated them.
+    ///
+    /// COMPUTED off `currentUser` rather than stored beside it, so there is
+    /// nothing to keep in step: every path that identifies the account
+    /// (`restore`, `adoptExistingSession`, `signIn`, `refreshCurrentUser`)
+    /// already re-reads `/api/me`, and `/api/me` has always carried the
+    /// preferences blob. A second stored copy would be a second thing to
+    /// forget to refresh, which is how `muteOnJoin` came to be written by
+    /// Settings and read by nobody.
+    ///
+    /// Defaults rather than an optional: a preference nobody has set is the
+    /// default, and every reader would otherwise write that coalescing itself.
+    var preferences: UserPreferences { currentUser?.preferences ?? UserPreferences() }
+
+    /// Write preferences back, and hold what the server actually stored.
+    ///
+    /// The response is what lands in `currentUser`, not the value that was
+    /// sent: the server merges one level deep, so what comes back can carry
+    /// keys this client never modelled. Trusting the local value would drop
+    /// them from the next save.
+    @discardableResult
+    func savePreferences(_ next: UserPreferences) async throws -> UserPreferences {
+        let saved = try await api.updatePreferences(next)
+        currentUser?.preferences = saved
+        return saved
+    }
+
     /// The channel a `ChatModel` currently has open, or nil.
     ///
     /// Reported by `ChatModel.open`/`close` — the model is the only thing that
