@@ -82,6 +82,16 @@
         }
       }
     },
+    "%lld other members": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "mais %lld pessoas"
+          }
+        }
+      }
+    },
     "%lld replies": {
       "localizations": {
         "pt-BR": {
@@ -138,6 +148,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "1 membro"
+          }
+        }
+      }
+    },
+    "1 other member": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "mais 1 pessoa"
           }
         }
       }
@@ -382,6 +402,16 @@
         }
       }
     },
+    "All of these are pruned on their own schedule. The privacy policy explains them in full.": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tudo isso é descartado no prazo de cada um. A política de privacidade explica em detalhe."
+          }
+        }
+      }
+    },
     "Already added": {
       "localizations": {
         "pt-BR": {
@@ -418,6 +448,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Atender com vídeo"
+          }
+        }
+      }
+    },
+    "Any community you own on your own, with nobody else in it.": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Qualquer comunidade que seja só sua, sem mais ninguém dentro."
           }
         }
       }
@@ -528,6 +568,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Banimentos"
+          }
+        }
+      }
+    },
+    "Bans you issued. Removing them would let everybody you banned back into communities you no longer have anything to do with.": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Os bans que você deu. Tirar eles deixaria todo mundo que você baniu voltar pra comunidades com as quais você não tem mais nada a ver."
           }
         }
       }
@@ -842,6 +892,16 @@
         }
       }
     },
+    "Communities you own are in the way.": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "As comunidades que são suas estão no caminho."
+          }
+        }
+      }
+    },
     "Communities, channels, DMs. Voice you can drop into without scheduling it first.": {
       "localizations": {
         "pt-BR": {
@@ -948,6 +1008,26 @@
           "stringUnit": {
             "state": "translated",
             "value": "Copiar texto"
+          }
+        }
+      }
+    },
+    "Could not build your export": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não deu pra montar sua exportação"
+          }
+        }
+      }
+    },
+    "Could not delete your account": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não deu pra apagar sua conta"
           }
         }
       }
@@ -1202,6 +1282,16 @@
         }
       }
     },
+    "Delete for ever": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apagar pra sempre"
+          }
+        }
+      }
+    },
     "Delete forever": {
       "localizations": {
         "pt-BR": {
@@ -1222,12 +1312,42 @@
         }
       }
     },
+    "Delete my account": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apagar minha conta"
+          }
+        }
+      }
+    },
+    "Delete your account": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apagar sua conta"
+          }
+        }
+      }
+    },
     "Deleted message": {
       "localizations": {
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
             "value": "Mensagem excluída"
+          }
+        }
+      }
+    },
+    "Deleting…": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apagando…"
           }
         }
       }
@@ -1312,12 +1432,32 @@
         }
       }
     },
+    "Do one of these first, for each community you own": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Faça uma destas primeiro, pra cada comunidade que é sua"
+          }
+        }
+      }
+    },
     "Done": {
       "localizations": {
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
             "value": "Pronto"
+          }
+        }
+      }
+    },
+    "Download my data": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Baixar meus dados"
           }
         }
       }
@@ -1388,6 +1528,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Todos os canais, mensagens e convites são excluídos para todo mundo."
+          }
+        }
+      }
+    },
+    "Every message you have written, everywhere, including in direct messages. Other people will see gaps where your messages were.": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cada mensagem que você escreveu, em todo lugar, inclusive nas mensagens diretas. As outras pessoas vão ver buracos onde estavam suas mensagens."
           }
         }
       }
@@ -1762,6 +1912,16 @@
         }
       }
     },
+    "It includes your profile, your settings, every message you wrote, the communities you are in, and who you have blocked. It does not include messages other people wrote, including their side of your direct messages. Those are their words, not your data, and you can still read them here in the app.": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vem com seu perfil, suas configurações, cada mensagem que você escreveu, as comunidades em que você está e quem você bloqueou. Não vem com mensagens que outras pessoas escreveram, nem o lado delas nas suas mensagens diretas. Aquilo é o que elas falaram, não é seu dado, e você continua lendo tudo aqui no app."
+          }
+        }
+      }
+    },
     "It's on your profile.": {
       "localizations": {
         "pt-BR": {
@@ -1828,6 +1988,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Guardar para sempre"
+          }
+        }
+      }
+    },
+    "Keep my account": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Manter minha conta"
           }
         }
       }
@@ -2038,6 +2208,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "O acesso ao microfone está desligado. Ative nos Ajustes para falar."
+          }
+        }
+      }
+    },
+    "Moderation records of actions you took in other people's communities, with your name removed. Deleting an account must not erase the record of how it was used to moderate somebody else.": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Registros de moderação do que você fez em comunidades dos outros, sem o seu nome. Apagar uma conta não pode apagar o registro de como ela foi usada pra moderar outra pessoa."
           }
         }
       }
@@ -2632,6 +2812,16 @@
         }
       }
     },
+    "Other people are still in these communities, so we will not delete them out from under them. In each community's settings, either hand it to another member or delete the community yourself.": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ainda tem gente nessas comunidades, então a gente não vai apagar elas por baixo das pessoas. Nas configurações de cada comunidade, passe ela pra outro membro ou apague você mesmo."
+          }
+        }
+      }
+    },
     "Paste the invite you were sent, or type the code.": {
       "localizations": {
         "pt-BR": {
@@ -2668,6 +2858,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Perfeita"
+          }
+        }
+      }
+    },
+    "Permanent. There is no undo and no backup to restore from.": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "É pra sempre. Não tem como desfazer nem backup pra restaurar."
           }
         }
       }
@@ -2728,6 +2928,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Mensagens fixadas nunca são apagadas."
+          }
+        }
+      }
+    },
+    "Preparing…": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Preparando…"
           }
         }
       }
@@ -3008,6 +3218,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Denunciar esta comunidade"
+          }
+        }
+      }
+    },
+    "Reports other people filed about you, with your name removed. We are not able to let an account be deleted as a way of clearing its own record.": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Denúncias que outras pessoas fizeram sobre você, sem o seu nome. A gente não pode deixar apagar a conta virar um jeito de limpar a própria ficha."
           }
         }
       }
@@ -3762,6 +3982,16 @@
         }
       }
     },
+    "This cannot be undone. We keep no backup you can be restored from, and nobody at pqp can bring your account back.": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Isso não tem volta. A gente não guarda backup pra te restaurar, e ninguém no pqp consegue trazer sua conta de volta."
+          }
+        }
+      }
+    },
     "This is private. Send it as a DM": {
       "localizations": {
         "pt-BR": {
@@ -3992,6 +4222,16 @@
         }
       }
     },
+    "Type your handle to confirm": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Digite seu identificador pra confirmar"
+          }
+        }
+      }
+    },
     "Unban": {
       "localizations": {
         "pt-BR": {
@@ -4128,6 +4368,26 @@
           "stringUnit": {
             "state": "translated",
             "value": "O que aconteceu?"
+          }
+        }
+      }
+    },
+    "What is deleted": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O que é apagado"
+          }
+        }
+      }
+    },
+    "What is kept, and why": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O que fica, e por quê"
           }
         }
       }
@@ -4292,6 +4552,26 @@
         }
       }
     },
+    "Your data": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seus dados"
+          }
+        }
+      }
+    },
+    "Your files and images, and the reactions you left.": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seus arquivos e imagens, e as reações que você deixou."
+          }
+        }
+      }
+    },
     "Your friend request was accepted.": {
       "localizations": {
         "pt-BR": {
@@ -4322,12 +4602,42 @@
         }
       }
     },
+    "Your memberships, your conversations, and the list of people you blocked.": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Suas participações em comunidades, suas conversas e a lista de quem você bloqueou."
+          }
+        }
+      }
+    },
+    "Your profile, handle, avatar and settings.": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seu perfil, seu identificador, seu avatar e suas configurações."
+          }
+        }
+      }
+    },
     "Your session expired. Sign in again.": {
       "localizations": {
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
             "value": "Sua sessão expirou. Entre de novo."
+          }
+        }
+      }
+    },
+    "Your sign-in. You will not be able to log back in.": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seu login. Você não vai conseguir entrar de novo."
           }
         }
       }

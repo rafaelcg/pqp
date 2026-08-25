@@ -13,6 +13,7 @@ struct AccountSettingsView: View {
     @State private var saving = false
     @State private var saved = false
     @State private var error: String?
+    @State private var confirmingDeletion = false
 
     // Resolved through `String(localized:)` rather than left as bare literals:
     // `Text(someString)` is the *verbatim* initialiser, so a picker built from
@@ -104,6 +105,8 @@ struct AccountSettingsView: View {
                     }
                     .disabled(saving)
                 }
+
+                YourDataSection { confirmingDeletion = true }
             }
             .scrollContentBackground(.hidden)
             .background(Palette.ink)
@@ -112,6 +115,22 @@ struct AccountSettingsView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Done") { dismiss() }.tint(Palette.paperMuted)
+                }
+            }
+            .sheet(isPresented: $confirmingDeletion) {
+                DeleteAccountView {
+                    confirmingDeletion = false
+                    // The account is gone from the server, which makes this a
+                    // sign-out with nothing left to sign out of: the Clerk
+                    // identity was deleted with it, the socket was closed with
+                    // 4003, and the device token row cascaded away. `signOut`
+                    // is still the right teardown because everything it clears
+                    // is *local* and none of it belongs to the next person to
+                    // use this phone.
+                    Task {
+                        await session.signOut()
+                        dismiss()
+                    }
                 }
             }
             .task { await load() }
@@ -823,14 +842,17 @@ struct WebhooksView: View {
 }
 
 
-private struct ShareItem: Identifiable {
+/// Not `private`: `AccountDataViews` hands the personal export to the same
+/// sheet, and a second copy of a UIKit shim is how two share sheets start
+/// behaving differently.
+struct ShareItem: Identifiable {
     let url: URL
     var id: String { url.absoluteString }
 }
 
 /// UIKit's share sheet, which SwiftUI has no direct equivalent for when the
 /// thing being shared is a file on disk.
-private struct ShareSheet: UIViewControllerRepresentable {
+struct ShareSheet: UIViewControllerRepresentable {
     let url: URL
 
     func makeUIViewController(context: Context) -> UIActivityViewController {
