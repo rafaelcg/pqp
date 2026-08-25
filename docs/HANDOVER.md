@@ -1,4 +1,4 @@
-# Handover — pqp (as of 2026-08-01)
+# Handover — pqp (as of 2026-08-25)
 
 Cold-start status for agents and humans. Companion: [`../CLAUDE.md`](../CLAUDE.md). Roadmap checklist: [`PLAN_STATUS.md`](./PLAN_STATUS.md).
 
@@ -14,11 +14,22 @@ Cold-start status for agents and humans. Companion: [`../CLAUDE.md`](../CLAUDE.m
 
 | Service | URL |
 |---|---|
-| Web (Cloudflare Pages) | https://pqp-3yr.pages.dev |
-| API (Railway) | https://api-production-206d.up.railway.app |
-| WebSocket | `wss://api-production-206d.up.railway.app/ws` |
+| Web (Cloudflare Pages, project `pqp`) | https://pqp.gg (also https://pqp-3yr.pages.dev) |
+| API (Fly.io app `pqp-api`, region `gru`) | https://api.pqp.gg |
+| WebSocket | `wss://api.pqp.gg/ws` |
+| Status | `GET https://api.pqp.gg/status.json` |
 
-ICE config: `GET https://api-production-206d.up.railway.app/api/ice-servers` (auth as required by current server).
+ICE config: `GET https://api.pqp.gg/api/ice-servers`.
+
+**The API moved off Railway.** A stale copy may still answer at
+`api-production-206d.up.railway.app`, and nothing points at it. This table said
+so for three weeks after it stopped being true, which is the kind of error that
+sends a cold-starting agent to debug a machine nobody is using. If you find a
+Railway URL anywhere else in the docs, it is wrong.
+
+Note that `curl` against `/api/...` returns 401 without a Bearer token: there is
+no public-route allowlist. See CLAUDE.md pitfall 8 for the handful of genuine
+exceptions.
 
 ## Monorepo
 
@@ -44,13 +55,17 @@ Never commit `.env`. Template: [`.env.example`](../.env.example).
 | 1 Auth + DB + API | Done |
 | 2 Text chat | Done |
 | 3 Voice (mesh) | Done (cross-NAT FIXED 2026-07-11) |
-| 4 Self-host / Railway + Pages | Done (live) |
-| 5 SFU | **LiveKit implemented 2026-07-30, not yet run against a live server**; Cloudflare Realtime still a stub |
+| 4 Self-host / Fly + Pages | Done (live) |
+| 5 SFU | LiveKit **verified against a live server 2026-08-07** (not Cloud, not at scale, not cross-NAT); **not enabled in production**; Cloudflare Realtime still a stub. Scope: [`voice-backends.md`](./voice-backends.md#verification-status) |
 | 6 Electron + billing | **Partial** (shell + CI artifacts + deep links; no app icon, no Stripe UI) |
 
 Detail and “still open” list: [`PLAN_STATUS.md`](./PLAN_STATUS.md).
 
 ## Recent shipped work (context for next agents)
+
+- **iOS builds 12 and 13, and the Sign in with Apple trap (2026-08-25):** build 11 was five weeks old. Build 12 carried the six commits since, including in-app account deletion (the App Store blocker). Build 13 then carried two device-only fixes worth their own upload. The **Share button did nothing**, for two stacked reasons: `RPSystemBroadcastPickerView` lays its `UIButton` out at `(5, 5)` with the picker's *full* width and height, so inside 62x62 bounds the live area was a 57x57 square in the bottom-right and the top-left of the painted circle was dead; and the picker sat at `.opacity(0.02)` while SwiftUI multiplies opacity down the tree, so `VoiceView`'s `.opacity(0.4)` while connecting gave 0.008, under UIKit's 0.01 hit-testing floor. Separately, **Clerk serves `oauth_apple`** (verified against the live FAPI environment endpoint) and its iOS SDK takes the *native* `ASAuthorizationAppleIDProvider` path, but `pqp.entitlements` had no `com.apple.developer.applesignin`: an offered-and-broken Apple button under Guideline 4.8. `APPLE_ID_AUTH` was already enabled on App ID `gg.pqp.app`; enabling it had **invalidated** the `pqp appstore` profile, which App Store Connect was already reporting as `INVALID` and nothing was reading. Re-minted via the API. Verify entitlements in the SIGNED BINARY (`codesign -d --entitlements - --xml pqp.app`), not in the source: the source said the right thing while the profile could not carry it. **Still open, device-only:** whether iOS then *finds* the broadcast extension when the picker is tapped.
+- **The marketing pages were promising things the product does not do (2026-08-25):** `/beta` sold "compartilha a tela e liga a camera na chamada, do celular". Sharing your own screen from the phone had never worked, and the camera is published in **DM calls only** (in a server voice channel iOS classifies peers' `cameraStreamId` and then draws nothing). Rewritten to sell watching somebody else's share from your phone, which is true and is what people away from a desk actually want. Separately `/tela` unfurled as "Discord sem compartilhar tela no Brasil? O que usar agora", a blanket present-tense claim about another company's product that an unfurl card carried into every reply the link appeared in; three engagement passes running chose the root link over `/tela` purely to avoid attaching it. A link nobody will send is not a landing page. Both descriptions were left alone because they already carry the date rather than asserting a present state. Note `marketing-meta.ts` holds a hardcoded copy of every title for the Pages middleware to inject at the edge, and `marketing-meta.test.ts` fails if it drifts from the catalogue, so all copies move together.
+- **The outbound readout had never printed a number (2026-08-25):** `RTCStatsReport` is maplike, so iterating it yields `[id, stat]` pairs; `voice-stats-probe.ts` handed the report straight to the parser as an `Iterable`, every row arrived as a two-element array with no `type`, and `pqpVoiceStats.report()` said "no mesh connections" from inside a live call. The unit tests fed arrays, which iterate as elements, so the only shape that mattered was the only shape never tested. The sentence it wanted to print was also false: the encoder reports `qualityLimitationReason: "bandwidth"` even with 3.3 Mbps of headroom, because our own `maxBitrate` is the binding constraint, so "held back by your connection" would have shown to everybody on fibre forever. Now split at 90 percent of the ceiling. **Measured but not fixed:** `retuneAllCameraSenders` applies one ceiling to *every* peer rather than splitting a budget the way the screen path does, so a 4-way call permits 4.46 Mbps of camera from one machine; and `SCREEN_UPLOAD_BUDGET_BPS` is a fixed 5 Mbps global assumption that never consults the sender's own `availableOutgoingBitrate`, which is already collected and read by nothing. For a Brazilian audience that assumption deserves a real measurement with link shaping before anyone changes it.
 
 - **Fix: the screen-share quality menu now changes the picture, not just the bitrate (2026-08-25):** reported as "I picked 360p in a voice channel and it felt far too good to be 360p", which matters because some people here are on slow connections. Measured at the **receiver** for the first time (`client/e2e/screen-quality-received.spec.ts`, two real browsers in a server voice channel, `inbound-rtp`): every rung below 1080p arrived as **1920x1080**. The choice only ever wrote `maxBitrate`, and a ceiling with nothing behind it does not make a smaller picture, it makes the same picture worse. The old comment claiming the encoder would scale down on its own under `maintain-framerate` is refuted by that measurement: once it has ramped up to the capture size it stays there. `tuneScreenSender` now also sets `scaleResolutionDownBy`, computed from the track's own height (a divisor, so a hard-coded one would be 360p on a 1080p monitor and 480p on a 1440p one). Received now: 1080p → 1920x1080, 720p → 1280x720, 480p → 853x480, 360p → 640x360; Auto still pins nothing. Capture stays 1080p30 on every rung, so moving back up is instant and free, and the camera path (which shrinks via `applyConstraints`) is untouched. **Still open:** the SFU path has the identical gap at `client/src/lib/livekit-session.ts:244` and was not changed, because no LiveKit server was available to measure it.
 - **iOS can delete its own account (2026-08-25, branch `feat/ios-account-deletion`):** the App Store submission blocker. Guideline 5.1.1(v) requires in-app deletion for any app that supports account creation, and iOS had neither that nor a personal export. Both now sit in a "Your data" section of Settings against `DELETE /api/me` and `GET /api/me/export`, with the web flow's safeguards intact (type your own tag; the 409 lists the communities in the way by name). Verified end to end on the simulator against a local server: the account really is destroyed and the app signs out. Same branch: **"mute microphone when joining voice" is finally read** (it was written by Settings and read by nobody, so ticking it still joined with a live mic), voice channels now report mute/deafen to the roster at all (`VoiceModel` never sent `set-voice-state`), and a message arriving no longer drags somebody out of the history (`ChatModel.isNearBottom` was a constant). Detail: [`IOS.md`](./IOS.md).
