@@ -174,6 +174,80 @@ enum TestSeed {
         return SeededServer(id: createdId ?? "", name: name)
     }
 
+    /// An incoming webhook on the server's `general` channel, as the path its
+    /// executable URL is built from (`/api/webhooks/:id/:token`).
+    ///
+    /// A webhook is the only way a UI test can make a message arrive *from
+    /// somebody else*: sending is a WebSocket frame, so there is no HTTP route
+    /// to post as a user, and a message the app under test sent scrolls the
+    /// sender to the bottom by design.
+    static func createWebhook(_ test: XCTestCase, serverId: String) -> String {
+        guard !serverId.isEmpty else { return "" }
+        let channelId = generalChannel(test, serverId: serverId)
+        guard !channelId.isEmpty else { return "" }
+
+        var request = URLRequest(url: URL(string: "\(apiBase)/api/channels/\(channelId)/webhooks")!)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(token())", forHTTPHeaderField: "Authorization")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["name": "Someone else"])
+
+        let done = XCTestExpectation(description: "create webhook")
+        nonisolated(unsafe) var path = ""
+        URLSession.shared.dataTask(with: request) { data, _, _ in
+            if let data,
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let webhook = json["webhook"] as? [String: Any] {
+                path = webhook["url"] as? String ?? ""
+            }
+            done.fulfill()
+        }.resume()
+        test.wait(for: [done], timeout: 15)
+        XCTAssertFalse(path.isEmpty, "Could not create a webhook to post through")
+        return path
+    }
+
+    /// The `general` channel every new server is created with.
+    private static func generalChannel(_ test: XCTestCase, serverId: String) -> String {
+        var request = URLRequest(url: URL(string: "\(apiBase)/api/servers/\(serverId)/channels")!)
+        request.setValue("Bearer \(token())", forHTTPHeaderField: "Authorization")
+
+        let done = XCTestExpectation(description: "read channels")
+        nonisolated(unsafe) var id = ""
+        URLSession.shared.dataTask(with: request) { data, _, _ in
+            if let data,
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let channels = json["channels"] as? [[String: Any]] {
+                id = channels.first { $0["type"] as? String == "text" }?["id"] as? String ?? ""
+            }
+            done.fulfill()
+        }.resume()
+        test.wait(for: [done], timeout: 15)
+        return id
+    }
+
+    /// Posts one message as the webhook. Synchronous so a caller can seed a
+    /// transcript in order, which is the only thing that makes the messages
+    /// readable as a sequence afterwards.
+    static func postThroughWebhook(_ test: XCTestCase, path: String, content: String) {
+        guard !path.isEmpty else { return }
+        var request = URLRequest(url: URL(string: "\(apiBase)\(path)")!)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["content": content])
+
+        let done = XCTestExpectation(description: "post through webhook")
+        URLSession.shared.dataTask(with: request) { _, response, _ in
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            XCTAssertTrue(
+                (200..<300).contains(status),
+                "Webhook post refused (\(status)). The execute limiter is 20 with 1/s refill."
+            )
+            done.fulfill()
+        }.resume()
+        test.wait(for: [done], timeout: 15)
+    }
+
     /// Removes a seeded server. Best effort — a failure here should not fail
     /// the test that already passed, but it is asserted loudly enough to notice
     /// if cleanup silently stops working and the list starts growing again.
