@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">pqp</string>
+
+    <!-- Sign in -->
+    <string name="sign_in_title">Talk to your people</string>
+    <string name="sign_in_subtitle">Voice and text that stays out of the way.</string>
+    <string name="sign_in_dev_action">Continue as a local dev account</string>
+    <string name="sign_in_dev_note">Debug builds only. The server has to be running with DEV_AUTH_BYPASS on.</string>
+    <string name="sign_out">Sign out</string>
+
+    <!-- Age gate -->
+    <string name="age_gate_title">One question first</string>
+    <string name="age_gate_body">pqp is for people aged 13 and over. Tell us your date of birth so we know which rules apply to your account.</string>
+    <string name="age_gate_confirm">Confirm</string>
+
+
+    <!-- Servers -->
+    <string name="servers_title">Servers</string>
+    <string name="servers_empty">You are not in any server yet.</string>
+    <string name="servers_create">New server</string>
+    <string name="servers_create_name">Server name</string>
+    <string name="servers_create_confirm">Create</string>
+
+    <!-- Channels -->
+    <string name="channels_empty">No channels here yet.</string>
+
+    <!-- Chat -->
+    <string name="chat_composer_hint">Message</string>
+    <string name="chat_send">Send</string>
+    <string name="chat_empty">Nothing here yet. Say something.</string>
+    <string name="chat_edited">edited</string>
+    <string name="chat_typing_one">%1$s is typing…</string>
+    <string name="chat_typing_many">Several people are typing…</string>
+    <string name="chat_back">Back</string>
+
+    <!-- Connection -->
+    <string name="connection_connecting">Connecting…</string>
+    <string name="connection_offline">Offline. Trying to reconnect…</string>
+    <string name="connection_retry">Retry</string>
+
+    <!-- Voice -->
+    <string name="voice_leave">Leave</string>
+    <string name="voice_mute">Mute</string>
+    <string name="voice_unmute">Unmute</string>
+    <string name="voice_deafen">Deafen</string>
+    <string name="voice_undeafen">Undeafen</string>
+    <string name="voice_connecting">Joining…</string>
+    <string name="voice_room_full">This channel is full.</string>
+    <string name="voice_mic_denied">pqp needs the microphone to join a call.</string>
+    <string name="voice_notification_channel">Ongoing call</string>
+    <string name="voice_notification_channel_description">Shown while you are in a voice channel, which is what keeps the call alive when the app is in the background.</string>
+    <string name="voice_notification_title">In voice</string>
+    <string name="voice_notification_hang_up">Hang up</string>
+    <string name="voice_transport_unsupported">This call runs on a server this app cannot join yet.</string>
+    <string name="voice_participants">%1$d in this call</string>
+    <string name="voice_peer_unreachable">Cannot reach everyone in this call</string>
+
+    <!-- You -->
+    <string name="you_title">You</string>
+    <string name="you_backend">Server</string>
+    <string name="you_version">Version</string>
+
+    <!-- Generic -->
+    <string name="cancel">Cancel</string>
+    <string name="error_generic">Something went wrong.</string>
+    <string name="error_network">The server did not answer.</string>
+</resources>

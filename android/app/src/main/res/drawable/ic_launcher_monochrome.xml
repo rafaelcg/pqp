@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The themed-icon layer. Android tints this itself, so every path has to be one
+  flat colour: the three dots are punched out of the bubble with an even-odd
+  fill rather than painted over it, which is what keeps them visible whatever
+  colour the launcher picks.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108"
+    android:tint="#FFFFFF">
+
+    <path
+        android:fillColor="#FFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M31,32 L77,32 A10,10 0 0 1 87,42 L87,64 A10,10 0 0 1 77,74 L52,74 L40,84 L40,74 L31,74 A10,10 0 0 1 21,64 L21,42 A10,10 0 0 1 31,32 Z M38,48 a5,5 0 1,0 0,10 a5,5 0 1,0 0,-10 Z M54,48 a5,5 0 1,0 0,10 a5,5 0 1,0 0,-10 Z M70,48 a5,5 0 1,0 0,10 a5,5 0 1,0 0,-10 Z" />
+</vector>

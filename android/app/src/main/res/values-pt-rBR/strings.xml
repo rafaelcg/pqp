@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">pqp</string>
+
+    <!-- Entrar -->
+    <string name="sign_in_title">Fale com a sua gente</string>
+    <string name="sign_in_subtitle">Voz e texto que não atrapalham.</string>
+    <string name="sign_in_dev_action">Continuar com uma conta local de desenvolvimento</string>
+    <string name="sign_in_dev_note">Só em builds de debug. O servidor precisa estar rodando com DEV_AUTH_BYPASS ligado.</string>
+    <string name="sign_out">Sair</string>
+
+    <!-- Verificação de idade -->
+    <string name="age_gate_title">Uma pergunta antes</string>
+    <string name="age_gate_body">O pqp é para quem tem 13 anos ou mais. Informe sua data de nascimento para sabermos quais regras valem para a sua conta.</string>
+    <string name="age_gate_confirm">Confirmar</string>
+
+
+    <!-- Servidores -->
+    <string name="servers_title">Servidores</string>
+    <string name="servers_empty">Você ainda não está em nenhum servidor.</string>
+    <string name="servers_create">Novo servidor</string>
+    <string name="servers_create_name">Nome do servidor</string>
+    <string name="servers_create_confirm">Criar</string>
+
+    <!-- Canais -->
+    <string name="channels_empty">Nenhum canal aqui ainda.</string>
+
+    <!-- Conversa -->
+    <string name="chat_composer_hint">Mensagem</string>
+    <string name="chat_send">Enviar</string>
+    <string name="chat_empty">Nada aqui ainda. Diga alguma coisa.</string>
+    <string name="chat_edited">editada</string>
+    <string name="chat_typing_one">%1$s está digitando…</string>
+    <string name="chat_typing_many">Várias pessoas estão digitando…</string>
+    <string name="chat_back">Voltar</string>
+
+    <!-- Conexão -->
+    <string name="connection_connecting">Conectando…</string>
+    <string name="connection_offline">Sem conexão. Tentando reconectar…</string>
+    <string name="connection_retry">Tentar de novo</string>
+
+    <!-- Voz -->
+    <string name="voice_leave">Sair</string>
+    <string name="voice_mute">Mudo</string>
+    <string name="voice_unmute">Tirar do mudo</string>
+    <string name="voice_deafen">Silenciar tudo</string>
+    <string name="voice_undeafen">Voltar a ouvir</string>
+    <string name="voice_connecting">Entrando…</string>
+    <string name="voice_room_full">Este canal está cheio.</string>
+    <string name="voice_mic_denied">O pqp precisa do microfone para entrar na chamada.</string>
+    <string name="voice_notification_channel">Chamada em andamento</string>
+    <string name="voice_notification_channel_description">Aparece enquanto você está em um canal de voz, e é o que mantém a chamada viva com o app em segundo plano.</string>
+    <string name="voice_notification_title">Na chamada</string>
+    <string name="voice_notification_hang_up">Desligar</string>
+    <string name="voice_transport_unsupported">Esta chamada usa um transporte que este app ainda não sabe usar.</string>
+    <string name="voice_participants">%1$d na chamada</string>
+    <string name="voice_peer_unreachable">Não foi possível alcançar todo mundo na chamada</string>
+
+    <!-- Você -->
+    <string name="you_title">Você</string>
+    <string name="you_backend">Servidor</string>
+    <string name="you_version">Versão</string>
+
+    <!-- Genéricos -->
+    <string name="cancel">Cancelar</string>
+    <string name="error_generic">Algo deu errado.</string>
+    <string name="error_network">O servidor não respondeu.</string>
+</resources>

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- oklch(0.16 0.012 250), the app ground. Kept in step with
+         client/src/index.css and ios/pqp/Sources/Design/Theme.swift. -->
+    <color name="pqp_ink">#090E12</color>
+</resources>
