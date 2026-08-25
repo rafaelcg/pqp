@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import {
+  describeLimitation,
   sampleVoiceStats,
+  type Limitation,
   type VideoSenderSample,
 } from "@/lib/voice-stats-probe";
 
@@ -23,9 +25,12 @@ import {
 const SAMPLE_INTERVAL_MS = 2000;
 
 /** Which limitation reasons get a plain-language name of their own. */
-function limitKey(reason: string) {
+function limitKey(reason: Limitation) {
   if (reason === "bandwidth") {
     return "settings.voice.videoQuality.limit.bandwidth" as const;
+  }
+  if (reason === "setting") {
+    return "settings.voice.videoQuality.limit.setting" as const;
   }
   if (reason === "cpu") {
     return "settings.voice.videoQuality.limit.cpu" as const;
@@ -105,8 +110,10 @@ export function OutboundVideoReadout({
     );
   }
 
-  const limited =
-    camera.limitedBy && camera.limitedBy !== "none" ? camera.limitedBy : null;
+  // Not `limitedBy` directly: the encoder calls its own `maxBitrate` a
+  // bandwidth limit, so the raw field says "your connection" to somebody on
+  // fibre whose only limit is the rung they picked. See `describeLimitation`.
+  const limited = describeLimitation(camera);
 
   return (
     <p className="mt-1 text-xs text-paper-muted" role="status">
@@ -118,7 +125,10 @@ export function OutboundVideoReadout({
       {limited && (
         <>
           {". "}
-          <span className="text-warning">
+          {/* Orange only when something is going wrong. Sitting on the ceiling
+              you chose is the setting working, not a fault, and colouring it
+              like one is how a person ends up rebooting a healthy router. */}
+          <span className={limited === "setting" ? undefined : "text-warning"}>
             {t("settings.voice.videoQuality.limited", {
               reason: t(limitKey(limited)),
             })}

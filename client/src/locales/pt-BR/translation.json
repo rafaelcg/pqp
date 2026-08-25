@@ -903,6 +903,7 @@
   "settings.voice.videoQuality.measuring": "Câmera ligada, medindo o que está saindo.",
   "settings.voice.videoQuality.limited": "Limitado por {reason}",
   "settings.voice.videoQuality.limit.bandwidth": "sua conexão",
+  "settings.voice.videoQuality.limit.setting": "seu ajuste de qualidade",
   "settings.voice.videoQuality.limit.cpu": "este computador",
   "settings.voice.videoQuality.limit.other": "o codificador",
   "settings.voice.videoQuality.idle": "Ligue sua câmera ou compartilhe sua tela durante uma chamada para ver o que está saindo de verdade.",

@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { summariseStats, type RtcStatLike } from "./voice-stats-probe";
+import {
+  describeLimitation,
+  statRows,
+  summariseStats,
+  type RtcStatLike,
+  type VideoSenderSample,
+} from "./voice-stats-probe";
 
 /**
  * The joining is the whole of this module's risk.
@@ -139,5 +145,112 @@ describe("summariseStats", () => {
     const orphaned = report().filter((stat) => stat.id !== "SV1");
     const { senders } = summariseStats(PEER, orphaned, roles, new Map());
     expect(senders[0]!.role).toBe("unknown");
+  });
+
+  it("carries the sender's own ceiling through when one is offered", () => {
+    const { senders } = summariseStats(PEER, report(), roles, new Map(), () =>
+      1_500_000,
+    );
+    expect(senders[0]!.ceilingKbps).toBe(1_500);
+  });
+});
+
+/**
+ * The shape the browser actually hands over.
+ *
+ * Every test above feeds an array, and an array iterates as its elements. An
+ * `RTCStatsReport` is maplike and iterates as `[id, stat]` pairs, so this
+ * module used to see a list of two-element arrays with no `type` on any of
+ * them and report an empty snapshot from inside a live call. A `Map` is the
+ * closest standard stand-in: same `forEach` yielding values, same pair-yielding
+ * iterator, and the bug reproduces exactly when `statRows` is bypassed.
+ */
+describe("statRows", () => {
+  const asReport = () =>
+    new Map(report().map((stat) => [stat.id as string, stat]));
+
+  it("reads the values out of a maplike report rather than its entries", () => {
+    const rows = statRows(asReport());
+    expect(rows).toHaveLength(report().length);
+    expect(rows.map((row) => row.type)).toContain("outbound-rtp");
+  });
+
+  it("still finds the sender once the report has been through it", () => {
+    const { senders, paths } = summariseStats(
+      PEER,
+      statRows(asReport()),
+      roles,
+      new Map(),
+    );
+    expect(senders).toHaveLength(1);
+    expect(senders[0]!.role).toBe("camera");
+    expect(paths).toHaveLength(1);
+  });
+
+  it("finds nothing when the report is iterated directly, which was the bug", () => {
+    const { senders } = summariseStats(
+      PEER,
+      asReport() as unknown as Iterable<RtcStatLike>,
+      roles,
+      new Map(),
+    );
+    expect(senders).toEqual([]);
+  });
+});
+
+/**
+ * Which of the two rate limits is talking.
+ *
+ * `qualityLimitationReason` says `bandwidth` for the app's own `maxBitrate`
+ * just as loudly as it does for a starved uplink, and the readout used to pass
+ * that straight through as "held back by your connection". The numbers below
+ * are measured ones: a loopback call with roughly 3.4 Mbps of headroom and a
+ * 1.5 Mbps ceiling targets about 1.5 Mbps, and the same sender with the link
+ * held to 500 kbps targets about 404 kbps against the same ceiling.
+ */
+describe("describeLimitation", () => {
+  const sample = (over: Partial<VideoSenderSample>): VideoSenderSample => ({
+    peerId: PEER,
+    role: "camera",
+    width: 640,
+    height: 360,
+    fps: 30,
+    kbps: 1_400,
+    targetKbps: 1_500,
+    ceilingKbps: 1_500,
+    limitedBy: "bandwidth",
+    limitDurations: null,
+    encoder: "libvpx",
+    framesEncoded: 100,
+    framesSent: 100,
+    keyFramesEncoded: 1,
+    pliCount: 0,
+    nackCount: 0,
+    ...over,
+  });
+
+  it("blames the setting when the encoder is sitting on its own ceiling", () => {
+    expect(describeLimitation(sample({}))).toBe("setting");
+  });
+
+  it("blames the connection when the target is far under the ceiling", () => {
+    expect(
+      describeLimitation(sample({ targetKbps: 404, ceilingKbps: 1_500 })),
+    ).toBe("bandwidth");
+  });
+
+  it("says nothing at all when nothing is limiting the sender", () => {
+    expect(describeLimitation(sample({ limitedBy: "none" }))).toBeNull();
+    expect(describeLimitation(sample({ limitedBy: null }))).toBeNull();
+  });
+
+  it("keeps cpu and other as themselves", () => {
+    expect(describeLimitation(sample({ limitedBy: "cpu" }))).toBe("cpu");
+    expect(describeLimitation(sample({ limitedBy: "other" }))).toBe("other");
+  });
+
+  it("falls back to the raw reason when there is no ceiling to compare to", () => {
+    expect(describeLimitation(sample({ ceilingKbps: null }))).toBe("bandwidth");
+    expect(describeLimitation(sample({ targetKbps: null }))).toBe("bandwidth");
   });
 });

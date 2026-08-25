@@ -56,6 +56,18 @@ export interface VideoSenderSample {
   targetKbps: number | null;
   /** The field this whole probe exists for: `bandwidth`, `cpu`, `none`, … */
   limitedBy: string | null;
+  /**
+   * The ceiling this sender was given, in kbps, read back off the sender.
+   *
+   * Here because `limitedBy` on its own cannot tell the two rate limits apart.
+   * The encoder reports `bandwidth` whenever it is holding back for any rate
+   * reason, and the app's own `maxBitrate` is one of those reasons, so a
+   * perfectly healthy 1:1 call on fibre reports `bandwidth` for its whole life.
+   * Knowing what the ceiling was is what turns that into an answer: a target
+   * sitting on the ceiling is the setting talking, and a target far under it is
+   * the link talking. Null when the sender could not be matched.
+   */
+  ceilingKbps: number | null;
   /** Seconds spent limited by each reason, since the call began. */
   limitDurations: Record<string, number> | null;
   encoder: string | null;
@@ -116,6 +128,8 @@ export function summariseStats(
   stats: Iterable<RtcStatLike>,
   roleOfTrack: (trackId: string) => VideoSenderRole,
   previous: Map<string, ByteMark>,
+  /** Optional: the sender's own `maxBitrate`, in bps, by track id. */
+  ceilingOfTrack?: (trackId: string) => number | null,
 ): VoiceStatsSnapshot {
   const byId = new Map<string, RtcStatLike>();
   const all: RtcStatLike[] = [];
@@ -166,6 +180,10 @@ export function summariseStats(
           ? null
           : Math.round(num(stat.targetBitrate)! / 1000),
       limitedBy: str(stat.qualityLimitationReason),
+      ceilingKbps: (() => {
+        const ceiling = trackId ? (ceilingOfTrack?.(trackId) ?? null) : null;
+        return ceiling === null ? null : Math.round(ceiling / 1000);
+      })(),
       limitDurations:
         durations && typeof durations === "object"
           ? (durations as Record<string, number>)
@@ -223,6 +241,56 @@ export function summariseStats(
   return { senders, paths };
 }
 
+/** What is actually holding a sender back, once the two rate limits are split. */
+export type Limitation = "bandwidth" | "setting" | "cpu" | "other";
+
+/**
+ * How close to its ceiling a sender has to be encoding before the ceiling, and
+ * not the link, is called the reason.
+ *
+ * Chrome keeps a little headroom under a `maxBitrate` rather than sitting
+ * exactly on it. Measured on a loopback call with 3.3 to 3.6 Mbps of estimated
+ * headroom and a 1.5 Mbps ceiling, the target settled at 1492 to 1500 kbps,
+ * which is 99 percent of the ceiling. The same sender with the link held to
+ * 500 kbps targeted 404 kbps against the same 1.5 Mbps ceiling, or 27 percent.
+ * Anything in that gap is unambiguous, so the line is drawn well clear of both.
+ */
+const AT_CEILING = 0.9;
+
+/**
+ * Why this sender is not sending more, in terms a person can act on.
+ *
+ * WHY THIS IS NOT JUST `qualityLimitationReason`. That field answers "is the
+ * encoder rate limited", and the app's own `maxBitrate` is a rate limit, so it
+ * reads `bandwidth` on a healthy fibre call for the whole of its life. Telling
+ * that person their connection is holding them back is false, and it is the
+ * kind of false that sends somebody to reset a router that was never the
+ * problem. The honest split is: at the ceiling means the setting is the limit
+ * and a higher rung would buy a better picture; far under it means the link is
+ * the limit and a higher rung would buy nothing.
+ *
+ * Returns null when nothing is limiting the sender, and falls back to the raw
+ * reason whenever the ceiling or the target is missing, because a guess with
+ * half the numbers is how the wrong sentence got shipped in the first place.
+ */
+export function describeLimitation(sample: VideoSenderSample): Limitation | null {
+  const reason = sample.limitedBy;
+  if (!reason || reason === "none") {
+    return null;
+  }
+  if (reason === "cpu") {
+    return "cpu";
+  }
+  if (reason !== "bandwidth") {
+    return "other";
+  }
+  const { ceilingKbps, targetKbps } = sample;
+  if (ceilingKbps === null || targetKbps === null || ceilingKbps <= 0) {
+    return "bandwidth";
+  }
+  return targetKbps >= ceilingKbps * AT_CEILING ? "setting" : "bandwidth";
+}
+
 interface Registration {
   peerId: string;
   pc: RTCPeerConnection;
@@ -260,6 +328,51 @@ export function sampleVoiceStats(): Promise<VoiceStatsSnapshot> {
   return sampleAll();
 }
 
+/**
+ * Turn one `RTCStatsReport` into the flat rows `summariseStats` reads.
+ *
+ * THE WHOLE REASON THIS FUNCTION EXISTS, and it is not a style preference.
+ * `RTCStatsReport` is maplike, so iterating it yields `[id, stat]` **pairs**,
+ * not stats. This module used to hand the report straight to `summariseStats`
+ * as an `Iterable<RtcStatLike>` — which type-checks, because a cast said so —
+ * and every row it saw was a two-element array with no `type` field. Every
+ * sample came back empty: `pqpVoiceStats.report()` said "no mesh connections"
+ * from inside a live call, and the readout under the quality menu said there
+ * was no outgoing video to measure while the camera was sending 1.5 Mbps.
+ *
+ * It survived because the unit tests feed arrays of plain objects, which
+ * iterate as objects, so the one shape that mattered was the one never tested.
+ * `forEach` is the maplike accessor that yields values, and it is what every
+ * other consumer of `getStats()` uses for exactly this reason.
+ */
+export function statRows(report: {
+  forEach: (fn: (stat: unknown) => void) => void;
+}): RtcStatLike[] {
+  const rows: RtcStatLike[] = [];
+  report.forEach((stat) => {
+    if (stat && typeof stat === "object") {
+      rows.push(stat as RtcStatLike);
+    }
+  });
+  return rows;
+}
+
+/** The `maxBitrate` each video sender is currently running under, by track. */
+function ceilingLookup(pc: RTCPeerConnection): (trackId: string) => number | null {
+  const ceilings = new Map<string, number>();
+  for (const sender of pc.getSenders()) {
+    const track = sender.track;
+    if (!track || track.kind !== "video") {
+      continue;
+    }
+    const max = sender.getParameters().encodings?.[0]?.maxBitrate;
+    if (typeof max === "number" && Number.isFinite(max)) {
+      ceilings.set(track.id, max);
+    }
+  }
+  return (trackId) => ceilings.get(trackId) ?? null;
+}
+
 async function sampleAll(): Promise<VoiceStatsSnapshot> {
   const senders: VideoSenderSample[] = [];
   const paths: CandidatePairSample[] = [];
@@ -268,9 +381,10 @@ async function sampleAll(): Promise<VoiceStatsSnapshot> {
       const report = await registration.pc.getStats();
       const snapshot = summariseStats(
         registration.peerId,
-        report as unknown as Iterable<RtcStatLike>,
+        statRows(report),
         registration.roleOfTrack,
         byteMarks,
+        ceilingLookup(registration.pc),
       );
       senders.push(...snapshot.senders);
       paths.push(...snapshot.paths);
@@ -300,7 +414,9 @@ function print(snapshot: VoiceStatsSnapshot): void {
       fps: sender.fps ?? "-",
       kbps: sender.kbps ?? "-",
       target: sender.targetKbps ?? "-",
+      ceiling: sender.ceilingKbps ?? "-",
       limitedBy: sender.limitedBy ?? "-",
+      reallyBy: describeLimitation(sender) ?? "-",
       encoder: sender.encoder ?? "-",
       pli: sender.pliCount ?? "-",
     })),

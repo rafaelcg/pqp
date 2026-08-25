@@ -903,6 +903,7 @@
   "settings.voice.videoQuality.measuring": "Camera on, measuring what is going out.",
   "settings.voice.videoQuality.limited": "Held back by {reason}",
   "settings.voice.videoQuality.limit.bandwidth": "your connection",
+  "settings.voice.videoQuality.limit.setting": "your quality setting",
   "settings.voice.videoQuality.limit.cpu": "this computer",
   "settings.voice.videoQuality.limit.other": "the encoder",
   "settings.voice.videoQuality.idle": "Turn your camera on or share your screen during a call to see what is actually going out.",
