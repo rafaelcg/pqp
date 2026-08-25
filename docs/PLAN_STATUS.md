@@ -1,6 +1,6 @@
 # Plan status
 
-> **Handover (2026-07-11):** live URLs, secrets checklist, voice FIXED → [`HANDOVER.md`](./HANDOVER.md). Agent quickstart → [`../CLAUDE.md`](../CLAUDE.md).
+> **Handover (2026-08-25):** live URLs, secrets checklist, voice FIXED → [`HANDOVER.md`](./HANDOVER.md). Agent quickstart → [`../CLAUDE.md`](../CLAUDE.md).
 
 ## Original roadmap
 
@@ -10,7 +10,7 @@
 | 1 Auth + DB + API | Done | Clerk, Postgres, servers/channels |
 | 2 Text chat | Done | WS + markdown + presence |
 | 3 Voice per channel | Done | Mesh + chat on voice channels; cross-NAT FIXED (ExpressTURN / ICE, 2026-07-11) |
-| 4 Self-host / Railway | Done | Docker Compose + docs; hosted Pages + Railway live |
+| 4 Self-host / Fly | Done | Docker Compose + docs; hosted Pages + Fly (`pqp-api`, gru) live. Railway is retired; nothing points at it |
 | 5 SFU | LiveKit **verified against a live server** (2026-08-07) | Two headless Chromium participants joined a real LiveKit room through `livekit-session.ts` and exchanged audio both ways; mute, screen share, ban eviction, the mesh-cap bypass and the mesh-only 503 all checked. Verification found `revokeTokenTs` to be LiveKit-Cloud-only, so a ban could be defeated by reconnecting on the token already held — fixed with a re-sweep. **Not** verified against LiveKit Cloud, at scale, or cross-NAT; the silent per-client mesh fallback is a known open split. Details and exact scope: [`voice-backends.md`](./voice-backends.md#verification-status). Cloudflare Realtime still a stub |
 | 6 Electron + billing | Partial | Electron shell + CI artifacts + deep links wired end-to-end; no app icon, no Stripe UI |
 
