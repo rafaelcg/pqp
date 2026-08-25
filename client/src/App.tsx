@@ -3844,6 +3844,20 @@ function MainAppContent({
                 participants={voiceState.occupancy[selectedChannel.id] ?? []}
                 isSharingScreen={voiceState.isSharingScreen}
                 isSharingScreenAudio={voiceState.isSharingScreenAudio}
+                // The camera is only ever this machine's when the call in
+                // progress is *this* channel's; the state is a single
+                // controller, so a stale preview would otherwise show up in a
+                // channel you are merely looking at.
+                isCameraOn={
+                  voiceState.voiceChannelId === selectedChannel.id &&
+                  voiceState.isCameraOn
+                }
+                localCameraStream={
+                  voiceState.voiceChannelId === selectedChannel.id
+                    ? voiceState.localCameraStream
+                    : null
+                }
+                videoQuality={localSettings.videoQuality}
                 screenSharePeerIds={
                   voiceState.voiceChannelId === selectedChannel.id
                     ? voiceState.screenSharePeerIds
@@ -3862,6 +3876,11 @@ function MainAppContent({
                 }}
                 onStartScreenShare={() => void voice.startScreenShare()}
                 onStopScreenShare={() => void voice.stopScreenShare()}
+                onToggleCamera={() => void voice.toggleCamera()}
+                // The same handler the conversation call and the Settings
+                // dialog use, so there is one stored choice and three views of
+                // it rather than three settings that drift.
+                onVideoQualityChange={handleVideoQualityChange}
               />
             </div>
             <div className="flex min-h-0 flex-1 flex-col">
