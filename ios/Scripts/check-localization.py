@@ -17,9 +17,13 @@ only reads the catalogue, and a Brazilian user quietly gets English.
 
 WHAT IT DOES NOT CATCH: a translation that exists and is never looked up,
 because `Text(someString)` is the *verbatim* initialiser. That one is invisible
-to the compiler too. Its symptom is the opposite of this one: a catalogue key
-that no `.stringsdata` mentions. Those are reported as a note rather than an
-error, because a genuinely deleted string leaves the same trace.
+to the compiler too. Its symptom is the opposite of this one, a catalogue key
+that no `.stringsdata` mentions, and it is deliberately NOT reported here: a
+string somebody simply deleted leaves exactly the same trace, and an incremental
+build only regenerates the `.stringsdata` of the files it recompiled, so most of
+the catalogue would look orphaned on most builds. Checking that direction means
+comparing a clean build, which is a thing to do while hunting rather than a
+thing to do every time anybody presses Run.
 """
 import json
 import os
