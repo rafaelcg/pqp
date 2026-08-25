@@ -145,9 +145,9 @@ test("the in-call readout reports the camera that is actually on the wire", asyn
     });
 
     await page
-      .getByRole("button", { name: /^Camera and screen quality:/ })
+      .getByRole("button", { name: /^Video you send:/ })
       .click({ timeout: 15_000 });
-    const menu = page.getByRole("menu", { name: "Camera and screen quality" });
+    const menu = page.getByRole("menu", { name: /^Video you send:/ });
     await expect(menu).toBeVisible({ timeout: 15_000 });
 
     // Polled rather than read once: the readout samples on a two-second timer,

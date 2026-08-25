@@ -798,15 +798,50 @@ export function createPeerConnectionManager(
     // Console-only measurement (`lib/voice-stats-probe.ts`). The role lookup is
     // resolved live rather than captured, because `replaceTrack` changes the
     // track id under a sender that keeps its identity.
-    registerVoiceConnection(remotePeerId, pc, (trackId): VideoSenderRole => {
-      if (managed.cameraSender?.track?.id === trackId) {
-        return "camera";
-      }
-      if (managed.screenSender?.track?.id === trackId) {
-        return "screen";
-      }
-      return "unknown";
-    });
+    registerVoiceConnection(
+      remotePeerId,
+      pc,
+      (trackId): VideoSenderRole => {
+        if (managed.cameraSender?.track?.id === trackId) {
+          return "camera";
+        }
+        if (managed.screenSender?.track?.id === trackId) {
+          return "screen";
+        }
+        return "unknown";
+      },
+      {
+        /**
+         * The same question asked of the INCOMING tracks, which is what lets a
+         * viewer be told the size they are actually watching.
+         *
+         * It has to go through the classified streams rather than the raw
+         * receivers: `pc.getReceivers()` knows a track is video and nothing
+         * else, and camera-versus-screen is only decidable from the stream id
+         * the peer announced on the roster (`classifyVideo`). Resolved live,
+         * because that classification flips whenever the roster and the track
+         * arrive in the other order.
+         */
+        roleOfRemoteTrack: (trackId): VideoSenderRole => {
+          if (
+            managed.cameraStream
+              ?.getVideoTracks()
+              .some((track) => track.id === trackId)
+          ) {
+            return "camera";
+          }
+          if (
+            managed.screenStream
+              ?.getVideoTracks()
+              .some((track) => track.id === trackId)
+          ) {
+            return "screen";
+          }
+          return "unknown";
+        },
+        displayName: () => managed.displayName ?? null,
+      },
+    );
 
     if (localStream) {
       for (const track of localStream.getTracks()) {
