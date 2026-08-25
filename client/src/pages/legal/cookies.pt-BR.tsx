@@ -16,7 +16,7 @@ export const cookiesPtBr: LegalDocument = {
   description:
     "Exatamente quais cookies, chaves de armazenamento local e caches o pqp.gg coloca no seu dispositivo, e quais terceiros o seu navegador contata.",
   heading: "Aviso de cookies",
-  updated: "21 de agosto de 2026",
+  updated: "25 de agosto de 2026",
   sections: [
     {
       id: "intro",
@@ -33,13 +33,13 @@ export const cookiesPtBr: LegalDocument = {
     },
     {
       id: "cookies",
-      sourceRev: "5f3ec581",
+      sourceRev: "0c32195b",
       heading: "Cookies",
       body: (
         <>
           <p>
-            <strong>O app do pqp não define nenhum cookie.</strong> Os únicos
-            cookies no pqp.gg vêm do{" "}
+            <strong>O app do pqp não define nenhum cookie.</strong> Todo cookie
+            no pqp.gg vem de um de dois terceiros. O primeiro é o{" "}
             <a href="https://clerk.com" target="_blank" rel="noreferrer">
               Clerk
             </a>
@@ -51,23 +51,52 @@ export const cookiesPtBr: LegalDocument = {
             no site dele.
           </p>
           <p>
-            A gente não define cookie de publicidade, cookie de analytics nem
-            cookie de rastreamento entre sites de tipo nenhum — nem no app, nem
-            nas páginas institucionais.
+            O segundo é o{" "}
+            <strong>rastreamento de conversão do Google Ads</strong>. O pqp.gg
+            compra um pouco de publicidade, e a tag do Google carrega em toda
+            página daqui para a gente saber se um anúncio produziu uma conta e
+            não só um clique. Ela define cookies de origem própria no domínio
+            pqp.gg, com nomes começando em <code>_gcl_</code>, que registram que
+            a sua visita chegou por um anúncio e permitem ligar um cadastro
+            posterior a ele. Esses <strong>não</strong> são estritamente
+            necessários: bloqueie e tudo funciona exatamente igual, e o cadastro
+            simplesmente não é contado. O Google documenta o nome e o prazo de
+            cada um no site dele.
+          </p>
+          <p>
+            Um evento vai para o Google, uma vez, e só quando uma conta é
+            criada: que houve um cadastro. Ele não leva nome, nem e-mail, nem id
+            de usuário, nem nada que você digitou. A gente não envia dados da sua
+            conta para o Google, não ativou conversões aprimoradas nem nenhum
+            cruzamento com dados de clientes, e não roda remarketing nem listas
+            de público. Entrar de novo não envia nada.
+          </p>
+          <p>
+            São esses. A gente não define cookie de analytics nem cookie de
+            rastreamento entre sites de tipo nenhum, nem no app, nem nas páginas
+            institucionais.
+          </p>
+          <p>
+            <strong>Isso vale só para o pqp.gg.</strong> A tag do Google é
+            adicionada quando o site hospedado é compilado, e só quando essa
+            compilação recebe o id da nossa conta de publicidade. Uma cópia
+            self-hosted do pqp não contata nenhum servidor de publicidade do
+            Google e não define nenhum cookie do Google.
           </p>
         </>
       ),
     },
     {
       id: "local-storage",
-      sourceRev: "9475cc28",
+      sourceRev: "048749eb",
       heading: "Armazenamento local",
       body: (
         <>
           <p>
             Estes ficam guardados pelo seu navegador sob a origem pqp.gg. Ficam
-            no seu dispositivo, nunca são usados para publicidade e só podem ser
-            lidos pelo pqp.gg.
+            no seu dispositivo e só podem ser lidos pelo pqp.gg. Nenhum deles é
+            enviado a um anunciante, inclusive o último da lista, que existe
+            justamente para impedir que algo seja enviado.
           </p>
           <ul>
             <li>
@@ -104,6 +133,14 @@ export const cookiesPtBr: LegalDocument = {
               login, quando é enviado uma única vez para a sua conta. Se você
               nunca se cadastrar, ele simplesmente expira.
             </li>
+            <li>
+              <code>pqp:ads-signup-reported</code>: o identificador da conta
+              cujo cadastro já foi contado pela tag de conversão do Google Ads
+              descrita acima, para que recarregar o app não conte o mesmo
+              cadastro duas vezes. É gravado uma vez, quando você cria uma
+              conta, e nunca sai do seu dispositivo. Se você nunca se cadastrar,
+              ele nunca chega a ser gravado.
+            </li>
           </ul>
           <p>
             A maior parte dessas configurações também é salva na sua conta no
@@ -134,7 +171,7 @@ export const cookiesPtBr: LegalDocument = {
     },
     {
       id: "third-parties",
-      sourceRev: "aeadd58b",
+      sourceRev: "7f28937c",
       heading: "Terceiros que o seu navegador contata",
       body: (
         <>
@@ -174,6 +211,11 @@ export const cookiesPtBr: LegalDocument = {
               quando os anexos de arquivo estão ligados, o seu navegador envia e
               baixa esses arquivos direto do armazenamento.
             </li>
+            <li>
+              <strong>Google Ads</strong> carrega a tag de conversão descrita em
+              &quot;Cookies&quot; de{" "}
+              <code>www.googletagmanager.com</code>, em toda página do pqp.gg.
+            </li>
           </ul>
           <p>
             As imagens de prévia de link são a exceção: a gente passa essas pelo
@@ -185,16 +227,18 @@ export const cookiesPtBr: LegalDocument = {
     },
     {
       id: "not-used",
-      sourceRev: "5bb995f8",
+      sourceRev: "faffa6e0",
       heading: "O que a gente não usa",
       body: (
         <>
           <p>
-            Nenhum pixel de publicidade ou de retargeting, nenhuma gravação de
-            sessão, nenhum SDK de relatório de erro, nenhuma impressão digital
-            de dispositivo e nenhum serviço de push. As notificações no desktop
-            são disparadas localmente pelo seu próprio navegador e não passam
-            por mais ninguém.
+            Nenhum pixel de retargeting ou remarketing, nenhuma lista de
+            público, nenhuma gravação de sessão, nenhum SDK de relatório de
+            erro, nenhuma impressão digital de dispositivo e nenhum serviço de
+            push. As notificações no desktop são disparadas localmente pelo seu
+            próprio navegador e não passam por mais ninguém. A tag do Google
+            descrita em &quot;Cookies&quot; acima é a única peça de maquinaria
+            de publicidade aqui, e ela só conta cadastros.
           </p>
           <p>
             A gente usa o <strong>Cloudflare Web Analytics</strong> para contar
@@ -219,14 +263,16 @@ export const cookiesPtBr: LegalDocument = {
     },
     {
       id: "managing",
-      sourceRev: "bedb07ab",
+      sourceRev: "09a66c50",
       heading: "Como controlar isso",
       body: (
         <p>
           Você pode limpar cookies, armazenamento local e dados em cache do
           pqp.gg nas configurações do seu navegador, e bloquear requisições a
           terceiros com uma extensão, se preferir. Bloquear os cookies do Clerk
-          impede o login. Limpar o armazenamento local reseta o tema, o idioma e
+          impede o login. Bloquear os do Google não custa nada a você e custa a
+          nós um cadastro não contado. Limpar o armazenamento local reseta o
+          tema, o idioma e
           as preferências de notificação naquele dispositivo, mas não mexe na
           sua conta.
         </p>

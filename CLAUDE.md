@@ -54,6 +54,7 @@ See `.env.example`. Important names:
 | Game connections | `PUBLIC_APP_URL`, `STEAM_WEB_API_KEY`, `BATTLENET_CLIENT_ID`, `BATTLENET_CLIENT_SECRET`, `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET` (off per provider until set; see `docs/CONNECTIONS.md`) |
 | Ambient runner (`tools/ambient`) | `PQP_API_URL`, `AMBIENT_TOKENS_FILE`, `AMBIENT_STATE_DIR`, `AMBIENT_CONFIG`, `AMBIENT_MODEL`, `ANTHROPIC_API_KEY`, `AMBIENT_KILL_SWITCH` |
 | Client | `VITE_CLERK_PUBLISHABLE_KEY`, `VITE_API_URL`, `VITE_WS_URL`, `VITE_DEV_AUTH_BYPASS`, `VITE_VOICE_BACKEND` (leave empty to follow the server; `mesh` forces peer-to-peer) |
+| Hosted-only tags (never set on a self-host) | `VITE_UMAMI_WEBSITE_ID` / `VITE_UMAMI_SRC`, `VITE_GOOGLE_ADS_ID` / `VITE_GOOGLE_ADS_SIGNUP_LABEL`. Each pair gates a third-party tag that a Vite plugin injects into `index.html` at build time; unset means the tag is absent from the built HTML, which is the point (AGPL, self-hosters must not inherit our analytics or our advertising). Google Ads also needs the label, and only reports one event: an account being created. See `client/src/lib/google-ads-tag.ts` and `client/src/lib/google-ads.ts` |
 | ICE / TURN (API preferred) | `TURN_URL`, `TURN_USERNAME`, `TURN_CREDENTIAL`, `CLOUDFLARE_TURN_KEY_ID`, `CLOUDFLARE_TURN_API_TOKEN`, `METERED_API_KEY`, `METERED_DOMAIN` |
 | Client TURN fallback (avoid in prod) | `VITE_TURN_URL`, `VITE_TURN_USERNAME`, `VITE_TURN_CREDENTIAL` |
 | SFU | `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` (implemented); `CLOUDFLARE_REALTIME_*` (stub) |

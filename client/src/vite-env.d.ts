@@ -2,6 +2,7 @@
 /// <reference types="vite-plugin-pwa/client" />
 
 import type { PqpDesktop } from "./lib/desktop";
+import type { Gtag } from "./lib/google-ads";
 import type { VoiceStatsConsole } from "./lib/voice-stats-probe";
 
 interface ImportMetaEnv {
@@ -13,6 +14,14 @@ interface ImportMetaEnv {
   readonly VITE_TURN_CREDENTIAL?: string;
   readonly VITE_VOICE_BACKEND?: "mesh" | "cloudflare-sfu" | "livekit";
   readonly VITE_DEV_AUTH_BYPASS?: string;
+  /**
+   * The Google Ads advertiser id (`AW-…`) and the label of the sign-up
+   * conversion action. Optional, and absent on every self-hosted build: without
+   * them no Google tag is injected and nothing is ever reported. See
+   * `lib/google-ads-tag.ts` and `lib/google-ads.ts`.
+   */
+  readonly VITE_GOOGLE_ADS_ID?: string;
+  readonly VITE_GOOGLE_ADS_SIGNUP_LABEL?: string;
 }
 
 interface ImportMeta {
@@ -28,6 +37,12 @@ declare global {
      * live call can be measured from the console instead of described.
      */
     pqpVoiceStats?: VoiceStatsConsole;
+    /**
+     * Defined only by the Google tag, which is only injected on the pqp.gg
+     * build. Optional here because on a self-hosted build it genuinely is not
+     * there, and `lib/google-ads.ts` has to be able to see that.
+     */
+    gtag?: Gtag;
   }
 }
 

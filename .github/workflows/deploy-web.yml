@@ -77,6 +77,14 @@ jobs:
           # Optional — public TestFlight join link. Empty is fine; the site then
           # points "Join the iOS beta" at /vs-discord#ios-beta instead.
           VITE_TESTFLIGHT_URL: ${{ secrets.VITE_TESTFLIGHT_URL }}
+          # Google Ads conversion tracking. Both empty until the conversion
+          # action exists in the Ads account, and empty means the build emits no
+          # Google tag whatsoever, so setting them is what turns this on. They
+          # go through repository variables rather than secrets because neither
+          # is one: both are readable in the page source of any site that runs
+          # conversion tracking. See client/src/lib/google-ads-tag.ts.
+          VITE_GOOGLE_ADS_ID: ${{ vars.VITE_GOOGLE_ADS_ID }}
+          VITE_GOOGLE_ADS_SIGNUP_LABEL: ${{ vars.VITE_GOOGLE_ADS_SIGNUP_LABEL }}
         run: pnpm --filter @pqp/client build
 
       # Install wrangler outside the pnpm workspace (npm + workspace:* fails in client/)
