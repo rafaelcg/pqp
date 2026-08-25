@@ -352,7 +352,7 @@ struct BanListView: View {
                                 HStack(spacing: 12) {
                                     Avatar(name: ban.displayName ?? "?", seed: ban.userId, size: 40)
                                     VStack(alignment: .leading, spacing: 2) {
-                                        Text(ban.displayName ?? "Unknown")
+                                        Text(ban.displayName ?? String(localized: "Unknown"))
                                             .font(Typography.bodyMedium)
                                             .foregroundStyle(Palette.paper)
                                         if let reason = ban.reason {

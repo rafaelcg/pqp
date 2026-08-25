@@ -126,7 +126,25 @@ protocol TokenProviding: Sendable {
 /// Development identity. The server accepts this only when `DEV_AUTH_BYPASS`
 /// is on and `NODE_ENV != production`, so it cannot work against the hosted API.
 struct DevTokenProvider: TokenProviding {
-    func currentToken() async -> String? { "dev-local-token" }
+    func currentToken() async -> String? {
+        #if DEBUG
+        // `dev-local-token:<suffix>` is a *different* dev account, minted by
+        // the same bypass (`devBypassIdentity` in server/src/auth/clerk.ts).
+        //
+        // Exists for one test that cannot be written without it: deleting your
+        // account, which on the shared `dev-local-token` identity would destroy
+        // the servers, conversations and handle every other UI test in the
+        // suite reads. Debug-only, like `PQP_API_OVERRIDE` above, so a release
+        // build has no such branch. The alphabet matches the server's, which
+        // refuses anything else rather than minting a surprise account.
+        if let suffix = ProcessInfo.processInfo.environment["PQP_DEV_USER"],
+           !suffix.isEmpty,
+           suffix.range(of: "^[a-z0-9_-]{1,32}$", options: .regularExpression) != nil {
+            return "dev-local-token:\(suffix)"
+        }
+        #endif
+        return "dev-local-token"
+    }
 }
 
 actor APIClient {
@@ -608,20 +626,7 @@ extension APIClient {
     /// Raw bytes, not JSON-decoded: this is a file the user is about to save,
     /// not data the app reads.
     func exportServer(id: String) async throws -> Data {
-        var request = URLRequest(
-            url: backend.apiBaseURL.appendingPathComponent("/api/servers/\(id)/export")
-        )
-        if let token = await tokenProvider.currentToken() {
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            throw APIError.server(
-                status: (response as? HTTPURLResponse)?.statusCode ?? 0,
-                message: "Export failed"
-            )
-        }
-        return data
+        try await rawGet("/api/servers/\(id)/export")
     }
 
     func transferOwnership(serverId: String, to userId: String) async throws -> Server {
@@ -959,6 +964,123 @@ extension APIClient {
     /// slash would otherwise silently address a different route.
     private func pathEscaped(_ value: String) -> String {
         value.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? value
+    }
+
+    // MARK: - Your own data (LGPD art. 18)
+
+    /// A GET whose body is a **file**, not a shape the app reads.
+    ///
+    /// Deliberately not `get()`: the two exports answer with
+    /// `Content-Disposition: attachment` and a body that is only ever written to
+    /// disk and handed to the share sheet. Decoding it would mean modelling
+    /// every table in the product for the sake of throwing the model away.
+    ///
+    /// It still maps refusals the way `perform` does — an export is behind a
+    /// rate limiter, and "Export failed" in place of "Slow down. Try again in
+    /// 47s." is the difference between a user who waits and one who taps the
+    /// button forever.
+    private func rawGet(_ path: String) async throws -> Data {
+        var request = URLRequest(url: backend.apiBaseURL.appendingPathComponent(path))
+        if let token = await tokenProvider.currentToken() {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch {
+            throw APIError.transport(error.localizedDescription)
+        }
+        guard let http = response as? HTTPURLResponse else {
+            throw APIError.transport("Malformed response")
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            throw Self.refusal(status: http.statusCode, body: data, response: http)
+        }
+        return data
+    }
+
+    /// Everything the service holds about you, as a file (art. 18, II and V).
+    ///
+    /// The web client's counterpart mints a blob URL and clicks an invisible
+    /// link. A phone has nowhere to "download" to, so the caller writes this to
+    /// a temp file and hands it to the share sheet — the same arrangement
+    /// `exportServer` already uses, which is how a file leaves an iOS app.
+    func exportMyData() async throws -> Data {
+        try await rawGet("/api/me/export")
+    }
+
+    /// Delete your own account (art. 18, IV and VI). Irreversible, and real:
+    /// there is no soft-delete flag anywhere behind this.
+    ///
+    /// `confirm` is the account's own tag, typed by hand. `AccountDeletion`
+    /// decides whether it matches before this is ever called, using the same
+    /// rule the server refuses on.
+    ///
+    /// HAND-BUILT rather than driven through `send`, for the one reason the web
+    /// client hand-builds its own: the refusal this screen has to *act* on is a
+    /// 409 carrying a list of communities, and the shared path reduces every
+    /// error to its `error` string. There is no 401 retry here, unlike the web
+    /// version, because `ClerkTokenProvider` already reads a fresh token per
+    /// request rather than caching one.
+    func deleteMyAccount(confirm: String) async throws {
+        struct Body: Encodable { let confirm: String }
+        struct Refusal: Decodable {
+            let error: String?
+            let code: String?
+            let servers: [BlockingOwnedServer]?
+        }
+
+        var request = URLRequest(url: backend.apiBaseURL.appendingPathComponent("/api/me"))
+        request.httpMethod = "DELETE"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token = await tokenProvider.currentToken() {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        request.httpBody = try Coding.encoder.encode(Body(confirm: confirm))
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch {
+            throw APIError.transport(error.localizedDescription)
+        }
+        guard let http = response as? HTTPURLResponse else {
+            throw APIError.transport("Malformed response")
+        }
+        if (200..<300).contains(http.statusCode) {
+            return
+        }
+
+        let refusal = try? Coding.decoder.decode(Refusal.self, from: data)
+        if http.statusCode == 409, refusal?.code == "owned_servers" {
+            throw AccountDeletionBlocked(
+                message: refusal?.error
+                    ?? String(localized: "Communities you own are in the way."),
+                servers: refusal?.servers ?? []
+            )
+        }
+        throw Self.refusal(status: http.statusCode, body: data, response: http)
+    }
+
+    /// A non-2xx, mapped the way `perform` maps one. Shared by the two calls
+    /// above, which build their own requests and would otherwise each have to
+    /// remember that a 429 carries `Retry-After`.
+    private static func refusal(
+        status: Int, body: Data, response: HTTPURLResponse
+    ) -> APIError {
+        let message = (try? Coding.decoder.decode(ApiErrorBody.self, from: body))?.error
+            ?? "Request failed (\(status))"
+        switch status {
+        case 401: return .unauthorized
+        case 404: return .notFound(message)
+        case 429:
+            let retry = response.value(forHTTPHeaderField: "Retry-After").flatMap(Int.init)
+            return .rateLimited(retryAfter: retry)
+        default: return .server(status: status, message: message)
+        }
     }
 }
 

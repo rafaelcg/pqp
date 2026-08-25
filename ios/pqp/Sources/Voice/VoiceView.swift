@@ -288,7 +288,7 @@ private struct PeerRow: View {
                         in: 0...2
                     )
                     .tint(Palette.signal)
-                    Text("\(Int(volume * 100))%")
+                    Text(verbatim: "\(Int(volume * 100))%")
                         .font(.system(size: 10, design: .monospaced))
                         .foregroundStyle(Palette.paperMuted)
                         .frame(width: 38, alignment: .trailing)

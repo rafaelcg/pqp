@@ -178,6 +178,15 @@ needs a reference to each remote track, which is why they are captured on
 `didAdd stream` — WebRTC plays received audio automatically, so without one
 there is no way to turn it off short of tearing the connection down.
 
+**A peer can send more than one audio track.** Sharing a screen with its sound
+publishes the machine's audio alongside the microphone, under the screen
+capture's own stream id, which the web client has done since 2026-08-22. Remote
+audio is therefore filed per peer *and per track* (`RemoteAudioMixer`, covered by
+`RemoteAudioTests`). Keyed by peer alone, the second track overwrote the first
+and took the only handle on the microphone with it: deafen then silenced the
+screen and left the presenter's voice playing, and the per-person slider reached
+half of what that person was sending. Neither logged anything.
+
 A call survives a socket drop by being **rebuilt, not resumed**. The server
 drops the voice peer when the socket closes and a reconnect mints a *new* peer
 id, so the old mesh is unusable; `ready` tears everything down and rejoins.
@@ -276,6 +285,43 @@ unsupported. It is cheap to settle: one build, one phone, thirty seconds.
 Per-peer volume is done. Screen share receiving is done; screen share sending is
 written but untested. Camera-in-voice-channels is not built at all (neither
 client offers it).
+
+## Copy and pt-BR
+
+All UI copy lives inline in Swift and is collected into
+`pqp/Resources/Localizable.xcstrings`, which is **keyed on the English source
+string**. Three checks cover it, and each sees something the other two cannot:
+
+| Check | Where | Catches |
+|---|---|---|
+| Every catalogue key still has its pt-BR | `NoEmDashTests` | a translation orphaned by editing the English literal, which renames its key |
+| Every English literal is *in* the catalogue | `Check localisation coverage` build phase (`Scripts/check-localization.py`) | copy that never reached the catalogue at all |
+| The compiled bundle answers in Portuguese | `LocalizationCoverageTests`, `LocalizationUITests` | a catalogue that is in the repo and not in the app |
+
+The middle one is the one with no Xcode equivalent, and it is why
+`SWIFT_EMIT_LOC_STRINGS` is on: the compiler writes one `.stringsdata` per file
+naming every localised literal it saw, which is the only authority on which
+strings are copy. Nothing else can tell `Text("Hang up")` from `Text(name)`. It
+found **126** untranslated strings the first time it ran, on an app whose
+catalogue was 100% translated by the other measure: the whole Friends screen,
+the whole DM call UI, threads, screen share and every audit-log phrase.
+
+Two ways to be wrong, both silent before that phase existed:
+
+- **A new literal with no catalogue entry.** `Text("Hang up")` falls back to its
+  own key, so a Brazilian reader gets English and nothing anywhere says so. The
+  build phase now fails with the file, the line and the string.
+- **A translation that is never asked for.** `Text(someString)` is the
+  *verbatim* initialiser, so a picker built from a `[(String, String)]` renders
+  English however good the translation is. Four settings pickers and all
+  nineteen audit-log phrases were in this state. The fix is `String(localized:)`
+  at the point the literal is written, and the symptom to watch for is a
+  catalogue key that no `.stringsdata` mentions.
+
+Anything that is a value rather than words takes `Text(verbatim:)`: a reaction
+count, a separator, an already-localised phrase being joined to another. Left as
+`Text("\(count)")` it mints a catalogue key of `%lld` that no translator can do
+anything with.
 
 ## Writing UI tests here
 
@@ -421,6 +467,35 @@ xcodebuild -project pqp.xcodeproj -scheme pqp \
 
 They will fail without the server running. That is intentional.
 
+## Your own data: export and deletion
+
+**Account deletion is an App Store submission requirement, not a feature.**
+Review Guideline 5.1.1(v): an app that supports account creation must let the
+account be deleted from inside the app. Both rights live in the last section of
+Settings (`Sources/Home/AccountDataViews.swift`), against the same endpoints the
+web client uses.
+
+- **Export** — `GET /api/me/export`. The bytes are written to a temp file and
+  handed to the share sheet, because a phone has nowhere to "download" to. Same
+  arrangement as the community export in Server settings; both go through
+  `APIClient.rawGet`.
+- **Deletion** — `DELETE /api/me`, with the account's own tag typed by hand.
+  `AccountDeletion` mirrors `deleteConfirmationMatches` from `@pqp/shared`, so
+  the button being enabled and the server accepting the request cannot drift
+  apart. Three refusals matter: 400 (what was typed does not match), 409 with
+  `code: "owned_servers"` (communities other people are still in, listed by name
+  so the screen can say which), and 502 (the identity provider refused; nothing
+  was deleted and retrying is safe). Afterwards the app calls
+  `SessionStore.signOut`, which is the right local teardown even though there is
+  no session left to end.
+
+The UI test deletes a **throwaway** dev-bypass account rather than the shared
+one. `PQP_DEV_USER=<suffix>` makes `DevTokenProvider` send
+`dev-local-token:<suffix>`, which the server's bypass mints as a separate
+identity; without that, running the suite would destroy the servers,
+conversations and handle every other test reads. Debug-only, like
+`PQP_API_OVERRIDE`.
+
 ## Parity with the web client
 
 Both clients talk to the same API — there is no mobile backend and no BFF — so
@@ -441,6 +516,9 @@ per-peer volume.
 
 Also done: **native push notifications** (APNs — see above) and invite links that
 open the app, by universal link or `pqp://`.
+
+Also done: **your own data** — the personal export and account deletion, in
+their own Settings section. See below.
 
 Still only on web: drag-to-reorder within a category (channels can be moved
 between categories, but not dragged into a position).

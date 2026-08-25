@@ -83,6 +83,14 @@ enum TestSeed {
         let name: String
     }
 
+    /// The bearer for a dev-bypass identity. `nil` is the shared account every
+    /// other test uses; a suffix is the separate one the deletion test needs,
+    /// and is the same string the app is launched with in `PQP_DEV_USER`.
+    static func token(_ devUser: String? = nil) -> String {
+        guard let devUser, !devUser.isEmpty else { return "dev-local-token" }
+        return "dev-local-token:\(devUser)"
+    }
+
     /// Answers the 18+ gate for the dev-bypass user.
     ///
     /// The gate outranks every other route — a freshly reset database leaves
@@ -90,17 +98,17 @@ enum TestSeed {
     /// 403 until a date of birth is on file. Idempotent by design: a 200 means
     /// it just passed, a 409 means it was already answered; both are fine and
     /// anything else will surface as the seed failure it causes.
-    static func passAgeGate(_ test: XCTestCase) {
+    static func passAgeGate(_ test: XCTestCase, devUser: String? = nil) {
         var request = URLRequest(url: URL(string: "\(apiBase)/api/me/age-check")!)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer dev-local-token", forHTTPHeaderField: "Authorization")
+        request.setValue("Bearer \(token(devUser))", forHTTPHeaderField: "Authorization")
         request.httpBody = try? JSONSerialization.data(withJSONObject: ["dateOfBirth": "1990-01-01"])
 
         let done = XCTestExpectation(description: "pass age gate")
         URLSession.shared.dataTask(with: request) { _, _, _ in done.fulfill() }.resume()
         test.wait(for: [done], timeout: 15)
-        dismissFirstRun(test)
+        dismissFirstRun(test, devUser: devUser)
     }
 
     /// Put the hub's first-run checklist away for the dev-bypass account.
@@ -114,11 +122,11 @@ enum TestSeed {
     ///
     /// Best effort and unasserted: a failure here costs a card on a screen, not a
     /// wrong result.
-    static func dismissFirstRun(_ test: XCTestCase) {
+    static func dismissFirstRun(_ test: XCTestCase, devUser: String? = nil) {
         var request = URLRequest(url: URL(string: "\(apiBase)/api/me/preferences")!)
         request.httpMethod = "PATCH"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer dev-local-token", forHTTPHeaderField: "Authorization")
+        request.setValue("Bearer \(token(devUser))", forHTTPHeaderField: "Authorization")
         request.httpBody = try? JSONSerialization.data(withJSONObject: [
             "firstRunDismissedAt": "2026-01-01T00:00:00.000Z"
         ])
@@ -164,6 +172,80 @@ enum TestSeed {
         }.resume()
         test.wait(for: [done], timeout: 15)
         return SeededServer(id: createdId ?? "", name: name)
+    }
+
+    /// An incoming webhook on the server's `general` channel, as the path its
+    /// executable URL is built from (`/api/webhooks/:id/:token`).
+    ///
+    /// A webhook is the only way a UI test can make a message arrive *from
+    /// somebody else*: sending is a WebSocket frame, so there is no HTTP route
+    /// to post as a user, and a message the app under test sent scrolls the
+    /// sender to the bottom by design.
+    static func createWebhook(_ test: XCTestCase, serverId: String) -> String {
+        guard !serverId.isEmpty else { return "" }
+        let channelId = generalChannel(test, serverId: serverId)
+        guard !channelId.isEmpty else { return "" }
+
+        var request = URLRequest(url: URL(string: "\(apiBase)/api/channels/\(channelId)/webhooks")!)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(token())", forHTTPHeaderField: "Authorization")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["name": "Someone else"])
+
+        let done = XCTestExpectation(description: "create webhook")
+        nonisolated(unsafe) var path = ""
+        URLSession.shared.dataTask(with: request) { data, _, _ in
+            if let data,
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let webhook = json["webhook"] as? [String: Any] {
+                path = webhook["url"] as? String ?? ""
+            }
+            done.fulfill()
+        }.resume()
+        test.wait(for: [done], timeout: 15)
+        XCTAssertFalse(path.isEmpty, "Could not create a webhook to post through")
+        return path
+    }
+
+    /// The `general` channel every new server is created with.
+    private static func generalChannel(_ test: XCTestCase, serverId: String) -> String {
+        var request = URLRequest(url: URL(string: "\(apiBase)/api/servers/\(serverId)/channels")!)
+        request.setValue("Bearer \(token())", forHTTPHeaderField: "Authorization")
+
+        let done = XCTestExpectation(description: "read channels")
+        nonisolated(unsafe) var id = ""
+        URLSession.shared.dataTask(with: request) { data, _, _ in
+            if let data,
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let channels = json["channels"] as? [[String: Any]] {
+                id = channels.first { $0["type"] as? String == "text" }?["id"] as? String ?? ""
+            }
+            done.fulfill()
+        }.resume()
+        test.wait(for: [done], timeout: 15)
+        return id
+    }
+
+    /// Posts one message as the webhook. Synchronous so a caller can seed a
+    /// transcript in order, which is the only thing that makes the messages
+    /// readable as a sequence afterwards.
+    static func postThroughWebhook(_ test: XCTestCase, path: String, content: String) {
+        guard !path.isEmpty else { return }
+        var request = URLRequest(url: URL(string: "\(apiBase)\(path)")!)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["content": content])
+
+        let done = XCTestExpectation(description: "post through webhook")
+        URLSession.shared.dataTask(with: request) { _, response, _ in
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            XCTAssertTrue(
+                (200..<300).contains(status),
+                "Webhook post refused (\(status)). The execute limiter is 20 with 1/s refill."
+            )
+            done.fulfill()
+        }.resume()
+        test.wait(for: [done], timeout: 15)
     }
 
     /// Removes a seeded server. Best effort — a failure here should not fail

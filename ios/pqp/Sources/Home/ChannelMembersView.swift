@@ -33,7 +33,7 @@ struct ChannelMembersView: View {
                                     .foregroundStyle(Palette.danger)
                             }
 
-                            SectionLabel(text: "Can see this channel")
+                            SectionLabel(text: String(localized: "Can see this channel"))
                                 .padding(.horizontal, 4)
                             if allowed.isEmpty {
                                 Text("Only people with a role that grants access.")
@@ -43,17 +43,17 @@ struct ChannelMembersView: View {
                             }
                             ForEach(allowed) { user in
                                 row(name: user.displayName, seed: user.id,
-                                    avatarUrl: user.avatarUrl, action: "Remove") {
+                                    avatarUrl: user.avatarUrl, removes: true) {
                                     Task { await remove(user.id) }
                                 }
                             }
 
-                            SectionLabel(text: "Add from the community")
+                            SectionLabel(text: String(localized: "Add from the community"))
                                 .padding(.horizontal, 4)
                                 .padding(.top, 10)
                             ForEach(candidates.filter { !allowedIds.contains($0.id) }) { member in
                                 row(name: member.displayName, seed: member.id,
-                                    avatarUrl: member.avatarUrl, action: "Add") {
+                                    avatarUrl: member.avatarUrl, removes: false) {
                                     Task { await add(member.id) }
                                 }
                             }
@@ -63,7 +63,7 @@ struct ChannelMembersView: View {
                     }
                 }
             }
-            .navigationTitle("#\(channel.name)")
+            .navigationTitle(Text(verbatim: "#\(channel.name)"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -78,16 +78,20 @@ struct ChannelMembersView: View {
         name: String,
         seed: String,
         avatarUrl: String? = nil,
-        action: String,
+        removes: Bool,
         perform: @escaping () -> Void
     ) -> some View {
         HStack(spacing: 12) {
             Avatar(name: name, seed: seed, size: 36, url: avatarUrl)
             Text(name).font(Typography.bodyMedium).foregroundStyle(Palette.paper)
             Spacer()
-            Button(action, action: perform)
+            // Resolved here rather than passed in as copy: a localised title
+            // cannot also be the flag that picks the tint, which is what
+            // comparing it against "Remove" quietly relied on.
+            Button(removes ? String(localized: "Remove") : String(localized: "Add"),
+                   action: perform)
                 .font(Typography.caption)
-                .foregroundStyle(action == "Remove" ? Palette.danger : Palette.signal)
+                .foregroundStyle(removes ? Palette.danger : Palette.signal)
         }
         .padding(12)
         .pqpSurface()

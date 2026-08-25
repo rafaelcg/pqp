@@ -63,12 +63,11 @@ actor VoiceClient {
 
     private var localAudioTrack: RTCAudioTrack?
     private var localStream: RTCMediaStream?
-    /// Remote audio, kept per peer so deafening can silence it. WebRTC plays
-    /// received audio automatically, so without a reference there is no way to
-    /// turn it off short of tearing the connection down.
-    private var remoteTracks: [String: RTCAudioTrack] = [:]
-    private var isDeafened = false
-    private var volumes: [String: Double] = [:]
+    /// Remote audio, kept so deafening can silence it. WebRTC plays received
+    /// audio automatically, so without a reference there is no way to turn it
+    /// off short of tearing the connection down. Per peer *and per track*: see
+    /// `RemoteAudioMixer` for why one reference per peer was not enough.
+    private var remoteAudio = RemoteAudioMixer<RTCAudioTrack>()
     private var statsTimer: Task<Void, Never>?
     private var speaking: Set<String> = []
     private var iceServers: [RTCIceServer] = []
@@ -227,10 +226,7 @@ actor VoiceClient {
     /// Deafening silences everyone else and forces your own mic off, matching
     /// the web client — being heard while hearing nothing is a trap.
     func setDeafened(_ deafened: Bool) {
-        isDeafened = deafened
-        for track in remoteTracks.values {
-            track.isEnabled = !deafened
-        }
+        remoteAudio.setDeafened(deafened)
         if deafened {
             localAudioTrack?.isEnabled = false
         }
@@ -238,11 +234,13 @@ actor VoiceClient {
 
     fileprivate func addRemoteTrack(_ box: UncheckedBox<RTCAudioTrack>, for peerId: String) {
         let track = box.value
-        track.isEnabled = !isDeafened
-        // Re-apply any volume already chosen for this person: on a reconnect
-        // the track is new but the preference is not.
-        if let volume = volumes[peerId] { track.source.volume = volume }
-        remoteTracks[peerId] = track
+        // Keyed by track id, not by peer: a peer sharing a screen with its
+        // sound sends two. Deafen and volume are re-applied by the mixer.
+        remoteAudio.add(track, id: track.trackId, for: peerId)
+    }
+
+    fileprivate func removeRemoteTrack(trackId: String, for peerId: String) {
+        remoteAudio.remove(trackId: trackId, for: peerId)
     }
 
     /// Per-person playback level, 0…2 where 1 is unchanged.
@@ -251,8 +249,7 @@ actor VoiceClient {
     /// the server mints a fresh peer id on every join, so a peer-keyed
     /// preference would reset whenever that person reconnected.
     func setVolume(_ volume: Double, for peerId: String) {
-        volumes[peerId] = volume
-        remoteTracks[peerId]?.source.volume = volume
+        remoteAudio.setVolume(volume, for: peerId)
     }
 
     // MARK: - Camera
@@ -575,7 +572,7 @@ actor VoiceClient {
         renegotiationTasks[peerId] = nil
         connections[peerId]?.close()
         connections[peerId] = nil
-        remoteTracks[peerId] = nil
+        remoteAudio.remove(peerId: peerId)
         speaking.remove(peerId)
         pendingCandidates[peerId] = nil
         peerNames[peerId] = nil
@@ -595,8 +592,7 @@ actor VoiceClient {
         statsTimer?.cancel()
         statsTimer = nil
         speaking.removeAll()
-        remoteTracks.removeAll()
-        isDeafened = false
+        remoteAudio.removeEverything()
         for task in renegotiationTasks.values { task.cancel() }
         renegotiationTasks.removeAll()
         for (_, connection) in connections { connection.close() }
@@ -848,7 +844,7 @@ actor VoiceClient {
                 connection: peerConnectionState[peerId] ?? "connecting",
                 avatarUrl: peerAvatarUrls[peerId],
                 isSpeaking: speaking.contains(peerId),
-                volume: volumes[peerId] ?? 1
+                volume: remoteAudio.volume(for: peerId)
             )
         }
         .sorted { $0.displayName < $1.displayName }
@@ -950,10 +946,14 @@ private final class PeerDelegate: NSObject, RTCPeerConnectionDelegate, @unchecke
     }
 
     func peerConnection(_ peerConnection: RTCPeerConnection, didRemove stream: RTCMediaStream) {
-        let trackIds = stream.videoTracks.map(\.trackId)
+        let videoIds = stream.videoTracks.map(\.trackId)
+        let audioIds = stream.audioTracks.map(\.trackId)
         Task { [owner, peerId] in
-            for trackId in trackIds {
+            for trackId in videoIds {
                 await owner?.removeRemoteVideo(trackId: trackId, for: peerId)
+            }
+            for trackId in audioIds {
+                await owner?.removeRemoteTrack(trackId: trackId, for: peerId)
             }
         }
     }
@@ -981,9 +981,15 @@ private final class PeerDelegate: NSObject, RTCPeerConnectionDelegate, @unchecke
     }
 
     func peerConnection(_ peerConnection: RTCPeerConnection, didRemove rtpReceiver: RTCRtpReceiver) {
-        guard let trackId = rtpReceiver.track?.trackId else { return }
+        guard let track = rtpReceiver.track else { return }
+        let trackId = track.trackId
+        let isAudio = track is RTCAudioTrack
         Task { [owner, peerId] in
-            await owner?.removeRemoteVideo(trackId: trackId, for: peerId)
+            if isAudio {
+                await owner?.removeRemoteTrack(trackId: trackId, for: peerId)
+            } else {
+                await owner?.removeRemoteVideo(trackId: trackId, for: peerId)
+            }
         }
     }
     func peerConnectionShouldNegotiate(_ peerConnection: RTCPeerConnection) {}
