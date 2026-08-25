@@ -893,7 +893,7 @@
   "settings.voice.outputUnsupported": "Output device selection is not supported in this browser.",
   "settings.voice.outputVolume": "Output volume",
   "settings.voice.videoQuality": "Camera and screen quality",
-  "settings.voice.videoQuality.hint": "One choice for both your camera and your screen share. Auto asks for 720p from the camera and lets the connection decide from there. A fixed choice asks for that size instead, and spends more on the screen share as well. Your screen is always captured at 1080p; a higher setting lets more of it through. The picture still drops when the link cannot carry it.",
+  "settings.voice.videoQuality.hint": "One choice for both your camera and your screen share. Auto asks for 720p from the camera and lets the connection decide from there. A fixed choice asks for that size instead, and sends your screen share at that size too. Your screen is still captured at 1080p whatever you pick, so moving the setting back up costs you nothing. The picture still drops below your choice when the link cannot carry it.",
   "settings.voice.videoQuality.auto": "Auto",
   "settings.voice.videoQuality.1080p": "1080p",
   "settings.voice.videoQuality.720p": "720p",

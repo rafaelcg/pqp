@@ -7,6 +7,7 @@ import {
   DEFAULT_VIDEO_QUALITY,
   parseVideoQuality,
   screenBitrateFor,
+  screenScaleFactor,
   VIDEO_QUALITIES,
 } from "./video-quality";
 
@@ -204,5 +205,53 @@ describe("screenBitrateFor", () => {
     // The ceiling exists to be reachable, not to saturate a 5 to 10 Mbps home
     // upload and starve the audio riding on the same link.
     expect(screenBitrateFor("1080p")).toBeLessThanOrEqual(4_000_000);
+  });
+});
+
+describe("screenScaleFactor", () => {
+  it("scales a 1080p capture to the size each label names", () => {
+    // THE REPORTED BUG, as arithmetic. "I picked 360p and it was clearly not
+    // 360p": nothing divided the resolution, so the encoder held 1920x1080 and
+    // spent the smaller ceiling on a worse-looking version of the same frame.
+    expect(screenScaleFactor("1080p", 1080)).toBe(1);
+    expect(screenScaleFactor("720p", 1080)).toBeCloseTo(1.5, 2);
+    expect(screenScaleFactor("480p", 1080)).toBeCloseTo(2.25, 2);
+    expect(screenScaleFactor("360p", 1080)).toBeCloseTo(3, 2);
+  });
+
+  it("computes the divisor from the screen in front of the user", () => {
+    // `scaleResolutionDownBy` is a divisor, not a size, so a hard-coded 3 means
+    // 360p on a 1080p monitor and 480p on a 1440p one. The same label has to
+    // mean the same picture on both.
+    expect(screenScaleFactor("360p", 1440)).toBeCloseTo(4, 2);
+    expect(screenScaleFactor("720p", 1440)).toBeCloseTo(2, 2);
+    expect(screenScaleFactor("360p", 720)).toBeCloseTo(2, 2);
+  });
+
+  it("never scales a capture up to meet a bigger label", () => {
+    // Somebody sharing a small window and picking 1080p gets the window, not a
+    // blown-up one: a divisor below 1 is an upscale, which costs bitrate to add
+    // no detail at all.
+    expect(screenScaleFactor("1080p", 720)).toBe(1);
+    expect(screenScaleFactor("720p", 480)).toBe(1);
+    expect(screenScaleFactor("360p", 360)).toBe(1);
+  });
+
+  it("leaves auto to the connection", () => {
+    // Auto is the one rung that names no size, so it pins none: the encoder
+    // adapts up and down on its own, which is the whole meaning of the word.
+    for (const height of [1080, 1440, 720, null]) {
+      expect(screenScaleFactor("auto", height)).toBe(1);
+    }
+  });
+
+  it("assumes the capture ceiling when the track will not say", () => {
+    // `getSettings()` can answer with nothing at all in the first moments after
+    // a capture starts. Guessing 1 there would silently ship 1080p to somebody
+    // who asked for 360p, which is the bug; the requested capture height is the
+    // honest guess, and the next re-tune corrects it either way.
+    expect(screenScaleFactor("360p", null)).toBeCloseTo(3, 2);
+    expect(screenScaleFactor("360p", undefined)).toBeCloseTo(3, 2);
+    expect(screenScaleFactor("360p", 0)).toBeCloseTo(3, 2);
   });
 });
