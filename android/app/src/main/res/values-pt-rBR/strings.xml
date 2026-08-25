@@ -65,4 +65,66 @@
     <string name="cancel">Cancelar</string>
     <string name="error_generic">Algo deu errado.</string>
     <string name="error_network">O servidor não respondeu.</string>
+
+    <!-- Conversas -->
+    <string name="dms_title">Mensagens</string>
+    <string name="dms_empty">Nenhuma conversa ainda. Comece uma e ela aparece aqui.</string>
+    <string name="dms_new">Nova mensagem</string>
+    <string name="dms_no_messages">Sem mensagens ainda</string>
+    <string name="dms_empty_conversation">Conversa vazia</string>
+    <!-- "many" nunca aparece aqui: um grupo vai no máximo até dez pessoas.
+         Está definido porque o CLDR do português tem essa categoria e a
+         ferramenta cobra a forma completa. -->
+    <plurals name="dms_group_people">
+        <item quantity="one">%1$d pessoa</item>
+        <item quantity="many">%1$d de pessoas</item>
+        <item quantity="other">%1$d pessoas</item>
+    </plurals>
+    <string name="dms_close">Fechar</string>
+    <string name="dms_close_prompt">Fechar %1$s?</string>
+    <string name="dms_close_explanation">Sai só da sua lista. Nada é apagado, e uma conversa entre duas pessoas volta com o histórico assim que qualquer um dos dois falar.</string>
+    <string name="dms_group_limit">Uma conversa em grupo vai até dez pessoas.</string>
+    <string name="dms_new_no_friends">Nenhum amigo ainda. Procure pelo identificador completo, como nome#1234, ou adicione alguém em Amigos primeiro.</string>
+    <string name="dms_new_start_one">Enviar mensagem para %1$s</string>
+    <string name="dms_new_start_group">Criar um grupo de %1$d</string>
+
+    <!-- Encontrar pessoas -->
+    <string name="people_search_hint">Buscar pelo identificador</string>
+    <string name="people_search_no_matches">Nada encontrado. Tente o identificador completo, como nome#1234.</string>
+    <string name="people_search_no_tag">Ninguém com essa tag.</string>
+
+    <!-- Amigos -->
+    <string name="friends_title">Amigos</string>
+    <string name="friends_tab_online">Online</string>
+    <string name="friends_tab_all">Todos</string>
+    <string name="friends_tab_pending">Pendentes</string>
+    <string name="friends_add">Adicionar amigo</string>
+    <string name="friends_add_hint">Busque pelo identificador completo, como nome#1234.</string>
+    <string name="friends_add_action">Adicionar</string>
+    <string name="friends_empty_online">Ninguém por aqui. Seus amigos aparecem aqui quando ficarem online.</string>
+    <string name="friends_empty_all">Nenhum amigo ainda. Adicione alguém pelo identificador completo, como nome#1234.</string>
+    <string name="friends_empty_pending">Nada pendente. Os pedidos esperando por você, e os que você enviou, chegam aqui.</string>
+    <string name="friends_section_incoming">Esperando por você</string>
+    <string name="friends_section_outgoing">Enviados</string>
+    <string name="friends_accept">Aceitar</string>
+    <string name="friends_decline">Recusar</string>
+    <string name="friends_cancel_request">Cancelar</string>
+    <string name="friends_message">Mensagem</string>
+    <string name="friends_remove">Remover amigo</string>
+    <string name="friends_block">Bloquear</string>
+    <string name="friends_more">Mais</string>
+    <string name="friends_remove_prompt">Remover %1$s?</string>
+    <string name="friends_remove_explanation">A pessoa não será avisada. Vocês podem se adicionar de novo depois.</string>
+    <string name="friends_block_prompt">Bloquear %1$s?</string>
+    <string name="friends_block_explanation">Bloquear também encerra a amizade e esconde as mensagens da pessoa.</string>
+    <string name="friends_request_sent">Pedido enviado</string>
+    <string name="friends_now_friends">Vocês são amigos</string>
+    <string name="friends_nudge_request">Alguém te enviou um pedido de amizade.</string>
+    <string name="friends_nudge_accepted">Seu pedido de amizade foi aceito.</string>
+
+    <!-- Status -->
+    <string name="status_online">Online</string>
+    <string name="status_idle">Ausente</string>
+    <string name="status_dnd">Não perturbe</string>
+    <string name="status_offline">Offline</string>
 </resources>

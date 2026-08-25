@@ -65,4 +65,62 @@
     <string name="cancel">Cancel</string>
     <string name="error_generic">Something went wrong.</string>
     <string name="error_network">The server did not answer.</string>
+
+    <!-- Conversations -->
+    <string name="dms_title">Messages</string>
+    <string name="dms_empty">No conversations yet. Start one and it shows up here.</string>
+    <string name="dms_new">New message</string>
+    <string name="dms_no_messages">No messages yet</string>
+    <string name="dms_empty_conversation">Empty conversation</string>
+    <plurals name="dms_group_people">
+        <item quantity="one">%1$d person</item>
+        <item quantity="other">%1$d people</item>
+    </plurals>
+    <string name="dms_close">Close</string>
+    <string name="dms_close_prompt">Close %1$s?</string>
+    <string name="dms_close_explanation">It only leaves your list. Nothing is deleted, and a one to one conversation comes back with its history the moment either of you says something.</string>
+    <string name="dms_group_limit">A group conversation tops out at ten people.</string>
+    <string name="dms_new_no_friends">No friends yet. Search a full handle like name#1234, or add someone from Friends first.</string>
+    <string name="dms_new_start_one">Message %1$s</string>
+    <string name="dms_new_start_group">Start a group of %1$d</string>
+
+    <!-- Finding people -->
+    <string name="people_search_hint">Search by handle</string>
+    <string name="people_search_no_matches">No matches. Try their full handle, like name#1234.</string>
+    <string name="people_search_no_tag">No one with that tag.</string>
+
+    <!-- Friends -->
+    <string name="friends_title">Friends</string>
+    <string name="friends_tab_online">Online</string>
+    <string name="friends_tab_all">All</string>
+    <string name="friends_tab_pending">Pending</string>
+    <string name="friends_add">Add friend</string>
+    <string name="friends_add_hint">Search a full handle, like name#1234.</string>
+    <string name="friends_add_action">Add</string>
+    <string name="friends_empty_online">Nobody is around. Your friends show up here when they come online.</string>
+    <string name="friends_empty_all">No friends yet. Add someone with their full handle, like name#1234.</string>
+    <string name="friends_empty_pending">Nothing pending. Requests waiting on you, and the ones you sent, land here.</string>
+    <string name="friends_section_incoming">Waiting on you</string>
+    <string name="friends_section_outgoing">Sent</string>
+    <string name="friends_accept">Accept</string>
+    <string name="friends_decline">Decline</string>
+    <string name="friends_cancel_request">Cancel</string>
+    <string name="friends_message">Message</string>
+    <string name="friends_remove">Remove friend</string>
+    <string name="friends_block">Block</string>
+    <string name="friends_more">More</string>
+    <string name="friends_remove_prompt">Remove %1$s?</string>
+    <string name="friends_remove_explanation">They will not be told. You can add each other again later.</string>
+    <string name="friends_block_prompt">Block %1$s?</string>
+    <string name="friends_block_explanation">Blocking also ends the friendship and hides their messages.</string>
+    <string name="friends_request_sent">Request sent</string>
+    <string name="friends_now_friends">You are friends</string>
+    <string name="friends_nudge_request">Someone sent you a friend request.</string>
+    <string name="friends_nudge_accepted">Your friend request was accepted.</string>
+
+    <!-- Status -->
+    <string name="status_online">Online</string>
+    <string name="status_idle">Idle</string>
+    <string name="status_dnd">Do not disturb</string>
+    <string name="status_offline">Offline</string>
 </resources>

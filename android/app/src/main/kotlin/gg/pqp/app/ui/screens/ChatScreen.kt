@@ -71,6 +71,11 @@ fun ChatScreen(
     channelId: String,
     channelName: String,
     onBack: () -> Unit,
+    /**
+     * What the app bar says. A server channel is `#name`; a conversation is a
+     * person's name, because there is no channel there to prefix.
+     */
+    title: String = "#$channelName",
 ) {
     val model: ChatViewModel = viewModel(
         key = channelId,
@@ -101,7 +106,7 @@ fun ChatScreen(
         topBar = {
             Column {
                 TopAppBar(
-                    title = { Text("#$channelName") },
+                    title = { Text(title) },
                     navigationIcon = {
                         IconButton(onClick = onBack) {
                             Icon(

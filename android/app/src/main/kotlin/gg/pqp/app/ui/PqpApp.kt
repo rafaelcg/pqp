@@ -23,12 +23,13 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
 import gg.pqp.app.core.SessionPhase
 import gg.pqp.app.core.SessionStore
+import gg.pqp.app.social.ui.HomeScreen
+import gg.pqp.app.social.ui.conversationDestination
 import gg.pqp.app.ui.components.CallBar
 import gg.pqp.app.ui.screens.AgeGateScreen
 import gg.pqp.app.ui.screens.ChannelsScreen
 import gg.pqp.app.ui.screens.ChatScreen
 import gg.pqp.app.ui.screens.FailedScreen
-import gg.pqp.app.ui.screens.ServersScreen
 import gg.pqp.app.ui.screens.SignInScreen
 import gg.pqp.app.ui.screens.YouScreen
 import gg.pqp.app.voice.VoiceController
@@ -119,14 +120,20 @@ private fun SignedInNav(session: SessionStore, voice: VoiceController) {
             // break that cooperation.
             NavHost(navController = nav, startDestination = ServersRoute) {
                 composable<ServersRoute> {
-                    ServersScreen(
+                    // The start destination is the three-tab home (servers,
+                    // messages, friends) rather than the server list alone.
+                    // The route keeps its name so nothing else that addresses
+                    // it has to change.
+                    HomeScreen(
                         session = session,
                         onOpenServer = { server ->
                             nav.navigate(ChannelsRoute(server.id, server.name))
                         },
+                        onOpenConversation = { route -> nav.navigate(route) },
                         onOpenProfile = { nav.navigate(YouRoute) },
                     )
                 }
+                conversationDestination(session, onBack = nav::popBackStack)
                 composable<ChannelsRoute> { entry ->
                     val route = entry.toRoute<ChannelsRoute>()
                     ChannelsScreen(
