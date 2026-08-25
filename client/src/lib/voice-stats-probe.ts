@@ -78,6 +78,43 @@ export interface VideoSenderSample {
   nackCount: number | null;
 }
 
+/**
+ * One INBOUND video track, as it looked at the moment of sampling.
+ *
+ * WHY A SEPARATE SHAPE FROM `VideoSenderSample`, when four of the fields have
+ * the same names. Because the two answer opposite questions and only one of
+ * them has a knob attached. A sender row says "here is what I am spending and
+ * here is what is stopping me spending more", and every one of those limits is
+ * something this machine can act on. A receiver row says "here is what turned
+ * up", and there is **nothing on this side that can make it bigger**: in a full
+ * mesh the sender encodes one stream per peer and that is what arrives.
+ * `scaleResolutionDownBy` and `maxBitrate` are sender-side encoder parameters
+ * and `RTCRtpReceiver` has no counterpart to either.
+ *
+ * So there is no `ceilingKbps`, no `limitedBy` and no `describeLimitation` for
+ * these rows, and adding one later would be inventing an answer. The honest
+ * reading of a receiver row is the size, the rate, and who chose them.
+ */
+export interface VideoReceiverSample {
+  /** The mesh peer this arrived from. */
+  peerId: string;
+  /** Their display name, when the connection was registered with one. */
+  displayName: string | null;
+  role: VideoSenderRole;
+  /** Decoded frame size. `null` until the first frame is decoded. */
+  width: number | null;
+  height: number | null;
+  fps: number | null;
+  /** Measured from the byte delta since the previous sample, not reported. */
+  kbps: number | null;
+  /** Frames decoded since the call began. Zero means nothing has arrived. */
+  framesDecoded: number | null;
+  decoder: string | null;
+  /** Times the picture froze, which is the receiver's own quality complaint. */
+  freezeCount: number | null;
+  packetsLost: number | null;
+}
+
 /** The path the media is taking, which is the other half of the answer. */
 export interface CandidatePairSample {
   peerId: string;
@@ -93,13 +130,50 @@ export interface CandidatePairSample {
 
 export interface VoiceStatsSnapshot {
   senders: VideoSenderSample[];
+  receivers: VideoReceiverSample[];
   paths: CandidatePairSample[];
 }
 
-/** Byte/timestamp pair kept between samples so a bitrate can be derived. */
+/**
+ * Byte/timestamp pair kept between samples so a bitrate can be derived.
+ *
+ * `bytes` rather than `bytesSent` because the same machinery now measures both
+ * directions, and a field named for one of them is how a receiver row ends up
+ * silently reporting a sender's rate.
+ */
 interface ByteMark {
-  bytesSent: number;
+  bytes: number;
   timestamp: number;
+}
+
+/**
+ * Bits per second since this key was last seen, recording the new reading.
+ *
+ * Differenced rather than read, because every byte counter in `getStats()` is
+ * cumulative from the start of the call: the absolute value is an average over
+ * the whole session, in which a collapse three seconds ago is invisible.
+ */
+function rateKbps(
+  previous: Map<string, ByteMark>,
+  key: string,
+  bytes: number | null,
+  timestamp: number | null,
+): number | null {
+  const mark = previous.get(key);
+  let kbps: number | null = null;
+  if (
+    mark &&
+    bytes !== null &&
+    timestamp !== null &&
+    timestamp > mark.timestamp
+  ) {
+    const seconds = (timestamp - mark.timestamp) / 1000;
+    kbps = Math.round(((bytes - mark.bytes) * 8) / seconds / 1000);
+  }
+  if (bytes !== null && timestamp !== null) {
+    previous.set(key, { bytes, timestamp });
+  }
+  return kbps;
 }
 
 function num(value: unknown): number | null {
@@ -130,6 +204,16 @@ export function summariseStats(
   previous: Map<string, ByteMark>,
   /** Optional: the sender's own `maxBitrate`, in bps, by track id. */
   ceilingOfTrack?: (trackId: string) => number | null,
+  /**
+   * Optional: which of a REMOTE peer's video tracks this is.
+   *
+   * Separate from `roleOfTrack` because the two resolve against different
+   * things: outgoing tracks are found on `pc.getSenders()`, incoming ones on
+   * the classified remote streams. A single callback would have to guess which
+   * side an id came from at the exact moment a `replaceTrack` makes both
+   * plausible.
+   */
+  roleOfRemoteTrack?: (trackId: string) => VideoSenderRole,
 ): VoiceStatsSnapshot {
   const byId = new Map<string, RtcStatLike>();
   const all: RtcStatLike[] = [];
@@ -150,22 +234,12 @@ export function summariseStats(
     const source = byId.get(str(stat.mediaSourceId) ?? "");
     const trackId = str(source?.trackIdentifier);
     const key = `${peerId}:${str(stat.id) ?? "?"}`;
-    const bytesSent = num(stat.bytesSent);
-    const timestamp = num(stat.timestamp);
-    const mark = previous.get(key);
-    let kbps: number | null = null;
-    if (
-      mark &&
-      bytesSent !== null &&
-      timestamp !== null &&
-      timestamp > mark.timestamp
-    ) {
-      const seconds = (timestamp - mark.timestamp) / 1000;
-      kbps = Math.round(((bytesSent - mark.bytesSent) * 8) / seconds / 1000);
-    }
-    if (bytesSent !== null && timestamp !== null) {
-      previous.set(key, { bytesSent, timestamp });
-    }
+    const kbps = rateKbps(
+      previous,
+      key,
+      num(stat.bytesSent),
+      num(stat.timestamp),
+    );
 
     const durations = stat.qualityLimitationDurations;
     senders.push({
@@ -194,6 +268,46 @@ export function summariseStats(
       keyFramesEncoded: num(stat.keyFramesEncoded),
       pliCount: num(stat.pliCount),
       nackCount: num(stat.nackCount),
+    });
+  }
+
+  /**
+   * What is arriving, which is the half nobody was measuring.
+   *
+   * THE ENTIRE REASON THIS EXISTS. Every number this module produced was read
+   * off the local sender, so a call could be measured in full detail by the
+   * one person whose picture was fine and not at all by the person watching it
+   * go soft. A screen share from a phone was reported as "it looked 360p", and
+   * there was no way to turn that into a figure from the machine it looked
+   * 360p on, which is the only machine that can see it.
+   *
+   * `trackIdentifier` is read straight off `inbound-rtp`: unlike the outbound
+   * side there is no `media-source` hop, because the source is somebody else's.
+   */
+  const receivers: VideoReceiverSample[] = [];
+  for (const stat of all) {
+    if (stat.type !== "inbound-rtp" || stat.kind !== "video") {
+      continue;
+    }
+    const trackId = str(stat.trackIdentifier);
+    const key = `in:${peerId}:${str(stat.id) ?? "?"}`;
+    receivers.push({
+      peerId,
+      displayName: null,
+      role: trackId ? (roleOfRemoteTrack?.(trackId) ?? "unknown") : "unknown",
+      width: num(stat.frameWidth),
+      height: num(stat.frameHeight),
+      fps: num(stat.framesPerSecond),
+      kbps: rateKbps(
+        previous,
+        key,
+        num(stat.bytesReceived),
+        num(stat.timestamp),
+      ),
+      framesDecoded: num(stat.framesDecoded),
+      decoder: str(stat.decoderImplementation),
+      freezeCount: num(stat.freezeCount),
+      packetsLost: num(stat.packetsLost),
     });
   }
 
@@ -238,7 +352,7 @@ export function summariseStats(
     };
   });
 
-  return { senders, paths };
+  return { senders, receivers, paths };
 }
 
 /** What is actually holding a sender back, once the two rate limits are split. */
@@ -295,6 +409,16 @@ interface Registration {
   peerId: string;
   pc: RTCPeerConnection;
   roleOfTrack: (trackId: string) => VideoSenderRole;
+  /** Which of this peer's INCOMING video tracks an id belongs to. */
+  roleOfRemoteTrack: (trackId: string) => VideoSenderRole;
+  /**
+   * Who the peer is, resolved live rather than captured.
+   *
+   * A peer's identity arrives on the roster, which routinely lands *after* the
+   * connection is created, so a name captured at registration time is `null`
+   * for the life of the call on exactly the connections that matter.
+   */
+  displayName: () => string | null;
 }
 
 const registrations = new Map<RTCPeerConnection, Registration>();
@@ -375,6 +499,7 @@ function ceilingLookup(pc: RTCPeerConnection): (trackId: string) => number | nul
 
 async function sampleAll(): Promise<VoiceStatsSnapshot> {
   const senders: VideoSenderSample[] = [];
+  const receivers: VideoReceiverSample[] = [];
   const paths: CandidatePairSample[] = [];
   for (const registration of registrations.values()) {
     try {
@@ -385,14 +510,21 @@ async function sampleAll(): Promise<VoiceStatsSnapshot> {
         registration.roleOfTrack,
         byteMarks,
         ceilingLookup(registration.pc),
+        registration.roleOfRemoteTrack,
       );
       senders.push(...snapshot.senders);
+      // The name is attached here rather than inside `summariseStats`, which
+      // is pure and knows nothing about the roster.
+      const displayName = registration.displayName();
+      for (const receiver of snapshot.receivers) {
+        receivers.push({ ...receiver, displayName });
+      }
       paths.push(...snapshot.paths);
     } catch {
       // A connection closed between the iteration and the call. Nothing to say.
     }
   }
-  return { senders, paths };
+  return { senders, receivers, paths };
 }
 
 /* eslint-disable no-console -- the console IS the output of this module; there
@@ -400,7 +532,11 @@ async function sampleAll(): Promise<VoiceStatsSnapshot> {
    measurement as a fault. */
 function print(snapshot: VoiceStatsSnapshot): void {
   const time = new Date().toLocaleTimeString();
-  if (snapshot.senders.length === 0 && snapshot.paths.length === 0) {
+  if (
+    snapshot.senders.length === 0 &&
+    snapshot.receivers.length === 0 &&
+    snapshot.paths.length === 0
+  ) {
     console.log(`[pqp voice ${time}] no mesh connections — not in a call?`);
     return;
   }
@@ -419,6 +555,24 @@ function print(snapshot: VoiceStatsSnapshot): void {
       reallyBy: describeLimitation(sender) ?? "-",
       encoder: sender.encoder ?? "-",
       pli: sender.pliCount ?? "-",
+    })),
+  );
+  console.log(`[pqp voice ${time}] inbound video`);
+  console.table(
+    snapshot.receivers.map((receiver) => ({
+      peer: receiver.peerId.slice(0, 8),
+      from: receiver.displayName ?? "-",
+      role: receiver.role,
+      size:
+        receiver.width && receiver.height
+          ? `${receiver.width}x${receiver.height}`
+          : "-",
+      fps: receiver.fps ?? "-",
+      kbps: receiver.kbps ?? "-",
+      frames: receiver.framesDecoded ?? "-",
+      freezes: receiver.freezeCount ?? "-",
+      lost: receiver.packetsLost ?? "-",
+      decoder: receiver.decoder ?? "-",
     })),
   );
   console.table(
@@ -497,8 +651,21 @@ export function registerVoiceConnection(
   peerId: string,
   pc: RTCPeerConnection,
   roleOfTrack: (trackId: string) => VideoSenderRole,
+  remote?: {
+    roleOfRemoteTrack: (trackId: string) => VideoSenderRole;
+    displayName: () => string | null;
+  },
 ): void {
-  registrations.set(pc, { peerId, pc, roleOfTrack });
+  registrations.set(pc, {
+    peerId,
+    pc,
+    roleOfTrack,
+    // Optional so that a caller which only cares about the outgoing half (the
+    // SFU session, and every test that registers a fake connection) keeps
+    // working unchanged, reporting `unknown` rather than throwing.
+    roleOfRemoteTrack: remote?.roleOfRemoteTrack ?? (() => "unknown"),
+    displayName: remote?.displayName ?? (() => null),
+  });
   exposeConsole();
 }
 

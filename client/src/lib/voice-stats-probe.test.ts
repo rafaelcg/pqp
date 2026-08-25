@@ -78,7 +78,7 @@ describe("summariseStats", () => {
   });
 
   it("reports no bitrate on the first sample and a delta on the second", () => {
-    const marks = new Map<string, { bytesSent: number; timestamp: number }>();
+    const marks = new Map<string, { bytes: number; timestamp: number }>();
     const first = summariseStats(PEER, report(), roles, marks);
     expect(first.senders[0]!.kbps).toBeNull();
 
@@ -141,6 +141,11 @@ describe("summariseStats", () => {
     expect(paths).toEqual([]);
   });
 
+  it("reports no receivers at all when nothing is arriving", () => {
+    const { receivers } = summariseStats(PEER, report(), roles, new Map());
+    expect(receivers).toEqual([]);
+  });
+
   it("says unknown rather than guessing when the track cannot be resolved", () => {
     const orphaned = report().filter((stat) => stat.id !== "SV1");
     const { senders } = summariseStats(PEER, orphaned, roles, new Map());
@@ -152,6 +157,163 @@ describe("summariseStats", () => {
       1_500_000,
     );
     expect(senders[0]!.ceilingKbps).toBe(1_500);
+  });
+});
+
+/**
+ * The receiving half, which is the half nobody was measuring.
+ *
+ * WHY IT MATTERS ENOUGH TO HAVE ITS OWN BLOCK. Every number this module
+ * produced came off the local sender, so a call could be measured in complete
+ * detail by the one person whose picture was fine and not at all by the person
+ * watching it go soft. That is exactly how a screen share sent from the iOS app
+ * got reported as "it looked 360p" with no figure attached: the only machine
+ * that could see the problem had no way to put a number on it.
+ *
+ * A sender's `getParameters()` is not a substitute, and this is the trap a
+ * previous pass fell into. It proves the browser accepted the numbers it was
+ * given. It cannot tell 360p from 1080p squeezed into 360p worth of bits, and
+ * those two are identical from the sending side and completely different to
+ * whoever is watching. `inbound-rtp` `frameWidth`/`frameHeight` is the only
+ * place the truth is written down.
+ */
+describe("summariseStats, inbound", () => {
+  const inbound = (over: Partial<RtcStatLike> = {}): RtcStatLike => ({
+    id: "IT01",
+    type: "inbound-rtp",
+    kind: "video",
+    // Straight off the stat, with no media-source hop: the source belongs to
+    // somebody else's machine, so there is nothing local to follow it to.
+    trackIdentifier: "track-their-screen",
+    timestamp: 1000,
+    bytesReceived: 500_000,
+    frameWidth: 640,
+    frameHeight: 360,
+    framesPerSecond: 12,
+    framesDecoded: 300,
+    decoderImplementation: "ExternalDecoder",
+    freezeCount: 2,
+    packetsLost: 7,
+    ...over,
+  });
+
+  const remoteRoles = (trackId: string) =>
+    trackId === "track-their-screen" ? ("screen" as const) : ("camera" as const);
+
+  it("reports the size that actually arrived, which is all a viewer can see", () => {
+    const { receivers } = summariseStats(
+      PEER,
+      report([inbound()]),
+      roles,
+      new Map(),
+      undefined,
+      remoteRoles,
+    );
+    expect(receivers).toHaveLength(1);
+    expect(receivers[0]!.width).toBe(640);
+    expect(receivers[0]!.height).toBe(360);
+    expect(receivers[0]!.fps).toBe(12);
+    expect(receivers[0]!.role).toBe("screen");
+    expect(receivers[0]!.framesDecoded).toBe(300);
+    expect(receivers[0]!.freezeCount).toBe(2);
+    expect(receivers[0]!.packetsLost).toBe(7);
+  });
+
+  it("differences bytesReceived rather than reporting the running total", () => {
+    // The cumulative counter would average the whole call, in which a collapse
+    // three seconds ago is invisible — the same mistake the outbound half was
+    // written to avoid, and the reason both now share one helper.
+    const marks = new Map<string, { bytes: number; timestamp: number }>();
+    const first = summariseStats(
+      PEER,
+      report([inbound()]),
+      roles,
+      marks,
+      undefined,
+      remoteRoles,
+    );
+    expect(first.receivers[0]!.kbps).toBeNull();
+
+    const later = report([
+      inbound({ timestamp: 2000, bytesReceived: 600_000 }),
+    ]);
+    const second = summariseStats(
+      PEER,
+      later,
+      roles,
+      marks,
+      undefined,
+      remoteRoles,
+    );
+    // 100 kB in one second is 800 kbit/s.
+    expect(second.receivers[0]!.kbps).toBe(800);
+  });
+
+  it("keeps the two directions in separate byte marks", () => {
+    // Both loops write into one map, and an inbound row whose key collided with
+    // an outbound one would report somebody else's bitrate as your own. The
+    // `in:` prefix is what keeps them apart, and a shared `id` between an
+    // outbound-rtp and an inbound-rtp is entirely legal.
+    const marks = new Map<string, { bytes: number; timestamp: number }>();
+    // One id, two directions, two different rates: 25 kB/s out (200 kbit/s)
+    // against 100 kB/s in (800 kbit/s). If the keys collided the second read
+    // would report one of those numbers twice.
+    const collide = (sent: number, received: number, timestamp: number) =>
+      report([inbound({ id: "OT01", bytesReceived: received, timestamp })]).map(
+        (stat) =>
+          stat.type === "outbound-rtp"
+            ? { ...stat, bytesSent: sent, timestamp }
+            : stat,
+      );
+    summariseStats(
+      PEER,
+      collide(100_000, 500_000, 1000),
+      roles,
+      marks,
+      undefined,
+      remoteRoles,
+    );
+    const second = summariseStats(
+      PEER,
+      collide(125_000, 600_000, 2000),
+      roles,
+      marks,
+      undefined,
+      remoteRoles,
+    );
+    expect(second.senders[0]!.kbps).toBe(200);
+    expect(second.receivers[0]!.kbps).toBe(800);
+  });
+
+  it("says unknown rather than guessing whose video it is", () => {
+    // The classification comes off the roster and the track can beat it here.
+    // Printing "their screen" for a stream nothing has classified yet is a
+    // guess presented as a fact, in a readout whose whole job is to stop that.
+    const { receivers } = summariseStats(
+      PEER,
+      report([inbound()]),
+      roles,
+      new Map(),
+    );
+    expect(receivers[0]!.role).toBe("unknown");
+  });
+
+  it("ignores inbound audio", () => {
+    const audio: RtcStatLike = {
+      id: "IA1",
+      type: "inbound-rtp",
+      kind: "audio",
+      bytesReceived: 9_000,
+    };
+    const { receivers } = summariseStats(
+      PEER,
+      report([audio]),
+      roles,
+      new Map(),
+      undefined,
+      remoteRoles,
+    );
+    expect(receivers).toEqual([]);
   });
 });
 

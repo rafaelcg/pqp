@@ -11,6 +11,7 @@ describe("showsVideoQualityControl", () => {
       showsVideoQualityControl({
         isCameraOn: true,
         isSharingScreen: false,
+        hasIncomingVideo: false,
         collapsed: false,
       }),
     ).toBe(true);
@@ -25,16 +26,40 @@ describe("showsVideoQualityControl", () => {
       showsVideoQualityControl({
         isCameraOn: false,
         isSharingScreen: true,
+        hasIncomingVideo: false,
         collapsed: false,
       }),
     ).toBe(true);
   });
 
-  it("is absent when nothing is going out, so an audio call's bar is untouched", () => {
+  it("appears for somebody who is only WATCHING somebody else's video", () => {
+    // THE REPORTED BUG, AS A UNIT. A screen share sent from the iOS app looked
+    // like 360p on the web client watching it. The watcher had no video control
+    // on the call at all — this function hid it, because they were sending
+    // nothing — so they went to Settings, found the one quality selector the
+    // product has, moved it from 360p to 1080p, and nothing changed. It could
+    // not have: that selector governs this machine's own senders, and in a mesh
+    // the picture you receive is the one the sender encoded.
+    //
+    // A viewer still gets no knob here, because WebRTC has none to give them.
+    // What they get is the control opening with the receiving half alone: the
+    // size that is actually arriving, and whose choice it was.
     expect(
       showsVideoQualityControl({
         isCameraOn: false,
         isSharingScreen: false,
+        hasIncomingVideo: true,
+        collapsed: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("is absent when the call carries no video in either direction", () => {
+    expect(
+      showsVideoQualityControl({
+        isCameraOn: false,
+        isSharingScreen: false,
+        hasIncomingVideo: false,
         collapsed: false,
       }),
     ).toBe(false);
@@ -45,6 +70,7 @@ describe("showsVideoQualityControl", () => {
       showsVideoQualityControl({
         isCameraOn: true,
         isSharingScreen: true,
+        hasIncomingVideo: false,
         collapsed: true,
       }),
     ).toBe(false);
@@ -58,6 +84,7 @@ describe("videoQualityMenuOpen", () => {
         requested: true,
         isCameraOn: true,
         isSharingScreen: false,
+        hasIncomingVideo: false,
         collapsed: false,
       }),
     ).toBe(true);
@@ -69,6 +96,7 @@ describe("videoQualityMenuOpen", () => {
         requested: true,
         isCameraOn: false,
         isSharingScreen: false,
+        hasIncomingVideo: false,
         collapsed: false,
       }),
     ).toBe(false);
@@ -83,6 +111,7 @@ describe("videoQualityMenuOpen", () => {
         requested: true,
         isCameraOn: false,
         isSharingScreen: true,
+        hasIncomingVideo: false,
         collapsed: false,
       }),
     ).toBe(true);
@@ -94,9 +123,25 @@ describe("videoQualityMenuOpen", () => {
         requested: true,
         isCameraOn: true,
         isSharingScreen: true,
+        hasIncomingVideo: false,
         collapsed: true,
       }),
     ).toBe(false);
+  });
+
+  it("stays open for a watcher after their own camera goes off", () => {
+    // Turning your camera off while somebody is presenting to you leaves the
+    // menu with something to say — what is arriving — so yanking it away would
+    // be the popover-over-nothing bug in reverse.
+    expect(
+      videoQualityMenuOpen({
+        requested: true,
+        isCameraOn: false,
+        isSharingScreen: false,
+        hasIncomingVideo: true,
+        collapsed: false,
+      }),
+    ).toBe(true);
   });
 
   it("stays shut when nobody asked", () => {
@@ -105,6 +150,7 @@ describe("videoQualityMenuOpen", () => {
         requested: false,
         isCameraOn: true,
         isSharingScreen: true,
+        hasIncomingVideo: false,
         collapsed: false,
       }),
     ).toBe(false);

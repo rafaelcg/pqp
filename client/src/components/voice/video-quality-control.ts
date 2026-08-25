@@ -23,12 +23,31 @@ export interface VideoQualityControlContext {
   isCameraOn: boolean;
   /** Whether this machine is currently presenting a screen. */
   isSharingScreen: boolean;
+  /**
+   * Whether anybody else's video is arriving right now.
+   *
+   * NEW TERM, AND THE REASON THE CONTROL EXISTS FOR VIEWERS AT ALL. Until now
+   * this was `isCameraOn || isSharingScreen`, so somebody who was only
+   * *watching* had no video surface on the call whatsoever. That is precisely
+   * the person who reported a soft screen share, went looking for a quality
+   * control, and found the only one the product has: the Settings selector,
+   * which governs what leaves *their* machine and could not possibly change
+   * what arrives. They moved it from 360p to 1080p, twice, and nothing
+   * happened, because nothing was ever going to.
+   *
+   * A viewer cannot be given a knob here — the sender encodes the stream and
+   * `RTCRtpReceiver` has no size or rate parameter — but they can be given the
+   * answer, which is the size that is actually arriving and whose choice it
+   * was. So the control opens for them too, showing the receiving half alone.
+   */
+  hasIncomingVideo: boolean;
   /** The stage's one-line collapsed strip, which carries only the essentials. */
   collapsed: boolean;
 }
 
 /**
- * HIDDEN, not disabled, when this machine is sending no video at all.
+ * HIDDEN, not disabled, when there is no video on this call in either
+ * direction.
  *
  * Three reasons, in order of weight. The bar is crowded and sending-nothing is
  * the state *everybody* is in by default, so hiding is what keeps the bar
@@ -53,9 +72,10 @@ export interface VideoQualityControlContext {
 export function showsVideoQualityControl({
   isCameraOn,
   isSharingScreen,
+  hasIncomingVideo,
   collapsed,
 }: VideoQualityControlContext): boolean {
-  return (isCameraOn || isSharingScreen) && !collapsed;
+  return (isCameraOn || isSharingScreen || hasIncomingVideo) && !collapsed;
 }
 
 /**
@@ -68,9 +88,10 @@ export function showsVideoQualityControl({
  * requested flag afterwards, so the menu cannot spring back open by itself
  * later; this function is what makes the intervening frame correct.
  *
- * Note that it now takes *both* video terms, so ending a share while the
- * camera is still on leaves the menu up rather than yanking it away: the
- * control still governs something.
+ * Note that it takes *all three* video terms, so ending a share while the
+ * camera is still on — or while somebody else is still sending you something —
+ * leaves the menu up rather than yanking it away: it still has something to
+ * govern or something to report.
  */
 export function videoQualityMenuOpen(
   context: VideoQualityControlContext & { requested: boolean },

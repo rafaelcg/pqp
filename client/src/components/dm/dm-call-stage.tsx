@@ -632,6 +632,7 @@ function ActiveCall({
     requested: qualityMenuRequested,
     isCameraOn: voiceState.isCameraOn,
     isSharingScreen: voiceState.isSharingScreen,
+    hasIncomingVideo: receivingVideo(voiceState),
     collapsed,
   });
   // Cleared rather than merely ignored: a menu that was open when the camera
@@ -1014,6 +1015,20 @@ function ActiveCall({
   );
 }
 
+/**
+ * Whether somebody else's video has actually arrived.
+ *
+ * Off the peers rather than off `screenSharePeerIds`, which is the roster's
+ * *claim* and also counts this machine's own share. What decides whether the
+ * quality control has anything to report to a watcher is whether a stream is
+ * really there.
+ */
+function receivingVideo(voiceState: VoiceState): boolean {
+  return voiceState.remotePeers.some(
+    (peer) => peer.cameraStream !== null || peer.screenStream !== null,
+  );
+}
+
 function CallControls({
   voiceState,
   collapsed,
@@ -1117,13 +1132,15 @@ function CallControls({
           <VideoOff className={iconSize} />
         )}
       </button>
-      {/* The setting for whatever video is going out, immediately to the right
-          of the camera. Absent until this machine is sending some, so an
-          audio-only call's bar is the bar it has always been. Screen share
-          counts: the same choice governs it now. */}
+      {/* Video, in whichever direction this call has any, immediately to the
+          right of the camera. Absent on an audio-only call, so that bar is the
+          bar it has always been. Sending shows the sizes; watching shows what
+          is arriving and whose choice it was, which is the whole of what a
+          viewer can truthfully be told. */}
       {showsVideoQualityControl({
         isCameraOn: voiceState.isCameraOn,
         isSharingScreen: voiceState.isSharingScreen,
+        hasIncomingVideo: receivingVideo(voiceState),
         collapsed,
       }) && (
         <VideoQualityMenu
@@ -1131,6 +1148,7 @@ function CallControls({
           open={qualityMenuOpen}
           onOpenChange={onQualityMenuOpenChange}
           onChange={onVideoQualityChange}
+          isSendingVideo={voiceState.isCameraOn || voiceState.isSharingScreen}
           buttonClassName={size}
           iconClassName={iconSize}
         />
