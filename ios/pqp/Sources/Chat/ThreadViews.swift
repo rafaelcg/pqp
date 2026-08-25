@@ -197,7 +197,7 @@ private struct ThreadRow: View {
                          ? String(localized: "1 reply")
                          : String(localized: "\(thread.replyCount) replies"))
                         .monospacedDigit()
-                    Text("·")
+                    Text(verbatim: "·")
                     Text(thread.lastActivityAt, format: .relative(presentation: .named))
                         .lineLimit(1)
                 }
@@ -208,7 +208,7 @@ private struct ThreadRow: View {
                 // thread's own history. A deleted origin says so rather than
                 // vanishing: the conversation outlives the message.
                 if let origin, !origin.body.isEmpty {
-                    Text("\(origin.authorName): \(origin.body)")
+                    Text(verbatim: "\(origin.authorName): \(origin.body)")
                         .font(Typography.caption)
                         .foregroundStyle(Palette.paperMuted)
                         .lineLimit(1)

@@ -65,7 +65,9 @@ struct DepoimentosSection: View {
                             // exception for typography is how 184 of them got into
                             // the web catalogues. The caption weight already says
                             // this line is the byline and not more of the quote.
-                            Text("\(one.author.tag ?? one.author.displayName), \(Depoimentos.stamp(one), format: .dateTime.month(.wide).year())")
+                            (Text(verbatim: "\(one.author.tag ?? one.author.displayName), ")
+                             + Text(Depoimentos.stamp(one),
+                                    format: .dateTime.month(.wide).year()))
                                 .font(Typography.caption)
                                 .foregroundStyle(Palette.paperMuted)
                                 .lineLimit(1)
@@ -217,7 +219,7 @@ struct DepoimentoComposer: View {
                             .foregroundStyle(Palette.paperMuted)
                             .fixedSize(horizontal: false, vertical: true)
                         Spacer(minLength: 8)
-                        Text("\(remaining)")
+                        Text(verbatim: "\(remaining)")
                             .font(Typography.caption)
                             .monospacedDigit()
                             .foregroundStyle(remaining < 0 ? Palette.danger : Palette.paperMuted)

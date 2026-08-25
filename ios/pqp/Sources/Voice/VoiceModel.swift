@@ -45,15 +45,42 @@ final class VoiceModel {
     /// Outgoing screen share, driven by the ReplayKit bridge.
     let screenShare = ScreenShareController()
     var isMuted = false {
-        didSet { Task { await voice.setMuted(isMuted) } }
+        didSet {
+            Task {
+                await voice.setMuted(isMuted)
+                await reportVoiceState()
+            }
+        }
     }
     /// Deafening also mutes, matching the web client: being heard while
     /// hearing nothing is a trap rather than a feature.
     var isDeafened = false {
         didSet {
             if isDeafened { isMuted = true }
-            Task { await voice.setDeafened(isDeafened) }
+            Task {
+                await voice.setDeafened(isDeafened)
+                await reportVoiceState()
+            }
         }
+    }
+
+    /// Tell the room what this client's microphone is doing.
+    ///
+    /// A voice channel's roster carries `muted` and `deafened` for everybody in
+    /// it — it is what draws the crossed-out microphone beside a name, here and
+    /// in every web client in the room — and this app was never sending it. The
+    /// symptom was silent by construction: you could hear yourself go quiet, and
+    /// nobody else could see it, so a muted person read as one who had simply
+    /// stopped talking. `CallModel` has always reported it; this is the same two
+    /// lines for server voice channels.
+    ///
+    /// Reads the properties at execution time rather than taking them as
+    /// arguments, so the two `didSet` observers above cannot race into
+    /// declaring a stale pair: whichever task runs last still reports what is
+    /// true now. Display state only, never enforcement — the server treats it
+    /// as self-reported, and drops a no-op or a flood.
+    private func reportVoiceState() async {
+        await session?.realtime.setVoiceState(muted: isMuted, deafened: isDeafened)
     }
 
     var isSpeakerOn = true {
@@ -148,6 +175,20 @@ final class VoiceModel {
         do {
             let ice: IceServersResponse = try await session.api.get("/api/ice-servers")
             try await voice.startAudio()
+            // "Mute microphone when joining voice", which Settings has been
+            // writing since the screen existed and nothing has ever read.
+            //
+            // HERE, between the track being created and the first peer
+            // connection being built, for the same reason the web client
+            // applies `startMuted` before its own track exists: a preference
+            // that takes effect a moment *after* the join is a preference that
+            // let a room hear the first thing you said.
+            //
+            // Awaited directly as well as set, because the property's `didSet`
+            // hands its work to an unstructured Task that need not have run by
+            // the time `joinVoice` below returns a peer to connect to.
+            isMuted = session.preferences.muteOnJoin ?? false
+            await voice.setMuted(isMuted)
             await voice.configure(
                 selfPeerId: "",
                 iceServers: ice.iceServers,
@@ -364,6 +405,12 @@ final class VoiceModel {
                         participant.cameraStreamId, for: participant.peerId
                     )
                 }
+                // The peer the server just minted for us starts at "unmuted,
+                // undeafened", whatever this client had already decided —
+                // joining with "mute on join" set is exactly that case. The
+                // server expects this re-declaration after every join and
+                // drops it when it says nothing new.
+                await reportVoiceState()
             }
 
         case .voicePeerJoined(let participant):

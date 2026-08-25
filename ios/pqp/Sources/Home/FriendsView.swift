@@ -146,7 +146,7 @@ struct FriendsView: View {
                             .font(Typography.caption)
                             .foregroundStyle(model.tab == tab ? Palette.inkDeep : Palette.paperMuted)
                         if badge > 0 {
-                            Text("\(badge)")
+                            Text(verbatim: "\(badge)")
                                 .font(.system(size: 11, weight: .bold))
                                 .monospacedDigit()
                                 .foregroundStyle(model.tab == tab ? Palette.inkDeep : Palette.signal)

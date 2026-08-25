@@ -556,7 +556,7 @@ struct UserProfileSheet: View {
                         .textSelection(.enabled)
                 }
                 if let presence, subject.tag != nil {
-                    Text("•").foregroundStyle(Palette.border)
+                    Text(verbatim: "•").foregroundStyle(Palette.border)
                 }
                 if let presence {
                     Text(presenceLabel(presence))

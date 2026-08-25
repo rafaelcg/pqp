@@ -319,6 +319,13 @@ final class CallModel {
         do {
             let ice: IceServersResponse = try await session.api.get("/api/ice-servers")
             try await voice.startAudio()
+            // "Mute microphone when joining voice" covers a DM call too, which
+            // is how the web client reads it: `handleConversationCall` passes
+            // the same `startMuted` its voice-channel join does. Applied
+            // between the track existing and the room being joined; the
+            // re-declaration on `welcome` is what tells the other end.
+            isMuted = session.preferences.muteOnJoin ?? false
+            await voice.setMuted(isMuted)
             await voice.setSpeaker(isSpeakerOn)
             await voice.configure(
                 selfPeerId: "",
