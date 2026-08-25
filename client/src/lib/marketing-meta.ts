@@ -127,8 +127,8 @@ const PAGE_COPY: Record<MarketingPage, PageCopy> = {
     canonicalPath: "/tela",
     title: {
       "pt-BR":
-        "Discord sem compartilhar tela no Brasil? O que usar agora | pqp",
-      en: "Discord screen share suspended in Brazil? What to use now | pqp",
+        "Compartilhar tela no navegador: o que usar hoje | pqp",
+      en: "Sharing your screen in the browser: what works today | pqp",
     },
     description: {
       "pt-BR":
