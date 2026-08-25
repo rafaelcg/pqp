@@ -3,10 +3,11 @@
 A native Kotlin + Jetpack Compose client in `android/`. It talks to the same
 server as the web and iOS apps: no mobile backend, no BFF, no protocol change.
 
-**Read the state of it before quoting it.** Auth, servers, channels and text
-chat are built and verified end to end against a live local server. Voice
-negotiates between two clients and its media path is unproven. Screen sharing is
-not built. The honest boundaries are in **What is real** at the bottom.
+**Read the state of it before quoting it.** Auth, servers, channels, text chat,
+direct messages and the friends list are built and verified end to end against a
+live local server. Voice negotiates between two clients and its media path is
+unproven. Screen sharing is not built. The honest boundaries are in **What is
+real** at the bottom.
 
 ## Why native, and not the four cheaper options
 
@@ -65,9 +66,10 @@ the order to cut from the bottom:
    unproven for an environment reason. See the caveat.**
 3. Screen sharing via `MediaProjection`. **Not started, and the biggest win.**
 4. Push via FCM, as the third leg of `server/src/services/push.ts`.
-5. DMs, attachments, reactions, invites, everything on the parity list.
+5. DMs and the friends list. **Done, and verified between two clients.**
+6. Attachments, reactions, invites, everything on the parity list.
 
-If time runs short, cut from **5 upward**. The one thing not to cut is 3: it is
+If time runs short, cut from **6 upward**. The one thing not to cut is 3: it is
 the only feature on this list that no pqp client on a phone has at all.
 
 ## Running it
@@ -157,6 +159,8 @@ emulator -avd Pixel_10_Pro -read-only -port 5556 &
 | `app/src/main/kotlin/gg/pqp/app/core` | Backend config, models, REST client, WebSocket client, session |
 | `app/src/main/kotlin/gg/pqp/app/ui` | Compose screens, theme, shared components |
 | `app/src/main/kotlin/gg/pqp/app/voice` | Mesh WebRTC engine, call state, foreground service |
+| `app/src/main/kotlin/gg/pqp/app/social` | Friends, blocks, conversations: wire shapes, endpoints, the live repository |
+| `app/src/main/kotlin/gg/pqp/app/social/ui` | The three-tab home, the inbox, the friends screen, the two people pickers |
 | `app/src/main/res/values` | English copy |
 | `app/src/main/res/values-pt-rBR` | Portuguese copy |
 | `app/src/debug` | Cleartext exemption for the local server, debug builds only |
@@ -419,6 +423,121 @@ domain socket carrying NV12 between two processes, none of the machinery
 5. Receiving is the mesh's ordinary video path and needs a renderer; the app has
    none today.
 
+## Direct messages and the friends list
+
+Three peer destinations behind a bottom `NavigationBar`: **Servers**, with the
+list #103 built, unchanged; **Messages**, the conversation list; and
+**Friends**. Both new tabs carry a live count, which is the whole reason the bar
+exists rather than a link somewhere: a friend request and a DM both arrive as
+socket frames while you are looking at something else, and a badge nobody can
+see is a badge that does not work.
+
+Everything lives in `gg/pqp/app/social/` (`SocialModels`, `SocialApi`,
+`SocialRepository`) and `gg/pqp/app/social/ui/`. Outside that package the branch
+touches four files, on purpose: two lines of `PqpApp.kt` (the start destination
+renders `HomeScreen`, and `conversationDestination(...)` registers one route),
+one default parameter on `ChatScreen`, and an append to each `strings.xml`.
+
+### A conversation is a channel, so it is the same chat screen
+
+`channels.kind` is `dm` or `group` instead of `server`, and everything a
+conversation carries after that point is the ordinary channel protocol:
+`join-channel`, `message-create`, `message-broadcast`, the same paging endpoint,
+the same nonce. So `ChatScreen` and `ChatViewModel` are reused as they are. The
+only difference a conversation needs is its title, which is why `ChatScreen`
+gained a `title` parameter that defaults to `#$channelName`: a conversation has
+no name of its own, and `#` in front of a person's name is wrong.
+
+`channels.name` is stored empty server-side, deliberately, because any name
+invented there would be wrong the moment somebody renamed themselves. The
+participant list is the title, and the server has already left the viewer out of
+it.
+
+### The rule that is easy to get wrong
+
+**Closing a conversation deletes only your own `channel_members` row.** The
+channel, its history and the other person are untouched, and the server puts you
+back in it the instant either side speaks: `restoreDmParticipants` in
+`server/src/services/dms.ts`, run *before* the message is written so that you
+are in its audience for the badge.
+
+The consequence for a client is one branch. A `channel-activity` frame naming a
+conversation this client has never heard of is **not** a frame to drop; it is a
+conversation that has just come back, and only the server knows who is in it, so
+the answer is to re-read `GET /api/dms`. Drop it and a reopened DM reaches
+nobody: the sender watches their message land, and it never appears on the other
+phone until somebody pulls to refresh. `SocialRepository.onChannelActivity`
+carries that branch and the comment saying why.
+
+This is also why the repository is not a `ViewModel`. The frames arrive when
+neither tab is on screen, so something has to be listening then; it lives for
+the process the way `VoiceController` does, and empties both lists on sign-out.
+
+### What the protocol does and does not offer
+
+- `GET /api/friends` is the whole relationship surface in one read: friends with
+  a status, requests waiting on you, requests you have standing.
+- **A refusal is not an oracle.** Every rejected friend request and every
+  refused conversation answers with one sentence, whichever reason it was.
+  The server's wording is shown verbatim, and the sheets show it *inside*
+  themselves rather than on a snackbar the sheet is covering, which was a real
+  bug found while testing: the refusal was posted to a screen nobody could see,
+  so the button read as broken.
+- **Declining is silent**, and so are cancelling and unfriending. All three are
+  one `DELETE` and the other side is never told.
+- **Pending entries carry no presence.** Until you accept, the other person is a
+  stranger, and the server sends no status for one, so there is no dot to draw.
+- **`friend-activity` is content-free.** It names nobody: the client re-reads
+  the bounded endpoint it was already entitled to read. It fires for a new
+  request and for an acceptance, and deliberately never for a decline, a cancel,
+  an unfriend or a block.
+- **Presence has no frame of its own.** A friend's status only changes here when
+  `GET /api/friends` is read again, so the Friends tab polls every 15s while it
+  is on screen and stops when it leaves. Same cadence as iOS.
+- **Discovery has two paths**, and both are budgeted server-side: a prefix
+  search over handles, and an exact `name#1234` lookup for somebody who already
+  knows the full tag. The field is debounced by 300ms and refuses to search
+  below two characters, because that endpoint is the tightest-budgeted one in
+  the API and a request per keystroke gets rate limited inside a word. A tag
+  that matches nobody is a 404, which is an answer and not an error.
+- **A group is always created new.** There is no canonical identity for a set of
+  people, so two taps make two groups. That is the server's intent, not a bug.
+  The picker stops at nine others because the server caps a conversation at ten.
+
+Blocking is offered from a friend row and ends the friendship through a database
+trigger, so no separate unfriend call is issued beside it. The blocked list
+itself has no screen yet.
+
+### Verified, with two emulators and two accounts
+
+Two dev-bypass accounts against a live local server, driven through the UI on
+both phones rather than through curl:
+
+- Adding by exact tag, the request landing in the other client's **Pending** tab
+  with a live badge, accepting it there, and the acceptance arriving back on the
+  first phone as a snackbar plus a friend row with a green dot. Both sides
+  confirmed in `GET /api/friends`.
+- **A DM in both directions.** Sent from one phone, rendered on the other, and
+  the row present in Postgres as `kind = 'dm'`. The reply arrived live on the
+  first phone without a refresh.
+- **The reopened conversation.** One side closed the conversation (its
+  `GET /api/dms` then answered `{"conversations":[]}`), the other side sent a
+  message, and the conversation came back in the closed side's list with its
+  unread badge and all three messages of history, live and with no manual
+  refresh.
+- A group of three, created from the picker, titled by its participants, with
+  the row showing a stacked avatar and "3 people" on the far side.
+- Unread badges clearing on open, and the refusal path: a stranger the server
+  will not let you message shows "Cannot open a conversation with this user"
+  inside the sheet.
+- pt-BR, through `cmd locale set-app-locales`. The system supplies the relative
+  timestamps ("Há 2 min."), so those follow the locale for free.
+
+**Not verified:** a conversation with somebody who has blocked you (the block
+path is server-side and untried from this client), attachments in a DM, and
+anything about how the list behaves at a few hundred conversations. There are
+still no instrumented tests. Blocking is wired but was not exercised end to end.
+
 ## Push notifications: not built
 
 The server already decides *who* gets told, in `server/src/services/push.ts`,
@@ -471,10 +590,13 @@ restart are verified between two clients; audio flowing is not, for an
 environment reason spelled out above. **Do not write "Android voice works"**
 until somebody has heard somebody.
 
-**Not built:** screen sharing, push, DMs, attachments, reactions, replies,
+Built and **verified between two clients**: direct messages, group
+conversations, and the friends list. The detail, including which parts were
+exercised and which were not, is in **Direct messages and the friends list**
+above.
+
+**Not built:** screen sharing, push, attachments, reactions, replies,
 editing, pinning, threads, search, members and moderation, invites, profile
 editing, communities, game connections, data export and account deletion. There
 are no instrumented tests. `assembleRelease` signs with the debug key and needs
 a real keystore before it goes anywhere near Play.
-
-This is a foundation with one real feature on it. It is not the app yet.
