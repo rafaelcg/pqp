@@ -9,6 +9,8 @@ import {
   PhoneOff,
   ScreenShare,
   ScreenShareOff,
+  Video,
+  VideoOff,
   Volume2,
   VolumeX,
 } from "lucide-react";
@@ -30,6 +32,15 @@ import {
   VoiceAvatar,
   type VoiceAvatarSize,
 } from "@/components/voice/voice-avatar";
+import {
+  showsVideoQualityControl,
+  videoQualityMenuOpen,
+} from "@/components/voice/video-quality-control";
+import { VideoQualityMenu } from "@/components/voice/video-quality-menu";
+import {
+  DEFAULT_VIDEO_QUALITY,
+  type VideoQuality,
+} from "@/lib/video-quality";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
@@ -45,6 +56,54 @@ function avatarSizeFor(count: number, compact: boolean): VoiceAvatarSize {
     return size;
   }
   return size === "xl" ? "lg" : size === "lg" ? "md" : "sm";
+}
+
+/**
+ * One participant's camera, filling their tile.
+ *
+ * A live `<video>` rather than a poster frame, because the tile is the whole
+ * of the camera UI in a voice channel: there is no second, larger place to
+ * send somebody. `muted` is not a preference — this element carries video only
+ * (the microphone is a separate track, played through the audio sinks), and an
+ * unmuted element here would be a second copy of the room that ignores every
+ * per-peer volume the tiles offer.
+ */
+function TileVideo({
+  stream,
+  mirrored,
+  label,
+}: {
+  stream: MediaStream;
+  mirrored: boolean;
+  label: string;
+}) {
+  const ref = useRef<HTMLVideoElement>(null);
+  useEffect(() => {
+    const video = ref.current;
+    if (!video) {
+      return;
+    }
+    video.srcObject = stream;
+    // Autoplay can still be refused (a backgrounded tab, a paused document);
+    // swallowed because the element resumes itself when it becomes visible.
+    void video.play().catch(() => {});
+  }, [stream]);
+  return (
+    <video
+      ref={ref}
+      aria-label={label}
+      autoPlay
+      playsInline
+      muted
+      className={cn(
+        "absolute inset-0 h-full w-full rounded-xl object-cover",
+        // Your own camera is a mirror, everybody else's is a window. This is
+        // the one video convention nobody has to be taught, and getting it the
+        // wrong way round makes people feel they are waving with the wrong hand.
+        mirrored && "-scale-x-100",
+      )}
+    />
+  );
 }
 
 interface ParticipantTileProps {
@@ -64,6 +123,11 @@ interface ParticipantTileProps {
   showTransmitBadge?: boolean;
   avatarSize: VoiceAvatarSize;
   minHeightClass: string;
+  /**
+   * This participant's camera, when it is on. Null is the ordinary case and
+   * renders exactly the avatar tile this panel has always had.
+   */
+  cameraStream?: MediaStream | null;
   connectionState?: RemotePeer["connectionState"];
   /** 0..1 playback multiplier. Only supplied for remote peers. */
   volume?: number;
@@ -83,6 +147,7 @@ function ParticipantTile({
   showTransmitBadge = false,
   avatarSize,
   minHeightClass,
+  cameraStream = null,
   connectionState,
   volume,
   onSetVolume,
@@ -103,10 +168,18 @@ function ParticipantTile({
   const settling =
     connectionState !== undefined && connectionState !== "connected" && !failed;
 
+  // A camera takes the tile over: the avatar is a stand-in for a face, and
+  // once the face is there the stand-in is only in its way. Everything else
+  // the tile says (the name, the badges, the volume) stays exactly where it
+  // was, moved to the bottom over a scrim so it is still readable against a
+  // bright picture.
+  const showingCamera = cameraStream !== null;
+
   return (
     <li
       className={cn(
-        "group relative flex flex-col items-center justify-center gap-2 rounded-xl border p-3 text-center transition-colors duration-150",
+        "group relative flex flex-col items-center gap-2 rounded-xl border p-3 text-center transition-colors duration-150",
+        showingCamera ? "justify-end overflow-hidden" : "justify-center",
         minHeightClass,
         failed
           ? "border-danger/50 bg-danger/5"
@@ -115,19 +188,39 @@ function ParticipantTile({
             : "border-ink-4 bg-ink",
       )}
     >
-      <VoiceAvatar
-        name={name}
-        avatarUrl={avatarUrl}
-        // The speaking ring doubles as the transmitting indicator rather than
-        // a second visual language: in push-to-talk an open mic *is* the state
-        // worth showing, whether or not you happen to be making noise this
-        // frame. Everywhere else the ring keeps its usual meaning.
-        isSpeaking={(isSpeaking || (showTransmitBadge && isTransmitting)) && !silenced}
-        muted={isMuted || silenced}
-        size={avatarSize}
-      />
+      {showingCamera ? (
+        <TileVideo
+          stream={cameraStream}
+          mirrored={isSelf}
+          label={
+            isSelf
+              ? t("voice.tile.yourCamera")
+              : t("voice.tile.cameraOf", { name })
+          }
+        />
+      ) : (
+        <VoiceAvatar
+          name={name}
+          avatarUrl={avatarUrl}
+          // The speaking ring doubles as the transmitting indicator rather than
+          // a second visual language: in push-to-talk an open mic *is* the state
+          // worth showing, whether or not you happen to be making noise this
+          // frame. Everywhere else the ring keeps its usual meaning.
+          isSpeaking={
+            (isSpeaking || (showTransmitBadge && isTransmitting)) && !silenced
+          }
+          muted={isMuted || silenced}
+          size={avatarSize}
+        />
+      )}
 
-      <p className="w-full min-w-0 truncate text-sm font-medium">
+      <p
+        className={cn(
+          "w-full min-w-0 truncate text-sm font-medium",
+          showingCamera &&
+            "relative rounded bg-ink/70 px-1.5 py-0.5 backdrop-blur-sm",
+        )}
+      >
         {name}
         {isSelf && (
           <span className="ml-1 text-xs text-paper-muted">
@@ -143,7 +236,7 @@ function ParticipantTile({
         settling ||
         failed ||
         showTransmitBadge) && (
-        <div className="flex flex-wrap items-center justify-center gap-1">
+        <div className="relative flex flex-wrap items-center justify-center gap-1">
           {/* Push-to-talk only. Two states, always one of them on screen, so
               the answer to "am I live right now" is never an absence. */}
           {/* i18n: needs `voice.tile.live` / `voice.tile.holdToTalk`. */}
@@ -218,7 +311,7 @@ function ParticipantTile({
         <Button
           variant="secondary"
           size="sm"
-          className="h-6 px-2 text-[10px]"
+          className="relative h-6 px-2 text-[10px]"
           onClick={onRetry}
         >
           {t("voice.tile.retry")}
@@ -228,7 +321,7 @@ function ParticipantTile({
       {onSetVolume && volume !== undefined && !failed && (
         <div
           className={cn(
-            "grid w-full transition-[grid-template-rows] duration-150",
+            "relative grid w-full transition-[grid-template-rows] duration-150",
             volume === 1
               ? "grid-rows-[0fr] group-hover:grid-rows-[1fr] group-focus-within:grid-rows-[1fr]"
               : "grid-rows-[1fr]",
@@ -310,6 +403,15 @@ interface VoicePanelProps {
   isSharingScreen?: boolean;
   /** Whether our own live share is carrying the machine's audio. */
   isSharingScreenAudio?: boolean;
+  /** This machine's camera is on. Discord-style: it may run alongside a share. */
+  isCameraOn?: boolean;
+  /** Our own camera, for the self tile's preview. */
+  localCameraStream?: MediaStream | null;
+  /**
+   * The chosen video quality, the same stored value the Settings dialog and
+   * the conversation-call stage read. Governs the camera *and* the screen.
+   */
+  videoQuality?: VideoQuality;
   /** peerIds currently sharing. */
   screenSharePeerIds?: string[];
   /** The room's stated transport, for the share cap. */
@@ -330,6 +432,9 @@ interface VoicePanelProps {
   onRetryPeer?: (peerId: string) => void;
   onStartScreenShare?: () => void;
   onStopScreenShare?: () => void;
+  /** Absent on a build with no camera support; the button is then not rendered. */
+  onToggleCamera?: () => void;
+  onVideoQualityChange?: (quality: VideoQuality) => void;
 }
 
 export function VoicePanel({
@@ -352,6 +457,9 @@ export function VoicePanel({
   usingSfu = false,
   isSharingScreen = false,
   isSharingScreenAudio = false,
+  isCameraOn = false,
+  localCameraStream = null,
+  videoQuality = DEFAULT_VIDEO_QUALITY,
   screenSharePeerIds = [],
   roomTransport = null,
   participants = [],
@@ -363,6 +471,8 @@ export function VoicePanel({
   onRetryPeer,
   onStartScreenShare,
   onStopScreenShare,
+  onToggleCamera,
+  onVideoQualityChange,
 }: VoicePanelProps) {
   const { t } = useTranslation();
   const showWarning = !usingSfu && remotePeers.length >= MESH_VOICE_WARNING;
@@ -383,10 +493,40 @@ export function VoicePanel({
   // mid-session, and this must not be re-evaluated on every keystroke elsewhere.
   const screenShareBlocked = useMemo(() => screenShareUnavailableReason(), []);
   const [hint, setHint] = useState<string | null>(null);
+  /**
+   * Whether the quality menu has been *asked for*, which is not the same as
+   * whether it is open. The same rule the conversation-call stage uses decides
+   * the second question, so stopping your last outgoing video cannot leave a
+   * popover anchored to a button that is no longer there.
+   *
+   * `collapsed: false` because this panel has no collapsed strip: it is the
+   * whole of the channel's left column, and it is either on screen or the
+   * channel is not selected at all.
+   */
+  const [qualityRequested, setQualityRequested] = useState(false);
+  const qualityContext = {
+    isCameraOn,
+    isSharingScreen,
+    collapsed: false,
+  };
+  const showQuality =
+    !!onVideoQualityChange && showsVideoQualityControl(qualityContext);
+  const qualityOpen =
+    !!onVideoQualityChange &&
+    videoQualityMenuOpen({ ...qualityContext, requested: qualityRequested });
   const pushToTalk = inputMode === "push-to-talk";
   // Muted or deafened outranks the key, so the button says so rather than
   // inviting a press that would do nothing.
   const pushToTalkBlocked = isMuted || isDeafened;
+
+  // `videoQualityMenuOpen` already keeps the popover from rendering over a
+  // button that has gone away; this is the other half, so it cannot spring
+  // back open by itself when the camera comes on again later.
+  useEffect(() => {
+    if (!showQuality) {
+      setQualityRequested(false);
+    }
+  }, [showQuality]);
 
   // The explanation is an answer to a tap, not a persistent state of the call.
   useEffect(() => {
@@ -513,6 +653,10 @@ export function VoicePanel({
                     showTransmitBadge={pushToTalk}
                     avatarSize={avatarSize}
                     minHeightClass={minHeightClass}
+                    // Camera and share are independent, exactly as in Discord:
+                    // presenting keeps your face on your own tile rather than
+                    // replacing it with the thing you are presenting.
+                    cameraStream={localCameraStream}
                   />
                 )}
                 {remotePeers.map((peer) => {
@@ -529,6 +673,10 @@ export function VoicePanel({
                       isPresenting={screenSharePeerIds.includes(peer.peerId)}
                       avatarSize={avatarSize}
                       minHeightClass={minHeightClass}
+                      // Filed by the mesh from the roster's `cameraStreamId`,
+                      // or by LiveKit from the publication's source. Null for
+                      // everybody whose camera is off, which is most people.
+                      cameraStream={peer.cameraStream}
                       connectionState={peer.connectionState}
                       volume={peerVolumes[key] ?? 1}
                       onSetVolume={(volume) => onSetPeerVolume(key, volume)}
@@ -659,6 +807,43 @@ export function VoicePanel({
                   <Headphones className="h-4 w-4" />
                 )}
               </Button>
+              {/* Camera. Off by default and independent of the share, so a
+                  channel can carry a face and a game at the same time the way
+                  every other product does. */}
+              {onToggleCamera && (
+                <Button
+                  variant="secondary"
+                  size="icon"
+                  aria-label={
+                    isCameraOn
+                      ? t("voice.control.cameraOff")
+                      : t("voice.control.cameraOn")
+                  }
+                  aria-pressed={isCameraOn}
+                  onClick={onToggleCamera}
+                >
+                  {isCameraOn ? (
+                    <Video className="h-4 w-4 text-signal" />
+                  ) : (
+                    <VideoOff className="h-4 w-4" />
+                  )}
+                </Button>
+              )}
+              {/* The quality control, immediately to the right of the camera
+                  and on the same rule as the conversation call's: present only
+                  while this machine is actually sending video, because that is
+                  the only time it has anything to govern or to report. Somebody
+                  who wants to pin a size before joining still has Settings. */}
+              {showQuality && (
+                <VideoQualityMenu
+                  value={videoQuality}
+                  open={qualityOpen}
+                  onOpenChange={setQualityRequested}
+                  onChange={(quality) => onVideoQualityChange?.(quality)}
+                  buttonClassName="h-9 w-9 shrink-0"
+                  iconClassName="h-4 w-4"
+                />
+              )}
               {(onStartScreenShare || onStopScreenShare) &&
                 (screenShareBlocked ? (
                   /* Not `disabled`: a disabled button cannot be tapped, and on
