@@ -3,9 +3,12 @@ package gg.pqp.app.voice
 import android.content.Context
 import android.content.Intent
 import android.media.AudioAttributes
+import android.media.AudioDeviceInfo
 import android.media.AudioFocusRequest
 import android.media.AudioManager
+import android.os.Build
 import android.util.Log
+import gg.pqp.app.core.IceServer
 import gg.pqp.app.core.PqpJson
 import gg.pqp.app.core.RealtimeState
 import gg.pqp.app.core.SessionStore
@@ -22,24 +25,31 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.int
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import org.webrtc.EglBase
+import org.webrtc.VideoTrack
 
 enum class VoiceStage { Idle, Joining, Connected, Refused }
 
 data class VoiceState(
     val channelId: String? = null,
+    /** Null after a moderator move: the id is known, the name is not. */
     val channelName: String? = null,
     val stage: VoiceStage = VoiceStage.Idle,
     val participants: List<VoiceParticipant> = emptyList(),
     val muted: Boolean = false,
     val deafened: Boolean = false,
+    /** Speakerphone rather than the earpiece. See [VoiceController.applyAudioRoute]. */
+    val speakerphone: Boolean = true,
+    /** This device is capturing and publishing its screen. */
+    val sharingScreen: Boolean = false,
     /**
-     * Peers this device could not build a media path to.
+     * Peers this device could not build a media path to, or built one to and
+     * heard nothing on.
      *
      * Surfaced, not swallowed. Without this the call bar says "2 in this call"
      * while nobody can hear anybody, which is the exact shape of failure a
@@ -50,11 +60,24 @@ data class VoiceState(
     val unreachablePeers: Int = 0,
     /** The server's own refusal, shown verbatim rather than reinterpreted. */
     val refusal: Refusal? = null,
+    /**
+     * A sentence from the server about this call, already written.
+     *
+     * Today that is only voice moderation. The frame carries the whole sentence
+     * precisely so a client that renders nothing but this string is a correct
+     * client, and so an eviction is never indistinguishable from a network
+     * failure.
+     */
+    val notice: String? = null,
 ) {
     val isActive: Boolean get() = stage == VoiceStage.Joining || stage == VoiceStage.Connected
+
+    /** Somebody other than us is presenting. */
+    val presenter: VoiceParticipant?
+        get() = participants.firstOrNull { it.sharingScreen }
 }
 
-enum class Refusal { RoomFull, TransportUnsupported }
+enum class Refusal { RoomFull, TransportUnsupported, ScreenShareDenied }
 
 /**
  * "Am I in a call", for the whole process.
@@ -73,18 +96,38 @@ class VoiceController(
     private val _state = MutableStateFlow(VoiceState())
     val state: StateFlow<VoiceState> = _state.asStateFlow()
 
+    private val _remoteScreen = MutableStateFlow<VideoTrack?>(null)
+
+    /** The screen somebody else is sharing, for a renderer to attach to. */
+    val remoteScreen: StateFlow<VideoTrack?> = _remoteScreen.asStateFlow()
+
     private val peerMedia = java.util.concurrent.ConcurrentHashMap<String, PeerMediaState>()
 
     private val engine = VoiceEngine(
         context = context,
+        scope = scope,
         signal = { frame -> session.realtime.send(frame.toJsonObject()) },
         onPeerState = { peerId, mediaState ->
             peerMedia[peerId] = mediaState
             _state.value = _state.value.copy(
-                unreachablePeers = peerMedia.values.count { it == PeerMediaState.Failed },
+                // Silent counts as unreachable, because to the person holding
+                // the phone it is the same thing. A connection that came up and
+                // carries no audio is the failure this line exists to admit;
+                // hiding it behind a green state is how a voice app ships
+                // broken and reads as finished.
+                unreachablePeers = peerMedia.values.count {
+                    it == PeerMediaState.Failed || it == PeerMediaState.Silent
+                },
             )
         },
+        onRemoteScreen = { _, track -> _remoteScreen.value = track },
+        // Posted rather than run inline: this arrives on the projection's own
+        // callback thread, from inside the capturer we are about to dispose.
+        onScreenShareEnded = { scope.launch { stopScreenShare() } },
     )
+
+    /** The GL context a `SurfaceViewRenderer` has to be initialised with. */
+    val eglContext: EglBase.Context? get() = engine.eglContext
 
     private val audioManager =
         context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -93,7 +136,22 @@ class VoiceController(
     private var previousAudioMode: Int = AudioManager.MODE_NORMAL
 
     /** Kept so a socket reconnect can rejoin the same room. */
-    @Volatile private var wantedChannel: Pair<String, String>? = null
+    @Volatile private var wantedChannel: Pair<String, String?>? = null
+
+    /**
+     * The socket dropped while we were in a call, so the room has to be rebuilt.
+     *
+     * Set on the way *down* rather than inferred on the way up. The previous
+     * version tried to notice a second `Ready` and computed
+     * `wasReady && state == Ready` inside the branch where `state` is by
+     * definition not `Ready`, so it was always false and the rejoin never fired
+     * once. Meanwhile the server had already dropped the peer, which left the
+     * app showing a live call, with a live microphone, in a room it was no
+     * longer in.
+     */
+    @Volatile private var needsRejoin = false
+
+    private var pendingIce: List<IceServer> = emptyList()
 
     init {
         scope.launch { listen() }
@@ -105,15 +163,24 @@ class VoiceController(
      * permission prompt belongs to the screen that asked, and a foreground
      * service of type `microphone` cannot legally start without it.
      */
-    fun join(channelId: String, channelName: String) {
-        if (_state.value.channelId == channelId && _state.value.isActive) return
+    fun join(channelId: String, channelName: String?) {
+        if (_state.value.channelId == channelId && _state.value.stage == VoiceStage.Connected) {
+            return
+        }
+        enter(channelId, channelName)
+    }
 
+    private fun enter(channelId: String, channelName: String?) {
         wantedChannel = channelId to channelName
+        needsRejoin = false
+        peerMedia.clear()
         _state.value = VoiceState(
             channelId = channelId,
             channelName = channelName,
             stage = VoiceStage.Joining,
             muted = _state.value.muted,
+            deafened = _state.value.deafened,
+            speakerphone = _state.value.speakerphone,
         )
 
         // The notification comes up before the microphone is touched. Android
@@ -123,8 +190,7 @@ class VoiceController(
         VoiceService.start(context)
 
         scope.launch {
-            val ice = runCatching { session.api.iceServers() }.getOrDefault(emptyList())
-            pendingIce = ice
+            pendingIce = resolveIceServers()
             session.realtime.send(
                 buildJsonObject {
                     put("type", "join-voice-room")
@@ -139,15 +205,34 @@ class VoiceController(
         }
     }
 
-    private var pendingIce: List<gg.pqp.app.core.IceServer> = emptyList()
+    /**
+     * ICE servers, and never an empty list.
+     *
+     * A failed call to `/api/ice-servers` used to leave the peer connection
+     * with no servers at all, which is not "degraded, STUN only" but "host
+     * candidates only": it works on one wifi and nowhere else, and it looks
+     * exactly like pitfall #1 arriving through a different door. The web client
+     * has always fallen back to the same public STUN hosts the API serves, so
+     * this does too.
+     */
+    private suspend fun resolveIceServers(): List<IceServer> {
+        val fetched = runCatching { session.api.iceServers() }.getOrNull()
+        if (!fetched.isNullOrEmpty()) return fetched
+        Log.w(TAG, "no ICE servers from the API; falling back to public STUN")
+        return DEFAULT_STUN.map { url -> IceServer(urls = JsonPrimitive(url)) }
+    }
 
     fun leave() {
         wantedChannel = null
+        needsRejoin = false
         if (_state.value.channelId != null) {
             session.realtime.send(buildJsonObject { put("type", "leave-voice-room") })
         }
         teardown()
-        _state.value = VoiceState(muted = _state.value.muted)
+        _state.value = VoiceState(
+            muted = _state.value.muted,
+            speakerphone = _state.value.speakerphone,
+        )
     }
 
     fun toggleMute() {
@@ -164,8 +249,99 @@ class VoiceController(
         pushVoiceState()
     }
 
+    fun toggleSpeakerphone() {
+        val speakerphone = !_state.value.speakerphone
+        _state.value = _state.value.copy(speakerphone = speakerphone)
+        applyAudioRoute(speakerphone)
+    }
+
     fun dismissRefusal() {
-        _state.value = _state.value.copy(refusal = null, stage = VoiceStage.Idle)
+        // A refused *join* leaves nothing behind, so the stage goes back to
+        // idle. A refused screen share happened inside a live call and must not
+        // end it: clearing the stage there would hang up on everybody because
+        // the room was already carrying two screens.
+        val wasJoinRefusal = _state.value.refusal != Refusal.ScreenShareDenied
+        _state.value = _state.value.copy(
+            refusal = null,
+            stage = if (wasJoinRefusal) VoiceStage.Idle else _state.value.stage,
+        )
+    }
+
+    fun dismissNotice() {
+        _state.value = _state.value.copy(notice = null)
+    }
+
+    // --- screen share ---
+
+    /**
+     * Publish this device's screen, with a consent grant the UI just obtained.
+     *
+     * The order below is the whole feature and it is the order Android
+     * enforces: consent first (only a user gesture can raise that dialog), then
+     * the foreground service has to already be running with the
+     * `mediaProjection` type, and only then may the projection be created. From
+     * Android 14 a projection created before its service throws, and the throw
+     * lands inside the capturer where it reads like a capture failure rather
+     * than an ordering one.
+     */
+    fun startScreenShare(permission: Intent) {
+        if (!_state.value.isActive) return
+        if (_state.value.sharingScreen) return
+        // The capture is started from inside the service, after its
+        // `startForeground` has returned. Doing it here would race that call
+        // and lose. See the class comment on [VoiceService].
+        VoiceService.startProjection(context, permission)
+    }
+
+    /**
+     * Called by [VoiceService] once it is foreground with the projection type.
+     *
+     * Not public: the ordering rule above is the whole reason this is a
+     * separate entry point, and a caller that skipped [startScreenShare] would
+     * be skipping it.
+     */
+    internal fun beginScreenCapture(permission: Intent) {
+        if (!_state.value.isActive) {
+            VoiceService.dropProjection(context)
+            return
+        }
+
+        val (width, height) = displaySizeOf(context)
+        val profile = screenCaptureProfileFor(width, height)
+        if (!engine.startScreenShare(permission, profile)) {
+            VoiceService.dropProjection(context)
+            return
+        }
+
+        _state.value = _state.value.copy(sharingScreen = true)
+        // Announced after the capture is alive, never before: a roster that
+        // says somebody is presenting while nothing is on the wire puts an
+        // empty tile in front of everybody else.
+        session.realtime.send(
+            buildJsonObject {
+                put("type", "set-sharing-screen")
+                put("sharing", true)
+                // This capture carries no audio. `MediaProjection` can record
+                // the device's playback from Android 10, but only from apps
+                // that allow it, and a system audio track nobody can rely on is
+                // worse than an honest silent share.
+                put("audioStreamId", JsonNull)
+            },
+        )
+    }
+
+    fun stopScreenShare() {
+        if (!engine.isSharingScreen && !_state.value.sharingScreen) return
+        engine.stopScreenShare()
+        VoiceService.dropProjection(context)
+        _state.value = _state.value.copy(sharingScreen = false)
+        session.realtime.send(
+            buildJsonObject {
+                put("type", "set-sharing-screen")
+                put("sharing", false)
+                put("audioStreamId", JsonNull)
+            },
+        )
     }
 
     private fun pushVoiceState() {
@@ -192,6 +368,8 @@ class VoiceController(
                 "voice-roster" -> onRoster(frame)
                 "voice-room-full" -> onRefused(frame, Refusal.RoomFull)
                 "voice-transport-unsupported" -> onRefused(frame, Refusal.TransportUnsupported)
+                "screen-share-denied" -> onScreenShareDenied(frame)
+                "voice-moderation" -> onModeration(frame)
                 "offer" -> frame.str("sdp")?.let { engine.handleOffer(frame.str("from")!!, it) }
                 "answer" -> frame.str("sdp")?.let { engine.handleAnswer(frame.str("from")!!, it) }
                 "ice-candidate" -> onCandidate(frame)
@@ -204,26 +382,53 @@ class VoiceController(
      *
      * The server drops the voice peer when the socket closes, and a reconnect
      * mints a *new* peer id, so every peer connection in the old mesh is
-     * addressed to a peer that no longer exists. `ready` therefore tears the
-     * whole thing down and rejoins.
+     * addressed to a peer that no longer exists.
+     *
+     * The flag is set on the way down, in the branch that actually observes the
+     * drop. Trying to infer it from a second `Ready` does not work: the socket
+     * always passes through `Reconnecting`, and the previous attempt cleared
+     * its own evidence on the way past.
      */
     private suspend fun followConnection() {
-        var wasReady = false
         session.realtime.state.collect { state ->
             when (state) {
                 RealtimeState.Ready -> {
                     val wanted = wantedChannel
-                    if (wasReady && wanted != null) {
+                    if (needsRejoin && wanted != null) {
+                        Log.i(TAG, "socket back; rebuilding the call in ${wanted.first}")
                         engine.stop()
-                        join(wanted.first, wanted.second)
+                        enter(wanted.first, wanted.second)
                     }
-                    wasReady = true
                 }
+
                 RealtimeState.Refused -> {
                     if (wantedChannel != null) leave()
-                    wasReady = false
                 }
-                else -> wasReady = wasReady && state == RealtimeState.Ready
+
+                RealtimeState.Connecting,
+                RealtimeState.Reconnecting,
+                RealtimeState.Idle,
+                -> {
+                    if (wantedChannel == null) return@collect
+                    // The server has already dropped our peer. Say so rather
+                    // than keep showing a room we are no longer in.
+                    needsRejoin = true
+                    engine.stop()
+                    peerMedia.clear()
+                    _remoteScreen.value = null
+                    // `engine.stop` released the capture, so the service must
+                    // stop claiming the projection type as well. A foreground
+                    // service that declares `mediaProjection` with no live
+                    // projection behind it is one the platform is entitled to
+                    // kill, which would take the rejoining call with it.
+                    VoiceService.dropProjection(context)
+                    _state.value = _state.value.copy(
+                        stage = VoiceStage.Joining,
+                        participants = emptyList(),
+                        unreachablePeers = 0,
+                        sharingScreen = false,
+                    )
+                }
             }
         }
     }
@@ -280,8 +485,70 @@ class VoiceController(
     private fun onRefused(frame: JsonObject, refusal: Refusal) {
         if (frame.str("voiceChannelId") != _state.value.channelId) return
         wantedChannel = null
+        needsRejoin = false
         teardown()
-        _state.value = VoiceState(stage = VoiceStage.Refused, refusal = refusal)
+        _state.value = VoiceState(
+            stage = VoiceStage.Refused,
+            refusal = refusal,
+            speakerphone = _state.value.speakerphone,
+        )
+    }
+
+    /**
+     * The room already has as many screens as its transport allows.
+     *
+     * The capture is torn down rather than left running quietly: the roster
+     * will not carry us as a presenter, so a live projection would be a
+     * recording nobody asked for and nobody can see.
+     */
+    private fun onScreenShareDenied(frame: JsonObject) {
+        if (frame.str("voiceChannelId") != _state.value.channelId) return
+        engine.stopScreenShare()
+        VoiceService.dropProjection(context)
+        _state.value = _state.value.copy(
+            sharingScreen = false,
+            refusal = Refusal.ScreenShareDenied,
+        )
+    }
+
+    /**
+     * A moderator acted on this device's voice session.
+     *
+     * This is the one frame where doing nothing is a safety problem rather than
+     * a missing feature. The server drops the peer straight after sending it
+     * and never sends us our own `peer-left`, so a client that ignores it keeps
+     * a frozen roster, a foreground service and, worst of all, an open
+     * microphone: somebody removed from a call is still recording.
+     *
+     * Guarded to the room we are actually in, so a stale or forged frame about
+     * some other channel does nothing.
+     */
+    private fun onModeration(frame: JsonObject) {
+        if (frame.str("voiceChannelId") != _state.value.channelId) return
+        val message = frame.str("message")
+        when (frame.str("action")) {
+            "moved" -> {
+                val target = frame.str("movedToChannelId")
+                if (target != null) {
+                    // Followed with an ordinary join, which re-runs every
+                    // server-side admission check, so this can never put us
+                    // somewhere we could not have gone ourselves. The name is
+                    // not on the frame and there is no endpoint to ask; the bar
+                    // says "in voice" until the roster names it.
+                    teardown()
+                    enter(target, null)
+                } else {
+                    leave()
+                }
+            }
+
+            "disconnected" -> leave()
+
+            // "muted" / "unmuted" are informational: the server has already
+            // applied them, and the notice below is the whole client response.
+            else -> Unit
+        }
+        _state.value = _state.value.copy(notice = message)
     }
 
     private fun onCandidate(frame: JsonObject) {
@@ -301,9 +568,9 @@ class VoiceController(
 
     private fun acquireAudioFocus() {
         previousAudioMode = audioManager.mode
-        // `MODE_IN_COMMUNICATION` is what routes to the earpiece, enables the
-        // platform's own echo cancellation and puts the volume rocker on the
-        // call stream instead of the media one.
+        // `MODE_IN_COMMUNICATION` enables the platform's own echo cancellation
+        // and puts the volume rocker on the call stream instead of the media
+        // one.
         audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
 
         val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
@@ -317,9 +584,51 @@ class VoiceController(
             .build()
         focusRequest = request
         audioManager.requestAudioFocus(request)
+        applyAudioRoute(_state.value.speakerphone)
+    }
+
+    /**
+     * Send the call to the speaker, not the earpiece.
+     *
+     * THIS IS NOT A PREFERENCE, IT IS THE DIFFERENCE BETWEEN AUDIBLE AND NOT.
+     * `MODE_IN_COMMUNICATION` on its own routes to the *earpiece*, which is the
+     * right default for a phone call held against a face and completely wrong
+     * for a voice channel somebody joined while doing something else: the audio
+     * is technically playing, at a volume nobody more than three centimetres
+     * away can hear, and it presents as "voice does not work".
+     *
+     * A wired headset or a Bluetooth device wins over both. Asking for the
+     * built-in speaker only when it is the device we mean leaves the platform's
+     * own preference order intact, which is what routes a headset correctly
+     * without this code knowing headsets exist.
+     */
+    private fun applyAudioRoute(speakerphone: Boolean) {
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                if (!speakerphone) {
+                    audioManager.clearCommunicationDevice()
+                    return@runCatching
+                }
+                val speaker = audioManager.availableCommunicationDevices.firstOrNull {
+                    it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
+                }
+                if (speaker != null) audioManager.setCommunicationDevice(speaker)
+            } else {
+                @Suppress("DEPRECATION")
+                audioManager.isSpeakerphoneOn = speakerphone
+            }
+        }
     }
 
     private fun releaseAudioFocus() {
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                audioManager.clearCommunicationDevice()
+            } else {
+                @Suppress("DEPRECATION")
+                audioManager.isSpeakerphoneOn = false
+            }
+        }
         focusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
         focusRequest = null
         audioManager.mode = previousAudioMode
@@ -328,6 +637,7 @@ class VoiceController(
     private fun teardown() {
         engine.stop()
         peerMedia.clear()
+        _remoteScreen.value = null
         releaseAudioFocus()
         VoiceService.stop(context)
     }
@@ -364,5 +674,16 @@ class VoiceController(
 
     companion object {
         private const val TAG = "pqp.voice"
+
+        /**
+         * The same three hosts `server/src/services/ice.ts` serves when it has
+         * no TURN of its own. Duplicated rather than fetched, because the point
+         * of a fallback is that the fetch is what failed.
+         */
+        private val DEFAULT_STUN = listOf(
+            "stun:stun.l.google.com:19302",
+            "stun:stun1.l.google.com:19302",
+            "stun:stun.cloudflare.com:3478",
+        )
     }
 }

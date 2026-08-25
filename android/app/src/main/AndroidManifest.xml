@@ -17,6 +17,13 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- Screen sharing. The consent dialog is the system's and cannot be
+         skipped; this permission only lets the same call keep running while
+         the screen is being captured. The type is added to the *running* voice
+         service rather than carried by a second one, because a projection and
+         the microphone that narrates it are one session. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
 
     <application
@@ -58,6 +65,6 @@
         <service
             android:name=".voice.VoiceService"
             android:exported="false"
-            android:foregroundServiceType="microphone" />
+            android:foregroundServiceType="microphone|mediaProjection" />
     </application>
 </manifest>
