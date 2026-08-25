@@ -257,10 +257,28 @@ function ceilingOf(sender: FakeSender): number | undefined {
   return accepted?.encodings?.[0]?.maxBitrate;
 }
 
+/**
+ * The divisor a sender is currently running at, per the last accepted call.
+ *
+ * Separate from the ceiling because they are separate failures. A ceiling that
+ * lands while the divisor does not is precisely the bug this feature shipped
+ * with: every rung below 1080p arrived at 1920x1080, starved of bits rather
+ * than scaled, so "360p" looked like blocky 1080p instead of clean 360p. A
+ * test that only reads `maxBitrate` calls that a pass.
+ */
+function scaleOf(sender: FakeSender): number | undefined {
+  const accepted = sender.setParameters.mock.calls.at(-1)?.[0] as
+    | RTCRtpSendParameters
+    | undefined;
+  return accepted?.encodings?.[0]?.scaleResolutionDownBy;
+}
+
 const screenCeilings = () =>
   senders.filter((s) => s.track?.id === "screen").map(ceilingOf);
 const cameraCeilings = () =>
   senders.filter((s) => s.track?.id === "camera").map(ceilingOf);
+const screenScales = () =>
+  senders.filter((s) => s.track?.id === "screen").map(scaleOf);
 
 /** A call in progress, with `count` other people in it. Mesh, always. */
 async function inCall(count: number) {
@@ -282,6 +300,8 @@ describe("the quality menu reaches the screen encoder of every peer", () => {
     await settle();
 
     expect(screenCeilings()).toEqual([600_000]);
+    // The size too, not just the bits. See `scaleOf`.
+    expect(screenScales()).toEqual([3]);
   });
 
   it("moves a live share in a channel call with three other members", async () => {
@@ -294,6 +314,9 @@ describe("the quality menu reaches the screen encoder of every peer", () => {
 
     // Every peer, not just the first: a mesh has one sender per person.
     expect(screenCeilings()).toEqual([600_000, 600_000, 600_000]);
+    // And the size reaches every one of them, which is the half that was
+    // missing entirely until the divisor was written at all.
+    expect(screenScales()).toEqual([3, 3, 3]);
   });
 
   it("gives a peer who joins after the choice the same ceiling", async () => {
