@@ -257,7 +257,8 @@ struct CallStageView: View {
             if call.screenShare.isAvailable {
                 ScreenShareControlButton(
                     isSharing: call.screenShare.isSharing,
-                    identifier: "call.share"
+                    identifier: "call.share",
+                    onTap: { call.screenShare.noteTapped() }
                 )
             }
 

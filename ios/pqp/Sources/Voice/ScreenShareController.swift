@@ -2,6 +2,7 @@ import CoreVideo
 import Foundation
 import Observation
 import QuartzCore
+import UIKit
 
 /// Owns "am I sharing my screen", for a voice channel or a DM call alike.
 ///
@@ -43,9 +44,36 @@ final class ScreenShareController {
     private var onStart: (@MainActor () async -> Void)?
     private var onStop: (@MainActor () async -> Void)?
 
+    /// When the share control was last tapped, and the watcher armed by it.
+    ///
+    /// See `noteTapped` for why a tap is worth remembering at all.
+    private var lastTapAt: TimeInterval?
+    private var captureObserver: NSObjectProtocol?
+    private var captureWatcher: Task<Void, Never>?
+
     /// How often the watchdog looks. Well under `staleTimeout`, so the stop it
     /// detects lands inside the two seconds that timeout promises.
     private static let watchdogInterval: Duration = .milliseconds(400)
+
+    /// How recently the control must have been tapped for a capture starting to
+    /// count as *ours*.
+    ///
+    /// `isCaptured` is true for AirPlay, mirroring and the built-in screen
+    /// recorder as well as for a broadcast extension, so it cannot be read as
+    /// "our share started" on its own. Pairing it with a tap on our own control
+    /// in the last few seconds is what makes it specific: somebody who starts
+    /// iOS's own recorder mid-call never touched our button, and gets no
+    /// complaint from us.
+    private static let tapAttributionWindow: TimeInterval = 15
+
+    /// How long a live capture may produce no frames before the app says so.
+    ///
+    /// The extension retries the socket every 500ms and the app is already
+    /// listening by the time the control is even visible, so the first frame
+    /// should arrive almost immediately. Five seconds is far past "slow" and
+    /// well inside the extension's own ten-second give-up, so the two messages
+    /// cannot both fire for one failure.
+    private static let firstFrameDeadline: Duration = .seconds(5)
 
     func configure(
         onFrame: @escaping @MainActor (UncheckedBox<CVPixelBuffer>, Int) -> Void,
@@ -81,12 +109,20 @@ final class ScreenShareController {
         }
         self.receiver = receiver
         isAvailable = true
+        observeCapture()
     }
 
     /// Stops listening and unpublishes. Called when the room ends.
     func disarm() async {
         watchdog?.cancel()
         watchdog = nil
+        captureWatcher?.cancel()
+        captureWatcher = nil
+        if let captureObserver {
+            NotificationCenter.default.removeObserver(captureObserver)
+        }
+        captureObserver = nil
+        lastTapAt = nil
         receiver?.stop()
         receiver = nil
         lastFrameAt = nil
@@ -95,6 +131,67 @@ final class ScreenShareController {
             isSharing = false
             await onStop?()
         }
+    }
+
+    /// The share control was tapped.
+    ///
+    /// WHY THE APP NEEDS TO KNOW. Everything after this tap belongs to iOS: the
+    /// sheet is Apple's, the decision is the user's, and the system reports
+    /// neither back. Without this the app cannot tell a control that was never
+    /// touched from one that was touched and did nothing, which is exactly the
+    /// state a broken share leaves somebody in. It changes no state on its own
+    /// and shows nothing: a picker opened and dismissed must still leave no
+    /// trace. It only makes the *next* thing that happens attributable.
+    func noteTapped() {
+        lastTapAt = CACurrentMediaTime()
+        errorMessage = nil
+    }
+
+    /// Watch for a system capture beginning, so a broadcast that starts and
+    /// sends nothing can be reported instead of looking like a frozen call.
+    private func observeCapture() {
+        guard captureObserver == nil else { return }
+        captureObserver = NotificationCenter.default.addObserver(
+            forName: UIScreen.capturedDidChangeNotification,
+            object: nil,
+            queue: nil
+        ) { [weak self] notification in
+            // Read on the posting thread (always the main one for this
+            // notification) and carry a plain Bool across, because
+            // `Notification` is not `Sendable`.
+            let isCaptured = (notification.object as? UIScreen)?.isCaptured ?? false
+            Task { @MainActor [weak self] in
+                self?.captureChanged(isCaptured: isCaptured)
+            }
+        }
+    }
+
+    private func captureChanged(isCaptured: Bool) {
+        guard isCaptured else {
+            captureWatcher?.cancel()
+            captureWatcher = nil
+            return
+        }
+        guard let lastTapAt,
+              CACurrentMediaTime() - lastTapAt <= Self.tapAttributionWindow else {
+            // Somebody else's capture. Not ours to explain.
+            return
+        }
+        captureWatcher?.cancel()
+        captureWatcher = Task { [weak self] in
+            try? await Task.sleep(for: Self.firstFrameDeadline)
+            guard !Task.isCancelled else { return }
+            await self?.reportSilentBroadcast()
+        }
+    }
+
+    private func reportSilentBroadcast() async {
+        // A share that got through needs no explanation, and a refusal already
+        // carries the room's own sentence.
+        guard !isSharing, !isRefused, lastFrameAt == nil else { return }
+        errorMessage = String(
+            localized: "Screen sharing started but no picture is getting through. Stop the broadcast and start it again."
+        )
     }
 
     /// The room refused it — the call is already at the screen-share cap.

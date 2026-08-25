@@ -3322,6 +3322,16 @@
         }
       }
     },
+    "Screen sharing started but no picture is getting through. Stop the broadcast and start it again.": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O compartilhamento começou, mas nenhuma imagem está chegando. Pare a transmissão e comece de novo."
+          }
+        }
+      }
+    },
     "Search %@": {
       "localizations": {
         "pt-BR": {

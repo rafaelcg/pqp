@@ -244,14 +244,27 @@ struct ChannelListView: View {
             // member; without this the badge only moves on pull-to-refresh,
             // which makes unread counts look broken next to the web client.
             session.eventHandlers[handlerKey] = { event in
-                guard case .activity(let channelId, let serverId, let mention) = event,
-                      serverId == server.id else { return }
-                let existing = unread[channelId]
-                unread[channelId] = UnreadEntry(
-                    channelId: channelId,
-                    count: (existing?.count ?? 0) + 1,
-                    mentions: (existing?.mentions ?? 0) + (mention ? 1 : 0)
-                )
+                switch event {
+                case .activity(let channelId, let serverId, let mention)
+                    where serverId == server.id:
+                    let existing = unread[channelId]
+                    unread[channelId] = UnreadEntry(
+                        channelId: channelId,
+                        count: (existing?.count ?? 0) + 1,
+                        mentions: (existing?.mentions ?? 0) + (mention ? 1 : 0)
+                    )
+                // Somebody changed a role or a channel's access. The frame says
+                // nothing about what changed, and it does not need to: the
+                // channel list endpoint resolves VIEW_CHANNEL in the database,
+                // so re-reading it *is* the answer. Without this a channel you
+                // have just been shut out of stays in this list until the app is
+                // relaunched, and a channel you have just been let into does not
+                // appear at all.
+                case .permissionsUpdate(let serverId, _) where serverId == server.id:
+                    Task { await reloadAfterPermissionsChange() }
+                default:
+                    return
+                }
             }
         }
         .onDisappear { session.eventHandlers.removeValue(forKey: handlerKey) }
@@ -402,6 +415,22 @@ struct ChannelListView: View {
             self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
         }
         isLoading = false
+    }
+
+    /// Re-read the list after a permissions change, quietly.
+    ///
+    /// Deliberately not `load()`: that sets `isLoading`, which throws a spinner
+    /// over a list somebody is reading because an admin renamed a role. A
+    /// failure is also swallowed rather than shown, because the list on screen
+    /// is still the last thing the server actually said, and replacing it with
+    /// an error would be a worse answer than a slightly stale one. The next
+    /// `permissions-update` or a pull-to-refresh tries again.
+    private func reloadAfterPermissionsChange() async {
+        guard let fresh = try? await session.api.channels(serverId: server.id) else { return }
+        channels = fresh
+        // A channel that is gone must not keep a badge behind in the dictionary.
+        let visible = Set(fresh.map(\.id))
+        unread = unread.filter { visible.contains($0.key) }
     }
 }
 

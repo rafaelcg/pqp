@@ -69,6 +69,17 @@ It covers email codes, OAuth and MFA, none of which can be exercised here
 without a real inbox — a bespoke version would be unverifiable code on the one
 path where being wrong locks everybody out.
 
+**The sheet shows Google and Apple, and Apple needs an entitlement.**
+`AuthView` renders one button per provider enabled on the Clerk instance, and
+`clerk.pqp.gg` has `oauth_google` and `oauth_apple` both enabled. Clerk's iOS SDK
+takes the *native* path for Apple (`ASAuthorizationAppleIDProvider`), so without
+`com.apple.developer.applesignin` the button is offered and fails. Build 12 and
+earlier were in exactly that state: Guideline 4.8 requires Sign in with Apple
+once Google is offered, and a broken one does not satisfy it. The entitlement is
+declared in `ios/project.yml`; the capability still has to be enabled on the App
+ID and the `pqp appstore` profile re-minted, or Release signing fails. See
+[`TESTFLIGHT.md`](./TESTFLIGHT.md).
+
 `ClerkTokenProvider` reads a **fresh** token per request. Clerk session tokens
 live about a minute, so caching one — or capturing it at launch — makes
 everything work for sixty seconds and then 401 forever. That exact bug already
@@ -237,6 +248,49 @@ that a socket gives ordering and backpressure for free and a failed write tells
 the extension the app is gone, and that raw NV12 avoids an encode/decode round
 trip across what is local memory.
 
+### The control that did nothing (build 12)
+
+Reported from a real phone against build 12: tapping Share did nothing at all.
+Two faults in our own composition were found and fixed, both measured rather
+than reasoned about, and both pinned by `ScreenSharePickerTests`:
+
+- **Apple's button is not where its view is.** `RPSystemBroadcastPickerView`
+  lays its single `UIButton` out at `(5, 5)` with the picker's *full* width and
+  height. Inside 62x62 bounds that runs from 5 to 67, so the part that both
+  hit-tests and overlaps the bounds is a 57x57 square in the bottom-right
+  corner: the top and left five points of the circle we paint were dead, and a
+  tap there reached the picker, which has no action. `alignHitTarget` now pins
+  the button to the bounds on every layout pass, so what is painted and what is
+  tappable are the same square.
+- **The invisibility was one rounding step from killing the control.** UIKit
+  refuses to hit-test a view at alpha 0.01 or below. The picker sat at
+  `.opacity(0.02)` in SwiftUI, and SwiftUI's opacity *multiplies* down the tree,
+  so `VoiceView` wrapping the control in `.opacity(0.4)` while the room was
+  connecting produced 0.008 and a control that could not be touched at all. The
+  alpha now lives on the `UIView` itself, where UIKit reads each view's own
+  value and no ancestor can multiply it under the floor.
+
+`VoiceView` also passes its 60pt size *into* the control rather than imposing it
+with an outer `.frame`, so the circle, the picker and Apple's button are one
+square by construction.
+
+**What this does not settle.** Whether iOS then finds the extension and opens
+its sheet is device-only. What can be said off-device is that the tap reaches
+Apple's button (asserted on a grid, corners included), the `.appex` is embedded
+with the bundle id `preferredExtension` names, its `NSExtensionPointIdentifier`
+is `com.apple.broadcast-services-upload`, and its principal class resolves
+(`_TtC12pqpBroadcast13SampleHandler` is in the binary).
+
+**To settle it, on a phone:** join a voice channel, tap Share. Either the system
+sheet appears, which means the picker and the extension are fine and anything
+still wrong is downstream, or nothing appears, which means iOS is not finding
+the extension and the next thing to check is the App Group on both App IDs.
+If the sheet appears and Start Broadcast produces no picture within five
+seconds, the app now says so rather than sitting there: a capture that begins
+within fifteen seconds of a tap on our own control, and then sends no frame, is
+reported. That window is what keeps AirPlay and the built-in screen recorder,
+which also set `isCaptured`, from being blamed on us.
+
 Things iOS makes awkward, and how they are handled:
 
 - **Starting is the system's decision.** `RPSystemBroadcastPickerView` is the only
@@ -283,8 +337,10 @@ somebody has run a TestFlight build on a phone. Both sentences are currently
 unsupported. It is cheap to settle: one build, one phone, thirty seconds.
 
 Per-peer volume is done. Screen share receiving is done; screen share sending is
-written but untested. Camera-in-voice-channels is not built at all (neither
-client offers it).
+written and, as of build 12, reported broken from a phone (see above).
+Camera-in-voice-channels **shipped on web** in PR #77 and is still not built
+here: this app publishes a camera in DM calls only, and drops the ones it
+receives in a channel on the floor.
 
 ## Copy and pt-BR
 
@@ -520,8 +576,19 @@ open the app, by universal link or `pqp://`.
 Also done: **your own data** — the personal export and account deletion, in
 their own Settings section. See below.
 
-Still only on web: drag-to-reorder within a category (channels can be moved
-between categories, but not dragged into a position).
+Still only on web, as of 2026-08-25:
+
+| Gap | Note |
+|---|---|
+| **Roles and permissions** (PR #75) | 20 permission bits, role management, per-channel overwrites. iOS knows only the legacy `owner`/`admin`/`member` rank (`Moderation.swift`). **Not a leak:** `listChannels` resolves VIEW_CHANNEL in Postgres and the server evicts sockets, so a permission-blind client is never shown content it should not have. What iOS now also does is act on `permissions-update` and re-read the list, so a channel you have lost no longer sits in the sidebar until relaunch. |
+| **Camera in a channel call** (PR #77) | iOS publishes a camera in DM calls only. It already *classifies* peers' `cameraStreamId` in a channel (`VoiceModel`), so it receives them and then draws nothing. |
+| **Screen-share quality selector** | Web has a 1080p/720p/480p/360p ladder for camera and screen. iOS is fixed at `maxLongSide = 1280` and 12fps, with no picker. |
+| **In-app sounds** (PR #62) | No cue playback of any kind on iOS. Haptics only. |
+| **Game connections** (PR #58) | Steam / Battle.net / Twitch are absent entirely. |
+| **Public profile viewer** | The handle can be claimed and shared from Settings, but `UserProfileSheet` shows the `name#1234` tag and never a `pqp.gg/@handle`, and there is no deep link for one. |
+| Drag-to-reorder within a category | Channels move between categories, but not into a position. |
+| Attachments | Outbound is JPEG-only, from the photo picker. No document picker, so no video, audio, PDF or text upload. |
+| Threads | No `GET /api/channels/:id/threads` exists, so the list is derived from the last ~100 messages; no archive action. |
 
 > Screen share used to be on that list and was left there by mistake. It landed
 > the day after this file was written (`e6027ba`, "See and send screen shares on

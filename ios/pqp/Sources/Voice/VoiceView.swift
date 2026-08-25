@@ -172,11 +172,16 @@ struct VoiceView: View {
             // run in the simulator, and the bridge refuses to arm there, so a
             // button that opened a sheet leading nowhere would be a lie.
             if model.screenShare.isAvailable {
+                // 60pt to match the controls either side, passed *in* rather
+                // than imposed with an outer `.frame`: the painted circle, the
+                // system picker and Apple's own button all have to be the same
+                // square, or part of what looks tappable is not.
                 ScreenShareControlButton(
                     isSharing: model.screenShare.isSharing,
-                    identifier: "voice.share"
+                    identifier: "voice.share",
+                    side: 60,
+                    onTap: { model.screenShare.noteTapped() }
                 )
-                .frame(width: 60, height: 60)
                 .opacity(model.status == .connected ? 1 : 0.4)
                 .allowsHitTesting(model.status == .connected)
             }

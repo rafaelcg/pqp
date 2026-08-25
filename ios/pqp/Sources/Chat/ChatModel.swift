@@ -510,7 +510,11 @@ final class ChatModel {
         // model's business. Neither is a friend nudge: it is addressed to this
         // account rather than to this channel, and the hub and the friends screen
         // are the two places that draw anything from it.
-        case .friendActivity,
+        // A permissions change is the channel list's business, not the
+        // transcript's: if this channel is one you have just lost, the server
+        // has already evicted this socket from it, so nothing more arrives here
+        // either way.
+        case .friendActivity, .permissionsUpdate,
              .presence, .activity, .other,
              .voiceWelcome, .voicePeerJoined, .voicePeerLeft, .voiceRoster,
              .voiceRoomFull, .voiceTransportUnsupported, .voiceScreenShareDenied,
