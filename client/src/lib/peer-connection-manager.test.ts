@@ -421,3 +421,72 @@ describe("receiving a peer's screen share", () => {
     expect(ctx.peers()[0]!.screenStream?.id).toBe("share-1");
   });
 });
+
+/**
+ * The outgoing half of glare.
+ *
+ * Perfect negotiation is written up as a rule about the offer you *receive*,
+ * and this manager implements that half faithfully in `applyRemoteDescription`.
+ * The half nobody writes about is the offer you were about to send when
+ * somebody else's arrived: `setLocalDescription` rejects, and the rejection
+ * belongs to whoever asked for the track.
+ *
+ * That caller is `toggleCamera`, and it reads a rejection as "the camera
+ * failed" — so it stops the capture and puts the message on screen. Losing a
+ * race the transport recovers from on its own therefore cost somebody their
+ * camera and explained it to them in WebRTC's words. Reproduced on a real pair
+ * at roughly one run in four by turning the camera on and sharing a screen
+ * back to back, which is a normal thing to do in a voice channel.
+ */
+describe("an offer that collides with an incoming one", () => {
+  it("does not propagate to the caller that asked for the track", async () => {
+    const ctx = setup();
+    ctx.manager.connectToPeer(REMOTE);
+    await settle();
+    const pc = ctx.pc();
+    pc.setLocalDescription = async () => {
+      const err = new Error(
+        "Failed to set local offer sdp: Called in wrong state: have-remote-offer",
+      );
+      err.name = "InvalidStateError";
+      throw err;
+    };
+
+    await expect(
+      ctx.manager.setLocalCameraStream(
+        fakeStream("cam", [track("video", "cam-1")]),
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it("leaves the sender in place, so the deferred offer has something to carry", async () => {
+    const ctx = setup();
+    ctx.manager.connectToPeer(REMOTE);
+    await settle();
+    const pc = ctx.pc();
+    pc.setLocalDescription = async () => {
+      throw new Error("Called in wrong state: have-remote-offer");
+    };
+
+    await ctx.manager.setLocalCameraStream(
+      fakeStream("cam", [track("video", "cam-1")]),
+    );
+
+    // The track is on the connection whatever the SDP did; the retry loop is
+    // what eventually puts an m-line under it.
+    expect(pc.added.map((entry) => entry.track.id)).toContain("cam-1");
+  });
+
+  it("still sends the offer when nothing collides", async () => {
+    const ctx = setup();
+    ctx.manager.connectToPeer(REMOTE);
+    await settle();
+    const before = ctx.offers().length;
+
+    await ctx.manager.setLocalCameraStream(
+      fakeStream("cam", [track("video", "cam-1")]),
+    );
+
+    expect(ctx.offers().length).toBeGreaterThan(before);
+  });
+});

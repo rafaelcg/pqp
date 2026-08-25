@@ -823,6 +823,30 @@ export function createPeerConnectionManager(
         to: peer.peerId,
         sdp: peer.pc.localDescription!.sdp,
       });
+    } catch (err) {
+      // GLARE, AND IT MUST NOT REACH THE CALLER.
+      //
+      // `setLocalDescription` rejects with "Called in wrong state:
+      // have-remote-offer" when a remote offer landed between this offer being
+      // decided on and being made. Perfect negotiation handles the *incoming*
+      // half of that race in `applyRemoteDescription`; this is the outgoing
+      // half, which had nothing.
+      //
+      // The sequence that produces it is two track additions close together —
+      // turning the camera on and then sharing a screen, which is now a normal
+      // thing to do in a voice channel. Measured at roughly one run in four
+      // with no pause between the two clicks.
+      //
+      // Why it mattered: the caller for the camera is `toggleCamera`, and its
+      // catch turns the camera back OFF and puts the message on screen. So a
+      // lost negotiation race cost somebody their camera and explained it to
+      // them in WebRTC's words, for a collision the transport recovers from on
+      // its own. Deferring instead is strictly better than the old behaviour in
+      // every case: an added sender is re-offered by `scheduleRenegotiation`
+      // once the pair is stable, and a removal is left exactly where the old
+      // dropped offer left it, minus the exception.
+      console.warn("[pqp] renegotiation collided; deferring the offer", err);
+      scheduleRenegotiation(peer);
     } finally {
       peer.makingOffer = false;
     }
