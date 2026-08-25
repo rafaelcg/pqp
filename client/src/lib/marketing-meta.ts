@@ -144,8 +144,8 @@ const PAGE_COPY: Record<MarketingPage, PageCopy> = {
     },
     description: {
       "pt-BR":
-        "Acesso antecipado ao pqp no iPhone. Voz, tela compartilhada e câmera na chamada, direto do bolso. Vagas pelo TestFlight, de graça e em beta aberto.",
-      en: "Early access to pqp on iPhone. Voice, screen share, and camera in the call, from your pocket. Spots via TestFlight, free and in open beta.",
+        "Acesso antecipado ao pqp no iPhone. Voz, texto e as telas que o pessoal compartilha, direto do bolso. Vagas pelo TestFlight, de graça e em beta aberto.",
+      en: "Early access to pqp on iPhone. Voice, text, and the screens other people are sharing, from your pocket. Spots via TestFlight, free and in open beta.",
     },
   },
   "/garanta": {
