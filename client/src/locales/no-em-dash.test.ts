@@ -1,8 +1,10 @@
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import en from "./en/translation.json";
 import ptBR from "./pt-BR/translation.json";
+// `?raw` rather than node:fs: this is the client project and its tsconfig
+// carries no node types, which is what the blog bodies already do for the
+// same reason (see `lib/blog/bodies.ts`).
+import indexHtml from "../../index.html?raw";
 
 /**
  * No em dash reaches a user, in either language.
@@ -64,12 +66,8 @@ describe("user-facing copy carries no dash punctuation", () => {
    * use for the character, comments included.
    */
   it("the static head in index.html", () => {
-    const html = readFileSync(
-      fileURLToPath(new URL("../../index.html", import.meta.url)),
-      "utf8",
-    );
     const found = Object.entries(BANNED)
-      .filter(([char]) => html.includes(char))
+      .filter(([char]) => indexHtml.includes(char))
       .map(([, name]) => name);
     expect(found).toEqual([]);
   });
