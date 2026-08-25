@@ -1,0 +1,480 @@
+# Android app
+
+A native Kotlin + Jetpack Compose client in `android/`. It talks to the same
+server as the web and iOS apps: no mobile backend, no BFF, no protocol change.
+
+**Read the state of it before quoting it.** Auth, servers, channels and text
+chat are built and verified end to end against a live local server. Voice
+negotiates between two clients and its media path is unproven. Screen sharing is
+not built. The honest boundaries are in **What is real** at the bottom.
+
+## Why native, and not the four cheaper options
+
+Umami puts the audience at **Windows 76%, Android 14%, iOS 6%**. Android is
+more than twice iOS's reach and had no app at all while two iOS builds shipped
+the same night. That is the reason to build something. It is not, on its own, a
+reason to build the most expensive thing, so all four options were costed
+against the four constraints that actually decide it: **background WebRTC
+voice**, **screen capture**, **push**, and **one maintainer**.
+
+| Option | Verdict |
+|---|---|
+| **Trusted Web Activity / PWA wrapper** | **Rejected, and it is the one that hurts.** See below. |
+| **Kotlin Multiplatform** | Rejected. KMP earns its keep by sharing logic between platforms, and iOS is plain Swift with its own hand-written models, socket and mesh. There is nothing to share with. It would add a build system nobody here knows in exchange for sharing code with a target that already has its own copy. |
+| **React Native / Capacitor** | Rejected, narrowly. It would genuinely reuse the web client, and its WebRTC story is a real one. But the two features that make an Android app worth having, a call that survives backgrounding and screen capture, are both native modules you end up writing in Kotlin anyway, on top of a bridge, in a third language. For one maintainer that is the worst of both. |
+| **Native Kotlin + Compose** | **Chosen.** |
+
+### The TWA case, in detail, because it nearly won
+
+`docs/PWA.md` is not a stub. The PWA is a real installable app: manifest,
+service worker, prompted updates, notification clicks routed through the worker
+specifically because Chrome on Android refuses `new Notification()`, `dvh`
+heights, `visualViewport`-positioned dialogs. Wrapping it in a Trusted Web
+Activity is perhaps a day of work and would put *something* on the Play Store
+this week.
+
+Three things stop it, and only the third is about feel.
+
+1. **A call cannot survive the app being backgrounded.** Chrome suspends
+   timers and throttles a backgrounded tab, and a TWA is a tab. There is no way
+   for web code to hold a foreground service, which is the *only* mechanism
+   Android offers for "keep running, the user knows". A voice app whose calls
+   drop when you check a message is not a voice app.
+2. **No mobile browser can share a screen.** `getDisplayMedia` is not
+   implemented on Android Chrome. Every mobile visitor today can watch a screen
+   share and none can start one, and screen capture is precisely where an
+   Android app beats the desktop web, because `MediaProjection` needs no
+   separate extension process the way iOS ReplayKit does. This is the largest
+   single win available and it is unreachable from a wrapper.
+3. **It would not feel native, and would be judged as if it did.** The web
+   client is a desktop-shaped layout that has been made to fit a phone. A TWA
+   removes the browser chrome and changes nothing else: no Material 3, no
+   predictive back, no system share sheet, no launcher-coloured icon.
+
+A TWA remains the right answer for a *reach* problem. This is a *capability*
+problem.
+
+### Effort, and what gets cut first
+
+Roughly three weeks of solo evenings to reach rough parity with the iOS client.
+This session covers the first of them. The order below is the order to keep, and
+the order to cut from the bottom:
+
+1. Auth, servers, channels, text chat. **Done.**
+2. Voice with a foreground service. **Built, and negotiating; the media path is
+   unproven for an environment reason. See the caveat.**
+3. Screen sharing via `MediaProjection`. **Not started, and the biggest win.**
+4. Push via FCM, as the third leg of `server/src/services/push.ts`.
+5. DMs, attachments, reactions, invites, everything on the parity list.
+
+If time runs short, cut from **5 upward**. The one thing not to cut is 3: it is
+the only feature on this list that no pqp client on a phone has at all.
+
+## Running it
+
+The toolchain on the machine this was written on: **Android Studio's bundled
+JDK 25**, **SDK platform 37**, **build-tools 36.0.0**, **AGP 9.3.2**, **Kotlin
+2.4.10**, **Gradle 9.7.1** (wrapper committed).
+
+There is no JDK on `PATH`, so `JAVA_HOME` has to be pointed at Android Studio's:
+
+```bash
+export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
+export ANDROID_HOME="$HOME/Library/Android/sdk"
+```
+
+Then, from `android/`:
+
+```bash
+./gradlew :app:assembleDebug     # build
+./gradlew :app:installDebug      # build and install on the running emulator
+```
+
+Opening `android/` in Android Studio works too and needs neither variable.
+
+### The server has to be reachable, and `10.0.2.2` did not work
+
+Debug builds point at `http://localhost:3001`, which reaches the host machine
+through a reverse tunnel:
+
+```bash
+adb reverse tcp:3001 tcp:3001
+```
+
+**Run that after every emulator boot.** It is the default rather than the
+fallback because the emulator's documented `10.0.2.2` host alias did **not**
+route on the Pixel 10 Pro / API 37 image here: connections to it timed out after
+ten seconds with the host firewall off and the server bound to `*:3001`. The
+tunnel works identically on an emulator and on a phone plugged in over USB, so
+it is one instruction instead of two.
+
+The server itself, with the dev bypass on:
+
+```bash
+# root .env
+DEV_AUTH_BYPASS=true
+```
+```bash
+docker compose up -d postgres
+pnpm --filter @pqp/shared build   # the server imports the built dist
+pnpm dev
+```
+
+Without it the app lands on "The server did not answer." with a Retry button,
+which is the intended failure rather than a hang.
+
+To point a build somewhere else, without editing Kotlin:
+
+```bash
+./gradlew :app:installDebug -Ppqp.apiUrl=https://api.pqp.gg -Ppqp.wsUrl=wss://api.pqp.gg/ws
+```
+
+`android/local.properties` and the environment (`PQP_APIURL`, `PQP_WSURL`,
+`PQP_CLERKPUBLISHABLEKEY`) are read the same way. Nothing is committed.
+
+### Two accounts, for the tests that need two clients
+
+A dev-bypass suffix mints a *separate* identity server-side, exactly as on iOS:
+
+```bash
+adb -s emulator-5556 shell am start -n gg.pqp.app.debug/gg.pqp.app.MainActivity \
+  --es pqp.devUser bob
+```
+
+That account is `dev_local_user_bob`. Debug builds only. Two emulators from one
+AVD need `-read-only` on **both**, which means restarting an already-running
+one:
+
+```bash
+emulator -avd Pixel_10_Pro -read-only -port 5554 &
+emulator -avd Pixel_10_Pro -read-only -port 5556 &
+```
+
+## Layout
+
+| Path | What |
+|---|---|
+| `app/src/main/kotlin/gg/pqp/app/core` | Backend config, models, REST client, WebSocket client, session |
+| `app/src/main/kotlin/gg/pqp/app/ui` | Compose screens, theme, shared components |
+| `app/src/main/kotlin/gg/pqp/app/voice` | Mesh WebRTC engine, call state, foreground service |
+| `app/src/main/res/values` | English copy |
+| `app/src/main/res/values-pt-rBR` | Portuguese copy |
+| `app/src/debug` | Cleartext exemption for the local server, debug builds only |
+
+## Auth
+
+Two modes, chosen at launch by whether a publishable key is present. Same
+arrangement as iOS, and stated the same way round so that a release build with
+no key is loudly unable to authenticate rather than quietly falling back to a
+token only a local server accepts.
+
+| `pqp.clerkPublishableKey` | Mode | Reaches |
+|---|---|---|
+| unset (default) | dev bypass | local server only |
+| `pk_…` | Clerk | any deployment |
+
+Clerk's own `AuthView` (`com.clerk:clerk-android-ui`) is used as shipped rather
+than a hand-built form. It covers email codes, OAuth and MFA, none of which can
+be exercised without a real inbox, and a bespoke version would be unverifiable
+code on the one path where being wrong locks everybody out. iOS made the same
+call for the same reason.
+
+**Sign in with Google is what matters here.** `AuthView` renders one button per
+provider enabled on the Clerk instance, and `clerk.pqp.gg` has `oauth_google`
+on. Unlike iOS there is **no Sign in with Apple requirement**: Guideline 4.8 is
+an App Store rule with no Play Store counterpart, so offering Google alone is
+fine.
+
+`ClerkTokenProvider` reads a **fresh** token per request. Clerk session tokens
+live about a minute, so caching one makes everything work for sixty seconds and
+then 401 forever. That bug has already shipped once on the web client.
+
+**Unverified:** completing a real Clerk sign-in. No publishable key was
+available in this session, so the app was built and tested on the dev bypass.
+Everything after the token lands is the same code the bypass exercises.
+
+## The age gate is not optional
+
+`GET /api/me` answers `ageGate: "pending"` on a fresh account, and until it
+reads `passed` **every other endpoint answers 403 and the WebSocket refuses the
+handshake outright**. A client that treats it as an ordinary loading failure
+looks broken rather than unfinished, so it is a session phase with its own
+screen (`AgeGateScreen`). The date travels as a plain `YYYY-MM-DD` with no time
+and no zone, because attaching an instant to a date of birth is the classic way
+to refuse somebody on their own birthday.
+
+## Decisions worth knowing
+
+**Sending a message is a WebSocket frame, not an HTTP call.** There is no
+`POST /api/channels/:id/messages`; the protocol only offers `message-create`
+over `/ws`. That makes the socket load-bearing rather than an enhancement, which
+is why `RealtimeClient` reconnects with capped, jittered backoff and resolves a
+fresh token per attempt.
+
+**A send that cannot leave reconnects rather than returning quietly.**
+`RealtimeClient.send` returns "this left the phone", and the caller drops its
+optimistic row when it did not. A client that looks online and silently discards
+everything it is asked to say is the worst failure this class has, and iOS
+shipped exactly that once.
+
+**There is no ack and no error frame.** An invalid frame is dropped server-side
+in silence. The only correlation the protocol offers is the `nonce` echoed back
+on `message-broadcast`, so that is what retires an optimistic row. The
+optimistic row borrows the nonce as its id, which makes retiring it a filter.
+
+**Both delete spellings are live.** The server broadcasts `message-delete`;
+`message-deleted` is the older name and is still relayed. Handling one leaves
+deleted messages on screen for whoever is connected to the wrong instance.
+
+**`kind` and `type` on a channel are different fields.** `kind` is what the row
+*is* (`server` / `dm` / `group`); `type` is what it *carries* (`text` / `voice`
+/ `category`). A category is a channel row, not a separate object, and its
+children point at it through `parentId`.
+
+**`position` is unique only within a sibling group**, and top-level text
+channels, top-level voice channels and categories are three separate groups that
+all carry `parentId == null`. Sorting them as one list interleaves three
+sequences of 0, 1, 2, so `ChannelsScreen` renders them as sections.
+
+**`Message.blocked` is on the wire and absent from the zod schema.** The server
+adds it in `mapMessage` so a blocked author's row still travels and paging stays
+correct. Decoded defensively, like iOS.
+
+**`ignoreUnknownKeys` is not laziness.** The API grows fields (threads, embeds,
+webhook embeds, permissions) faster than this client models them, and a strict
+parse would turn each one into a channel that cannot load. Inbound socket frames
+are dispatched on `type` as raw `JsonObject` for the same reason: an unknown
+member of the union has to be ignored, not thrown on.
+
+**There is no OkHttp `callTimeout`.** It bounds a whole exchange, and a
+WebSocket *is* one exchange, so a ceiling there would kill every socket on
+schedule. `docs/IOS.md` records that exact failure on URLSession, where it
+looked like a live connection that dropped everything it was asked to send.
+
+## Android conventions, deliberately
+
+- **Edge to edge**, with `SystemBarStyle.auto` rather than `dark`. Pinning the
+  bar icons light painted white icons onto the light scheme's near-white ground,
+  where the clock and the battery disappeared. The emulator boots in light mode,
+  which is how it was caught.
+- **Predictive back**: `android:enableOnBackInvokedCallback="true"`, and
+  Navigation Compose's default transitions are left alone because they cooperate
+  with the gesture and a bespoke slide would not.
+- **Material 3 throughout**: large collapsing app bar, extended FAB, pull to
+  refresh, snackbars, date picker, filled icon buttons.
+- **Not Material You.** Dynamic colour would repaint the one thing the product
+  is recognised by, and pqp's identity is a lime signal on near-black. The
+  Android feel comes from the components, the motion and the navigation; it does
+  not have to come from the wallpaper. Discord and Slack make the same call on
+  this platform. The palette is the same sRGB conversion `ios/…/Theme.swift`
+  already did from `client/src/index.css`, so the three clients are one product.
+- **Adaptive icon** with a themed monochrome layer, drawn as vectors. The three
+  dots are punched out of the bubble with an even-odd fill so the themed variant
+  survives the system's tint.
+- The launcher icon is a squircle for servers and a circle for people, because
+  Material draws that distinction and a server is a place.
+
+## Copy and pt-BR
+
+Both languages live in Android's own resource system: `res/values/strings.xml`
+is the English source, `res/values-pt-rBR/strings.xml` the Portuguese. No copy
+is a Kotlin literal. `androidResources.localeFilters` pins the APK to `en` and
+`pt-rBR` so a dependency's forty other translations are dropped rather than
+offered as a half-translated surface.
+
+The gap versus iOS: **there is no equivalent of `check-localization.py`.**
+Android has no `.stringsdata`, so nothing currently proves that a new
+`stringResource` call has a Portuguese counterpart, or that a Portuguese string
+is still reachable from English. A lint rule or a small script comparing the two
+files' `name` attributes would cover most of it and is not written.
+
+## Voice
+
+Full-mesh WebRTC (`io.github.webrtc-sdk:android`), matching the server's default
+backend. Signalling is the same `/ws` socket the chat uses.
+
+**The politeness rule matches `client/src/lib/peer-connection-manager.ts`
+exactly:** `isImpolite(local, remote) = local > remote`, so the peer whose id
+sorts *higher* sends the initial offer. Invert it and two peers either both
+offer (glare) or neither does (a silent deadlock where everyone sits in
+`connecting`), and it looks fine until two *different* clients meet in one room.
+
+Other things the mesh depends on, each of which is a comment at its site:
+
+- **ICE candidates are queued until a remote description exists.** They
+  routinely arrive first, and adding one early is an error rather than a no-op.
+- **A `null` candidate is end-of-candidates**, not a failure.
+- **Remote audio is filed per peer *and per track*.** A peer can send more than
+  one audio track: sharing a screen with its sound publishes the machine's audio
+  alongside the microphone. Keyed by peer alone, the second overwrites the first
+  and takes the only handle on the microphone with it, so deafening silences the
+  screen and leaves the presenter's voice playing.
+- **Deafening forces the microphone off too.** Being heard while hearing nothing
+  is a trap rather than a feature, and it is what both other clients do.
+- **`transports: ["mesh"]` is declared on `join-voice-room`.** The room's
+  transport is decided by the server and is binding; declaring up front lets it
+  refuse *before* creating a peer, so a mesh-only client never appears in an SFU
+  room's roster as somebody who can neither hear nor be heard.
+- **A call is rebuilt, not resumed, after a socket drop.** The server drops the
+  voice peer when the socket closes and a reconnect mints a *new* peer id, so
+  every connection in the old mesh addresses a peer that no longer exists.
+  `ready` tears it down and rejoins.
+
+### The foreground service is the feature, not the plumbing
+
+Android stops a backgrounded app's threads, and a foreground service with a
+visible notification is the only sanctioned exemption. `VoiceService` is started
+**before the microphone is touched**, because Android 14 and later refuse a
+`microphone`-typed service started the other way round, and it holds no call
+state: `VoiceController` owns the mesh and lives on the `Application`, so a
+service restart cannot desynchronise the two. The service is `START_NOT_STICKY`,
+because a call the system restarted without its signalling socket is a
+notification with nothing behind it.
+
+`POST_NOTIFICATIONS` is requested alongside `RECORD_AUDIO`. Only the microphone
+gates the call, but a refused notification leaves a call running that nothing on
+screen mentions.
+
+Audio uses `MODE_IN_COMMUNICATION` with a `USAGE_VOICE_COMMUNICATION` focus
+request, which is what routes sensibly, puts the volume rocker on the call
+stream, and turns on the platform's echo cancellation.
+
+### What voice is verified to do, and what it is not
+
+Tested with **two emulators in one room** on two separate dev-bypass accounts,
+which is the only arrangement that exercises anything a single client cannot.
+
+Verified:
+
+- The permission flow, and the foreground service coming up with
+  `types=0x00000080` (`FOREGROUND_SERVICE_TYPE_MICROPHONE`) carrying an ongoing
+  `category=call` notification with a Hang up action.
+- `join-voice-room` out, `welcome` back, and both call bars reaching **2 in this
+  call** with each other in the roster.
+- **The politeness rule.** Exactly one side offered, the other answered, and
+  both peer connections reached `CONNECTING`: no glare and no deadlock, which
+  are the two ways the comparison can be wrong.
+- **The ICE restart.** On failure exactly one side restarted (the impolite one),
+  and both connections returned to `CONNECTING`.
+
+**Not verified: audio actually flowing.** Both peer connections then went to
+`FAILED`, and the reason is not the app: `GET /api/ice-servers` was serving
+**STUN only**, because the local `.env` carries the placeholder `VITE_TURN_*`
+values, and two emulators on one host are on separate NATs. That is pitfall #1
+in `CLAUDE.md` word for word, reproduced. Everything up to and including the
+candidate exchange is exercised; the media path is not.
+
+What the failure produced, and this is the useful part: the call bar said "2 in
+this call" while nobody could hear anybody. That is the exact shape of a voice
+stack that looks finished and is not, so the engine now reports per-peer media
+state and the bar says **Cannot reach everyone in this call** in the error
+colour instead.
+
+To settle the last step, with real TURN credentials in the API's `TURN_URL` /
+`TURN_USERNAME` / `TURN_CREDENTIAL` (the `VITE_` spellings are read as a
+fallback):
+
+```bash
+emulator -avd Pixel_10_Pro -read-only -port 5554 &
+emulator -avd Pixel_10_Pro -read-only -port 5556 &
+# on each: adb -s <serial> reverse tcp:3001 tcp:3001, then installDebug
+adb -s emulator-5556 shell am start -n gg.pqp.app.debug/gg.pqp.app.MainActivity \
+  --es pqp.devUser bob
+```
+
+Join the same voice channel from both. `adb logcat -s pqp.voice` must show
+`peer <id> -> CONNECTED` on both, and neither bar may show the unreachable
+line. Two devices on the *same* wifi would also settle it without TURN, since
+host candidates route there.
+
+Also unverified, and known-missing rather than broken: no speaking indicators,
+no per-peer volume, no earpiece/speaker toggle, no push-to-talk, no camera, and
+LiveKit rooms are refused rather than joined.
+
+## Screen sharing: not built, and the point of the whole exercise
+
+Nothing here captures a screen yet. It is the largest available win, because
+**no mobile browser can share one**. `getDisplayMedia` is not implemented on
+Android Chrome, so every pqp user on a phone today can watch a share and none
+can start one.
+
+Android makes it considerably easier than iOS did. `MediaProjection` runs **in
+the app's own process**: no broadcast upload extension, no App Group, no Unix
+domain socket carrying NV12 between two processes, none of the machinery
+`ios/pqp/ScreenShare` exists to work around. The shape is:
+
+1. `MediaProjectionManager.createScreenCaptureIntent()`, launched for a result.
+   The consent dialog is the system's and must be triggered by the user.
+2. A **second** foreground service type, `mediaProjection`, declared on the
+   manifest and added to the `startForeground` call. From Android 14 the
+   projection must be started *after* that service is already foreground, and
+   from Android 15 consent has to be re-obtained for each capture session.
+3. `ScreenCapturerAndroid` from the WebRTC SDK, into a `VideoSource`, into a
+   track added to every peer connection, published under a stream id of
+   `pqp-screen-…` so the far end classifies it (see `VoiceModel` on iOS and
+   `sharingScreen` on `voiceParticipantSchema`).
+4. `set-sharing-screen` on the socket so the roster carries it, and
+   `SCREEN_SHARE_LIMIT` (2 on mesh, 4 on LiveKit) respected, since the server sends
+   `screen-share-denied` past it.
+5. Receiving is the mesh's ordinary video path and needs a renderer; the app has
+   none today.
+
+## Push notifications: not built
+
+The server already decides *who* gets told, in `server/src/services/push.ts`,
+and fans out to Web Push and APNs from one place. FCM would be a third leg of
+the same feature and the client would re-decide none of it. That is server work
+plus a `FirebaseMessagingService` here, and neither exists.
+
+## CI
+
+**Deliberately not added.** The build needs an Android SDK, an accepted licence
+and a JDK, and the existing `ci.yml` is a pnpm/Node pipeline; bolting an Android
+job onto it risks the pipeline that guards the API for a build nobody is
+releasing yet. What it would look like, when it is wanted, as its own workflow
+file (`.github/workflows/android.yml`) so a failure cannot block the web or API
+deploys:
+
+```yaml
+name: android
+on:
+  pull_request:
+    paths: ["android/**", ".github/workflows/android.yml"]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "21" }
+      - uses: android-actions/setup-android@v3
+      - run: ./gradlew :app:assembleDebug lint
+        working-directory: android
+```
+
+Two things to know before writing it: `compileSdk = 37` is newer than AGP 9.3.2
+knows about (hence `android.suppressUnsupportedCompileSdk` in
+`gradle.properties`), and CI would need that platform installed or the compile
+SDK lowered to 36.
+
+## What is real
+
+Built and **verified against a live local server on an emulator**: launch, the
+dev-bypass session, the age gate, the server list with create and pull to
+refresh, the channel list with categories and text/voice sections, the full
+message round trip (join, send, broadcast, render, and the row persisted
+server-side with a real id), reconnect handling, sign-out, and the two
+languages.
+
+Built and **partly verified**: voice. Signalling, roster, politeness and the ICE
+restart are verified between two clients; audio flowing is not, for an
+environment reason spelled out above. **Do not write "Android voice works"**
+until somebody has heard somebody.
+
+**Not built:** screen sharing, push, DMs, attachments, reactions, replies,
+editing, pinning, threads, search, members and moderation, invites, profile
+editing, communities, game connections, data export and account deletion. There
+are no instrumented tests. `assembleRelease` signs with the debug key and needs
+a real keystore before it goes anywhere near Play.
+
+This is a foundation with one real feature on it. It is not the app yet.

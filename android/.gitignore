@@ -1,0 +1,11 @@
+build/
+.gradle/
+.cxx/
+
+# Machine-local: the SDK path and any build inputs (API URLs, the Clerk
+# publishable key). Never committed, like every other .env in this repo.
+local.properties
+
+*.iml
+.idea/
+captures/
