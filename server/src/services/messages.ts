@@ -1,6 +1,6 @@
 import {
   buildReplyExcerpt,
-  extractMentionUsernames,
+  extractMentions,
   formatUserTag,
   MAX_PINS_PER_CHANNEL,
   type Attachment,
@@ -58,11 +58,14 @@ export type HydratedMessage = DbMessage & {
 /** Parent columns every read path needs to build a quote header. */
 const REPLY_COLUMNS = `m.reply_to_id,
             parent.author_id as reply_author_id,
-            pu.display_name as reply_author_name,
+            COALESCE(NULLIF(reply_sm.nickname, ''), pu.display_name) as reply_author_name,
             parent.body as reply_body`;
 
 const REPLY_JOINS = `LEFT JOIN messages parent ON parent.id = m.reply_to_id
-     LEFT JOIN users pu ON pu.id = parent.author_id`;
+     LEFT JOIN users pu ON pu.id = parent.author_id
+     LEFT JOIN server_members reply_sm
+       ON reply_sm.user_id = parent.author_id
+      AND reply_sm.server_id = msg_ch.server_id`;
 
 /** Every history read needs to know who pinned a message, not just when. */
 const PIN_COLUMNS = `m.pinned_at, m.pinned_by, pinner.display_name as pinned_by_name`;
@@ -70,16 +73,20 @@ const PIN_JOIN = `LEFT JOIN users pinner ON pinner.id = m.pinned_by`;
 
 /** Every history read selects the same shape; only the cursor clause differs. */
 const MESSAGE_SELECT = `SELECT m.id, m.channel_id, m.author_id, m.body, m.created_at, m.edited_at,
-            u.display_name as author_name,
+            COALESCE(NULLIF(author_sm.nickname, ''), u.display_name) as author_name,
             u.username as author_username,
             u.discriminator as author_discriminator,
             u.avatar_url as author_avatar_url,
             u.is_webhook as author_is_webhook,
             m.webhook_embeds, m.webhook_username, m.webhook_avatar_url,
+            m.mention_everyone, m.mention_here,
             ${REPLY_COLUMNS},
             ${PIN_COLUMNS}
      FROM messages m
      JOIN users u ON u.id = m.author_id
+     JOIN channels msg_ch ON msg_ch.id = m.channel_id
+     LEFT JOIN server_members author_sm
+       ON author_sm.user_id = m.author_id AND author_sm.server_id = msg_ch.server_id
      ${REPLY_JOINS}
      ${PIN_JOIN}`;
 
@@ -368,6 +375,13 @@ export async function getReplyParent(
  * difference between a reply that notifies and a reply that decorates — and it
  * lands in the same table, so the unread and badge paths need no change.
  */
+export interface MentionWrite {
+  extraUserIds?: readonly string[];
+  mentionEveryone?: boolean;
+  mentionHere?: boolean;
+  canMentionEveryone?: boolean;
+}
+
 async function recordMentions(
   db: Queryable,
   messageId: string,
@@ -375,12 +389,14 @@ async function recordMentions(
   authorId: string,
   body: string,
   reply?: { parentId: string; authorId: string },
+  extra?: MentionWrite,
 ): Promise<void> {
-  const usernames = extractMentionUsernames(body);
+  const parsed = extractMentions(body);
+  const usernames = parsed.usernames;
   if (usernames.length > 0) {
     await db.query(
       `INSERT INTO message_mentions (message_id, user_id)
-       SELECT $1, u.id
+       SELECT $1::uuid, u.id
        FROM users u
        CROSS JOIN channels c
        WHERE c.id = $2
@@ -402,14 +418,64 @@ async function recordMentions(
     );
   }
 
+  if (parsed.roleNames.length > 0) {
+    await db.query(
+      `INSERT INTO message_mentions (message_id, user_id)
+       SELECT DISTINCT $1::uuid, mr.user_id
+       FROM channels c
+       JOIN roles r ON r.server_id = c.server_id
+       JOIN member_roles mr ON mr.role_id = r.id AND mr.server_id = c.server_id
+       WHERE c.id = $2
+         AND c.kind = 'server'
+         AND LOWER(r.name) = ANY($3::text[])
+         AND (r.mentionable OR $5::boolean)
+         AND mr.user_id <> $4
+         AND NOT EXISTS (
+           SELECT 1 FROM users named
+            WHERE named.username = LOWER(r.name)
+              AND CASE WHEN c.kind = 'server' THEN
+                    EXISTS (
+                      SELECT 1 FROM server_members sm
+                       WHERE sm.server_id = c.server_id AND sm.user_id = named.id
+                    )
+                  ELSE
+                    EXISTS (
+                      SELECT 1 FROM channel_members cm
+                       WHERE cm.channel_id = c.id AND cm.user_id = named.id
+                    )
+                  END
+         )
+         AND ${notBlockedSql("mr.user_id", "$4")}
+       ON CONFLICT DO NOTHING`,
+      [
+        messageId,
+        channelId,
+        parsed.roleNames,
+        authorId,
+        extra?.mentionEveryone === true || extra?.canMentionEveryone === true,
+      ],
+    );
+  }
+
+  const extraIds = extra?.extraUserIds ?? [];
+  if (extraIds.length > 0) {
+    await db.query(
+      `INSERT INTO message_mentions (message_id, user_id)
+       SELECT $1::uuid, x.user_id
+       FROM UNNEST($2::uuid[]) AS x(user_id)
+       WHERE x.user_id <> $3
+         AND ${notBlockedSql("x.user_id", "$3")}
+       ON CONFLICT DO NOTHING`,
+      [messageId, extraIds, authorId],
+    );
+  }
+
   if (!reply) {
     return;
   }
-  // Answering yourself is not a notification. The predicate lives in SQL so a
-  // parent deleted between the insert and here simply yields no row.
   await db.query(
     `INSERT INTO message_mentions (message_id, user_id)
-     SELECT $1, parent.author_id
+     SELECT $1::uuid, parent.author_id
      FROM messages parent
      WHERE parent.id = $2 AND parent.author_id <> $3
        AND ${notBlockedSql("parent.author_id", "$3")}
@@ -449,10 +515,21 @@ export async function createMessage(
   body: string,
   replyToId?: string | null,
   attachmentIds?: string[],
+  mentions?: MentionWrite,
 ): Promise<HydratedMessage | null> {
   const verified = attachmentIds?.length
     ? await verifyPendingAttachments(channelId, author.id, attachmentIds)
     : [];
+
+  const nickRow = await getPool().query<{ nickname: string | null }>(
+    `SELECT sm.nickname
+       FROM channels c
+       LEFT JOIN server_members sm
+         ON sm.server_id = c.server_id AND sm.user_id = $2
+      WHERE c.id = $1`,
+    [channelId, author.id],
+  );
+  const authorName = nickRow.rows[0]?.nickname || author.display_name;
 
   const client = await getPool().connect();
   try {
@@ -462,15 +539,25 @@ export async function createMessage(
     // parent lookup hangs off.
     const result = await client.query<DbMessage>(
       `WITH inserted AS (
-         INSERT INTO messages (channel_id, author_id, body, reply_to_id)
-         VALUES ($1, $2, $3, $4)
-         RETURNING id, channel_id, author_id, body, created_at, edited_at, reply_to_id
+         INSERT INTO messages (channel_id, author_id, body, reply_to_id, mention_everyone, mention_here)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         RETURNING id, channel_id, author_id, body, created_at, edited_at, reply_to_id,
+                   mention_everyone, mention_here
        )
        SELECT m.id, m.channel_id, m.author_id, m.body, m.created_at, m.edited_at,
+              m.mention_everyone, m.mention_here,
               ${REPLY_COLUMNS}
        FROM inserted m
+       JOIN channels msg_ch ON msg_ch.id = m.channel_id
        ${REPLY_JOINS}`,
-      [channelId, author.id, body, replyToId ?? null],
+      [
+        channelId,
+        author.id,
+        body,
+        replyToId ?? null,
+        mentions?.mentionEveryone === true,
+        mentions?.mentionHere === true,
+      ],
     );
     // A message is never born pinned, so the columns above are left out rather
     // than joined for nothing — mapMessage already treats them as optional.
@@ -490,15 +577,14 @@ export async function createMessage(
       author.id,
       body,
       replyToId ? { parentId: replyToId, authorId: author.id } : undefined,
+      mentions,
     );
 
     await client.query("COMMIT");
 
-    // The author is already in hand from the authenticated session — the previous
-    // implementation re-read it from the database on every single message.
     return {
       ...message,
-      author_name: author.display_name,
+      author_name: authorName,
       author_username: author.username,
       author_discriminator: author.discriminator,
       author_avatar_url: author.avatar_url,
@@ -529,7 +615,7 @@ export async function updateMessageBody(
                  pinned_at, pinned_by
      )
      SELECT m.id, m.channel_id, m.author_id, m.body, m.created_at, m.edited_at,
-            u.display_name as author_name,
+            COALESCE(NULLIF(author_sm.nickname, ''), u.display_name) as author_name,
             u.username as author_username,
             u.discriminator as author_discriminator,
             u.avatar_url as author_avatar_url,
@@ -537,6 +623,9 @@ export async function updateMessageBody(
             ${PIN_COLUMNS}
      FROM updated m
      JOIN users u ON u.id = m.author_id
+     JOIN channels msg_ch ON msg_ch.id = m.channel_id
+     LEFT JOIN server_members author_sm
+       ON author_sm.user_id = m.author_id AND author_sm.server_id = msg_ch.server_id
      ${REPLY_JOINS}
      ${PIN_JOIN}`,
     [messageId, body],
@@ -698,6 +787,8 @@ export function mapMessage(
     pinnedAt: m.pinned_at?.toISOString() ?? null,
     pinnedBy: mapPinnedBy(m),
     isWebhook: m.author_is_webhook ?? false,
+    mentionEveryone: m.mention_everyone ?? false,
+    mentionHere: m.mention_here ?? false,
     webhookEmbeds: (m.webhook_embeds as WebhookEmbed[] | null) ?? [],
     // --- threads ---
     thread: m.thread ?? null,
@@ -779,7 +870,7 @@ export async function pinMessage(
                  pinned_at, pinned_by
      )
      SELECT m.id, m.channel_id, m.author_id, m.body, m.created_at, m.edited_at,
-            u.display_name as author_name,
+            COALESCE(NULLIF(author_sm.nickname, ''), u.display_name) as author_name,
             u.username as author_username,
             u.discriminator as author_discriminator,
             u.avatar_url as author_avatar_url,
@@ -787,6 +878,9 @@ export async function pinMessage(
             ${PIN_COLUMNS}
      FROM updated m
      JOIN users u ON u.id = m.author_id
+     JOIN channels msg_ch ON msg_ch.id = m.channel_id
+     LEFT JOIN server_members author_sm
+       ON author_sm.user_id = m.author_id AND author_sm.server_id = msg_ch.server_id
      ${REPLY_JOINS}
      ${PIN_JOIN}`,
     [messageId, pinnedBy],
@@ -808,7 +902,7 @@ export async function unpinMessage(
                  pinned_at, pinned_by
      )
      SELECT m.id, m.channel_id, m.author_id, m.body, m.created_at, m.edited_at,
-            u.display_name as author_name,
+            COALESCE(NULLIF(author_sm.nickname, ''), u.display_name) as author_name,
             u.username as author_username,
             u.discriminator as author_discriminator,
             u.avatar_url as author_avatar_url,
@@ -816,6 +910,9 @@ export async function unpinMessage(
             ${PIN_COLUMNS}
      FROM updated m
      JOIN users u ON u.id = m.author_id
+     JOIN channels msg_ch ON msg_ch.id = m.channel_id
+     LEFT JOIN server_members author_sm
+       ON author_sm.user_id = m.author_id AND author_sm.server_id = msg_ch.server_id
      ${REPLY_JOINS}
      ${PIN_JOIN}`,
     [messageId],

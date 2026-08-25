@@ -9,12 +9,9 @@ import type {
   ReactionBroadcast,
   ThreadSummary,
 } from "@pqp/shared";
-import {
-  buildReplyExcerpt,
-  extractMentionUsernames,
-  MESSAGE_PAGE_SIZE,
-} from "@pqp/shared";
+import { buildReplyExcerpt, MESSAGE_PAGE_SIZE } from "@pqp/shared";
 import { notifyOpenChannelMessage } from "@/lib/notifications";
+import { messagePingsYou } from "@/lib/message-mentions-you";
 import {
   apiFetch,
   deleteMessage as deleteMessageRequest,
@@ -24,21 +21,6 @@ import {
 } from "@/lib/api";
 import { revokePreviewUrl, type OutgoingAttachment } from "@/lib/attachments";
 import type { RealtimeTransport } from "@/lib/realtime";
-
-function messageNamesUser(
-  body: string,
-  username: string | null,
-  replyAuthorId: string | null | undefined,
-  readerId: string | null,
-): boolean {
-  if (readerId && replyAuthorId === readerId) {
-    return true;
-  }
-  if (!username) {
-    return false;
-  }
-  return extractMentionUsernames(body).includes(username.toLowerCase());
-}
 
 /** A message plus the client-only state an optimistic bubble needs. */
 export interface ChatMessage extends Message {
@@ -158,14 +140,33 @@ function applyReactionBroadcast(
 ): MessageReaction[] {
   const existing = reactions.find((r) => r.emoji === broadcast.emoji);
   const isMe = broadcast.userId === currentUserId;
+  const users = existing?.users ?? [];
+  const already = users.some((user) => user.id === broadcast.userId);
+  const reactor = {
+    id: broadcast.userId,
+    displayName: broadcast.displayName ?? "",
+  };
 
   if (broadcast.added) {
     if (!existing) {
-      return [...reactions, { emoji: broadcast.emoji, count: 1, me: isMe }];
+      return [
+        ...reactions,
+        {
+          emoji: broadcast.emoji,
+          count: 1,
+          me: isMe,
+          users: [reactor],
+        },
+      ];
     }
     return reactions.map((r) =>
       r.emoji === broadcast.emoji
-        ? { ...r, count: r.count + 1, me: r.me || isMe }
+        ? {
+            ...r,
+            count: already ? r.count : r.count + 1,
+            me: r.me || isMe,
+            users: already ? users : [...users, reactor],
+          }
         : r,
     );
   }
@@ -174,13 +175,19 @@ function applyReactionBroadcast(
     return reactions;
   }
 
+  const nextUsers = users.filter((user) => user.id !== broadcast.userId);
   if (existing.count <= 1) {
     return reactions.filter((r) => r.emoji !== broadcast.emoji);
   }
 
   return reactions.map((r) =>
     r.emoji === broadcast.emoji
-      ? { ...r, count: r.count - 1, me: isMe ? false : r.me }
+      ? {
+          ...r,
+          count: r.count - 1,
+          me: isMe ? false : r.me,
+          users: nextUsers,
+        }
       : r,
   );
 }
@@ -193,6 +200,8 @@ function toChatMessage(message: MessageBroadcast["message"]): ChatMessage {
     reactions: message.reactions ?? [],
     replyTo: message.replyTo ?? null,
     attachments: message.attachments ?? [],
+    mentionEveryone: message.mentionEveryone ?? false,
+    mentionHere: message.mentionHere ?? false,
   };
 }
 
@@ -653,6 +662,8 @@ export function createChatController(
         // webhook — an optimistic bubble is never one.
         isWebhook: false,
         webhookEmbeds: [],
+        mentionEveryone: false,
+        mentionHere: false,
         // A message is never born with a thread either.
         thread: null,
         // Built with the same helper the server uses, so the bubble does not
@@ -677,10 +688,6 @@ export function createChatController(
         channelId,
         replyTo?.id,
         optimisticAttachments.map((attachment) => attachment.id),
-      );
-      notifyOpenChannelMessage(
-        channelId,
-        messageNamesUser(body, currentUsername, replyTo?.authorId, currentUserId),
       );
     },
 
@@ -910,12 +917,7 @@ export function createChatController(
           if (incoming.authorId !== currentUserId) {
             notifyOpenChannelMessage(
               channelId,
-              messageNamesUser(
-                incoming.body,
-                currentUsername,
-                incoming.replyTo?.authorId,
-                currentUserId,
-              ),
+              messagePingsYou(incoming, currentUsername, currentUserId),
             );
           }
           return;

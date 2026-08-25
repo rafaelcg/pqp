@@ -75,6 +75,11 @@ import {
   updateChannelSchema,
   updateMemberRoleSchema,
   updateMessageSchema,
+  createRoleSchema,
+  updateRoleSchema,
+  reorderRolesSchema,
+  markChannelReadSchema,
+  channelOverwriteSchema,
   completeConnectionSchema,
   updateConnectionSchema,
   updateProfileSchema,
@@ -102,6 +107,7 @@ import {
   evictVoiceUser,
   evictVoiceUsersExcept,
   forEachAuthenticatedSocket,
+  notifyPermissionsUpdate,
   resolveEmbedInBackground,
   resolveStatuses,
 } from "../ws/index.js";
@@ -139,7 +145,11 @@ import {
   sendJson,
 } from "../lib/http.js";
 import { Etagged, etagged } from "../lib/etag.js";
-import { clientAddress, createRateLimiter } from "../lib/rate-limit.js";
+import {
+  clientAddress,
+  createRateLimiter,
+  limitFromEnv,
+} from "../lib/rate-limit.js";
 import { createRouter, type RequestContext } from "../lib/router.js";
 import {
   buildPersonalExport,
@@ -345,7 +355,6 @@ import {
 } from "../services/dms.js";
 import {
   canAccessChannel,
-  canManageServer,
   findUserById,
   findUserByTag,
   getMemberRole,
@@ -356,10 +365,40 @@ import {
   listUnread,
   markChannelRead,
   searchUsersByPrefix,
+  setMemberNickname,
   toPublicUser,
   updateMemberRole,
   updateProfile,
 } from "../services/users.js";
+import {
+  canActOnMember,
+  coerceEveryoneViewOverwrite,
+  computeMemberPermissions,
+  bumpPermissionsVersion,
+  getEveryoneRoleId,
+  getMemberHierarchy,
+  getPermissionsSnapshot,
+  memberHasPermission,
+  Permission,
+  restorePrivateEveryoneViewOverwrite,
+} from "../services/permissions.js";
+import {
+  assertCanEditRole,
+  assignRole,
+  clampRolePermissions,
+  createRole,
+  deleteChannelOverwrite,
+  deleteRole,
+  getRole,
+  listChannelOverwrites,
+  listRoles,
+  mapRole,
+  parsePermissions,
+  reorderRoles,
+  unassignRole,
+  updateRole,
+  upsertChannelOverwrite,
+} from "../services/roles.js";
 
 /** Per-identity request budget. Generous for a UI, hostile to a script. */
 /**
@@ -367,11 +406,6 @@ import {
  * self-host and a public instance want very different numbers, and an automated
  * suite driving one account needs headroom a human never would.
  */
-function limitFromEnv(name: string, fallback: number): number {
-  const parsed = Number(process.env[name]);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
-}
-
 const apiLimiter = createRateLimiter({
   capacity: limitFromEnv("RATE_LIMIT_API_CAPACITY", 120),
   refillPerSecond: limitFromEnv("RATE_LIMIT_API_REFILL", 10),
@@ -614,12 +648,27 @@ async function requireServerMember(serverId: string, userId: string) {
   return role;
 }
 
+async function requirePermission(
+  serverId: string,
+  userId: string,
+  bit: bigint,
+  channelId?: string | null,
+): Promise<void> {
+  await requireServerMember(serverId, userId);
+  if (!(await memberHasPermission(serverId, userId, bit, channelId))) {
+    throw new Forbidden("You do not have permission to do that");
+  }
+}
+
 async function requireManager(serverId: string, userId: string) {
   const role = await requireServerMember(serverId, userId);
-  if (role !== "owner" && role !== "admin") {
-    throw new Forbidden("Only owners and admins can do that");
+  if (role === "owner" || role === "admin") {
+    return role;
   }
-  return role;
+  if (await memberHasPermission(serverId, userId, Permission.ADMINISTRATOR)) {
+    return role;
+  }
+  throw new Forbidden("Only owners and admins can do that");
 }
 
 async function requireOwner(serverId: string, userId: string) {
@@ -644,7 +693,7 @@ async function requireOwner(serverId: string, userId: string) {
  */
 async function requireOutranked(
   serverId: string,
-  actorRole: MemberRole,
+  actorId: string,
   targetUserId: string,
   action: "kick" | "ban" | "timeout" | "disconnect" | "move" | "mute",
 ): Promise<MemberRole | null> {
@@ -652,7 +701,14 @@ async function requireOutranked(
   if (targetRole === "owner") {
     throw new Forbidden(`Cannot ${action} the owner`);
   }
-  if (targetRole === "admin" && actorRole !== "owner") {
+  const actor = await getMemberHierarchy(serverId, actorId);
+  const target = targetRole
+    ? await getMemberHierarchy(serverId, targetUserId)
+    : null;
+  if (target && actor && !canActOnMember(actor, target)) {
+    throw new Forbidden(`You cannot ${action} that member`);
+  }
+  if (targetRole === "admin" && actor && !actor.isOwner) {
     throw new Forbidden(`Only the owner can ${action} an admin`);
   }
   return targetRole;
@@ -2561,7 +2617,7 @@ router.get(
 router.post(
   "/api/servers/:serverId/channels",
   async ({ req, user }, { serverId }) => {
-    await requireManager(serverId!, user.id);
+    await requirePermission(serverId!, user.id, Permission.MANAGE_CHANNELS);
     const body = createChannelSchema.parse(await readJsonBody(req));
     const channel = await createChannel(
       serverId!,
@@ -2586,7 +2642,11 @@ router.post(
 
 router.patch("/api/channels/:channelId", async ({ req, user }, { channelId }) => {
   const channel = await requireServerChannel(channelId!);
-  await requireManager(channel.server_id, user.id);
+  await requirePermission(
+    channel.server_id,
+    user.id,
+    Permission.MANAGE_CHANNELS,
+  );
   const body = updateChannelSchema.parse(await readJsonBody(req));
   const updated = await updateChannel(channelId!, {
     name: body.name,
@@ -2613,6 +2673,9 @@ router.patch("/api/channels/:channelId", async ({ req, user }, { channelId }) =>
     for (const threadId of await listThreadChannelIds(channelId!)) {
       evictChannelViewers(threadId, { exceptUserIds: [...allowed] });
     }
+  }
+  if (body.isPrivate !== undefined && body.isPrivate !== channel.is_private) {
+    pingPermissions(channel.server_id);
   }
 
   // `channel` (read for the authorization check above) already carries the
@@ -2643,7 +2706,11 @@ router.patch("/api/channels/:channelId", async ({ req, user }, { channelId }) =>
 
 router.delete("/api/channels/:channelId", async ({ user }, { channelId }) => {
   const channel = await requireServerChannel(channelId!);
-  await requireManager(channel.server_id, user.id);
+  await requirePermission(
+    channel.server_id,
+    user.id,
+    Permission.MANAGE_CHANNELS,
+  );
   await deleteChannel(channelId!);
   evictVoiceChannel(channelId!);
   evictChannelViewers(channelId!);
@@ -2671,7 +2738,11 @@ router.patch(
   "/api/channels/:channelId/move",
   async ({ req, user }, { channelId }) => {
     const channel = await requireServerChannel(channelId!);
-    await requireManager(channel.server_id, user.id);
+    await requirePermission(
+      channel.server_id,
+      user.id,
+      Permission.MANAGE_CHANNELS,
+    );
     const body = moveChannelSchema.parse(await readJsonBody(req));
 
     try {
@@ -2705,7 +2776,11 @@ router.get(
   "/api/channels/:channelId/members",
   async ({ user }, { channelId }) => {
     const channel = await requireServerChannel(channelId!);
-    await requireManager(channel.server_id, user.id);
+    await requirePermission(
+      channel.server_id,
+      user.id,
+      Permission.MANAGE_CHANNELS,
+    );
     return { members: await listChannelMembers(channelId!) };
   },
 );
@@ -2714,12 +2789,18 @@ router.post(
   "/api/channels/:channelId/members",
   async ({ req, user }, { channelId }) => {
     const channel = await requireServerChannel(channelId!);
-    await requireManager(channel.server_id, user.id);
+    await requirePermission(
+      channel.server_id,
+      user.id,
+      Permission.MANAGE_CHANNELS,
+    );
     const body = addChannelMemberSchema.parse(await readJsonBody(req));
     if (!(await isServerMember(channel.server_id, body.userId))) {
       throw new HttpError(400, "User must be a server member");
     }
     await addChannelMember(channelId!, body.userId);
+    await bumpPermissionsVersion(channel.server_id);
+    pingPermissions(channel.server_id);
     return created({ ok: true });
   },
 );
@@ -2728,7 +2809,11 @@ router.delete(
   "/api/channels/:channelId/members/:userId",
   async ({ user }, { channelId, userId }) => {
     const channel = await requireServerChannel(channelId!);
-    await requireManager(channel.server_id, user.id);
+    await requirePermission(
+      channel.server_id,
+      user.id,
+      Permission.MANAGE_CHANNELS,
+    );
     await removeChannelMember(channelId!, userId!);
     if (channel.is_private) {
       evictChannelViewers(channelId!, { onlyUserIds: [userId!] });
@@ -2738,14 +2823,25 @@ router.delete(
         evictChannelViewers(threadId, { onlyUserIds: [userId!] });
       }
     }
+    await bumpPermissionsVersion(channel.server_id);
+    pingPermissions(channel.server_id);
     return { ok: true };
   },
 );
 
-router.post("/api/channels/:channelId/read", async ({ user }, { channelId }) => {
+router.post("/api/channels/:channelId/read", async ({ req, user }, { channelId }) => {
   await requireChannelAccess(channelId!, user.id);
-  await markChannelRead(channelId!, user.id);
-  return { ok: true };
+  const body = markChannelReadSchema.parse(await readJsonBody(req));
+  const result = await markChannelRead(
+    channelId!,
+    user.id,
+    body.lastReadAt ? new Date(body.lastReadAt) : undefined,
+  );
+  return {
+    ok: true as const,
+    previousLastReadAt: result.previousLastReadAt?.toISOString() ?? null,
+    lastReadAt: result.lastReadAt.toISOString(),
+  };
 });
 
 // -------------------------------------------------------------- webhooks
@@ -2939,7 +3035,12 @@ router.delete("/api/messages/:messageId", async ({ user }, { messageId }) => {
   if (
     existing.author_id !== user.id &&
     !(
-      existing.server_id && (await canManageServer(existing.server_id, user.id))
+      existing.server_id &&
+      (await memberHasPermission(
+        existing.server_id,
+        user.id,
+        Permission.MANAGE_MESSAGES,
+      ))
     )
   ) {
     throw new Forbidden("You cannot delete this message");
@@ -2981,7 +3082,11 @@ async function requirePinAccess(
 ): Promise<void> {
   if (
     existing.server_id &&
-    !(await canManageServer(existing.server_id, userId))
+    !(await memberHasPermission(
+      existing.server_id,
+      userId,
+      Permission.MANAGE_MESSAGES,
+    ))
   ) {
     throw new Forbidden("Only owners and admins can pin messages");
   }
@@ -3176,11 +3281,357 @@ router.get("/api/servers/:serverId/members", async ({ user }, { serverId }) => {
   };
 });
 
+router.get(
+  "/api/servers/:serverId/permissions",
+  async ({ user }, { serverId }) => {
+    await requireServerMember(serverId!, user.id);
+    const channels = await listChannels(serverId!, user.id);
+    return getPermissionsSnapshot(
+      serverId!,
+      user.id,
+      channels.map((channel) => channel.id),
+    );
+  },
+);
+
+router.get("/api/servers/:serverId/roles", async ({ user }, { serverId }) => {
+  await requireServerMember(serverId!, user.id);
+  return { roles: (await listRoles(serverId!)).map(mapRole) };
+});
+
+router.post("/api/servers/:serverId/roles", async ({ req, user }, { serverId }) => {
+  await requirePermission(serverId!, user.id, Permission.MANAGE_ROLES);
+  const body = createRoleSchema.parse(await readJsonBody(req));
+  const actorPerms = await computeMemberPermissions(serverId!, user.id);
+  const requested = body.permissions
+    ? parsePermissions(body.permissions)
+    : 0n;
+  const permissions = clampRolePermissions(actorPerms, requested, 0n);
+  const role = await createRole(serverId!, {
+    name: body.name,
+    color: body.color,
+    mentionable: body.mentionable,
+    permissions,
+  });
+    await logAudit({
+      serverId: serverId!,
+      actorId: user.id,
+      action: "role.create",
+      targetType: "role",
+      targetId: role.id,
+      changes: [{ key: "name", old: null, new: role.name }],
+    });
+    pingPermissions(serverId!);
+    return created({ role: mapRole(role) });
+});
+
+router.patch(
+  "/api/servers/:serverId/roles/order",
+  async ({ req, user }, { serverId }) => {
+    await requirePermission(serverId!, user.id, Permission.MANAGE_ROLES);
+    const actor = await getMemberHierarchy(serverId!, user.id);
+    if (!actor) {
+      throw new NotFound("Server not found");
+    }
+    const body = reorderRolesSchema.parse(await readJsonBody(req));
+    await reorderRoles(serverId!, body.roleIds, actor);
+    await logAudit({
+      serverId: serverId!,
+      actorId: user.id,
+      action: "role.update",
+      targetType: "server",
+      targetId: serverId!,
+      changes: [{ key: "order", old: null, new: body.roleIds }],
+    });
+    pingPermissions(serverId!);
+    return { ok: true };
+  },
+);
+
+router.patch("/api/roles/:roleId", async ({ req, user }, { roleId }) => {
+  const role = await getRole(roleId!);
+  if (!role) {
+    throw new NotFound("Role not found");
+  }
+  const { actorPerms } = await assertCanEditRole(user.id, role);
+  const body = updateRoleSchema.parse(await readJsonBody(req));
+  if (role.is_everyone && body.name) {
+    throw new HttpError(400, "The @everyone role cannot be renamed");
+  }
+  const nextPermissions =
+    body.permissions !== undefined
+      ? clampRolePermissions(
+          actorPerms,
+          parsePermissions(body.permissions),
+          parsePermissions(role.permissions),
+        )
+      : undefined;
+  const updated = await updateRole(role, {
+    name: body.name,
+    color: body.color,
+    mentionable: body.mentionable,
+    hoist: body.hoist,
+    permissions: nextPermissions,
+  });
+  await logAudit({
+    serverId: role.server_id,
+    actorId: user.id,
+    action: "role.update",
+    targetType: "role",
+    targetId: role.id,
+    changes: [{ key: "name", old: role.name, new: updated.name }],
+  });
+  pingPermissions(role.server_id);
+  return { role: mapRole(updated) };
+});
+
+router.delete("/api/roles/:roleId", async ({ user }, { roleId }) => {
+  const role = await getRole(roleId!);
+  if (!role) {
+    throw new NotFound("Role not found");
+  }
+  await assertCanEditRole(user.id, role);
+  await deleteRole(role);
+  await logAudit({
+    serverId: role.server_id,
+    actorId: user.id,
+    action: "role.delete",
+    targetType: "role",
+    targetId: role.id,
+    changes: [{ key: "name", old: role.name, new: null }],
+  });
+  pingPermissions(role.server_id);
+  return { ok: true };
+});
+
+router.put(
+  "/api/servers/:serverId/members/:userId/roles/:roleId",
+  async ({ user }, { serverId, userId, roleId }) => {
+    const role = await getRole(roleId!);
+    if (!role || role.server_id !== serverId) {
+      throw new NotFound("Role not found");
+    }
+    await assertCanEditRole(user.id, role);
+    if (!(await isServerMember(serverId!, userId!))) {
+      throw new NotFound("Member not found");
+    }
+    await requireOutranked(serverId!, user.id, userId!, "kick");
+    await assignRole(serverId!, userId!, roleId!);
+    await logAudit({
+      serverId: serverId!,
+      actorId: user.id,
+      action: "member.roles_update",
+      targetType: "user",
+      targetId: userId!,
+      changes: [{ key: "roleId", old: null, new: roleId }],
+    });
+    pingPermissions(serverId!);
+    return { ok: true };
+  },
+);
+
+router.delete(
+  "/api/servers/:serverId/members/:userId/roles/:roleId",
+  async ({ user }, { serverId, userId, roleId }) => {
+    const role = await getRole(roleId!);
+    if (!role || role.server_id !== serverId) {
+      throw new NotFound("Role not found");
+    }
+    await assertCanEditRole(user.id, role);
+    if (!(await isServerMember(serverId!, userId!))) {
+      throw new NotFound("Member not found");
+    }
+    await requireOutranked(serverId!, user.id, userId!, "kick");
+    await unassignRole(serverId!, userId!, roleId!);
+    await logAudit({
+      serverId: serverId!,
+      actorId: user.id,
+      action: "member.roles_update",
+      targetType: "user",
+      targetId: userId!,
+      changes: [{ key: "roleId", old: roleId, new: null }],
+    });
+    pingPermissions(serverId!);
+    return { ok: true };
+  },
+);
+
+async function evictViewersOutsideAudience(channelId: string): Promise<void> {
+  const audience = await getChannelAudience(channelId);
+  if (!audience) {
+    return;
+  }
+  const allowed = [...audience.userIds];
+  evictChannelViewers(channelId, { exceptUserIds: allowed });
+  evictVoiceUsersExcept(channelId, new Set(allowed));
+  for (const threadId of await listThreadChannelIds(channelId)) {
+    evictChannelViewers(threadId, { exceptUserIds: allowed });
+  }
+}
+
+function pingPermissions(serverId: string): void {
+  void notifyPermissionsUpdate(serverId).catch((error) => {
+    console.error("[api] permissions-update failed:", error);
+  });
+}
+
+router.get(
+  "/api/channels/:channelId/overwrites",
+  async ({ user }, { channelId }) => {
+    const channel = await requireServerChannel(channelId!);
+    await requirePermission(
+      channel.server_id,
+      user.id,
+      Permission.MANAGE_ROLES,
+    );
+    return { overwrites: await listChannelOverwrites(channelId!) };
+  },
+);
+
+router.put(
+  "/api/channels/:channelId/overwrites",
+  async ({ req, user }, { channelId }) => {
+    const channel = await requireServerChannel(channelId!);
+    await requirePermission(
+      channel.server_id,
+      user.id,
+      Permission.MANAGE_ROLES,
+    );
+    const body = channelOverwriteSchema.parse(await readJsonBody(req));
+    const actorPerms = await computeMemberPermissions(
+      channel.server_id,
+      user.id,
+    );
+    let allow = parsePermissions(body.allow);
+    let deny = parsePermissions(body.deny);
+    if (
+      (actorPerms & Permission.ADMINISTRATOR) !== Permission.ADMINISTRATOR &&
+      ((allow & ~actorPerms) !== 0n || (deny & ~actorPerms) !== 0n)
+    ) {
+      throw new Forbidden("You can only overwrite permissions you have");
+    }
+    const everyoneId = await getEveryoneRoleId(channel.server_id);
+    if (body.targetType === "role" && body.targetId === everyoneId) {
+      const coerced = coerceEveryoneViewOverwrite(
+        channel.is_private,
+        allow,
+        deny,
+      );
+      allow = coerced.allow;
+      deny = coerced.deny;
+    }
+    if (allow === 0n && deny === 0n) {
+      await deleteChannelOverwrite(
+        channelId!,
+        channel.server_id,
+        body.targetType,
+        body.targetId,
+      );
+    } else {
+      await upsertChannelOverwrite(
+        channelId!,
+        channel.server_id,
+        body.targetType,
+        body.targetId,
+        allow,
+        deny,
+      );
+    }
+    if (channel.is_private && body.targetType === "role" && body.targetId === everyoneId) {
+      await restorePrivateEveryoneViewOverwrite(channelId!, channel.server_id);
+    }
+    await evictViewersOutsideAudience(channelId!);
+    pingPermissions(channel.server_id);
+    await logAudit({
+      serverId: channel.server_id,
+      actorId: user.id,
+      action: "channel.overwrite_update",
+      targetType: "channel",
+      targetId: channelId!,
+      changes: [
+        { key: "targetId", old: null, new: body.targetId },
+        { key: "allow", old: null, new: body.allow },
+        { key: "deny", old: null, new: body.deny },
+      ],
+    });
+    return { ok: true };
+  },
+);
+
+router.delete(
+  "/api/channels/:channelId/overwrites/:targetType/:targetId",
+  async ({ user }, { channelId, targetType, targetId }) => {
+    const channel = await requireServerChannel(channelId!);
+    await requirePermission(
+      channel.server_id,
+      user.id,
+      Permission.MANAGE_ROLES,
+    );
+    if (targetType !== "role" && targetType !== "member") {
+      throw new HttpError(400, "Invalid overwrite target");
+    }
+    await deleteChannelOverwrite(
+      channelId!,
+      channel.server_id,
+      targetType,
+      targetId!,
+    );
+    if (channel.is_private && targetType === "role") {
+      const everyoneId = await getEveryoneRoleId(channel.server_id);
+      if (targetId === everyoneId) {
+        await restorePrivateEveryoneViewOverwrite(channelId!, channel.server_id);
+      }
+    }
+    await evictViewersOutsideAudience(channelId!);
+    pingPermissions(channel.server_id);
+    await logAudit({
+      serverId: channel.server_id,
+      actorId: user.id,
+      action: "channel.overwrite_delete",
+      targetType: "channel",
+      targetId: channelId!,
+      changes: [
+        { key: "targetType", old: targetType, new: null },
+        { key: "targetId", old: targetId, new: null },
+      ],
+    });
+    return { ok: true };
+  },
+);
+
 router.patch(
   "/api/servers/:serverId/members/:userId",
   async ({ req, user }, { serverId, userId }) => {
-    await requireOwner(serverId!, user.id);
     const body = updateMemberRoleSchema.parse(await readJsonBody(req));
+    if (body.nickname !== undefined) {
+      if (userId === user.id) {
+        await requirePermission(
+          serverId!,
+          user.id,
+          Permission.CHANGE_NICKNAME,
+        );
+      } else {
+        await requirePermission(
+          serverId!,
+          user.id,
+          Permission.MANAGE_NICKNAMES,
+        );
+        await requireOutranked(serverId!, user.id, userId!, "kick");
+      }
+      await setMemberNickname(serverId!, userId!, body.nickname);
+      await logAudit({
+        serverId: serverId!,
+        actorId: user.id,
+        action: "member.nickname_update",
+        targetType: "user",
+        targetId: userId!,
+        changes: [{ key: "nickname", old: null, new: body.nickname }],
+      });
+    }
+    if (body.role === undefined) {
+      return { ok: true };
+    }
+    await requireOwner(serverId!, user.id);
     const previousRole = await getMemberRole(serverId!, userId!);
     await updateMemberRole(serverId!, userId!, body.role);
 
@@ -3213,6 +3664,7 @@ router.patch(
       targetId: userId!,
       changes: [{ key: "role", old: previousRole, new: body.role }],
     });
+    pingPermissions(serverId!);
     return { ok: true };
   },
 );
@@ -3238,7 +3690,7 @@ router.get(
 router.post(
   "/api/servers/:serverId/timeouts",
   async ({ req, user }, { serverId }) => {
-    const actorRole = await requireManager(serverId!, user.id);
+    await requirePermission(serverId!, user.id, Permission.MODERATE_MEMBERS);
     const body = issueTimeoutSchema.parse(await readJsonBody(req));
     if (body.userId === user.id) {
       throw new HttpError(400, "You cannot time yourself out");
@@ -3248,7 +3700,7 @@ router.post(
     // not there. `requireOutranked` returns null for a non-member.
     const targetRole = await requireOutranked(
       serverId!,
-      actorRole,
+      user.id,
       body.userId,
       "timeout",
     );
@@ -3322,14 +3774,14 @@ router.delete(
 router.delete(
   "/api/servers/:serverId/members/:userId",
   async ({ req, user }, { serverId, userId }) => {
-    const actorRole = await requireManager(serverId!, user.id);
+    await requirePermission(serverId!, user.id, Permission.KICK_MEMBERS);
     const body = removeMemberSchema.parse(await readJsonBody(req));
     if (userId === user.id) {
       throw new HttpError(400, "Use leave to remove yourself");
     }
     const targetRole = await requireOutranked(
       serverId!,
-      actorRole,
+      user.id,
       userId!,
       "kick",
     );
@@ -3390,13 +3842,17 @@ async function requireVoiceModeration(
   targetUserId: string,
   action: "disconnect" | "move" | "mute",
 ): Promise<void> {
-  const actorRole = await requireManager(serverId, actorId);
+  await requirePermission(
+    serverId,
+    actorId,
+    action === "mute" ? Permission.MUTE_MEMBERS : Permission.MODERATE_MEMBERS,
+  );
   if (targetUserId === actorId) {
     throw new HttpError(400, "Use the leave button on yourself");
   }
   const targetRole = await requireOutranked(
     serverId,
-    actorRole,
+    actorId,
     targetUserId,
     action,
   );
@@ -3564,7 +4020,7 @@ router.get("/api/servers/:serverId/bans", async ({ user }, { serverId }) => {
 router.post(
   "/api/servers/:serverId/bans",
   async ({ req, user }, { serverId }) => {
-    const actorRole = await requireManager(serverId!, user.id);
+    await requirePermission(serverId!, user.id, Permission.BAN_MEMBERS);
     const body = banMemberSchema.parse(await readJsonBody(req));
     if (body.userId === user.id) {
       throw new HttpError(400, "You cannot ban yourself");
@@ -3574,7 +4030,7 @@ router.post(
     if (!(await getUserById(body.userId))) {
       throw new NotFound("User not found");
     }
-    await requireOutranked(serverId!, actorRole, body.userId, "ban");
+    await requireOutranked(serverId!, user.id, body.userId, "ban");
 
     await banMember(serverId!, body.userId, user.id, body.reason);
     await logAudit({
@@ -3873,7 +4329,7 @@ router.patch("/api/reports/:report", async ({ req, user }, { report }) => {
     if (
       !(await requireOutranked(
         scope.serverId,
-        actorRole,
+        user.id,
         report.reportedUserId,
         "timeout",
       ))
@@ -4051,7 +4507,7 @@ router.get("/api/servers/:serverId/invites", async ({ user }, { serverId }) => {
 router.post(
   "/api/servers/:serverId/invites",
   async ({ req, user }, { serverId }) => {
-    await requireManager(serverId!, user.id);
+    await requirePermission(serverId!, user.id, Permission.CREATE_INVITE);
     const body = createInviteSchema.parse(await readJsonBody(req));
     const invite = await createInvite(serverId!, user.id, {
       maxUses: body.maxUses,

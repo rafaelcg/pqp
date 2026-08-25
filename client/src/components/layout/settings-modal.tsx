@@ -75,11 +75,14 @@ import {
 } from "@/lib/notifications";
 import {
   adoptSoundPreferences,
+  getIncomingRing,
   getSoundState,
   playCue,
+  setIncomingRing,
   setSoundCueEnabled,
   setSoundEnabled,
   subscribeSounds,
+  type IncomingRingId,
   type SoundCue,
 } from "@/lib/sounds";
 import {
@@ -1154,6 +1157,14 @@ const SOUND_CUE_OPTIONS: { cue: SoundCue; label: MessageKey }[] = [
   { cue: "outgoingCall", label: "settings.notifications.sounds.outgoingCall" },
 ];
 
+const INCOMING_RING_OPTIONS: { id: IncomingRingId; label: MessageKey }[] = [
+  { id: "classic", label: "settings.notifications.sounds.ring.classic" },
+  { id: "chime", label: "settings.notifications.sounds.ring.chime" },
+  { id: "pulse", label: "settings.notifications.sounds.ring.pulse" },
+  { id: "marimba", label: "settings.notifications.sounds.ring.marimba" },
+  { id: "glass", label: "settings.notifications.sounds.ring.glass" },
+];
+
 /**
  * The account-wide notification default, plus the opt-in itself.
  *
@@ -1169,6 +1180,11 @@ function NotificationsSection() {
     subscribeSounds,
     getSoundState,
     getSoundState,
+  );
+  const incomingRing = useSyncExternalStore(
+    subscribeSounds,
+    getIncomingRing,
+    getIncomingRing,
   );
   const active = state.desktop && permission === "granted";
 
@@ -1245,30 +1261,61 @@ function NotificationsSection() {
             <span className="text-sm">{t("settings.notifications.sounds.enabled")}</span>
           </label>
           {SOUND_CUE_OPTIONS.map((option) => (
-            <label
-              key={option.cue}
-              className="flex cursor-pointer items-center gap-3 pl-7"
-            >
-              <input
-                type="checkbox"
-                className="h-4 w-4 accent-[var(--color-signal)]"
-                checked={sounds[option.cue]}
-                disabled={!sounds.enabled}
-                onChange={(e) =>
-                  setSoundCueEnabled(option.cue, e.target.checked)
-                }
-              />
-              <span className="min-w-0 flex-1 text-sm">{t(option.label)}</span>
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                disabled={!sounds.enabled || !sounds[option.cue]}
-                onClick={() => playCue(option.cue)}
-              >
-                {t("settings.notifications.sounds.preview")}
-              </Button>
-            </label>
+            <div key={option.cue} className="space-y-1.5">
+              <label className="flex cursor-pointer items-center gap-3 pl-7">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 accent-[var(--color-signal)]"
+                  checked={sounds[option.cue]}
+                  disabled={!sounds.enabled}
+                  onChange={(e) =>
+                    setSoundCueEnabled(option.cue, e.target.checked)
+                  }
+                />
+                <span className="min-w-0 flex-1 text-sm">{t(option.label)}</span>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  disabled={!sounds.enabled || !sounds[option.cue]}
+                  onClick={() => playCue(option.cue)}
+                >
+                  {t("settings.notifications.sounds.preview")}
+                </Button>
+              </label>
+              {option.cue === "incomingCall" ? (
+                <div className="space-y-1.5 pl-14">
+                  <p className="text-xs text-paper-muted">
+                    {t("settings.notifications.sounds.ringHint")}
+                  </p>
+                  <div
+                    role="radiogroup"
+                    aria-label={t("settings.notifications.sounds.ringHint")}
+                    className="flex flex-wrap gap-1.5"
+                  >
+                    {INCOMING_RING_OPTIONS.map((ring) => {
+                      const selected = ring.id === incomingRing;
+                      return (
+                        <button
+                          key={ring.id}
+                          type="button"
+                          role="radio"
+                          aria-checked={selected}
+                          disabled={!sounds.enabled || !sounds.incomingCall}
+                          onClick={() => {
+                            setIncomingRing(ring.id);
+                            playCue("incomingCall");
+                          }}
+                          className={chipClass(selected)}
+                        >
+                          {t(ring.label)}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
+            </div>
           ))}
         </div>
       </Field>

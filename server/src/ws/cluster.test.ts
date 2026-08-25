@@ -60,6 +60,7 @@ vi.mock("../services/blocks.js", () => ({
 
 vi.mock("../services/servers.js", () => ({
   getChannelAudience: async () => null,
+  getChannel: async () => ({ kind: "dm", server_id: null }),
 }));
 
 vi.mock("../services/embeds.js", () => ({
@@ -77,6 +78,11 @@ vi.mock("../services/messages.js", () => ({
 vi.mock("../services/reactions.js", () => ({
   getMessageChannelId: async () => null,
   toggleReaction: async () => ({ added: true }),
+  resolveChannelMemberName: async (
+    _channelId: string,
+    _userId: string,
+    fallback: string,
+  ) => fallback,
 }));
 
 type ChatModule = typeof import("./chat.js");

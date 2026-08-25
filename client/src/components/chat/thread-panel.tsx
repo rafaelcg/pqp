@@ -5,9 +5,14 @@ import {
 import { Archive, MessageSquareText, X } from "lucide-react";
 import { useState } from "react";
 import { MessageComposer } from "@/components/chat/message-composer";
-import { MessageList } from "@/components/chat/message-list";
+import {
+  MessageList,
+  type MessageAuthorInfo,
+  type MessageRoleColor,
+} from "@/components/chat/message-list";
 import { threadChipLabel } from "@/components/chat/thread-chip";
 import type { ChatController, ChatMessage } from "@/hooks/use-chat";
+import { findLastOwnEditableMessage } from "@/lib/edit-last-message";
 import { useTranslation } from "@/lib/i18n";
 import type { MentionCandidate } from "@/lib/mention-autocomplete";
 
@@ -44,6 +49,14 @@ interface ThreadPanelProps {
   showLinkEmbeds: boolean;
   onClose: () => void;
   onReportMessage?: (message: ChatMessage) => void;
+  authors?: ReadonlyMap<string, MessageAuthorInfo>;
+  roles?: readonly MessageRoleColor[];
+  unreadHeld?: boolean;
+  unreadSince?: string | null;
+  onForward?: (message: ChatMessage) => void;
+  onMarkUnread?: (message: ChatMessage) => void;
+  onMarkRead?: () => void;
+  onSent?: () => void;
 }
 
 export function ThreadPanel({
@@ -59,9 +72,18 @@ export function ThreadPanel({
   showLinkEmbeds,
   onClose,
   onReportMessage,
+  authors,
+  roles,
+  unreadHeld,
+  unreadSince = null,
+  onForward,
+  onMarkUnread,
+  onMarkRead,
+  onSent,
 }: ThreadPanelProps) {
   const { t } = useTranslation();
   const [replyTarget, setReplyTarget] = useState<ChatMessage | null>(null);
+  const [editMessageId, setEditMessageId] = useState<string | null>(null);
 
   return (
     <aside
@@ -151,7 +173,15 @@ export function ThreadPanel({
         onRetryMessage={(nonce) => controller.retryMessage(nonce)}
         onDiscardMessage={(nonce) => controller.discardMessage(nonce)}
         showLinkEmbeds={showLinkEmbeds}
-        // Deliberately no onStartThread / onOpenThread: threads do not nest.
+        authors={authors}
+        roles={roles}
+        unreadHeld={unreadHeld}
+        unreadSince={unreadSince}
+        editMessageId={editMessageId}
+        onEditMessageHandled={() => setEditMessageId(null)}
+        onForward={onForward}
+        onMarkUnread={onMarkUnread}
+        onMarkRead={onMarkRead}
       />
 
       <MessageComposer
@@ -160,12 +190,24 @@ export function ThreadPanel({
         onSend={(body, attachments) => {
           controller.sendMessage(body, replyTarget, attachments);
           setReplyTarget(null);
+          onSent?.();
         }}
         onTyping={() => controller.notifyTyping()}
         channelId={thread.channelId}
         replyTarget={replyTarget}
         onCancelReply={() => setReplyTarget(null)}
         mentionCandidates={mentionCandidates}
+        onEditLastOwn={() => {
+          const last = findLastOwnEditableMessage(
+            controller.getMessages(),
+            currentUser?.id ?? null,
+          );
+          if (!last) {
+            return false;
+          }
+          setEditMessageId(last.id);
+          return true;
+        }}
         disabled={isLoading}
         placeholder={t("thread.placeholder")}
       />

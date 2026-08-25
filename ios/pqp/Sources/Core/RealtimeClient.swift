@@ -10,7 +10,7 @@ enum RealtimeEvent: Sendable {
     case messageCreated(Message, nonce: String?)
     case messageUpdated(Message)
     case messageDeleted(channelId: String, messageId: String)
-    case reaction(channelId: String, messageId: String, emoji: String, userId: String, added: Bool)
+    case reaction(channelId: String, messageId: String, emoji: String, userId: String, added: Bool, displayName: String?)
     case typing(channelId: String, userId: String, displayName: String)
     case presence(channelId: String, users: [PresenceUser])
     case activity(channelId: String, serverId: String?, mention: Bool)
@@ -665,7 +665,8 @@ actor RealtimeClient {
                   let emoji = envelope.emoji, let userId = envelope.userId,
                   let added = envelope.added else { return }
             event = .reaction(channelId: channelId, messageId: messageId,
-                              emoji: emoji, userId: userId, added: added)
+                              emoji: emoji, userId: userId, added: added,
+                              displayName: envelope.displayName)
         case "typing-broadcast":
             guard let channelId = envelope.channelId, let userId = envelope.userId,
                   let displayName = envelope.displayName else { return }

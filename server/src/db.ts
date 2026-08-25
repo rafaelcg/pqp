@@ -185,9 +185,10 @@ export interface DbMessage {
   /** Joined from `author_id`; true when the author is a webhook's pseudo-identity. */
   author_is_webhook?: boolean;
   webhook_embeds?: unknown;
-  /** Per-message override of the webhook's own configured name/avatar. */
   webhook_username?: string | null;
   webhook_avatar_url?: string | null;
+  mention_everyone?: boolean;
+  mention_here?: boolean;
 }
 
 export interface DbInvite {

@@ -1,5 +1,6 @@
 import {
   ATTACHMENT_MIME_ALLOWLIST,
+  extractMentions,
   isImageContentType,
   MESSAGE_MAX_LENGTH,
   type AttachmentContentType,
@@ -35,7 +36,13 @@ import {
   type OutgoingAttachment,
 } from "@/lib/attachments";
 import { createGifAttachment } from "@/lib/api";
-import { expandEmojiShortcodes } from "@/lib/emoji-shortcodes";
+import {
+  applyEmojiShortcode,
+  expandClosedShortcodeAtCaret,
+  expandEmojiShortcodes,
+  filterEmojiShortcodes,
+  findEmojiQuery,
+} from "@/lib/emoji-shortcodes";
 import { loadGifSearchEnabled } from "@/lib/gifs";
 import {
   applyMention,
@@ -88,6 +95,11 @@ interface MessageComposerProps {
   mentionCandidates?: MentionCandidate[];
   disabled?: boolean;
   placeholder?: string;
+  /**
+   * ArrowUp with an empty composer: edit the reader's last message.
+   * Return true when a message was opened so the key is consumed.
+   */
+  onEditLastOwn?: () => boolean;
 }
 
 /** Grow with the content, but never take over the whole pane. */
@@ -133,6 +145,7 @@ export function MessageComposer({
   mentionCandidates = [],
   disabled,
   placeholder,
+  onEditLastOwn,
 }: MessageComposerProps) {
   const { t } = useTranslation();
   const inputPlaceholder = placeholder ?? t("composer.placeholderFallback");
@@ -182,17 +195,35 @@ export function MessageComposer({
     [mentionCandidates, mentionQuery],
   );
 
+  const emojiQuery = useMemo(
+    () =>
+      slashOpen || menuDismissed || mentionQuery
+        ? null
+        : findEmojiQuery(body, caret),
+    [body, caret, menuDismissed, mentionQuery, slashOpen],
+  );
+  const emojiMatches = useMemo(
+    () => (emojiQuery ? filterEmojiShortcodes(emojiQuery.query) : []),
+    [emojiQuery],
+  );
+
   const isUploading = pending.some((item) => item.status === "uploading");
   const readyCount = pending.filter((item) => item.status === "ready").length;
   const isAttachmentsEnabled = Boolean(attachmentLimits?.enabled && channelId);
 
-  const menuKind: "slash" | "mention" | null = slashOpen
+  const menuKind: "slash" | "mention" | "emoji" | null = slashOpen
     ? "slash"
     : mentionMatches.length > 0
       ? "mention"
-      : null;
+      : emojiMatches.length > 0
+        ? "emoji"
+        : null;
   const menuCount =
-    menuKind === "slash" ? slashMatches.length : mentionMatches.length;
+    menuKind === "slash"
+      ? slashMatches.length
+      : menuKind === "mention"
+        ? mentionMatches.length
+        : emojiMatches.length;
 
   const options: AutocompleteOption[] = useMemo(() => {
     if (menuKind === "slash") {
@@ -218,8 +249,15 @@ export function MessageComposer({
         ),
       }));
     }
+    if (menuKind === "emoji") {
+      return emojiMatches.map((entry) => ({
+        id: entry.name,
+        primary: entry.emoji,
+        secondary: `:${entry.name}:`,
+      }));
+    }
     return [];
-  }, [menuKind, mentionMatches, slashMatches]);
+  }, [emojiMatches, menuKind, mentionMatches, slashMatches]);
 
   useEffect(() => {
     setSelectedIndex(0);
@@ -539,9 +577,23 @@ export function MessageComposer({
     restoreCaret(next.caret);
   }
 
+  function applyEmojiSelection(index: number) {
+    const entry = emojiMatches[index];
+    if (!entry || !emojiQuery) {
+      return;
+    }
+    const next = applyEmojiShortcode(body, emojiQuery, entry.emoji);
+    setBody(next.value);
+    restoreCaret(next.caret);
+  }
+
   function applySelection(index: number) {
     if (menuKind === "mention") {
       applyMentionSelection(index);
+      return;
+    }
+    if (menuKind === "emoji") {
+      applyEmojiSelection(index);
       return;
     }
     const command = slashMatches[index];
@@ -605,6 +657,21 @@ export function MessageComposer({
       return;
     }
 
+    if (trimmed) {
+      const mentions = extractMentions(trimmed);
+      if (mentions.everyone || mentions.here) {
+        const key =
+          mentions.everyone && mentions.here
+            ? "composer.confirmEveryoneHere"
+            : mentions.everyone
+              ? "composer.confirmEveryone"
+              : "composer.confirmHere";
+        if (!window.confirm(t(key))) {
+          return;
+        }
+      }
+    }
+
     onSend(
       trimmed ? expandEmojiShortcodes(trimmed) : "",
       ready.map((item) => ({
@@ -663,6 +730,24 @@ export function MessageComposer({
       return;
     }
 
+    if (
+      event.key === "ArrowUp" &&
+      !event.altKey &&
+      !event.shiftKey &&
+      !event.metaKey &&
+      !event.ctrlKey &&
+      !menuKind &&
+      !isPickerOpen &&
+      !isGifPickerOpen &&
+      body === "" &&
+      pending.length === 0
+    ) {
+      if (onEditLastOwn?.()) {
+        event.preventDefault();
+      }
+      return;
+    }
+
     if (!menuKind || menuCount === 0) {
       return;
     }
@@ -686,7 +771,7 @@ export function MessageComposer({
     }
 
     if (event.key === "Enter" && !event.metaKey) {
-      if (menuKind === "mention") {
+      if (menuKind === "mention" || menuKind === "emoji") {
         event.preventDefault();
         applySelection(selectedIndex);
         return;
@@ -728,9 +813,23 @@ export function MessageComposer({
       {menuKind && (
         <AutocompleteMenu
           id={MENU_ID}
-          label={menuKind === "mention" ? t("composer.members") : t("composer.slashCommands")}
-          heading={menuKind === "mention" ? t("composer.members") : t("composer.commands")}
-          emptyLabel={t("composer.noCommands")}
+          label={
+            menuKind === "mention"
+              ? t("composer.members")
+              : menuKind === "emoji"
+                ? t("composer.emoji")
+                : t("composer.slashCommands")
+          }
+          heading={
+            menuKind === "mention"
+              ? t("composer.members")
+              : menuKind === "emoji"
+                ? t("composer.emoji")
+                : t("composer.commands")
+          }
+          emptyLabel={
+            menuKind === "emoji" ? t("composer.noEmoji") : t("composer.noCommands")
+          }
           options={options}
           selectedIndex={selectedIndex}
           onSelect={applySelection}
@@ -739,7 +838,6 @@ export function MessageComposer({
       )}
       {isPickerOpen && !menuKind && (
         <EmojiPickerPanel
-          className="absolute bottom-[calc(100%-0.25rem)] left-3 sm:left-4"
           onSelect={insertEmoji}
           onClose={() => setIsPickerOpen(false)}
         />
@@ -887,9 +985,18 @@ export function MessageComposer({
           rows={1}
           onChange={(e) => {
             setMenuDismissed(false);
-            setBody(e.target.value);
-            syncCaret(e.target);
-            if (e.target.value.trim() && !e.target.value.startsWith("/")) {
+            const nextValue = e.target.value;
+            const nextCaret = e.target.selectionStart ?? nextValue.length;
+            const expanded = expandClosedShortcodeAtCaret(nextValue, nextCaret);
+            if (expanded) {
+              setBody(expanded.value);
+              restoreCaret(expanded.caret);
+            } else {
+              setBody(nextValue);
+              setCaret(nextCaret);
+            }
+            const typingFrom = expanded?.value ?? nextValue;
+            if (typingFrom.trim() && !typingFrom.startsWith("/")) {
               onTyping?.();
             }
           }}

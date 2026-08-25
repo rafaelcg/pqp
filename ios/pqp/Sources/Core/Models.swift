@@ -157,10 +157,35 @@ struct Channel: Codable, Identifiable, Hashable, Sendable {
     var isCategory: Bool { type == "category" }
 }
 
+struct ReactionUser: Codable, Hashable, Sendable {
+    let id: String
+    let displayName: String
+}
+
 struct MessageReaction: Codable, Hashable, Sendable {
     let emoji: String
     var count: Int
     var me: Bool
+    var users: [ReactionUser]
+
+    init(emoji: String, count: Int, me: Bool, users: [ReactionUser] = []) {
+        self.emoji = emoji
+        self.count = count
+        self.me = me
+        self.users = users
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        emoji = try c.decode(String.self, forKey: .emoji)
+        count = try c.decode(Int.self, forKey: .count)
+        me = try c.decode(Bool.self, forKey: .me)
+        users = try c.decodeIfPresent([ReactionUser].self, forKey: .users) ?? []
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case emoji, count, me, users
+    }
 }
 
 struct MessageReplyRef: Codable, Hashable, Sendable {

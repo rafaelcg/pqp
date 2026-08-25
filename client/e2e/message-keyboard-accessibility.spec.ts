@@ -202,7 +202,7 @@ test("reaction pills announce their state and toggle from the keyboard-opened me
 
   const pill = row.getByRole("button", { name: /👍 reaction/ });
   await expect(pill).toHaveAttribute("aria-pressed", "true");
-  await expect(pill).toHaveAccessibleName(/you reacted/);
+  await expect(pill).toHaveAccessibleName(/You|you reacted/);
 });
 
 test("a new message arriving does not move focus away from the row being read", async ({

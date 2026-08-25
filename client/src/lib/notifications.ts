@@ -665,7 +665,9 @@ export function notifyChannelActivity(
  *
  * `notifyChannelActivity` stays quiet for that channel so OS banners do not
  * announce what the user can already read. Plain messages are silent here
- * too; only a name-check plays. DND and a muted channel still silence it.
+ * too; only a ping that names the reader plays (username, fired @everyone /
+ * @here, or a reply). Own messages never ping. DND and a muted channel still
+ * silence it.
  */
 export function notifyOpenChannelMessage(
   channelId: string,

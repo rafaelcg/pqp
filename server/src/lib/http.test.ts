@@ -1,5 +1,6 @@
+import type { IncomingMessage } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
-import { clampLimit, isUuid, resolveCorsOrigin } from "./http.js";
+import { clampLimit, corsHeaders, isUuid, resolveCorsOrigin } from "./http.js";
 
 const originalOrigins = process.env.CORS_ALLOWED_ORIGINS;
 
@@ -66,5 +67,12 @@ describe("resolveCorsOrigin", () => {
     // Non-browser callers send no Origin, and CORS cannot restrict them anyway.
     process.env.CORS_ALLOWED_ORIGINS = "https://pqp.gg";
     expect(resolveCorsOrigin(undefined)).toBe("*");
+  });
+});
+
+describe("corsHeaders", () => {
+  it("allows PUT so channel overwrites can preflight from the SPA origin", () => {
+    const headers = corsHeaders({ headers: {} } as IncomingMessage);
+    expect(headers["Access-Control-Allow-Methods"]).toContain("PUT");
   });
 });

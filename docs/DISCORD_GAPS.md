@@ -51,7 +51,7 @@ They cost days, not weeks.
 | 19 | ✅ Blocking and DM privacy controls | safety | high | medium |
 | 20 | Timeouts, slow mode, and a real message-rejected path | moderation | medium | medium |
 | 21 | ✅ Audit log | moderation | medium | medium |
-| 22 | Real permission system: roles with bitfields and per-channel overwrites | permissions | high | large |
+| 22 | ✅ Real permission system: roles with bitfields and per-channel overwrites | permissions | high | large |
 | 23 | Incoming webhooks, Discord wire-compatible | integrations | high | large |
 | 24 | ✅ Pinned messages | conversation-structure | medium | small |
 | 25 | ✅ Link and image embeds (unfurling) | content-rendering | medium | medium |
@@ -327,9 +327,11 @@ No `@dnd-kit` or any new dependency: native HTML5 drag-and-drop handles desktop 
 
 One real bug surfaced by testing with a pre-existing top-level channel already at position 0 (not by design — a browser check happened to have one): deleting a category renumbers its now-uncategorized former children to append after whatever top-level channels of the same type already existed, rather than keeping their old category-scoped position values, which collided. Caught by a test, mutation-checked (revert the fix, exactly that test fails).
 
-#### 22. Real permission system: roles with bitfields and per-channel overwrites
+#### 22. ✅ Real permission system: roles with bitfields and per-channel overwrites
 
 *high pain · large · permissions*
+
+**Shipped 2026-08-24.** Discord 8-step overwrites, 20 bits, seeded `@everyone` + Admin, nicknames, `@everyone`/`@here`. Channel overwrite editor, hoist UI, role colours, live `permissions-update` WS frame. Unenforced bits (`ATTACH_FILES`, `READ_MESSAGE_HISTORY`, `SPEAK`, `MANAGE_SERVER`) stay hidden in both editors.
 
 **Why it matters.** You cannot make someone a channel moderator without also handing them kick, ban and server settings, you cannot make a read-only announcement channel, and you cannot keep an admin out of a founders-only channel because the admin bypass is hardcoded.
 

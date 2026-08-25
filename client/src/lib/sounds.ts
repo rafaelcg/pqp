@@ -15,6 +15,19 @@ import { queuePreferenceSync } from "@/lib/preferences";
 
 export const SOUND_STORAGE_KEY = "pqp-sounds";
 
+/** Incoming ringtones. Device-local: not part of the account sound prefs. */
+export const INCOMING_RING_IDS = [
+  "classic",
+  "chime",
+  "pulse",
+  "marimba",
+  "glass",
+] as const;
+
+export type IncomingRingId = (typeof INCOMING_RING_IDS)[number];
+
+const DEFAULT_INCOMING_RING: IncomingRingId = "classic";
+
 export type SoundCue =
   | "message"
   | "mention"
@@ -57,6 +70,7 @@ type OutputContext = AudioContext & {
   setSinkId?: (id: string) => Promise<void>;
 };
 
+let incomingRing: IncomingRingId = DEFAULT_INCOMING_RING;
 let state: SoundState = load();
 const listeners = new Set<() => void>();
 
@@ -69,6 +83,21 @@ const loops = new Map<"incomingCall" | "outgoingCall", () => void>();
 
 function isBoolean(value: unknown): value is boolean {
   return value === true || value === false;
+}
+
+export function isIncomingRingId(value: unknown): value is IncomingRingId {
+  return (
+    typeof value === "string" &&
+    (INCOMING_RING_IDS as readonly string[]).includes(value)
+  );
+}
+
+function readIncomingRing(value: unknown): IncomingRingId {
+  if (typeof value !== "object" || value === null) {
+    return DEFAULT_INCOMING_RING;
+  }
+  const id = (value as Record<string, unknown>).incomingRing;
+  return isIncomingRingId(id) ? id : DEFAULT_INCOMING_RING;
 }
 
 function readState(value: unknown): SoundState {
@@ -99,19 +128,32 @@ function load(): SoundState {
   try {
     const raw = localStorage.getItem(SOUND_STORAGE_KEY);
     if (!raw) {
+      incomingRing = DEFAULT_INCOMING_RING;
       return { ...DEFAULT_STATE };
     }
-    return readState(JSON.parse(raw) as unknown);
+    const parsed = JSON.parse(raw) as unknown;
+    incomingRing = readIncomingRing(parsed);
+    return readState(parsed);
   } catch {
+    incomingRing = DEFAULT_INCOMING_RING;
     return { ...DEFAULT_STATE };
   }
 }
 
 function persist(next: SoundState): void {
   try {
-    localStorage.setItem(SOUND_STORAGE_KEY, JSON.stringify(next));
+    localStorage.setItem(
+      SOUND_STORAGE_KEY,
+      JSON.stringify({ ...next, incomingRing }),
+    );
   } catch {
     // Quota or private mode. The in-memory copy still drives this session.
+  }
+}
+
+function notifySoundListeners(): void {
+  for (const listener of listeners) {
+    listener();
   }
 }
 
@@ -133,8 +175,19 @@ function commit(next: SoundState, { sync }: { sync: boolean }): void {
   if (sync) {
     queuePreferenceSync({ sounds: toPreferences(next) }, { immediate: true });
   }
-  for (const listener of listeners) {
-    listener();
+  notifySoundListeners();
+}
+
+export function getIncomingRing(): IncomingRingId {
+  return incomingRing;
+}
+
+export function setIncomingRing(id: IncomingRingId): void {
+  incomingRing = id;
+  persist(state);
+  notifySoundListeners();
+  if (loops.has("incomingCall")) {
+    startToneLoop("incomingCall");
   }
 }
 
@@ -435,10 +488,68 @@ export function whenCueSettled(): Promise<void> {
 }
 
 /**
- * Dual-tone telephone cadence. Incoming is the classic 440+480 Hz US ring
- * (2s on, 4s period). Outgoing is quieter and a hair slower so you can tell
- * which side of the call you are on without looking.
+ * Incoming rings are short motifs, not a long dual-tone, except Classic
+ * which is the original US telephone cadence. Outgoing stays a quieter,
+ * slower dual-tone so you can tell which side of the call you are on.
  */
+interface RingTone {
+  freq: number;
+  type: OscillatorType;
+  delay: number;
+  duration: number;
+  peak: number;
+}
+
+interface IncomingRingPreset {
+  periodMs: number;
+  previewMs: number;
+  tones: readonly RingTone[];
+}
+
+const INCOMING_RINGS: Record<IncomingRingId, IncomingRingPreset> = {
+  classic: {
+    periodMs: 4000,
+    previewMs: 2100,
+    tones: [
+      { freq: 440, type: "sine", delay: 0, duration: 2, peak: 0.11 },
+      { freq: 480, type: "sine", delay: 0, duration: 2, peak: 0.11 },
+    ],
+  },
+  chime: {
+    periodMs: 2800,
+    previewMs: 900,
+    tones: [
+      { freq: 523.25, type: "triangle", delay: 0, duration: 0.28, peak: 0.16 },
+      { freq: 659.25, type: "triangle", delay: 0.14, duration: 0.32, peak: 0.14 },
+    ],
+  },
+  pulse: {
+    periodMs: 2200,
+    previewMs: 700,
+    tones: [
+      { freq: 196, type: "triangle", delay: 0, duration: 0.09, peak: 0.2 },
+      { freq: 247, type: "triangle", delay: 0.16, duration: 0.09, peak: 0.18 },
+    ],
+  },
+  marimba: {
+    periodMs: 3000,
+    previewMs: 900,
+    tones: [
+      { freq: 392, type: "triangle", delay: 0, duration: 0.14, peak: 0.15 },
+      { freq: 494, type: "triangle", delay: 0.11, duration: 0.14, peak: 0.14 },
+      { freq: 587, type: "triangle", delay: 0.22, duration: 0.18, peak: 0.13 },
+    ],
+  },
+  glass: {
+    periodMs: 2400,
+    previewMs: 600,
+    tones: [
+      { freq: 880, type: "sine", delay: 0, duration: 0.08, peak: 0.1 },
+      { freq: 1318.5, type: "sine", delay: 0.14, duration: 0.08, peak: 0.09 },
+    ],
+  },
+};
+
 function stopRunningLoop(cue: "incomingCall" | "outgoingCall"): void {
   const stop = loops.get(cue);
   if (!stop) {
@@ -446,6 +557,46 @@ function stopRunningLoop(cue: "incomingCall" | "outgoingCall"): void {
   }
   loops.delete(cue);
   stop();
+}
+
+function trackOscillator(active: OscillatorNode[], osc: OscillatorNode): void {
+  active.push(osc);
+  osc.onended = () => {
+    const index = active.indexOf(osc);
+    if (index >= 0) {
+      active.splice(index, 1);
+    }
+  };
+}
+
+function scheduleTone(
+  ctx: AudioContext,
+  dest: GainNode,
+  tone: RingTone,
+  when: number,
+  active: OscillatorNode[],
+): void {
+  const start = when + tone.delay;
+  const attack = Math.min(0.018, tone.duration * 0.25);
+  const release = Math.min(0.05, tone.duration * 0.4);
+  const peakAt = start + attack;
+  const holdEnd = Math.max(peakAt, start + tone.duration - release);
+  const end = start + tone.duration;
+  const env = ctx.createGain();
+  env.gain.setValueAtTime(0, start);
+  env.gain.linearRampToValueAtTime(tone.peak, peakAt);
+  if (holdEnd > peakAt) {
+    env.gain.setValueAtTime(tone.peak, holdEnd);
+  }
+  env.gain.linearRampToValueAtTime(0, end);
+  env.connect(dest);
+  const osc = ctx.createOscillator();
+  osc.type = tone.type;
+  osc.frequency.value = tone.freq;
+  osc.connect(env);
+  osc.start(start);
+  osc.stop(end + 0.02);
+  trackOscillator(active, osc);
 }
 
 function startToneLoop(cue: "incomingCall" | "outgoingCall"): void {
@@ -458,40 +609,37 @@ function startToneLoop(cue: "incomingCall" | "outgoingCall"): void {
     void ctx.resume().catch(() => {});
   }
 
-  const incoming = cue === "incomingCall";
-  const freqA = incoming ? 440 : 425;
-  const freqB = incoming ? 480 : 450;
-  const level = incoming ? 0.22 : 0.12;
-  const onSeconds = incoming ? 2 : 1.6;
-  const periodMs = incoming ? 4000 : 5000;
   const active: OscillatorNode[] = [];
+  const incoming = cue === "incomingCall";
+  const preset = incoming ? INCOMING_RINGS[incomingRing] : null;
+  const periodMs = preset?.periodMs ?? 5000;
 
   const burst = () => {
     if (!context || context.state === "closed" || !master) {
       return;
     }
     const when = context.currentTime;
+    if (preset) {
+      for (const tone of preset.tones) {
+        scheduleTone(context, master, tone, when, active);
+      }
+      return;
+    }
+    const onSeconds = 1.6;
     const env = context.createGain();
     env.gain.setValueAtTime(0, when);
-    env.gain.linearRampToValueAtTime(level, when + 0.02);
-    env.gain.setValueAtTime(level, when + onSeconds - 0.04);
+    env.gain.linearRampToValueAtTime(0.12, when + 0.02);
+    env.gain.setValueAtTime(0.12, when + onSeconds - 0.04);
     env.gain.linearRampToValueAtTime(0, when + onSeconds);
     env.connect(master);
-
-    for (const freq of [freqA, freqB]) {
+    for (const freq of [425, 450]) {
       const osc = context.createOscillator();
       osc.type = "sine";
       osc.frequency.value = freq;
       osc.connect(env);
       osc.start(when);
       osc.stop(when + onSeconds + 0.02);
-      active.push(osc);
-      osc.onended = () => {
-        const index = active.indexOf(osc);
-        if (index >= 0) {
-          active.splice(index, 1);
-        }
-      };
+      trackOscillator(active, osc);
     }
   };
 
@@ -510,17 +658,29 @@ function startToneLoop(cue: "incomingCall" | "outgoingCall"): void {
   });
 }
 
+const loopTokens: Record<"incomingCall" | "outgoingCall", number> = {
+  incomingCall: 0,
+  outgoingCall: 0,
+};
+
 export function playCue(cue: SoundCue): void {
   if (!isCueEnabled(state, cue)) {
     return;
   }
   unlockSounds();
   if (cue === "incomingCall" || cue === "outgoingCall") {
-    // Preview: one burst, not a loop.
+    // Preview: one burst, not a loop. Token so a real call started during
+    // the preview is not killed when this timeout fires.
+    const token = ++loopTokens[cue];
     startToneLoop(cue);
-    const delay = cue === "incomingCall" ? 2100 : 1700;
+    const delay =
+      cue === "incomingCall" ? INCOMING_RINGS[incomingRing].previewMs : 1700;
     if (typeof window !== "undefined") {
-      window.setTimeout(() => stopSoundLoop(cue), delay);
+      window.setTimeout(() => {
+        if (token === loopTokens[cue]) {
+          stopSoundLoop(cue);
+        }
+      }, delay);
     }
     return;
   }
@@ -533,11 +693,6 @@ export function playActivitySound(mentions: number): void {
   }
   playCue("mention");
 }
-
-const loopTokens: Record<"incomingCall" | "outgoingCall", number> = {
-  incomingCall: 0,
-  outgoingCall: 0,
-};
 
 export function startSoundLoop(cue: "incomingCall" | "outgoingCall"): void {
   if (!isCueEnabled(state, cue)) {
@@ -615,6 +770,7 @@ export function resetSoundEngineForTests(): void {
 
 export function resetSoundStateForTests(): void {
   resetSoundEngineForTests();
+  incomingRing = DEFAULT_INCOMING_RING;
   state = { ...DEFAULT_STATE };
   listeners.clear();
 }

@@ -46,11 +46,25 @@ async function fillChannel(page: Page, prefix: string): Promise<Locator> {
   }
   const last = page.getByText(body, { exact: true }).last();
   await expect(last).toBeVisible();
-  // The list scrolls itself to the newest message; measure once it has settled.
+  const row = last.locator("xpath=ancestor::article[1]");
+  // Opening a channel with unread parks the viewport on the NEW rule, so the
+  // last send sits below the fold and the jump pill covers its right edge.
+  const jump = page.getByRole("button", {
+    name: /new message|Jump to present/i,
+  });
+  if (await jump.isVisible()) {
+    await jump.click();
+  }
+  await row.scrollIntoViewIfNeeded();
+  await expect(row).toBeInViewport();
+  await expect(row).not.toContainText("Message failed to send.");
   await expect
-    .poll(async () => (await last.boundingBox())?.y ?? 0)
-    .toBeGreaterThan(0);
-  return last.locator("xpath=ancestor::article[1]");
+    .poll(async () => {
+      const label = await row.getAttribute("aria-label");
+      return Boolean(label && !/Sending|Failed to send/.test(label));
+    })
+    .toBeTruthy();
+  return row;
 }
 
 interface Box {

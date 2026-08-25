@@ -339,13 +339,25 @@ final class ChatModel {
                 if reactions[existing].me {
                     reactions[existing].count -= 1
                     reactions[existing].me = false
+                    if let meId = session.currentUser?.id {
+                        reactions[existing].users.removeAll { $0.id == meId }
+                    }
                     if reactions[existing].count <= 0 { reactions.remove(at: existing) }
                 } else {
                     reactions[existing].count += 1
                     reactions[existing].me = true
+                    if let me = session.currentUser,
+                       !reactions[existing].users.contains(where: { $0.id == me.id }) {
+                        reactions[existing].users.append(
+                            ReactionUser(id: me.id, displayName: me.displayName)
+                        )
+                    }
                 }
             } else {
-                reactions.append(MessageReaction(emoji: emoji, count: 1, me: true))
+                let mine = session.currentUser.map {
+                    [ReactionUser(id: $0.id, displayName: $0.displayName)]
+                } ?? []
+                reactions.append(MessageReaction(emoji: emoji, count: 1, me: true, users: mine))
             }
             messages[index].reactions = reactions
         }
@@ -439,7 +451,7 @@ final class ChatModel {
             guard deletedChannelId == channelId else { return }
             messages.removeAll { $0.id == messageId }
 
-        case .reaction(let reactionChannelId, let messageId, let emoji, let userId, let added):
+        case .reaction(let reactionChannelId, let messageId, let emoji, let userId, let added, let displayName):
             guard reactionChannelId == channelId,
                   let index = messages.firstIndex(where: { $0.id == messageId }) else { return }
             // Our own toggle was already applied optimistically; applying the
@@ -449,11 +461,22 @@ final class ChatModel {
             var reactions = messages[index].reactions
             if let existing = reactions.firstIndex(where: { $0.emoji == emoji }) {
                 reactions[existing].count += added ? 1 : -1
+                if added {
+                    if let displayName,
+                       !reactions[existing].users.contains(where: { $0.id == userId }) {
+                        reactions[existing].users.append(
+                            ReactionUser(id: userId, displayName: displayName)
+                        )
+                    }
+                } else {
+                    reactions[existing].users.removeAll { $0.id == userId }
+                }
                 if reactions[existing].count <= 0 {
                     reactions.remove(at: existing)
                 }
             } else if added {
-                reactions.append(MessageReaction(emoji: emoji, count: 1, me: false))
+                let users = displayName.map { [ReactionUser(id: userId, displayName: $0)] } ?? []
+                reactions.append(MessageReaction(emoji: emoji, count: 1, me: false, users: users))
             }
             messages[index].reactions = reactions
 

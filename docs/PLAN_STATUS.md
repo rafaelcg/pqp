@@ -60,8 +60,10 @@
 | Character accounts | Done, unverified against a deploy (`character_accounts` + one gated branch in `verifyAuthHeader`; hashed 256-bit token, constant-time compare, one-UPDATE revoke; a character cannot DM, be DMed, join voice, be friended, be found outside a shared server, or delete/export itself — all enforced server-side. Off unless `CHARACTER_ACCOUNTS_ENABLED=true`) |
 | Public pages: `/@handle` and `/c/<slug>` | Done (profile redesigned as an identity page — hero banner or a generated gradient, overlapping avatar, community badges as a grid, **approved depoimentos rendered**, join month at month granularity; `users.banner_key/banner_url` on the avatar machinery, uploadable in Settings → Profile. New `servers.community_slug`, unique among *listed* communities, derived from the name on opt-in — a collision refuses the listing rather than auto-suffixing. `GET /api/public/communities/:slug` is unauthenticated behind `COMMUNITIES_ENABLED` and carries a poster, never a member list. Both CTAs carry an intent through sign-up; the Pages middleware injects OG for both — `docs/HANDLES.md`) |
 | Game connections (Steam, Battle.net, Twitch) | Done as Discord-style Connections, not as a second login (`docs/CONNECTIONS.md`). Off per provider until that provider's env is set. Visibility defaults to in-app only; the public page is opt-in. |
-| In-app sounds | Demo on `feat/in-app-sounds`. Cinematic UI SFX (CC0): mention=`mention`, voice join/leave=`select`/`deselect`. Join/leave play on click; the mic pipeline waits so capture cannot cut the cue. Samples exclusive; outgoing ring waits. No ordinary-message ping. Synthesised call ring. Settings → Notifications. |
+| In-app sounds | Demo on `feat/in-app-sounds`. Cinematic UI SFX (CC0): mention=`mention`, voice join/leave=`select`/`deselect`. Join/leave play on click; the mic pipeline waits so capture cannot cut the cue. Samples exclusive; outgoing ring waits. No ordinary-message ping. Incoming ring picker in Settings (Classic plus four motifs). Outgoing still dual-tone. |
 | Ambient life — the five launch communities | Done, canned-verified (`tools/ambient/`: 25 personas across Resenha FC / Maratona / Fone com Fio / Sala de Espera do Ranked / Véspera de Prova; provisioning + seed scripts, multi-community scheduling from one process, inbound reply screening with a per-human cap, JSONL audit log, kill switch honoured mid-scene — `docs/ambient-deploy.md`). **No live Claude generation has been made** since the spike; every run so far is `--canned` |
+| Roles, nicknames, `@everyone` / `@here` | Done locally (2026-08-24). Discord 8-step overwrites, 20 permission bits as decimal strings / `bigint`, seeded `@everyone` + Admin, nicknames display-only (mentions stay `@username`), mass mentions gated on `MENTION_EVERYONE`. Channel overwrite editor (allow / inherit / deny). Live `permissions-update` WS frame. Hoist in the member list. Role colours on message names and the member sidebar. |
+| NEW divider, mention rows, `:emoji:` / ArrowUp | Done locally (2026-08-24). `POST /read` returns the previous cursor so the log can keep a NEW rule for the visit. Mentioned rows get an accent wash. Own messages do not wash or ping; a fired `@everyone` / `@here` from someone else does. Composer ArrowUp edits last own message; `:name` autocompletes. |
 
 ## Product roadmap
 
@@ -75,7 +77,9 @@ levels, file/image attachments, user search by handle, direct and group messages
 with DM privacy controls, pinned messages, channel categories with drag-to-reorder, link
 and image embeds (unfurling), a per-server audit log, message retention policies, per-server
 data export, incoming webhooks (#23, Discord wire-compatible), screen share (#11), and
-SSO/SAML readiness, a public status page, and the mobile PWA.
+SSO/SAML readiness, a public status page, and the mobile PWA. Role bitfields,
+nicknames, `@everyone`/`@here`, the channel overwrite editor, hoist, and live
+`permissions-update` (#22 / #71) shipped 2026-08-24.
 
 Two subsystems landed alongside those features and shape what comes next:
 
