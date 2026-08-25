@@ -189,7 +189,9 @@ import { getDesktop } from "@/lib/desktop";
 import {
   describeActivity,
   notifyChannelActivity,
+  rememberActivityChannel,
   rememberServers,
+  unreadByServer,
 } from "@/lib/notifications";
 import { setSoundOutput } from "@/lib/sounds";
 import { useMemberSidebar } from "@/hooks/use-member-sidebar";
@@ -1446,9 +1448,24 @@ function MainAppContent({
             const activity = message as {
               channelId: string;
               mention: boolean;
+              /** Null for a conversation, which belongs to no server. */
+              serverId?: string | null;
               /** Absent from an API that predates conversations. */
               kind?: ChannelKind;
             };
+            // Where this came from, taken from the frame rather than looked up.
+            // The directory is only ever fed the SELECTED server's channel
+            // list, so without this every frame from any other server — and
+            // every frame from a thread, which is in no channel list at all —
+            // described to nulls: the server's own mute was skipped, the banner
+            // could not name where it came from, and the rail had no icon to
+            // mark. Placing the channel first is what makes the three lines
+            // below able to answer.
+            rememberActivityChannel(
+              activity.channelId,
+              activity.serverId ?? null,
+              activity.kind ?? "server",
+            );
             if (activity.kind && activity.kind !== "server") {
               const now = new Date().toISOString();
               if (
@@ -2807,6 +2824,24 @@ function MainAppContent({
   );
   useChannelNotifications({ channels: notificationChannels, unread });
 
+  /**
+   * Unread per server icon.
+   *
+   * The rail used to be able to indicate only the server already selected,
+   * because the selected server's channels are the only ones the app fetches a
+   * list for. That left every notification about any other server with nothing
+   * to look at when you followed it back into the app. The activity frame has
+   * been carrying its `serverId` all along; `rememberActivityChannel` files it,
+   * and this is what reads it back.
+   */
+  const serverUnread = useMemo(() => {
+    const placedBy = new Map<string, string | null>();
+    for (const channel of notificationChannels) {
+      placedBy.set(channel.id, channel.serverId);
+    }
+    return unreadByServer(unread, placedBy);
+  }, [notificationChannels, unread]);
+
   const conversationUnread = conversationUnreadTotals(conversations, unread);
 
   /**
@@ -3519,8 +3554,7 @@ function MainAppContent({
       <ServerRail
         servers={servers}
         selectedServerId={selectedServerId}
-        unread={unread}
-        channels={channels}
+        serverUnread={serverUnread}
         homeSelected={selection.kind === "dm"}
         homeUnread={conversationUnread}
         // Requests AND depoimentos waiting to be answered — see `waitingOnYou`
