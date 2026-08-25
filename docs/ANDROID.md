@@ -574,8 +574,13 @@ to that boundary and stops there.
 
 ### What the server needs, precisely
 
-Six edits, in the shape the existing APNs leg already established. `apns.ts` is
-the template throughout: FCM is the same job with a different envelope.
+Seven edits, in the shape the existing APNs leg already established. `apns.ts`
+is the template throughout: FCM is the same job with a different envelope.
+
+The blast radius is `server/src/` plus `server/src/schema.sql`, and **nothing
+else**. In particular `packages/shared/` is not involved: `PushPlatform` and
+`pushRegistrationSchema` live in `server/src/services/push.ts`, and there are no
+push schemas in shared at all.
 
 **1. `server/src/schema.sql`** gains an `fcm` branch on the CHECK constraint,
 identical in shape to the `apns` one (a token, no endpoint, no keys), plus its
@@ -599,12 +604,20 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_push_subscriptions_fcm_token
   ON push_subscriptions (token) WHERE platform = 'fcm';
 ```
 
-A **separate** index rather than widening the existing one.
-`saveApnsSubscription` infers its arbitrating index by restating
-`WHERE platform = 'apns'`, and inference against a partial index requires the
-predicate to match exactly; widening the old index would break that insert with
-"no unique or exclusion constraint matching the ON CONFLICT specification". The
-FCM upsert restates `WHERE platform = 'fcm'` the same way.
+A **separate** index, and the reason runs the opposite way to the obvious one.
+`ON CONFLICT` inference does not need the index predicate to *match* the
+restated one, it needs the index predicate to be *implied* by it. So widening
+the existing index to `WHERE platform IN ('apns', 'fcm')` would **not** break
+`saveApnsSubscription`: Postgres proves `platform = ANY('{apns,fcm}')` from
+`platform = 'apns'` and the upsert keeps working. This was tested against the
+project's own Postgres 16 container, not reasoned about.
+
+What actually fails is the other direction. An FCM upsert restating
+`WHERE platform = 'fcm'` cannot infer an index predicated on
+`platform = 'apns'`, because that implication does not hold, and it errors with
+"no unique or exclusion constraint matching the ON CONFLICT specification".
+Hence a second index scoped to `fcm`, which the FCM upsert then restates the
+same way `saveApnsSubscription` restates its own.
 
 **2. `PushPlatform`** gains `"fcm"`, and a `saveFcmSubscription` mirrors
 `saveApnsSubscription` exactly, upserting on the token for the same reason: one
@@ -648,8 +661,14 @@ wrong and expensive to get wrong.**
       "tag":   "<payload.tag>"
     },
     "android": {
-      "priority": "HIGH",
-      "ttl": "86400s",                  // CALL_PUSH_TTL_SECONDS for a ring
+      // BOTH OF THESE COME FROM `PushDeliveryOptions`, WHICH ALREADY EXISTS.
+      // Do not hardcode either. `MESSAGE_DELIVERY` is urgency "normal" and TTL
+      // 24h; `CALL_DELIVERY` is urgency "high" and TTL 50s, because a ring
+      // delivered at minute two is not late, it is wrong. Hardcoding "HIGH"
+      // would send every mention and DM at ring urgency and make Android
+      // diverge from web by accident.
+      "priority": "<delivery.urgency === 'high' ? 'HIGH' : 'NORMAL'>",
+      "ttl": "<delivery.ttlSeconds>s",
       "collapse_key": "<payload.tag>"   // same job as apns-collapse-id
     }
   }
@@ -659,22 +678,87 @@ wrong and expensive to get wrong.**
 The four `data` keys are the ones `buildApnsBody` already carries to iOS under
 exactly those names, so the three clients keep one vocabulary.
 
-A `notification` block would be drawn by the Firebase SDK on the tray without
-ever waking the app, which takes away the one decision this client has to make:
-whether the person is already reading the channel being announced. That is the
-phantom "1 nova mensagem" bug (#79) in another costume, and on Android it would
-be unfixable from the client. The price of data-only is that a force-stopped app
-does not receive it and some OEM battery managers delay it. That trade is taken
-deliberately: a late notification is a smaller failure than a wrong one.
+The reason is **control of how the notification is drawn**, not suppression.
+
+It is worth being exact, because the tempting justification is wrong. With a
+`notification` key, `onMessageReceived` *is* still called while the app is in
+the foreground; the SDK only draws the message itself when the app is
+backgrounded. And backgrounded is precisely the case where
+`PushPresentation.shouldNotify` returns true unconditionally, because nothing is
+being read. So "a `notification` block would smuggle a push past the redundancy
+check" describes a failure that cannot actually happen.
+
+What a `notification` block really costs is everything about the notification
+this client decides:
+
+- **The channel.** The SDK draws on whatever
+  `default_notification_channel_id` names, not on `pqp.messages` with its
+  importance and description.
+- **The tag, and therefore collapsing.** One live notification per conversation
+  is a `notify(tag, id)` call; the SDK does not make it.
+- **The tap.** The PendingIntent carrying `path` and `tag` into `MainActivity`
+  is what lands a tap on the right channel. The SDK's default launches the
+  activity with none of it.
+
+Two shapes of the same event drawn two different ways, depending on whether the
+app happened to be backgrounded, is a worse outcome than either. Data-only makes
+the client the only thing that draws.
+
+Note also what is *not* a cost of this choice: a force-stopped app receives no
+FCM message of any kind, `notification` or `data`, so that is not a trade-off
+data-only makes. Delivery to a dozing device is governed by `priority`, which is
+set above.
 
 **6. Wiring.** `isAnyPushEnabled()` gains `|| isFcmEnabled()`. `PushTransports`
 gains an `fcm` leg and `readTransports` reads it. `deliverToUsers` gains one
 branch, next to the APNs one, and that is the only place the platforms diverge.
 `GET /api/push/config` gains `fcm: isFcmEnabled()`, and the POST route's
 two-way `isApns ? ... : ...` guard becomes a three-way switch so a server with
-no FCM config refuses tokens it can never send to. Prune the row on FCM's
-`UNREGISTERED` and `INVALID_ARGUMENT`, which are its equivalents of APNs
-`Unregistered` and a 410.
+no FCM config refuses tokens it can never send to.
+
+**Prune on `UNREGISTERED` (404) and `SENDER_ID_MISMATCH` (403), and on nothing
+else.** Specifically **not** on `INVALID_ARGUMENT`: that is FCM's answer to a
+malformed *message body*, not only to a bad token, so pruning on it means one
+payload bug deletes every Android subscription in the table on the next fan-out.
+`isApnsTokenGone` in `services/apns.ts` is careful about exactly this class of
+ambiguity for APNs, and documents why; inherit that care rather than the shape
+of the code. An `fcmTokenGone` helper with the same comment is the right place
+for it.
+
+**7. Unregistering, which is the one that is a security bug if it is skipped.**
+
+`deleteApnsSubscription` is hard-scoped to one platform:
+
+```sql
+DELETE FROM push_subscriptions
+ WHERE user_id = $1 AND platform = 'apns' AND token = $2
+```
+
+and `DELETE /api/push/subscriptions?token=...` routes to it **unconditionally**
+whenever a `token` parameter is present. So an FCM token sent to that endpoint
+matches zero rows and the route still answers `{ ok: true }`. Silent, and it
+looks like it worked.
+
+That is not cosmetic. The Android client calls this endpoint on sign-out and on
+switching notifications off, in that order and before the credential goes, for
+the reason written at the call site: **the row has to go before the credential
+does, or the next person to hold this phone gets the last one's
+notifications.** Leave this edit out and that is exactly what happens: sign out,
+hand the phone over, and the previous account's DM pushes keep arriving on it.
+
+The fix is to widen the delete rather than add a parallel route, because the
+client sends only a token and the server cannot tell the platform from it:
+
+```sql
+DELETE FROM push_subscriptions
+ WHERE user_id = $1 AND token = $2 AND platform IN ('apns', 'fcm')
+```
+
+Still scoped by `user_id`, so nobody can delete another account's row, and
+`platform IN ('apns', 'fcm')` keeps a `web` row (whose token is null) out of
+reach. Renaming it to something like `deleteDeviceSubscription` says what it now
+covers. **No client change is needed**: the Android client already sends
+`?token=`, the same shape iOS does.
 
 **Deploying this drops every live voice call**, because `server/` redeploys the
 API. It is not urgent and should ride along with something else.
