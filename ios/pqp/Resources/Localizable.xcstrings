@@ -512,6 +512,16 @@
         }
       }
     },
+    "Auto": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Automático"
+          }
+        }
+      }
+    },
     "Ban": {
       "localizations": {
         "pt-BR": {
@@ -698,6 +708,26 @@
           "stringUnit": {
             "state": "translated",
             "value": "O acesso à câmera está desligado. Ative nos Ajustes."
+          }
+        }
+      }
+    },
+    "Camera and screen quality": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Qualidade da câmera e da tela"
+          }
+        }
+      }
+    },
+    "Camera going out": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Câmera saindo"
           }
         }
       }
@@ -2712,6 +2742,16 @@
         }
       }
     },
+    "One choice for your camera and your screen share. Auto asks the camera for 720p and lets the connection decide from there. A fixed choice asks for that size and sends your screen at that size too. Your screen is captured at 720p on a phone whatever you pick, so 1080p and 720p send the same picture with more bits behind it. The picture still drops below your choice when the link cannot carry it.": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uma escolha só, valendo para a sua câmera e para o compartilhamento de tela. Automático pede 720p da câmera e deixa a conexão decidir a partir daí. Uma escolha fixa pede aquele tamanho e envia a sua tela nesse tamanho também. No celular a tela é capturada em 720p, escolha o que escolher, então 1080p e 720p enviam a mesma imagem, com mais bits por trás. A imagem ainda cai abaixo da sua escolha quando o link não dá conta."
+          }
+        }
+      }
+    },
     "Online": {
       "localizations": {
         "pt-BR": {
@@ -3318,6 +3358,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Salvando…"
+          }
+        }
+      }
+    },
+    "Screen going out": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tela saindo"
           }
         }
       }
@@ -4222,6 +4272,16 @@
         }
       }
     },
+    "Turn your camera on or share your screen during a call to see what is really going out.": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ligue sua câmera ou compartilhe sua tela durante uma chamada para ver o que está saindo de verdade."
+          }
+        }
+      }
+    },
     "Type the community name": {
       "localizations": {
         "pt-BR": {
@@ -4318,6 +4378,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Enviando…"
+          }
+        }
+      }
+    },
+    "Video": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vídeo"
           }
         }
       }
@@ -4808,6 +4878,36 @@
           "stringUnit": {
             "state": "translated",
             "value": "expulsou um membro"
+          }
+        }
+      }
+    },
+    "limited by the encoder": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "limitado pelo codificador"
+          }
+        }
+      }
+    },
+    "limited by this phone": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "limitado por este celular"
+          }
+        }
+      }
+    },
+    "limited by your connection": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "limitado pela sua conexão"
           }
         }
       }
