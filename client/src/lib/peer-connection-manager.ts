@@ -159,6 +159,18 @@ interface ManagedPeer {
   /** The system-audio half of a screen share, when the capture carried one. */
   screenAudioSender: RTCRtpSender | null;
   pendingCandidates: RTCIceCandidateInit[];
+  /**
+   * We changed our own senders and this peer has not been told yet.
+   *
+   * Set the moment a track is added or removed, cleared only once an offer
+   * carrying that change has actually been applied. It exists because the
+   * change and the offer are no longer the same step: an offer can only be
+   * made from a settled connection, and the moment a person clicks "share" is
+   * not under our control. Without it, an offer that had to wait would be
+   * waited for by nobody — `hasUnnegotiatedSender` cannot see a *removal*,
+   * which has no sender left to look at.
+   */
+  owedOffer: boolean;
   userId?: string;
   displayName?: string;
   avatarUrl?: string | null;
@@ -749,6 +761,7 @@ export function createPeerConnectionManager(
       cameraSender: null,
       screenAudioSender: null,
       pendingCandidates: [],
+      owedOffer: false,
       iceRestartTimer: null,
       politeRestartFallback: null,
       iceRestartAttempts: 0,
@@ -806,6 +819,55 @@ export function createPeerConnectionManager(
   }
 
   /**
+   * Set to false the first time a browser refuses `setLocalDescription()`.
+   *
+   * Per manager rather than per module so nothing carries across a rebuilt
+   * call, and so a test gets a clean one. In practice it is decided once, on
+   * the first offer of the first call, and never looked at again.
+   */
+  let implicitLocalDescription = true;
+
+  /**
+   * Put our own offer on the connection.
+   *
+   * The argument-less form is the point. `setLocalDescription(await
+   * createOffer())` is two operations with an await between them, and an offer
+   * describes the session it was built from: anything landing in that gap — a
+   * remote offer being answered, our own second track, an ICE restart — leaves
+   * the browser asked to apply a description of a session that no longer
+   * exists. Chrome does not shrug at that. It throws out of
+   * `setLocalDescription` with "Failed to set local offer sdp: ...", and
+   * whatever the caller was doing dies with it. The implicit form builds the
+   * offer and applies it as one step, so there is no gap to lose it in.
+   *
+   * An ICE restart cannot use it (there is nowhere to ask for one), which is
+   * the only reason the explicit form is still here at all — that, and a
+   * browser old enough to still require the argument. Losing every call on
+   * such a browser would be a far worse bug than the one this fixes, and the
+   * cost of not risking it is one `catch`.
+   */
+  async function applyLocalOffer(pc: RTCPeerConnection, iceRestart: boolean) {
+    if (!iceRestart && implicitLocalDescription) {
+      try {
+        await pc.setLocalDescription();
+        return;
+      } catch (err) {
+        // A browser that still requires the argument rejects the *call*, with
+        // a TypeError, before any SDP exists. Every real SDP failure is a
+        // DOMException, so this is the one error that means "wrong overload"
+        // rather than "bad session".
+        if (!(err instanceof TypeError)) {
+          throw err;
+        }
+        implicitLocalDescription = false;
+      }
+    }
+    await pc.setLocalDescription(
+      await pc.createOffer(iceRestart ? { iceRestart: true } : undefined),
+    );
+  }
+
+  /**
    * Create-offer-and-send. Named generically because either side of a pair may
    * call it (initial connect, ICE restart, or adding a track later) — the
    * actual politeness/glare resolution happens in `applyRemoteDescription` on
@@ -814,17 +876,52 @@ export function createPeerConnectionManager(
   async function negotiate(peer: ManagedPeer, iceRestart = false) {
     try {
       peer.makingOffer = true;
-      await peer.pc.setLocalDescription(
-        await peer.pc.createOffer(iceRestart ? { iceRestart: true } : undefined),
-      );
+      await applyLocalOffer(peer.pc, iceRestart);
       send({
         type: "offer",
         from: localPeerId,
         to: peer.peerId,
         sdp: peer.pc.localDescription!.sdp,
       });
+      // `owedOffer` is deliberately NOT cleared here. Sending an offer is not
+      // the same as the peer having received it: perfect negotiation resolves
+      // glare by having one side drop the other's offer on the floor, and a
+      // debt cleared on send would be forgotten exactly when it was not paid.
+      // The answer is the acknowledgement, and that is where it clears.
     } finally {
       peer.makingOffer = false;
+    }
+  }
+
+  /**
+   * Tell this peer about a sender we just added or removed. Never throws.
+   *
+   * An offer is only legal from a settled connection, and nothing about the
+   * moment a person clicks "share my screen" respects that: the pair may be
+   * halfway through answering an offer of their own, or restarting ICE. The
+   * old code offered anyway, `setLocalDescription` rejected, and the rejection
+   * travelled all the way out to `startScreenShare`, which tore the capture
+   * down and printed Chrome's own English sentence on a Brazilian user's
+   * screen. The share was destroyed by its own timing.
+   *
+   * The tracks are already on the connection by the time this is called, so
+   * there is nothing to undo and nothing to apologise for — only an offer that
+   * has to wait for its turn. `scheduleRenegotiation` is exactly that waiting
+   * room, and it already existed for the neighbouring case of a track that
+   * never got an m-line.
+   */
+  async function requestNegotiation(peer: ManagedPeer): Promise<void> {
+    peer.owedOffer = true;
+    if (peer.makingOffer || peer.pc.signalingState !== "stable") {
+      scheduleRenegotiation(peer);
+      return;
+    }
+    try {
+      await negotiate(peer);
+    } catch {
+      // Lost a race that opened after the check above. The offer is still
+      // owed, so hand it to the same waiting room rather than to the caller.
+      scheduleRenegotiation(peer);
     }
   }
 
@@ -839,14 +936,32 @@ export function createPeerConnectionManager(
   }
 
   /**
-   * Offer an unnegotiated local track once the pair has settled.
+   * Anything this peer has not been told about our senders.
+   *
+   * Two questions, not one. `hasUnnegotiatedSender` reads the connection and
+   * catches a track that never got an m-line, including one added by a code
+   * path that never asked for an offer. `owedOffer` is our own record, and it
+   * is the only one of the two that survives a *removal*: stopping a share
+   * leaves no sender behind to notice, and a peer never told about the stop
+   * keeps rendering a frozen frame.
+   */
+  function needsNegotiation(peer: ManagedPeer): boolean {
+    return peer.owedOffer || hasUnnegotiatedSender(peer);
+  }
+
+  /**
+   * Offer whatever this peer has not been told, once the pair has settled.
    *
    * Checked-and-retried rather than fired once: right after our answer goes
    * out the remote is still applying it, and an offer landing in that window
    * is glare that perfect negotiation resolves by *dropping* it — with nothing
    * left to try again, since this manager does not use `onnegotiationneeded`.
-   * Every attempt re-checks the transceiver, so the loop is a no-op the moment
-   * the track has its m-line (or the peer is gone).
+   * Every attempt re-checks, so the loop is a no-op the moment the peer knows
+   * (or is gone).
+   *
+   * This is also where a screen share's offer ends up when the person started
+   * sharing at a moment the connection was busy. That is not a rare corner:
+   * a click arrives whenever it arrives.
    */
   function scheduleRenegotiation(peer: ManagedPeer, attempt = 0) {
     if (attempt >= 5) {
@@ -856,7 +971,7 @@ export function createPeerConnectionManager(
       if (peers.get(peer.peerId) !== peer) {
         return;
       }
-      if (!hasUnnegotiatedSender(peer)) {
+      if (!needsNegotiation(peer)) {
         return;
       }
       if (peer.makingOffer || peer.pc.signalingState !== "stable") {
@@ -892,6 +1007,12 @@ export function createPeerConnectionManager(
 
     await peer.pc.setRemoteDescription(description);
 
+    if (description.type === "answer") {
+      // They answered, so they have our senders. This is the only moment that
+      // is actually evidence of that.
+      peer.owedOffer = false;
+    }
+
     if (description.type === "offer") {
       peer.isSettingRemoteAnswerPending = true;
       try {
@@ -905,6 +1026,13 @@ export function createPeerConnectionManager(
       } finally {
         peer.isSettingRemoteAnswerPending = false;
       }
+      // The answer we just sent describes every sender that had an m-line to
+      // be described on, so anything owed from before is now paid — unless a
+      // track is still sitting on a transceiver the offer never covered, which
+      // is the case the next block exists for.
+      if (!hasUnnegotiatedSender(peer)) {
+        peer.owedOffer = false;
+      }
       // An answer can only cover the m-lines the offer carried. A track added
       // *before* this connection first negotiated — camera or screen already
       // on when this peer joined the call — sits on a transceiver with no
@@ -917,9 +1045,14 @@ export function createPeerConnectionManager(
       // remote while it is still applying that answer (signaling not stable),
       // reads as glare, and gets dropped — the retry loop keeps trying until
       // the track has an m-line or the attempts run out.
-      if (hasUnnegotiatedSender(peer)) {
-        scheduleRenegotiation(peer);
-      }
+    }
+
+    // Both description types, not just offers. Applying a remote *answer* is
+    // the moment the connection returns to stable, which makes it the first
+    // legal opportunity to send an offer that had to wait — a screen share
+    // started while this exchange was in flight is exactly that offer.
+    if (needsNegotiation(peer)) {
+      scheduleRenegotiation(peer);
     }
 
     for (const candidate of peer.pendingCandidates) {
@@ -1014,8 +1147,14 @@ export function createPeerConnectionManager(
         // One offer covering both m-lines. Offering once per track would put
         // the second offer on the wire while the first answer was still being
         // applied, which perfect negotiation resolves by dropping it.
+        //
+        // Requested, not commanded: whether an offer is legal right now is the
+        // connection's business, not the share's. A person clicking "share"
+        // during any other exchange used to get Chrome's own SDP error printed
+        // at them and lose the capture; now the tracks are on the connection
+        // either way and the offer waits its turn.
         if (needsOffer) {
-          await negotiate(peer);
+          await requestNegotiation(peer);
         }
       }
     },
@@ -1029,7 +1168,7 @@ export function createPeerConnectionManager(
             await peer.cameraSender.replaceTrack(nextTrack);
           } else {
             peer.cameraSender = peer.pc.addTrack(nextTrack, stream!);
-            await negotiate(peer);
+            await requestNegotiation(peer);
           }
           // After both branches: `replaceTrack` keeps the sender's parameters,
           // but a camera re-opened at a new quality is exactly when the ceiling
@@ -1038,7 +1177,7 @@ export function createPeerConnectionManager(
         } else if (peer.cameraSender) {
           peer.pc.removeTrack(peer.cameraSender);
           peer.cameraSender = null;
-          await negotiate(peer);
+          await requestNegotiation(peer);
         }
       }
     },
