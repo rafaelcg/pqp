@@ -8,7 +8,10 @@ import {
 
 interface UseAccentHue {
   preference: AccentHuePreference;
-  setPreference: (preference: AccentHuePreference) => void;
+  setPreference: (
+    preference: AccentHuePreference,
+    options?: { immediate?: boolean },
+  ) => void;
 }
 
 export function useAccentHue(): UseAccentHue {
@@ -18,9 +21,15 @@ export function useAccentHue(): UseAccentHue {
     getAccentHue,
   );
 
-  const setPreference = useCallback((next: AccentHuePreference) => {
-    setAccentHuePreference(next);
-  }, []);
+  const setPreference = useCallback(
+    (
+      next: AccentHuePreference,
+      options?: { immediate?: boolean },
+    ) => {
+      setAccentHuePreference(next, options);
+    },
+    [],
+  );
 
   return { preference, setPreference };
 }

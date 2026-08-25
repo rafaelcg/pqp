@@ -1155,7 +1155,7 @@ function AccentHuePicker() {
               type="button"
               aria-label={t("settings.appearance.accentHue", { hue })}
               aria-pressed={preference === hue}
-              onClick={() => setPreference(hue)}
+              onClick={() => setPreference(hue, { immediate: true })}
               className={cn(
                 "accent-hue-dot h-7 w-7 rounded-full border-2 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent",
                 preference === hue

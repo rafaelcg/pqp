@@ -78,6 +78,15 @@ describe("stored accent hue", () => {
     );
   });
 
+  it("a swatch click can sync immediately", () => {
+    setAccentHuePreference(210, { immediate: true });
+
+    expect(queuePreferenceSync).toHaveBeenCalledWith(
+      { accentHue: 210 },
+      { immediate: true },
+    );
+  });
+
   it("resetting to the look syncs immediately", () => {
     setAccentHuePreference("default");
 

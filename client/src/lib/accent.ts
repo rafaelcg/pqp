@@ -175,12 +175,18 @@ function commit(preference: AccentHuePreference): void {
   }
 }
 
-export function setAccentHuePreference(preference: AccentHuePreference): void {
+export function setAccentHuePreference(
+  preference: AccentHuePreference,
+  { immediate }: { immediate?: boolean } = {},
+): void {
   storeAccentHue(preference);
   commit(preference);
+  // Swatches and reset are one click. The slider stays on the debounce path
+  // so a drag does not spend the write budget. A reload before the debounce
+  // flushes would let `/api/me` adopt the previous `default` and undo the pick.
   queuePreferenceSync(
     { accentHue: preference },
-    { immediate: preference === "default" },
+    { immediate: immediate ?? preference === "default" },
   );
 }
 

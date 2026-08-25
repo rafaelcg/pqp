@@ -303,9 +303,11 @@ test.describe("stage 2 — light and system", () => {
 
     await page.reload();
     await expect(page.getByText("Dev auth bypass")).toBeVisible({ timeout: 20_000 });
-    expect(
-      await page.evaluate(() => document.documentElement.dataset.accent ?? ""),
-    ).toBe("custom");
+    await expect
+      .poll(() =>
+        page.evaluate(() => document.documentElement.dataset.accent ?? ""),
+      )
+      .toBe("custom");
   });
 
   test("a stored appearance is applied before first paint", async ({ page }) => {
