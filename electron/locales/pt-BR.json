@@ -13,5 +13,22 @@
   "passkey.windowTitle": "Entrar com Google",
   "passkey.hintTitle": "Travou pedindo passkey?",
   "passkey.hintBody": "O login por passkey não completa aqui no app. Nesta janela do Google, clique em \"Tentar de outra forma\" (\"Try another way\") e escolha entrar com senha, que funciona normalmente.",
-  "passkey.hintDismiss": "Entendi"
+  "passkey.hintDismiss": "Entendi",
+  "share.title": "Escolha o que compartilhar",
+  "share.subtitle": "Todo mundo na chamada vê o que você escolher.",
+  "share.groupScreens": "Telas",
+  "share.groupWindows": "Janelas",
+  "share.screenFallback": "Tela {index}",
+  "share.windowFallback": "Janela sem título",
+  "share.noPreview": "Sem prévia",
+  "share.cancel": "Cancelar",
+  "share.confirm": "Compartilhar",
+  "share.empty": "Nada para compartilhar neste computador.",
+  "share.permissionTitle": "O pqp não consegue ver a sua tela",
+  "share.permissionBody": "O macOS não deu ao pqp permissão para gravar a tela, então não há o que oferecer. Ative o pqp em Privacidade e Segurança > Gravação de Tela e Áudio do Sistema, feche o pqp, abra de novo e tente compartilhar outra vez.",
+  "share.permissionOpen": "Abrir Ajustes do Sistema",
+  "share.permissionDismiss": "Agora não",
+  "share.failedTitle": "Não deu para começar o compartilhamento",
+  "share.failedBody": "O pqp não conseguiu listar as telas e janelas deste computador. Tente de novo e, se continuar, reinicie o pqp.",
+  "share.failedDismiss": "OK"
 }

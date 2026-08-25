@@ -13,5 +13,22 @@
   "passkey.windowTitle": "Sign in with Google",
   "passkey.hintTitle": "Stuck on a passkey prompt?",
   "passkey.hintBody": "Passkey sign-in cannot complete here in the app. In this Google window, click \"Try another way\" and choose your password instead, which works normally.",
-  "passkey.hintDismiss": "Got it"
+  "passkey.hintDismiss": "Got it",
+  "share.title": "Choose what to share",
+  "share.subtitle": "Everyone in the call sees what you pick.",
+  "share.groupScreens": "Screens",
+  "share.groupWindows": "Windows",
+  "share.screenFallback": "Screen {index}",
+  "share.windowFallback": "Untitled window",
+  "share.noPreview": "No preview",
+  "share.cancel": "Cancel",
+  "share.confirm": "Share",
+  "share.empty": "Nothing to share on this computer.",
+  "share.permissionTitle": "pqp cannot see your screen",
+  "share.permissionBody": "macOS has not given pqp permission to record the screen, so there is nothing for it to offer you. Turn pqp on under Privacy & Security > Screen & System Audio Recording, quit pqp, open it again, and share once more.",
+  "share.permissionOpen": "Open System Settings",
+  "share.permissionDismiss": "Not now",
+  "share.failedTitle": "Screen sharing could not start",
+  "share.failedBody": "pqp could not list the screens and windows on this computer. Try again, and if it keeps happening, restart pqp.",
+  "share.failedDismiss": "OK"
 }

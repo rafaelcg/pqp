@@ -62,6 +62,34 @@ On **macOS**, the shell uses `titleBarStyle: "hiddenInset"` (traffic lights only
 
 On Windows / Linux, the native title bar is kept (minimal).
 
+## Screen sharing
+
+`getDisplayMedia` in the renderer resolves nothing until the main process answers it, so the shell owns "which surface?" entirely (`setDisplayMediaRequestHandler` in `main.js`).
+
+Two paths, in this order:
+
+1. **The OS picker**, via `useSystemPicker: true`. macOS 15+ takes over and Electron never calls our handler. Leave this on: it is the list the user already knows, it does not need a screen-recording grant, and it survives switching surfaces mid-share.
+2. **Our picker**, `electron/picker/`, everywhere else. That is Windows, Linux, and macOS before 15.
+
+Our picker is a small `file://` window owned by the shell, **not** a React screen in the client. The packaged shell loads the *hosted* client, so a picker over there would mean the main process waiting on a reply from a renderer that may have been deployed before the message existed, and a reply that never comes is a `getDisplayMedia` that never settles. Version skew between the two is normal here; a page inside the bundle cannot skew.
+
+| Piece | File |
+|---|---|
+| Listing, permission, labels, callback payload | `lib/display-sources.js` (unit-tested, no display needed) |
+| Picker page | `picker/index.html`, `picker/picker.js`, `picker/picker.css` |
+| Picker bridge (`window.pqpPicker`, separate from `pqpDesktop`) | `picker/preload.js` |
+| Copy (`share.*`, en + pt-BR) | `locales/` |
+
+Notes:
+
+- Sources are fetched as `["screen", "window"]` with thumbnails. Thumbnails are not decoration: several windows routinely share a title and the picture is the only way to tell them apart.
+- The first surface (the primary display) is preselected and **Share** is focused, so a one-monitor user presses Enter.
+- A list of exactly one surface skips the picker entirely (Wayland portals hand back one pre-picked surface).
+- Cancelling, Escape, and closing the window all answer `null`, which Chromium turns into `NotAllowedError`, which the client already words as "blocked or cancelled".
+- **macOS screen recording**: `desktopCapturer` does not fail without it, it returns a plausible list of nothing useful. The status is read again *after* listing (the listing is what raises the OS prompt) and a dialog offers `x-apple.systempreferences:…Privacy_ScreenCapture`. The grant only takes effect after a relaunch, and the copy says so.
+- Loopback audio is Windows-only in Chromium. Asking for it elsewhere fails the whole request rather than degrading to a silent share.
+- `picker/**/*` is in `build.files`. Leaving it out ships a shell whose picker cannot load.
+
 ## Security model
 
 - `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`

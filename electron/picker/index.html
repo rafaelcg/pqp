@@ -1,0 +1,42 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <!--
+      Nothing here loads from the network, so nothing here is allowed to. The
+      only remote-ish thing on the page is a thumbnail, and those arrive as
+      data: URLs over IPC.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; img-src data:; style-src 'self'; script-src 'self'; form-action 'none'; base-uri 'none'"
+    />
+    <title>pqp</title>
+    <link rel="stylesheet" href="picker.css" />
+  </head>
+  <body>
+    <header class="head">
+      <h1 id="title"></h1>
+      <p id="subtitle" class="subtitle"></p>
+    </header>
+
+    <main id="scroll" class="scroll">
+      <section id="screens" class="group" hidden>
+        <h2 id="screens-label" class="group-label"></h2>
+        <div class="grid" id="screens-grid"></div>
+      </section>
+      <section id="windows" class="group" hidden>
+        <h2 id="windows-label" class="group-label"></h2>
+        <div class="grid" id="windows-grid"></div>
+      </section>
+      <p id="empty" class="empty" hidden></p>
+    </main>
+
+    <footer class="foot">
+      <button type="button" id="cancel" class="btn"></button>
+      <button type="button" id="confirm" class="btn primary" disabled></button>
+    </footer>
+
+    <script src="picker.js"></script>
+  </body>
+</html>
