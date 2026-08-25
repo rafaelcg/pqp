@@ -13,14 +13,22 @@ import SwiftUI
 /// somewhere a person can find it on purpose.
 struct YourDataSection: View {
     @Environment(SessionStore.self) private var session
-    /// Raised, not handled here: the confirmation is a sheet, and a sheet
-    /// presented from inside a `Form` section disappears with the row that
-    /// owns it the moment the form redraws.
+
+    /// The finished export, for whoever owns the screen to hand to the share
+    /// sheet, and the request to confirm a deletion.
+    ///
+    /// NEITHER SHEET IS PRESENTED FROM HERE, and that is not style. A `Form` is
+    /// a collection view: its sections are built and destroyed as they scroll,
+    /// and a `.sheet` attached to one is torn down with it. The export sheet
+    /// was attached to a section and it worked whenever the section happened to
+    /// still be on screen and silently did nothing when it was not, which is
+    /// the worst kind of intermittent. Both now hang off the screen's own body,
+    /// which exists for as long as the screen does.
+    @Binding var exportFile: URL?
     let onRequestDelete: () -> Void
 
     @State private var exporting = false
     @State private var exportError: String?
-    @State private var exportFile: URL?
 
     var body: some View {
         Section {
@@ -47,12 +55,6 @@ struct YourDataSection: View {
         } footer: {
             Text("Permanent. There is no undo and no backup to restore from.")
         }
-        .sheet(item: Binding(
-            get: { exportFile.map { ExportedFile(url: $0) } },
-            set: { if $0 == nil { exportFile = nil } }
-        )) { file in
-            ShareSheet(url: file.url)
-        }
     }
 
     /// The web client mints a blob URL and clicks an invisible link. A phone
@@ -75,11 +77,6 @@ struct YourDataSection: View {
                 ?? String(localized: "Could not build your export")
         }
     }
-}
-
-private struct ExportedFile: Identifiable {
-    let url: URL
-    var id: String { url.absoluteString }
 }
 
 /// The confirmation itself.

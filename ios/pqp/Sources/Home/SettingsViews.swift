@@ -14,6 +14,11 @@ struct AccountSettingsView: View {
     @State private var saved = false
     @State private var error: String?
     @State private var confirmingDeletion = false
+    /// The finished personal export, waiting for the share sheet. Held HERE
+    /// rather than inside `YourDataSection` because a `.sheet` attached to a
+    /// `Form` section is torn down when that section scrolls away. See the note
+    /// on that view.
+    @State private var exportFile: URL?
 
     // Resolved through `String(localized:)` rather than left as bare literals:
     // `Text(someString)` is the *verbatim* initialiser, so a picker built from
@@ -106,7 +111,7 @@ struct AccountSettingsView: View {
                     .disabled(saving)
                 }
 
-                YourDataSection { confirmingDeletion = true }
+                YourDataSection(exportFile: $exportFile) { confirmingDeletion = true }
             }
             .scrollContentBackground(.hidden)
             .background(Palette.ink)
@@ -134,6 +139,15 @@ struct AccountSettingsView: View {
                 }
             }
             .task { await load() }
+        }
+        // ON THE STACK, not on the `Form` alongside the confirmation above.
+        // Two `.sheet` modifiers at the same level is a coin flip over which
+        // one is honoured; at different levels both are unambiguous.
+        .sheet(item: Binding(
+            get: { exportFile.map { ShareItem(url: $0) } },
+            set: { if $0 == nil { exportFile = nil } }
+        )) { item in
+            ShareSheet(url: item.url)
         }
     }
 
