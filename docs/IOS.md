@@ -232,26 +232,76 @@ constant 3 is 360p on a 1080-line source and 480p on a 1440-line one.
 **Until now this client called `setParameters` nowhere at all.** No sender had a
 bitrate ceiling, a frame rate, a size, or a degradation preference, on any track,
 ever. That is almost certainly why a share documented as 720p was reported from a
-phone arriving at roughly 360p: the default preference for a source that has not
-declared itself a screen is `maintain-framerate`, which means *shrink the
-picture* under pressure, and the quality scaler behind it steps resolution down
-whenever the encoder's QP stays high. Sharp text at 12 fps keeps it high
-permanently, so those steps only go one way. The screen sender now asks for
-`maintainResolution` instead, which is the opposite trade and also turns that
-scaler off; the camera keeps `maintainFramerate`, which is right for a face and
-is what the web asks for.
+phone arriving at roughly 360p: the default preference is `maintain-framerate`,
+which means *shrink the picture* under pressure, and with no ceiling to reach for
+there was nothing holding the encoder at the size it captured. Both senders now
+state a ceiling, a frame rate and a size, and the screen's ceiling is split
+across the room by `meshScreenBitrate` the way the web splits it, because a mesh
+uploads one copy per peer.
 
-`videoSource(forScreenCast:)` was considered for the same job and deliberately
-not used: it turns the same scaler off, but it also puts VP8 into
-`ScreenshareLayers`, whose base temporal layer targets about 5 fps. See the
-comment in `startScreenShare`.
+Both roles ask for `maintain-framerate`. An earlier draft gave the screen
+`maintain-resolution`, on the argument that a legible slideshow beats a smooth
+blur; that argument assumed the 12 fps below, and Rafael's verdict on 12 fps was
+"unusable". Under pressure the picture now gets smaller rather than stuttering,
+which is what the web has always asked for too. The ladder is the lever: on a
+link that cannot do 720p30, picking 480p buys a crisp 480p30.
 
-**The capture ceiling is unchanged and is the real limit on the top rung.** The
-broadcast extension still packs at `ScreenShareWire.maxLongSide` (1280) and 12
-fps, for the memory reasons in that file's header, so 1080p and 720p send the
-same picture with a different allowance behind it. Settings says so out loud.
-Raising it means letting the extension read the choice out of the App Group, in a
-~50 MB process, on a path nobody has yet run on a phone.
+`videoSource(forScreenCast:)` was considered and deliberately not used: it turns
+the quality scaler off, but it also puts VP8 into `ScreenshareLayers`, whose base
+temporal layer targets about 5 fps. See the comment in `startScreenShare`.
+
+**The size ceiling is unchanged and is the real limit on the top rung.** The
+broadcast extension still packs at `ScreenShareWire.maxLongSide` (1280), for the
+memory reasons in that file's header, so 1080p and 720p send the same picture
+with a different allowance behind it. Settings says so out loud. Raising it means
+letting the extension read the choice out of the App Group, in a ~50 MB process,
+on a path nobody has yet run on a phone.
+
+### 30 fps
+
+The wire ran at 12 fps until it was called unusable from a phone, which it is.
+The old constant was defended on two grounds and neither survives contact.
+
+"Screen content is mostly static" is a claim about the *average* frame, and the
+average is what a codec already handles for free: a still page costs almost
+nothing however often it is sampled. What a frame rate buys is the moments that
+are not static, which is every moment anybody is scrolling, dragging, playing
+something or moving a cursor. Sampling those at 12 Hz does not make them cheaper,
+it makes them unreadable.
+
+"Every frame is an encode per peer in a mesh" is true, and is an argument for a
+governor rather than for this constant. The governor now exists:
+`meshScreenBitrate` splits one 5 Mbps upload budget across the room, so a crowded
+call spends its budget on fewer bits per frame, which WebRTC decides continuously
+and well, rather than on a frame rate chosen once by a number that could not see
+the room. The web has run its screen at 30 since it had one
+(`SCREEN_MAX_FRAMERATE`); this was never a considered difference between the
+platforms, only an unexamined one.
+
+**What 30 costs on the local bridge.** 720p NV12 is ~1.38 MB a frame, so the
+socket carries ~41 MB/s rather than ~17. An iPhone's memory bandwidth is GB/s, so
+the copy was never the wall; the walls are syscalls and buffers in flight inside
+a ~50 MB process, and both are now addressed where they live:
+
+- the extension **allocates nothing per frame**. `ScreenShareScaler` keeps its
+  planes and hands them out in place, and the socket writes the header and the
+  planes separately. The `Data` concatenation that used to sit between them cost
+  two 1.38 MB copies a frame, which at 30 fps would be 83 MB/s of pure churn in
+  the one process the OS kills rather than warns;
+- send and receive buffers are raised to about one and a half frames, so a
+  frame's write is usually one pass instead of hundreds of kernel round trips;
+- the app reads 256 KB at a time instead of 64 KB, into a buffer it keeps: six
+  syscalls a frame rather than twenty two;
+- a frame is **dropped whole** when the socket is not writable at all, rather
+  than parking ReplayKit's thread inside a write while more frames queue behind
+  it. Dropped is not failed, and only failed tears the bridge down.
+
+**Battery and thermals are the honest open question.** 720p30 is 27.6 Mpx/s of
+encode *per peer*, so a four-way mesh asks the phone for four of those. Nobody
+has run it on hardware, so there is no number to quote here. What can be said is
+that the rungs trade against each other almost exactly: 720p12 was 11.1 Mpx/s and
+480p30 is 12.3, so somebody who finds 720p30 too warm has a real answer in the
+picker rather than a regression to report.
 
 ### Reading what is actually transmitted
 
@@ -313,7 +363,7 @@ works".
 
 The extension is a **separate process**, and the WebRTC peer connections live in
 the app, so frames cross an App Group (`group.gg.pqp.app`) over a **Unix domain
-socket** carrying tightly packed NV12 at ≤720p / 12fps. The reasoning for both
+socket** carrying tightly packed NV12 at ≤720p / 30fps. The reasoning for both
 choices is in the header comment of `ScreenShareWire.swift`; the short version is
 that a socket gives ordering and backpressure for free and a failed write tells
 the extension the app is gone, and that raw NV12 avoids an encode/decode round
@@ -654,7 +704,7 @@ Still only on web, as of 2026-08-25:
 |---|---|
 | **Roles and permissions** (PR #75) | 20 permission bits, role management, per-channel overwrites. iOS knows only the legacy `owner`/`admin`/`member` rank (`Moderation.swift`). **Not a leak:** `listChannels` resolves VIEW_CHANNEL in Postgres and the server evicts sockets, so a permission-blind client is never shown content it should not have. What iOS now also does is act on `permissions-update` and re-read the list, so a channel you have lost no longer sits in the sidebar until relaunch. |
 | ~~Camera in a channel call~~ | **Done.** See **Cameras** above. |
-| ~~Screen-share quality selector~~ | **Done**, with one platform difference: the screen is still *captured* at 1280 on the long side and 12 fps, so the top two rungs send the same picture. See **Quality** above. |
+| ~~Screen-share quality selector~~ | **Done**, with one platform difference: the screen is still *captured* at 1280 on the long side, so the top two rungs send the same picture. See **Quality** above. |
 | **In-app sounds** (PR #62) | No cue playback of any kind on iOS. Haptics only. |
 | **Game connections** (PR #58) | Steam / Battle.net / Twitch are absent entirely. |
 | **Public profile viewer** | The handle can be claimed and shared from Settings, but `UserProfileSheet` shows the `name#1234` tag and never a `pqp.gg/@handle`, and there is no deep link for one. |

@@ -136,6 +136,35 @@ extension VideoQuality {
     }
 }
 
+/// Total upload a presenter may spend on the screen, and the floor the split
+/// cannot go below. Both are the web's numbers, for the web's reasons.
+///
+/// A full mesh uploads a separate copy to every peer, so a per-peer rate
+/// multiplies by the room: without this, a six-way call asks one domestic uplink
+/// for six times the chosen ceiling and gets congestion collapse rather than
+/// video. This client never had it, which mattered less while the screen was
+/// pinned at 12 fps and matters a great deal now that it is not.
+private let screenUploadBudgetBps = 5_000_000
+private let screenMinBitrateBps = 600_000
+
+/// What one screen sender is allowed, given the room and the chosen quality.
+///
+/// Three terms, in the order they matter, and the order is the point:
+///
+///  - the **chosen ceiling** is the user's answer to how much upload they are
+///    willing to spend, and always wins as an upper bound. Picking 480p cannot
+///    be overruled into sending 4 Mbps by an empty room.
+///  - the **budget share** is the room's answer, and is what stops the mesh
+///    multiplying.
+///  - the **floor** only ever lifts the *share*, never the chosen ceiling, so
+///    the division cannot produce something unwatchable in a crowded room. Past
+///    the point where it binds, the honest fix is the SFU rather than a smaller
+///    number.
+func meshScreenBitrate(peerCount: Int, quality: VideoQuality) -> Int {
+    let share = screenUploadBudgetBps / max(1, peerCount)
+    return min(quality.screenBitrate, max(screenMinBitrateBps, share))
+}
+
 /// How much to divide a source picture by so it arrives at the size the menu
 /// names.
 ///

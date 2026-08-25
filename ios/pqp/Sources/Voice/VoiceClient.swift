@@ -305,11 +305,23 @@ actor VoiceClient {
     /// under pressure permanently. A share documented as 720p was reported
     /// arriving at roughly 360p, which is two of those steps.
     ///
-    /// So the screen asks for the opposite trade. A shared screen is read, and a
-    /// slideshow of legible text beats a smooth blur of unreadable text; the
-    /// frame rate is 12 to begin with, so there is very little of it left to
-    /// protect. The camera keeps `maintainFramerate`, which is right for a face
-    /// and is what the web client asks for.
+    /// BOTH ROLES ASK FOR `maintainFramerate`, and the screen's half of that was
+    /// decided the hard way. An earlier version of this change gave the screen
+    /// `maintainResolution` on the reasoning that a shared screen is read, so a
+    /// legible slideshow beats a smooth blur. That reasoning had a hidden
+    /// premise: that the frame rate was 12 and there was hardly any of it left
+    /// to protect. Rafael's verdict on 12 was "unusable", which settles it.
+    /// Under pressure something has to give, and the answer for this product is
+    /// that the picture gets smaller rather than that it stutters, which is also
+    /// what the web client has always asked for.
+    ///
+    /// The size is still pinned, which is the part that makes this safe rather
+    /// than a return to the old collapse: `scaleResolutionDownBy` states what the
+    /// rung promises, `meshScreenBitrate` gives the encoder enough to reach it,
+    /// and the preference only governs what happens *below* the label when the
+    /// link genuinely cannot carry even that. The user's lever is the ladder: on
+    /// a link that cannot do 720p30, choosing 480p buys a crisp 480p30 instead
+    /// of a soft automatic something.
     private func tuneVideoSenders() {
         let camera = cameraEncoding()
         for sender in cameraSenders.values {
@@ -317,7 +329,7 @@ actor VoiceClient {
         }
         let screen = screenEncoding()
         for sender in screenSenders.values {
-            Self.apply(screen, to: sender, preference: .maintainResolution)
+            Self.apply(screen, to: sender, preference: .maintainFramerate)
         }
     }
 
@@ -344,7 +356,14 @@ actor VoiceClient {
 
     private func screenEncoding() -> VideoEncoding {
         VideoEncoding(
-            maxBitrate: videoQuality.screenBitrate,
+            // Split across the room, because a mesh uploads a copy per peer and
+            // a per-peer rate therefore multiplies. Re-derived on every tune, so
+            // a joiner makes everyone give bitrate back and a leaver hands it
+            // out again; without the second half a call that started at six and
+            // dropped to two would encode at the six-way rate forever.
+            maxBitrate: meshScreenBitrate(
+                peerCount: connections.count, quality: videoQuality
+            ),
             frameRate: Int(ScreenShareWire.defaultFrameRate),
             scale: videoScaleFactor(
                 for: videoQuality,
@@ -492,24 +511,24 @@ actor VoiceClient {
     /// presenter per room and the server enforces it.
     func startScreenShare() async -> String? {
         if let localScreenStreamId { return localScreenStreamId }
-        // NOT `videoSource(forScreenCast: true)`, and the reasoning is worth
-        // keeping because the flag looks like the obvious answer here.
+        // NOT `videoSource(forScreenCast: true)`, which looks like the obvious
+        // call for a screen and is the wrong one here.
         //
-        // What it would buy is turning the quality scaler off. That scaler
-        // watches the encoder's QP and steps the *resolution* down whenever it
-        // stays high, and sharp text at 12 fps keeps it high permanently, so its
-        // steps only ever go one way. It is the likeliest explanation for a
-        // share documented as 720p being reported arriving at roughly 360p,
-        // which is two of those steps.
+        // `is_screencast` turns the quality scaler off, and the quality scaler
+        // is what steps the *resolution* down when the encoder's QP stays high.
+        // Turning it off sounds like a straight win after a 720p share was
+        // reported arriving at roughly 360p. But it also puts VP8 into
+        // `ScreenshareLayers`, whose base temporal layer targets about 5 fps,
+        // and VP8 is entirely possible between this app and a Chrome peer. Given
+        // that the standing complaint about this feature is now "12 fps is
+        // unusable", a flag that can quietly produce 5 is not one to reach for.
         //
-        // But `degradationPreference = .maintainResolution` in `tuneVideoSenders`
-        // turns the same scaler off, by the same code path, without the rest of
-        // what the flag drags in: `is_screencast` also puts VP8 into
-        // `ScreenshareLayers`, whose base temporal layer targets about 5 fps.
-        // Between this app and a Chrome peer VP8 is entirely possible, so the
-        // flag risks trading a resolution collapse for a framerate one, and
-        // neither can be told apart from the other without a phone in hand.
-        // The preference is the smaller instrument that does the same job.
+        // So the arrangement is the web client's, exactly: an ordinary source,
+        // `maintainFramerate`, a pinned `scaleResolutionDownBy`, and a mesh
+        // budget generous enough that the encoder can hold the size it was told
+        // to. The scaler stays on and is allowed to shrink the picture below the
+        // label when the link truly cannot carry it, which is the trade this
+        // product has now chosen twice.
         let source = factory.videoSource()
         let capturer = RTCVideoCapturer(delegate: source)
         // Distinct from `pqp-camera-…` and unique per share: the id IS the
@@ -587,7 +606,7 @@ actor VoiceClient {
                 screenCaptureLines = lines
                 let encoding = screenEncoding()
                 for sender in screenSenders.values {
-                    Self.apply(encoding, to: sender, preference: .maintainResolution)
+                    Self.apply(encoding, to: sender, preference: .maintainFramerate)
                 }
             }
         }

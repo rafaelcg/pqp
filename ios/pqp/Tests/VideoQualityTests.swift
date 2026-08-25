@@ -172,6 +172,63 @@ final class VideoQualityTests: XCTestCase {
         XCTAssertEqual(VideoQuality.p360.lines, 360)
     }
 
+    // MARK: - The mesh budget
+
+    /// A mesh uploads a copy per peer, so a per-peer rate multiplies by the
+    /// room. Without the split a six-way call asks one domestic uplink for six
+    /// times the chosen ceiling and gets congestion collapse rather than video.
+    func testTheBudgetIsSplitAcrossTheRoom() {
+        let alone = meshScreenBitrate(peerCount: 1, quality: .p1080)
+        let crowded = meshScreenBitrate(peerCount: 4, quality: .p1080)
+        XCTAssertGreaterThan(alone, crowded)
+        XCTAssertEqual(crowded, 5_000_000 / 4)
+    }
+
+    /// The chosen ceiling is the outermost bound. An empty room is not a licence
+    /// to overrule somebody who deliberately picked 480p.
+    func testAnEmptyRoomCannotOverruleTheChoice() {
+        XCTAssertEqual(
+            meshScreenBitrate(peerCount: 1, quality: .p480),
+            VideoQuality.p480.screenBitrate
+        )
+        XCTAssertEqual(
+            meshScreenBitrate(peerCount: 0, quality: .p360),
+            VideoQuality.p360.screenBitrate
+        )
+    }
+
+    /// The floor lifts the *share*, never the chosen ceiling, so a crowded room
+    /// cannot divide its way down to something unwatchable and cannot spend more
+    /// than the user asked for either.
+    func testTheFloorLiftsTheShareAndNotTheChoice() {
+        // 5 Mbps over twenty peers is 250 kbps, which the floor lifts to 600.
+        XCTAssertEqual(meshScreenBitrate(peerCount: 20, quality: .p1080), 600_000)
+        // But the same crowd cannot lift somebody who chose 360p above 360p.
+        XCTAssertEqual(
+            meshScreenBitrate(peerCount: 20, quality: .p360),
+            VideoQuality.p360.screenBitrate
+        )
+    }
+
+    // MARK: - The frame rate
+
+    /// THE ONE RAFAEL ASKED FOR. 12 was reported unusable from a phone; a
+    /// default user has to get 30, and every consumer of this number derives
+    /// from it rather than repeating it, so this single assertion covers the
+    /// wire clock, the source adaptation and the sender's `maxFramerate`.
+    func testTheScreenRunsAtThirty() {
+        XCTAssertEqual(ScreenShareWire.defaultFrameRate, 30)
+    }
+
+    /// The rungs trade rate against size, which is what makes the picker a real
+    /// answer for somebody whose link or phone cannot carry 720p30 rather than a
+    /// reason to go back to sampling everybody at 12 Hz.
+    func testALowerRungAtThirtyCostsAboutWhatTheOldRateCostAt720p() {
+        let oldPixelRate = 1280 * 720 * 12
+        let newPixelRate = 854 * 480 * Int(ScreenShareWire.defaultFrameRate)
+        XCTAssertEqual(Double(newPixelRate) / Double(oldPixelRate), 1, accuracy: 0.2)
+    }
+
     // MARK: - Storage
 
     /// Device-local and remembered, which is the whole contract with the
