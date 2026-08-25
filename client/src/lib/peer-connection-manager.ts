@@ -3,6 +3,7 @@ import {
   cameraBitrateFor,
   DEFAULT_VIDEO_QUALITY,
   screenBitrateFor,
+  screenScaleFactor,
   type VideoQuality,
 } from "./video-quality";
 import {
@@ -401,6 +402,23 @@ async function tuneCameraSender(
  * Failure is swallowed on purpose. `setParameters` rejects on browsers that do
  * not accept one of these fields, and a share that runs on the old defaults is
  * enormously better than one that throws while starting.
+ *
+ * THE SIZE IS SET HERE TOO, AND IT HAS TO BE. Measured at the receiving end of
+ * a real voice channel, a ceiling on its own never changed the picture's size:
+ * every rung below 1080p arrived as 1920x1080, because once the encoder has
+ * ramped up to the capture size it stays there and pays a tight allowance in
+ * artefacts rather than in pixels. That is "I picked 360p and it did not look
+ * like 360p", exactly as reported. `scaleResolutionDownBy` is the only knob
+ * that makes a label mean a size, and it is computed from the track's own
+ * dimensions because it is a divisor: see `screenScaleFactor`.
+ *
+ * `maintain-framerate` SURVIVES THE CHANGE, deliberately. The argument for it
+ * has always been the content: people share games and films here, and holding
+ * resolution while the framerate collapses turns a film into a slideshow. What
+ * changes is its scope. The chosen rung is now the *starting* size rather than
+ * a ceiling the encoder happened to ignore, so this preference only governs
+ * what happens *below* the label when the link cannot carry even that, which is
+ * the one direction a viewer forgives.
  */
 async function tuneScreenSender(
   sender: RTCRtpSender | null,
@@ -419,9 +437,18 @@ async function tuneScreenSender(
       params.encodings = [{}];
     }
     params.degradationPreference = "maintain-framerate";
+    // Read per call rather than once per share: a surface switch or a resized
+    // window changes the capture under a live sender, and every re-tune (a
+    // joiner, a leaver, a new choice) is then a chance to correct the divisor.
+    const captureHeight = sender.track?.getSettings?.().height ?? null;
+    const scale = screenScaleFactor(quality, captureHeight);
     for (const encoding of params.encodings) {
       encoding.maxBitrate = meshScreenBitrate(peerCount, quality);
       encoding.maxFramerate = SCREEN_MAX_FRAMERATE;
+      // Written on every rung including 1080p and auto, where it is 1: a
+      // divisor only ever set on the way down would make the menu a one-way
+      // trip, leaving a 3x scale in place after somebody chose 1080p again.
+      encoding.scaleResolutionDownBy = scale;
     }
     await sender.setParameters(params);
   } catch {

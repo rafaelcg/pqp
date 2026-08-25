@@ -893,7 +893,7 @@
   "settings.voice.outputUnsupported": "Escolher a saída de áudio não funciona neste navegador.",
   "settings.voice.outputVolume": "Volume de saída",
   "settings.voice.videoQuality": "Qualidade da câmera e da tela",
-  "settings.voice.videoQuality.hint": "Uma escolha só, valendo para a sua câmera e para o compartilhamento de tela. Automático pede 720p da câmera e deixa a conexão decidir a partir daí. Uma escolha fixa pede aquele tamanho e também gasta mais com a tela compartilhada. Sua tela é sempre capturada em 1080p; um ajuste mais alto deixa passar mais dela. A imagem ainda cai quando o link não dá conta.",
+  "settings.voice.videoQuality.hint": "Uma escolha só, valendo para a sua câmera e para o compartilhamento de tela. Automático pede 720p da câmera e deixa a conexão decidir a partir daí. Uma escolha fixa pede aquele tamanho e envia a tela compartilhada nesse tamanho também. Sua tela continua sendo capturada em 1080p, escolha o que escolher, então voltar o ajuste para cima não custa nada. A imagem ainda cai abaixo da sua escolha quando o link não dá conta.",
   "settings.voice.videoQuality.auto": "Automático",
   "settings.voice.videoQuality.1080p": "1080p",
   "settings.voice.videoQuality.720p": "720p",

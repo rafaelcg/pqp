@@ -169,6 +169,8 @@ interface SenderReport {
   /** Read back from the sender, not from what we asked for. */
   maxBitrate: number | null;
   maxFramerate: number | null;
+  /** The divisor between the capture and what the encoder actually sends. */
+  scaleResolutionDownBy: number | null;
   degradationPreference: string | null;
   /** What the peer connection says it is encoding, when it has encoded any. */
   rtpWidth: number | null;
@@ -278,6 +280,7 @@ async function videoSenders(page: Page): Promise<SenderReport[]> {
           contentHint: track.contentHint ?? "",
           maxBitrate: encoding?.maxBitrate ?? null,
           maxFramerate: encoding?.maxFramerate ?? null,
+          scaleResolutionDownBy: encoding?.scaleResolutionDownBy ?? null,
           degradationPreference: params.degradationPreference ?? null,
           rtpWidth: rtp?.frameWidth ?? null,
           rtpHeight: rtp?.frameHeight ?? null,
@@ -493,6 +496,42 @@ async function expectTargetBitrate(
 const PIXELS = (report: SenderReport) =>
   (report.width ?? 0) * (report.height ?? 0);
 
+/**
+ * Wait for the capture to reach a size, rather than reading it once.
+ *
+ * FLAKE, SEEN ON CI (run 32875666762, on a PR that touched two iOS plists and
+ * nothing else): "360p: capture shrank, expected < 921600, received 921600",
+ * which is exactly the 1280x720 the camera was leaving. A quality change is two
+ * independent async operations, `applyConstraints` on the track and
+ * `setParameters` on the sender, and `senderFor` waits on the second. So the
+ * old code waited for the *ceiling* to land and then asserted on the
+ * *dimensions*, which `getSettings()` keeps reporting at the previous size
+ * until the capture pipeline produces a frame at the new one. Slower hardware
+ * simply widens that window.
+ *
+ * `settleEncoder` is not the fix either, despite sitting one line below: it
+ * waits on `framesEncoded` advancing, which says nothing about what size those
+ * frames are. Polling the number actually being asserted is the fix.
+ */
+async function expectCapturePixels(
+  page: Page,
+  role: "camera" | "screen",
+  reached: (pixels: number) => boolean,
+  label: string,
+): Promise<SenderReport> {
+  let last: SenderReport | undefined;
+  await expect
+    .poll(
+      async () => {
+        last = await senderFor(page, role);
+        return reached(PIXELS(last));
+      },
+      { timeout: 20_000, message: label },
+    )
+    .toBe(true);
+  return last!;
+}
+
 test("a DM call's camera encoder follows the quality menu", async ({
   page,
   browser,
@@ -539,7 +578,12 @@ test("a DM call's camera encoder follows the quality menu", async ({
     console.log("[quality] camera 360p:", JSON.stringify(low));
     expect(low.maxBitrate, "360p: camera ceiling").toBe(400_000);
     expect(low.trackId, "360p: same track, no re-capture").toBe(auto.trackId);
-    expect(PIXELS(low), "360p: capture shrank").toBeLessThan(PIXELS(auto));
+    const shrunk = await expectCapturePixels(
+      page,
+      "camera",
+      (pixels) => pixels < PIXELS(auto),
+      "360p: capture shrank",
+    );
     await settleEncoder(page, "camera");
 
     // ---- and back up to the top ----------------------------------------
@@ -549,8 +593,11 @@ test("a DM call's camera encoder follows the quality menu", async ({
     console.log("[quality] camera 1080p:", JSON.stringify(high));
     expect(high.maxBitrate, "1080p: camera ceiling").toBe(2_500_000);
     expect(high.trackId, "1080p: same track, no re-capture").toBe(auto.trackId);
-    expect(PIXELS(high), "1080p: capture grew back").toBeGreaterThan(
-      PIXELS(low),
+    await expectCapturePixels(
+      page,
+      "camera",
+      (pixels) => pixels > PIXELS(shrunk),
+      "1080p: capture grew back",
     );
     await settleEncoder(page, "camera");
 
@@ -622,10 +669,19 @@ test("a DM call's screen encoder follows the quality menu", async ({
     // eslint-disable-next-line no-console
     console.log("[quality] screen 360p:", JSON.stringify(low));
     expect(low.maxBitrate, "360p: screen ceiling").toBe(600_000);
-    // Capture size is deliberately NOT on this ladder: a screen grabbed small
-    // has lost the pixels permanently. The bitrate is the reversible lever.
+    // CAPTURE size is deliberately NOT on this ladder: a screen grabbed small
+    // has lost the pixels permanently, and the encoder cannot invent them back
+    // in the moments when the link has room to spare.
     expect(low.width, "360p: capture size is unchanged").toBe(auto.width);
     expect(low.height, "360p: capture size is unchanged").toBe(auto.height);
+    // ENCODED size is, and this is the half that was missing. A ceiling with no
+    // divisor behind it left every rung sending 1920x1080 and simply spending
+    // fewer bits on it, measured at the receiver in
+    // `screen-quality-received.spec.ts`.
+    expect(low.scaleResolutionDownBy, "360p: 1080 lines divided to 360").toBe(
+      3,
+    );
+    expect(auto.scaleResolutionDownBy, "auto: pins no size at all").toBe(1);
     await expectTargetBitrate(page, "screen", 600_000, "360p");
   } finally {
     await watcher.context.close();

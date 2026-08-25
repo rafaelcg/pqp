@@ -92,11 +92,23 @@ class FakePeerConnection {
   }
 }
 
-const videoTrack = (id: string) => ({ id, kind: "video" });
+/**
+ * A video track that can be asked how big it is.
+ *
+ * `getSettings` is here because the screen tuning now has to divide the capture
+ * down to the size the menu names, and the divisor can only come from the
+ * track's own dimensions: a hard-coded one would mean 360p on a 1080p monitor
+ * and 480p on a 1440p one.
+ */
+const videoTrack = (id: string, height = 1080) => ({
+  id,
+  kind: "video",
+  getSettings: () => ({ width: Math.round((height * 16) / 9), height }),
+});
 
 /** A stream carrying exactly one video track, which is all these paths read. */
-function fakeStream(id: string): MediaStream {
-  const track = videoTrack(id);
+function fakeStream(id: string, height = 1080): MediaStream {
+  const track = videoTrack(id, height);
   return {
     id,
     getTracks: () => [track],
@@ -394,6 +406,62 @@ describe("the quality choice reaches the screen sender", () => {
     expect(screenSenders()[0]!.setParameters.mock.calls.length).toBe(
       before + 1,
     );
+  });
+
+  it("divides the picture down to the size the label names", async () => {
+    // THE REPORTED BUG. Measured at the receiver in a server voice channel:
+    // every rung below 1080p arrived as 1920x1080, because the choice moved
+    // `maxBitrate` and nothing else. A ceiling on its own does not make a
+    // smaller picture, it makes the same picture worse, which is exactly what
+    // "I picked 360p and it did not look like 360p" describes.
+    const manager = createPeerConnectionManager("z-local", () => {});
+    manager.connectToPeer("a-remote");
+    await manager.setLocalScreenStream(fakeStream("screen"));
+    const sender = screenSenders()[0]!;
+
+    manager.setScreenQuality("360p");
+    await Promise.resolve();
+
+    expect(lastParams(sender)?.encodings[0]?.scaleResolutionDownBy).toBeCloseTo(
+      3,
+      2,
+    );
+    // And no re-capture to do it, so the OS picker never reappears.
+    expect(sender.replaceTrack).not.toHaveBeenCalled();
+  });
+
+  it("divides by what this screen is, not by a number", async () => {
+    // A 1440p monitor asked for 360p needs a divisor of 4 where a 1080p one
+    // needs 3. Same label, same picture, different hardware.
+    const manager = createPeerConnectionManager("z-local", () => {});
+    manager.setScreenQuality("360p");
+    manager.connectToPeer("a-remote");
+    await manager.setLocalScreenStream(fakeStream("screen", 1440));
+
+    expect(
+      lastParams(screenSenders()[0]!)?.encodings[0]?.scaleResolutionDownBy,
+    ).toBeCloseTo(4, 2);
+  });
+
+  it("gives the full picture back when the choice goes back up", async () => {
+    // The failure this guards is a divisor that is only ever written on the way
+    // down: 360p then 1080p would leave a 3x scale in place forever, and the
+    // menu would become a one-way trip.
+    const manager = createPeerConnectionManager("z-local", () => {});
+    manager.connectToPeer("a-remote");
+    await manager.setLocalScreenStream(fakeStream("screen"));
+    const sender = screenSenders()[0]!;
+
+    manager.setScreenQuality("360p");
+    await Promise.resolve();
+    manager.setScreenQuality("1080p");
+    await Promise.resolve();
+
+    expect(lastParams(sender)?.encodings[0]?.scaleResolutionDownBy).toBe(1);
+
+    manager.setScreenQuality("auto");
+    await Promise.resolve();
+    expect(lastParams(sender)?.encodings[0]?.scaleResolutionDownBy).toBe(1);
   });
 
   it("leaves a working share when the encoder refuses the parameters", async () => {

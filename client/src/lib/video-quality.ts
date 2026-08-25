@@ -91,16 +91,23 @@ export function cameraProfileFor(quality: VideoQuality): CameraProfile {
  * 1080p30 costs roughly twice as much. Handing the screen the camera's ladder
  * would keep the label honest and the picture blurry, which is the bug.
  *
- * WHY CAPTURE SIZE IS NOT ON THIS LADDER. The screen is always captured at
- * 1080p30 (`SCREEN_CAPTURE_OPTIONS` in `use-voice.ts`) whatever is chosen
+ * WHY CAPTURE SIZE IS STILL NOT ON THIS LADDER. The screen is always captured
+ * at 1080p30 (`SCREEN_CAPTURE_OPTIONS` in `use-voice.ts`) whatever is chosen
  * here, and that is deliberate. Capture size is a floor you cannot climb back
  * up: a screen grabbed at 640x360 has lost the pixels that made the text
  * legible, permanently, even in the moments when the link has room to spare.
- * The bitrate ceiling is the reversible lever. Under
- * `degradationPreference: "maintain-framerate"` the encoder scales 1080p down
- * on its own when the ceiling is tight and scales it back up the moment it is
- * not, continuously, which is the behaviour a person actually wants from a
- * setting called "quality".
+ * The *encoder* is where the size is chosen, which is what `screenScaleFactor`
+ * below is for, and it is revisable in both directions at any moment.
+ *
+ * THE BITRATE CEILING WAS ONCE THE WHOLE ANSWER, AND IT WAS NOT ENOUGH. This
+ * file used to argue that a tight ceiling plus
+ * `degradationPreference: "maintain-framerate"` would make the encoder scale
+ * 1080p down on its own. Measured at the receiver in a real voice channel, it
+ * does not: once the encoder has ramped up to the capture size it stays there
+ * and spends the smaller allowance on a worse-looking 1920x1080, so picking
+ * 360p bought a blocky full-size picture rather than a clean small one. The
+ * ladder therefore names a size as well as a rate, and the size is pinned with
+ * `scaleResolutionDownBy`.
  */
 const SCREEN_BITRATES: Record<Exclude<VideoQuality, "auto">, number> = {
   "1080p": 4_000_000,
@@ -135,6 +142,71 @@ const AUTO_SCREEN_BITRATE = 3_000_000;
  */
 export function screenBitrateFor(quality: VideoQuality): number {
   return quality === "auto" ? AUTO_SCREEN_BITRATE : SCREEN_BITRATES[quality];
+}
+
+/**
+ * The number of picture lines each label promises the far end.
+ *
+ * A label is a promise about what the viewer receives, so these are the heights
+ * `scaleResolutionDownBy` is solved for. Height rather than width because that
+ * is what "360p" has always meant, and because it is the dimension that stays
+ * meaningful across a 16:9 monitor, an ultrawide and a shared portrait window.
+ */
+const SCREEN_HEIGHTS: Record<Exclude<VideoQuality, "auto">, number> = {
+  "1080p": 1080,
+  "720p": 720,
+  "480p": 480,
+  "360p": 360,
+};
+
+/**
+ * What the screen is asked for, and therefore the best guess at what a capture
+ * that has not reported its size yet will turn out to be.
+ *
+ * Kept next to the ladder rather than imported from `use-voice.ts` to avoid a
+ * cycle; the two must agree, and `video-quality.test.ts` says so out loud.
+ */
+export const SCREEN_CAPTURE_HEIGHT = 1080;
+
+/**
+ * How much to divide the captured picture by so it arrives at the size the menu
+ * names.
+ *
+ * WHY A DIVISOR AND NOT A SIZE. `RTCRtpEncodingParameters` only offers
+ * `scaleResolutionDownBy`, which is a ratio applied to whatever the track is
+ * currently producing. That is why this takes the capture's own height: a
+ * hard-coded 3 is 360p on a 1080p monitor and 480p on a 1440p one, and the same
+ * label has to mean the same picture on both. On this codebase the capture is
+ * clamped to 1080 lines, but a smaller shared window is entirely normal and a
+ * future clamp is one edit away, so the height is read rather than assumed.
+ *
+ * NEVER BELOW 1. A divisor under one is an upscale: it spends bitrate inventing
+ * pixels that carry no detail. Somebody sharing a 720-line window and choosing
+ * 1080p gets their window, unchanged, which is the honest reading of the label.
+ *
+ * AUTO PINS NOTHING, deliberately. It is the one rung that names no size, so it
+ * leaves the encoder free to climb and fall with the link, which is the whole
+ * meaning of the word and the behaviour every default should have.
+ */
+export function screenScaleFactor(
+  quality: VideoQuality,
+  captureHeight?: number | null,
+): number {
+  if (quality === "auto") {
+    return 1;
+  }
+  const target = SCREEN_HEIGHTS[quality];
+  // A capture reports no size at all in its first moments. Assuming the size we
+  // asked for beats assuming "no scaling", which would ship 1080p to somebody
+  // who chose 360p until something happened to re-tune the sender.
+  const height =
+    captureHeight && captureHeight > 0 ? captureHeight : SCREEN_CAPTURE_HEIGHT;
+  if (height <= target) {
+    return 1;
+  }
+  // Two decimals: enough for every rung on every common panel, and short of the
+  // float noise that would make a re-tune look like a change when it is not.
+  return Math.round((height / target) * 100) / 100;
 }
 
 /**
