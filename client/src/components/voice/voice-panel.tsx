@@ -33,6 +33,8 @@ import {
   type VoiceAvatarSize,
 } from "@/components/voice/voice-avatar";
 import {
+  presentersToAsk,
+  requestsOfUs,
   showsVideoQualityControl,
   videoQualityMenuOpen,
 } from "@/components/voice/video-quality-control";
@@ -435,6 +437,15 @@ interface VoicePanelProps {
   /** Absent on a build with no camera support; the button is then not rendered. */
   onToggleCamera?: () => void;
   onVideoQualityChange?: (quality: VideoQuality) => void;
+  /**
+   * Ask one presenter for a size, or withdraw with `auto`.
+   *
+   * Per-peer by construction: the frame is addressed, and the presenter
+   * answers it on the sender they hold for us alone. Absent on a build or a
+   * transport where asking makes no sense, in which case the menu simply does
+   * not offer it.
+   */
+  onRequestScreenQuality?: (peerId: string, quality: VideoQuality) => void;
 }
 
 export function VoicePanel({
@@ -473,6 +484,7 @@ export function VoicePanel({
   onStopScreenShare,
   onToggleCamera,
   onVideoQualityChange,
+  onRequestScreenQuality,
 }: VoicePanelProps) {
   const { t } = useTranslation();
   const showWarning = !usingSfu && remotePeers.length >= MESH_VOICE_WARNING;
@@ -854,6 +866,23 @@ export function VoicePanel({
                   onOpenChange={setQualityRequested}
                   onChange={(quality) => onVideoQualityChange?.(quality)}
                   isSendingVideo={isCameraOn || isSharingScreen}
+                  presenters={presentersToAsk(remotePeers)}
+                  requestsOfUs={requestsOfUs(remotePeers)}
+                  onRequestQuality={
+                    onRequestScreenQuality
+                      ? (quality) => {
+                          // Fanned out here rather than in the manager: the
+                          // frame is per-peer, and a "send to everyone
+                          // presenting" method would be one more place that
+                          // could quietly grow into a broadcast.
+                          for (const presenter of presentersToAsk(
+                            remotePeers,
+                          )) {
+                            onRequestScreenQuality(presenter.peerId, quality);
+                          }
+                        }
+                      : undefined
+                  }
                   buttonClassName="h-9 w-9 shrink-0"
                   iconClassName="h-4 w-4"
                 />

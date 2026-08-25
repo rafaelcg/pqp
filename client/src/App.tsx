@@ -3269,6 +3269,9 @@ function MainAppContent({
           onToggleMute={() => voice.toggleMute()}
           onToggleCamera={() => void voice.toggleCamera()}
           onVideoQualityChange={handleVideoQualityChange}
+          onRequestScreenQuality={(peerId, quality) =>
+            voice.requestScreenQualityFrom(peerId, quality)
+          }
           onStartScreenShare={() => void voice.startScreenShare()}
           onStopScreenShare={() => void voice.stopScreenShare()}
           onFocusScreenShare={(peerId) => voice.focusScreenShare(peerId)}
@@ -3881,6 +3884,13 @@ function MainAppContent({
                 // dialog use, so there is one stored choice and three views of
                 // it rather than three settings that drift.
                 onVideoQualityChange={handleVideoQualityChange}
+                // Not stored anywhere. A request is a thing you say to one
+                // person for the duration of one connection, and persisting it
+                // would mean a click tonight quietly costing somebody their
+                // uplink in every call next month.
+                onRequestScreenQuality={(peerId, quality) =>
+                  voice.requestScreenQualityFrom(peerId, quality)
+                }
               />
             </div>
             <div className="flex min-h-0 flex-1 flex-col">

@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   callControlsMayIdle,
+  presentersToAsk,
+  requestsOfUs,
   showsVideoQualityControl,
   videoQualityMenuOpen,
+  type QualityPeer,
 } from "./video-quality-control";
 
 describe("showsVideoQualityControl", () => {
@@ -177,5 +180,82 @@ describe("callControlsMayIdle", () => {
     expect(callControlsMayIdle({ ...base, autoHide: false })).toBe(false);
     expect(callControlsMayIdle({ ...base, anyVideo: false })).toBe(false);
     expect(callControlsMayIdle({ ...base, collapsed: true })).toBe(false);
+  });
+});
+
+/**
+ * Who the asking half of the menu is about, in each direction.
+ *
+ * Both lists are derived from what has actually arrived rather than from the
+ * roster's claims, and both have a case where the obvious implementation says
+ * something false: a peer who is in `screenSharePeerIds` but whose stream has
+ * not turned up is not somebody you can ask, and a withdrawn request is not a
+ * request for `auto`.
+ */
+describe("presentersToAsk", () => {
+  const peer = (over: Partial<QualityPeer>): QualityPeer => ({
+    peerId: "p1",
+    displayName: "Ana",
+    screenStream: null,
+    ...over,
+  });
+  const stream = {} as MediaStream;
+
+  it("lists only the peers whose screen is really arriving", () => {
+    const rows = presentersToAsk([
+      peer({ peerId: "p1", screenStream: stream }),
+      peer({ peerId: "p2", screenStream: null }),
+    ]);
+    expect(rows.map((row) => row.peerId)).toEqual(["p1"]);
+  });
+
+  it("reports auto for a presenter nobody has asked anything of", () => {
+    // Same value as a withdrawal on purpose: "I have not asked" and "never
+    // mind" are the same state, and giving them two representations is how a
+    // tick ends up next to a rung nobody chose.
+    const [row] = presentersToAsk([peer({ screenStream: stream })]);
+    expect(row!.ourRequest).toBe("auto");
+  });
+
+  it("carries our standing ask through", () => {
+    const [row] = presentersToAsk([
+      peer({ screenStream: stream, ourScreenQualityRequest: "1080p" }),
+    ]);
+    expect(row!.ourRequest).toBe("1080p");
+  });
+});
+
+describe("requestsOfUs", () => {
+  const peer = (over: Partial<QualityPeer>): QualityPeer => ({
+    peerId: "p1",
+    displayName: "Ana",
+    screenStream: null,
+    ...over,
+  });
+
+  it("names who asked and for what", () => {
+    const rows = requestsOfUs([peer({ requestedScreenQuality: "1080p" })]);
+    expect(rows).toEqual([
+      { peerId: "p1", displayName: "Ana", quality: "1080p" },
+    ]);
+  });
+
+  it("says nothing about a peer who has asked for nothing", () => {
+    expect(requestsOfUs([peer({ requestedScreenQuality: null })])).toEqual([]);
+    expect(requestsOfUs([peer({})])).toEqual([]);
+    // A withdrawal reaches the manager as `auto` and is stored as null, but a
+    // peer on an older build could put `auto` on the wire as a value. "Ana
+    // asked for Auto" is a sentence about nothing.
+    expect(requestsOfUs([peer({ requestedScreenQuality: "auto" })])).toEqual([]);
+  });
+
+  it("does not require the asker to be sending us anything", () => {
+    // Asymmetric on purpose, and it is not an oversight: somebody watching your
+    // share with their own camera off is the ordinary case, and they are
+    // exactly the person who asks.
+    const rows = requestsOfUs([
+      peer({ screenStream: null, requestedScreenQuality: "720p" }),
+    ]);
+    expect(rows).toHaveLength(1);
   });
 });

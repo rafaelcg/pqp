@@ -2,6 +2,7 @@ import type { ClientRelayMessage } from "@pqp/shared";
 import {
   cameraBitrateFor,
   DEFAULT_VIDEO_QUALITY,
+  effectiveScreenQuality,
   screenBitrateFor,
   screenScaleFactor,
   type VideoQuality,
@@ -43,6 +44,19 @@ export interface RemotePeer {
   userId?: string;
   displayName?: string;
   avatarUrl?: string | null;
+  /**
+   * The size this peer has asked US to send them, or null if they have not.
+   *
+   * On the presenter's copy of the roster this is "what they want"; it is
+   * surfaced so the presenter can see who asked for what rather than having
+   * their upload quietly moved by somebody else's click.
+   */
+  requestedScreenQuality?: VideoQuality | null;
+  /**
+   * The size WE have asked this peer for, or null. The watcher's own copy of
+   * their own request, so the menu can show which rung is pending.
+   */
+  ourScreenQualityRequest?: VideoQuality | null;
 }
 
 export type SignalingSend = (message: ClientRelayMessage) => void;
@@ -153,6 +167,17 @@ interface ManagedPeer {
    * see `setPeerSharingScreen` for why nothing else can.
    */
   remoteSharingScreen: boolean;
+  /**
+   * What this peer asked us to send them, and what we asked them for.
+   *
+   * Both live on the peer rather than in a map beside it so that they die with
+   * the connection. That is deliberate and is the request's whole lifetime: a
+   * rejoin mints a fresh peer id, so "make it bigger" costs a presenter their
+   * uplink for one call and not forever. Somebody who wants it every time can
+   * ask again, which takes one click and is a decision rather than a residue.
+   */
+  requestedScreenQuality: VideoQuality | null;
+  ourScreenQualityRequest: VideoQuality | null;
   /** Our own outgoing video senders on this connection, one per purpose —
    *  looked up by role, never by `track.kind`, because both are video. */
   screenSender: RTCRtpSender | null;
@@ -215,6 +240,20 @@ export interface PeerConnectionManager {
    * the share never blinks and the picker never reopens.
    */
   setScreenQuality(quality: VideoQuality): void;
+  /**
+   * Ask ONE peer to send their screen at a different size.
+   *
+   * Addressed to a peer rather than broadcast because it is answered per-peer:
+   * the presenter holds a separate sender for every mesh peer, so this raises
+   * the asker's copy alone. Null withdraws the request and lets the presenter
+   * fall back to whatever they would have done anyway.
+   */
+  requestScreenQualityFrom(
+    remotePeerId: string,
+    quality: VideoQuality | null,
+  ): void;
+  /** A peer has asked us for a size. Record it and re-tune their sender only. */
+  handleScreenQualityRequest(from: string, quality: VideoQuality | null): void;
   /**
    * Record which of a peer's video streams is their camera (from the roster).
    * Null means "camera off" — any remaining video is treated as screen share.
@@ -484,8 +523,20 @@ export function createPeerConnectionManager(
       return;
     }
     for (const peer of peers.values()) {
-      void tuneScreenSender(peer.screenSender, peerCount, screenQuality);
+      void tuneScreenSender(peer.screenSender, peerCount, qualityFor(peer));
     }
+  }
+
+  /**
+   * The size this one peer's copy should run at.
+   *
+   * The only place the presenter's choice and a watcher's request meet, and it
+   * is per-peer because the senders are per-peer: honouring Ana's request moves
+   * Ana's sender and nothing else in the room. See `effectiveScreenQuality` for
+   * the rule and for why a deliberate rung is never overruled.
+   */
+  function qualityFor(peer: ManagedPeer): VideoQuality {
+    return effectiveScreenQuality(screenQuality, peer.requestedScreenQuality);
   }
 
   /**
@@ -534,6 +585,8 @@ export function createPeerConnectionManager(
       userId: peer.userId,
       displayName: peer.displayName,
       avatarUrl: peer.avatarUrl,
+      requestedScreenQuality: peer.requestedScreenQuality,
+      ourScreenQualityRequest: peer.ourScreenQualityRequest,
     }));
     stateHandler?.(remotePeers);
   }
@@ -784,6 +837,8 @@ export function createPeerConnectionManager(
       remoteCameraStreamId: null,
       remoteScreenAudioStreamId: null,
       remoteSharingScreen: false,
+      requestedScreenQuality: null,
+      ourScreenQualityRequest: null,
       screenSender: null,
       cameraSender: null,
       screenAudioSender: null,
@@ -857,7 +912,11 @@ export function createPeerConnectionManager(
         // Somebody joining mid-share gets the same treatment as everybody who
         // was already here, and the room just grew, so this is also the moment
         // the existing senders need their share of the budget recomputed.
-        void tuneScreenSender(managed.screenSender, peers.size + 1, screenQuality);
+        void tuneScreenSender(
+          managed.screenSender,
+          peers.size + 1,
+          qualityFor(managed),
+        );
         // `+ 1` for the same reason: this runs before the caller files the new
         // peer, and the room everyone is about to be in is the one to budget
         // for.
@@ -1188,7 +1247,7 @@ export function createPeerConnectionManager(
             peer.screenSender = peer.pc.addTrack(nextVideo, stream!);
             needsOffer = true;
           }
-          await tuneScreenSender(peer.screenSender, peers.size, screenQuality);
+          await tuneScreenSender(peer.screenSender, peers.size, qualityFor(peer));
         } else if (peer.screenSender) {
           peer.pc.removeTrack(peer.screenSender);
           peer.screenSender = null;
@@ -1250,6 +1309,49 @@ export function createPeerConnectionManager(
       }
       cameraMaxBitrate = maxBitrate;
       retuneAllCameraSenders();
+    },
+
+    requestScreenQualityFrom(
+      remotePeerId: string,
+      quality: VideoQuality | null,
+    ) {
+      const peer = peers.get(remotePeerId);
+      if (!peer || peer.ourScreenQualityRequest === quality) {
+        return;
+      }
+      peer.ourScreenQualityRequest = quality;
+      send({
+        type: "screen-quality-request",
+        from: localPeerId,
+        to: remotePeerId,
+        // Null travels as `auto` rather than as its own withdrawal frame: the
+        // presenter's fallback when nobody has asked IS their own setting, and
+        // `effectiveScreenQuality` already treats a request of `auto` as no
+        // opinion. One shape on the wire, one rule at the far end.
+        quality: quality ?? DEFAULT_VIDEO_QUALITY,
+      });
+      emitState();
+    },
+
+    handleScreenQualityRequest(from: string, quality: VideoQuality | null) {
+      const peer = peers.get(from);
+      if (!peer) {
+        return;
+      }
+      // `auto` is the withdrawal, per the note above.
+      const next = quality === DEFAULT_VIDEO_QUALITY ? null : quality;
+      if (peer.requestedScreenQuality === next) {
+        return;
+      }
+      peer.requestedScreenQuality = next;
+      // ONE sender, not all of them. Retuning the room here is the bug this
+      // whole design exists to avoid: it would let one watcher's click move
+      // everybody else's picture, which is the objection to viewer-initiated
+      // quality and the reason the answer is per-peer.
+      if (localScreenStream) {
+        void tuneScreenSender(peer.screenSender, peers.size, qualityFor(peer));
+      }
+      emitState();
     },
 
     setScreenQuality(quality: VideoQuality) {

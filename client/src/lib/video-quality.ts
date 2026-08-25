@@ -235,11 +235,86 @@ export function cameraBitrateFor(quality: VideoQuality): number {
   return cameraProfileFor(quality).maxBitrate;
 }
 
+/**
+ * What one peer's screen sender should actually run at, given what the
+ * presenter chose and what that one watcher asked for.
+ *
+ * THE PROBLEM THIS SOLVES. A viewer cannot raise the quality they receive.
+ * `scaleResolutionDownBy` and `maxBitrate` live on an `RTCRtpSender`, and
+ * `RTCRtpReceiver` has no counterpart to either, so what the presenter encodes
+ * is what arrives. The only route from "this looks soft" to a bigger picture
+ * runs through the presenter's machine, which is what the request frame is
+ * for. This function is the presenter's answer to it.
+ *
+ * PER-PEER, AND THAT IS THE WHOLE REASON IT IS SAFE. In a full mesh the
+ * presenter holds a separate `RTCRtpSender` for every peer, so granting Ana's
+ * request raises **Ana's copy only** and Bruno keeps exactly what he had. The
+ * obvious objection to viewer-initiated quality — "in a call with three
+ * watchers, one person asking for 1080p spends the sender's uplink on
+ * everybody's behalf, and the sender may be on a phone" — is therefore not a
+ * thing that can happen here. It would be the right objection to an SFU, or to
+ * any design that took a single maximum across the room, which is why neither
+ * is what this does.
+ *
+ * MULTIPLE REQUESTS CANNOT CONFLICT, for the same reason. Two watchers asking
+ * for two different sizes each get their own, out of their own sender. There
+ * is no maximum to take and no tie to break, so there is no rule here about
+ * one, and inventing one would be inventing a problem.
+ *
+ * THE PRESENTER'S EXPLICIT CHOICE ALWAYS WINS. `auto` is what everybody has
+ * who has never opened the menu: it means "no opinion, do something sensible",
+ * and a watcher's opinion is a perfectly good thing to fill that with. Any
+ * other rung was typed by a person who was deciding how much of their upload
+ * to spend, frequently on a phone or a tethered connection, and a stranger in
+ * the call does not get to overrule that. So a presenter on 480p stays on
+ * 480p, and the asker is told the sender is capped rather than left wondering
+ * why nothing happened.
+ *
+ * THE ROOM'S BUDGET STILL BINDS ON TOP OF THIS. The returned quality is fed to
+ * `meshScreenBitrate`, which divides `SCREEN_UPLOAD_BUDGET_BPS` by the peer
+ * count. A granted request therefore cannot push the presenter's *total*
+ * uplink past the number it was already bounded by, however many people ask
+ * and however loudly. What it buys is a bigger picture out of the same
+ * allowance for the one peer who asked, which on a link with headroom is
+ * exactly the trade the asker wanted.
+ *
+ * AND NOTHING HERE IS A PROMISE. This is the size the encoder is *aimed* at.
+ * `degradationPreference: "maintain-framerate"` still gives resolution back
+ * when the link cannot carry it, in both directions, several times a second.
+ * Asking for 1080p over a link that cannot do it produces 1080p worth of
+ * ambition and 480p worth of picture, which is what it has always produced.
+ */
+export function effectiveScreenQuality(
+  chosen: VideoQuality,
+  requested: VideoQuality | null,
+): VideoQuality {
+  if (requested === null || chosen !== "auto") {
+    return chosen;
+  }
+  return requested;
+}
+
 /** Storage and query strings hand back `unknown`; this is the only door in. */
 export function parseVideoQuality(raw: unknown): VideoQuality {
   return VIDEO_QUALITIES.includes(raw as VideoQuality)
     ? (raw as VideoQuality)
     : DEFAULT_VIDEO_QUALITY;
+}
+
+/**
+ * The same door, for a value that arrived from another machine.
+ *
+ * Differs from `parseVideoQuality` in what it does with something it does not
+ * recognise: null, not the default. A stored rung that no longer parses should
+ * fall back to `auto` because the person is still there and still owns the
+ * setting; a *request* naming a rung this build has never heard of is a peer
+ * on a different version, and turning that into "auto" would be acting on a
+ * message we did not understand.
+ */
+export function parseRequestedQuality(raw: unknown): VideoQuality | null {
+  return VIDEO_QUALITIES.includes(raw as VideoQuality)
+    ? (raw as VideoQuality)
+    : null;
 }
 
 type GetUserMedia = (

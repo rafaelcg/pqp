@@ -42,6 +42,7 @@ import {
   screenBitrateFor,
   captureCamera,
   DEFAULT_VIDEO_QUALITY,
+  parseRequestedQuality,
   type VideoQuality,
 } from "@/lib/video-quality";
 import {
@@ -1385,6 +1386,20 @@ export function createVoiceController(transport: RealtimeTransport) {
         }
         void manager?.handleIceCandidate(message.from, message.candidate);
         break;
+      case "screen-quality-request":
+        // Same roster guard as every other relayed frame: a peer the server
+        // has not told us about does not get to touch our encoder.
+        if (!knownPeerIds.has(message.from)) {
+          return;
+        }
+        // `parseRequestedQuality` rather than `parseVideoQuality`: a rung this
+        // build has never heard of is a peer on another version, and turning
+        // that into `auto` would be acting on a message we did not understand.
+        manager?.handleScreenQualityRequest(
+          message.from,
+          parseRequestedQuality(message.quality),
+        );
+        break;
       // --- conversation calls ---
       case "call-incoming":
         // Already in (or joining) this call on this device — nothing to answer.
@@ -1991,6 +2006,19 @@ export function createVoiceController(transport: RealtimeTransport) {
 
     getVideoQuality(): VideoQuality {
       return videoQuality;
+    },
+
+    /**
+     * Ask one presenter for a different size, or withdraw the ask with null.
+     *
+     * MESH ONLY, and it says so by doing nothing on an SFU. On LiveKit the
+     * subscriber genuinely can choose its own layer, so the honest version
+     * there is `setVideoQuality` on the remote track publication rather than a
+     * message to the publisher, and wiring this frame into it would be asking
+     * a room that already solved the problem to solve it again badly.
+     */
+    requestScreenQualityFrom(peerId: string, quality: VideoQuality | null) {
+      manager?.requestScreenQualityFrom(peerId, quality);
     },
 
     // --- end conversation calls ---------------------------------------------

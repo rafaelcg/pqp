@@ -336,6 +336,176 @@ async function waitForSteadyVideo(
   );
 }
 
+/** Open the watcher's control and pick a rung out of the asking half. */
+async function askForQuality(page: Page, label: string): Promise<void> {
+  await page
+    .getByRole("button", { name: "Video you are receiving" })
+    .click({ timeout: 10_000 });
+  const menu = page.getByRole("menu", { name: "Video you are receiving" });
+  // Unambiguous by construction: a watcher's menu carries no sizes of its own,
+  // so the only radios in it are the ones asking somebody else for a size.
+  await menu
+    .getByRole("menuitemradio", { name: label, exact: true })
+    .click({ timeout: 10_000 });
+  await page.keyboard.press("Escape");
+}
+
+/** Pick a rung out of the presenter's own half. */
+async function chooseSendQuality(page: Page, label: string): Promise<void> {
+  await page
+    .getByRole("button", { name: /^Video you send:/ })
+    .click({ timeout: 10_000 });
+  await page
+    .getByRole("menuitemradio", { name: label, exact: true })
+    .click({ timeout: 10_000 });
+}
+
+/**
+ * Poll until the received picture is the height named, and say what it was if
+ * it never gets there.
+ *
+ * Polled rather than slept for the reason the whole file exists: a fixed wait
+ * cannot tell "the encoder did what it was asked" from "the encoder was going
+ * to do that anyway", and the failure message has to carry the number or the
+ * next person is back to guessing.
+ */
+async function expectReceivedHeight(
+  page: Page,
+  height: number,
+  what: string,
+  timeoutMs = 45_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let last: Received | null = null;
+  while (Date.now() < deadline) {
+    last = await receivedVideo(page);
+    if (last.height === height) {
+      return;
+    }
+    await page.waitForTimeout(2_000);
+  }
+  throw new Error(
+    `${what}: expected ${height} lines, last saw ${last?.width}x${last?.height}`,
+  );
+}
+
+/** Poll until the received picture is taller than a floor it must clear. */
+async function expectReceivedGrowth(
+  page: Page,
+  above: number,
+  what: string,
+  timeoutMs = 60_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let last: Received | null = null;
+  while (Date.now() < deadline) {
+    last = await receivedVideo(page);
+    if ((last.height ?? 0) > above) {
+      return;
+    }
+    await page.waitForTimeout(2_000);
+  }
+  throw new Error(
+    `${what}: expected more than ${above} lines, last saw ${last?.width}x${last?.height}`,
+  );
+}
+
+/**
+ * The one thing a watcher CAN do, and the one thing they cannot.
+ *
+ * Both halves measured at the receiver, because that is the only place either
+ * claim is true or false. Sizes are asserted exactly rather than as bands: once
+ * a rung is pinned the presenter's encoder is given a `scaleResolutionDownBy`
+ * solved for that many lines, so there is a right answer and it is not a range.
+ * (The `auto` baseline is the exception and is polled for stability, since auto
+ * pins nothing and the encoder climbs on its own for about thirty seconds.)
+ */
+test("a watcher can ask the presenter, and a pinned presenter says no", async ({
+  page,
+  browser,
+}) => {
+  const { serverId } = await seedVoiceServer("vq-ask-a", "vq-ask-b");
+  const watcher = await secondClient(
+    browser,
+    `/app/servers/${serverId}`,
+    "vq-ask-b",
+  );
+
+  try {
+    await bootAs(page, `/app/servers/${serverId}`, "vq-ask-a");
+    await joinVoice(page);
+    await joinVoice(watcher.page);
+
+    await page
+      .getByRole("button", { name: "Share your screen", exact: true })
+      .click({ timeout: 10_000 });
+    await expect(
+      watcher.page.getByText(/is presenting/),
+    ).toBeVisible({ timeout: 30_000 });
+    await paintNoise(page);
+
+    // The presenter is on `auto`, which is what everybody has who has never
+    // opened the menu: no opinion, and therefore room for somebody else's.
+    const steady = await waitForSteadyVideo(watcher.page);
+
+    // --- the watcher asks, and it lands ----------------------------------
+    // Down first. A ramp can only make a picture bigger, so a drop to exactly
+    // 360 lines cannot be anything but the request reaching the far encoder.
+    await askForQuality(watcher.page, "360p");
+    await expectReceivedHeight(
+      watcher.page,
+      360,
+      "the watcher's request reached the presenter's encoder",
+    );
+
+    // --- and it can be taken back ----------------------------------------
+    await askForQuality(watcher.page, "No preference");
+    // Above 360 rather than at any particular size: withdrawing puts the
+    // presenter back on `auto`, which pins nothing, so the encoder climbs on
+    // its own again and there is no one correct number to name.
+    await expectReceivedGrowth(
+      watcher.page,
+      360,
+      "withdrawing the request hands the size back to the presenter",
+    );
+
+    // --- a presenter who has chosen keeps their choice --------------------
+    // The safety property, and the reason this is a request rather than a
+    // command: the presenter is frequently the one on the phone. 480p typed by
+    // them beats 1080p asked for by somebody else.
+    await chooseSendQuality(page, "480p");
+    await expectReceivedHeight(
+      watcher.page,
+      480,
+      "the presenter's own rung takes effect",
+    );
+    await askForQuality(watcher.page, "1080p");
+    await watcher.page.waitForTimeout(15_000);
+    const refused = await receivedVideo(watcher.page);
+
+    // eslint-disable-next-line no-console
+    console.log(
+      [
+        "",
+        "RECEIVED SCREEN SHARE, as the WATCHER asks the PRESENTER",
+        `  presenter auto, no ask   ${steady.width}x${steady.height}`,
+        "  watcher asks 360p        360 lines (asserted)",
+        "  watcher withdraws        above 360 lines (asserted)",
+        `  presenter pins 480p,`,
+        `  watcher asks 1080p       ${refused.width}x${refused.height}`,
+        "",
+      ].join("\n"),
+    );
+
+    expect(
+      refused.height,
+      "a request cannot overrule a presenter who picked a rung",
+    ).toBe(480);
+  } finally {
+    await watcher.context.close();
+  }
+});
+
 test("a watcher is shown the size arriving, and cannot change it", async ({
   page,
   browser,
@@ -421,9 +591,15 @@ test("a watcher is shown the size arriving, and cannot change it", async ({
     });
     await expect(menu).toBeVisible();
 
-    // NO SIZES. A rung offered to somebody who cannot act on it is the bug in
-    // its original form: it reads as a control and does nothing.
-    await expect(menu.getByRole("menuitemradio")).toHaveCount(0);
+    // NO SIZES FOR THIS MACHINE'S OWN SENDERS. A rung offered to somebody who
+    // cannot act on it is the bug in its original form: it reads as a control
+    // and does nothing. The radios that ARE here ask the presenter, which is
+    // the one thing a watcher can truthfully do, and they are recognisable by
+    // the rung the sending list has never had.
+    await expect(menu.getByText("Video you send")).toHaveCount(0);
+    await expect(
+      menu.getByRole("menuitemradio", { name: "No preference", exact: true }),
+    ).toBeVisible();
 
     // The size actually arriving, named, with the presenter's name on it and
     // the sentence that says whose choice it is.

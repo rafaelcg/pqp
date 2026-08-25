@@ -151,6 +151,40 @@ export const iceCandidateMessageSchema = z.object({
   candidate: iceCandidateInitSchema.nullable(),
 });
 
+/**
+ * A WATCHER asking a PRESENTER for a different size.
+ *
+ * WHY THE PROTOCOL NEEDS A FRAME FOR THIS AT ALL. A viewer cannot raise the
+ * quality they receive by themselves and never will be able to:
+ * `scaleResolutionDownBy` and `maxBitrate` are `RTCRtpSender` parameters and
+ * `RTCRtpReceiver` has no counterpart to either, so in a full mesh the
+ * presenter encodes one stream per peer and that is exactly what turns up.
+ * Congestion feedback can make the picture smaller and can never make it
+ * bigger than what was encoded. The only way a watcher's wish reaches the
+ * pixels is by reaching the *other machine*, which needs a message.
+ *
+ * WHY IT IS A REQUEST AND NOT A COMMAND, AND WHY THAT IS SAFE. It is honoured
+ * per-peer. The presenter has a separate sender for every peer in the mesh, so
+ * granting this raises the asker's copy alone and nobody else's; the mesh
+ * upload budget still divides by the room, so the presenter's total uplink is
+ * bounded by exactly the same number it was before anybody asked. And a
+ * presenter who has deliberately picked a rung keeps it: an explicit choice is
+ * a considered "do not spend my uplink", and a stranger does not overrule it.
+ * See `effectiveScreenQuality` in the client for the whole rule.
+ *
+ * `quality` is one of the five names the menu uses. It is `z.string()` rather
+ * than an enum on purpose: the ladder is a client-side product decision that
+ * has already changed once, the server only relays this frame without reading
+ * it, and a rung the far end does not recognise must degrade to "ignored"
+ * rather than to a dropped frame at the relay.
+ */
+export const screenQualityRequestMessageSchema = z.object({
+  type: z.literal("screen-quality-request"),
+  from: z.string(),
+  to: z.string(),
+  quality: z.string().max(16),
+});
+
 // --- conversation calls ---------------------------------------------------
 //
 // A server voice channel is join-when-you-want; a conversation (DM / group DM)
@@ -278,6 +312,7 @@ export const voiceSignalingMessageSchema = z.discriminatedUnion("type", [
   offerMessageSchema,
   answerMessageSchema,
   iceCandidateMessageSchema,
+  screenQualityRequestMessageSchema,
   // --- conversation calls ---
   callIncomingMessageSchema,
   callRingCancelledMessageSchema,
@@ -301,12 +336,16 @@ export type ScreenShareDeniedMessage = z.infer<
 export type OfferMessage = z.infer<typeof offerMessageSchema>;
 export type AnswerMessage = z.infer<typeof answerMessageSchema>;
 export type IceCandidateMessage = z.infer<typeof iceCandidateMessageSchema>;
+export type ScreenQualityRequestMessage = z.infer<
+  typeof screenQualityRequestMessageSchema
+>;
 export type VoiceSignalingMessage = z.infer<typeof voiceSignalingMessageSchema>;
 
 export const clientRelayMessageSchema = z.discriminatedUnion("type", [
   offerMessageSchema,
   answerMessageSchema,
   iceCandidateMessageSchema,
+  screenQualityRequestMessageSchema,
 ]);
 
 export type ClientRelayMessage = z.infer<typeof clientRelayMessageSchema>;
@@ -317,7 +356,8 @@ export function isClientRelayMessage(
   return (
     message.type === "offer" ||
     message.type === "answer" ||
-    message.type === "ice-candidate"
+    message.type === "ice-candidate" ||
+    message.type === "screen-quality-request"
   );
 }
 
@@ -374,6 +414,7 @@ export const voiceClientMessageSchema = z.discriminatedUnion("type", [
   offerMessageSchema,
   answerMessageSchema,
   iceCandidateMessageSchema,
+  screenQualityRequestMessageSchema,
   // --- conversation calls ---
   callRingMessageSchema,
   callDeclineMessageSchema,

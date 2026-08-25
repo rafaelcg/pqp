@@ -65,6 +65,17 @@ const VOICE_MESSAGE_TYPES = new Set([
   "offer",
   "answer",
   "ice-candidate",
+  // A watcher asking a presenter for a different size. Relayed like the three
+  // above and read no more closely than they are: the server checks that both
+  // ends are peers of the same mesh room and forwards the frame verbatim.
+  //
+  // THIS LIST IS THE REASON A NEW FRAME NEEDS THE API REDEPLOYED. Adding the
+  // schema to `@pqp/shared` is not enough on its own — a type missing from
+  // this set never reaches `handleVoiceMessage` at all, and the frame is
+  // dropped in silence, which is indistinguishable from a feature that simply
+  // does not work. Measured the hard way: the client sent it, the server said
+  // nothing, and the presenter's encoder never moved.
+  "screen-quality-request",
   // --- conversation calls ---
   "call-ring",
   "call-decline",

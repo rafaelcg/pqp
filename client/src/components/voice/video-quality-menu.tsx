@@ -47,12 +47,40 @@ const LABELS: Record<VideoQuality, MessageKey> = {
   "360p": "settings.voice.videoQuality.360p",
 };
 
+/** One person presenting to us, and the rung we have asked them for. */
+export interface PresenterSummary {
+  peerId: string;
+  displayName: string | null;
+  /** What we last asked this person for. `auto` means we have not asked. */
+  ourRequest: VideoQuality;
+}
+
+/** One person who has asked US for a size, for the presenter's own half. */
+export interface RequestOfUs {
+  peerId: string;
+  displayName: string | null;
+  quality: VideoQuality;
+}
+
+/**
+ * "Auto" is the right word for a rung you are choosing for your own encoder
+ * and the wrong one for a rung you are asking somebody else for, where it
+ * means "never mind, send what you were going to".
+ */
+const ASK_LABELS: Record<VideoQuality, MessageKey> = {
+  ...LABELS,
+  auto: "call.quality.ask.none",
+};
+
 export function VideoQualityMenu({
   value,
   open,
   onOpenChange,
   onChange,
   isSendingVideo,
+  presenters = [],
+  onRequestQuality,
+  requestsOfUs = [],
   buttonClassName,
   iconClassName,
 }: {
@@ -70,6 +98,33 @@ export function VideoQualityMenu({
    * what a watcher opened this for.
    */
   isSendingVideo: boolean;
+  /**
+   * The people presenting to us right now, if any.
+   *
+   * Empty means there is nobody to ask and the asking half is not rendered:
+   * an "ask for 1080p" offered while nobody is sharing is the same empty
+   * gesture the old label was.
+   */
+  presenters?: PresenterSummary[];
+  /**
+   * Ask everybody presenting for a size, or withdraw with `auto`.
+   *
+   * ONE CALL FOR THE WHOLE ROOM, and it is still answered per-peer. The frame
+   * is addressed to a peer, so this fans out to each presenter separately and
+   * each one moves only OUR copy of their share. Asking "everyone presenting"
+   * rather than picking a presenter out of a list is a UI simplification and
+   * not a semantic one: the alternative is a submenu per person, in a popover,
+   * during a call, to express something almost nobody means differently for
+   * two shares at once.
+   */
+  onRequestQuality?: (quality: VideoQuality) => void;
+  /**
+   * What OTHER people have asked US for. Shown, never acted on here: a
+   * presenter's own encoder has already moved by the time this renders, and
+   * the point of showing it is that an upload moved for a reason the presenter
+   * can see rather than silently.
+   */
+  requestsOfUs?: RequestOfUs[];
   buttonClassName?: string;
   iconClassName?: string;
 }) {
@@ -158,6 +213,21 @@ export function VideoQualityMenu({
           {isSendingVideo && (
             <div className="mt-1 border-t border-ink-4/60 px-2.5 pb-1.5 pt-1">
               <OutboundVideoReadout idleKey="call.quality.unmeasured" />
+              {/* Who moved your upload, and to what. A presenter whose sender
+                  quietly went up because somebody else clicked something is
+                  owed the sentence, even though the request can never exceed
+                  what they already permit. */}
+              {requestsOfUs.map((request) => (
+                <p
+                  key={request.peerId}
+                  className="mt-0.5 text-xs text-paper-muted"
+                >
+                  {t("call.quality.askedOfYou", {
+                    name: request.displayName ?? t("voice.share.someone"),
+                    quality: t(LABELS[request.quality]),
+                  })}
+                </p>
+              ))}
             </div>
           )}
           {/* The other direction, and for a viewer the only thing in here.
@@ -169,6 +239,52 @@ export function VideoQualityMenu({
               {t("call.quality.receiving")}
             </p>
             <InboundVideoReadout />
+            {/* The one thing a viewer CAN do about a soft picture, and it is
+                deliberately worded as asking rather than setting. It reaches
+                the presenter's encoder through a signalling frame; it is
+                granted per-peer, so it spends nobody else's share of the
+                presenter's uplink; and a presenter who has deliberately picked
+                a rung keeps it. See `effectiveScreenQuality`. */}
+            {onRequestQuality && presenters.length > 0 && (
+              <div className="mt-1.5">
+                <p className="pb-0.5 text-xs uppercase tracking-wide text-paper-muted">
+                  {t("call.quality.ask")}
+                </p>
+                {VIDEO_QUALITIES.map((quality) => {
+                  // Checked only when EVERY presenter has been asked for it,
+                  // which is the honest reading of a single fan-out control:
+                  // a tick against a rung one of two shares is running at
+                  // would be a claim about both.
+                  const selected = presenters.every(
+                    (presenter) => presenter.ourRequest === quality,
+                  );
+                  return (
+                    <button
+                      key={quality}
+                      type="button"
+                      role="menuitemradio"
+                      aria-checked={selected}
+                      className="flex w-full items-center gap-2.5 rounded-md py-1 text-left text-sm text-paper outline-none hover:bg-ink-3 focus-visible:bg-ink-3"
+                      onClick={() => onRequestQuality(quality)}
+                    >
+                      <Check
+                        className={cn(
+                          "h-3.5 w-3.5 shrink-0 text-signal",
+                          !selected && "invisible",
+                        )}
+                        aria-hidden="true"
+                      />
+                      <span className="min-w-0 flex-1 truncate">
+                        {t(ASK_LABELS[quality])}
+                      </span>
+                    </button>
+                  );
+                })}
+                <p className="mt-0.5 text-xs text-paper-muted">
+                  {t("call.quality.ask.hint")}
+                </p>
+              </div>
+            )}
           </div>
         </div>
       )}

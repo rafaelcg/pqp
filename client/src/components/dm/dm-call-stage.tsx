@@ -48,6 +48,8 @@ import {
 } from "@/components/voice/screen-stage";
 import {
   callControlsMayIdle,
+  presentersToAsk,
+  requestsOfUs,
   showsVideoQualityControl,
   videoQualityMenuOpen,
 } from "@/components/voice/video-quality-control";
@@ -353,6 +355,7 @@ export function DmCallStage({
   onToggleMute,
   onToggleCamera,
   onVideoQualityChange,
+  onRequestScreenQuality,
   onStartScreenShare,
   onStopScreenShare,
   onFocusScreenShare,
@@ -372,6 +375,8 @@ export function DmCallStage({
   onToggleMute: () => void;
   onToggleCamera: () => void;
   onVideoQualityChange: (quality: VideoQuality) => void;
+  /** Ask one presenter for a size, or withdraw with `auto`. Per-peer. */
+  onRequestScreenQuality?: (peerId: string, quality: VideoQuality) => void;
   onStartScreenShare?: () => void;
   onStopScreenShare?: () => void;
   onFocusScreenShare?: (peerId: string) => void;
@@ -435,6 +440,7 @@ export function DmCallStage({
       onToggleMute={onToggleMute}
       onToggleCamera={onToggleCamera}
       onVideoQualityChange={onVideoQualityChange}
+      onRequestScreenQuality={onRequestScreenQuality}
       onStartScreenShare={onStartScreenShare}
       onStopScreenShare={onStopScreenShare}
       onFocusScreenShare={onFocusScreenShare}
@@ -453,6 +459,7 @@ function ActiveCall({
   onToggleMute,
   onToggleCamera,
   onVideoQualityChange,
+  onRequestScreenQuality,
   onStartScreenShare,
   onStopScreenShare,
   onFocusScreenShare,
@@ -467,6 +474,8 @@ function ActiveCall({
   onToggleMute: () => void;
   onToggleCamera: () => void;
   onVideoQualityChange: (quality: VideoQuality) => void;
+  /** Ask one presenter for a size, or withdraw with `auto`. Per-peer. */
+  onRequestScreenQuality?: (peerId: string, quality: VideoQuality) => void;
   onStartScreenShare?: () => void;
   onStopScreenShare?: () => void;
   onFocusScreenShare?: (peerId: string) => void;
@@ -730,6 +739,7 @@ function ActiveCall({
       onToggleCamera={onToggleCamera}
       videoQuality={videoQuality}
       onVideoQualityChange={onVideoQualityChange}
+      onRequestScreenQuality={onRequestScreenQuality}
       qualityMenuOpen={qualityMenuOpen}
       onQualityMenuOpenChange={setQualityMenuRequested}
       onStartScreenShare={onStartScreenShare}
@@ -1039,6 +1049,7 @@ function CallControls({
   onToggleCamera,
   videoQuality,
   onVideoQualityChange,
+  onRequestScreenQuality,
   qualityMenuOpen,
   onQualityMenuOpenChange,
   onStartScreenShare,
@@ -1055,6 +1066,8 @@ function CallControls({
   onToggleCamera: () => void;
   videoQuality: VideoQuality;
   onVideoQualityChange: (quality: VideoQuality) => void;
+  /** Ask one presenter for a size, or withdraw with `auto`. Per-peer. */
+  onRequestScreenQuality?: (peerId: string, quality: VideoQuality) => void;
   qualityMenuOpen: boolean;
   onQualityMenuOpenChange: (open: boolean) => void;
   onStartScreenShare?: () => void;
@@ -1149,6 +1162,19 @@ function CallControls({
           onOpenChange={onQualityMenuOpenChange}
           onChange={onVideoQualityChange}
           isSendingVideo={voiceState.isCameraOn || voiceState.isSharingScreen}
+          presenters={presentersToAsk(voiceState.remotePeers)}
+          requestsOfUs={requestsOfUs(voiceState.remotePeers)}
+          onRequestQuality={
+            onRequestScreenQuality
+              ? (quality) => {
+                  for (const presenter of presentersToAsk(
+                    voiceState.remotePeers,
+                  )) {
+                    onRequestScreenQuality(presenter.peerId, quality);
+                  }
+                }
+              : undefined
+          }
           buttonClassName={size}
           iconClassName={iconSize}
         />

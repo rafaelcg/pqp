@@ -5,6 +5,8 @@ import {
   cameraConstraintsFor,
   captureCamera,
   DEFAULT_VIDEO_QUALITY,
+  effectiveScreenQuality,
+  parseRequestedQuality,
   parseVideoQuality,
   screenBitrateFor,
   screenScaleFactor,
@@ -253,5 +255,64 @@ describe("screenScaleFactor", () => {
     expect(screenScaleFactor("360p", null)).toBeCloseTo(3, 2);
     expect(screenScaleFactor("360p", undefined)).toBeCloseTo(3, 2);
     expect(screenScaleFactor("360p", 0)).toBeCloseTo(3, 2);
+  });
+});
+
+/**
+ * What a watcher's request is allowed to do to a presenter's encoder.
+ *
+ * This is the rule the whole viewer-request feature turns on, and it lives here
+ * rather than in the manager precisely so it can be argued with in isolation.
+ * The interesting cases are all about who is entitled to spend somebody else's
+ * upload, which is a product decision wearing a ternary.
+ */
+describe("effectiveScreenQuality", () => {
+  it("uses the request when the presenter has expressed no opinion", () => {
+    // `auto` is what everybody has who never opened the menu. It means "do
+    // something sensible", and a watcher saying what would be sensible for them
+    // is a perfectly good thing to fill that with.
+    expect(effectiveScreenQuality("auto", "1080p")).toBe("1080p");
+    expect(effectiveScreenQuality("auto", "360p")).toBe("360p");
+  });
+
+  it("never overrules a presenter who picked a rung on purpose", () => {
+    // The presenter is frequently the one on the phone or the tether. A rung
+    // they typed is a decision about their own upload, and a stranger in the
+    // call does not get to move it, in EITHER direction, which is why the
+    // downward case is here too.
+    expect(effectiveScreenQuality("480p", "1080p")).toBe("480p");
+    expect(effectiveScreenQuality("1080p", "360p")).toBe("1080p");
+    expect(effectiveScreenQuality("720p", "720p")).toBe("720p");
+  });
+
+  it("falls back to the presenter's own choice when nobody has asked", () => {
+    expect(effectiveScreenQuality("auto", null)).toBe("auto");
+    expect(effectiveScreenQuality("480p", null)).toBe("480p");
+  });
+
+  it("treats a request of auto as a withdrawal, not a demand for auto", () => {
+    // `auto` is how the wire encodes "never mind". Reading it as a *request*
+    // would be indistinguishable from the absence of one, which is exactly
+    // what it is meant to be.
+    expect(effectiveScreenQuality("auto", "auto")).toBe("auto");
+    expect(effectiveScreenQuality("480p", "auto")).toBe("480p");
+  });
+});
+
+describe("parseRequestedQuality", () => {
+  it("accepts the rungs this build knows", () => {
+    for (const quality of VIDEO_QUALITIES) {
+      expect(parseRequestedQuality(quality)).toBe(quality);
+    }
+  });
+
+  it("answers null, not auto, to a rung it has never heard of", () => {
+    // A stored setting that no longer parses falls back to auto, because the
+    // person is still there and still owns it. A REQUEST naming an unknown
+    // rung is a peer on another version, and turning that into auto would be
+    // acting on a message we did not understand.
+    expect(parseRequestedQuality("4k")).toBeNull();
+    expect(parseRequestedQuality(undefined)).toBeNull();
+    expect(parseRequestedQuality(1080)).toBeNull();
   });
 });

@@ -18,6 +18,72 @@
  * visible shape (a menu floating over nothing, a bar that vanishes mid-read).
  */
 
+import type {
+  PresenterSummary,
+  RequestOfUs,
+} from "@/components/voice/video-quality-menu";
+import type { VideoQuality } from "@/lib/video-quality";
+
+/**
+ * The shape both stages hold a peer in, as far as quality is concerned.
+ *
+ * Structural rather than the real `RemotePeer` so this module stays free of
+ * the media layer and keeps running in the DOM-less node suite.
+ */
+export interface QualityPeer {
+  peerId: string;
+  displayName?: string;
+  screenStream: MediaStream | null;
+  /** What they have asked US to send them, from the mesh manager. */
+  requestedScreenQuality?: VideoQuality | null;
+  /** What WE have asked them for. */
+  ourScreenQualityRequest?: VideoQuality | null;
+}
+
+/**
+ * Everybody whose screen is actually arriving, with our standing ask.
+ *
+ * Derived from the streams rather than from the roster's `screenSharePeerIds`,
+ * which is a claim and also counts our own share: what decides whether there is
+ * somebody to ask is whether their picture is really here.
+ */
+export function presentersToAsk(peers: QualityPeer[]): PresenterSummary[] {
+  return peers
+    .filter((peer) => peer.screenStream !== null)
+    .map((peer) => ({
+      peerId: peer.peerId,
+      displayName: peer.displayName ?? null,
+      // `auto` is "no preference" here, which is also how the wire encodes a
+      // withdrawal, so an absent ask and a withdrawn one read the same.
+      ourRequest: peer.ourScreenQualityRequest ?? "auto",
+    }));
+}
+
+/**
+ * Everybody who has asked US for a size.
+ *
+ * For the presenter's own half of the menu. A request can never exceed what
+ * the presenter already permits, so there is nothing here to approve or
+ * refuse; it exists so that an upload which moved for somebody else's reason
+ * moved visibly rather than silently.
+ */
+export function requestsOfUs(peers: QualityPeer[]): RequestOfUs[] {
+  const rows: RequestOfUs[] = [];
+  for (const peer of peers) {
+    const quality = peer.requestedScreenQuality;
+    // `auto` never reaches here: the manager stores a withdrawal as null.
+    if (!quality || quality === "auto") {
+      continue;
+    }
+    rows.push({
+      peerId: peer.peerId,
+      displayName: peer.displayName ?? null,
+      quality,
+    });
+  }
+  return rows;
+}
+
 export interface VideoQualityControlContext {
   /** Whether this machine's camera is currently sending. */
   isCameraOn: boolean;
