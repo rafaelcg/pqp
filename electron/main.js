@@ -25,6 +25,15 @@ const {
   mayPromptForPasskey,
 } = require("./lib/passkey-hint");
 const { initAutoUpdate } = require("./lib/updater");
+const {
+  THUMBNAIL_SIZE,
+  MAC_SCREEN_SETTINGS_URL,
+  normalizeSources,
+  labelSources,
+  pickAutomatically,
+  screenPermission,
+  captureResponse,
+} = require("./lib/display-sources");
 
 const PROTOCOL = "pqp";
 const DEFAULT_DEV_URL = "http://localhost:5173/app";
@@ -53,6 +62,21 @@ let mainWindow = null;
 let staticServer = null;
 /** @type {string | null} */
 let pendingDeepLink = null;
+/** @type {BrowserWindow | null} */
+let pickerWindow = null;
+
+/**
+ * How long the picker window gets to load before the share is abandoned.
+ *
+ * Only the load is timed, never the decision: a timer running while somebody
+ * reads their window titles would snatch the picker away mid-thought. This
+ * exists because the alternative to giving up is worse. A picker page that
+ * never loads (a missing file in a bad package, a renderer that crashed on
+ * start) leaves `getDisplayMedia` pending forever, and a promise that never
+ * settles is a share button that does nothing at all and says nothing about
+ * it, which is the exact bug class this whole change is here to remove.
+ */
+const PICKER_LOAD_TIMEOUT_MS = 12_000;
 
 function resolveClientDist() {
   if (app.isPackaged) {
@@ -496,6 +520,305 @@ async function ensureMacMediaAccess(mediaTypes) {
   }
 }
 
+/** macOS screen-recording grant, or "ok" everywhere it does not exist. */
+function macScreenAccessStatus() {
+  if (process.platform !== "darwin") {
+    return "granted";
+  }
+  try {
+    return systemPreferences.getMediaAccessStatus("screen");
+  } catch {
+    // A macOS that will not answer is not a macOS that has said no.
+    return "unknown";
+  }
+}
+
+/** Parent for a modal, or null when the app window is gone. */
+function dialogParent() {
+  return mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+}
+
+async function showModal(options) {
+  const parent = dialogParent();
+  try {
+    return parent
+      ? await dialog.showMessageBox(parent, options)
+      : await dialog.showMessageBox(options);
+  } catch {
+    return { response: -1 };
+  }
+}
+
+/**
+ * Say that macOS is the one refusing, and offer the switch.
+ *
+ * Without this the app has no screens to show, shows none, and looks broken.
+ * That is the failure shape already fixed twice this week: a control that does
+ * nothing and explains nothing. The OS prompt macOS raises on the first
+ * attempt is not a substitute, because the grant only takes effect after a
+ * relaunch, so somebody who says yes to it still gets an empty picker until
+ * they quit and reopen. The copy says that in as many words.
+ */
+async function explainScreenPermission() {
+  const { response } = await showModal({
+    type: "warning",
+    title: t("share.permissionTitle"),
+    message: t("share.permissionTitle"),
+    detail: t("share.permissionBody"),
+    buttons: [t("share.permissionOpen"), t("share.permissionDismiss")],
+    defaultId: 0,
+    cancelId: 1,
+    noLink: true,
+  });
+  if (response === 0) {
+    shell.openExternal(MAC_SCREEN_SETTINGS_URL).catch(() => {});
+  }
+}
+
+/** Nothing to offer, and no permission story to tell about it. */
+async function explainNoSources() {
+  await showModal({
+    type: "warning",
+    title: t("share.failedTitle"),
+    message: t("share.failedTitle"),
+    detail: t("share.failedBody"),
+    buttons: [t("share.failedDismiss")],
+    defaultId: 0,
+    noLink: true,
+  });
+}
+
+/**
+ * Put the surfaces in front of the user and wait for an answer.
+ *
+ * WHY THIS IS A SHELL WINDOW AND NOT REACT. The obvious place for a picker is
+ * the client, which already has components, styling and i18n. It is the wrong
+ * place. The packaged shell loads the *hosted* client (see DEFAULT_PROD_URL),
+ * so the renderer inside any given install is whatever was deployed to Pages
+ * today, not what shipped with the binary. A picker over there would mean this
+ * handler sending an IPC message and waiting for a reply from code that may
+ * predate the message entirely, and there is no reply to wait for: the promise
+ * never settles, `getDisplayMedia` hangs, and the share button dies silently
+ * in exactly the shells that most need the fix. A `file://` page inside the
+ * bundle cannot skew away from the main process that talks to it.
+ *
+ * Resolves with a source id, or null for every way of saying no: the Cancel
+ * button, Escape, closing the window, a page that never loads.
+ */
+function showSourcePicker(labeled) {
+  // One at a time. A second voice channel asking mid-decision would stack two
+  // identical windows with no way to tell which call each belongs to.
+  if (pickerWindow && !pickerWindow.isDestroyed()) {
+    pickerWindow.focus();
+    return Promise.resolve(null);
+  }
+
+  return new Promise((resolve) => {
+    const parent = dialogParent();
+    const dark = nativeTheme.shouldUseDarkColors;
+    const win = new BrowserWindow({
+      width: 760,
+      height: 560,
+      minWidth: 460,
+      minHeight: 360,
+      parent: parent ?? undefined,
+      modal: parent !== null,
+      show: false,
+      title: t("share.title"),
+      backgroundColor: dark ? "#1c1c1f" : "#ffffff",
+      autoHideMenuBar: true,
+      minimizable: false,
+      maximizable: false,
+      fullscreenable: false,
+      webPreferences: {
+        preload: path.join(__dirname, "picker", "preload.js"),
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+      },
+    });
+    pickerWindow = win;
+
+    let settled = false;
+    let loadTimer = setTimeout(() => {
+      loadTimer = null;
+      console.warn("[pqp] share picker never finished loading");
+      finish(null);
+    }, PICKER_LOAD_TIMEOUT_MS);
+
+    // Every one of these channels is answered only for this window's own
+    // webContents. The app window has a different preload and cannot reach
+    // them, but an ipcMain channel is global and this is one line.
+    const fromPicker = (event) => !win.isDestroyed() && event.sender === win.webContents;
+
+    const onLoad = (event) =>
+      fromPicker(event)
+        ? {
+            sources: labeled,
+            dark,
+            strings: {
+              title: t("share.title"),
+              subtitle: t("share.subtitle"),
+              groupScreens: t("share.groupScreens"),
+              groupWindows: t("share.groupWindows"),
+              noPreview: t("share.noPreview"),
+              cancel: t("share.cancel"),
+              confirm: t("share.confirm"),
+              empty: t("share.empty"),
+            },
+          }
+        : null;
+
+    const onReady = (event) => {
+      if (!fromPicker(event) || loadTimer === null) {
+        return;
+      }
+      clearTimeout(loadTimer);
+      loadTimer = null;
+    };
+
+    const onChoose = (event, sourceId) => {
+      if (!fromPicker(event) || typeof sourceId !== "string") {
+        return;
+      }
+      finish(sourceId);
+    };
+
+    const onCancel = (event) => {
+      if (!fromPicker(event)) {
+        return;
+      }
+      finish(null);
+    };
+
+    function finish(sourceId) {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (loadTimer !== null) {
+        clearTimeout(loadTimer);
+        loadTimer = null;
+      }
+      ipcMain.removeHandler("pqp:picker-load");
+      ipcMain.removeListener("pqp:picker-ready", onReady);
+      ipcMain.removeListener("pqp:picker-choose", onChoose);
+      ipcMain.removeListener("pqp:picker-cancel", onCancel);
+      resolve(sourceId);
+      if (!win.isDestroyed()) {
+        win.close();
+      }
+    }
+
+    // `handle` throws on a channel that already has one, and a throw here
+    // escapes into the display-media handler and kills the share. The
+    // one-at-a-time guard above should make this impossible; this makes the
+    // impossible case a no-op instead of a broken button.
+    ipcMain.removeHandler("pqp:picker-load");
+    ipcMain.handle("pqp:picker-load", onLoad);
+    ipcMain.on("pqp:picker-ready", onReady);
+    ipcMain.on("pqp:picker-choose", onChoose);
+    ipcMain.on("pqp:picker-cancel", onCancel);
+
+    win.once("ready-to-show", () => {
+      if (!win.isDestroyed()) {
+        win.show();
+      }
+    });
+
+    // The titlebar close button, or the whole app quitting mid-decision.
+    // Closing without choosing is a cancel, not a failure.
+    win.on("closed", () => {
+      if (pickerWindow === win) {
+        pickerWindow = null;
+      }
+      finish(null);
+    });
+
+    win.webContents.on("did-fail-load", (_e, code, description) => {
+      console.warn(`[pqp] share picker failed to load: ${code} ${description}`);
+      finish(null);
+    });
+    win.webContents.on("render-process-gone", () => {
+      finish(null);
+    });
+
+    // Nothing in this window may navigate anywhere, ever. It renders window
+    // titles from other applications and a stray `target=_blank` would be the
+    // only way out of a page that has no links in it.
+    win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+    win.webContents.on("will-navigate", (event) => event.preventDefault());
+
+    win.loadFile(path.join(__dirname, "picker", "index.html")).catch((err) => {
+      console.warn("[pqp] share picker load failed:", err?.message ?? err);
+      finish(null);
+    });
+  });
+}
+
+/**
+ * The whole "which surface?" decision, from permission to callback payload.
+ *
+ * Order matters. macOS raises its own screen-recording prompt on the FIRST
+ * `getSources` call, so the permission state is read twice: once to avoid a
+ * pointless listing when we already know the answer is no, and once after,
+ * because that listing is what produced whatever answer we now have. A macOS
+ * without the grant does not fail this call, which would be easy to handle. It
+ * returns a plausible-looking list of nothing useful, and the only way to know
+ * is to ask again.
+ */
+async function chooseDisplaySource(audioRequested) {
+  const platform = process.platform;
+
+  if (screenPermission(platform, macScreenAccessStatus()) === "blocked") {
+    await explainScreenPermission();
+    return null;
+  }
+
+  let raw = [];
+  try {
+    raw = await desktopCapturer.getSources({
+      // The fix, in two words. `["screen"]` alone is why a window could never
+      // be picked, and why a second monitor was unreachable behind
+      // `sources[0]`.
+      types: ["screen", "window"],
+      // Previews, because "Untitled" three times over is not a choice. This
+      // costs a screenshot of every surface, taken once as the picker opens.
+      thumbnailSize: THUMBNAIL_SIZE,
+      fetchWindowIcons: true,
+    });
+  } catch (err) {
+    console.warn("[pqp] desktopCapturer.getSources failed:", err?.message ?? err);
+  }
+
+  if (screenPermission(platform, macScreenAccessStatus()) !== "ok") {
+    // Covers "denied" and the still-undetermined state that means macOS is
+    // asking right now: either way the list in hand is not the machine's real
+    // surfaces, and showing it would be worse than saying why.
+    await explainScreenPermission();
+    return null;
+  }
+
+  const labeled = labelSources(normalizeSources(raw), t);
+  if (labeled.length === 0) {
+    await explainNoSources();
+    return null;
+  }
+
+  const chosenId = pickAutomatically(labeled) ?? (await showSourcePicker(labeled));
+  if (!chosenId) {
+    return null;
+  }
+
+  // Back to the object Electron handed us: the normalized copy is plain data
+  // for IPC and is not what the callback accepts.
+  const source = raw.find((candidate) => candidate.id === chosenId);
+  if (!source) {
+    return null;
+  }
+  return captureResponse(source, platform, audioRequested);
+}
+
 function configureSessionSecurity(appOrigin) {
   const ses = session.defaultSession;
 
@@ -516,28 +839,28 @@ function configureSessionSecurity(appOrigin) {
   );
 
   // `getDisplayMedia` exists in the renderer but resolves NOTHING until the
-  // shell answers the request — Chromium delegates "which screen?" to the
+  // shell answers the request: Chromium delegates "which screen?" to the
   // embedder. Without this handler every share attempt rejects and the client
   // reads it as "unsupported by this browser", which is a lie on desktop and
-  // the one claim this product cannot afford to break. On macOS 15+ the OS
-  // picker does the choosing; elsewhere (and as fallback) the primary screen
-  // is shared. Loopback audio is Windows-only in Chromium, so it is offered
-  // only there — asking for it on macOS fails the whole request.
+  // the one claim this product cannot afford to break.
+  //
+  // `useSystemPicker` stays on and stays first. On macOS 15+ the OS picker is
+  // better than anything shipped here: it is the surface list the user already
+  // knows, it can hand over a surface without a screen-recording grant, and it
+  // keeps working when they switch windows mid-share. Electron does not call
+  // this handler at all when it takes over. Everything below is the fallback,
+  // which is where every Windows and Linux user and every macOS before 15
+  // lands, and which until now silently shared `sources[0]` of `["screen"]`:
+  // the primary display, no choice of monitor, and no way to share a single
+  // window. That is the 23 Aug 2026 report.
   ses.setDisplayMediaRequestHandler(
-    (_request, callback) => {
-      desktopCapturer
-        .getSources({ types: ["screen"] })
-        .then((sources) => {
-          const primary = sources[0];
-          if (!primary) {
-            callback(null);
-            return;
-          }
-          callback(
-            process.platform === "win32"
-              ? { video: primary, audio: "loopback" }
-              : { video: primary },
-          );
+    (request, callback) => {
+      chooseDisplaySource(request?.audioRequested === true)
+        .then((response) => {
+          // `null` cancels. Chromium turns that into a NotAllowedError, which
+          // the client already words as "blocked or cancelled" rather than as
+          // a failure, so backing out of the picker reads as backing out.
+          callback(response);
         })
         .catch((err) => {
           console.warn("[pqp] screen capture source failed:", err?.message ?? err);

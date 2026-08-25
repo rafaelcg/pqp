@@ -48,6 +48,7 @@
       "main.js",
       "preload.js",
       "lib/**/*",
+      "picker/**/*",
       "package.json",
       "node_modules/**/*"
     ],

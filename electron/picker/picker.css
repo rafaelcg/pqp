@@ -1,0 +1,224 @@
+/*
+ * Deliberately hand-written and dependency-free. This window is part of the
+ * shell, not part of the web client, so it cannot reach the app's Tailwind
+ * build; these values are copied from the client's dark/light surfaces so the
+ * picker does not look like a different program.
+ *
+ * The theme comes from the main process as `data-theme` on <html>, because
+ * this window cannot read the renderer's localStorage and the OS preference is
+ * not always what the user picked in the app.
+ */
+
+:root {
+  --bg: #ffffff;
+  --bg-sunken: #f4f4f5;
+  --tile: #ffffff;
+  --tile-empty: #e4e4e7;
+  --border: #d4d4d8;
+  --text: #18181b;
+  --text-dim: #71717a;
+  --accent: #6366f1;
+  --accent-text: #ffffff;
+  --shadow: rgba(0, 0, 0, 0.12);
+}
+
+:root[data-theme="dark"] {
+  --bg: #1c1c1f;
+  --bg-sunken: #131316;
+  --tile: #26262b;
+  --tile-empty: #313138;
+  --border: #3f3f46;
+  --text: #f4f4f5;
+  --text-dim: #a1a1aa;
+  --accent: #818cf8;
+  --accent-text: #16161a;
+  --shadow: rgba(0, 0, 0, 0.4);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--text);
+  font-family:
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    Roboto,
+    sans-serif;
+  font-size: 13px;
+  /* A picker is a decision, not a document. Nothing here is worth selecting. */
+  user-select: none;
+  cursor: default;
+}
+
+.head {
+  padding: 18px 20px 10px;
+  flex: none;
+}
+
+h1 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.subtitle {
+  margin: 4px 0 0;
+  color: var(--text-dim);
+}
+
+.scroll {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 4px 20px 16px;
+  background: var(--bg-sunken);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.group + .group {
+  margin-top: 18px;
+}
+
+.group-label {
+  margin: 14px 0 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  gap: 12px;
+}
+
+.tile {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--tile);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: default;
+}
+
+.tile:hover {
+  border-color: var(--accent);
+}
+
+.tile:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.tile[aria-pressed="true"] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.shot {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 16 / 10;
+  border-radius: 5px;
+  overflow: hidden;
+  background: var(--tile-empty);
+}
+
+.shot img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.shot .no-preview {
+  padding: 0 8px;
+  color: var(--text-dim);
+  font-size: 11px;
+  text-align: center;
+}
+
+.label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.label img {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+}
+
+.label span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.empty {
+  margin: 40px 0;
+  text-align: center;
+  color: var(--text-dim);
+}
+
+.foot {
+  flex: none;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 20px;
+}
+
+.btn {
+  min-width: 92px;
+  padding: 7px 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--tile);
+  color: var(--text);
+  font: inherit;
+  font-weight: 500;
+  cursor: default;
+}
+
+.btn:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.btn.primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+.btn:disabled {
+  opacity: 0.5;
+}
