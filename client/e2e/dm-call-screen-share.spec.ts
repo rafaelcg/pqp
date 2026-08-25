@@ -51,7 +51,9 @@ test.use({
   permissions: ["microphone", "camera"],
 });
 
-// Two full app boots, a media handshake, and two renegotiations per test.
+// Two full app boots, a media handshake, and two renegotiations per test, plus
+// a frame-sampling window per liveness check, which is wall-clock time these
+// tests spend deliberately.
 test.setTimeout(120_000);
 
 function headersFor(suffix: string) {
@@ -194,6 +196,29 @@ function screenVideo(page: Page) {
   return page.locator('[data-testid="call-stage"] video.object-contain');
 }
 
+/**
+ * Nudge the pointer so the call controls are awake before clicking one.
+ *
+ * The control bar fades to `opacity-0 pointer-events-none` three seconds after
+ * the last pointer movement over the stage (`callControlsMayIdle`), which is
+ * right for somebody watching a film and fatal for a test that just spent a
+ * sampling window holding perfectly still: `click()` then waits forever for a
+ * button that can no longer receive the event, and Playwright's default action
+ * timeout is *no* timeout. A person moves the mouse to reach the button, so
+ * this does too.
+ */
+async function wakeCallControls(page: Page) {
+  const box = await page.getByTestId("call-stage").boundingBox();
+  if (!box) {
+    return;
+  }
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2 + 8);
+}
+
+/** Every control-bar click, with a timeout, so a dead one fails instead of hanging. */
+const CLICK = { timeout: 20_000 } as const;
+
 test("a screen share started mid-video-call reaches the other side's stage", async ({
   page,
   browser,
@@ -219,13 +244,17 @@ test("a screen share started mid-video-call reaches the other side's stage", asy
     // load scenario. The caller's camera came on with the video call; the
     // callee turns theirs on from the stage.
     await expectTileDecodingFrames(callee.page, pair.callerName);
-    await callee.page.getByRole("button", { name: "Turn camera on" }).click();
+    await wakeCallControls(callee.page);
+    await callee.page
+      .getByRole("button", { name: "Turn camera on" })
+      .click(CLICK);
     await expectTileDecodingFrames(page, pair.calleeName);
 
     // Mid-call, the caller starts sharing.
+    await wakeCallControls(page);
     await page
       .getByRole("button", { name: "Share your screen", exact: true })
-      .click();
+      .click(CLICK);
     await expect(page.getByText("You are presenting")).toBeVisible({
       timeout: 20_000,
     });
@@ -245,9 +274,10 @@ test("a screen share started mid-video-call reaches the other side's stage", asy
 
     // Stop the share: the callee's stage returns to the camera spotlight and
     // the caller's camera keeps playing.
+    await wakeCallControls(page);
     await page
       .getByRole("button", { name: "Stop sharing your screen", exact: true })
-      .click();
+      .click(CLICK);
     await expect(
       callee.page.getByText(`${pair.callerName} is presenting`),
     ).not.toBeVisible({ timeout: 20_000 });
@@ -284,9 +314,10 @@ test("a camera turned on during a share joins it instead of replacing it", async
       .getByRole("button", { name: "Accept" })
       .click({ timeout: 20_000 });
 
+    await wakeCallControls(page);
     await page
       .getByRole("button", { name: "Share your screen", exact: true })
-      .click();
+      .click(CLICK);
     await expect(page.getByText("You are presenting")).toBeVisible({
       timeout: 20_000,
     });
@@ -299,7 +330,8 @@ test("a camera turned on during a share joins it instead of replacing it", async
     // Now the camera, with the share already up. On the mesh this is a second
     // video track on a connection that already carries one, and the callee
     // tells them apart by the `cameraStreamId` the roster announces.
-    await page.getByRole("button", { name: "Turn camera on" }).click();
+    await wakeCallControls(page);
+    await page.getByRole("button", { name: "Turn camera on" }).click(CLICK);
 
     // Both, together: the camera arrives as its own tile and the share is
     // still the share. Either one pointing at the other's stream is the bug.
