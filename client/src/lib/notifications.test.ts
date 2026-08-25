@@ -3,10 +3,12 @@ import {
   activityRoutePath,
   describeActivity,
   formatBadge,
+  rememberActivityChannel,
   rememberChannels,
   rememberServers,
   resolveNotificationLevel,
   shouldNotify,
+  unreadByServer,
   type NotificationState,
 } from "./notifications";
 
@@ -126,8 +128,10 @@ describe("describeActivity", () => {
     rememberChannels([{ id: other, serverId: otherServer, name: "deploys" }]);
     rememberServers([{ id: otherServer, name: "work" }]);
 
-    // The whole point of the directories: an activity frame arriving for a
-    // server the user is not looking at still says where it came from.
+    // Covers a server whose channel list this session has already fetched.
+    // `rememberChannels` is only ever called with the SELECTED server's
+    // channels, so this is the easy half; the hard half — a server that has
+    // never been opened — is `rememberActivityChannel` below.
     expect(describeActivity(other, { count: 1, mentions: 1 })).toMatchObject({
       channelName: "deploys",
       serverName: "work",
@@ -157,6 +161,90 @@ describe("describeActivity", () => {
       // from — and nothing may be borrowed from whichever server is on screen.
       serverName: null,
     });
+  });
+});
+
+describe("rememberActivityChannel", () => {
+  // The regression these cover, in one sentence: the app only ever fetches the
+  // SELECTED server's channel list, so every activity frame from any other
+  // server — and every frame from a thread, which is in no channel list at all
+  // — described to nulls. That threw away the server id the frame was already
+  // carrying, and with it the server's own notification level. A muted server
+  // kept raising banners, and each one read "New activity / 1 new message"
+  // with nothing to say where it came from and nothing in the app to look at.
+  const bg = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+  const bgServer = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+
+  it("takes the server from the frame for a channel no list has named", () => {
+    rememberServers([{ id: bgServer, name: "QG" }]);
+    rememberActivityChannel(bg, bgServer, "server");
+
+    expect(describeActivity(bg, { count: 1, mentions: 0 })).toMatchObject({
+      serverId: bgServer,
+      // Still unnamed: the frame carries ids, not names, and no list has been
+      // fetched for this server. The title falls back — but it now says which
+      // server it fell back inside of.
+      channelName: null,
+      serverName: "QG",
+    });
+  });
+
+  it("lets that server's own level silence it", () => {
+    rememberActivityChannel(bg, bgServer, "server");
+    const muted = stateWith({ servers: { [bgServer]: "none" } });
+    const activity = describeActivity(bg, { count: 1, mentions: 0 });
+
+    expect(
+      resolveNotificationLevel(muted, activity.serverId, activity.channelId),
+    ).toBe("none");
+  });
+
+  it("gives the notification somewhere to land when clicked", () => {
+    rememberActivityChannel(bg, bgServer, "server");
+    const activity = describeActivity(bg, { count: 1, mentions: 0 });
+
+    expect(activityRoutePath(activity.channelId, activity.serverId)).toBe(
+      `/app/server/${bgServer}/channel/${bg}`,
+    );
+  });
+
+  it("never overwrites a name a real channel list already supplied", () => {
+    const named = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+    rememberChannels([{ id: named, serverId: bgServer, name: "geral" }]);
+    rememberActivityChannel(named, bgServer, "server");
+
+    expect(describeActivity(named, { count: 1, mentions: 0 })).toMatchObject({
+      channelName: "geral",
+    });
+  });
+});
+
+describe("unreadByServer", () => {
+  const server = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const inServer = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+  const dm = "12121212-1212-4212-8212-121212121212";
+
+  it("files a channel's unread under the server it came from", () => {
+    // Without this the server rail can only ever indicate the server already
+    // selected, so a banner about any other one has no counterpart on screen:
+    // the "nothing happened in the app" half of the same bug.
+    rememberActivityChannel(inServer, server, "server");
+
+    expect(
+      unreadByServer({ [inServer]: { count: 2, mentions: 1 } }),
+    ).toEqual({ [server]: { count: 2, mentions: 1 } });
+  });
+
+  it("keeps conversations off every server icon", () => {
+    rememberChannels([{ id: dm, serverId: null, name: "Ana", kind: "dm" }]);
+
+    expect(unreadByServer({ [dm]: { count: 3, mentions: 0 } })).toEqual({});
+  });
+
+  it("ignores a channel nothing has placed yet", () => {
+    expect(
+      unreadByServer({ "34343434-3434-4434-8434-343434343434": { count: 1, mentions: 0 } }),
+    ).toEqual({});
   });
 });
 

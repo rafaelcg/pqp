@@ -271,8 +271,12 @@ export interface ChannelDirectoryEntry {
   /**
    * For a conversation this is the derived participant label, not a stored
    * name — the caller resolves it, because a conversation has none.
+   *
+   * Null for a channel placed by `rememberActivityChannel`: an activity frame
+   * carries ids and no names, so where it came from is known before what it is
+   * called is.
    */
-  name: string;
+  name: string | null;
   kind: ChannelKind;
 }
 
@@ -295,6 +299,76 @@ export function rememberChannels(
       kind: channel.kind ?? "server",
     });
   }
+}
+
+/**
+ * Place a channel from the activity frame itself.
+ *
+ * `rememberChannels` is fed the SELECTED server's channel list and nothing
+ * else, so on its own the directory can only ever place channels of the one
+ * server on screen. Every frame from any other server, and every frame from a
+ * thread — which appears in no channel list at all — arrived at a directory
+ * that had never heard of it, and `describeActivity` degraded the whole record
+ * to nulls: no server id, so `resolveNotificationLevel` skipped that server's
+ * own level and fell through to the account default; no server name, so the
+ * banner read "New activity" with nothing to say where it came from; no route,
+ * so clicking it landed on /app. A muted server kept interrupting, and every
+ * interruption was unattributable.
+ *
+ * The frame has been carrying `serverId` and `kind` the whole time. This is
+ * where they stop being discarded.
+ *
+ * Never overwrites an entry that already has a name: a real channel list is a
+ * better answer than a frame, and the frame adds nothing the list did not
+ * already say.
+ */
+export function rememberActivityChannel(
+  channelId: string,
+  serverId: string | null,
+  kind: ChannelKind = "server",
+): void {
+  const known = directory.get(channelId);
+  if (known?.name != null) {
+    return;
+  }
+  directory.set(channelId, { serverId, name: known?.name ?? null, kind });
+}
+
+/**
+ * Unread totals per server, for the rail.
+ *
+ * Built from the directory rather than from a channel list, because the rail's
+ * problem is precisely the servers whose channel lists have not been fetched:
+ * summing `channels` could only ever light the icon already selected, which
+ * left a banner about any other server with no counterpart on screen. A channel
+ * the directory cannot place is skipped rather than guessed at, and a
+ * conversation (`serverId: null`) belongs to no icon at all.
+ *
+ * `placedBy` wins over the directory where it answers. The directory is filled
+ * from an effect, so on the first render after the selected server changes it
+ * is one render behind the `channels` array the caller already holds; passing
+ * that array's own answer in means the badge never has to flicker through a
+ * render where the app knew perfectly well which server the channel was in.
+ */
+export function unreadByServer(
+  unread: Readonly<Record<string, { count: number; mentions: number }>>,
+  placedBy?: ReadonlyMap<string, string | null>,
+): Record<string, { count: number; mentions: number }> {
+  const totals: Record<string, { count: number; mentions: number }> = {};
+  for (const [channelId, counts] of Object.entries(unread)) {
+    const serverId = placedBy?.has(channelId)
+      ? placedBy.get(channelId)
+      : directory.get(channelId)?.serverId;
+    if (!serverId) {
+      continue;
+    }
+    const running = totals[serverId] ?? { count: 0, mentions: 0 };
+    totals[serverId] = {
+      count: running.count + counts.count,
+      mentions: running.mentions + counts.mentions,
+    };
+  }
+  return totals;
 }
 
 export function lookupChannel(
