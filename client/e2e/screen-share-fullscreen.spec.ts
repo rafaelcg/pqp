@@ -150,3 +150,198 @@ test("a viewer can put someone else's share fullscreen", async ({
     await context.close().catch(() => {});
   }
 });
+
+/* -------------------------------------------------------------------------
+ * The same question in a private call.
+ *
+ * Reported verbatim, 23 Aug 2026: "nem consigo ampliar os compartilhamentos de
+ * tela de outros usuarios". A DM call used to put the only fullscreen control
+ * in the call's control bar, which fades to `opacity-0` after three seconds of
+ * the pointer resting, and answered no gesture on the share itself. The stage
+ * button worked, so a spec that pressed it was green while the thing a person
+ * actually reaches for did nothing at all.
+ *
+ * So this asserts the two affordances that live ON the share, both of which
+ * the channel stage has always had: a double click on the video, and a button
+ * over the picture naming whose screen it is.
+ * ---------------------------------------------------------------------- */
+
+function dmHeaders(suffix: string) {
+  return {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${DEV_TOKEN}:${suffix}`,
+  };
+}
+
+/** Age gate + onboarding for one dev-bypass account. */
+async function materialiseAccount(suffix: string) {
+  const accountHeaders = dmHeaders(suffix);
+  const me = await fetch(`${API}/api/me`, { headers: accountHeaders });
+  const body = (await me.json()) as {
+    id: string;
+    displayName: string;
+    ageGate?: string;
+  };
+  if (body.ageGate && body.ageGate !== "passed") {
+    await fetch(`${API}/api/me/age-check`, {
+      method: "POST",
+      headers: accountHeaders,
+      body: JSON.stringify({ dateOfBirth: "1990-01-01" }),
+    });
+  }
+  await fetch(`${API}/api/me/preferences`, {
+    method: "PATCH",
+    headers: accountHeaders,
+    body: JSON.stringify({ onboardedAt: new Date().toISOString() }),
+  });
+  return body;
+}
+
+async function seedConversation(callerSuffix: string, calleeSuffix: string) {
+  const caller = await materialiseAccount(callerSuffix);
+  const callee = await materialiseAccount(calleeSuffix);
+  await fetch(`${API}/api/me`, {
+    method: "PATCH",
+    headers: dmHeaders(calleeSuffix),
+    body: JSON.stringify({ dmPrivacy: "everyone" }),
+  });
+  const opened = await fetch(`${API}/api/dms`, {
+    method: "POST",
+    headers: dmHeaders(callerSuffix),
+    body: JSON.stringify({ userIds: [callee.id] }),
+  });
+  const { conversation } = (await opened.json()) as {
+    conversation: { channelId: string };
+  };
+  return {
+    conversationId: conversation.channelId,
+    callerSuffix,
+    calleeSuffix,
+    callerName: caller.displayName,
+  };
+}
+
+async function openConversation(
+  target: Page,
+  conversationId: string,
+  suffix: string,
+): Promise<void> {
+  await target.addInitScript((value) => {
+    localStorage.setItem("pqp:dev-user-suffix", value);
+  }, suffix);
+  await target.goto(`/app/dm/${conversationId}?lang=en`);
+  await expect(target.getByText("Dev auth bypass")).toBeVisible({
+    timeout: 20_000,
+  });
+  await expect(target.getByRole("button", { name: "Send" })).toBeVisible({
+    timeout: 20_000,
+  });
+}
+
+/** The share on a call stage, and whether it fills the viewport. */
+function measureCallStage(target: Page) {
+  return target.evaluate(() => {
+    const video = document.querySelector<HTMLVideoElement>(
+      '[data-testid="call-stage"] video.object-contain',
+    );
+    const rect = video?.getBoundingClientRect();
+    return {
+      width: rect?.width ?? 0,
+      height: rect?.height ?? 0,
+      fullscreen: !!document.fullscreenElement,
+      viewport: { width: window.innerWidth, height: window.innerHeight },
+    };
+  });
+}
+
+test("a viewer can enlarge a screen share in a private call", async ({
+  page,
+  browser,
+}) => {
+  // Two app boots plus a media handshake.
+  test.setTimeout(120_000);
+
+  const pair = await seedConversation("fsdm-a", "fsdm-b");
+  const context = await browser.newContext({
+    viewport: { width: 1440, height: 900 },
+    colorScheme: "dark",
+  });
+  await context.grantPermissions(["microphone", "camera"]);
+
+  try {
+    const viewer = await context.newPage();
+    await openConversation(viewer, pair.conversationId, pair.calleeSuffix);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openConversation(page, pair.conversationId, pair.callerSuffix);
+
+    await page
+      .getByRole("button", { name: "Start voice call", exact: true })
+      .click();
+    await expect(page.getByTestId("call-stage")).toBeVisible({
+      timeout: 20_000,
+    });
+    await viewer
+      .getByRole("button", { name: "Accept" })
+      .click({ timeout: 20_000 });
+
+    await page
+      .getByRole("button", { name: "Share your screen", exact: true })
+      .click();
+    await expect(
+      viewer.getByText(`${pair.callerName} is presenting`),
+    ).toBeVisible({ timeout: 30_000 });
+
+    const share = viewer
+      .locator('[data-testid="call-stage"] video.object-contain')
+      .first();
+    await expect(share).toBeVisible({ timeout: 20_000 });
+    await expect
+      .poll(
+        () => share.evaluate((el) => (el as HTMLVideoElement).videoWidth > 0),
+        { timeout: 30_000 },
+      )
+      .toBe(true);
+
+    const before = await measureCallStage(viewer);
+    expect(before.fullscreen).toBe(false);
+
+    // 1. The gesture. Double clicking somebody's share enlarges it, exactly as
+    //    it does on a channel stage.
+    await share.dblclick({ position: { x: 40, y: 40 } });
+    await expect
+      .poll(async () => (await measureCallStage(viewer)).fullscreen, {
+        timeout: 10_000,
+      })
+      .toBe(true);
+
+    const enlarged = await measureCallStage(viewer);
+    // Not merely "something is fullscreen": the picture has to have grown.
+    expect(enlarged.width).toBe(enlarged.viewport.width);
+    expect(enlarged.height).toBeGreaterThan(before.height);
+    expect(enlarged.height).toBeGreaterThan(enlarged.viewport.height * 0.9);
+
+    // 2. The visible control, on the share rather than in the fading bar, and
+    //    saying whose screen it is.
+    const shareControl = viewer.getByTestId("share-fullscreen");
+    await expect(shareControl).toHaveAttribute("aria-label", "Exit fullscreen");
+    await shareControl.click();
+    await expect
+      .poll(async () => (await measureCallStage(viewer)).fullscreen, {
+        timeout: 10_000,
+      })
+      .toBe(false);
+
+    await expect(shareControl).toHaveAttribute(
+      "aria-label",
+      `View ${pair.callerName}'s screen fullscreen`,
+    );
+    await shareControl.click();
+    await expect
+      .poll(async () => (await measureCallStage(viewer)).fullscreen, {
+        timeout: 10_000,
+      })
+      .toBe(true);
+  } finally {
+    await context.close().catch(() => {});
+  }
+});
