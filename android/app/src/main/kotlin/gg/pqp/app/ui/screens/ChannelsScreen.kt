@@ -135,13 +135,25 @@ fun ChannelsScreen(
 
     val roomFull = stringResource(R.string.voice_room_full)
     val unsupported = stringResource(R.string.voice_transport_unsupported)
+    val screenDenied = stringResource(R.string.voice_screen_share_denied)
     LaunchedEffect(voiceState.refusal) {
         when (voiceState.refusal) {
             Refusal.RoomFull -> snackbars.showSnackbar(roomFull)
             Refusal.TransportUnsupported -> snackbars.showSnackbar(unsupported)
+            Refusal.ScreenShareDenied -> snackbars.showSnackbar(screenDenied)
             null -> return@LaunchedEffect
         }
         voice.dismissRefusal()
+    }
+
+    // Voice moderation. The frame carries the whole sentence, already written
+    // and already translated by the server, so it is shown verbatim rather than
+    // mapped onto a string this client picked. An eviction the target cannot
+    // see is indistinguishable from a network failure.
+    LaunchedEffect(voiceState.notice) {
+        val notice = voiceState.notice ?: return@LaunchedEffect
+        snackbars.showSnackbar(notice)
+        voice.dismissNotice()
     }
 
     LaunchedEffect(serverId) {

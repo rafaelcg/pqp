@@ -55,6 +55,16 @@
     <string name="voice_transport_unsupported">This call runs on a server this app cannot join yet.</string>
     <string name="voice_participants">%1$d in this call</string>
     <string name="voice_peer_unreachable">Cannot reach everyone in this call</string>
+    <string name="voice_notification_sharing">Sharing your screen</string>
+    <string name="voice_share_screen">Share your screen</string>
+    <string name="voice_stop_sharing">Stop sharing</string>
+    <string name="voice_screen_share_denied">This call already has as many screens as it can carry.</string>
+    <string name="voice_screen_share_failed">Android would not start the screen capture.</string>
+    <string name="voice_watch_screen">%1$s is sharing a screen</string>
+    <string name="voice_watch">Watch</string>
+    <string name="voice_close_screen">Close</string>
+    <string name="voice_speaker_on">Speaker</string>
+    <string name="voice_speaker_off">Earpiece</string>
 
     <!-- Push notifications -->
     <string name="push_channel_messages">Mentions and messages</string>

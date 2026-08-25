@@ -55,6 +55,16 @@
     <string name="voice_transport_unsupported">Esta chamada usa um transporte que este app ainda não sabe usar.</string>
     <string name="voice_participants">%1$d na chamada</string>
     <string name="voice_peer_unreachable">Não foi possível alcançar todo mundo na chamada</string>
+    <string name="voice_notification_sharing">Compartilhando sua tela</string>
+    <string name="voice_share_screen">Compartilhar sua tela</string>
+    <string name="voice_stop_sharing">Parar de compartilhar</string>
+    <string name="voice_screen_share_denied">Esta chamada já tem todas as telas que consegue carregar.</string>
+    <string name="voice_screen_share_failed">O Android não iniciou a captura de tela.</string>
+    <string name="voice_watch_screen">%1$s está compartilhando uma tela</string>
+    <string name="voice_watch">Assistir</string>
+    <string name="voice_close_screen">Fechar</string>
+    <string name="voice_speaker_on">Viva-voz</string>
+    <string name="voice_speaker_off">Fone</string>
 
     <!-- Notificações -->
     <string name="push_channel_messages">Menções e mensagens</string>
