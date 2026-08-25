@@ -34,10 +34,50 @@ function edgeConfig(): Plugin {
   };
 }
 
+/**
+ * The Umami tag, injected only when this build was told which site it is.
+ *
+ * WHY THIS IS NOT JUST A `<script>` IN index.html. pqp is AGPL and meant to be
+ * self-hosted, and `index.html` ships to every self-hoster. A hardcoded tag
+ * would silently send *their* visitors' page views to *our* analytics account:
+ * wrong on its own terms, and a flat contradiction of the pitch that you keep
+ * your own keys. So the tag exists only when `VITE_UMAMI_WEBSITE_ID` is set,
+ * which is only on the pqp.gg build.
+ *
+ * The website id is not a secret. It is visible in the page source of every
+ * site running Umami, which is why it travels as a plain build var rather than
+ * as a repository secret pretending otherwise.
+ *
+ * `VITE_UMAMI_SRC` exists so a self-hoster who wants their own Umami can point
+ * at their own instance instead of Umami Cloud. Default is the hosted script.
+ */
+function umami(): Plugin {
+  const websiteId = process.env.VITE_UMAMI_WEBSITE_ID?.trim();
+  const src =
+    process.env.VITE_UMAMI_SRC?.trim() || "https://cloud.umami.is/script.js";
+  return {
+    name: "pqp-umami",
+    apply: "build",
+    transformIndexHtml() {
+      if (!websiteId) {
+        return [];
+      }
+      return [
+        {
+          tag: "script",
+          injectTo: "head",
+          attrs: { defer: true, src, "data-website-id": websiteId },
+        },
+      ];
+    },
+  };
+}
+
 export default defineConfig({
   plugins: [
     react(),
     edgeConfig(),
+    umami(),
     tailwindcss(),
     VitePWA({
       // `prompt`, never `autoUpdate`. This client holds live WebSocket state and

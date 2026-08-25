@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
-import { useTranslation } from "@/lib/i18n";
+import { useTranslation, type MessageKey } from "@/lib/i18n";
 import {
+  describeLimitation,
   sampleVoiceStats,
+  type Limitation,
   type VideoSenderSample,
 } from "@/lib/voice-stats-probe";
 
@@ -23,9 +25,12 @@ import {
 const SAMPLE_INTERVAL_MS = 2000;
 
 /** Which limitation reasons get a plain-language name of their own. */
-function limitKey(reason: string) {
+function limitKey(reason: Limitation) {
   if (reason === "bandwidth") {
     return "settings.voice.videoQuality.limit.bandwidth" as const;
+  }
+  if (reason === "setting") {
+    return "settings.voice.videoQuality.limit.setting" as const;
   }
   if (reason === "cpu") {
     return "settings.voice.videoQuality.limit.cpu" as const;
@@ -33,7 +38,20 @@ function limitKey(reason: string) {
   return "settings.voice.videoQuality.limit.other" as const;
 }
 
-export function OutboundVideoReadout() {
+export function OutboundVideoReadout({
+  /**
+   * What to say when there is no camera sender to read at all.
+   *
+   * The default is written for the Settings dialog, where the honest answer is
+   * "turn your camera on during a call". The in-call menu only exists while the
+   * camera *is* on, so that sentence would be a flat contradiction there: with
+   * a camera running and no sample, what is actually true is that this call
+   * cannot be measured from here (an SFU room keeps no local sender registry).
+   */
+  idleKey = "settings.voice.videoQuality.idle",
+}: {
+  idleKey?: MessageKey;
+} = {}) {
   const { t } = useTranslation();
   const [camera, setCamera] = useState<VideoSenderSample | null>(null);
 
@@ -50,8 +68,19 @@ export function OutboundVideoReadout() {
         // The first camera sender on any peer. In a mesh the same camera goes
         // to everybody, so one row answers the question for all of them, and
         // listing one line per peer would say the same thing several times.
+        //
+        // FALLS BACK TO THE SCREEN, because the setting this sits under now
+        // governs the screen sender too. Somebody presenting with their camera
+        // off used to be told there was nothing to measure, which is the same
+        // dead end that made the whole readout worthless in Settings, and it
+        // landed on exactly the person the sharpness complaint came from.
+        // Camera first when both exist: it is the smaller of the two numbers
+        // and the one people misread as "the call is broken".
+        const senders = snapshot.senders;
         setCamera(
-          snapshot.senders.find((sender) => sender.role === "camera") ?? null,
+          senders.find((sender) => sender.role === "camera") ??
+            senders.find((sender) => sender.role === "screen") ??
+            null,
         );
       });
     };
@@ -66,7 +95,7 @@ export function OutboundVideoReadout() {
   if (!camera) {
     return (
       <p className="mt-1 text-xs text-paper-muted">
-        {t("settings.voice.videoQuality.idle")}
+        {t(idleKey)}
       </p>
     );
   }
@@ -81,8 +110,10 @@ export function OutboundVideoReadout() {
     );
   }
 
-  const limited =
-    camera.limitedBy && camera.limitedBy !== "none" ? camera.limitedBy : null;
+  // Not `limitedBy` directly: the encoder calls its own `maxBitrate` a
+  // bandwidth limit, so the raw field says "your connection" to somebody on
+  // fibre whose only limit is the rung they picked. See `describeLimitation`.
+  const limited = describeLimitation(camera);
 
   return (
     <p className="mt-1 text-xs text-paper-muted" role="status">
@@ -94,7 +125,10 @@ export function OutboundVideoReadout() {
       {limited && (
         <>
           {". "}
-          <span className="text-warning">
+          {/* Orange only when something is going wrong. Sitting on the ceiling
+              you chose is the setting working, not a fault, and colouring it
+              like one is how a person ends up rebooting a healthy router. */}
+          <span className={limited === "setting" ? undefined : "text-warning"}>
             {t("settings.voice.videoQuality.limited", {
               reason: t(limitKey(limited)),
             })}

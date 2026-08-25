@@ -170,6 +170,52 @@ final class WireDecodingTests: XCTestCase {
         XCTAssertTrue(mention)
     }
 
+    /// A non-null `serverId` has to survive too. The negative case above was
+    /// the only one pinned, and it passes just as well against a decoder that
+    /// drops the field entirely.
+    func testServerActivityKeepsItsServerId() async throws {
+        let json = """
+        {"type":"channel-activity","serverId":"33333333-3333-3333-3333-333333333333",
+         "kind":"server","channelId":"22222222-2222-2222-2222-222222222222","mention":false}
+        """
+        let event = await firstEvent(from: json)
+        guard case .activity(_, let serverId, _) = event else {
+            return XCTFail("Expected activity, got \(String(describing: event))")
+        }
+        XCTAssertEqual(serverId, "33333333-3333-3333-3333-333333333333")
+    }
+
+    /// `permissions-update` is what tells a phone that a channel it is showing
+    /// is no longer one this account may see.
+    ///
+    /// Decoding it wrong is silent in both directions: as `.other` the sidebar
+    /// keeps a channel the server will not serve, and with the wrong `serverId`
+    /// the wrong server gets refetched while the right one goes stale.
+    func testPermissionsUpdateDecodes() async throws {
+        let json = """
+        {"type":"permissions-update","serverId":"33333333-3333-3333-3333-333333333333","version":7}
+        """
+        let event = await firstEvent(from: json)
+        guard case .permissionsUpdate(let serverId, let version) = event else {
+            return XCTFail("Expected permissionsUpdate, got \(String(describing: event))")
+        }
+        XCTAssertEqual(serverId, "33333333-3333-3333-3333-333333333333")
+        XCTAssertEqual(version, 7)
+    }
+
+    /// The version is advisory. A frame without one still has to arrive, because
+    /// the client refetches either way.
+    func testPermissionsUpdateWithoutAVersionStillArrives() async throws {
+        let json = """
+        {"type":"permissions-update","serverId":"33333333-3333-3333-3333-333333333333"}
+        """
+        let event = await firstEvent(from: json)
+        guard case .permissionsUpdate(_, let version) = event else {
+            return XCTFail("Expected permissionsUpdate, got \(String(describing: event))")
+        }
+        XCTAssertNil(version)
+    }
+
     /// `/api/me` decides the age-gate route; absent must read as "predates the
     /// gate", never as pending.
     func testCurrentUserAgeGateDecoding() throws {

@@ -280,7 +280,7 @@ final class ReadCacheTests: XCTestCase {
 
         await cache.apply(
             .reaction(channelId: "chan-1", messageId: "m1", emoji: "🔥",
-                      userId: "u1", added: true)
+                      userId: "u1", added: true, displayName: nil)
         )
         await cache.apply(.typing(channelId: "chan-1", userId: "u1", displayName: "Someone"))
 

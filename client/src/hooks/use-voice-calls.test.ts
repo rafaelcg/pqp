@@ -15,6 +15,8 @@ interface ManagerStub {
   localCameraStreams: (MediaStream | null)[];
   /** Ceilings handed to the manager, in order. See the video-quality tests. */
   cameraMaxBitrates: number[];
+  /** Screen qualities handed to the manager, in order. */
+  screenQualities: string[];
   disposed: boolean;
 }
 
@@ -33,6 +35,7 @@ vi.mock("@/lib/peer-connection-manager", () => ({
       peerIds: [],
       cameraStreamIds: [],
       cameraMaxBitrates: [],
+      screenQualities: [],
       localCameraStreams: [],
       disposed: false,
     };
@@ -46,10 +49,14 @@ vi.mock("@/lib/peer-connection-manager", () => ({
       setCameraMaxBitrate: (maxBitrate: number) => {
         stub.cameraMaxBitrates.push(maxBitrate);
       },
+      setScreenQuality: (quality: string) => {
+        stub.screenQualities.push(quality);
+      },
       setPeerCameraStreamId: (peerId: string, streamId: string | null) => {
         stub.cameraStreamIds.push([peerId, streamId]);
       },
       setPeerScreenAudioStreamId: () => {},
+      setPeerSharingScreen: () => {},
       onPeerStateChange: () => {},
       connectToPeer: (peerId: string) => stub.peerIds.push(peerId),
       removePeer: () => {},
@@ -76,6 +83,7 @@ vi.mock("@/lib/livekit-session", () => ({
     unpublishScreenAudio: async () => {},
     publishCamera: async () => {},
     setCameraMaxBitrate: async () => {},
+    setScreenMaxBitrate: async () => {},
     unpublishCamera: async () => {},
     disconnect: async () => {},
   })),
@@ -441,6 +449,46 @@ describe("camera", () => {
     // No re-capture: the webcam light does not blink and no video is dropped.
     expect(stoppedTracks).not.toContain("camera");
     expect(voice.getState().isCameraOn).toBe(true);
+  });
+
+  it("takes the same choice to the screen sender, not only the camera", async () => {
+    // THE REPORTED BUG. "I selected 1080p, shared, it was blurry": the control
+    // called setCameraMaxBitrate and stopped there, so the screen sender never
+    // heard about the choice at all and ran on a constant nothing could reach.
+    const { voice } = await connectedController();
+    await voice.setVideoQuality("1080p");
+
+    expect(managers[0]!.screenQualities.at(-1)).toBe("1080p");
+  });
+
+  it("tells the screen sender even with no camera and no share running", async () => {
+    // Somebody who pins a quality before presenting must have it applied when
+    // they do. The manager holds the choice; it does not merely react to a
+    // sender that already exists.
+    const { voice } = await connectedController();
+    await voice.setVideoQuality("480p");
+
+    expect(voice.getState().isCameraOn).toBe(false);
+    expect(voice.getState().isSharingScreen).toBe(false);
+    expect(managers[0]!.screenQualities).toContain("480p");
+  });
+
+  it("moves camera and screen together, every time, in step", async () => {
+    const { voice } = await connectedController();
+    for (const quality of ["360p", "720p", "1080p"] as const) {
+      await voice.setVideoQuality(quality);
+    }
+
+    expect(managers[0]!.screenQualities.slice(-3)).toEqual([
+      "360p",
+      "720p",
+      "1080p",
+    ]);
+    // And the camera kept its own ladder, which is a different set of numbers
+    // on purpose: same word, different cost.
+    expect(managers[0]!.cameraMaxBitrates.slice(-3)).toEqual([
+      400_000, 1_500_000, 2_500_000,
+    ]);
   });
 
   it("opens a later camera at the chosen size", async () => {

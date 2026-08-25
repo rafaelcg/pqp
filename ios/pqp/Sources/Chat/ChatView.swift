@@ -287,6 +287,25 @@ struct ChatView: View {
                         )
                         .padding(.top, 40)
                     }
+
+                    // THE ONLY THING THAT ANSWERS "is the tail on screen".
+                    //
+                    // `ChatModel.isNearBottom` guards the auto-scroll below and
+                    // was initialised to `true` and never written, so every
+                    // arriving message yanked the transcript to the bottom —
+                    // including while somebody was reading history, which is
+                    // the classic chat-app sin the comment there warns about.
+                    //
+                    // A `LazyVStack` only builds what is near the viewport, so
+                    // this one-point marker at the very end appears when the
+                    // tail is in reach and goes away when it is not. That is
+                    // exactly the question being asked, and unlike measuring
+                    // frames it changes no layout: the row is a point tall and
+                    // draws nothing.
+                    Color.clear
+                        .frame(height: 1)
+                        .onAppear { model.isNearBottom = true }
+                        .onDisappear { model.isNearBottom = false }
                 }
                 .padding(.horizontal, Metrics.hPadding)
                 .padding(.vertical, 12)
@@ -899,7 +918,7 @@ struct ReactionRow: View {
                 Button { onTap(reaction.emoji) } label: {
                 HStack(spacing: 4) {
                     Text(reaction.emoji).font(.system(size: 13))
-                    Text("\(reaction.count)")
+                    Text(verbatim: "\(reaction.count)")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(reaction.me ? Palette.signal : Palette.paperMuted)
                 }
@@ -917,9 +936,18 @@ struct ReactionRow: View {
                 )
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(reactionWhoLabel(reaction))
             }
         }
         .padding(.top, 2)
         .animation(Motion.press, value: reactions)
     }
+}
+
+private func reactionWhoLabel(_ reaction: MessageReaction) -> String {
+    let names = reaction.users.map(\.displayName).filter { !$0.isEmpty }
+    if names.isEmpty {
+        return "\(reaction.emoji), \(reaction.count)"
+    }
+    return "\(reaction.emoji), \(names.joined(separator: ", "))"
 }

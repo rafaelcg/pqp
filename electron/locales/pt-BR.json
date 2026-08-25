@@ -7,7 +7,11 @@
   "menu.toggleMuteHelp": "Alternar mute (Cmd/Ctrl+Shift+M)",
   "updater.title": "Atualização pronta",
   "updater.message": "O pqp {version} está pronto para instalar.",
-  "updater.detail": "Reiniciar leva alguns segundos. Se você está numa call, escolha Depois — a atualização instala na próxima vez que você sair.",
+  "updater.detail": "Reiniciar leva alguns segundos. Se você está numa call, escolha Depois, que a atualização instala na próxima vez que você sair.",
   "updater.restart": "Reiniciar agora",
-  "updater.later": "Depois"
+  "updater.later": "Depois",
+  "passkey.windowTitle": "Entrar com Google",
+  "passkey.hintTitle": "Travou pedindo passkey?",
+  "passkey.hintBody": "O login por passkey não completa aqui no app. Nesta janela do Google, clique em \"Tentar de outra forma\" (\"Try another way\") e escolha entrar com senha, que funciona normalmente.",
+  "passkey.hintDismiss": "Entendi"
 }

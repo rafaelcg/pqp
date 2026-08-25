@@ -6,6 +6,13 @@ import {
   subscribeToCluster,
 } from "../lib/bus.js";
 import { deleteObject, isStorageConfigured } from "../lib/s3.js";
+import {
+  applyPrivateChannelOverwrites,
+  bumpPermissionsVersion,
+  deleteMemberViewOverwrite,
+  seedDefaultRoles,
+  upsertMemberViewOverwrite,
+} from "./permissions.js";
 import { channelVisibleSql } from "./users.js";
 
 /**
@@ -185,6 +192,8 @@ export async function createServer(
       [server.id, ownerId],
     );
 
+    await seedDefaultRoles(client, server.id);
+
     const channelsResult = await client.query<ChannelRow>(
       `INSERT INTO channels (server_id, name, type, position, is_private) VALUES
          ($1, 'general', 'text', 0, FALSE),
@@ -247,7 +256,17 @@ export async function createChannel(
      RETURNING ${CHANNEL_COLUMNS}`,
     [serverId, name, type, position, isPrivate],
   );
-  return result.rows[0]!;
+  const channel = result.rows[0]!;
+  if (isPrivate) {
+    await applyPrivateChannelOverwrites(
+      getPool(),
+      channel.id,
+      serverId,
+      true,
+    );
+    await bumpPermissionsVersion(serverId);
+  }
+  return channel;
 }
 
 export class InvalidChannelMoveError extends Error {}
@@ -403,13 +422,32 @@ export async function updateChannel(
       updates.imageUrl === "" ? null : (updates.imageUrl ?? null),
     ],
   );
+  const updated = result.rows[0] ?? null;
+  if (updated && updates.isPrivate !== undefined && updated.server_id) {
+    await applyPrivateChannelOverwrites(
+      getPool(),
+      updated.id,
+      updated.server_id,
+      updated.is_private,
+    );
+    if (updated.is_private) {
+      const members = await getPool().query<{ user_id: string }>(
+        `SELECT user_id FROM channel_members WHERE channel_id = $1`,
+        [updated.id],
+      );
+      for (const member of members.rows) {
+        await upsertMemberViewOverwrite(getPool(), updated.id, member.user_id);
+      }
+    }
+    await bumpPermissionsVersion(updated.server_id);
+  }
   // `is_private` is half of `channelVisibleSql`, so a rename and a
   // public→private flip arrive through the same call and only one of them is
   // safe to keep a cached audience through. Invalidating unconditionally is
   // one wasted query on a rename and the difference between correct and not on
   // the flip.
   invalidateChannelAudience(channelId);
-  return result.rows[0] ?? null;
+  return updated;
 }
 
 export async function deleteChannel(channelId: string): Promise<boolean> {
@@ -1212,6 +1250,7 @@ export async function addChannelMember(
      ON CONFLICT DO NOTHING`,
     [channelId, userId],
   );
+  await upsertMemberViewOverwrite(getPool(), channelId, userId);
   invalidateChannelAudience(channelId);
 }
 
@@ -1223,6 +1262,7 @@ export async function removeChannelMember(
     `DELETE FROM channel_members WHERE channel_id = $1 AND user_id = $2`,
     [channelId, userId],
   );
+  await deleteMemberViewOverwrite(getPool(), channelId, userId);
   // The narrowing case this cache is most likely to get wrong: on a private
   // channel this row *is* the access, and the route that calls it only evicts
   // live viewers, which a person who was never looking is not.

@@ -65,6 +65,7 @@ if (DATABASE_URL) {
 
 const { getPool, initDb, closePool } = await import("../db.js");
 const { upsertUser } = await import("../services/users.js");
+const { seedDefaultRoles } = await import("./permissions.js");
 const {
   claimAttachments,
   createPendingAttachment,
@@ -216,6 +217,7 @@ describeDb("attachments", () => {
       [uploader.id],
     );
     const serverId = server.rows[0]!.id;
+    await seedDefaultRoles(getPool(), serverId);
     await getPool().query(
       `INSERT INTO server_members (server_id, user_id, role) VALUES
          ($1, $2, 'owner'), ($1, $3, 'member')`,

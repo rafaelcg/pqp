@@ -1,5 +1,5 @@
 import { Compass, MessageCircle, Plus, UserPlus } from "lucide-react";
-import type { Channel, Server } from "@pqp/shared";
+import type { Server } from "@pqp/shared";
 import {
   formatBadgeCount,
   type UnreadState,
@@ -22,8 +22,18 @@ import { cn } from "@/lib/utils";
 interface ServerRailProps {
   servers: Server[];
   selectedServerId: string | null;
-  unread: Record<string, UnreadState>;
-  channels: Channel[];
+  /**
+   * Unread totalled per server, for every server — not only the selected one.
+   *
+   * This used to be `unread` (by channel) plus `channels` (the selected
+   * server's list), and summing those could only ever light the icon already
+   * selected: no other server's channel list is fetched, so its channel ids
+   * meant nothing here. A desktop notification about any other server therefore
+   * had no counterpart anywhere on screen, which is what "I get notifications
+   * when nothing happened" turns out to mean. The caller resolves the totals
+   * from the activity frames' own server ids.
+   */
+  serverUnread: Record<string, UnreadState>;
   /** True while the conversation view is what the sidebar is showing. */
   homeSelected: boolean;
   /** Unread across every conversation, which has no server icon to land on. */
@@ -68,8 +78,7 @@ interface ServerRailProps {
 export function ServerRail({
   servers,
   selectedServerId,
-  unread,
-  channels,
+  serverUnread,
   homeSelected,
   homeUnread,
   friendRequestCount = 0,
@@ -89,22 +98,6 @@ export function ServerRail({
   // Subscribed once for the whole rail: hook rules forbid reading the store
   // inside the map below, and every icon needs the same snapshot anyway.
   const notifications = useNotificationState();
-
-  // Channels are only known for the selected server, so every other icon stays
-  // indicator-free rather than guessing.
-  const selectedTotals = channels.reduce(
-    (totals, channel) => {
-      const state = unread[channel.id];
-      if (!state) {
-        return totals;
-      }
-      return {
-        count: totals.count + state.count,
-        mentions: totals.mentions + state.mentions,
-      };
-    },
-    { count: 0, mentions: 0 },
-  );
 
   return (
     <nav className="flex h-full w-[72px] shrink-0 flex-col items-center gap-2 overflow-y-auto border-r border-ink-4/40 bg-rail py-3">
@@ -176,7 +169,7 @@ export function ServerRail({
 
       {servers.map((server) => {
         const selected = selectedServerId === server.id;
-        const totals = selected ? selectedTotals : null;
+        const totals = serverUnread[server.id] ?? null;
         const levels = serverNotificationControls(server.id, notifications);
         const muted = levels.level === "none";
         const mentions = muted ? 0 : (totals?.mentions ?? 0);

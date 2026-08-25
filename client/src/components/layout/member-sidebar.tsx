@@ -13,7 +13,8 @@ import { StatusDot } from "@/components/user/status-dot";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { useProfilePopover } from "@/components/user/user-profile-popover";
 import type { ProfileSubject } from "@/components/user/profile-relations";
-import { ApiError, fetchMembers, type ServerMember } from "@/lib/api";
+import { ApiError, fetchMembers, memberDisplayName, updateMemberNickname, type ServerMember, type ServerRole } from "@/lib/api";
+import { highestRoleColor } from "@/lib/author-display";
 import { useTranslation } from "@/lib/i18n";
 import {
   MEMBER_PAGE_SIZE,
@@ -22,6 +23,7 @@ import {
   sectionCollapsed,
   singleSection,
   toggleSectionCollapse,
+  effectiveRoleIds,
   type MemberRole,
   type MemberSection,
   type SectionCollapseState,
@@ -120,19 +122,21 @@ interface MemberSidebarProps {
   voiceOccupancy?: Record<string, VoiceParticipant[]>;
   /** This server's voice channels, for the "in voice" second line. */
   voiceChannels?: ReadonlyArray<{ id: string; name: string }>;
+  /** Server roles, for hoist sections and name colour. */
+  roles?: readonly ServerRole[];
 }
 
 /** A row, as the profile card wants it. */
 function subjectOf(member: ServerMember): ProfileSubject {
   return {
     id: member.id,
-    displayName: member.displayName,
+    displayName: memberDisplayName(member),
     tag: member.tag ?? null,
     avatarUrl: member.avatarUrl ?? null,
-    // Deliberately `null` rather than `"offline"` when the roster has no status:
-    // the card draws nothing for null and a pip for offline, and "we do not
-    // know" is the honest one. See `resolvePresence`.
     status: member.status ?? null,
+    username: member.username ?? null,
+    roleIds: member.roleIds,
+    rank: member.role,
   };
 }
 
@@ -171,6 +175,7 @@ export function MemberSidebar({
   onOpenMembersPanel,
   voiceOccupancy = {},
   voiceChannels = [],
+  roles = [],
 }: MemberSidebarProps) {
   const { t } = useTranslation();
   const openProfile = useProfilePopover();
@@ -349,17 +354,34 @@ export function MemberSidebar({
 
   // ----------------------------------------------------------------- grouping
 
+  const adminRoleId = useMemo(
+    () => roles.find((role) => role.systemKey === "admin")?.id ?? null,
+    [roles],
+  );
+  const hoistedRoles = useMemo(
+    () =>
+      [...roles]
+        .filter((role) => role.hoist && !role.isEveryone)
+        .sort((a, b) => b.position - a.position)
+        .map((role) => ({ id: role.id, name: role.name })),
+    [roles],
+  );
+
   const rows = useMemo(
     () =>
       participants
         ? [...participants, ...(self ? [self] : [])].map(asRosterRow)
-        : members,
-    [participants, self, members],
+        : members.map((member) => ({
+            ...member,
+            roleIds: effectiveRoleIds(member, adminRoleId),
+          })),
+    [participants, self, members, adminRoleId],
   );
 
   const sections = useMemo(
-    () => (participants ? singleSection(rows) : groupMembers(rows)),
-    [participants, rows],
+    () =>
+      participants ? singleSection(rows) : groupMembers(rows, hoistedRoles),
+    [participants, rows, hoistedRoles],
   );
 
   // userId → where they are in this server's voice, from the live rosters. Same
@@ -387,7 +409,9 @@ export function MemberSidebar({
   function headingFor(section: MemberSection<ServerMember>): string {
     const label =
       section.kind === "role"
-        ? t(section.role === "owner" ? "memberList.owner" : "memberList.admins")
+        ? section.role === "owner"
+          ? t("memberList.owner")
+          : (section.label ?? t("memberList.admins"))
         : section.kind === "offline"
           ? t("memberList.offline")
           : section.kind === "all"
@@ -399,6 +423,35 @@ export function MemberSidebar({
     });
   }
 
+  async function changeNickname(member: ServerMember) {
+    if (!serverId) {
+      return;
+    }
+    const next = window.prompt(
+      t("member.nicknamePrompt"),
+      member.nickname ?? "",
+    );
+    if (next === null) {
+      return;
+    }
+    const trimmed = next.trim();
+    try {
+      const nickname = trimmed.length === 0 ? null : trimmed;
+      await updateMemberNickname(serverId, member.id, nickname);
+      setMembers((prev) =>
+        prev.map((row) =>
+          row.id === member.id ? { ...row, nickname } : row,
+        ),
+      );
+    } catch (err) {
+      setError(
+        err instanceof ApiError
+          ? err.message
+          : t("member.nicknameFailed"),
+      );
+    }
+  }
+
   function menuFor(member: ServerMember): ContextMenuItemDef[] {
     const items: ContextMenuItemDef[] = [];
     if (onMention && member.username) {
@@ -407,6 +460,17 @@ export function MemberSidebar({
         id: "mention",
         label: t("memberList.mention"),
         onSelect: () => onMention(username),
+      });
+    }
+    if (
+      serverId &&
+      !participants &&
+      (member.id === currentUserId || role === "owner" || role === "admin")
+    ) {
+      items.push({
+        id: "nickname",
+        label: t("member.nickname"),
+        onSelect: () => void changeNickname(member),
       });
     }
     if (member.id !== currentUserId) {
@@ -476,6 +540,7 @@ export function MemberSidebar({
             dim={section.kind === "offline"}
             voiceChannelName={voiceByUser.get(member.id) ?? null}
             items={menuFor(member)}
+            nameColor={highestRoleColor(member.roleIds, roles)}
             onOpenProfile={(anchor) => openProfile(subjectOf(member), anchor)}
           />
         ))}
@@ -574,6 +639,7 @@ interface MemberRowProps {
   dim: boolean;
   voiceChannelName: string | null;
   items: ContextMenuItemDef[];
+  nameColor: string | null;
   onOpenProfile: (anchor: HTMLElement) => void;
 }
 
@@ -599,10 +665,12 @@ function MemberRow({
   dim,
   voiceChannelName,
   items,
+  nameColor,
   onOpenProfile,
 }: MemberRowProps) {
   const { t } = useTranslation();
   const status = member.status ?? null;
+  const shown = memberDisplayName(member);
 
   return (
     <ContextMenu items={items}>
@@ -615,13 +683,13 @@ function MemberRow({
         <button
           type="button"
           data-member-sidebar-trigger={member.id}
-          title={t("profile.open", { name: member.displayName })}
+          title={t("profile.open", { name: shown })}
           className="flex min-w-0 flex-1 items-center gap-2 rounded text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
           onClick={(event) => onOpenProfile(event.currentTarget)}
         >
           <span className="relative shrink-0">
             <UserAvatar
-              name={member.displayName}
+              name={shown}
               avatarUrl={member.avatarUrl}
               className="h-8 w-8"
               rounded="full"
@@ -642,8 +710,14 @@ function MemberRow({
             {/* `text-paper` explicitly: role colours are the next thing to land
                 here, and a name that inherits its colour has nowhere to put
                 one. */}
-            <span className="block truncate text-sm font-medium text-paper">
-              {member.displayName}
+            <span
+              className={cn(
+                "block truncate text-sm font-medium",
+                !nameColor && "text-paper",
+              )}
+              style={nameColor ? { color: nameColor } : undefined}
+            >
+              {shown}
             </span>
             {voiceChannelName && (
               <span className="block truncate text-[11px] text-signal">

@@ -20,6 +20,7 @@ import { getPreferences } from "./preferences.js";
 // evaluation time, so the cycle resolves. It exists because the audience cache
 // has to live beside the query it caches, and membership is written here.
 import { invalidateServerAudience } from "./servers.js";
+import { bumpPermissionsVersion } from "./permissions.js";
 
 /** Every column of `DbUser`, single-sourced so the reads cannot drift apart. */
 const DB_USER_COLUMNS = `id, clerk_id, display_name, username, discriminator, avatar_url, avatar_key, email_domains, is_character, handle, handle_changed_at, banner_url, banner_key`;
@@ -785,24 +786,17 @@ export function channelVisibleSql(viewer: string): string {
   // story, and a thread whose parent is gone (`parent_id` nulled) matches no
   // `eff` row and FAILS CLOSED.
   //
-  // Server membership (`sm.user_id IS NOT NULL`) and the role escape hatch are
-  // unchanged: an owner or admin who can read the private parent can read its
-  // threads, a plain member needs the parent's `channel_members` row, and a
-  // conversation still has no role escape hatch at all.
+  // Server membership (`sm.user_id IS NOT NULL`) is unchanged. The inner
+  // privacy question is `channel_viewable`: owner, Administrator, then the
+  // Discord overwrite algorithm. Conversations still have no role escape
+  // hatch at all.
   return `(
          CASE WHEN c.kind = 'server' THEN
            sm.user_id IS NOT NULL
            AND EXISTS (
              SELECT 1 FROM channels eff
              WHERE eff.id = CASE WHEN c.type = 'thread' THEN c.parent_id ELSE c.id END
-               AND (
-                 eff.is_private = FALSE
-                 OR sm.role IN ('owner', 'admin')
-                 OR EXISTS (
-                     SELECT 1 FROM channel_members cm
-                     WHERE cm.channel_id = eff.id AND cm.user_id = ${viewer}
-                   )
-               )
+               AND channel_viewable(eff.id, ${viewer})
            )
          ELSE ${channelMemberSql(viewer)}
          END
@@ -848,14 +842,23 @@ export async function listServerMembers(serverId: string) {
     discriminator: string | null;
     avatar_url: string | null;
     role: "owner" | "admin" | "member";
+    nickname: string | null;
+    role_ids: string[];
   }>(
-    `SELECT u.id, u.display_name, u.username, u.discriminator, u.avatar_url, sm.role
+    `SELECT u.id, u.display_name, u.username, u.discriminator, u.avatar_url, sm.role,
+            sm.nickname,
+            COALESCE(
+              (SELECT array_agg(mr.role_id)
+                 FROM member_roles mr
+                WHERE mr.server_id = sm.server_id AND mr.user_id = sm.user_id),
+              ARRAY[]::uuid[]
+            ) AS role_ids
      FROM server_members sm
      JOIN users u ON u.id = sm.user_id
      WHERE sm.server_id = $1
      ORDER BY
        CASE sm.role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END,
-       u.display_name ASC`,
+       COALESCE(sm.nickname, u.display_name) ASC`,
     [serverId],
   );
   return result.rows.map((row) => ({
@@ -866,6 +869,8 @@ export async function listServerMembers(serverId: string) {
     tag: formatUserTag(row.username, row.discriminator),
     avatarUrl: row.avatar_url,
     role: row.role,
+    nickname: row.nickname,
+    roleIds: row.role_ids ?? [],
   }));
 }
 
@@ -884,6 +889,19 @@ export async function updateMemberRole(
   // `channel_members` row of their own, so `admin` → `member` takes away every
   // private channel they were not explicitly added to.
   invalidateServerAudience(serverId);
+  await bumpPermissionsVersion(serverId);
+}
+
+export async function setMemberNickname(
+  serverId: string,
+  userId: string,
+  nickname: string | null,
+): Promise<void> {
+  await getPool().query(
+    `UPDATE server_members SET nickname = $3
+      WHERE server_id = $1 AND user_id = $2`,
+    [serverId, userId, nickname],
+  );
 }
 
 /** Remove all membership rows for a user in one server. */
@@ -1043,7 +1061,9 @@ export async function listUnread(serverId: string, userId: string) {
   }>(
     `SELECT c.id AS channel_id,
             COUNT(m.id)::text AS count,
-            COUNT(mm.user_id)::text AS mentions
+            COUNT(DISTINCT CASE
+              WHEN mm.user_id IS NOT NULL OR m.mention_everyone THEN m.id
+            END)::text AS mentions
      FROM channels c
      JOIN server_members sm ON sm.server_id = c.server_id AND sm.user_id = $2
      LEFT JOIN channel_reads cr
@@ -1071,12 +1091,43 @@ export async function listUnread(serverId: string, userId: string) {
 export async function markChannelRead(
   channelId: string,
   userId: string,
-): Promise<void> {
-  await getPool().query(
+  lastReadAt?: Date,
+): Promise<{ previousLastReadAt: Date | null; lastReadAt: Date }> {
+  const previous = await getPool().query<{ last_read_at: Date }>(
+    `SELECT last_read_at
+       FROM channel_reads
+      WHERE channel_id = $1 AND user_id = $2`,
+    [channelId, userId],
+  );
+  const previousLastReadAt = previous.rows[0]?.last_read_at ?? null;
+
+  // "Read up to now" must use Postgres's clock: messages.created_at is NOW()
+  // too, and a JS Date that is a few dozen milliseconds behind leaves the
+  // message still unread. An explicit rewind (Mark unread) keeps the caller's
+  // timestamp, clamped so it cannot sit in the future.
+  if (lastReadAt && Number.isFinite(lastReadAt.getTime())) {
+    const at =
+      lastReadAt.getTime() > Date.now() ? new Date() : lastReadAt;
+    await getPool().query(
+      `INSERT INTO channel_reads (channel_id, user_id, last_read_at)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (channel_id, user_id)
+       DO UPDATE SET last_read_at = EXCLUDED.last_read_at`,
+      [channelId, userId, at],
+    );
+    return { previousLastReadAt, lastReadAt: at };
+  }
+
+  const inserted = await getPool().query<{ last_read_at: Date }>(
     `INSERT INTO channel_reads (channel_id, user_id, last_read_at)
      VALUES ($1, $2, NOW())
      ON CONFLICT (channel_id, user_id)
-     DO UPDATE SET last_read_at = NOW()`,
+     DO UPDATE SET last_read_at = NOW()
+     RETURNING last_read_at`,
     [channelId, userId],
   );
+  return {
+    previousLastReadAt,
+    lastReadAt: inserted.rows[0]?.last_read_at ?? new Date(),
+  };
 }

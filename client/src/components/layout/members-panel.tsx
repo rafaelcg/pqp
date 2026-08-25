@@ -7,6 +7,7 @@ import {
   Clock,
   Flag,
   MicOff,
+  Pencil,
   PhoneOff,
   RotateCcw,
   ShieldMinus,
@@ -45,10 +46,12 @@ import {
   liftTimeout,
   listBans,
   listTimeouts,
+  memberDisplayName,
   moveMemberVoice,
   setMemberVoiceMuted,
   timeoutMember,
   unbanMember,
+  updateMemberNickname,
   updateMemberRole,
   type ServerBan,
   type ServerMember,
@@ -196,10 +199,13 @@ interface MembersPanelProps {
 function subjectOf(member: ServerMember): ProfileSubject {
   return {
     id: member.id,
-    displayName: member.displayName,
+    displayName: memberDisplayName(member),
     tag: member.tag ?? null,
     avatarUrl: member.avatarUrl ?? null,
     status: member.status ?? null,
+    username: member.username ?? null,
+    roleIds: member.roleIds,
+    rank: member.role,
   };
 }
 
@@ -415,6 +421,35 @@ export function MembersPanel({
     return role === "owner" || member.role === "member";
   }
 
+  async function changeNickname(member: ServerMember) {
+    if (!serverId) {
+      return;
+    }
+    const next = window.prompt(
+      t("member.nicknamePrompt"),
+      member.nickname ?? "",
+    );
+    if (next === null) {
+      return;
+    }
+    const trimmed = next.trim();
+    setBusyId(member.id);
+    setError(null);
+    try {
+      const nickname = trimmed.length === 0 ? null : trimmed;
+      await updateMemberNickname(serverId, member.id, nickname);
+      setMembers((prev) =>
+        prev.map((row) =>
+          row.id === member.id ? { ...row, nickname } : row,
+        ),
+      );
+    } catch (err) {
+      setError(messageOf(err, t("member.nicknameFailed")));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   async function setRole(userId: string, next: "admin" | "member") {
     if (!serverId) {
       return;
@@ -577,6 +612,17 @@ export function MembersPanel({
         label: t("member.mention"),
         icon: AtSign,
         onSelect: () => onMention(username),
+      });
+    }
+    if (
+      serverId &&
+      (member.id === currentUserId || canManage)
+    ) {
+      actions.push({
+        id: "nickname",
+        label: t("member.nickname"),
+        icon: Pencil,
+        onSelect: () => void changeNickname(member),
       });
     }
     if (role === "owner" && member.role !== "owner" && member.id !== currentUserId) {
@@ -982,6 +1028,7 @@ export function MembersPanel({
         )}
 
         {members.map((member) => {
+          const shown = memberDisplayName(member);
           const actions = actionsFor(member);
           const busy = busyId === member.id;
           const timeout = timeoutByUser.get(member.id);
@@ -1016,7 +1063,7 @@ export function MembersPanel({
                       the roster as well as from the transcript. */}
                   <button
                     type="button"
-                    title={t("profile.open", { name: member.displayName })}
+                    title={t("profile.open", { name: shown })}
                     data-member-trigger={member.id}
                     className="h-9 w-9 shrink-0 overflow-hidden rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
                     onClick={(event) =>
@@ -1024,7 +1071,7 @@ export function MembersPanel({
                     }
                   >
                     <UserAvatar
-                      name={member.displayName}
+                      name={shown}
                       avatarUrl={member.avatarUrl}
                       className="h-9 w-9"
                       fallbackClassName="bg-ink-3 text-sm"
@@ -1042,13 +1089,13 @@ export function MembersPanel({
                 <div className="min-w-0 flex-1">
                   <button
                     type="button"
-                    title={t("profile.open", { name: member.displayName })}
+                    title={t("profile.open", { name: shown })}
                     className="block max-w-full truncate rounded text-left text-sm font-semibold hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
                     onClick={(event) =>
                       openProfile(subjectOf(member), event.currentTarget)
                     }
                   >
-                    {member.displayName}
+                    {shown}
                   </button>
                   {member.tag && (
                     <p className="truncate font-mono text-[11px] text-paper-muted">
@@ -1122,7 +1169,7 @@ export function MembersPanel({
                         // `dim` keeps the button tappable (aria-disabled, not
                         // disabled) so a tap can explain why it does nothing.
                         className={cn("h-8 w-8", action.dim && "opacity-50")}
-                        aria-label={`${action.label}: ${member.displayName}`}
+                        aria-label={`${action.label}: ${shown}`}
                         aria-disabled={action.dim || undefined}
                         title={action.title ?? action.label}
                         disabled={busy}

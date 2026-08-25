@@ -2479,3 +2479,341 @@ CREATE TABLE IF NOT EXISTS connection_oauth_states (
 
 CREATE INDEX IF NOT EXISTS idx_connection_oauth_states_created
   ON connection_oauth_states (created_at);
+
+-- --------------------------------------------------------------- permissions
+--
+-- Discord's published 8-step overwrite algorithm
+-- (https://docs.discord.com/developers/topics/permissions), stored as BIGINT
+-- bitfields. Wire format is a decimal string; JS math is always bigint.
+--
+-- Bits 0–19, matching packages/shared/src/permissions.ts:
+--   0 CREATE_INVITE          1
+--   1 KICK_MEMBERS           2
+--   2 BAN_MEMBERS            4
+--   3 ADMINISTRATOR          8
+--   4 MANAGE_CHANNELS        16
+--   5 MANAGE_SERVER          32
+--   6 VIEW_CHANNEL           64
+--   7 SEND_MESSAGES          128
+--   8 MANAGE_MESSAGES        256
+--   9 ATTACH_FILES           512
+--  10 READ_MESSAGE_HISTORY   1024
+--  11 MENTION_EVERYONE       2048
+--  12 CONNECT                4096
+--  13 SPEAK                  8192
+--  14 MUTE_MEMBERS           16384
+--  15 CHANGE_NICKNAME        32768
+--  16 MANAGE_NICKNAMES       65536
+--  17 MANAGE_ROLES           131072
+--  18 MODERATE_MEMBERS       262144
+--  19 ADD_REACTIONS          524288
+--
+-- ALL = 1048575. Default @everyone = 571073.
+--
+-- Two seeded roles per server: `@everyone` (is_everyone, position 0, implicit
+-- membership — never a member_roles row) and `Admin` (system_key = 'admin',
+-- ADMINISTRATOR, assigned to server_members.role = 'admin'). The owner is not
+-- a role; servers.owner_id short-circuits to ALL.
+
+ALTER TABLE servers ADD COLUMN IF NOT EXISTS permissions_version INTEGER NOT NULL DEFAULT 0;
+
+ALTER TABLE server_members ADD COLUMN IF NOT EXISTS nickname TEXT;
+
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS mention_everyone BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS mention_here BOOLEAN NOT NULL DEFAULT FALSE;
+
+CREATE TABLE IF NOT EXISTS roles (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  server_id UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  color TEXT,
+  hoist BOOLEAN NOT NULL DEFAULT FALSE,
+  mentionable BOOLEAN NOT NULL DEFAULT FALSE,
+  permissions BIGINT NOT NULL DEFAULT 0,
+  position INTEGER NOT NULL DEFAULT 0,
+  is_everyone BOOLEAN NOT NULL DEFAULT FALSE,
+  system_key TEXT CHECK (system_key IN ('everyone', 'admin')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_roles_everyone
+  ON roles (server_id) WHERE is_everyone;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_roles_system_key
+  ON roles (server_id, system_key) WHERE system_key IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_roles_name_ci
+  ON roles (server_id, LOWER(name));
+
+CREATE INDEX IF NOT EXISTS idx_roles_server_position
+  ON roles (server_id, position);
+
+CREATE TABLE IF NOT EXISTS member_roles (
+  server_id UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  role_id UUID NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+  PRIMARY KEY (server_id, user_id, role_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_member_roles_user_server
+  ON member_roles (user_id, server_id);
+
+-- Role grants are membership. Kick, ban, and leave delete server_members;
+-- without this FK those rows survived, so a rejoining moderator kept KICK /
+-- BAN / MANAGE_ROLES. Sweep orphans first so the constraint can land on a
+-- database that already ran the table create without it.
+DELETE FROM member_roles mr
+ WHERE NOT EXISTS (
+   SELECT 1 FROM server_members sm
+    WHERE sm.server_id = mr.server_id AND sm.user_id = mr.user_id
+ );
+
+DO $$
+BEGIN
+  ALTER TABLE member_roles DROP CONSTRAINT IF EXISTS member_roles_membership_fk;
+  ALTER TABLE member_roles
+    ADD CONSTRAINT member_roles_membership_fk
+    FOREIGN KEY (server_id, user_id)
+    REFERENCES server_members (server_id, user_id)
+    ON DELETE CASCADE;
+EXCEPTION
+  WHEN others THEN NULL;
+END $$;
+
+CREATE TABLE IF NOT EXISTS channel_overwrites (
+  channel_id UUID NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+  target_type TEXT NOT NULL CHECK (target_type IN ('role', 'member')),
+  target_id UUID NOT NULL,
+  allow BIGINT NOT NULL DEFAULT 0,
+  deny BIGINT NOT NULL DEFAULT 0,
+  PRIMARY KEY (channel_id, target_type, target_id)
+);
+
+-- `@everyone` is implicit membership. A row here would OR its bits twice.
+CREATE OR REPLACE FUNCTION reject_everyone_member_role()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM roles r
+     WHERE r.id = NEW.role_id AND r.is_everyone
+  ) THEN
+    RAISE EXCEPTION 'cannot assign the @everyone role';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS member_roles_reject_everyone ON member_roles;
+CREATE TRIGGER member_roles_reject_everyone
+  BEFORE INSERT OR UPDATE ON member_roles
+  FOR EACH ROW
+  EXECUTE FUNCTION reject_everyone_member_role();
+
+-- Keep the seeded Admin role in sync with the derived rank column, so a raw
+-- INSERT of role='admin' (tests, older paths) still receives ADMINISTRATOR.
+CREATE OR REPLACE FUNCTION sync_admin_member_role()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_admin_id UUID;
+BEGIN
+  SELECT id INTO v_admin_id
+    FROM roles
+   WHERE server_id = NEW.server_id AND system_key = 'admin';
+  IF v_admin_id IS NULL THEN
+    RETURN NEW;
+  END IF;
+  IF NEW.role = 'admin' THEN
+    INSERT INTO member_roles (server_id, user_id, role_id)
+    VALUES (NEW.server_id, NEW.user_id, v_admin_id)
+    ON CONFLICT DO NOTHING;
+  ELSE
+    DELETE FROM member_roles
+     WHERE server_id = NEW.server_id
+       AND user_id = NEW.user_id
+       AND role_id = v_admin_id;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS server_members_sync_admin_role ON server_members;
+CREATE TRIGGER server_members_sync_admin_role
+  AFTER INSERT OR UPDATE OF role ON server_members
+  FOR EACH ROW
+  EXECUTE FUNCTION sync_admin_member_role();
+
+-- Seed @everyone + Admin on every existing server, then write private-channel
+-- overwrites so channel_viewable can replace the old is_private OR rank hatch.
+-- Must run BEFORE the function is first used on this boot.
+DO $$
+DECLARE
+  filled INTEGER;
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM data_migrations WHERE name = 'permissions_roles_backfill_2026_08'
+  ) THEN
+    RETURN;
+  END IF;
+
+  INSERT INTO roles (server_id, name, permissions, position, is_everyone, system_key, mentionable)
+  SELECT s.id, 'everyone', 571073, 0, TRUE, 'everyone', FALSE
+    FROM servers s
+   WHERE NOT EXISTS (
+     SELECT 1 FROM roles r WHERE r.server_id = s.id AND r.is_everyone
+   );
+
+  INSERT INTO roles (server_id, name, permissions, position, is_everyone, system_key, mentionable)
+  SELECT s.id, 'Admin', 1048575, 1, FALSE, 'admin', FALSE
+    FROM servers s
+   WHERE NOT EXISTS (
+     SELECT 1 FROM roles r WHERE r.server_id = s.id AND r.system_key = 'admin'
+   );
+
+  INSERT INTO member_roles (server_id, user_id, role_id)
+  SELECT sm.server_id, sm.user_id, r.id
+    FROM server_members sm
+    JOIN roles r ON r.server_id = sm.server_id AND r.system_key = 'admin'
+   WHERE sm.role = 'admin'
+  ON CONFLICT DO NOTHING;
+
+  -- Private channels: @everyone deny VIEW (64), listed members allow VIEW.
+  INSERT INTO channel_overwrites (channel_id, target_type, target_id, allow, deny)
+  SELECT c.id, 'role', r.id, 0, 64
+    FROM channels c
+    JOIN roles r ON r.server_id = c.server_id AND r.is_everyone
+   WHERE c.kind = 'server' AND c.is_private
+  ON CONFLICT DO NOTHING;
+
+  INSERT INTO channel_overwrites (channel_id, target_type, target_id, allow, deny)
+  SELECT cm.channel_id, 'member', cm.user_id, 64, 0
+    FROM channel_members cm
+    JOIN channels c ON c.id = cm.channel_id
+   WHERE c.kind = 'server' AND c.is_private
+  ON CONFLICT DO NOTHING;
+
+  GET DIAGNOSTICS filled = ROW_COUNT;
+  INSERT INTO data_migrations (name) VALUES ('permissions_roles_backfill_2026_08');
+  RAISE NOTICE 'pqp: seeded roles/overwrites (last insert % rows)', filled;
+END $$;
+
+-- @everyone must not carry kick/ban/timeout/Administrator (bits 1, 2, 3, 18).
+UPDATE roles
+   SET permissions = permissions & ~262158
+ WHERE is_everyone
+   AND (permissions & 262158) <> 0;
+
+-- Seeded Admin is hoisted so the member list matches the old Owner/Admins
+-- headings without hardcoding rank names.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM data_migrations WHERE name = 'admin_role_hoist_2026_08'
+  ) THEN
+    RETURN;
+  END IF;
+  UPDATE roles SET hoist = TRUE WHERE system_key = 'admin' AND NOT hoist;
+  INSERT INTO data_migrations (name) VALUES ('admin_role_hoist_2026_08');
+END $$;
+
+-- Who may VIEW this channel (the effective row: parent for a thread).
+-- Conversations never call this; channelVisibleSql keeps that branch as
+-- channel_members only.
+CREATE OR REPLACE FUNCTION channel_viewable(p_channel_id UUID, p_user_id UUID)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+  v_server_id UUID;
+  v_owner_id UUID;
+  v_everyone_id UUID;
+  v_base BIGINT;
+  v_role_deny BIGINT;
+  v_role_allow BIGINT;
+  v_member_deny BIGINT;
+  v_member_allow BIGINT;
+  v_admin BIGINT := 8;
+  v_view BIGINT := 64;
+BEGIN
+  SELECT c.server_id, s.owner_id
+    INTO v_server_id, v_owner_id
+    FROM channels c
+    JOIN servers s ON s.id = c.server_id
+   WHERE c.id = p_channel_id AND c.kind = 'server';
+
+  IF NOT FOUND THEN
+    RETURN FALSE;
+  END IF;
+
+  IF v_owner_id = p_user_id THEN
+    RETURN TRUE;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM server_members
+     WHERE server_id = v_server_id AND user_id = p_user_id
+  ) THEN
+    RETURN FALSE;
+  END IF;
+
+  SELECT id INTO v_everyone_id
+    FROM roles
+   WHERE server_id = v_server_id AND is_everyone;
+
+  IF v_everyone_id IS NULL THEN
+    RETURN FALSE;
+  END IF;
+
+  SELECT COALESCE((
+           SELECT r.permissions FROM roles r WHERE r.id = v_everyone_id
+         ), 0)
+         | COALESCE((
+           SELECT bit_or(r.permissions)
+             FROM member_roles mr
+             JOIN roles r ON r.id = mr.role_id
+            WHERE mr.server_id = v_server_id AND mr.user_id = p_user_id
+         ), 0)
+    INTO v_base;
+
+  IF (v_base & v_admin) <> 0 THEN
+    RETURN TRUE;
+  END IF;
+
+  SELECT COALESCE(o.allow, 0), COALESCE(o.deny, 0)
+    INTO v_role_allow, v_role_deny
+    FROM (SELECT 1) AS _
+    LEFT JOIN channel_overwrites o
+      ON o.channel_id = p_channel_id
+     AND o.target_type = 'role'
+     AND o.target_id = v_everyone_id;
+  v_base := (v_base & ~COALESCE(v_role_deny, 0)) | COALESCE(v_role_allow, 0);
+
+  SELECT COALESCE(bit_or(o.deny), 0), COALESCE(bit_or(o.allow), 0)
+    INTO v_role_deny, v_role_allow
+    FROM channel_overwrites o
+   WHERE o.channel_id = p_channel_id
+     AND o.target_type = 'role'
+     AND o.target_id <> v_everyone_id
+     AND o.target_id IN (
+       SELECT mr.role_id FROM member_roles mr
+        WHERE mr.server_id = v_server_id AND mr.user_id = p_user_id
+     );
+  v_base := (v_base & ~COALESCE(v_role_deny, 0)) | COALESCE(v_role_allow, 0);
+
+  SELECT o.allow, o.deny
+    INTO v_member_allow, v_member_deny
+    FROM channel_overwrites o
+   WHERE o.channel_id = p_channel_id
+     AND o.target_type = 'member'
+     AND o.target_id = p_user_id;
+  IF FOUND THEN
+    v_base := (v_base & ~v_member_deny) | v_member_allow;
+  END IF;
+
+  RETURN (v_base & v_view) <> 0;
+END;
+$$;

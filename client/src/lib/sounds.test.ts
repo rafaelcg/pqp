@@ -2,11 +2,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   adoptSoundPreferences,
   cueForActivity,
+  getIncomingRing,
   getSoundState,
   isCueEnabled,
   playActivitySound,
   playCue,
   resetSoundStateForTests,
+  setIncomingRing,
   setSoundCueEnabled,
   setSoundEnabled,
   startSoundLoop,
@@ -72,6 +74,23 @@ describe("adoptSoundPreferences", () => {
     expect(next.message).toBe(false);
     expect(next.mention).toBe(true);
     expect(next.enabled).toBe(true);
+  });
+
+  it("does not reset a locally picked incoming ring", () => {
+    setIncomingRing("glass");
+    adoptSoundPreferences({ mention: false });
+    expect(getIncomingRing()).toBe("glass");
+    expect(getSoundState().mention).toBe(false);
+  });
+});
+
+describe("incoming ring", () => {
+  it("keeps the pick when other cues change", () => {
+    setIncomingRing("chime");
+    expect(getIncomingRing()).toBe("chime");
+    setSoundCueEnabled("mention", false);
+    expect(getIncomingRing()).toBe("chime");
+    expect(getSoundState().mention).toBe(false);
   });
 });
 

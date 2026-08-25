@@ -16,7 +16,7 @@ import { openApp } from "./fixtures";
 const SECTIONS = [
   "Profile",
   "Connections",
-  "Voice & Audio",
+  "Voice & Video",
   "Notifications",
   "Appearance & Language",
   "Privacy",
@@ -72,7 +72,7 @@ test.describe("settings sections", () => {
     await openApp(page);
     await openSettings(page);
 
-    await page.getByRole("tab", { name: "Voice & Audio" }).click();
+    await page.getByRole("tab", { name: "Voice & Video" }).click();
     await expect(compactPeers(page)).not.toBeChecked();
     await compactPeers(page).check();
 
@@ -82,7 +82,7 @@ test.describe("settings sections", () => {
     await expect(page.getByRole("dialog")).toBeHidden();
 
     await openSettings(page);
-    await page.getByRole("tab", { name: "Voice & Audio" }).click();
+    await page.getByRole("tab", { name: "Voice & Video" }).click();
     await expect(compactPeers(page)).toBeChecked();
 
     // Put it back so the next spec starts where this one found things.

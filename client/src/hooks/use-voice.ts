@@ -39,6 +39,7 @@ import type { RealtimeTransport } from "@/lib/realtime";
 import {
   applyCameraQuality,
   cameraBitrateFor,
+  screenBitrateFor,
   captureCamera,
   DEFAULT_VIDEO_QUALITY,
   type VideoQuality,
@@ -324,6 +325,20 @@ function screenShareErrorMessage(err: unknown): string {
     // a source — that rejects with the same error name, so this isn't really
     // a permissions problem in the usual sense, but the copy still fits.
     return translateMessage("voice.error.shareBlocked");
+  }
+  if (err.name === "NotReadableError") {
+    // "Could not start audio source", verbatim, in English, is what a user hit
+    // in the QG on 24 Aug 2026. It is thrown when the picked surface's audio
+    // cannot be opened, and it rejects the WHOLE capture: the video was fine
+    // and they still got nothing, which is why the same person found that
+    // sharing without ticking the audio box works.
+    //
+    // Almost always the surface, not the machine. Chromium can only hand over
+    // audio for a *tab*; a window share has none to give, and a whole-screen
+    // share only does on Windows, never on macOS. Ticking "share audio" on a
+    // source that has no audio to share is the common way to land here, so the
+    // copy names the fix rather than the error.
+    return translateMessage("voice.error.shareAudioUnavailable");
   }
   return err.message;
 }
@@ -984,6 +999,32 @@ export function createVoiceController(transport: RealtimeTransport) {
     }
   }
 
+  /**
+   * Who is presenting, from the roster → the mesh manager.
+   *
+   * The one incoming media slot with no stream id to null out, so this flag is
+   * the only thing that tells a receiver a share ended. Without it the dead
+   * capture stays filed as that peer's screen and their *next* share renders
+   * black behind it — see `setPeerSharingScreen`.
+   *
+   * Runs after `applyCameraStreamIds` on purpose: the manager keeps the
+   * announced camera stream and drops the rest, so it has to know which one
+   * the camera is before it drops anything.
+   */
+  function applySharingScreen(participants: VoiceParticipant[]) {
+    if (!manager) {
+      return;
+    }
+    for (const participant of participants) {
+      if (participant.peerId !== state.peerId) {
+        manager.setPeerSharingScreen(
+          participant.peerId,
+          participant.sharingScreen,
+        );
+      }
+    }
+  }
+
   /** The same trip for screen audio, and a no-op on the SFU path for the same reason. */
   function applyScreenAudioStreamIds(participants: VoiceParticipant[]) {
     if (!manager) {
@@ -1061,6 +1102,12 @@ export function createVoiceController(transport: RealtimeTransport) {
         // room without the key down must be published muted.
         await sfu.setMuted(!state.isTransmitting);
       }
+      // Before anything is published, so a camera or a share carried across a
+      // reconnect is republished at the chosen quality. Without this a session
+      // rebuilt after a WS drop silently reverted both to the defaults, and
+      // nothing recomputed them until the user next touched the menu.
+      await sfu.setCameraMaxBitrate(cameraBitrateFor(videoQuality));
+      await sfu.setScreenMaxBitrate(screenBitrateFor(videoQuality));
       // A screen share started before a reconnect rebuilds the session — the
       // capture itself survives the WS drop (it's a browser-level grant, not
       // tied to the connection), only the publish needs redoing.
@@ -1091,6 +1138,9 @@ export function createVoiceController(transport: RealtimeTransport) {
     // Before any track is published, so a camera carried across a reconnect
     // gets the chosen ceiling on its first tune rather than the default one.
     manager.setCameraMaxBitrate(cameraBitrateFor(videoQuality));
+    // Same reason, for the screen: a share carried across a reconnect must be
+    // rebuilt at the chosen quality, not at the default one.
+    manager.setScreenQuality(videoQuality);
     if (pipeline) {
       manager.setLocalStream(pipeline.processedStream);
     }
@@ -1120,6 +1170,7 @@ export function createVoiceController(transport: RealtimeTransport) {
         peer.peerId,
         peer.screenAudioStreamId ?? null,
       );
+      manager.setPeerSharingScreen(peer.peerId, peer.sharingScreen);
     }
   }
 
@@ -1154,6 +1205,9 @@ export function createVoiceController(transport: RealtimeTransport) {
           // Mesh camera classification rides the roster — see the banner.
           applyCameraStreamIds(message.participants);
           applyScreenAudioStreamIds(message.participants);
+          // Last: it drops every video stream that is not the camera, so the
+          // camera has to be announced by the time it runs.
+          applySharingScreen(message.participants);
         }
         emit();
         break;
@@ -1293,6 +1347,10 @@ export function createVoiceController(transport: RealtimeTransport) {
         manager?.setPeerScreenAudioStreamId(
           message.peer.peerId,
           message.peer.screenAudioStreamId ?? null,
+        );
+        manager?.setPeerSharingScreen(
+          message.peer.peerId,
+          message.peer.sharingScreen,
         );
         playCue("voiceJoin");
         break;
@@ -1920,6 +1978,11 @@ export function createVoiceController(transport: RealtimeTransport) {
       const maxBitrate = cameraBitrateFor(next);
       manager?.setCameraMaxBitrate(maxBitrate);
       await sfu?.setCameraMaxBitrate(maxBitrate);
+      // The screen half, on both transports, and unconditionally: the mesh
+      // manager and the SFU session each hold the choice for a share that has
+      // not started yet, so this is not only about the sender on the wire.
+      manager?.setScreenQuality(next);
+      await sfu?.setScreenMaxBitrate(screenBitrateFor(next));
       const track = cameraCaptureStream?.getVideoTracks()[0];
       if (track) {
         await applyCameraQuality(track, next);

@@ -199,12 +199,12 @@ for (const size of SIZES) {
       await openDrawer(page);
       await page.getByRole("button", { name: "Open settings" }).first().click();
       await expect(page.getByRole("dialog")).toBeVisible();
-      // Voice & Audio is the longest section, and the one guaranteed to
+      // Voice & Video is the longest section, and the one guaranteed to
       // overflow a phone. Since settings was sectioned the overflow lives in
       // the section pane rather than in the dialog body — the body holds the
       // section rail beside it and must not move, or the rail scrolls off the
       // top and the other five sections become unreachable.
-      await page.getByRole("tab", { name: "Voice & Audio" }).click();
+      await page.getByRole("tab", { name: "Voice & Video" }).click();
       await page.waitForTimeout(800);
 
       const panes = await page.evaluate(() => {

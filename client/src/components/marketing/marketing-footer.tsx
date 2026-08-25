@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
 import { BetaTag } from "@/components/ui/beta-tag";
-import { RELEASES_PAGE_URL } from "@/lib/downloads";
+import { RELEASES_PAGE_URL, SOURCE_REPO_URL } from "@/lib/downloads";
 import { useTranslation } from "@/lib/i18n";
 
 const FOOTER_LINK =
@@ -72,6 +72,17 @@ export function MarketingFooter() {
             <Link to="/status" className={FOOTER_LINK}>
               {t("footer.status")}
             </Link>
+            {/* Sits with self-host rather than in its own column: the person
+                who wants the code is usually the person who just read that
+                they can run their own copy. */}
+            <a
+              href={SOURCE_REPO_URL}
+              target="_blank"
+              rel="noopener"
+              className={FOOTER_LINK}
+            >
+              {t("footer.source")}
+            </a>
           </div>
           <div className="flex flex-col gap-2">
             <p className="text-xs font-medium uppercase tracking-[0.16em] text-paper-muted">

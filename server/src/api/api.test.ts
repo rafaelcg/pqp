@@ -11,7 +11,7 @@ import {
   vi,
 } from "vitest";
 import type { WebSocket } from "ws";
-import { parseSearchSnippet } from "@pqp/shared";
+import { parseSearchSnippet, Permission, serializePermissions } from "@pqp/shared";
 import type { DbUser } from "../db.js";
 
 /**
@@ -63,6 +63,8 @@ const { handleApi, resetApiRateLimits } = await import("./index.js");
 const { getPool, initDb, closePool } = await import("../db.js");
 const { safeFetch } = await import("../lib/safe-fetch.js");
 const { upsertUser } = await import("../services/users.js");
+const { memberHasPermission } = await import("../services/permissions.js");
+const { getChannelAudience } = await import("../services/servers.js");
 const { handleChatMessage, resetChatRateLimits } = await import(
   "../ws/chat.js"
 );
@@ -496,14 +498,518 @@ describeDb("API authorization", () => {
       expect(exhausted.status).toBe(400);
     });
 
-    it("only lets managers create and list invites", async () => {
+    it("lets members create invites but not list them", async () => {
       const { serverId } = await makeServer();
       expect(
         (await call(member, "POST", `/api/servers/${serverId}/invites`, {})).status,
-      ).toBe(403);
+      ).toBe(201);
       expect(
         (await call(member, "GET", `/api/servers/${serverId}/invites`)).status,
       ).toBe(403);
+    });
+  });
+
+  describe("permissions and nicknames", () => {
+    it("seeds @everyone and Admin, and lets a member read the snapshot", async () => {
+      const { serverId } = await makeServer();
+      const roles = await call<{
+        roles: Array<{ name: string; isEveryone: boolean; systemKey: string | null }>;
+      }>(member, "GET", `/api/servers/${serverId}/roles`);
+      expect(roles.status).toBe(200);
+      expect(roles.body.roles.some((role) => role.isEveryone)).toBe(true);
+      expect(roles.body.roles.some((role) => role.systemKey === "admin")).toBe(
+        true,
+      );
+
+      const snap = await call<{ server: string; version: number }>(
+        member,
+        "GET",
+        `/api/servers/${serverId}/permissions`,
+      );
+      expect(snap.status).toBe(200);
+      expect(snap.body.server).toMatch(/^\d+$/);
+
+      expect(
+        (
+          await call(member, "POST", `/api/servers/${serverId}/roles`, {
+            name: "mods",
+          })
+        ).status,
+      ).toBe(403);
+    });
+
+    it("lets a member set their own nickname", async () => {
+      const { serverId } = await makeServer();
+      const res = await call(
+        member,
+        "PATCH",
+        `/api/servers/${serverId}/members/${member.id}`,
+        { nickname: "apelido" },
+      );
+      expect(res.status).toBe(200);
+      const list = await call<{
+        members: Array<{ id: string; nickname: string | null }>;
+      }>(owner, "GET", `/api/servers/${serverId}/members`);
+      const row = list.body.members.find((one) => one.id === member.id);
+      expect(row?.nickname).toBe("apelido");
+    });
+
+    it("strips kick, ban, timeout and Administrator from @everyone", async () => {
+      const { serverId } = await makeServer();
+      const listed = await call<{
+        roles: Array<{
+          id: string;
+          isEveryone: boolean;
+          permissions: string;
+        }>;
+      }>(owner, "GET", `/api/servers/${serverId}/roles`);
+      const everyone = listed.body.roles.find((role) => role.isEveryone)!
+      const dirty = serializePermissions(
+        BigInt(everyone.permissions) |
+          Permission.KICK_MEMBERS |
+          Permission.BAN_MEMBERS |
+          Permission.MODERATE_MEMBERS |
+          Permission.ADMINISTRATOR,
+      );
+      const saved = await call<{ role: { permissions: string } }>(
+        owner,
+        "PATCH",
+        `/api/roles/${everyone.id}`,
+        { permissions: dirty },
+      );
+      expect(saved.status).toBe(200);
+      const bits = BigInt(saved.body.role.permissions);
+      expect(bits & Permission.KICK_MEMBERS).toBe(0n);
+      expect(bits & Permission.BAN_MEMBERS).toBe(0n);
+      expect(bits & Permission.MODERATE_MEMBERS).toBe(0n);
+      expect(bits & Permission.ADMINISTRATOR).toBe(0n);
+    });
+
+    it("inserts a new role just above @everyone and lets the owner reorder", async () => {
+      const { serverId } = await makeServer();
+      const created = await call<{
+        role: { id: string; position: number };
+      }>(owner, "POST", `/api/servers/${serverId}/roles`, { name: "mods" });
+      expect(created.status).toBe(201);
+      expect(created.body.role.position).toBe(1);
+
+      const afterCreate = await call<{
+        roles: Array<{
+          id: string;
+          name: string;
+          position: number;
+          isEveryone: boolean;
+          systemKey: string | null;
+        }>;
+      }>(owner, "GET", `/api/servers/${serverId}/roles`);
+      const everyone = afterCreate.body.roles.find((role) => role.isEveryone)!;
+      const adminRole = afterCreate.body.roles.find(
+        (role) => role.systemKey === "admin",
+      )!;
+      const mods = afterCreate.body.roles.find((role) => role.name === "mods")!;
+      expect(everyone.position).toBe(0);
+      expect(mods.position).toBe(1);
+      expect(adminRole.position).toBe(2);
+
+      const reordered = await call(
+        owner,
+        "PATCH",
+        `/api/servers/${serverId}/roles/order`,
+        { roleIds: [adminRole.id, mods.id] },
+      );
+      expect(reordered.status).toBe(200);
+      const afterOrder = await call<{
+        roles: Array<{ id: string; position: number }>;
+      }>(owner, "GET", `/api/servers/${serverId}/roles`);
+      const byId = Object.fromEntries(
+        afterOrder.body.roles.map((role) => [role.id, role.position]),
+      );
+      expect(byId[everyone.id]).toBe(0);
+      expect(byId[adminRole.id]).toBe(1);
+      expect(byId[mods.id]).toBe(2);
+    });
+
+    it("refuses to strip a role from a member the actor does not outrank", async () => {
+      const { serverId } = await makeServer();
+      const created = await call<{ role: { id: string } }>(
+        owner,
+        "POST",
+        `/api/servers/${serverId}/roles`,
+        {
+          name: "mods",
+          permissions: serializePermissions(
+            Permission.MANAGE_ROLES |
+              Permission.VIEW_CHANNEL |
+              Permission.SEND_MESSAGES,
+          ),
+        },
+      );
+      expect(created.status).toBe(201);
+      const colour = await call<{ role: { id: string } }>(
+        owner,
+        "POST",
+        `/api/servers/${serverId}/roles`,
+        { name: "colour" },
+      );
+      expect(colour.status).toBe(201);
+
+      expect(
+        (
+          await call(
+            owner,
+            "PUT",
+            `/api/servers/${serverId}/members/${member.id}/roles/${created.body.role.id}`,
+          )
+        ).status,
+      ).toBe(200);
+      expect(
+        (
+          await call(
+            owner,
+            "PUT",
+            `/api/servers/${serverId}/members/${admin.id}/roles/${colour.body.role.id}`,
+          )
+        ).status,
+      ).toBe(200);
+
+      const stripped = await call(
+        member,
+        "DELETE",
+        `/api/servers/${serverId}/members/${admin.id}/roles/${colour.body.role.id}`,
+      );
+      expect(stripped.status).toBe(403);
+
+      const byOwner = await call(
+        owner,
+        "DELETE",
+        `/api/servers/${serverId}/members/${admin.id}/roles/${colour.body.role.id}`,
+      );
+      expect(byOwner.status).toBe(200);
+    });
+
+    it("drops role grants on kick so they do not return on rejoin", async () => {
+      const { serverId } = await makeServer();
+      const colour = await call<{ role: { id: string } }>(
+        owner,
+        "POST",
+        `/api/servers/${serverId}/roles`,
+        { name: "colour" },
+      );
+      expect(colour.status).toBe(201);
+      expect(
+        (
+          await call(
+            owner,
+            "PUT",
+            `/api/servers/${serverId}/members/${member.id}/roles/${colour.body.role.id}`,
+          )
+        ).status,
+      ).toBe(200);
+
+      expect(
+        (
+          await call(owner, "DELETE", `/api/servers/${serverId}/members/${member.id}`, {
+            ban: false,
+          })
+        ).status,
+      ).toBe(200);
+
+      const leftover = await getPool().query(
+        `SELECT 1 FROM member_roles WHERE server_id = $1 AND user_id = $2`,
+        [serverId, member.id],
+      );
+      expect(leftover.rowCount).toBe(0);
+
+      const invite = await call<{ invite: { code: string } }>(
+        owner,
+        "POST",
+        `/api/servers/${serverId}/invites`,
+        {},
+      );
+      expect(
+        (await call(member, "POST", `/api/invites/${invite.body.invite.code}/join`))
+          .status,
+      ).toBe(200);
+
+      const restored = await getPool().query(
+        `SELECT 1 FROM member_roles WHERE server_id = $1 AND user_id = $2`,
+        [serverId, member.id],
+      );
+      expect(restored.rowCount).toBe(0);
+    });
+
+    it("refuses to grant a role to someone who is not in the server", async () => {
+      const { serverId } = await makeServer();
+      const colour = await call<{ role: { id: string } }>(
+        owner,
+        "POST",
+        `/api/servers/${serverId}/roles`,
+        { name: "colour" },
+      );
+      expect(colour.status).toBe(201);
+      const granted = await call(
+        owner,
+        "PUT",
+        `/api/servers/${serverId}/members/${outsider.id}/roles/${colour.body.role.id}`,
+      );
+      expect(granted.status).toBe(404);
+    });
+
+    it("applies a parent-channel send deny to that channel's threads", async () => {
+      const { serverId, textChannelId } = await makeServer();
+      const listed = await call<{
+        roles: Array<{ id: string; isEveryone: boolean }>;
+      }>(owner, "GET", `/api/servers/${serverId}/roles`);
+      const everyone = listed.body.roles.find((role) => role.isEveryone)!;
+      const overwritten = await call(
+        owner,
+        "PUT",
+        `/api/channels/${textChannelId}/overwrites`,
+        {
+          targetType: "role",
+          targetId: everyone.id,
+          allow: "0",
+          deny: serializePermissions(Permission.SEND_MESSAGES),
+        },
+      );
+      expect(overwritten.status).toBe(200);
+
+      const posted = await getPool().query<{ id: string }>(
+        `INSERT INTO messages (channel_id, author_id, body)
+         VALUES ($1, $2, $3) RETURNING id`,
+        [textChannelId, owner.id, "thread origin"],
+      );
+      const started = await call<{ thread: { channelId: string } }>(
+        owner,
+        "POST",
+        `/api/messages/${posted.rows[0]!.id}/threads`,
+        { name: "announcements thread" },
+      );
+      expect(started.status).toBe(201);
+
+      expect(
+        await memberHasPermission(
+          serverId,
+          member.id,
+          Permission.SEND_MESSAGES,
+          textChannelId,
+        ),
+      ).toBe(false);
+      expect(
+        await memberHasPermission(
+          serverId,
+          member.id,
+          Permission.SEND_MESSAGES,
+          started.body.thread.channelId,
+        ),
+      ).toBe(false);
+    });
+
+    it("keeps @everyone VIEW locked to the private-channel toggle", async () => {
+      const { serverId, textChannelId } = await makeServer();
+      const listed = await call<{
+        roles: Array<{ id: string; isEveryone: boolean }>;
+      }>(owner, "GET", `/api/servers/${serverId}/roles`);
+      const everyone = listed.body.roles.find((role) => role.isEveryone)!;
+      expect(
+        (
+          await call(owner, "PATCH", `/api/channels/${textChannelId}`, {
+            isPrivate: true,
+          })
+        ).status,
+      ).toBe(200);
+
+      const overwritten = await call(
+        owner,
+        "PUT",
+        `/api/channels/${textChannelId}/overwrites`,
+        {
+          targetType: "role",
+          targetId: everyone.id,
+          allow: serializePermissions(Permission.VIEW_CHANNEL),
+          deny: "0",
+        },
+      );
+      expect(overwritten.status).toBe(200);
+
+      const rows = await call<{
+        overwrites: Array<{
+          targetId: string;
+          allow: string;
+          deny: string;
+        }>;
+      }>(owner, "GET", `/api/channels/${textChannelId}/overwrites`);
+      const everyoneRow = rows.body.overwrites.find(
+        (row) => row.targetId === everyone.id,
+      )!;
+      expect(BigInt(everyoneRow.deny) & Permission.VIEW_CHANNEL).toBe(
+        Permission.VIEW_CHANNEL,
+      );
+      expect(BigInt(everyoneRow.allow) & Permission.VIEW_CHANNEL).toBe(0n);
+    });
+
+    it("lets a staff role send while @everyone cannot", async () => {
+      const { serverId, textChannelId } = await makeServer();
+      const listed = await call<{
+        roles: Array<{ id: string; isEveryone: boolean }>;
+      }>(owner, "GET", `/api/servers/${serverId}/roles`);
+      const everyone = listed.body.roles.find((role) => role.isEveryone)!;
+      expect(
+        (
+          await call(owner, "PUT", `/api/channels/${textChannelId}/overwrites`, {
+            targetType: "role",
+            targetId: everyone.id,
+            allow: "0",
+            deny: serializePermissions(Permission.SEND_MESSAGES),
+          })
+        ).status,
+      ).toBe(200);
+
+      expect(
+        await memberHasPermission(
+          serverId,
+          member.id,
+          Permission.SEND_MESSAGES,
+          textChannelId,
+        ),
+      ).toBe(false);
+
+      const staff = await call<{ role: { id: string } }>(
+        owner,
+        "POST",
+        `/api/servers/${serverId}/roles`,
+        { name: "Staff", permissions: serializePermissions(Permission.SEND_MESSAGES) },
+      );
+      expect(staff.status).toBe(201);
+      expect(
+        (
+          await call(owner, "PUT", `/api/channels/${textChannelId}/overwrites`, {
+            targetType: "role",
+            targetId: staff.body.role.id,
+            allow: serializePermissions(Permission.SEND_MESSAGES),
+            deny: "0",
+          })
+        ).status,
+      ).toBe(200);
+      expect(
+        (
+          await call(
+            owner,
+            "PUT",
+            `/api/servers/${serverId}/members/${member.id}/roles/${staff.body.role.id}`,
+          )
+        ).status,
+      ).toBe(200);
+
+      expect(
+        await memberHasPermission(
+          serverId,
+          member.id,
+          Permission.SEND_MESSAGES,
+          textChannelId,
+        ),
+      ).toBe(true);
+    });
+
+    it("hides a channel from a role denied VIEW", async () => {
+      const { serverId, textChannelId } = await makeServer();
+      const colour = await call<{ role: { id: string } }>(
+        owner,
+        "POST",
+        `/api/servers/${serverId}/roles`,
+        { name: "colour" },
+      );
+      expect(colour.status).toBe(201);
+      expect(
+        (
+          await call(
+            owner,
+            "PUT",
+            `/api/servers/${serverId}/members/${member.id}/roles/${colour.body.role.id}`,
+          )
+        ).status,
+      ).toBe(200);
+      expect(
+        (
+          await call(owner, "PUT", `/api/channels/${textChannelId}/overwrites`, {
+            targetType: "role",
+            targetId: colour.body.role.id,
+            allow: "0",
+            deny: serializePermissions(Permission.VIEW_CHANNEL),
+          })
+        ).status,
+      ).toBe(200);
+
+      const audience = await getChannelAudience(textChannelId);
+      expect(audience?.has(member.id)).toBe(false);
+      expect(audience?.has(owner.id)).toBe(true);
+    });
+
+    it("bumps the permissions snapshot version when an overwrite is saved", async () => {
+      const { serverId, textChannelId } = await makeServer();
+      const listed = await call<{
+        roles: Array<{ id: string; isEveryone: boolean }>;
+      }>(owner, "GET", `/api/servers/${serverId}/roles`);
+      const everyone = listed.body.roles.find((role) => role.isEveryone)!;
+      const before = await call<{ version: number }>(
+        owner,
+        "GET",
+        `/api/servers/${serverId}/permissions`,
+      );
+      expect(before.status).toBe(200);
+
+      expect(
+        (
+          await call(owner, "PUT", `/api/channels/${textChannelId}/overwrites`, {
+            targetType: "role",
+            targetId: everyone.id,
+            allow: "0",
+            deny: serializePermissions(Permission.SEND_MESSAGES),
+          })
+        ).status,
+      ).toBe(200);
+
+      const after = await call<{ version: number }>(
+        owner,
+        "GET",
+        `/api/servers/${serverId}/permissions`,
+      );
+      expect(after.status).toBe(200);
+      expect(after.body.version).toBeGreaterThan(before.body.version);
+    });
+
+    it("logs deleting a channel overwrite", async () => {
+      const { serverId, textChannelId } = await makeServer();
+      const listed = await call<{
+        roles: Array<{ id: string; isEveryone: boolean }>;
+      }>(owner, "GET", `/api/servers/${serverId}/roles`);
+      const everyone = listed.body.roles.find((role) => role.isEveryone)!;
+      expect(
+        (
+          await call(owner, "PUT", `/api/channels/${textChannelId}/overwrites`, {
+            targetType: "role",
+            targetId: everyone.id,
+            allow: "0",
+            deny: serializePermissions(Permission.SEND_MESSAGES),
+          })
+        ).status,
+      ).toBe(200);
+
+      const deleted = await call(
+        owner,
+        "DELETE",
+        `/api/channels/${textChannelId}/overwrites/role/${everyone.id}`,
+      );
+      expect(deleted.status).toBe(200);
+
+      const log = await call<{
+        entries: Array<{ action: string; targetId: string | null }>;
+      }>(owner, "GET", `/api/servers/${serverId}/audit-log`);
+      expect(log.status).toBe(200);
+      expect(log.body.entries[0]).toMatchObject({
+        action: "channel.overwrite_delete",
+        targetId: textChannelId,
+      });
     });
   });
 
@@ -1316,9 +1822,21 @@ describeDb("API authorization", () => {
         authorView.body.unread.find((u) => u.channelId === textChannelId)?.count,
       ).toBe(0);
 
-      expect(
-        (await call(member, "POST", `/api/channels/${textChannelId}/read`)).status,
-      ).toBe(200);
+      const marked = await call<{
+        ok: boolean;
+        previousLastReadAt: string | null;
+        lastReadAt: string;
+      }>(member, "POST", `/api/channels/${textChannelId}/read`);
+      expect(marked.status).toBe(200);
+      expect(marked.body.previousLastReadAt).toBeNull();
+      expect(marked.body.lastReadAt).toBeTruthy();
+
+      const second = await call<{ previousLastReadAt: string | null }>(
+        member,
+        "POST",
+        `/api/channels/${textChannelId}/read`,
+      );
+      expect(second.body.previousLastReadAt).toBe(marked.body.lastReadAt);
 
       const after = await call<{
         unread: Array<{ channelId: string; count: number }>;
@@ -1326,6 +1844,39 @@ describeDb("API authorization", () => {
       expect(
         after.body.unread.find((u) => u.channelId === textChannelId)?.count,
       ).toBe(0);
+    });
+
+    it("rewinds the read cursor so later messages count as unread", async () => {
+      const { serverId, textChannelId } = await makeServer();
+      await getPool().query(
+        `INSERT INTO messages (channel_id, author_id, body, created_at)
+         VALUES ($1, $2, 'older', NOW() - INTERVAL '2 minutes'),
+                ($1, $2, 'newer', NOW() - INTERVAL '1 minute')`,
+        [textChannelId, owner.id],
+      );
+      const newer = await getPool().query<{ created_at: Date }>(
+        `SELECT created_at FROM messages
+          WHERE channel_id = $1 AND body = 'newer'`,
+        [textChannelId],
+      );
+      const justBefore = new Date(
+        newer.rows[0]!.created_at.getTime() - 1,
+      ).toISOString();
+
+      expect(
+        (
+          await call(member, "POST", `/api/channels/${textChannelId}/read`, {
+            lastReadAt: justBefore,
+          })
+        ).status,
+      ).toBe(200);
+
+      const unread = await call<{
+        unread: Array<{ channelId: string; count: number }>;
+      }>(member, "GET", `/api/servers/${serverId}/unread`);
+      expect(
+        unread.body.unread.find((u) => u.channelId === textChannelId)?.count,
+      ).toBe(1);
     });
   });
 

@@ -1,27 +1,32 @@
 import { describe, expect, it } from "vitest";
 import type { UserStatus } from "@pqp/shared";
 import {
-  HOISTED_ROLES,
   MEMBER_PAGE_SIZE,
   NO_COLLAPSE,
   OFFLINE_COLLAPSE_THRESHOLD,
   compareMembers,
+  effectiveRoleIds,
   groupMembers,
   isAround,
   sectionCollapsed,
   singleSection,
   toggleSectionCollapse,
   type GroupableMember,
+  type HoistedRole,
   type MemberRole,
 } from "./member-groups";
+
+const ADMIN: HoistedRole = { id: "admin-role", name: "Admin" };
+const HELPERS: HoistedRole = { id: "helpers", name: "Helpers" };
 
 function person(
   id: string,
   displayName: string,
   role: MemberRole,
   status?: UserStatus | null,
+  roleIds?: string[],
 ): GroupableMember {
-  return { id, displayName, role, status };
+  return { id, displayName, role, status, roleIds };
 }
 
 describe("isAround", () => {
@@ -38,28 +43,46 @@ describe("isAround", () => {
   });
 });
 
+describe("effectiveRoleIds", () => {
+  it("adds the seeded Admin role for rank admins who have no row", () => {
+    expect(
+      effectiveRoleIds({ role: "admin", roleIds: [] }, "admin-role"),
+    ).toEqual(["admin-role"]);
+    expect(
+      effectiveRoleIds({ role: "member", roleIds: ["helpers"] }, "admin-role"),
+    ).toEqual(["helpers"]);
+  });
+});
+
 describe("groupMembers", () => {
-  it("hoists the owner and the admins ahead of plain online members", () => {
-    const sections = groupMembers([
-      person("1", "Zed", "member", "online"),
-      person("2", "Ana", "admin", "online"),
-      person("3", "Rafa", "owner", "online"),
-    ]);
+  it("hoists the owner then hoisted roles ahead of plain online members", () => {
+    const sections = groupMembers(
+      [
+        person("1", "Zed", "member", "online"),
+        person("2", "Ana", "admin", "online", ["admin-role"]),
+        person("3", "Rafa", "owner", "online"),
+      ],
+      [ADMIN],
+    );
     expect(sections.map((s) => s.id)).toEqual([
       "role:owner",
-      "role:admin",
+      "role:admin-role",
       "online",
     ]);
     expect(sections[0]!.role).toBe("owner");
+    expect(sections[1]!.label).toBe("Admin");
     expect(sections[2]!.members.map((m) => m.displayName)).toEqual(["Zed"]);
   });
 
-  it("puts an offline admin in Offline rather than in Admins", () => {
-    const sections = groupMembers([
-      person("1", "Ana", "admin", "offline"),
-      person("2", "Bea", "admin", "online"),
-    ]);
-    expect(sections.map((s) => s.id)).toEqual(["role:admin", "offline"]);
+  it("puts an offline admin in Offline rather than in their hoisted role", () => {
+    const sections = groupMembers(
+      [
+        person("1", "Ana", "admin", "offline", ["admin-role"]),
+        person("2", "Bea", "admin", "online", ["admin-role"]),
+      ],
+      [ADMIN],
+    );
+    expect(sections.map((s) => s.id)).toEqual(["role:admin-role", "offline"]);
     expect(sections[0]!.members.map((m) => m.id)).toEqual(["2"]);
     expect(sections[1]!.members.map((m) => m.id)).toEqual(["1"]);
   });
@@ -85,8 +108,6 @@ describe("groupMembers", () => {
       person("3", "avila", "member", "online"),
       person("4", "Bruno", "member", "online"),
     ]);
-    // "Ávila"/"avila" collate together, so the id tie-break decides between
-    // them — and it has to, or they swap on every status refresh.
     expect(sections[0]!.members.map((m) => m.id)).toEqual(["2", "3", "4", "1"]);
   });
 
@@ -106,7 +127,7 @@ describe("groupMembers", () => {
   it("keeps offline members in one section whatever their rank", () => {
     const sections = groupMembers([
       person("1", "Owner", "owner", "offline"),
-      person("2", "Admin", "admin", "offline"),
+      person("2", "Admin", "admin", "offline", ["admin-role"]),
       person("3", "Member", "member", "offline"),
     ]);
     expect(sections).toHaveLength(1);
@@ -114,17 +135,32 @@ describe("groupMembers", () => {
     expect(sections[0]!.members).toHaveLength(3);
   });
 
-  it("generalises to a longer list of hoisted roles", () => {
-    // Stands in for custom roles: the caller passes the hoist order, this file
-    // does not need to know the vocabulary.
+  it("lands a member in their highest hoisted role", () => {
     const sections = groupMembers(
       [
         person("1", "Plain", "member", "online"),
-        person("2", "Boss", "owner", "online"),
+        person("2", "Both", "member", "online", ["admin-role", "helpers"]),
       ],
-      ["owner", "admin", "member"],
+      [ADMIN, HELPERS],
     );
-    expect(sections.map((s) => s.id)).toEqual(["role:owner", "role:member"]);
+    expect(sections.map((s) => s.id)).toEqual(["role:admin-role", "online"]);
+    expect(sections[0]!.members.map((m) => m.id)).toEqual(["2"]);
+  });
+
+  it("keeps owner above any hoisted role they also hold", () => {
+    const sections = groupMembers(
+      [person("1", "Boss", "owner", "online", ["admin-role"])],
+      [ADMIN],
+    );
+    expect(sections.map((s) => s.id)).toEqual(["role:owner"]);
+  });
+
+  it("does not hoist @everyone when nobody holds that id", () => {
+    const none = groupMembers(
+      [person("1", "Ana", "member", "online")],
+      [{ id: "everyone", name: "@everyone" }],
+    );
+    expect(none.map((s) => s.id)).toEqual(["online"]);
   });
 
   it("does not mutate the roster it was handed", () => {
@@ -134,10 +170,6 @@ describe("groupMembers", () => {
     ];
     groupMembers(roster);
     expect(roster.map((m) => m.id)).toEqual(["1", "2"]);
-  });
-
-  it("hoists exactly owner and admin by default", () => {
-    expect(HOISTED_ROLES).toEqual(["owner", "admin"]);
   });
 });
 
@@ -169,14 +201,11 @@ describe("compareMembers", () => {
 
 describe("OFFLINE_COLLAPSE_THRESHOLD", () => {
   it("leaves a small server's offline section open", () => {
-    // The threshold is a product promise, not an implementation detail: under it
-    // nobody has to click anything to see everybody.
     expect(OFFLINE_COLLAPSE_THRESHOLD).toBeGreaterThanOrEqual(20);
   });
 });
 
 describe("section collapse", () => {
-  /** A roster of `count` offline members, as one Offline section. */
   function offlineSection(count: number) {
     const roster = Array.from({ length: count }, (_, i) =>
       person(`u${i}`, `Person ${i}`, "member", "offline"),
@@ -206,8 +235,6 @@ describe("section collapse", () => {
     const section = offlineSection(OFFLINE_COLLAPSE_THRESHOLD + 1);
     const opened = toggleSectionCollapse(section, NO_COLLAPSE);
     expect(sectionCollapsed(section, opened)).toBe(false);
-    // The status poll rebuilds the sections every few seconds; a fresh section
-    // object with the same id must not reinstate the default.
     const rebuilt = offlineSection(OFFLINE_COLLAPSE_THRESHOLD + 2);
     expect(sectionCollapsed(rebuilt, opened)).toBe(false);
   });

@@ -6,8 +6,10 @@ import {
   connectionProviderFromPath,
   joinIntentFromSearch,
   normalizeHandle,
+  Permission,
   publicProfileDisplayUrl,
   validateHandle,
+  buildReplyExcerpt,
 } from "@pqp/shared";
 import type {
   AgeGateStatus,
@@ -24,7 +26,8 @@ import type {
   VoiceRoomTransport,
 } from "@pqp/shared";
 import { MessageComposer } from "@/components/chat/message-composer";
-import { MessageList } from "@/components/chat/message-list";
+import { MessageList, type MessageAuthorInfo } from "@/components/chat/message-list";
+import { ForwardDialog, type ForwardTarget } from "@/components/chat/forward-dialog";
 import { ThreadPanel } from "@/components/chat/thread-panel";
 import {
   ReportDialog,
@@ -90,6 +93,7 @@ import { useVoiceStateSync } from "@/components/voice/voice-state-sync";
 import { VoiceStatusBar } from "@/components/voice/voice-status-bar";
 import { CallRatingPrompt } from "@/components/voice/call-rating-prompt";
 import { useCallRating } from "@/hooks/use-call-rating";
+import { usePermissions } from "@/hooks/use-permissions";
 import { ShareHandleButton } from "@/components/handle/share-handle-button";
 import { BetaTag } from "@/components/ui/beta-tag";
 import { Dialog } from "@/components/ui/dialog";
@@ -115,6 +119,7 @@ import {
   fetchIceServers,
   fetchMe,
   fetchMembers,
+  fetchRoles,
   listTimeouts,
   fetchMessages,
   fetchServers,
@@ -133,8 +138,10 @@ import {
   updateChannel,
   updateMe,
   updatePreferences,
+  type ServerMember,
+  type ServerRole,
 } from "@/lib/api";
-import { parseAppRoute, signedOutRedirectPath } from "@/lib/app-route";
+import { parseAppRoute, signedOutRedirectPath, messageRoutePath } from "@/lib/app-route";
 import {
   hasStashedConnectionCallback,
   stashConnectionCallbackFromWindow,
@@ -162,6 +169,8 @@ import {
   unreadFromConversations,
   upsertConversation,
 } from "@/lib/conversations";
+import { findLastOwnEditableMessage } from "@/lib/edit-last-message";
+import { findFirstUnreadMessageId } from "@/lib/unread-divider";
 import {
   HOME_SELECTION,
   selectionRoutePath,
@@ -174,12 +183,15 @@ import {
   loadAttachmentConfig,
 } from "@/lib/attachments";
 import type { MentionCandidate } from "@/lib/mention-autocomplete";
+import { usernameFromTag } from "@/lib/author-display";
 import { devAuthToken, getAuthToken, isDevAuthBypassEnabled } from "@/lib/dev-auth";
 import { getDesktop } from "@/lib/desktop";
 import {
   describeActivity,
   notifyChannelActivity,
+  rememberActivityChannel,
   rememberServers,
+  unreadByServer,
 } from "@/lib/notifications";
 import { setSoundOutput } from "@/lib/sounds";
 import { useMemberSidebar } from "@/hooks/use-member-sidebar";
@@ -191,6 +203,7 @@ import { adoptAppearancePreference } from "@/lib/appearance";
 import { adoptContrastPreference } from "@/lib/contrast";
 import { adoptThemePreference } from "@/lib/theme";
 import { isMeshForced } from "@/lib/voice-backend";
+import type { VideoQuality } from "@/lib/video-quality";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -508,13 +521,28 @@ function MainAppContent({
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [unread, setUnread] = useState<Record<string, UnreadState>>({});
   const [replyTarget, setReplyTarget] = useState<ChatMessage | null>(null);
-  const [mentionCandidates, setMentionCandidates] = useState<
-    MentionCandidate[]
+  const [mentionMembers, setMentionMembers] = useState<MentionCandidate[]>([]);
+  const [mentionableRoles, setMentionableRoles] = useState<
+    Array<Pick<ServerRole, "id" | "name" | "mentionable" | "isEveryone">>
   >([]);
+  const [serverMembers, setServerMembers] = useState<ServerMember[]>([]);
+  const [serverRoles, setServerRoles] = useState<ServerRole[]>([]);
+  const [forwardMessage, setForwardMessage] = useState<ChatMessage | null>(null);
+  const unreadHoldRef = useRef(new Set<string>());
+  const [unreadHeldIds, setUnreadHeldIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  /** Last-read cursor from before this visit, for the NEW rule. */
+  const [unreadSince, setUnreadSince] = useState<string | null>(null);
+  const [threadUnreadSince, setThreadUnreadSince] = useState<string | null>(
+    null,
+  );
+  const unreadCursorByChannelRef = useRef<Record<string, string>>({});
+  const [editMessageId, setEditMessageId] = useState<string | null>(null);
   /**
    * The selected server's roster as rank only — what the profile card needs to
    * know whether it may offer a timeout, and to whom. Filled from the same fetch
-   * as `mentionCandidates`, so no surface pays a second request for it.
+   * as `mentionMembers`, so no surface pays a second request for it.
    */
   const [memberRoles, setMemberRoles] = useState<Map<string, MemberRole>>(
     () => new Map(),
@@ -613,6 +641,11 @@ function MainAppContent({
   friendsRef.current = friends;
   /** The server the sidebar is showing, or null in the conversation view. */
   const selectedServerId = selectionServerId(selection);
+  const selectedServerIdRef = useRef<string | null>(null);
+  selectedServerIdRef.current = selectedServerId;
+  const perms = usePermissions(selectedServerId);
+  const permsRef = useRef(perms);
+  permsRef.current = perms;
   /** Which server owns the active call — `channels` only holds the selected one. */
   const voiceServerIdRef = useRef<string | null>(null);
   /**
@@ -751,7 +784,9 @@ function MainAppContent({
     });
   }, [voice]);
 
-  const clearUnread = useCallback((channelId: string) => {
+  const clearUnread = useCallback(async (channelId: string): Promise<string | null> => {
+    unreadHoldRef.current.delete(channelId);
+    setUnreadHeldIds(new Set(unreadHoldRef.current));
     setUnread((prev) => {
       if (!prev[channelId]) {
         return prev;
@@ -760,9 +795,13 @@ function MainAppContent({
       delete next[channelId];
       return next;
     });
-    void markChannelRead(channelId).catch(() => {
+    try {
+      const result = await markChannelRead(channelId);
+      return result.previousLastReadAt ?? null;
+    } catch {
       // A missed read receipt only means a stale badge; not worth surfacing.
-    });
+      return null;
+    }
   }, []);
 
   const loadUnread = useCallback(async (serverId: string) => {
@@ -771,12 +810,14 @@ function MainAppContent({
       setUnread((prev) => {
         const next = { ...prev };
         for (const row of rows) {
-          if (row.count > 0 && row.channelId !== selectedChannelIdRef.current) {
+          const isOpen = row.channelId === selectedChannelIdRef.current;
+          const held = unreadHoldRef.current.has(row.channelId);
+          if (row.count > 0 && (!isOpen || held)) {
             next[row.channelId] = {
               count: row.count,
               mentions: row.mentions,
             };
-          } else {
+          } else if (!held) {
             delete next[row.channelId];
           }
         }
@@ -808,9 +849,10 @@ function MainAppContent({
         setConversations(sorted);
         conversationsRef.current = sorted;
         setUnread((prev) => {
+          const openId = selectedChannelIdRef.current;
           const seeded = unreadFromConversations(
             sorted,
-            selectedChannelIdRef.current,
+            openId && unreadHoldRef.current.has(openId) ? null : openId,
           );
           if (!trustSnapshot) {
             // The live map is spread last so it wins: it has counted
@@ -869,24 +911,39 @@ function MainAppContent({
   // only place a handle can be learned from without asking for it.
   useEffect(() => {
     if (conversationParticipants) {
-      setMentionCandidates([...conversationParticipants]);
+      setMentionMembers([...conversationParticipants]);
+      setMentionableRoles([]);
+      setServerMembers([]);
+      setServerRoles([]);
       return;
     }
     if (!selectedServerId) {
-      setMentionCandidates([]);
+      setMentionMembers([]);
+      setMentionableRoles([]);
+      setServerMembers([]);
+      setServerRoles([]);
       return;
     }
     let cancelled = false;
-    void fetchMembers(selectedServerId)
-      .then(({ members }) => {
+    void Promise.all([
+      fetchMembers(selectedServerId),
+      fetchRoles(selectedServerId).catch(() => ({ roles: [] as ServerRole[] })),
+    ])
+      .then(([{ members }, { roles }]) => {
         if (!cancelled) {
-          setMentionCandidates(members);
-          // The same roster, kept a second time as rank only. This is what lets
-          // the profile card offer moderation from a *message author* without a
-          // request of its own: `MentionCandidate` narrows `role` away, and the
-          // card needs it to know whether the server would refuse the action.
+          setMentionMembers(members);
+          setServerMembers(members);
+          setServerRoles(roles);
           setMemberRoles(
             new Map(members.map((member) => [member.id, member.role])),
+          );
+          setMentionableRoles(
+            roles.map((role) => ({
+              id: role.id,
+              name: role.name,
+              mentionable: role.mentionable,
+              isEveryone: role.isEveryone,
+            })),
           );
         }
       })
@@ -897,6 +954,102 @@ function MainAppContent({
       cancelled = true;
     };
   }, [conversationParticipants, selectedServerId]);
+
+  const mentionCandidates = useMemo(() => {
+    if (conversationParticipants) {
+      return mentionMembers;
+    }
+    const extra: MentionCandidate[] = [];
+    const canMass = perms.can(Permission.MENTION_EVERYONE);
+    if (canMass) {
+      extra.push({
+        id: "mention:everyone",
+        username: "everyone",
+        displayName: t("composer.mentionEveryone"),
+        avatarUrl: null,
+        mentionKind: "mass",
+      });
+      extra.push({
+        id: "mention:here",
+        username: "here",
+        displayName: t("composer.mentionHere"),
+        avatarUrl: null,
+        mentionKind: "mass",
+      });
+    }
+    for (const role of mentionableRoles) {
+      if (role.isEveryone) {
+        continue;
+      }
+      if (role.mentionable || canMass) {
+        extra.push({
+          id: `role:${role.id}`,
+          username: role.name,
+          displayName: role.name,
+          avatarUrl: null,
+          mentionKind: "role",
+        });
+      }
+    }
+    return [
+      ...mentionMembers.map((member) => ({
+        ...member,
+        mentionKind: "member" as const,
+      })),
+      ...extra,
+    ];
+  }, [
+    conversationParticipants,
+    mentionMembers,
+    mentionableRoles,
+    perms,
+    t,
+  ]);
+
+  const messageAuthors = useMemo(() => {
+    const map = new Map<string, MessageAuthorInfo>();
+    for (const member of serverMembers) {
+      map.set(member.id, {
+        rank: member.role,
+        roleIds: member.roleIds,
+        status: member.status ?? null,
+        username: member.username ?? usernameFromTag(member.tag),
+      });
+    }
+    for (const person of conversationParticipants ?? []) {
+      if (map.has(person.id)) {
+        continue;
+      }
+      map.set(person.id, {
+        username: person.username,
+      });
+    }
+    return map;
+  }, [conversationParticipants, serverMembers]);
+
+  const forwardTargets = useMemo((): ForwardTarget[] => {
+    const currentId = selectedChannelId;
+    const targets: ForwardTarget[] = [];
+    for (const channel of channels) {
+      if (channel.type === "text" && channel.id !== currentId) {
+        targets.push({
+          id: channel.id,
+          label: channel.name,
+          kind: "channel",
+        });
+      }
+    }
+    for (const conversation of conversations) {
+      if (conversation.channelId !== currentId) {
+        targets.push({
+          id: conversation.channelId,
+          label: conversationTitle(conversation.participants),
+          kind: "conversation",
+        });
+      }
+    }
+    return targets;
+  }, [channels, conversations, selectedChannelId]);
 
   /**
    * The selected server, but only when this account can manage it — the one
@@ -977,16 +1130,31 @@ function MainAppContent({
       setReplyTarget(null);
       // --- threads --- the panel belongs to the channel it was opened from.
       closeThreadPanelRef.current();
-      clearUnread(channelId);
+      setUnreadSince(null);
+      setEditMessageId(null);
+      const held = unreadHoldRef.current.has(channelId);
       setMessagesLoading(true);
       chat.joinChannel(channelId);
 
       try {
-        const page = await fetchMessages(channelId);
+        const [page, previousLastReadAt] = await Promise.all([
+          fetchMessages(channelId),
+          held
+            ? Promise.resolve(
+                unreadCursorByChannelRef.current[channelId] ?? null,
+              )
+            : clearUnread(channelId),
+        ]);
         if (selectedChannelIdRef.current !== channelId) {
           return;
         }
         chat.setMessages(page.messages, page.hasMore);
+        setUnreadSince(
+          previousLastReadAt &&
+            findFirstUnreadMessageId(page.messages, previousLastReadAt)
+            ? previousLastReadAt
+            : null,
+        );
         refresh();
       } catch (error) {
         setAppError(
@@ -1021,9 +1189,12 @@ function MainAppContent({
     // The read cursor moves on close, not per message: the panel was on
     // screen, so everything it showed is read, and this is what keeps the
     // chip's unread dot honest after the next reload.
-    clearUnread(openThreadChannelIdRef.current);
+    if (!unreadHoldRef.current.has(openThreadChannelIdRef.current)) {
+      void clearUnread(openThreadChannelIdRef.current);
+    }
     threadChat.leaveChannel();
     setOpenThread(null);
+    setThreadUnreadSince(null);
   }, [clearUnread, threadChat]);
   // openChannel is declared above this callback and must close the panel on
   // every channel switch, so it reaches it through a ref.
@@ -1034,14 +1205,28 @@ function MainAppContent({
     async (thread: ThreadSummary, origin: ChatMessage | null) => {
       setOpenThread({ thread, origin });
       setThreadLoading(true);
+      setThreadUnreadSince(null);
       threadChat.joinChannel(thread.channelId);
-      clearUnread(thread.channelId);
+      const held = unreadHoldRef.current.has(thread.channelId);
       try {
-        const page = await fetchMessages(thread.channelId);
+        const [page, previousLastReadAt] = await Promise.all([
+          fetchMessages(thread.channelId),
+          held
+            ? Promise.resolve(
+                unreadCursorByChannelRef.current[thread.channelId] ?? null,
+              )
+            : clearUnread(thread.channelId),
+        ]);
         if (openThreadChannelIdRef.current !== thread.channelId) {
           return;
         }
         threadChat.setMessages(page.messages, page.hasMore);
+        setThreadUnreadSince(
+          previousLastReadAt &&
+            findFirstUnreadMessageId(page.messages, previousLastReadAt)
+            ? previousLastReadAt
+            : null,
+        );
         refresh();
       } catch {
         // The panel opens empty; live traffic and sending still work, and
@@ -1073,6 +1258,50 @@ function MainAppContent({
     },
     [chat, openThreadPanel],
   );
+
+  const handleMarkUnread = useCallback(
+    (message: ChatMessage) => {
+      const created = Date.parse(message.createdAt);
+      if (!Number.isFinite(created)) {
+        return;
+      }
+      const channelId = message.channelId;
+      const lastReadAt = new Date(created - 1).toISOString();
+      unreadHoldRef.current.add(channelId);
+      unreadCursorByChannelRef.current[channelId] = lastReadAt;
+      setUnreadHeldIds(new Set(unreadHoldRef.current));
+      setUnread((prev) => ({
+        ...prev,
+        [channelId]: {
+          count: Math.max(1, prev[channelId]?.count ?? 1),
+          mentions: prev[channelId]?.mentions ?? 0,
+        },
+      }));
+      if (selectedChannelIdRef.current === channelId) {
+        setUnreadSince(lastReadAt);
+      }
+      if (openThreadChannelIdRef.current === channelId) {
+        setThreadUnreadSince(lastReadAt);
+      }
+      void markChannelRead(channelId, lastReadAt)
+        .then(() => {
+          if (selectedServerId) {
+            void loadUnread(selectedServerId);
+          }
+        })
+        .catch(() => {
+          // Badge is best-effort.
+        });
+    },
+    [loadUnread, selectedServerId],
+  );
+
+  const handleMarkRead = useCallback(() => {
+    const channelId = selectedChannelIdRef.current;
+    if (channelId) {
+      clearUnread(channelId);
+    }
+  }, [clearUnread]);
 
   // The thread controller renders optimistic bubbles for the same account.
   useEffect(() => {
@@ -1233,9 +1462,24 @@ function MainAppContent({
             const activity = message as {
               channelId: string;
               mention: boolean;
+              /** Null for a conversation, which belongs to no server. */
+              serverId?: string | null;
               /** Absent from an API that predates conversations. */
               kind?: ChannelKind;
             };
+            // Where this came from, taken from the frame rather than looked up.
+            // The directory is only ever fed the SELECTED server's channel
+            // list, so without this every frame from any other server — and
+            // every frame from a thread, which is in no channel list at all —
+            // described to nulls: the server's own mute was skipped, the banner
+            // could not name where it came from, and the rail had no icon to
+            // mark. Placing the channel first is what makes the three lines
+            // below able to answer.
+            rememberActivityChannel(
+              activity.channelId,
+              activity.serverId ?? null,
+              activity.kind ?? "server",
+            );
             if (activity.kind && activity.kind !== "server") {
               const now = new Date().toISOString();
               if (
@@ -1329,6 +1573,64 @@ function MainAppContent({
           // whole answer to "B is looking at a channel; what do they see?".
           if (message.type === "friend-activity") {
             friendsRef.current.applyNudge(message.kind);
+            return;
+          }
+
+          if (message.type === "permissions-update") {
+            if (message.serverId !== selectedServerIdRef.current) {
+              return;
+            }
+            permsRef.current.refresh(message.version);
+            setMemberRosterNudge((n) => n + 1);
+            void Promise.all([
+              fetchChannels(message.serverId),
+              fetchRoles(message.serverId).then(
+                (res) => res,
+                () => null,
+              ),
+              fetchMembers(message.serverId).then(
+                (res) => res,
+                () => null,
+              ),
+            ])
+              .then(([{ channels: list }, rolesRes, membersRes]) => {
+                if (selectedServerIdRef.current !== message.serverId) {
+                  return;
+                }
+                setChannels(list);
+                if (rolesRes) {
+                  setServerRoles(rolesRes.roles);
+                  setMentionableRoles(
+                    rolesRes.roles.map((role) => ({
+                      id: role.id,
+                      name: role.name,
+                      mentionable: role.mentionable,
+                      isEveryone: role.isEveryone,
+                    })),
+                  );
+                }
+                if (membersRes) {
+                  setServerMembers(membersRes.members);
+                  setMentionMembers(membersRes.members);
+                  setMemberRoles(
+                    new Map(
+                      membersRes.members.map((member) => [member.id, member.role]),
+                    ),
+                  );
+                }
+                const current = selectedChannelIdRef.current;
+                if (current && !list.some((channel) => channel.id === current)) {
+                  const next =
+                    list.find((channel) => channel.type === "text") ?? list[0];
+                  if (next) {
+                    setSelectedChannelId(next.id);
+                    selectedChannelIdRef.current = next.id;
+                  }
+                }
+              })
+              .catch(() => {
+                // Next navigation will refetch.
+              });
             return;
           }
 
@@ -1587,6 +1889,34 @@ function MainAppContent({
       await openChannel(channelId);
     },
     [openChannel, syncRoute],
+  );
+
+  const handleForwardPick = useCallback(
+    async (target: ForwardTarget) => {
+      const message = forwardMessage;
+      setForwardMessage(null);
+      if (!message) {
+        return;
+      }
+      const excerpt = buildReplyExcerpt(message.body) || "…";
+      const quote = t("chat.forward.quote", {
+        name: message.authorName,
+        excerpt,
+      });
+      const link = `${window.location.origin}${messageRoutePath(
+        selectedServerId,
+        message.channelId,
+        message.id,
+      )}`;
+      const draft = `${quote}\n${link}`;
+      if (target.kind === "channel") {
+        await selectChannel(target.id);
+      } else {
+        await selectConversation(target.id);
+      }
+      setComposerInsert(draft);
+    },
+    [forwardMessage, selectChannel, selectConversation, selectedServerId, t],
   );
 
   /** Leave the conversation view open with nothing selected in it. */
@@ -1966,6 +2296,25 @@ function MainAppContent({
     // the encoder's ceiling. Safe mid-call by construction, and a no-op when
     // the camera is off, where the next `toggleCamera` reads the new value.
     void voice.setVideoQuality(next.videoQuality);
+  }
+
+  /**
+   * The in-call quality menu, writing to the same place the Settings dialog
+   * writes to.
+   *
+   * There is one stored value (`LocalSettings.videoQuality`) and one live
+   * setter, so the two surfaces cannot drift: the menu on the call and the
+   * select in Settings are both views of this state, and either one moving
+   * re-renders the other with the new choice already selected. The controller
+   * is reached through the same `setVideoQuality` path Settings uses, which
+   * re-shapes the track already on the wire rather than re-capturing, so the
+   * camera does not blink when somebody changes this mid-call.
+   */
+  function handleVideoQualityChange(quality: VideoQuality) {
+    const next = { ...localSettings, videoQuality: quality };
+    setLocalSettings(next);
+    saveLocalSettings(next);
+    void voice.setVideoQuality(quality);
   }
 
   const refreshAfterJoin = useCallback(
@@ -2489,6 +2838,24 @@ function MainAppContent({
   );
   useChannelNotifications({ channels: notificationChannels, unread });
 
+  /**
+   * Unread per server icon.
+   *
+   * The rail used to be able to indicate only the server already selected,
+   * because the selected server's channels are the only ones the app fetches a
+   * list for. That left every notification about any other server with nothing
+   * to look at when you followed it back into the app. The activity frame has
+   * been carrying its `serverId` all along; `rememberActivityChannel` files it,
+   * and this is what reads it back.
+   */
+  const serverUnread = useMemo(() => {
+    const placedBy = new Map<string, string | null>();
+    for (const channel of notificationChannels) {
+      placedBy.set(channel.id, channel.serverId);
+    }
+    return unreadByServer(unread, placedBy);
+  }, [notificationChannels, unread]);
+
   const conversationUnread = conversationUnreadTotals(conversations, unread);
 
   /**
@@ -2583,7 +2950,10 @@ function MainAppContent({
       : undefined;
   const selectedServer = servers.find((s) => s.id === selectedServerId);
   const canManage =
-    selectedServer?.role === "owner" || selectedServer?.role === "admin";
+    selectedServer?.role === "owner" ||
+    selectedServer?.role === "admin" ||
+    perms.can(Permission.MANAGE_CHANNELS);
+  const canManageRoles = perms.can(Permission.MANAGE_ROLES);
 
   const voiceChannel =
     voiceState.voiceChannelId
@@ -2840,13 +3210,16 @@ function MainAppContent({
               {t("chrome.topic")}
             </button>
           )}
-          {canManage && selectedChannel.isPrivate && (
+          {(canManageRoles || (canManage && selectedChannel.isPrivate)) &&
+            selectedChannel.kind === "server" && (
             <button
               type="button"
               className="rounded-md px-2 py-1 text-xs text-signal hover:bg-ink-3"
               onClick={() => setChannelMembersChannel(selectedChannel)}
             >
-              {t("chrome.access")}
+              {selectedChannel.isPrivate
+                ? t("chrome.access")
+                : t("channelPerms.title")}
             </button>
           )}
           {/* The roster toggle, last in the row — the same position and the
@@ -2902,12 +3275,14 @@ function MainAppContent({
             avatarUrl: user.avatarUrl,
           }}
           voiceState={voiceState}
+          videoQuality={localSettings.videoQuality}
           onJoinCall={() =>
             void handleConversationCall(activeConversation.channelId, false)
           }
           onLeave={() => voice.leave()}
           onToggleMute={() => voice.toggleMute()}
           onToggleCamera={() => void voice.toggleCamera()}
+          onVideoQualityChange={handleVideoQualityChange}
           onStartScreenShare={() => void voice.startScreenShare()}
           onStopScreenShare={() => void voice.stopScreenShare()}
           onFocusScreenShare={(peerId) => voice.focusScreenShare(peerId)}
@@ -2965,6 +3340,15 @@ function MainAppContent({
         }
         unreadThreadIds={unreadThreadIds}
         activeThreadId={openThread?.thread.channelId ?? null}
+        authors={messageAuthors}
+        roles={serverRoles}
+        unreadHeld={unreadHeldIds.has(selectedChannel.id)}
+        unreadSince={unreadSince}
+        editMessageId={editMessageId}
+        onEditMessageHandled={() => setEditMessageId(null)}
+        onForward={setForwardMessage}
+        onMarkUnread={handleMarkUnread}
+        onMarkRead={handleMarkRead}
       />
       {/* --- threads --- overlaid on the pane (full width on mobile, a right
           column on desktop) so the parent stays where it was underneath. */}
@@ -2988,6 +3372,18 @@ function MainAppContent({
               subjectName: message.authorName,
             })
           }
+          authors={messageAuthors}
+          roles={serverRoles}
+          unreadHeld={unreadHeldIds.has(openThread.thread.channelId)}
+          unreadSince={threadUnreadSince}
+          onForward={setForwardMessage}
+          onMarkUnread={handleMarkUnread}
+          onMarkRead={() => clearUnread(openThread.thread.channelId)}
+          onSent={() => {
+            if (unreadHoldRef.current.has(openThread.thread.channelId)) {
+              clearUnread(openThread.thread.channelId);
+            }
+          }}
         />
       )}
       {/* Against the composer it explains, not floating in a corner: the frame
@@ -3005,6 +3401,9 @@ function MainAppContent({
         // from the wrong audience.
         key={selectedChannel.id}
         onSend={(body, attachments) => {
+          if (unreadHoldRef.current.has(selectedChannel.id)) {
+            clearUnread(selectedChannel.id);
+          }
           chat.sendMessage(body, replyTarget, attachments);
           setReplyTarget(null);
         }}
@@ -3017,6 +3416,17 @@ function MainAppContent({
         replyTarget={replyTarget}
         onCancelReply={() => setReplyTarget(null)}
         mentionCandidates={mentionCandidates}
+        onEditLastOwn={() => {
+          const last = findLastOwnEditableMessage(
+            chat.getMessages(),
+            user?.id ?? null,
+          );
+          if (!last) {
+            return false;
+          }
+          setEditMessageId(last.id);
+          return true;
+        }}
         slashContext={{
           updateDisplayName: async (name: string) => {
             const updated = await updateMe({ displayName: name });
@@ -3067,6 +3477,8 @@ function MainAppContent({
       // been selected above, and the composer remounts per channel, so its
       // insert effect picks this up on mount with the text already in it.
       onComposeDraft={(text) => setComposerInsert(text)}
+      onMention={(username) => setComposerInsert(`@${username}`)}
+      roles={serverRoles}
       onBlockUser={(userId) => void handleBlockUser(userId)}
       onUnblockUser={(userId) => void handleUnblockUser(userId)}
       onReportUser={(subject) =>
@@ -3156,8 +3568,7 @@ function MainAppContent({
       <ServerRail
         servers={servers}
         selectedServerId={selectedServerId}
-        unread={unread}
-        channels={channels}
+        serverUnread={serverUnread}
         homeSelected={selection.kind === "dm"}
         homeUnread={conversationUnread}
         // Requests AND depoimentos waiting to be answered — see `waitingOnYou`
@@ -3224,6 +3635,7 @@ function MainAppContent({
           channels={channels}
           selectedChannelId={selectedChannelId}
           canManage={!!canManage}
+          canManageRoles={canManageRoles}
           isLoading={channelsLoading}
           voiceOccupancy={voiceState.occupancy}
           speakingPeerIds={voiceState.speakingPeerIds}
@@ -3446,6 +3858,20 @@ function MainAppContent({
                 participants={voiceState.occupancy[selectedChannel.id] ?? []}
                 isSharingScreen={voiceState.isSharingScreen}
                 isSharingScreenAudio={voiceState.isSharingScreenAudio}
+                // The camera is only ever this machine's when the call in
+                // progress is *this* channel's; the state is a single
+                // controller, so a stale preview would otherwise show up in a
+                // channel you are merely looking at.
+                isCameraOn={
+                  voiceState.voiceChannelId === selectedChannel.id &&
+                  voiceState.isCameraOn
+                }
+                localCameraStream={
+                  voiceState.voiceChannelId === selectedChannel.id
+                    ? voiceState.localCameraStream
+                    : null
+                }
+                videoQuality={localSettings.videoQuality}
                 screenSharePeerIds={
                   voiceState.voiceChannelId === selectedChannel.id
                     ? voiceState.screenSharePeerIds
@@ -3464,6 +3890,11 @@ function MainAppContent({
                 }}
                 onStartScreenShare={() => void voice.startScreenShare()}
                 onStopScreenShare={() => void voice.stopScreenShare()}
+                onToggleCamera={() => void voice.toggleCamera()}
+                // The same handler the conversation call and the Settings
+                // dialog use, so there is one stored choice and three views of
+                // it rather than three settings that drift.
+                onVideoQualityChange={handleVideoQualityChange}
               />
             </div>
             <div className="flex min-h-0 flex-1 flex-col">
@@ -3537,6 +3968,7 @@ function MainAppContent({
           voiceChannels={channels
             .filter((c) => c.type === "voice")
             .map((c) => ({ id: c.id, name: c.name }))}
+          roles={serverRoles}
         />
       )}
 
@@ -3645,6 +4077,11 @@ function MainAppContent({
         serverId={selectedServerId}
         serverName={selectedServer?.name ?? null}
         canManage={!!canManage}
+        canCreateInvite={
+          perms.can(Permission.CREATE_INVITE) ||
+          selectedServer?.role === "owner" ||
+          selectedServer?.role === "admin"
+        }
         initialCode={inviteCodeFromUrl}
         initialError={inviteErrorFromUrl}
         onClose={() => {
@@ -3703,6 +4140,13 @@ function MainAppContent({
         onClose={() => setReportTarget(null)}
       />
 
+      <ForwardDialog
+        open={forwardMessage !== null}
+        targets={forwardTargets}
+        onPick={(target) => void handleForwardPick(target)}
+        onClose={() => setForwardMessage(null)}
+      />
+
       <NewDmDialog
         open={newDmOpen}
         currentUserId={user?.id ?? null}
@@ -3717,7 +4161,12 @@ function MainAppContent({
         open={channelMembersChannel !== null}
         channelId={channelMembersChannel?.id ?? null}
         channelName={channelMembersChannel?.name ?? null}
+        channelType={channelMembersChannel?.type ?? "text"}
+        isPrivate={channelMembersChannel?.isPrivate ?? false}
         serverId={selectedServerId}
+        roles={serverRoles}
+        canManageRoles={canManageRoles}
+        canManageAccess={!!canManage}
         onClose={() => setChannelMembersChannel(null)}
       />
 

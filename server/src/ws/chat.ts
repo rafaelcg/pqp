@@ -1,9 +1,13 @@
 import type { WebSocket } from "ws";
 import {
   chatClientMessageSchema,
+  extractMentions,
   extractMentionUsernames,
   friendActivitySchema,
+  hasPermission,
   isChatServerMessage,
+  Permission,
+  permissionsUpdateSchema,
   profileUpdateSchema,
   type ChatServerMessage,
   type FriendActivity,
@@ -15,7 +19,7 @@ import {
   publishToCluster,
   subscribeToCluster,
 } from "../lib/bus.js";
-import { createRateLimiter } from "../lib/rate-limit.js";
+import { createRateLimiter, limitFromEnv } from "../lib/rate-limit.js";
 import {
   extractFirstUrl,
   fetchAndCacheEmbed,
@@ -26,7 +30,11 @@ import {
   getReplyParent,
   mapMessage,
 } from "../services/messages.js";
-import { getMessageChannelId, toggleReaction } from "../services/reactions.js";
+import {
+  getMessageChannelId,
+  resolveChannelMemberName,
+  toggleReaction,
+} from "../services/reactions.js";
 import { listBlockersOf } from "../services/blocks.js";
 import { isDmSendBlocked, restoreDmParticipants } from "../services/dms.js";
 import {
@@ -35,12 +43,17 @@ import {
   type ActiveTimeout,
 } from "../services/sanctions.js";
 import { pushChannelActivity } from "../services/push.js";
-import { getChannelAudience } from "../services/servers.js";
+import { getChannel, getChannelAudience } from "../services/servers.js";
+import {
+  bumpPermissionsVersion,
+  computeMemberPermissions,
+  listServerMemberIds,
+} from "../services/permissions.js";
 // --- threads ---
 import { getThreadInfo } from "../services/threads.js";
 import { canAccessChannel } from "../services/users.js";
 import { forEachAuthenticatedSocket } from "./sockets.js";
-import { isInvisible, setSocketIdle } from "./status.js";
+import { isInvisible, isPresentForHere, setSocketIdle } from "./status.js";
 
 interface ChatConnection {
   socket: WebSocket;
@@ -66,7 +79,10 @@ const connections = new Map<WebSocket, ChatConnection>();
 const channelPresence = new Map<string, Set<ChatConnection>>();
 
 /** Enough for fast typing and reaction spam, not enough to hammer the DB. */
-const messageLimiter = createRateLimiter({ capacity: 10, refillPerSecond: 2 });
+const messageLimiter = createRateLimiter({
+  capacity: limitFromEnv("RATE_LIMIT_WS_MESSAGE_CAPACITY", 10),
+  refillPerSecond: limitFromEnv("RATE_LIMIT_WS_MESSAGE_REFILL", 2),
+});
 const reactionLimiter = createRateLimiter({ capacity: 20, refillPerSecond: 5 });
 const typingLimiter = createRateLimiter({ capacity: 5, refillPerSecond: 1 });
 
@@ -91,6 +107,7 @@ const ACTIVITY_TOPIC = "chat.activity";
 const EVICT_TOPIC = "chat.evict";
 const PROFILE_TOPIC = "chat.profile";
 const FRIEND_TOPIC = "chat.friend";
+const PERMISSIONS_TOPIC = "chat.permissions";
 
 interface PresenceUser {
   id: string;
@@ -486,6 +503,48 @@ function deliverFriendActivity(
 }
 
 /**
+ * Tell every connected member of a server that their resolved bits may have
+ * changed. Bumps `permissions_version` first so the frame is always newer
+ * than the snapshot the client already holds; a same-version ping would be
+ * dropped. Content-free otherwise: each client refetches
+ * `GET /api/servers/:id/permissions`. Same addressing as `friend-activity`
+ * (per member, never a channel fan-out), same fire-and-forget.
+ */
+export async function notifyPermissionsUpdate(
+  serverId: string,
+): Promise<void> {
+  const version = await bumpPermissionsVersion(serverId);
+  const memberIds = await listServerMemberIds(serverId);
+  deliverPermissionsUpdate(serverId, version, memberIds);
+  if (isBusEnabled()) {
+    publishToCluster(PERMISSIONS_TOPIC, {
+      type: "permissions-update",
+      serverId,
+      version,
+    });
+  }
+}
+
+/** Test seam and local half. Membership is passed in so unit tests need no DB. */
+export function deliverPermissionsUpdate(
+  serverId: string,
+  version: number,
+  memberIds: readonly string[],
+): void {
+  const allowed = new Set(memberIds);
+  const payload = encode({
+    type: "permissions-update",
+    serverId,
+    version,
+  } as const);
+  forEachAuthenticatedSocket((socket, user) => {
+    if (socket.readyState === 1 && allowed.has(user.id)) {
+      socket.send(payload);
+    }
+  });
+}
+
+/**
  * Broadcast a message deletion to everyone currently viewing the channel.
  * Called from the HTTP moderation endpoint, so there is no sender socket.
  */
@@ -607,14 +666,9 @@ async function notifyChannelActivity(
   mentions: string[],
   repliedToUserId?: string | null,
   options?: {
-    /**
-     * Whether this call may also fan out Web Push to users with no socket
-     * anywhere. Defaults on, and the cluster-bus handler turns it off: a
-     * pushable user is connected to NO instance, so if every instance pushed,
-     * one message would buzz a phone once per replica. Only the origin
-     * instance — the one that handled the send — pushes.
-     */
     webPush?: boolean;
+    mentionEveryone?: boolean;
+    mentionHereUserIds?: readonly string[];
   },
 ): Promise<void> {
   const [audience, blockers] = await Promise.all([
@@ -630,6 +684,7 @@ async function notifyChannelActivity(
   // body over the bus purely to re-run the same regex on the other side would
   // be both larger and slower.
   const mentioned = new Set(mentions);
+  const hereIds = new Set(options?.mentionHereUserIds ?? []);
 
   forEachAuthenticatedSocket((socket, user) => {
     if (socket.readyState !== 1 || user.id === authorId) {
@@ -665,7 +720,9 @@ async function notifyChannelActivity(
         // after a refresh disagree about the same message.
         mention:
           user.id === repliedToUserId ||
-          Boolean(user.username && mentioned.has(user.username)),
+          Boolean(user.username && mentioned.has(user.username)) ||
+          options?.mentionEveryone === true ||
+          hereIds.has(user.id),
       }),
     );
   });
@@ -684,6 +741,8 @@ async function notifyChannelActivity(
       mentionedUsernames: mentions,
       repliedToUserId: repliedToUserId ?? null,
       blockerIds: blockers,
+      mentionEveryone: options?.mentionEveryone === true,
+      mentionHereUserIds: options?.mentionHereUserIds ?? [],
     });
   }
 }
@@ -906,6 +965,19 @@ export async function handleChatMessage(
     if (!(await canAccessChannel(payload.channelId, conn.user.id))) {
       return;
     }
+    const channel = await getChannel(payload.channelId);
+    let canMentionEveryone = false;
+    if (channel?.kind === "server" && channel.server_id) {
+      const perms = await computeMemberPermissions(
+        channel.server_id,
+        conn.user.id,
+        payload.channelId,
+      );
+      if (!hasPermission(perms, Permission.SEND_MESSAGES)) {
+        return;
+      }
+      canMentionEveryone = hasPermission(perms, Permission.MENTION_EVERYONE);
+    }
     // A block closes a 1:1 in both directions. Dropped rather than answered,
     // because a WS frame has no status code — gap #20's message-rejected path
     // is what will eventually let the sender be told.
@@ -954,12 +1026,33 @@ export async function handleChatMessage(
       }
     }
 
+    const parsedMentions = extractMentions(payload.body);
+    let hereUserIds: string[] = [];
+    const mentionEveryone =
+      channel?.kind === "server" &&
+      parsedMentions.everyone &&
+      canMentionEveryone;
+    const mentionHere =
+      channel?.kind === "server" && parsedMentions.here && canMentionEveryone;
+    if (mentionHere) {
+      const hereAudience = await getChannelAudience(payload.channelId);
+      hereUserIds = (hereAudience?.userIds ?? []).filter(
+        (id) => id !== conn.user.id && isPresentForHere(id),
+      );
+    }
+
     const dbMessage = await createMessage(
       payload.channelId,
       conn.user,
       payload.body,
       parent?.id ?? null,
       payload.attachmentIds,
+      {
+        mentionEveryone,
+        mentionHere,
+        extraUserIds: hereUserIds,
+        canMentionEveryone,
+      },
     );
     // Nothing survived: an attachment-only message whose every upload failed
     // its verification. The frame said something when it was sent and says
@@ -996,16 +1089,13 @@ export async function handleChatMessage(
 
     const mentions = extractMentionUsernames(payload.body);
     if (isBusEnabled()) {
-      // Published before the local pass rather than after it, so the instances
-      // holding everybody else's sockets are not waiting on this instance's
-      // audience query. Each instance runs the query for its own connections —
-      // the alternative, publishing the resolved audience, is a list of every
-      // member of the channel.
       publishToCluster(ACTIVITY_TOPIC, {
         channelId: payload.channelId,
         authorId: conn.user.id,
         mentions,
         repliedToUserId: parent?.author_id ?? null,
+        mentionEveryone,
+        mentionHereUserIds: hereUserIds,
       });
     }
     await notifyChannelActivity(
@@ -1013,6 +1103,7 @@ export async function handleChatMessage(
       conn.user.id,
       mentions,
       parent?.author_id ?? null,
+      { mentionEveryone, mentionHereUserIds: hereUserIds },
     );
 
     // --- threads ---
@@ -1049,6 +1140,17 @@ export async function handleChatMessage(
     if (!(await canAccessChannel(payload.channelId, conn.user.id))) {
       return;
     }
+    const reactionChannel = await getChannel(payload.channelId);
+    if (reactionChannel?.kind === "server" && reactionChannel.server_id) {
+      const perms = await computeMemberPermissions(
+        reactionChannel.server_id,
+        conn.user.id,
+        payload.channelId,
+      );
+      if (!hasPermission(perms, Permission.ADD_REACTIONS)) {
+        return;
+      }
+    }
     // A reaction is a persistent, visible poke at somebody else's message, so
     // it is closed by the same block that closes sending — and by the same
     // guard that closes typing. Every path that puts something of the sender's
@@ -1072,6 +1174,11 @@ export async function handleChatMessage(
       conn.user.id,
       payload.emoji,
     );
+    const displayName = await resolveChannelMemberName(
+      payload.channelId,
+      conn.user.id,
+      conn.user.display_name,
+    );
 
     broadcastToChannel(
       payload.channelId,
@@ -1082,6 +1189,7 @@ export async function handleChatMessage(
         emoji: payload.emoji,
         userId: conn.user.id,
         added,
+        displayName,
       },
       conn.socket,
     );
@@ -1229,17 +1337,17 @@ subscribeToCluster(ACTIVITY_TOPIC, (data) => {
   if (!channelId || !authorId || !mentions) {
     return;
   }
-  // Unawaited — bus handlers are synchronous — so the rejection has to be
-  // caught here or it takes the process down with it.
+  const mentionHereUserIds = asStringArray(frame?.mentionHereUserIds) ?? [];
   void notifyChannelActivity(
     channelId,
     authorId,
     mentions,
     asString(frame?.repliedToUserId),
-    // Never push from a bus frame: a pushable user holds a socket on no
-    // instance at all, so the origin instance's own call already covered them
-    // — pushing here too would send one notification per replica.
-    { webPush: false },
+    {
+      webPush: false,
+      mentionEveryone: frame?.mentionEveryone === true,
+      mentionHereUserIds,
+    },
   ).catch((error) => {
     console.error("[chat] cluster activity fan-out failed:", error);
   });
@@ -1314,6 +1422,24 @@ subscribeToCluster(FRIEND_TOPIC, (data) => {
     return;
   }
   deliverFriendActivity(userId, kind);
+});
+
+subscribeToCluster(PERMISSIONS_TOPIC, (data) => {
+  const parsed = permissionsUpdateSchema.safeParse(data);
+  if (!parsed.success) {
+    return;
+  }
+  void listServerMemberIds(parsed.data.serverId)
+    .then((memberIds) => {
+      deliverPermissionsUpdate(
+        parsed.data.serverId,
+        parsed.data.version,
+        memberIds,
+      );
+    })
+    .catch((error) => {
+      console.error("[ws] permissions-update relay failed:", error);
+    });
 });
 
 /** The enum, asked rather than restated — one list, in shared. */

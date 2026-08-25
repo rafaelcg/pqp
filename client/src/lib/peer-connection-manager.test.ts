@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClientRelayMessage } from "@pqp/shared";
 import {
   createPeerConnectionManager,
@@ -48,6 +48,16 @@ class FakePeerConnection {
 
   connectionState = "new";
   iceConnectionState = "new";
+  /**
+   * Stable unless a test says otherwise.
+   *
+   * A plain field rather than something derived from the descriptions below,
+   * because most tests here never answer the offer they trigger and would sit
+   * in `have-local-offer` for the rest of their lives. The tests that are
+   * *about* the state machine set it by hand, which is also the honest way to
+   * say what they reproduce: a connection that happened to be busy at the
+   * moment somebody clicked a button.
+   */
   signalingState = "stable";
   localDescription: { type: string; sdp: string } | null = null;
   remoteDescription: unknown = null;
@@ -100,9 +110,28 @@ class FakePeerConnection {
   }
 
   async setLocalDescription(description?: { type: string; sdp?: string }) {
+    // No argument means "whatever this state calls for", which is the entire
+    // reason the manager uses that form: the browser decides, so the decision
+    // cannot be made from stale information.
+    const type =
+      description?.type ??
+      (this.signalingState === "have-remote-offer" ? "answer" : "offer");
+    if (type === "offer" && this.signalingState !== "stable") {
+      // Chrome's own words, copied from a real failure. This is what reached a
+      // user's screen in Portuguese-language pqp on 23 Aug 2026, in English,
+      // because the rejection travelled out of `setLocalScreenStream` and into
+      // the error banner.
+      const err = new Error(
+        "Failed to execute 'setLocalDescription' on 'RTCPeerConnection': " +
+          "Failed to set local offer sdp: Called in wrong state: " +
+          this.signalingState,
+      );
+      err.name = "InvalidStateError";
+      throw err;
+    }
     this.localDescription = {
-      type: description?.type ?? "offer",
-      sdp: description?.sdp ?? "offer-sdp",
+      type,
+      sdp: description?.sdp ?? `${type}-sdp`,
     };
   }
 
@@ -336,5 +365,304 @@ describe("receiving a peer's screen audio", () => {
 
     expect(ctx.peers()[0]!.stream?.id).toBe("their-mic");
     expect(ctx.peers()[0]!.screenAudioStream).toBeNull();
+  });
+});
+
+/**
+ * The re-share, reported verbatim as "tried to reshare and the share was all
+ * black".
+ *
+ * A screen share is the one incoming stream this manager identifies
+ * negatively — video from a peer that is not their announced camera — so
+ * unlike the camera and the screen audio, nothing about a share *ending* is
+ * announced. The receiver's own track is not the answer either: the sender's
+ * `removeTrack` mutes it rather than ending it, so `onended` does not fire.
+ *
+ * That leaves the dead capture in `videoStreams`, and `classifyVideo` is
+ * first-wins, so the *next* share renders behind a stream with no frames in
+ * it. Everything below is that sequence.
+ */
+describe("receiving a peer's screen share", () => {
+  function arriveVideo(pc: FakePeerConnection, streamId: string) {
+    const incoming = track("video", `${streamId}:video`);
+    pc.ontrack?.({
+      track: incoming,
+      streams: [fakeStream(streamId, [incoming])],
+    });
+    return incoming;
+  }
+
+  it("shows the second share, not the dead first one", () => {
+    const ctx = setup();
+    ctx.manager.connectToPeer(REMOTE);
+    ctx.manager.setPeerSharingScreen(REMOTE, true);
+    arriveVideo(ctx.pc(), "share-1");
+    expect(ctx.peers()[0]!.screenStream?.id).toBe("share-1");
+
+    // They press Stop. No `onended` here on purpose: that is exactly what the
+    // real receiver does not get.
+    ctx.manager.setPeerSharingScreen(REMOTE, false);
+    expect(ctx.peers()[0]!.screenStream).toBeNull();
+
+    // They share again. A fresh capture, so a fresh stream id.
+    arriveVideo(ctx.pc(), "share-2");
+    expect(ctx.peers()[0]!.screenStream?.id).toBe("share-2");
+  });
+
+  it("keeps the camera when a share ends", () => {
+    const ctx = setup();
+    ctx.manager.connectToPeer(REMOTE);
+    ctx.manager.setPeerCameraStreamId(REMOTE, "their-cam");
+    arriveVideo(ctx.pc(), "their-cam");
+    ctx.manager.setPeerSharingScreen(REMOTE, true);
+    arriveVideo(ctx.pc(), "share-1");
+
+    ctx.manager.setPeerSharingScreen(REMOTE, false);
+
+    const peer = ctx.peers()[0]!;
+    expect(peer.screenStream).toBeNull();
+    expect(peer.cameraStream?.id).toBe("their-cam");
+  });
+
+  it("does not drop a live share on a roster frame that repeats itself", () => {
+    const ctx = setup();
+    ctx.manager.connectToPeer(REMOTE);
+    ctx.manager.setPeerSharingScreen(REMOTE, true);
+    arriveVideo(ctx.pc(), "share-1");
+
+    // Every roster frame carries every participant, so "still sharing" is the
+    // common case and must cost nothing.
+    ctx.manager.setPeerSharingScreen(REMOTE, true);
+    ctx.manager.setPeerSharingScreen(REMOTE, true);
+
+    expect(ctx.peers()[0]!.screenStream?.id).toBe("share-1");
+  });
+
+  it("survives a stop the roster announces before the track ever arrived", () => {
+    const ctx = setup();
+    ctx.manager.connectToPeer(REMOTE);
+    // Roster first, no media yet: the two race on every real call.
+    ctx.manager.setPeerSharingScreen(REMOTE, true);
+    ctx.manager.setPeerSharingScreen(REMOTE, false);
+    ctx.manager.setPeerSharingScreen(REMOTE, true);
+    arriveVideo(ctx.pc(), "share-1");
+
+    expect(ctx.peers()[0]!.screenStream?.id).toBe("share-1");
+  });
+});
+
+/**
+ * "Quando tento compartilhar áudio de tela, dá esse bug:
+ *  Failed to execute 'setLocalDescription' on 'RTCPeerConnection': Failed to
+ *  set local offer sdp: ..." — reported through the in-app form on 23 Aug
+ *  2026, the day after screen-share audio shipped.
+ *
+ * The sentence is Chrome's, and the only reason a user ever read it is that
+ * `setLocalScreenStream` used to offer unconditionally. An offer is legal only
+ * from a settled connection, and nothing about the moment somebody clicks
+ * "share my screen" respects that: the pair may be halfway through answering
+ * an offer of its own, or restarting ICE after a network blip. The rejection
+ * escaped the manager, `startScreenShare` caught it, ran
+ * `stopScreenShareInternal`, and printed Chrome's English at a Portuguese
+ * speaker. The capture was destroyed by its own timing.
+ *
+ * Why these tests need a fake with a state machine in it: the one above cannot
+ * fail. `setLocalDescription` always resolved, so every other test in this
+ * file passed against the broken code and would pass against it again.
+ */
+describe("starting a screen share while the connection is busy", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** Connected, then caught mid-exchange. */
+  async function busy() {
+    const ctx = setup();
+    ctx.manager.connectToPeer(REMOTE);
+    await vi.advanceTimersByTimeAsync(0);
+    ctx.pc().signalingState = "have-remote-offer";
+    return ctx;
+  }
+
+  const capture = () =>
+    fakeStream("cap", [track("video", "v"), track("audio", "a")]);
+
+  /**
+   * The peer answers, which is the only evidence they actually received the
+   * offer. Perfect negotiation resolves glare by dropping one side's offer
+   * unanswered, so "we sent it" and "they have it" are different facts and the
+   * retry loop is right to keep going until the second one is true.
+   */
+  async function acknowledge(ctx: ReturnType<typeof setup>) {
+    await ctx.manager.handleAnswer(REMOTE, "answer-sdp");
+  }
+
+  it("does not reject, whatever the connection is doing", async () => {
+    const ctx = await busy();
+
+    // The assertion is the absence of a rejection. `startScreenShare` has no
+    // other handler: anything thrown here becomes the error banner and takes
+    // the capture down with it.
+    await expect(
+      ctx.manager.setLocalScreenStream(capture()),
+    ).resolves.toBeUndefined();
+  });
+
+  it("still puts both tracks on the connection", async () => {
+    const ctx = await busy();
+
+    await ctx.manager.setLocalScreenStream(capture());
+
+    // Deferring the *offer* is the fix. Deferring the tracks would be a
+    // different bug wearing the same clothes.
+    expect(ctx.pc().added.map((entry) => entry.track.kind)).toEqual([
+      "video",
+      "audio",
+    ]);
+  });
+
+  it("sends the offer once the connection settles", async () => {
+    const ctx = await busy();
+    const offersBefore = ctx.offers().length;
+    await ctx.manager.setLocalScreenStream(capture());
+    expect(ctx.offers().length - offersBefore).toBe(0);
+
+    ctx.pc().signalingState = "stable";
+    await vi.advanceTimersByTimeAsync(1000);
+
+    // Without this the share is on the wire for nobody: the tracks exist, no
+    // m-line carries them, and the presenter watches their own preview and
+    // assumes it worked.
+    expect(ctx.offers().length - offersBefore).toBe(1);
+  });
+
+  it("keeps trying while the connection stays busy", async () => {
+    const ctx = await busy();
+    const offersBefore = ctx.offers().length;
+    await ctx.manager.setLocalScreenStream(capture());
+
+    // A first retry that lands in another exchange must not be the last one.
+    await vi.advanceTimersByTimeAsync(500);
+    expect(ctx.offers().length - offersBefore).toBe(0);
+
+    ctx.pc().signalingState = "stable";
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(ctx.offers().length - offersBefore).toBeGreaterThanOrEqual(1);
+  });
+
+  it("tells the peer a share stopped, even when the stop had to wait", async () => {
+    const ctx = setup();
+    ctx.manager.connectToPeer(REMOTE);
+    await vi.advanceTimersByTimeAsync(0);
+    await ctx.manager.setLocalScreenStream(capture());
+    const offersBefore = ctx.offers().length;
+
+    ctx.pc().signalingState = "have-remote-offer";
+    await expect(
+      ctx.manager.setLocalScreenStream(null),
+    ).resolves.toBeUndefined();
+
+    ctx.pc().signalingState = "stable";
+    await vi.advanceTimersByTimeAsync(1000);
+
+    // A removal leaves no sender behind, so nothing on the connection can be
+    // inspected to notice the debt. Only our own record of it survives, and a
+    // peer never told the share stopped keeps rendering a frozen frame.
+    expect(ctx.offers().length - offersBefore).toBe(1);
+  });
+
+  it("stops offering once the peer has been told", async () => {
+    const ctx = await busy();
+    await ctx.manager.setLocalScreenStream(capture());
+    ctx.pc().signalingState = "stable";
+    await vi.advanceTimersByTimeAsync(1000);
+    await acknowledge(ctx);
+    const offersAfterFirst = ctx.offers().length;
+
+    // The retry loop re-arms itself, so a debt already paid has to read as
+    // paid or the pair renegotiates in a circle for the rest of the call.
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(ctx.offers().length).toBe(offersAfterFirst);
+  });
+
+  it("turns a camera on without rejecting either", async () => {
+    const ctx = await busy();
+
+    // Same fault, same shape, different button: `setLocalCameraStream` offered
+    // unconditionally too. A conversation call is where this is most likely,
+    // because both sides are toggling video at once.
+    await expect(
+      ctx.manager.setLocalCameraStream(fakeStream("cam", [track("video", "c")])),
+    ).resolves.toBeUndefined();
+
+    ctx.pc().signalingState = "stable";
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(ctx.pc().added.map((entry) => entry.track.kind)).toEqual(["video"]);
+    expect(ctx.offers().length).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * The escape hatch under the fix.
+ *
+ * The offer is now applied with `setLocalDescription()` and no argument, which
+ * is what removes the gap a stale offer could fall into. Every browser that
+ * can already run this manager supports it, but "already supports it" is a
+ * belief, and being wrong about it would mean nobody can join a call at all —
+ * a much larger bug than the one being fixed. So the old two-step form is kept
+ * for anything that answers the no-argument call with a TypeError.
+ */
+describe("a browser that still wants the offer handed to it", () => {
+  class OldPeerConnection extends FakePeerConnection {
+    override async setLocalDescription(description?: {
+      type: string;
+      sdp?: string;
+    }) {
+      if (description === undefined) {
+        // What a pre-2020 implementation does: refuse the call itself, before
+        // any SDP exists. A TypeError, never a DOMException.
+        throw new TypeError(
+          "Failed to execute 'setLocalDescription' on 'RTCPeerConnection': " +
+            "1 argument required, but only 0 present.",
+        );
+      }
+      return super.setLocalDescription(description);
+    }
+  }
+
+  it("falls back to createOffer instead of losing the call", async () => {
+    (globalThis as unknown as Record<string, unknown>).RTCPeerConnection =
+      OldPeerConnection;
+    const ctx = setup();
+
+    ctx.manager.connectToPeer(REMOTE);
+    await settle();
+
+    expect(ctx.offers()).toHaveLength(1);
+    expect(ctx.pc().localDescription?.type).toBe("offer");
+  });
+
+  it("keeps working for the offers after it", async () => {
+    (globalThis as unknown as Record<string, unknown>).RTCPeerConnection =
+      OldPeerConnection;
+    const ctx = setup();
+    ctx.manager.connectToPeer(REMOTE);
+    await settle();
+    const offersBefore = ctx.offers().length;
+
+    // The probe costs one failed call, once. A share that had to pay it again
+    // on every renegotiation would be a slow leak rather than a broken call,
+    // which is exactly the kind of thing nobody notices.
+    await ctx.manager.setLocalScreenStream(
+      fakeStream("cap", [track("video", "v"), track("audio", "a")]),
+    );
+
+    expect(ctx.offers().length - offersBefore).toBe(1);
   });
 });

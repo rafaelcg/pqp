@@ -33,6 +33,16 @@ struct CurrentUser: Codable, Identifiable, Hashable, Sendable {
     /// `HandleRules`, and a decode failure here must not cost the whole account.
     var handleChangedAt: String?
 
+    /// The account's own settings blob, which `GET /api/me` has always carried.
+    ///
+    /// Decoded HERE rather than only by `APIClient.preferences()` so that the
+    /// one thing every screen already has — the signed-in account — carries them
+    /// too. `muteOnJoin` is read at the moment a call is being built, which is
+    /// the worst possible time to discover it needs a round trip; hanging it off
+    /// the account that is already in memory means there is nothing to fetch and
+    /// nothing to keep in step. See `SessionStore.preferences`.
+    var preferences: UserPreferences?
+
     /// `handleChangedAt` as the cooldown arithmetic wants it. Parsed here rather
     /// than at the field so an unrecognised stamp reads as "no cooldown" — which
     /// is the safe direction: the server refuses a rename inside the window
@@ -157,10 +167,35 @@ struct Channel: Codable, Identifiable, Hashable, Sendable {
     var isCategory: Bool { type == "category" }
 }
 
+struct ReactionUser: Codable, Hashable, Sendable {
+    let id: String
+    let displayName: String
+}
+
 struct MessageReaction: Codable, Hashable, Sendable {
     let emoji: String
     var count: Int
     var me: Bool
+    var users: [ReactionUser]
+
+    init(emoji: String, count: Int, me: Bool, users: [ReactionUser] = []) {
+        self.emoji = emoji
+        self.count = count
+        self.me = me
+        self.users = users
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        emoji = try c.decode(String.self, forKey: .emoji)
+        count = try c.decode(Int.self, forKey: .count)
+        me = try c.decode(Bool.self, forKey: .me)
+        users = try c.decodeIfPresent([ReactionUser].self, forKey: .users) ?? []
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case emoji, count, me, users
+    }
 }
 
 struct MessageReplyRef: Codable, Hashable, Sendable {

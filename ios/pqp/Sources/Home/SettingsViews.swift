@@ -13,14 +13,28 @@ struct AccountSettingsView: View {
     @State private var saving = false
     @State private var saved = false
     @State private var error: String?
+    @State private var confirmingDeletion = false
+    /// The finished personal export, waiting for the share sheet. Held HERE
+    /// rather than inside `YourDataSection` because a `.sheet` attached to a
+    /// `Form` section is torn down when that section scrolls away. See the note
+    /// on that view.
+    @State private var exportFile: URL?
 
+    // Resolved through `String(localized:)` rather than left as bare literals:
+    // `Text(someString)` is the *verbatim* initialiser, so a picker built from
+    // a `[(String, String)]` renders English however good the translation is.
+    // These three lists had translations in the catalogue that no user ever saw.
     private let privacyOptions = [
-        ("everyone", "Anyone"),
-        ("server_members", "People I share a community with"),
-        ("nobody", "Nobody"),
+        ("everyone", String(localized: "Anyone")),
+        ("server_members", String(localized: "People I share a community with")),
+        ("nobody", String(localized: "Nobody")),
     ]
 
-    private let levels = [("all", "All messages"), ("mentions", "Only @mentions"), ("none", "Nothing")]
+    private let levels = [
+        ("all", String(localized: "All messages")),
+        ("mentions", String(localized: "Only @mentions")),
+        ("none", String(localized: "Nothing")),
+    ]
 
     var body: some View {
         NavigationStack {
@@ -96,6 +110,8 @@ struct AccountSettingsView: View {
                     }
                     .disabled(saving)
                 }
+
+                YourDataSection(exportFile: $exportFile) { confirmingDeletion = true }
             }
             .scrollContentBackground(.hidden)
             .background(Palette.ink)
@@ -106,14 +122,42 @@ struct AccountSettingsView: View {
                     Button("Done") { dismiss() }.tint(Palette.paperMuted)
                 }
             }
+            .sheet(isPresented: $confirmingDeletion) {
+                DeleteAccountView {
+                    confirmingDeletion = false
+                    // The account is gone from the server, which makes this a
+                    // sign-out with nothing left to sign out of: the Clerk
+                    // identity was deleted with it, the socket was closed with
+                    // 4003, and the device token row cascaded away. `signOut`
+                    // is still the right teardown because everything it clears
+                    // is *local* and none of it belongs to the next person to
+                    // use this phone.
+                    Task {
+                        await session.signOut()
+                        dismiss()
+                    }
+                }
+            }
             .task { await load() }
+        }
+        // ON THE STACK, not on the `Form` alongside the confirmation above.
+        // Two `.sheet` modifiers at the same level is a coin flip over which
+        // one is honoured; at different levels both are unambiguous.
+        .sheet(item: Binding(
+            get: { exportFile.map { ShareItem(url: $0) } },
+            set: { if $0 == nil { exportFile = nil } }
+        )) { item in
+            ShareSheet(url: item.url)
         }
     }
 
     private func load() async {
         displayName = session.currentUser?.displayName ?? ""
         dmPrivacy = session.currentUser?.dmPrivacy ?? "server_members"
-        preferences = (try? await session.api.preferences()) ?? UserPreferences()
+        // From the session rather than a second `GET /api/me`: the account in
+        // memory has carried its preferences since it was identified, and the
+        // extra round trip only bought a chance for the two to disagree.
+        preferences = session.preferences
         blocked = (try? await session.api.blocks()) ?? []
     }
 
@@ -128,7 +172,12 @@ struct AccountSettingsView: View {
                 displayName: displayName.trimmingCharacters(in: .whitespacesAndNewlines),
                 dmPrivacy: dmPrivacy
             )
-            preferences = try await session.api.updatePreferences(preferences)
+            // Through the session, so what the server stored is what the next
+            // voice join reads. Saving straight to the API left the account in
+            // memory holding the *old* preferences, which is the shape of the
+            // bug this fixes: "mute microphone when joining" was written here
+            // and read nowhere.
+            preferences = try await session.savePreferences(preferences)
             await session.refreshCurrentUser()
             saved = true
         } catch {
@@ -439,8 +488,13 @@ struct ServerSettingsView: View {
 
     private var isOwner: Bool { server.role == "owner" }
 
+    // Same verbatim trap as the pickers in `AccountSettingsView`: see the
+    // comment there.
     private let retentionOptions: [(Int?, String)] = [
-        (nil, "Keep forever"), (30, "30 days"), (90, "90 days"), (365, "1 year"),
+        (nil, String(localized: "Keep forever")),
+        (30, String(localized: "30 days")),
+        (90, String(localized: "90 days")),
+        (365, String(localized: "1 year")),
     ]
 
     var body: some View {
@@ -487,7 +541,8 @@ struct ServerSettingsView: View {
                     }
                     ForEach(audit.prefix(30)) { entry in
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("\(entry.actorName ?? "A departed account") \(AuditLabels.describe(entry.action))")
+                            Text(verbatim: "\(entry.actorName ?? String(localized: "A departed account")) "
+                             + AuditLabels.describe(entry.action))
                                 .font(Typography.callout)
                             Text(entry.createdAt, format: .dateTime.day().month().hour().minute())
                                 .font(Typography.caption)
@@ -639,26 +694,29 @@ struct ServerSettingsView: View {
 /// Kept in one place because the web client learned the hard way that adding an
 /// action without adding its label renders the raw enum string to users.
 enum AuditLabels {
+    // `String(localized:)` per phrase, not bare literals: a `[String: String]`
+    // never reaches the string catalogue, so the whole log rendered in English
+    // however complete the translation looked.
     private static let map: [String: String] = [
-        "member.kick": "kicked a member",
-        "member.ban": "banned a member",
-        "member.unban": "unbanned a member",
-        "member.role_update": "changed a member's role",
-        "member.sso_join": "joined via SSO email domain",
-        "channel.create": "created a channel",
-        "channel.update": "updated a channel",
-        "channel.delete": "deleted a channel",
-        "channel.move": "reordered a channel",
-        "message.delete": "deleted someone's message",
-        "server.update": "renamed the community",
-        "server.retention_update": "changed message retention",
-        "server.sso_domain_update": "changed the SSO email domain",
-        "server.ownership_transfer": "transferred ownership",
-        "server.data_export": "exported the community's data",
-        "invite.create": "created an invite",
-        "invite.delete": "revoked an invite",
-        "webhook.create": "created a webhook",
-        "webhook.delete": "deleted a webhook",
+        "member.kick": String(localized: "kicked a member"),
+        "member.ban": String(localized: "banned a member"),
+        "member.unban": String(localized: "unbanned a member"),
+        "member.role_update": String(localized: "changed a member's role"),
+        "member.sso_join": String(localized: "joined via SSO email domain"),
+        "channel.create": String(localized: "created a channel"),
+        "channel.update": String(localized: "updated a channel"),
+        "channel.delete": String(localized: "deleted a channel"),
+        "channel.move": String(localized: "reordered a channel"),
+        "message.delete": String(localized: "deleted someone's message"),
+        "server.update": String(localized: "renamed the community"),
+        "server.retention_update": String(localized: "changed message retention"),
+        "server.sso_domain_update": String(localized: "changed the SSO email domain"),
+        "server.ownership_transfer": String(localized: "transferred ownership"),
+        "server.data_export": String(localized: "exported the community's data"),
+        "invite.create": String(localized: "created an invite"),
+        "invite.delete": String(localized: "revoked an invite"),
+        "webhook.create": String(localized: "created a webhook"),
+        "webhook.delete": String(localized: "deleted a webhook"),
     ]
 
     static func describe(_ action: String) -> String {
@@ -798,14 +856,17 @@ struct WebhooksView: View {
 }
 
 
-private struct ShareItem: Identifiable {
+/// Not `private`: `AccountDataViews` hands the personal export to the same
+/// sheet, and a second copy of a UIKit shim is how two share sheets start
+/// behaving differently.
+struct ShareItem: Identifiable {
     let url: URL
     var id: String { url.absoluteString }
 }
 
 /// UIKit's share sheet, which SwiftUI has no direct equivalent for when the
 /// thing being shared is a file on disk.
-private struct ShareSheet: UIViewControllerRepresentable {
+struct ShareSheet: UIViewControllerRepresentable {
     let url: URL
 
     func makeUIViewController(context: Context) -> UIActivityViewController {

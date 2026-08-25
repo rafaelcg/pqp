@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildReplyExcerpt,
   createChannelSchema,
+  extractMentions,
   extractMentionUsernames,
   formatUserTag,
   messageBodySchema,
@@ -10,6 +11,7 @@ import {
   reactionEmojiSchema,
   REPLY_EXCERPT_MAX_LENGTH,
   updateProfileSchema,
+  usernameSchema,
   userPreferencesSchema,
 } from "./api.js";
 import { messageCreateMessageSchema } from "./chat.js";
@@ -84,6 +86,24 @@ describe("extractMentionUsernames", () => {
     // A /g regex carries lastIndex; reusing one across calls is a classic bug.
     expect(extractMentionUsernames("@alice")).toEqual(["alice"]);
     expect(extractMentionUsernames("@alice")).toEqual(["alice"]);
+  });
+
+  it("does not treat @everyone or @here as usernames", () => {
+    expect(extractMentionUsernames("ping @everyone and @here")).toEqual([]);
+    expect(extractMentions("hey @alice @everyone @here @mods")).toEqual({
+      usernames: ["alice", "mods"],
+      everyone: true,
+      here: true,
+      roleNames: ["alice", "mods"],
+    });
+  });
+});
+
+describe("usernameSchema reserved names", () => {
+  it("refuses everyone and here so they cannot collide with mass mentions", () => {
+    expect(usernameSchema.safeParse("everyone").success).toBe(false);
+    expect(usernameSchema.safeParse("here").success).toBe(false);
+    expect(usernameSchema.safeParse("alice").success).toBe(true);
   });
 });
 
@@ -296,7 +316,9 @@ describe("reply protocol", () => {
       authorAvatarUrl: null,
       body: "hi",
       createdAt: new Date(0).toISOString(),
+      reactions: [{ emoji: "👍", count: 1, me: true }],
     });
+    expect(parsed.reactions[0]!.users).toEqual([]);
     expect(parsed.replyTo).toBeNull();
   });
 

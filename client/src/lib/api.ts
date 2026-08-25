@@ -194,6 +194,10 @@ function patch<T>(path: string, body: unknown) {
   return apiFetch<T>(path, { method: "PATCH", body: JSON.stringify(body) });
 }
 
+function put<T>(path: string, body: unknown) {
+  return apiFetch<T>(path, { method: "PUT", body: JSON.stringify(body) });
+}
+
 function del<T>(path: string, body?: unknown) {
   return apiFetch<T>(path, {
     method: "DELETE",
@@ -833,8 +837,15 @@ export const moveChannel = (
     index,
   });
 
-export const markChannelRead = (channelId: string) =>
-  post<{ ok: boolean }>(`/api/channels/${channelId}/read`);
+export const markChannelRead = (channelId: string, lastReadAt?: string) =>
+  post<{
+    ok: boolean;
+    previousLastReadAt?: string | null;
+    lastReadAt?: string;
+  }>(
+    `/api/channels/${channelId}/read`,
+    lastReadAt ? { lastReadAt } : undefined,
+  );
 
 // ----------------------------------------------------------------- messages
 
@@ -909,6 +920,8 @@ export interface ServerMember {
   tag: string | null;
   role: "owner" | "admin" | "member";
   avatarUrl: string | null;
+  nickname?: string | null;
+  roleIds?: string[];
   /**
    * Resolved live by the server from its connection registry — never stored, and
    * never `invisible`: somebody hidden resolves to `offline` here exactly like
@@ -922,6 +935,13 @@ export interface ServerMember {
   status?: UserStatus;
 }
 
+export function memberDisplayName(member: {
+  nickname?: string | null;
+  displayName: string;
+}): string {
+  return member.nickname?.trim() || member.displayName;
+}
+
 export const fetchMembers = (serverId: string) =>
   apiFetch<{ members: ServerMember[] }>(`/api/servers/${serverId}/members`);
 
@@ -931,6 +951,79 @@ export const updateMemberRole = (
   role: "admin" | "member",
 ) =>
   patch<{ ok: boolean }>(`/api/servers/${serverId}/members/${userId}`, { role });
+
+export const updateMemberNickname = (
+  serverId: string,
+  userId: string,
+  nickname: string | null,
+) =>
+  patch<{ ok: boolean }>(`/api/servers/${serverId}/members/${userId}`, {
+    nickname,
+  });
+
+export interface ServerRole {
+  id: string;
+  serverId: string;
+  name: string;
+  color: string | null;
+  hoist: boolean;
+  mentionable: boolean;
+  permissions: string;
+  position: number;
+  isEveryone: boolean;
+  systemKey: "everyone" | "admin" | null;
+}
+
+export const fetchRoles = (serverId: string) =>
+  apiFetch<{ roles: ServerRole[] }>(`/api/servers/${serverId}/roles`);
+
+export const createRole = (
+  serverId: string,
+  body: { name: string; color?: string | null; mentionable?: boolean; permissions?: string },
+) => post<{ role: ServerRole }>(`/api/servers/${serverId}/roles`, body);
+
+export const updateRole = (
+  roleId: string,
+  body: {
+    name?: string;
+    color?: string | null;
+    mentionable?: boolean;
+    hoist?: boolean;
+    permissions?: string;
+  },
+) => patch<{ role: ServerRole }>(`/api/roles/${roleId}`, body);
+
+export const deleteRole = (roleId: string) =>
+  del<{ ok: boolean }>(`/api/roles/${roleId}`);
+
+export const reorderRoles = (serverId: string, roleIds: string[]) =>
+  patch<{ ok: boolean }>(`/api/servers/${serverId}/roles/order`, { roleIds });
+
+export const assignMemberRole = (
+  serverId: string,
+  userId: string,
+  roleId: string,
+) =>
+  put<{ ok: boolean }>(
+    `/api/servers/${serverId}/members/${userId}/roles/${roleId}`,
+    {},
+  );
+
+export const unassignMemberRole = (
+  serverId: string,
+  userId: string,
+  roleId: string,
+) =>
+  del<{ ok: boolean }>(
+    `/api/servers/${serverId}/members/${userId}/roles/${roleId}`,
+  );
+
+export const fetchMemberPermissions = (serverId: string) =>
+  apiFetch<{
+    version: number;
+    server: string;
+    channels: Record<string, string>;
+  }>(`/api/servers/${serverId}/permissions`);
 
 export const kickMember = (serverId: string, userId: string) =>
   del<{ ok: boolean }>(`/api/servers/${serverId}/members/${userId}`);
@@ -1050,6 +1143,32 @@ export const fetchChannelMembers = (channelId: string) =>
       tag: string | null;
     }>;
   }>(`/api/channels/${channelId}/members`);
+
+export interface ChannelOverwrite {
+  targetType: "role" | "member";
+  targetId: string;
+  allow: string;
+  deny: string;
+}
+
+export const fetchChannelOverwrites = (channelId: string) =>
+  apiFetch<{ overwrites: ChannelOverwrite[] }>(
+    `/api/channels/${channelId}/overwrites`,
+  );
+
+export const putChannelOverwrite = (
+  channelId: string,
+  body: ChannelOverwrite,
+) => put<{ ok: boolean }>(`/api/channels/${channelId}/overwrites`, body);
+
+export const deleteChannelOverwrite = (
+  channelId: string,
+  targetType: "role" | "member",
+  targetId: string,
+) =>
+  del<{ ok: boolean }>(
+    `/api/channels/${channelId}/overwrites/${targetType}/${targetId}`,
+  );
 
 export const fetchWebhooks = (channelId: string) =>
   apiFetch<{ webhooks: Webhook[] }>(`/api/channels/${channelId}/webhooks`);

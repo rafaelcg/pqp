@@ -118,11 +118,9 @@ export async function listRevokedPrivateChannelIds(
   const result = await getPool().query<{ id: string }>(
     `SELECT c.id FROM channels c
      WHERE c.server_id = $1
-       AND c.is_private = TRUE
-       AND NOT EXISTS (
-         SELECT 1 FROM channel_members cm
-         WHERE cm.channel_id = c.id AND cm.user_id = $2
-       )`,
+       AND c.kind = 'server'
+       AND c.type <> 'thread'
+       AND NOT channel_viewable(c.id, $2)`,
     [serverId, userId],
   );
   return result.rows.map((row) => row.id);

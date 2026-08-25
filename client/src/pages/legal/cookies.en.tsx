@@ -202,6 +202,14 @@ export const cookiesEn: LegalDocument = {
             recognise you across visits or across sites. The privacy notice
             describes exactly what it records.
           </p>
+          <p>
+            <strong>Umami</strong>, hosted in the EU, is here for the same
+            reason and on the same terms: it counts visits, sets no cookie,
+            stores nothing on your device, and has no persistent identifier to
+            recognise you with. Your browser fetches its script from{" "}
+            <code>cloud.umami.is</code>, which is the only reason it appears on
+            this page at all.
+          </p>
         </>
       ),
     },

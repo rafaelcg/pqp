@@ -39,14 +39,16 @@ function splitTextNode(
       parts.push({ type: "text", value: value.slice(lastIndex, index) });
     }
     const username = (match[1] ?? "").toLowerCase();
+    const isMass = username === "everyone" || username === "here";
     parts.push({
       type: "text",
       value: match[0],
       data: {
         hName: "span",
         hProperties: {
-          className:
-            username === currentUsername
+          className: isMass
+            ? "pqp-mention pqp-mention-mass"
+            : username === currentUsername
               ? "pqp-mention pqp-mention-self"
               : "pqp-mention",
         },

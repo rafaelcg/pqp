@@ -51,6 +51,15 @@ export interface RateLimitOptions {
   now?: () => number;
 }
 
+/**
+ * Positive numeric env override. A test suite that drives one account needs
+ * headroom a human never would; production keeps the fallback.
+ */
+export function limitFromEnv(name: string, fallback: number): number {
+  const parsed = Number(process.env[name]);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 export function createRateLimiter({
   capacity,
   refillPerSecond,

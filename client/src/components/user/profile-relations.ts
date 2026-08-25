@@ -33,6 +33,21 @@ export interface ProfileSubject {
    * nothing.
    */
   status?: UserStatus | null;
+  /** Handle used for `@username` mentions. Optional when the caller has none. */
+  username?: string | null;
+  /** Painted roles this person holds in the current server, if known. */
+  roleIds?: string[];
+  /** Rank column: owner / admin chip, not a painted role. */
+  rank?: MemberRole | null;
+}
+
+/** Painted roles the card can list. `@everyone` is filtered out at render. */
+export interface ProfileRoleChip {
+  id: string;
+  name: string;
+  color: string | null;
+  position: number;
+  isEveryone: boolean;
 }
 
 /**

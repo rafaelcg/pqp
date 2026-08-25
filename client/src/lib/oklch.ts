@@ -104,3 +104,12 @@ export function oklchToRgb({ l, c, h }: Oklch): Rgb {
 export function cssColorToRgb(value: string, fallback: Oklch): Rgb {
   return oklchToRgb(parseOklch(value) ?? fallback);
 }
+
+/** Six-digit hex for native colour inputs, which cannot read stylesheet tokens. */
+export function rgbToHex({ r, g, b }: Rgb): string {
+  const byte = (n: number) =>
+    Math.round(n * 255)
+      .toString(16)
+      .padStart(2, "0");
+  return `#${byte(r)}${byte(g)}${byte(b)}`;
+}

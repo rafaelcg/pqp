@@ -198,7 +198,7 @@ export const cookiesPtBr: LegalDocument = {
     },
     {
       id: "not-used",
-      sourceRev: "16b2487b",
+      sourceRev: "5bb995f8",
       heading: "O que a gente não usa",
       body: (
         <>
@@ -218,6 +218,14 @@ export const cookiesPtBr: LegalDocument = {
             Ele não usa identificador persistente, então não consegue reconhecer
             você entre visitas nem entre sites. O aviso de privacidade descreve
             exatamente o que ele registra.
+          </p>
+          <p>
+            O <strong>Umami</strong>, hospedado na União Europeia, está aqui
+            pelo mesmo motivo e nas mesmas condições: conta visitas, não define
+            cookie, não guarda nada no seu dispositivo e não tem identificador
+            persistente pra reconhecer você. O seu navegador busca o script dele
+            em <code>cloud.umami.is</code>, que é o único motivo de ele aparecer
+            nesta página.
           </p>
         </>
       ),

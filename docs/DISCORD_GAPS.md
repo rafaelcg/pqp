@@ -44,14 +44,14 @@ They cost days, not weeks.
 | 12 | Call quality indicators and a TURN-relay badge | diagnostics | medium | small |
 | 13 | ✅ Theming: light mode, a token layer, and synced user preferences | theming | medium | medium |
 | 14 | ✅ Channel categories and drag-to-reorder | server-structure | high | medium |
-| 15 | Camera video in voice channels | video | medium | medium |
+| 15 | ✅ Camera video in voice channels | video | medium | medium |
 | 16 | Keyboard access to message actions and a screen-reader-visible message log | accessibility | medium | small |
 | 17 | ✅ Find people by handle, and stop re-rolling their tag | identity | high | small |
 | 18 | ✅ Direct messages (1:1 and group) | messaging | critical | large |
 | 19 | ✅ Blocking and DM privacy controls | safety | high | medium |
 | 20 | Timeouts, slow mode, and a real message-rejected path | moderation | medium | medium |
 | 21 | ✅ Audit log | moderation | medium | medium |
-| 22 | Real permission system: roles with bitfields and per-channel overwrites | permissions | high | large |
+| 22 | ✅ Real permission system: roles with bitfields and per-channel overwrites | permissions | high | large |
 | 23 | Incoming webhooks, Discord wire-compatible | integrations | high | large |
 | 24 | ✅ Pinned messages | conversation-structure | medium | small |
 | 25 | ✅ Link and image embeds (unfurling) | content-rendering | medium | medium |
@@ -293,7 +293,7 @@ ELECTRON: register `session.setDisplayMediaRequestHandler` with `desktopCapturer
 
 MESH VS SFU: one sharer to N viewers on mesh is N independent encodes — cap mesh sharing at ~2-3 viewers / 720p15 and require the SFU above that, refusing with the existing `voice-room-full`-style server gate in server/src/ws/voice.ts.
 
-#### 15. Camera video in voice channels
+#### 15. ✅ Camera video in voice channels
 
 *medium pain · medium · video*
   
@@ -301,13 +301,15 @@ Depends on: Screen share with audio — same renegotiation fix, same multi-track
 
 **Why it matters.** pqp advertises "Voice & Video" in its own settings UI and then offers no video, so anyone expecting a face-to-face standup gets a phone call.
 
-**Today.** Nothing. Audio-only end to end: mic capture is `video: false` (client/src/hooks/use-voice.ts:97), `VoiceAudioSinks` mounts only `<audio>` elements (client/src/components/voice/voice-audio-sinks.tsx:54), and `listAudioDevices` (client/src/lib/audio-devices.ts:28) enumerates only audioinput/audiooutput — there is no camera picker. The "Voice & Video" heading is at client/src/components/layout/settings-modal.tsx:432.
+**Done.** The camera is on the voice panel's control bar, and a participant whose camera is on has their tile *become* the picture: mirrored for yourself, a window for everybody else (client/src/components/voice/voice-panel.tsx). Camera and screen share are independent, exactly as in Discord, so presenting keeps your face on your own tile while the share fills the stage beside it.
 
-**Sketch.**
+Nothing new was needed below the UI. `toggleCamera` in client/src/hooks/use-voice.ts already worked for both transports, the roster's `cameraStreamId` already told the mesh which incoming video was a face, and `set-camera` on the server was never conversation-specific. The video quality control moved onto the same bar with it, so a bad uplink is answerable from inside the call rather than from Settings.
 
-Once the screen-share plumbing lands this is mostly UI. Add `listVideoDevices()` to client/src/lib/audio-devices.ts (filter `videoinput`) and a camera select + `videoDeviceId` in `LocalSettings` (settings-modal.tsx:14-21). Add `enableCamera(deviceId)` to the controller in use-voice.ts doing getUserMedia({video:{deviceId,width:1280,frameRate:30}}) then `manager.addVideoTrack()` on mesh or `localParticipant.setCameraEnabled(true)` on LiveKit. Render a tile grid (`client/src/components/voice/video-grid.tsx`) with mirrored self-view and active-speaker promotion driven by the `speakingPeerIds` state that already exists in `VoiceState`. Reuse the `voice-publish` protocol message from screen share for the camera-on indicator on channel-list.tsx occupant avatars.
+Pinned by `client/e2e/video-quality.spec.ts`, which measures **decoded frames** at the watching member (not `videoWidth`, which cannot fail here; see CONTRIBUTING) with a camera and a screen share running at once, and reads the encoder ceilings back off `RTCRtpSender.getParameters()`.
 
-MESH VS SFU: video mesh is O(n²) uplinks — usable at 2-3 people, unusable at the current `MESH_VOICE_LIMIT` of 8 (packages/shared/src/voice-backend.ts:14, enforced at server/src/ws/voice.ts:286). Enforce a `MESH_VIDEO_LIMIT` of ~3 publishers server-side and require LiveKit above it, where simulcast plus the existing `dynacast: true` do the right thing.
+**Still open here.** No camera *device* picker: `listAudioDevices` (client/src/lib/audio-devices.ts) still enumerates only audioinput/audiooutput, so a machine with two webcams gets whichever one the browser prefers. No camera-on badge on the channel-list occupant avatars, which would need the roster to carry it.
+
+MESH VS SFU: video mesh is O(n²) uplinks, usable at 2-3 people and unusable at the current `MESH_VOICE_LIMIT` of 8 (packages/shared/src/voice-backend.ts:14, enforced at server/src/ws/voice.ts:286). There is still no `MESH_VIDEO_LIMIT`: nothing stops eight people turning cameras on in a mesh room, and the honest fix is a server-side publisher cap plus LiveKit above it, where simulcast and the existing `dynacast: true` do the right thing. That is a protocol and server change, so it is written down here rather than done.
 
 ### Tier 3 — structure, safety, and scale
 
@@ -327,9 +329,11 @@ No `@dnd-kit` or any new dependency: native HTML5 drag-and-drop handles desktop 
 
 One real bug surfaced by testing with a pre-existing top-level channel already at position 0 (not by design — a browser check happened to have one): deleting a category renumbers its now-uncategorized former children to append after whatever top-level channels of the same type already existed, rather than keeping their old category-scoped position values, which collided. Caught by a test, mutation-checked (revert the fix, exactly that test fails).
 
-#### 22. Real permission system: roles with bitfields and per-channel overwrites
+#### 22. ✅ Real permission system: roles with bitfields and per-channel overwrites
 
 *high pain · large · permissions*
+
+**Shipped 2026-08-24.** Discord 8-step overwrites, 20 bits, seeded `@everyone` + Admin, nicknames, `@everyone`/`@here`. Channel overwrite editor, hoist UI, role colours, live `permissions-update` WS frame. Unenforced bits (`ATTACH_FILES`, `READ_MESSAGE_HISTORY`, `SPEAK`, `MANAGE_SERVER`) stay hidden in both editors.
 
 **Why it matters.** You cannot make someone a channel moderator without also handing them kick, ban and server settings, you cannot make a read-only announcement channel, and you cannot keep an admin out of a founders-only channel because the admin bypass is hardcoded.
 

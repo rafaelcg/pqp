@@ -110,6 +110,7 @@ interface ChannelListProps {
   channels: Channel[];
   selectedChannelId: string | null;
   canManage: boolean;
+  canManageRoles?: boolean;
   isLoading?: boolean;
   voiceOccupancy?: Record<string, VoiceParticipant[]>;
   speakingPeerIds?: string[];
@@ -144,6 +145,7 @@ export function ChannelList({
   channels,
   selectedChannelId,
   canManage,
+  canManageRoles = false,
   isLoading = false,
   voiceOccupancy = {},
   speakingPeerIds = [],
@@ -267,6 +269,7 @@ export function ChannelList({
           unread={unread[channel.id] ?? EMPTY_UNREAD}
           connected={activeVoiceChannelId === channel.id}
           canManage={canManage}
+          canManageRoles={canManageRoles}
           icon={<ChannelIcon channel={channel} />}
           isDragging={draggedId === channel.id}
           isDragOver={dragOverId === channel.id}
@@ -694,6 +697,7 @@ function ChannelRow({
   unread,
   connected = false,
   canManage,
+  canManageRoles = false,
   icon,
   isDragging,
   isDragOver,
@@ -718,6 +722,7 @@ function ChannelRow({
   unread: UnreadState;
   connected?: boolean;
   canManage: boolean;
+  canManageRoles?: boolean;
   icon: ReactNode;
   isDragging: boolean;
   isDragOver: boolean;
@@ -755,10 +760,12 @@ function ChannelRow({
       label: channel.isPrivate ? t("chrome.makePublic") : t("chrome.makePrivate"),
       onSelect: onTogglePrivate,
     });
-    if (channel.isPrivate) {
+    if (channel.isPrivate || canManageRoles) {
       items.push({
         id: "invite-private",
-        label: t("chrome.manageAccess"),
+        label: channel.isPrivate
+          ? t("chrome.manageAccess")
+          : t("channelPerms.title"),
         onSelect: onManageMembers,
       });
     }
@@ -806,6 +813,16 @@ function ChannelRow({
         onSelect: onDelete,
       },
     );
+  }
+
+  if (!canManage && canManageRoles) {
+    items.push({
+      id: "invite-private",
+      label: channel.isPrivate
+        ? t("chrome.manageAccess")
+        : t("channelPerms.title"),
+      onSelect: onManageMembers,
+    });
   }
 
   items.push(

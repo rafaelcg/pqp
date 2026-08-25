@@ -1,4 +1,4 @@
-import { Loader2, MoreHorizontal, Phone } from "lucide-react";
+import { Loader2, MoreHorizontal, Phone, AtSign } from "lucide-react";
 import {
   createContext,
   useCallback,
@@ -65,6 +65,7 @@ import {
   type ProfileModerationAction,
   type ProfileModerationContext,
   type ProfilePrimaryAction,
+  type ProfileRoleChip,
   type ProfileSubject,
 } from "./profile-relations";
 
@@ -146,6 +147,10 @@ interface ProfilePopoverProviderProps {
    * people who need it most — see the note on `DepoimentoComposer`.
    */
   onComposeDraft?: (text: string) => void;
+  /** Insert `@username` into the open composer. Same as the member-list Mention. */
+  onMention?: (username: string) => void;
+  /** Server roles, for the colour dots on this card. Empty outside a server. */
+  roles?: readonly ProfileRoleChip[];
   onBlockUser: (userId: string) => void;
   onUnblockUser: (userId: string) => void;
   onReportUser: (subject: ProfileSubject) => void;
@@ -164,6 +169,8 @@ export function ProfilePopoverProvider({
   onOpenConversation,
   onStartCall,
   onComposeDraft,
+  onMention,
+  roles,
   onBlockUser,
   onUnblockUser,
   onReportUser,
@@ -201,6 +208,8 @@ export function ProfilePopoverProvider({
           onOpenConversation={onOpenConversation}
           onStartCall={onStartCall}
           onComposeDraft={onComposeDraft}
+          onMention={onMention}
+          roles={roles}
           onBlockUser={onBlockUser}
           onUnblockUser={onUnblockUser}
           onReportUser={onReportUser}
@@ -253,6 +262,8 @@ interface UserProfileCardProps {
   onOpenConversation: (conversation: DmSummary) => void;
   onStartCall?: (conversation: DmSummary) => void;
   onComposeDraft?: (text: string) => void;
+  onMention?: (username: string) => void;
+  roles?: readonly ProfileRoleChip[];
   onBlockUser: (userId: string) => void;
   onUnblockUser: (userId: string) => void;
   onReportUser: (subject: ProfileSubject) => void;
@@ -268,6 +279,8 @@ function UserProfileCard({
   onOpenConversation,
   onStartCall,
   onComposeDraft,
+  onMention,
+  roles,
   onBlockUser,
   onUnblockUser,
   onReportUser,
@@ -279,6 +292,17 @@ function UserProfileCard({
   // actually looking, which is the argument use-friends.ts makes for pull.
   const { data, loading, send, accept, remove, removeDepoimento } = useFriends();
   const cardRef = useRef<HTMLDivElement>(null);
+  const mentionUsername = subject.username?.trim() || null;
+  const paintedRoles = useMemo(() => {
+    if (!roles?.length || !subject.roleIds?.length) {
+      return [];
+    }
+    const held = new Set(subject.roleIds);
+    return roles
+      .filter((role) => held.has(role.id) && !role.isEveryone)
+      .slice()
+      .sort((a, b) => b.position - a.position);
+  }, [roles, subject.roleIds]);
   const [placement, setPlacement] = useState<Placement | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -781,6 +805,28 @@ function UserProfileCard({
             {subject.tag}
           </p>
         )}
+        {paintedRoles.length > 0 && (
+          <ul
+            className="mt-2 flex flex-wrap gap-1"
+            aria-label={t("profile.roles")}
+          >
+            {paintedRoles.map((role) => (
+              <li
+                key={role.id}
+                className="inline-flex items-center gap-1 rounded-md bg-ink-3 px-1.5 py-0.5 text-[11px] text-paper"
+              >
+                <span
+                  className="h-2 w-2 shrink-0 rounded-full"
+                  style={{
+                    backgroundColor: role.color ?? "currentColor",
+                  }}
+                  aria-hidden
+                />
+                {role.name}
+              </li>
+            ))}
+          </ul>
+        )}
         {since && (
           <p className="mt-1 text-[11px] text-paper-muted">
             {t("profile.friendsSince", {
@@ -804,7 +850,25 @@ function UserProfileCard({
         )}
 
         {state === "self" ? (
-          <p className="mt-3 text-xs text-paper-muted">{t("profile.isYou")}</p>
+          <div className="mt-3 flex flex-wrap items-center gap-1.5">
+            <p className="flex-1 text-xs text-paper-muted">{t("profile.isYou")}</p>
+            {onMention && mentionUsername && (
+              <Button
+                size="sm"
+                variant="secondary"
+                className="px-2"
+                title={t("member.mention")}
+                aria-label={t("member.mention")}
+                data-profile-mention=""
+                onClick={() => {
+                  onMention(mentionUsername);
+                  onClose();
+                }}
+              >
+                <AtSign aria-hidden className="h-4 w-4" />
+              </Button>
+            )}
+          </div>
         ) : loading ? (
           <div className="mt-3 flex h-8 items-center text-paper-muted">
             <Loader2 aria-hidden className="h-4 w-4 animate-spin" />
@@ -889,6 +953,24 @@ function UserProfileCard({
                 onClick={handleCall}
               >
                 <Phone aria-hidden className="h-4 w-4" />
+              </Button>
+            )}
+
+            {onMention && mentionUsername && (
+              <Button
+                size="sm"
+                variant="secondary"
+                className="px-2"
+                title={t("member.mention")}
+                aria-label={t("member.mention")}
+                disabled={busy}
+                data-profile-mention=""
+                onClick={() => {
+                  onMention(mentionUsername);
+                  onClose();
+                }}
+              >
+                <AtSign aria-hidden className="h-4 w-4" />
               </Button>
             )}
 

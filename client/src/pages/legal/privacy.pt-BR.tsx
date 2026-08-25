@@ -138,7 +138,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "what-we-collect",
-      sourceRev: "ac588d76",
+      sourceRev: "2fb4a57f",
       heading: "O que a gente coleta",
       body: (
         <>
@@ -245,6 +245,21 @@ export const privacyPtBr: LegalDocument = {
             dentro do app, então você não vai encontrar ele no nosso
             código-fonte. Bloquear com uma extensão de navegador não quebra
             nada.
+          </p>
+          <p>
+            As mesmas páginas também carregam o <strong>Umami</strong>,
+            hospedado pelos criadores dele na União Europeia, com a mesma
+            finalidade: contar visitas e ver em quais páginas as pessoas chegam.
+            Ele também é sem cookie, não guarda nada no seu dispositivo e não
+            usa identificador persistente. Registra o endereço da página, a
+            página que trouxe você, e o seu país, navegador e tipo de
+            dispositivo, tudo de forma agregada. Ele nunca vê a sua conta, e
+            bloquear ele também não quebra nada.
+          </p>
+          <p>
+            São dois porque respondem perguntas um pouco diferentes, e nenhum
+            dos dois te custa nada por medir. Se isso mudar, este parágrafo muda
+            junto.
           </p>
         </>
       ),

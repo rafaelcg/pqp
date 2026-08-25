@@ -20,6 +20,14 @@ interface ManagerStub {
   disposed: boolean;
   /** Every capture handed to the mesh, in order. `null` means "stop sharing". */
   screenStreams: (MediaStream | null)[];
+  /**
+   * Every "peer X is/is not presenting" the roster forwarded to the mesh.
+   *
+   * The mesh cannot work this out for itself — a share announces no stream id,
+   * and the sender's `removeTrack` only mutes the receiver's track — so this
+   * wiring is the whole of how a receiver learns a share ended.
+   */
+  sharingScreen: [string, boolean][];
 }
 
 const playCueMock = vi.hoisted(() => vi.fn());
@@ -38,6 +46,7 @@ vi.mock("@/lib/peer-connection-manager", () => ({
       peerIds: [],
       disposed: false,
       screenStreams: [],
+      sharingScreen: [],
     };
     managers.push(stub);
     return {
@@ -47,8 +56,12 @@ vi.mock("@/lib/peer-connection-manager", () => ({
       },
       setLocalCameraStream: async () => {},
       setCameraMaxBitrate: () => {},
+      setScreenQuality: () => {},
       setPeerCameraStreamId: () => {},
       setPeerScreenAudioStreamId: () => {},
+      setPeerSharingScreen: (peerId: string, sharing: boolean) => {
+        stub.sharingScreen.push([peerId, sharing]);
+      },
       onPeerStateChange: () => {},
       connectToPeer: (peerId: string) => stub.peerIds.push(peerId),
       removePeer: () => {},
@@ -82,6 +95,7 @@ vi.mock("@/lib/livekit-session", () => ({
     unpublishScreenAudio: async () => {},
     publishCamera: async () => {},
     setCameraMaxBitrate: async () => {},
+    setScreenMaxBitrate: async () => {},
     unpublishCamera: async () => {},
     disconnect: async () => {},
   })),
@@ -348,7 +362,7 @@ describe("screen share audio", () => {
     displayMedia = async () => {
       // Raised after the user has already chosen a surface. Asking again would
       // put a second picker on screen with nothing to explain it.
-      const err = new Error("could not start");
+      const err = new Error("Could not start audio source");
       err.name = "NotReadableError";
       throw err;
     };
@@ -358,6 +372,28 @@ describe("screen share audio", () => {
     expect(displayMediaCalls).toHaveLength(1);
     expect(voice.getState().isSharingScreen).toBe(false);
     expect(voice.getState().error).not.toBeNull();
+  });
+
+  it("explains a failed audio capture instead of quoting the browser", async () => {
+    // A real report from the QG, 24 Aug 2026: "Could not start audio source",
+    // in English, with no clue attached, and the share dropped even though the
+    // video was fine. The person worked out on their own that unticking the
+    // audio box fixed it, which is a thing the product should have told them.
+    displayMedia = async () => {
+      const err = new Error("Could not start audio source");
+      err.name = "NotReadableError";
+      throw err;
+    };
+    const { voice } = await connectedMesh();
+    await voice.startScreenShare();
+
+    const message = voice.getState().error ?? "";
+    // The specific failure this regressed into: passing the browser's own
+    // string through untranslated.
+    expect(message).not.toBe("Could not start audio source");
+    expect(message).not.toContain("Could not start");
+    // And it has to name the fix, not just the symptom.
+    expect(message.toLowerCase()).toMatch(/aba|guia|tab/);
   });
 
   it("does not reopen the picker when the user dismissed it", async () => {
@@ -479,6 +515,32 @@ describe("concurrent screen shares", () => {
     expect(state.screenSharePeerIds).toEqual(["aaa", "bbb"]);
     expect(state.focusedScreenPeerId).toBe("aaa");
     expect(state.audibleScreenPeerIds).toEqual(["aaa", "bbb"]);
+  });
+
+  it("tells the mesh when a peer stops presenting", async () => {
+    // The half of the re-share fix that lives up here. A share announces no
+    // stream id and the sender's `removeTrack` only *mutes* the receiver's
+    // track, so if this hand-off is missing the dead capture stays filed as
+    // that peer's screen and their next share renders black behind it.
+    const { voice } = await connectedMesh();
+    const mesh = managers.at(-1)!;
+    voice.handleSignaling({
+      type: "voice-roster",
+      voiceChannelId: CHANNEL,
+      transport: "mesh",
+      participants: [participant(PEER, false), participant("aaa", true)],
+    });
+    voice.handleSignaling({
+      type: "voice-roster",
+      voiceChannelId: CHANNEL,
+      transport: "mesh",
+      participants: [participant(PEER, false), participant("aaa", false)],
+    });
+
+    expect(mesh.sharingScreen).toContainEqual(["aaa", true]);
+    expect(mesh.sharingScreen).toContainEqual(["aaa", false]);
+    // Never about ourselves: our own preview does not come off the mesh.
+    expect(mesh.sharingScreen.map(([peerId]) => peerId)).not.toContain(PEER);
   });
 
   it("skips the picker when the mesh cap is already full", async () => {

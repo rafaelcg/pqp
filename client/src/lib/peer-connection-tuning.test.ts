@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createPeerConnectionManager,
-  screenBitrateFor,
+  meshScreenBitrate,
 } from "./peer-connection-manager";
+import { screenBitrateFor } from "./video-quality";
 
 /**
  * What the encoder is told, and whether saying no to it can break a call.
@@ -91,11 +92,23 @@ class FakePeerConnection {
   }
 }
 
-const videoTrack = (id: string) => ({ id, kind: "video" });
+/**
+ * A video track that can be asked how big it is.
+ *
+ * `getSettings` is here because the screen tuning now has to divide the capture
+ * down to the size the menu names, and the divisor can only come from the
+ * track's own dimensions: a hard-coded one would mean 360p on a 1080p monitor
+ * and 480p on a 1440p one.
+ */
+const videoTrack = (id: string, height = 1080) => ({
+  id,
+  kind: "video",
+  getSettings: () => ({ width: Math.round((height * 16) / 9), height }),
+});
 
 /** A stream carrying exactly one video track, which is all these paths read. */
-function fakeStream(id: string): MediaStream {
-  const track = videoTrack(id);
+function fakeStream(id: string, height = 1080): MediaStream {
+  const track = videoTrack(id, height);
   return {
     id,
     getTracks: () => [track],
@@ -219,7 +232,7 @@ describe("screen budget across a growing room", () => {
     expect(screenSenders()).toHaveLength(3);
     for (const sender of screenSenders()) {
       expect(lastParams(sender)?.encodings[0]?.maxBitrate).toBe(
-        screenBitrateFor(3),
+        meshScreenBitrate(3),
       );
     }
   });
@@ -237,15 +250,229 @@ describe("screen budget across a growing room", () => {
     const remaining = screenSenders().filter((s) => s.track !== null);
     for (const sender of remaining.slice(0, 2)) {
       expect(lastParams(sender)?.encodings[0]?.maxBitrate).toBe(
-        screenBitrateFor(2),
+        meshScreenBitrate(2),
       );
     }
   });
 
-  it("clamps a two-person call to the maximum rather than the raw share", () => {
-    // Which is why the peer-count arithmetic could never explain a bad DM.
-    expect(screenBitrateFor(1)).toBe(2_500_000);
-    expect(screenBitrateFor(2)).toBe(2_500_000);
-    expect(screenBitrateFor(3)).toBeLessThan(2_500_000);
+  it("gives a re-share the same ceiling as the first one", async () => {
+    // The reported bug was a *second* share, so the peer count the second
+    // `setLocalScreenStream` tunes with is worth pinning: a stop-and-restart
+    // must not leave the new sender budgeted for a room that is not there.
+    const manager = createPeerConnectionManager("z-local", () => {});
+    manager.connectToPeer("a-remote");
+    await manager.setLocalScreenStream(fakeStream("screen"));
+    await manager.setLocalScreenStream(null);
+    await manager.setLocalScreenStream(fakeStream("screen"));
+
+    expect(lastParams(screenSenders().at(-1)!)?.encodings[0]?.maxBitrate).toBe(
+      meshScreenBitrate(1),
+    );
+  });
+
+  it("clamps a call to the chosen ceiling rather than the raw share", () => {
+    // Which is why the peer-count arithmetic could never explain a bad DM: the
+    // clamp, not the division, is what a small call actually runs into.
+    expect(meshScreenBitrate(1)).toBe(3_000_000);
+    expect(meshScreenBitrate(2)).toBe(2_500_000);
+    expect(meshScreenBitrate(3)).toBeLessThan(2_500_000);
+  });
+});
+
+describe("the quality choice reaches the screen sender", () => {
+  it("gives a 1080p share more than the old hard-coded 2.5 Mbps", () => {
+    // THE REPORTED BUG, pinned. "I selected 1080p, shared, it was blurry": the
+    // choice moved the camera and nothing else, and the screen sender ran on a
+    // constant no setting could reach.
+    expect(meshScreenBitrate(1, "1080p")).toBe(4_000_000);
+    expect(meshScreenBitrate(1, "1080p")).toBeGreaterThan(2_500_000);
+  });
+
+  it("orders the five settings, and separates every one of them", () => {
+    const rungs = ["360p", "480p", "720p", "auto", "1080p"] as const;
+    const rates = rungs.map((rung) => meshScreenBitrate(1, rung));
+    expect(rates).toEqual([...rates].sort((a, b) => a - b));
+    expect(new Set(rates).size).toBe(rungs.length);
+  });
+
+  it("lets the chosen ceiling win over an empty room's budget", () => {
+    // The room has bandwidth going spare and the user still said 480p. A
+    // budget that could overrule that would make the control a suggestion.
+    expect(meshScreenBitrate(1, "480p")).toBe(1_000_000);
+    expect(meshScreenBitrate(1, "480p")).toBeLessThan(
+      meshScreenBitrate(1, "auto"),
+    );
+  });
+
+  it("lets a crowded room's budget win over a generous choice", () => {
+    // And the other direction, because a mesh presenter uploads one copy per
+    // peer: picking 1080p in an eight-way call cannot be allowed to ask one
+    // domestic uplink for 32 Mbps.
+    expect(meshScreenBitrate(8, "1080p")).toBeLessThan(
+      meshScreenBitrate(1, "1080p"),
+    );
+    expect(meshScreenBitrate(8, "1080p")).toBe(meshScreenBitrate(8, "auto"));
+  });
+
+  it("never drops a share below the floor, whatever is chosen", () => {
+    for (const rung of ["auto", "1080p", "720p", "480p", "360p"] as const) {
+      for (const peers of [1, 2, 4, 8, 16]) {
+        expect(meshScreenBitrate(peers, rung)).toBeGreaterThanOrEqual(600_000);
+      }
+    }
+  });
+
+  it("leaves every crowded room exactly where it was before the raise", () => {
+    // The point of choosing 4 Mbps rather than more: the 5 Mbps budget still
+    // binds from two peers up, so the raise reaches small calls only. If this
+    // fails, somebody moved the budget and changed group calls by accident.
+    for (const peers of [2, 3, 4, 6, 8]) {
+      expect(meshScreenBitrate(peers, "1080p")).toBe(
+        Math.round(Math.max(600_000, 5_000_000 / peers)),
+      );
+    }
+  });
+
+  it("defaults to auto when no quality is passed at all", () => {
+    // Every pre-existing caller passes one argument. They must keep meaning
+    // what they meant.
+    expect(meshScreenBitrate(4)).toBe(meshScreenBitrate(4, "auto"));
+  });
+
+  it("keeps the mesh cap and the ladder's top rung agreed", () => {
+    // Two constants in two modules that must not drift: the mesh's own hard cap
+    // and the most any quality may ask for. If they part company, one of them
+    // silently stops doing anything.
+    expect(screenBitrateFor("1080p")).toBe(4_000_000);
+  });
+
+  it("moves a live share's ceiling without touching the capture", async () => {
+    // Mid-call, the same promise the camera makes: no re-publish, so the OS
+    // picker never reappears and the share never blinks out for its viewers.
+    const manager = createPeerConnectionManager("z-local", () => {});
+    manager.connectToPeer("a-remote");
+    await manager.setLocalScreenStream(fakeStream("screen"));
+    const sender = screenSenders()[0]!;
+
+    manager.setScreenQuality("1080p");
+    await Promise.resolve();
+
+    expect(lastParams(sender)?.encodings[0]?.maxBitrate).toBe(
+      meshScreenBitrate(1, "1080p"),
+    );
+    expect(sender.replaceTrack).not.toHaveBeenCalled();
+    expect(sender.track?.id).toBe("screen");
+  });
+
+  it("carries the choice to a share that starts after it", async () => {
+    // The order people actually do it in: set the quality, then share. The
+    // manager has to hold the choice, not merely react to a live sender.
+    const manager = createPeerConnectionManager("z-local", () => {});
+    manager.setScreenQuality("360p");
+    manager.connectToPeer("a-remote");
+    await manager.setLocalScreenStream(fakeStream("screen"));
+
+    expect(lastParams(screenSenders()[0]!)?.encodings[0]?.maxBitrate).toBe(
+      meshScreenBitrate(1, "360p"),
+    );
+  });
+
+  it("carries the choice to somebody who joins mid-share", async () => {
+    const manager = createPeerConnectionManager("z-local", () => {});
+    manager.setScreenQuality("1080p");
+    manager.connectToPeer("a-remote");
+    await manager.setLocalScreenStream(fakeStream("screen"));
+    manager.connectToPeer("b-remote");
+
+    await Promise.resolve();
+    expect(screenSenders()).toHaveLength(2);
+    for (const sender of screenSenders()) {
+      expect(lastParams(sender)?.encodings[0]?.maxBitrate).toBe(
+        meshScreenBitrate(2, "1080p"),
+      );
+    }
+  });
+
+  it("does not re-tune every sender when the choice has not moved", async () => {
+    const manager = createPeerConnectionManager("z-local", () => {});
+    manager.connectToPeer("a-remote");
+    await manager.setLocalScreenStream(fakeStream("screen"));
+    const before = screenSenders()[0]!.setParameters.mock.calls.length;
+
+    manager.setScreenQuality("720p");
+    manager.setScreenQuality("720p");
+    await Promise.resolve();
+
+    expect(screenSenders()[0]!.setParameters.mock.calls.length).toBe(
+      before + 1,
+    );
+  });
+
+  it("divides the picture down to the size the label names", async () => {
+    // THE REPORTED BUG. Measured at the receiver in a server voice channel:
+    // every rung below 1080p arrived as 1920x1080, because the choice moved
+    // `maxBitrate` and nothing else. A ceiling on its own does not make a
+    // smaller picture, it makes the same picture worse, which is exactly what
+    // "I picked 360p and it did not look like 360p" describes.
+    const manager = createPeerConnectionManager("z-local", () => {});
+    manager.connectToPeer("a-remote");
+    await manager.setLocalScreenStream(fakeStream("screen"));
+    const sender = screenSenders()[0]!;
+
+    manager.setScreenQuality("360p");
+    await Promise.resolve();
+
+    expect(lastParams(sender)?.encodings[0]?.scaleResolutionDownBy).toBeCloseTo(
+      3,
+      2,
+    );
+    // And no re-capture to do it, so the OS picker never reappears.
+    expect(sender.replaceTrack).not.toHaveBeenCalled();
+  });
+
+  it("divides by what this screen is, not by a number", async () => {
+    // A 1440p monitor asked for 360p needs a divisor of 4 where a 1080p one
+    // needs 3. Same label, same picture, different hardware.
+    const manager = createPeerConnectionManager("z-local", () => {});
+    manager.setScreenQuality("360p");
+    manager.connectToPeer("a-remote");
+    await manager.setLocalScreenStream(fakeStream("screen", 1440));
+
+    expect(
+      lastParams(screenSenders()[0]!)?.encodings[0]?.scaleResolutionDownBy,
+    ).toBeCloseTo(4, 2);
+  });
+
+  it("gives the full picture back when the choice goes back up", async () => {
+    // The failure this guards is a divisor that is only ever written on the way
+    // down: 360p then 1080p would leave a 3x scale in place forever, and the
+    // menu would become a one-way trip.
+    const manager = createPeerConnectionManager("z-local", () => {});
+    manager.connectToPeer("a-remote");
+    await manager.setLocalScreenStream(fakeStream("screen"));
+    const sender = screenSenders()[0]!;
+
+    manager.setScreenQuality("360p");
+    await Promise.resolve();
+    manager.setScreenQuality("1080p");
+    await Promise.resolve();
+
+    expect(lastParams(sender)?.encodings[0]?.scaleResolutionDownBy).toBe(1);
+
+    manager.setScreenQuality("auto");
+    await Promise.resolve();
+    expect(lastParams(sender)?.encodings[0]?.scaleResolutionDownBy).toBe(1);
+  });
+
+  it("leaves a working share when the encoder refuses the parameters", async () => {
+    // Raising a ceiling must not be able to cost anybody their share.
+    rejectSetParameters = true;
+    const manager = createPeerConnectionManager("z-local", () => {});
+    manager.connectToPeer("a-remote");
+
+    await expect(
+      manager.setLocalScreenStream(fakeStream("screen")),
+    ).resolves.toBeUndefined();
+    expect(screenSenders()[0]?.track?.id).toBe("screen");
   });
 });

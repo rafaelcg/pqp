@@ -900,6 +900,20 @@ h2,
   background: color-mix(in oklch, var(--color-accent) 26%, transparent);
 }
 
+.pqp-mention-mass {
+  font-weight: 600;
+}
+
+.pqp-message-mention {
+  /* Wash only. Consecutive pings in a group share one block via
+     mentionJoinTop / mentionJoinBottom on the row, not a left bar. */
+  background: color-mix(in oklch, var(--color-accent) 14%, transparent);
+}
+
+.pqp-message-mention:hover {
+  background: color-mix(in oklch, var(--color-accent) 20%, transparent);
+}
+
 @keyframes rise-in {
   from {
     opacity: 0;
@@ -1052,6 +1066,7 @@ h2,
   --font-family: var(--font-sans);
   border: none;
   height: 340px;
+  max-height: 100%;
 }
 
 /*

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clientAddress, createRateLimiter } from "./rate-limit.js";
+import { clientAddress, createRateLimiter, limitFromEnv } from "./rate-limit.js";
 
 function fakeClock(start = 0) {
   let now = start;
@@ -193,5 +193,22 @@ describe("clientAddress", () => {
         }),
       ).toBe("10.0.0.1");
     });
+  });
+});
+
+describe("limitFromEnv", () => {
+  it("uses the fallback when the variable is missing or not a positive number", () => {
+    const previous = process.env.RATE_LIMIT_WS_MESSAGE_CAPACITY;
+    delete process.env.RATE_LIMIT_WS_MESSAGE_CAPACITY;
+    expect(limitFromEnv("RATE_LIMIT_WS_MESSAGE_CAPACITY", 10)).toBe(10);
+    process.env.RATE_LIMIT_WS_MESSAGE_CAPACITY = "0";
+    expect(limitFromEnv("RATE_LIMIT_WS_MESSAGE_CAPACITY", 10)).toBe(10);
+    process.env.RATE_LIMIT_WS_MESSAGE_CAPACITY = "10000";
+    expect(limitFromEnv("RATE_LIMIT_WS_MESSAGE_CAPACITY", 10)).toBe(10000);
+    if (previous === undefined) {
+      delete process.env.RATE_LIMIT_WS_MESSAGE_CAPACITY;
+    } else {
+      process.env.RATE_LIMIT_WS_MESSAGE_CAPACITY = previous;
+    }
   });
 });
