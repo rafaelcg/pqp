@@ -14,6 +14,8 @@ coil = "3.5.0"
 splashscreen = "1.2.0"
 clerk = "1.1.4"
 webrtc = "144.7559.14"
+firebaseBom = "34.18.0"
+googleServices = "4.5.0"
 junit = "4.13.2"
 androidxJunit = "1.3.0"
 espresso = "3.7.0"
@@ -50,6 +52,10 @@ coil-network-okhttp = { group = "io.coil-kt.coil3", name = "coil-network-okhttp"
 clerk-ui = { group = "com.clerk", name = "clerk-android-ui", version.ref = "clerk" }
 webrtc = { group = "io.github.webrtc-sdk", name = "android", version.ref = "webrtc" }
 
+# The BOM pins firebase-messaging's version, so the artifact below carries none.
+firebase-bom = { group = "com.google.firebase", name = "firebase-bom", version.ref = "firebaseBom" }
+firebase-messaging = { group = "com.google.firebase", name = "firebase-messaging" }
+
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "androidxJunit" }
 androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espresso" }
@@ -59,3 +65,4 @@ android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+google-services = { id = "com.google.gms.google-services", version.ref = "googleServices" }

@@ -64,7 +64,9 @@ the order to cut from the bottom:
 2. Voice with a foreground service. **Built, and negotiating; the media path is
    unproven for an environment reason. See the caveat.**
 3. Screen sharing via `MediaProjection`. **Not started, and the biggest win.**
-4. Push via FCM, as the third leg of `server/src/services/push.ts`.
+4. Push via FCM, as the third leg of `server/src/services/push.ts`. **Client
+   built; the server leg is specified and unwritten, and it needs a Firebase
+   project that does not exist. See the push section below.**
 5. DMs, attachments, reactions, invites, everything on the parity list.
 
 If time runs short, cut from **5 upward**. The one thing not to cut is 3: it is
@@ -419,12 +421,242 @@ domain socket carrying NV12 between two processes, none of the machinery
 5. Receiving is the mesh's ordinary video path and needs a renderer; the app has
    none today.
 
-## Push notifications: not built
+## Push notifications: the client is built, the server leg is not
 
-The server already decides *who* gets told, in `server/src/services/push.ts`,
-and fans out to Web Push and APNs from one place. FCM would be a third leg of
-the same feature and the client would re-decide none of it. That is server work
-plus a `FirebaseMessagingService` here, and neither exists.
+The client half is here and works. The server half does not exist, cannot be
+faked from the client, and is **not** in this PR. Read the boundary before
+quoting either half.
+
+### What the server does today, and why Android cannot register
+
+`server/src/services/push.ts` already decides *who* gets told: no live socket
+anywhere in the cluster, not on do-not-disturb, and a per-channel notification
+level that allows it. That decision is made once and handed to two transports,
+Web Push (VAPID) and APNs. FCM would be the third leg of the same feature, and
+the client re-decides none of it.
+
+Three things stop an Android device registering against the server as it stands,
+and all three are server-side:
+
+1. **`PushPlatform` is `"web" | "apns"`.** There is no third value.
+2. **`pushRegistrationSchema` is a two-member zod union**: an APNs body
+   (`platform: "apns"` plus a lowercase-hex token) or a Web Push body (an https
+   endpoint plus ECDH keys). An FCM registration token is neither. It is a long
+   mixed-case opaque string containing a `:`, so `POST /api/push/subscriptions`
+   answers 400.
+3. **The database would refuse it anyway.** `push_subscriptions_platform_shape`
+   in `server/src/schema.sql` is a CHECK constraint that enumerates the two
+   shapes, so an `fcm` row is rejected at the storage layer even if the types
+   allowed it.
+
+There is no client-side way around this, and squeezing an FCM token into the
+`web` shape would be a lie that looks like it works. So the client is built up
+to that boundary and stops there.
+
+### What the server needs, precisely
+
+Six edits, in the shape the existing APNs leg already established. `apns.ts` is
+the template throughout: FCM is the same job with a different envelope.
+
+**1. `server/src/schema.sql`** gains an `fcm` branch on the CHECK constraint,
+identical in shape to the `apns` one (a token, no endpoint, no keys), plus its
+own partial unique index:
+
+```sql
+ALTER TABLE push_subscriptions
+  DROP CONSTRAINT IF EXISTS push_subscriptions_platform_shape;
+ALTER TABLE push_subscriptions
+  ADD CONSTRAINT push_subscriptions_platform_shape CHECK (
+    (platform = 'web'
+      AND endpoint IS NOT NULL AND p256dh IS NOT NULL AND auth IS NOT NULL
+      AND token IS NULL)
+    OR
+    (platform IN ('apns', 'fcm')
+      AND token IS NOT NULL
+      AND endpoint IS NULL AND p256dh IS NULL AND auth IS NULL)
+  );
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_push_subscriptions_fcm_token
+  ON push_subscriptions (token) WHERE platform = 'fcm';
+```
+
+A **separate** index rather than widening the existing one.
+`saveApnsSubscription` infers its arbitrating index by restating
+`WHERE platform = 'apns'`, and inference against a partial index requires the
+predicate to match exactly; widening the old index would break that insert with
+"no unique or exclusion constraint matching the ON CONFLICT specification". The
+FCM upsert restates `WHERE platform = 'fcm'` the same way.
+
+**2. `PushPlatform`** gains `"fcm"`, and a `saveFcmSubscription` mirrors
+`saveApnsSubscription` exactly, upserting on the token for the same reason: one
+device has one token, and if two accounts sign in on one phone the token must
+follow whoever is signed in now.
+
+**3. `pushRegistrationSchema`** gains a third member, tried **before** the Web
+Push member for the same compatibility reason the APNs one is:
+
+```ts
+export const fcmSubscriptionSchema = z.object({
+  platform: z.literal("fcm"),
+  // Registration tokens are ~150-200 chars today, of the form
+  // "<instance-id>:APA91b<...>", but Google documents the length as not
+  // fixed. Bounded generously and checked for shape, not pinned.
+  token: z.string().min(64).max(4096).regex(/^[A-Za-z0-9_:.-]+$/),
+});
+```
+
+**4. A new `server/src/services/fcm.ts`**, mirroring `apns.ts`. Config from a
+service account (`FCM_PROJECT_ID`, `FCM_CLIENT_EMAIL`, `FCM_PRIVATE_KEY`), a
+self-signed JWT exchanged for an OAuth2 access token against
+`https://oauth2.googleapis.com/token` with scope
+`https://www.googleapis.com/auth/firebase.messaging`, then
+`POST https://fcm.googleapis.com/v1/projects/<project>/messages:send`. Cache the
+access token for its hour rather than minting one per push. `isFcmEnabled()`
+answers whether all three variables are set, exactly as `isApnsEnabled` does.
+
+**5. The send body must be DATA-ONLY. This is the part that is easy to get
+wrong and expensive to get wrong.**
+
+```jsonc
+{
+  "message": {
+    "token": "<registration token>",
+    // NO "notification" key. See below.
+    "data": {
+      "title": "<payload.title>",
+      "body":  "<payload.body>",
+      "path":  "<payload.path>",
+      "tag":   "<payload.tag>"
+    },
+    "android": {
+      "priority": "HIGH",
+      "ttl": "86400s",                  // CALL_PUSH_TTL_SECONDS for a ring
+      "collapse_key": "<payload.tag>"   // same job as apns-collapse-id
+    }
+  }
+}
+```
+
+The four `data` keys are the ones `buildApnsBody` already carries to iOS under
+exactly those names, so the three clients keep one vocabulary.
+
+A `notification` block would be drawn by the Firebase SDK on the tray without
+ever waking the app, which takes away the one decision this client has to make:
+whether the person is already reading the channel being announced. That is the
+phantom "1 nova mensagem" bug (#79) in another costume, and on Android it would
+be unfixable from the client. The price of data-only is that a force-stopped app
+does not receive it and some OEM battery managers delay it. That trade is taken
+deliberately: a late notification is a smaller failure than a wrong one.
+
+**6. Wiring.** `isAnyPushEnabled()` gains `|| isFcmEnabled()`. `PushTransports`
+gains an `fcm` leg and `readTransports` reads it. `deliverToUsers` gains one
+branch, next to the APNs one, and that is the only place the platforms diverge.
+`GET /api/push/config` gains `fcm: isFcmEnabled()`, and the POST route's
+two-way `isApns ? ... : ...` guard becomes a three-way switch so a server with
+no FCM config refuses tokens it can never send to. Prune the row on FCM's
+`UNREGISTERED` and `INVALID_ARGUMENT`, which are its equivalents of APNs
+`Unregistered` and a 410.
+
+**Deploying this drops every live voice call**, because `server/` redeploys the
+API. It is not urgent and should ride along with something else.
+
+### What Rafael has to create
+
+Nothing in this repo can produce these, and none of them may be invented:
+
+1. **A Firebase project** on the Google account that will own it, with an
+   **Android app** added to it. It needs **two** package names registered, since
+   debug builds carry a suffix: `gg.pqp.app` and `gg.pqp.app.debug`.
+2. **`google-services.json`**, downloaded from that project, dropped at
+   `android/app/google-services.json`. It is **gitignored** (it names a live
+   project on somebody's billing account, and this repo is public), and its
+   absence is what keeps the whole surface switched off.
+3. **A service account key** for the same project, with the Firebase Cloud
+   Messaging API enabled, for the server's `FCM_PROJECT_ID` / `FCM_CLIENT_EMAIL`
+   / `FCM_PRIVATE_KEY`. Those are Fly secrets and never go near the client.
+
+Until (2) exists the app compiles, runs, and says so on the You screen. Until
+(3) exists the server answers `fcm: false` and the client offers no toggle.
+
+### How the client is gated
+
+The same posture as the web client's analytics: absent config means the feature
+is absent, not broken.
+
+`app/build.gradle.kts` applies the `com.google.gms.google-services` plugin
+**only when `google-services.json` exists**, because the plugin fails the build
+outright when it does not, and turns that into a `BuildConfig.PUSH_AVAILABLE`
+flag the Kotlin side reads. `firebase-messaging` is a dependency either way: it
+compiles and links with no config, and every call into it is behind the flag.
+With no config Firebase logs `FirebaseApp initialization unsuccessful` once at
+launch and nothing else happens.
+
+The second gate is the server's. `GET /api/push/config` has no `fcm` member
+today, so `PushServerConfig.fcm` defaults to false, the switch is disabled and
+says "This server cannot send notifications to Android yet." The day the server
+answers `fcm: true`, already-installed builds start offering it with no client
+change.
+
+### What the client does
+
+| Piece | Where |
+|---|---|
+| Route parsing, shared vocabulary with the web worker and iOS | `push/DeepLink.kt` |
+| The FCM data frame | `push/PushMessage.kt` |
+| Whether to draw, and what is on screen | `push/PushPresentation.kt` |
+| The tray, the channel, the tap intent | `push/PushNotifier.kt` |
+| Token, registration, session and foreground tracking | `push/PushController.kt` |
+| The FCM entry point | `push/PqpMessagingService.kt` |
+| The switch on the You screen | `push/PushSettings.kt` |
+
+**Notification channel ids** are a shared surface, so they are namespaced:
+`pqp.messages` (mentions, replies, DMs; IMPORTANCE_HIGH) is this feature's, and
+the only one it creates. `voice` belongs to `VoiceService` and its ongoing
+`category=call` notification. The two must never converge: they want opposite
+settings, and a ringing-call push would want a third id rather than either.
+
+**Mute, notification level and do-not-disturb are not re-decided here.** All
+three are settled server-side at send time, in `shouldPush`, because the client
+that would normally suppress an interruption is by definition not running. The
+one decision the client makes is local: is the person already looking at this.
+
+**That check cannot repeat the web client's #79 bug.** The frame is
+self-describing: the channel id and the server id are parsed out of the push's
+own `path`, with no reference to any channel list the app happens to hold. That
+was the actual fault in #79 (the server id was discarded and recovered from a
+directory that only ever held the selected server's channels), and there is no
+directory here to miss. The second half is that "visible" means foregrounded
+**and** parked on that channel: `ChatScreen` reports through a
+`LifecycleStartEffect`, so a chat sitting in the back stack behind a locked
+screen does not count as being read.
+
+### What is verified, and what is not
+
+Verified on an emulator (API 37, Play Store image), against a live local server,
+with a debug-only receiver (`src/debug/.../PushDebugReceiver.kt`) that feeds a
+frame into `PushController.onMessageReceived`, the exact method
+`PqpMessagingService` calls, with the data map the server's FCM leg would send:
+
+- A push for a channel not on screen draws one notification on `pqp.messages`,
+  id 2, tagged with the channel id, `category=msg`, importance 4.
+- Tapping it lands on that channel, titled `#general`, with the channel list
+  behind it.
+- The same push while that channel is open draws **nothing**.
+- A push for a different channel, while the first is open, still draws.
+- The same push with the app backgrounded draws, which is the case a stale
+  "visible channel" would silently swallow.
+- 21 unit tests over the route parser and the presentation rule. Neutering the
+  foreground guard fails exactly the test that names it.
+
+**Not verified, and not verifiable here: FCM itself.** No Firebase project
+exists, so there is no registration token, no delivery, and no round trip. Every
+line above the transport is exercised; the transport is not. Do not write
+"Android push works" until a real device has received a real message from a real
+server.
+
+Also unbuilt: no toggle for `dmDetails` (the server owns it and the client only
+reads it), no ringing-call notification, and no notification actions such as
+reply or mark-as-read.
 
 ## CI
 
@@ -471,10 +703,17 @@ restart are verified between two clients; audio flowing is not, for an
 environment reason spelled out above. **Do not write "Android voice works"**
 until somebody has heard somebody.
 
-**Not built:** screen sharing, push, DMs, attachments, reactions, replies,
+Built and **partly verified**: push. Everything downstream of delivery is
+exercised on a device, including the guard that keeps a notification off a
+channel already on screen; FCM delivery itself is not, because no Firebase
+project exists and the server has no FCM leg. **Do not write "Android push
+works"** until a real device has received a real message from a real server.
+
+**Not built:** screen sharing, DMs, attachments, reactions, replies,
 editing, pinning, threads, search, members and moderation, invites, profile
 editing, communities, game connections, data export and account deletion. There
-are no instrumented tests. `assembleRelease` signs with the debug key and needs
-a real keystore before it goes anywhere near Play.
+are no instrumented tests, though there are now unit tests under
+`app/src/test`. `assembleRelease` signs with the debug key and needs a real
+keystore before it goes anywhere near Play.
 
 This is a foundation with one real feature on it. It is not the app yet.

@@ -54,11 +54,31 @@ class MainActivity : ComponentActivity() {
             app.session.restore()
         }
 
+        // A tapped notification, which on a cold start is already on the
+        // intent by the time this runs. The target is parked on the controller
+        // rather than acted on here: there is no NavController until the tree
+        // below is composed, and the session may still be launching.
+        app.push.onActivityIntent(intent)
+
         setContent {
             PqpTheme {
-                PqpApp(session = app.session, voice = app.voice)
+                PqpApp(session = app.session, voice = app.voice, push = app.push)
             }
         }
+    }
+
+    /**
+     * A tap while the app is already running. `MainActivity` is launched
+     * SINGLE_TOP from the notification, so the second tap arrives here instead
+     * of creating a second Activity.
+     *
+     * `setIntent` first, because `getIntent()` otherwise keeps answering with
+     * the one that started the process.
+     */
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        (application as PqpApplication).push.onActivityIntent(intent)
     }
 }
 

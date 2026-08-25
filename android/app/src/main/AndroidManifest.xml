@@ -59,5 +59,25 @@
             android:name=".voice.VoiceService"
             android:exported="false"
             android:foregroundServiceType="microphone" />
+
+        <!-- Where FCM hands over a data message and a rotated token.
+             `exported="false"`: Firebase's own manifest binds this through a
+             permission-guarded internal path, and nothing else may start it. -->
+        <service
+            android:name=".push.PqpMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
+        <!-- Only ever a fallback. The server's FCM leg must send data-only
+             payloads, which never reach this default because the app draws
+             them itself; see gg.pqp.app.push.PushMessage. Declared so that a
+             payload which does slip through with a `notification` block gets
+             the product's icon instead of a grey square. -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_icon"
+            android:resource="@drawable/ic_notification" />
     </application>
 </manifest>

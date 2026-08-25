@@ -25,6 +25,34 @@ fun config(name: String, fallback: String): String =
         ?: System.getenv(name.replace('.', '_').uppercase())
         ?: fallback
 
+/**
+ * Whether this build can talk to Firebase Cloud Messaging at all.
+ *
+ * `google-services.json` is a per-project file that nobody has created yet, and
+ * it is gitignored besides, so the normal state of this repo is "absent". Two
+ * things follow, and both are deliberate:
+ *
+ *  1. The `com.google.gms.google-services` plugin is applied ONLY when the file
+ *     exists. Applied without it the plugin does not warn, it fails the build,
+ *     which would mean nobody could compile the app until somebody created a
+ *     Firebase project.
+ *  2. The result is a BuildConfig flag rather than a comment, because the
+ *     Kotlin side has to make the same decision at runtime: with no Firebase
+ *     project there is no token to register and no message to receive, so the
+ *     push surface stays off and says so, the way the web client gates its
+ *     analytics behind an unset env var.
+ *
+ * `firebase-messaging` itself is a dependency either way. It compiles and links
+ * with no config; only its runtime initialisation needs one, and every call
+ * into it is behind the flag.
+ */
+val googleServicesConfig = file("google-services.json")
+val pushAvailable = googleServicesConfig.exists()
+
+if (pushAvailable) {
+    apply(plugin = "com.google.gms.google-services")
+}
+
 android {
     namespace = "gg.pqp.app"
     compileSdk = 37
@@ -37,6 +65,9 @@ android {
         versionName = "0.1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // Read by gg.pqp.app.push.Push. See the note on `pushAvailable` above.
+        buildConfigField("boolean", "PUSH_AVAILABLE", pushAvailable.toString())
     }
 
     androidResources {
@@ -139,6 +170,9 @@ dependencies {
 
     implementation(libs.clerk.ui)
     implementation(libs.webrtc)
+
+    implementation(platform(libs.firebase.bom))
+    implementation(libs.firebase.messaging)
 
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
