@@ -27,7 +27,7 @@ export const privacyPtBr: LegalDocument = {
   description:
     "Como o pqp.gg trata dados pessoais: o que a gente coleta, as bases legais, onde os dados são tratados, por quanto tempo ficam e os seus direitos sob a LGPD e a lei de proteção de dados do Reino Unido.",
   heading: "Política de Privacidade",
-  updated: "21 de agosto de 2026",
+  updated: "25 de agosto de 2026",
   sections: [
     {
       id: "intro",
@@ -138,7 +138,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "what-we-collect",
-      sourceRev: "2fb4a57f",
+      sourceRev: "be10efc1",
       heading: "O que a gente coleta",
       body: (
         <>
@@ -261,27 +261,67 @@ export const privacyPtBr: LegalDocument = {
             dos dois te custa nada por medir. Se isso mudar, este parágrafo muda
             junto.
           </p>
+
+          <h3>Medição de publicidade</h3>
+          <p>
+            O pqp.gg compra um pouco de publicidade, e carrega o{" "}
+            <strong>rastreamento de conversão do Google Ads</strong> para a
+            gente saber se um anúncio produziu uma conta e não só um clique.
+            Essa é a única coisa no site que não é sem cookie, e a gente prefere
+            dizer isso na cara do que esconder. A tag do Google carrega em toda
+            página do pqp.gg, e ela define cookies de origem própria no domínio
+            pqp.gg (os nomes começam em <code>_gcl_</code>) para lembrar que a
+            sua visita chegou por um anúncio.
+          </p>
+          <p>
+            Um evento é enviado ao Google, uma vez: quando uma conta é criada, a
+            tag informa que houve um cadastro. Ele não leva nome, nem e-mail,
+            nem id de usuário, nem nada que você digitou. A gente não envia
+            dados da sua conta para o Google, não ativou conversões aprimoradas
+            nem nenhum cruzamento com dados de clientes, e não roda remarketing
+            nem listas de público. Entrar de novo não envia nada, e nada do que
+            você faz dentro do app envia também.
+          </p>
+          <p>
+            O Google é um terceiro aqui e trata o que recebe, inclusive o seu
+            endereço IP, sob os termos dele. Bloquear a tag com uma extensão de
+            navegador, ou bloquear cookies para o pqp.gg, não quebra nada: o
+            produto funciona exatamente igual e o cadastro simplesmente não é
+            contado.
+          </p>
+          <p>
+            Isso vale para o pqp.gg hospedado e para mais nada. A tag é
+            adicionada na hora de compilar, e só quando a compilação recebe o id
+            da nossa conta de publicidade. Uma cópia self-hosted do pqp não
+            contata nenhum servidor de publicidade do Google e não define nenhum
+            cookie do Google.
+          </p>
         </>
       ),
     },
     {
       id: "what-we-dont-do",
-      sourceRev: "383a8a66",
+      sourceRev: "0322d1cf",
       heading: "O que a gente não faz",
       body: (
         <ul>
           <li>
-            <strong>Sem rastreamento e sem perfil sobre você.</strong> Não tem
-            pixel de publicidade, não tem gravador de sessão e não tem serviço
-            de relatório de erro. Nada segue você entre sites, e nada do que a
-            gente guarda monta um retrato de você como pessoa. A gente usa uma
-            ferramenta de analytics que preserva privacidade, descrita em
-            &quot;O que a gente coleta&quot; acima — ela conta visitas, não
-            identifica visitantes.
+            <strong>Sem perfil sobre você.</strong> Não tem gravador de sessão e
+            não tem serviço de relatório de erro, e nada do que a gente guarda
+            monta um retrato de você como pessoa. As duas ferramentas de
+            analytics descritas em &quot;O que a gente coleta&quot; acima contam
+            visitas e não conseguem identificar visitantes. A única exceção ao
+            &quot;nada segue você entre sites&quot; é a tag de conversão do
+            Google Ads, descrita no mesmo lugar: o trabalho dela é ligar um
+            clique em anúncio a um cadastro, e ela é a única coisa no pqp.gg que
+            um terceiro consegue ler.
           </li>
           <li>
-            <strong>Sem publicidade e sem venda de dados.</strong> A gente não
-            monta perfil publicitário e não vende nem aluga dados pessoais.
+            <strong>Sem perfil publicitário e sem venda de dados.</strong> A
+            gente anuncia, sim, e conta quantos cadastros a publicidade
+            produziu, que é a tag de conversão acima. A gente não monta perfil
+            publicitário, não roda remarketing nem listas de público, e não vende
+            nem aluga dados pessoais.
           </li>
           <li>
             <strong>Sem fingerprinting de dispositivo e sem geolocalização.</strong>{" "}
@@ -352,7 +392,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "legal-bases",
-      sourceRev: "aa3151f1",
+      sourceRev: "b4d9162b",
       heading: "Por que a gente trata os seus dados, e a base legal",
       body: (
         <>
@@ -416,6 +456,16 @@ export const privacyPtBr: LegalDocument = {
               </em>
             </li>
             <li>
+              <strong>Medir a nossa publicidade.</strong> Contar quantos
+              cadastros uma campanha de anúncio produziu, pela tag de conversão
+              do Google Ads descrita acima. Ela conta um evento; não identifica
+              você para a gente nem para o Google.{" "}
+              <em>
+                (Base: legítimo interesse, art. 7, IX. Para se opor, bloqueie a
+                tag no navegador ou escreva para a gente.)
+              </em>
+            </li>
+            <li>
               <strong>Qualquer coisa opcional que você ligar</strong>, como as
               notificações no desktop, que o seu navegador pede permissão em
               separado.{" "}
@@ -426,7 +476,7 @@ export const privacyPtBr: LegalDocument = {
             </li>
           </ul>
           <p>
-            Pela lei do Reino Unido, essas mesmas sete atividades se apoiam nas
+            Pela lei do Reino Unido, essas mesmas oito atividades se apoiam nas
             bases equivalentes do art. 6 do UK GDPR — contrato, legítimo
             interesse, obrigação legal, interesses vitais e consentimento, nessa
             ordem. O tratamento é o mesmo dos dois jeitos; só mudam os números
@@ -442,7 +492,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "who-sees",
-      sourceRev: "ad28a814",
+      sourceRev: "a1e5b534",
       heading: "Quem mais vê os seus dados",
       body: (
         <>
@@ -496,6 +546,12 @@ export const privacyPtBr: LegalDocument = {
             <li>
               <strong>DiceBear</strong> — as imagens de avatar prontas em{" "}
               <span lang="en">Settings</span> carregam do serviço deles.
+            </li>
+            <li>
+              <strong>Google Ads</strong> carrega a tag de conversão em toda
+              página do pqp.gg, então o Google vê o seu endereço IP e qual
+              página você abriu, e é avisado uma vez quando uma conta é criada.
+              Está detalhado em &quot;Medição de publicidade&quot; acima.
             </li>
           </ul>
           <p>
@@ -867,14 +923,17 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "self-hosted",
-      sourceRev: "60e0fd63",
+      sourceRev: "1eb5616f",
       heading: "Instâncias self-hosted",
       body: (
         <p>
           Se você roda o pqp por conta própria, você escolhe o banco de dados, a
           aplicação do Clerk e a hospedagem, e você é o controlador dos seus
-          usuários. O pqp.gg não recebe os dados dos seus usuários. Conte para
-          os seus membros como você lida com as informações deles.
+          usuários. O pqp.gg não recebe os dados dos seus usuários. A nossa
+          publicidade também não chega na sua cópia: a tag de conversão do
+          Google Ads descrita acima é adicionada só na compilação do pqp.gg, então
+          uma instância self-hosted sai sem ela. Conte para os seus membros como
+          você lida com as informações deles.
         </p>
       ),
     },

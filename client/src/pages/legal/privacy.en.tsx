@@ -11,7 +11,7 @@ export const privacyEn: LegalDocument = {
   description:
     "How pqp.gg handles personal data: what we collect, our legal bases, where it is processed, retention, and your rights under the LGPD and UK data protection law.",
   heading: "Privacy Policy",
-  updated: "21 August 2026",
+  updated: "25 August 2026",
   sections: [
     {
       id: "intro",
@@ -230,6 +230,40 @@ export const privacyEn: LegalDocument = {
             neither costs you anything to be measured by. If that changes, this
             paragraph changes with it.
           </p>
+
+          <h3>Advertising measurement</h3>
+          <p>
+            pqp.gg buys a small amount of advertising, and it carries{" "}
+            <strong>Google Ads conversion tracking</strong> so we can tell
+            whether an ad produced an account and not just a click. This is the
+            one thing on the site that is not cookieless, and we would rather
+            say so plainly than bury it. Google&apos;s tag loads on every page of
+            pqp.gg, and it sets first-party cookies on the pqp.gg domain (their
+            names begin <code>_gcl_</code>) to remember that your visit came
+            from an ad.
+          </p>
+          <p>
+            One event is sent to Google, once: when an account is created, the
+            tag reports that a sign-up happened. It carries no name, no email,
+            no user id and nothing you typed. We do not upload account data to
+            Google, we have not switched on enhanced conversions or any
+            customer-data matching, and we run no remarketing or audience lists.
+            Signing in again sends nothing, and neither does anything you do
+            inside the app.
+          </p>
+          <p>
+            Google is a third party here and handles what it receives, including
+            your IP address, under its own terms. Blocking the tag with a
+            browser extension, or blocking cookies for pqp.gg, breaks nothing:
+            the product works exactly the same and the sign-up simply goes
+            uncounted.
+          </p>
+          <p>
+            This is true of the hosted pqp.gg and of nothing else. The tag is
+            added at build time, and only when the build is given our
+            advertising account id, so a self-hosted copy of pqp contacts no
+            Google advertising server and sets no Google cookie.
+          </p>
         </>
       ),
     },
@@ -239,17 +273,21 @@ export const privacyEn: LegalDocument = {
       body: (
         <ul>
           <li>
-            <strong>No tracking, and no profile of you.</strong> There is no
-            advertising pixel, no session recorder, and no error-reporting
-            service. Nothing follows you between sites, and nothing we hold
-            builds a picture of you as a person. We do use one
-            privacy-preserving analytics tool, described under &quot;What we
-            collect&quot; above — it counts visits, it does not identify
-            visitors.
+            <strong>No profile of you.</strong> There is no session recorder and
+            no error-reporting service, and nothing we hold builds a picture of
+            you as a person. The two analytics tools described under &quot;What
+            we collect&quot; above count visits and cannot identify visitors.
+            The single exception to &quot;nothing follows you between sites&quot;
+            is the Google Ads conversion tag, described in the same place: its
+            whole job is to connect one ad click to one sign-up, and it is the
+            only thing on pqp.gg that a third party can read.
           </li>
           <li>
-            <strong>No advertising and no selling data.</strong> We do not build
-            advertising profiles and we do not sell or rent personal data.
+            <strong>No advertising profiles, and no selling data.</strong> We do
+            advertise, and we count how many sign-ups the advertising produced,
+            which is the conversion tag above. We build no advertising profiles,
+            run no remarketing or audience lists, and do not sell or rent
+            personal data.
           </li>
           <li>
             <strong>No device fingerprinting and no geolocation.</strong> We do
@@ -380,6 +418,16 @@ export const privacyEn: LegalDocument = {
               </em>
             </li>
             <li>
+              <strong>Measuring our advertising.</strong> Counting how many
+              sign-ups an ad campaign produced, through the Google Ads
+              conversion tag described above. It counts an event; it does not
+              identify you to us or to Google.{" "}
+              <em>
+                (Basis: legitimate interest, art. 7, IX. Object by blocking the
+                tag in your browser, or by writing to us.)
+              </em>
+            </li>
+            <li>
               <strong>Anything optional you switch on</strong>, like desktop
               notifications, which your browser asks you to allow separately.{" "}
               <em>
@@ -389,7 +437,7 @@ export const privacyEn: LegalDocument = {
             </li>
           </ul>
           <p>
-            Under UK law the same seven activities rest on the equivalent bases
+            Under UK law the same eight activities rest on the equivalent bases
             in UK GDPR art. 6 — contract, legitimate interests, legal
             obligation, vital interests and consent, in that order. The
             processing is the same either way; only the article numbers change.
@@ -453,6 +501,12 @@ export const privacyEn: LegalDocument = {
             <li>
               <strong>DiceBear</strong> — the preset avatar images in Settings
               load from their service.
+            </li>
+            <li>
+              <strong>Google Ads</strong> loads its conversion tag on every page
+              of pqp.gg, so Google sees your IP address and which page you
+              loaded, and it is told once when an account is created. Set out in
+              full under &quot;Advertising measurement&quot; above.
             </li>
           </ul>
           <p>
@@ -806,8 +860,11 @@ export const privacyEn: LegalDocument = {
         <p>
           If you run pqp yourself, you choose the database, the Clerk
           application, and the hosting, and you are the controller for your
-          users. pqp.gg does not receive your users&apos; data. Tell your
-          members how you handle their information.
+          users. pqp.gg does not receive your users&apos; data. Our advertising
+          does not reach your copy either: the Google Ads conversion tag
+          described above is added to the pqp.gg build alone, so a self-hosted
+          instance ships without it. Tell your members how you handle their
+          information.
         </p>
       ),
     },
