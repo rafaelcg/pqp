@@ -86,7 +86,7 @@ export function ServerIdentitySection({
             })}
             hasImage={!!server.iconUrl}
             preview={
-              <span className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-ink-3 font-display text-lg font-bold text-paper">
+              <span className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-ink-3 font-display text-lg font-bold text-paper">
                 <ServerIcon name={server.name} iconUrl={server.iconUrl} />
               </span>
             }

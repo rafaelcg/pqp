@@ -103,19 +103,26 @@ describe("centerCropRectForAspect", () => {
   const BANNER = SERVER_BANNER_WIDTH / SERVER_BANNER_HEIGHT;
 
   it("takes the whole image when it is already the target shape", () => {
-    expect(centerCropRectForAspect(1024, 360, BANNER)).toEqual({
+    expect(
+      centerCropRectForAspect(
+        SERVER_BANNER_WIDTH,
+        SERVER_BANNER_HEIGHT,
+        BANNER,
+      ),
+    ).toEqual({
       x: 0,
       y: 0,
-      width: 1024,
-      height: 360,
+      width: SERVER_BANNER_WIDTH,
+      height: SERVER_BANNER_HEIGHT,
     });
   });
 
   it("crops the sides of an image wider than the target", () => {
-    // 4000×360 is far wider than 2.84:1, so the height survives untouched.
-    const crop = centerCropRectForAspect(4000, 360, BANNER);
-    expect(crop.height).toBe(360);
-    expect(crop.width).toBe(1024);
+    // 4000×480 is far wider than the channel-column band, so the height
+    // survives untouched.
+    const crop = centerCropRectForAspect(4000, SERVER_BANNER_HEIGHT, BANNER);
+    expect(crop.height).toBe(SERVER_BANNER_HEIGHT);
+    expect(crop.width).toBe(SERVER_BANNER_WIDTH);
     expect(crop.x).toBe(1488);
     expect(crop.y).toBe(0);
   });
@@ -125,9 +132,9 @@ describe("centerCropRectForAspect", () => {
     // the wrong way round and a phone photo becomes a strip of forehead.
     const crop = centerCropRectForAspect(1080, 1920, BANNER);
     expect(crop.width).toBe(1080);
-    expect(crop.height).toBe(380);
+    expect(crop.height).toBe(506);
     expect(crop.x).toBe(0);
-    expect(crop.y).toBe(770);
+    expect(crop.y).toBe(707);
   });
 
   it("degenerates to centerCropRect at an aspect of 1", () => {

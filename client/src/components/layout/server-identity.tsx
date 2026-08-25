@@ -1,3 +1,4 @@
+import { SERVER_BANNER_HEIGHT, SERVER_BANNER_WIDTH } from "@pqp/shared";
 import { useState } from "react";
 import { resolveUploadedImageUrl } from "@/lib/avatar";
 import { cn } from "@/lib/utils";
@@ -9,7 +10,7 @@ import { cn } from "@/lib/utils";
  * identically: a picture set by a server owner, rendered to everyone who is in
  * the room, from a URL nobody else reviewed. A broken or slow-to-fail one has
  * to land on the same two letters the server had before it uploaded anything —
- * never a broken-image icon in a 72px rail, never an empty 120px band above the
+ * never a broken-image icon in a 72px rail, never an empty banner band above the
  * channel list. That is the same rule `ChannelIcon` follows, for the same
  * reason, and it is why both components below hold a `failedUrl` rather than
  * trusting the load.
@@ -115,14 +116,17 @@ export function ServerBanner({
   return (
     <div
       data-server-banner=""
-      className="relative h-[120px] shrink-0 overflow-hidden border-b border-ink-4/60 bg-ink-3"
+      className="relative w-full shrink-0 overflow-hidden border-b border-ink-4/60 bg-ink-3"
+      style={{
+        aspectRatio: `${SERVER_BANNER_WIDTH} / ${SERVER_BANNER_HEIGHT}`,
+      }}
     >
       <img
         src={resolved}
         alt=""
         loading="lazy"
         referrerPolicy="no-referrer"
-        className="h-full w-full object-cover"
+        className="h-full w-full object-cover object-center"
         onError={() => setFailedUrl(resolved)}
       />
       <span

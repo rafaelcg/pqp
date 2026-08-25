@@ -235,9 +235,9 @@ export function ServerRail({
               onClick={() => onSelectServer(server.id)}
               title={server.name}
               className={cn(
-                "relative flex h-12 w-12 items-center justify-center rounded-2xl font-display text-sm font-bold transition-all duration-200 hover:rounded-xl",
+                "relative flex h-12 w-12 items-center justify-center rounded-xl font-display text-sm font-bold transition-colors",
                 selected
-                  ? "rounded-xl bg-signal text-ink"
+                  ? "bg-signal text-ink"
                   : "bg-ink-3 text-paper hover:bg-signal hover:text-ink",
                 muted && !selected && "opacity-50",
               )}
@@ -247,8 +247,8 @@ export function ServerRail({
               )}
               {/* The clip lives on this span rather than on the button so the
                   selection pip, which is drawn outside the button's own box,
-                  survives. `rounded-[inherit]` keeps the icon following the
-                  squircle-to-rounded-square animation the button plays. */}
+                  survives. `rounded-[inherit]` keeps the photo in the same
+                  rounded square the empty monogram uses. */}
               <span className="flex h-full w-full items-center justify-center overflow-hidden rounded-[inherit]">
                 <ServerIcon name={server.name} iconUrl={server.iconUrl} />
               </span>
