@@ -163,12 +163,82 @@ const lightBlock = readTokens(css, /:root\[data-theme="light"\][^{]*\{([\s\S]*?)
 if (Object.keys(lightBlock).length > 0) {
   themes.light = { ...themes.dark, ...lightBlock };
 }
+for (const appearance of ["harmony", "hearth", "night"]) {
+  const darkSkin = readTokens(
+    css,
+    new RegExp(
+      `:root\\[data-appearance="${appearance}"\\]\\s*\\{([\\s\\S]*?)\\n\\}`,
+    ),
+  );
+  const lightSkin = readTokens(
+    css,
+    new RegExp(
+      `:root\\[data-appearance="${appearance}"\\]\\[data-theme="light"\\]\\s*\\{([\\s\\S]*?)\\n\\}`,
+    ),
+  );
+  if (Object.keys(darkSkin).length > 0) {
+    themes[`${appearance}-dark`] = { ...themes.dark, ...darkSkin };
+  }
+  if (Object.keys(lightSkin).length > 0) {
+    themes[`${appearance}-light`] = {
+      ...themes.dark,
+      ...lightBlock,
+      ...darkSkin,
+      ...lightSkin,
+    };
+  }
+}
+
 const contrastBlock = readTokens(
   css,
-  /:root\[data-theme="high-contrast"\][^{]*\{([\s\S]*?)\n\}/,
+  /:root\[data-contrast="more"\]\s*\{([\s\S]*?)\n\}/,
+);
+const contrastLightBlock = readTokens(
+  css,
+  /:root\[data-theme="light"\]\[data-contrast="more"\]\s*\{([\s\S]*?)\n\}/,
 );
 if (Object.keys(contrastBlock).length > 0) {
-  themes["high-contrast"] = { ...themes.dark, ...contrastBlock };
+  for (const [name, tokens] of Object.entries({ ...themes })) {
+    const isLight = name.includes("light");
+    themes[`${name}-contrast`] = {
+      ...tokens,
+      ...contrastBlock,
+      ...(isLight ? contrastLightBlock : {}),
+    };
+  }
+}
+
+const accentBlock = readTokens(
+  css,
+  /:root\[data-accent="custom"\]\s*\{([\s\S]*?)\n\}/,
+);
+const accentLightBlock = readTokens(
+  css,
+  /:root\[data-theme="light"\]\[data-accent="custom"\]\s*\{([\s\S]*?)\n\}/,
+);
+function resolveAccentTokens(tokens, hue) {
+  const resolved = {};
+  for (const [name, value] of Object.entries(tokens)) {
+    resolved[name] = value.replaceAll("var(--accent-hue)", String(hue));
+  }
+  return resolved;
+}
+if (Object.keys(accentBlock).length > 0) {
+  const accentBases = ["dark", "light", "night-dark", "harmony-light"];
+  for (const hue of [0, 90, 125, 210, 255, 330]) {
+    for (const name of accentBases) {
+      const tokens = themes[name];
+      if (!tokens) {
+        continue;
+      }
+      const isLight = name.includes("light");
+      themes[`${name}-accent-${hue}`] = {
+        ...tokens,
+        ...resolveAccentTokens(accentBlock, hue),
+        ...(isLight ? resolveAccentTokens(accentLightBlock, hue) : {}),
+      };
+    }
+  }
 }
 
 const contrast = Object.entries(themes).flatMap(([name, tokens]) =>

@@ -47,6 +47,39 @@ export const usernameSchema = z
 export const themePreferenceSchema = z.enum(["light", "dark", "system"]);
 export type ThemePreference = z.infer<typeof themePreferenceSchema>;
 
+/**
+ * Named token skins, independent of light/dark/system. `signal` is the
+ * default pqp look. `harmony` and `hearth` take the mood of other chat apps
+ * without using those apps' names or brand colours. `night` is a near-black
+ * skin for dark, not a clone of another product's AMOLED theme.
+ *
+ * `guild` and `accord` were earlier ids for harmony. Accept them on read so
+ * a stored pick does not silently fall back to signal.
+ */
+export const appearancePreferenceSchema = z.preprocess(
+  (value) =>
+    value === "guild" || value === "accord" ? "harmony" : value,
+  z.enum(["signal", "harmony", "hearth", "night"]),
+);
+export type AppearancePreference = z.infer<typeof appearancePreferenceSchema>;
+
+/**
+ * Accessibility contrast, independent of appearance and of light/dark.
+ * `system` follows `prefers-contrast: more`.
+ */
+export const contrastPreferenceSchema = z.enum(["default", "more", "system"]);
+export type ContrastPreference = z.infer<typeof contrastPreferenceSchema>;
+
+/**
+ * Accent hue on top of the named look. `default` keeps the appearance's own
+ * accent. A number is degrees on the OKLCH hue circle.
+ */
+export const accentHuePreferenceSchema = z.union([
+  z.literal("default"),
+  z.number().int().min(0).max(360),
+]);
+export type AccentHuePreference = z.infer<typeof accentHuePreferenceSchema>;
+
 export const notificationLevelSchema = z.enum(["all", "mentions", "none"]);
 export type NotificationLevel = z.infer<typeof notificationLevelSchema>;
 
@@ -161,6 +194,9 @@ export const userPreferencesSchema = z.object({
    */
   status: manualStatusSchema.optional(),
   theme: themePreferenceSchema.optional(),
+  appearance: appearancePreferenceSchema.optional(),
+  contrast: contrastPreferenceSchema.optional(),
+  accentHue: accentHuePreferenceSchema.optional(),
   muteOnJoin: z.boolean().optional(),
   compactPeers: z.boolean().optional(),
   /** Mic gain, where 1 is unity and 2 is the boost ceiling the UI exposes. */

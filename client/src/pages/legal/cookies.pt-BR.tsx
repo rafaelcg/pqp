@@ -5,7 +5,8 @@ import type { LegalDocument } from "./document";
  * Aviso de cookies em português do Brasil. Tradução de `cookies.en.tsx`; veja
  * as notas de registro e de terminologia em `terms.pt-BR.tsx`.
  *
- * Os nomes das chaves de armazenamento (`pqp-theme`, `pqp:locale`…) e os
+ * Os nomes das chaves de armazenamento (`pqp-theme`, `pqp-appearance`,
+ * `pqp-accent-hue`, `pqp-contrast`, `pqp:locale`…) e os
  * domínios são identificadores técnicos e ficam idênticos ao inglês — traduzir
  * um deles tornaria a lista inútil para quem for conferir no navegador.
  */
@@ -16,7 +17,7 @@ export const cookiesPtBr: LegalDocument = {
   description:
     "Exatamente quais cookies, chaves de armazenamento local e caches o pqp.gg coloca no seu dispositivo, e quais terceiros o seu navegador contata.",
   heading: "Aviso de cookies",
-  updated: "21 de agosto de 2026",
+  updated: "25 de agosto de 2026",
   sections: [
     {
       id: "intro",
@@ -60,7 +61,7 @@ export const cookiesPtBr: LegalDocument = {
     },
     {
       id: "local-storage",
-      sourceRev: "9475cc28",
+      sourceRev: "6fa647e0",
       heading: "Armazenamento local",
       body: (
         <>
@@ -72,6 +73,18 @@ export const cookiesPtBr: LegalDocument = {
           <ul>
             <li>
               <code>pqp-theme</code> — claro, escuro ou seguir o sistema.
+            </li>
+            <li>
+              <code>pqp-appearance</code> — Sinal, Harmonia, Lareira ou Noite.
+              O visual escolhido, separado do claro e do escuro.
+            </li>
+            <li>
+              <code>pqp-accent-hue</code> — uma cor de destaque escolhida, ou
+              a do visual.
+            </li>
+            <li>
+              <code>pqp-contrast</code> — padrão, alto, ou seguir o contraste
+              do sistema.
             </li>
             <li>
               <code>pqp:locale</code> — o idioma que você escolheu (inglês ou

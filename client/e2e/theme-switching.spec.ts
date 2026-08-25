@@ -77,7 +77,9 @@ test.describe("stage 2 — light and system", () => {
     // The theme moved into its own section when settings was sectioned.
     await page.getByRole("tab", { name: "Appearance & Language" }).click();
 
-    const light = page.getByRole("radio", { name: /light/i });
+    const light = page
+      .getByRole("radiogroup", { name: /brightness|claridade/i })
+      .getByRole("radio", { name: /light|claro/i });
     await expect(light).toBeVisible();
     await light.click();
 
@@ -200,6 +202,126 @@ test.describe("stage 2 — light and system", () => {
     }
   });
 
+  test("choosing an appearance applies it and survives a reload", async ({
+    page,
+  }) => {
+    await openApp(page);
+    await page.getByRole("button", { name: "Open settings" }).click();
+    await page.getByRole("tab", { name: "Appearance & Language" }).click();
+
+    const harmony = page.getByRole("radio", { name: /harmony|harmonia/i });
+    await expect(harmony).toBeVisible();
+    await harmony.click();
+
+    await expect
+      .poll(() =>
+        page.evaluate(() => document.documentElement.dataset.appearance ?? ""),
+      )
+      .toBe("harmony");
+
+    const harmonyAccent = await cssVar(page, "--color-accent");
+    await page.evaluate(() => {
+      document.documentElement.dataset.appearance = "signal";
+    });
+    const signalAccent = await cssVar(page, "--color-accent");
+    expect(harmonyAccent).not.toBe(signalAccent);
+
+    await page.reload();
+    await expect(page.getByText("Dev auth bypass")).toBeVisible({ timeout: 20_000 });
+    expect(
+      await page.evaluate(() => document.documentElement.dataset.appearance ?? ""),
+    ).toBe("harmony");
+  });
+
+  test("choosing night applies it and survives a reload", async ({ page }) => {
+    await openApp(page);
+    await page.getByRole("button", { name: "Open settings" }).click();
+    await page.getByRole("tab", { name: "Appearance & Language" }).click();
+
+    const night = page.getByRole("radio", { name: /night|noite/i });
+    await expect(night).toBeVisible();
+    await night.click();
+
+    await expect
+      .poll(() =>
+        page.evaluate(() => document.documentElement.dataset.appearance ?? ""),
+      )
+      .toBe("night");
+
+    const nightSurface = await cssVar(page, "--color-surface-0");
+    expect(nightSurface).toMatch(/oklch\(\s*0\s+0\s+0\s*\)/);
+
+    expect(await themeAttr(page)).toBe("dark");
+    const light = page
+      .getByRole("radiogroup", { name: /brightness|claridade/i })
+      .getByRole("radio", { name: /light|claro/i });
+    await expect(light).toBeDisabled();
+
+    await page.reload();
+    await expect(page.getByText("Dev auth bypass")).toBeVisible({ timeout: 20_000 });
+    expect(
+      await page.evaluate(() => document.documentElement.dataset.appearance ?? ""),
+    ).toBe("night");
+    expect(await themeAttr(page)).toBe("dark");
+
+    await page.getByRole("button", { name: "Open settings" }).click();
+    await page.getByRole("tab", { name: "Appearance & Language" }).click();
+    await expect(
+      page
+        .getByRole("radiogroup", { name: /brightness|claridade/i })
+        .getByRole("radio", { name: /light|claro/i }),
+    ).toBeDisabled();
+  });
+
+  test("choosing an accent hue applies it and survives a reload", async ({
+    page,
+  }) => {
+    await openApp(page);
+    await page.getByRole("button", { name: "Open settings" }).click();
+    await page.getByRole("tab", { name: "Appearance & Language" }).click();
+
+    await page.getByRole("button", { name: /hue 210|matiz 210/i }).click();
+
+    await expect
+      .poll(() =>
+        page.evaluate(() => document.documentElement.dataset.accent ?? ""),
+      )
+      .toBe("custom");
+    expect(
+      await page.evaluate(() =>
+        document.documentElement.style.getPropertyValue("--accent-hue"),
+      ),
+    ).toBe("210");
+
+    const customAccent = await cssVar(page, "--color-accent");
+    await page.evaluate(() => {
+      delete document.documentElement.dataset.accent;
+      document.documentElement.style.removeProperty("--accent-hue");
+    });
+    const lookAccent = await cssVar(page, "--color-accent");
+    expect(customAccent).not.toBe(lookAccent);
+
+    await page.reload();
+    await expect(page.getByText("Dev auth bypass")).toBeVisible({ timeout: 20_000 });
+    expect(
+      await page.evaluate(() => document.documentElement.dataset.accent ?? ""),
+    ).toBe("custom");
+  });
+
+  test("a stored appearance is applied before first paint", async ({ page }) => {
+    await ensureServer();
+    await resetPreferences();
+    await page.addInitScript(() => {
+      window.localStorage.setItem("pqp-appearance", "hearth");
+    });
+
+    await page.goto("/app", { waitUntil: "commit" });
+    await page.waitForFunction(() => document.readyState !== "loading");
+    expect(
+      await page.evaluate(() => document.documentElement.dataset.appearance ?? ""),
+    ).toBe("hearth");
+  });
+
   test("switching theme does not throw", async ({ page }) => {
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(String(error)));
@@ -212,10 +334,70 @@ test.describe("stage 2 — light and system", () => {
     await openApp(page);
     await page.getByRole("button", { name: "Open settings" }).click();
     await page.getByRole("tab", { name: "Appearance & Language" }).click();
-    await page.getByRole("radio", { name: /light/i }).click();
-    await page.getByRole("radio", { name: /dark/i }).click();
-    await page.getByRole("radio", { name: /system/i }).click();
+    const theme = page.getByRole("radiogroup", { name: /brightness|claridade/i });
+    await theme.getByRole("radio", { name: /light|claro/i }).click();
+    await theme.getByRole("radio", { name: /dark|escuro/i }).click();
+    await theme.getByRole("radio", { name: /system|sistema/i }).click();
 
     expect(errors).toEqual([]);
+  });
+
+  test("choosing high contrast applies it and survives a reload", async ({
+    page,
+  }) => {
+    await openApp(page);
+    await page.getByRole("button", { name: "Open settings" }).click();
+    await page.getByRole("tab", { name: "Appearance & Language" }).click();
+
+    const high = page
+      .getByRole("radiogroup", { name: /contrast|contraste/i })
+      .getByRole("radio", { name: /high|alto/i });
+    await expect(high).toBeVisible();
+    await high.click();
+
+    await expect
+      .poll(() =>
+        page.evaluate(() => document.documentElement.dataset.contrast ?? ""),
+      )
+      .toBe("more");
+
+    await page.reload();
+    await expect(page.getByText("Dev auth bypass")).toBeVisible({ timeout: 20_000 });
+    expect(
+      await page.evaluate(() => document.documentElement.dataset.contrast ?? ""),
+    ).toBe("more");
+  });
+
+  test("a stored accent hue is applied before first paint", async ({ page }) => {
+    await ensureServer();
+    await resetPreferences();
+    await page.addInitScript(() => {
+      window.localStorage.setItem("pqp-accent-hue", "40");
+    });
+
+    await page.goto("/app", { waitUntil: "commit" });
+    await page.waitForFunction(() => document.readyState !== "loading");
+    expect(
+      await page.evaluate(() => document.documentElement.dataset.accent ?? ""),
+    ).toBe("custom");
+    expect(
+      await page.evaluate(() =>
+        document.documentElement.style.getPropertyValue("--accent-hue"),
+      ),
+    ).toBe("40");
+  });
+
+  test("a stored contrast is applied before first paint", async ({ page }) => {
+    await ensureServer();
+    await resetPreferences();
+    await page.addInitScript(() => {
+      window.localStorage.setItem("pqp-contrast", "more");
+    });
+
+    await page.goto("/app", { waitUntil: "commit" });
+    await page.waitForFunction(() => document.readyState !== "loading");
+    expect(
+      await page.evaluate(() => document.documentElement.dataset.contrast ?? ""),
+    ).toBe("more");
   });
 });

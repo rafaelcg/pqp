@@ -536,7 +536,7 @@ STAGE 2 — Light + System (3-4 days). `:root[data-theme="light"]` override bloc
 
 STAGE 3 — server-side preferences (~2 days). This absorbs the separate "settings don't follow the user" gap: `CREATE TABLE IF NOT EXISTS user_preferences (user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE, settings JSONB NOT NULL DEFAULT '{}'::jsonb, updated_at TIMESTAMPTZ)` validated by a `userPreferencesSchema` in packages/shared/src/api.ts (theme, muteOnJoin, compactPeers, inputVolume, outputVolume, notification prefs) — a column per preference means a migration per preference and this set will churn. `inputDeviceId`/`outputDeviceId` MUST stay local: a deviceId from another machine is meaningless and `getUserMedia({audio:{deviceId:{exact}}})` (settings-modal.tsx:151) throws on it. Fold reads into `toPublicUser` (server/src/services/users.ts:29) so `GET /api/me` carries them at zero extra round-trips; add `PATCH /api/me/preferences` (upsert, shallow merge, last-write-wins) near api/index.ts:210, debounced ~500ms since `patchLocal` fires on every slider tick. Server wins on read, user action wins on write — never reconcile-and-write on boot or a stale tab clobbers the phone.
 
-High-contrast preset (a 22-line block once the token layer exists, mapped to `prefers-contrast: more`) is the one stage-4 item worth pulling forward, since it has a real accessibility need behind it.
+High contrast shipped as a third axis (`data-contrast="more"`, preference `default | more | system`). It is not a fourth appearance and not a Teams clone. See [`THEMING.md`](./THEMING.md).
 
 #### 16. Keyboard access to message actions and a screen-reader-visible message log
 

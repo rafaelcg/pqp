@@ -11,7 +11,7 @@ export const cookiesEn: LegalDocument = {
   description:
     "Exactly which cookies, local storage keys and caches pqp.gg puts on your device, and which third parties your browser contacts.",
   heading: "Cookie notice",
-  updated: "21 August 2026",
+  updated: "25 August 2026",
   sections: [
     {
       id: "intro",
@@ -62,6 +62,18 @@ export const cookiesEn: LegalDocument = {
           <ul>
             <li>
               <code>pqp-theme</code> — light, dark, or follow-the-system.
+            </li>
+            <li>
+              <code>pqp-appearance</code> — Signal, Harmony, Hearth, or Night.
+              The named look, separate from light and dark.
+            </li>
+            <li>
+              <code>pqp-accent-hue</code> — a custom accent colour, or the
+              look's default.
+            </li>
+            <li>
+              <code>pqp-contrast</code> — default, high, or follow the system
+              contrast setting.
             </li>
             <li>
               <code>pqp:locale</code> — your chosen language (English or

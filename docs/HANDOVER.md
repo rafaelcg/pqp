@@ -52,6 +52,7 @@ Detail and “still open” list: [`PLAN_STATUS.md`](./PLAN_STATUS.md).
 
 ## Recent shipped work (context for next agents)
 
+- **Appearance presets (2026-08-25):** Settings → Appearance picks Signal (default), Harmony, Hearth, or Night. Second axis beside light/dark/system (`data-appearance`, `pqp-appearance`, synced on the account). Night is dark-only: it pins brightness to dark and turns Light / System off. Token skins only; no layout clone and no other product's hex values. High contrast is a third axis (`data-contrast="more"`, `pqp-contrast`, default `system` follows `prefers-contrast: more`). Accent hue is a fourth axis (`data-accent="custom"`, `pqp-accent-hue`, `default` or 0–360). See [`THEMING.md`](./THEMING.md).
 - **i18n (en + pt-BR):** i18next core, JSON catalogues, lazy Portuguese, Electron menus. See [`I18N.md`](./I18N.md).
 - **In-app sounds (2026-08-23, demo on `feat/in-app-sounds`):** cinematic UI SFX (CC0): mention = `mention`, voice join/leave = `select`/`deselect`. No ping for ordinary messages. Incoming/outgoing call rings are still synthesised dual-tone. OS banners stay silent. Settings → Notifications has a Sounds block. DND still mutes mention. Your own join/leave play on the click, not after mic/welcome; the mic pipeline waits until that cue finishes (or 750ms) so opening capture cannot cut the tail. One sample at a time so join cannot stack on leave or the outgoing ring. Mentions also play in the open channel. Other people joining/leaving the lobby you are in still play.
 - **More than one person can share a screen (2026-08-23):** the exclusive presenter lock is gone. Caps are **2 concurrent shares on mesh, 4 on LiveKit** (`SCREEN_SHARE_LIMIT`). The web layout auto-shows every share (split on a wide window for two; focus + chips otherwise). Screen audio follows hook state: one share is that share, two are both, three-plus is the focused share only. Old clients that still take the first `sharingScreen` roster entry see only that first sharer.
@@ -170,7 +171,7 @@ secret; they would ship in the public bundle.
 | [`billing.md`](./billing.md) | Future Plus/Pro |
 | [`PLAN_STATUS.md`](./PLAN_STATUS.md) | Phase checklist |
 | [`DISCORD_GAPS.md`](./DISCORD_GAPS.md) | Ranked feature gaps vs Discord, with implementation sketches |
-| [`THEMING.md`](./THEMING.md) | Theming scope: role tokens, light mode, synced preferences |
+| [`THEMING.md`](./THEMING.md) | Theming scope: role tokens, light mode, synced preferences, named appearance presets, high contrast, accent hue |
 | [`DECISIONS.md`](./DECISIONS.md) | Choices that shape work not yet built (attachment storage, DM model) |
 
 ## Hardening + product pass (2026-07-31)

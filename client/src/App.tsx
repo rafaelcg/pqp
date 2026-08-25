@@ -186,6 +186,9 @@ import { useMemberSidebar } from "@/hooks/use-member-sidebar";
 import { useChannelNotifications } from "@/hooks/use-notifications";
 import { useUserStatus } from "@/hooks/use-status";
 import { createRealtimeTransport, type RealtimeStatus } from "@/lib/realtime";
+import { adoptAccentHuePreference } from "@/lib/accent";
+import { adoptAppearancePreference } from "@/lib/appearance";
+import { adoptContrastPreference } from "@/lib/contrast";
 import { adoptThemePreference } from "@/lib/theme";
 import { isMeshForced } from "@/lib/voice-backend";
 import { cn } from "@/lib/utils";
@@ -1117,8 +1120,19 @@ function MainAppContent({
         // them. Nothing is sent back: a tab that has been open for hours would
         // otherwise push its stale values over a newer choice made elsewhere.
         // Persisted locally so the next cold start renders them without a wait.
-        if (me.preferences?.theme) {
+        if (me.preferences?.appearance) {
+          adoptAppearancePreference(me.preferences.appearance);
+        }
+        if (me.preferences?.appearance === "night") {
+          adoptThemePreference("dark");
+        } else if (me.preferences?.theme) {
           adoptThemePreference(me.preferences.theme);
+        }
+        if (me.preferences?.contrast) {
+          adoptContrastPreference(me.preferences.contrast);
+        }
+        if (me.preferences?.accentHue !== undefined) {
+          adoptAccentHuePreference(me.preferences.accentHue);
         }
         const merged = applyRemotePreferences(
           loadLocalSettings(),
