@@ -37,6 +37,23 @@ enum RealtimeEvent: Sendable {
     /// at all — so somebody holding their phone could be sitting on a request
     /// indefinitely and see nothing.
     case friendActivity(kind: FriendActivityKind)
+    /// What you are allowed to see on `serverId` changed, so re-read it.
+    ///
+    /// Content-free on purpose, exactly like `friendActivity`: it names no
+    /// channel and no bit, because the answer is whatever
+    /// `GET /api/servers/:id/channels` gives back, and that endpoint already
+    /// filters by VIEW_CHANNEL in the database. Sent to every member of the
+    /// server, not to viewers of a channel, because losing access is precisely
+    /// the case where you are no longer in the audience of the thing that
+    /// changed.
+    ///
+    /// WHY IT MATTERS ON A PHONE. The server evicts a socket from a channel it
+    /// may no longer see, so no content leaks either way. What leaks is the
+    /// *name*: without this frame the channel sits in the sidebar until the app
+    /// is relaunched, and tapping it opens a room the server will not talk
+    /// about. The web client has refetched on this frame since roles shipped;
+    /// this app dropped it on the floor as `.other`.
+    case permissionsUpdate(serverId: String, version: Int?)
 
     // Voice signalling. The server is a pure relay for offer/answer/candidate;
     // everything else here is room membership.
@@ -569,6 +586,10 @@ actor RealtimeClient {
         let candidate: IceCandidatePayload?
         let limit: Int?
         let transport: String?
+        /// `permissions-update` only. Optional because the frame is advisory:
+        /// the client refetches either way, and a missing version just means
+        /// "refetch anyway" (`shouldApplyPermissionsVersion` on the web).
+        let version: Int?
         // Conversation calls
         let conversationId: String?
         let kind: String?
@@ -581,7 +602,7 @@ actor RealtimeClient {
             case type, nonce, message, channelId, messageId, emoji, userId
             case displayName, added, users, serverId, mention
             case peerId, voiceChannelId, peers, participants, peer, sdp, from
-            case candidate, limit, transport
+            case candidate, limit, transport, version
             case conversationId, kind, caller, reason, thread
             // `self` is a Swift keyword, so the wire key is remapped.
             case selfPeer = "self"
@@ -689,6 +710,9 @@ actor RealtimeClient {
             guard let raw = envelope.kind, let kind = FriendActivityKind(rawValue: raw)
             else { return }
             event = .friendActivity(kind: kind)
+        case "permissions-update":
+            guard let serverId = envelope.serverId else { return }
+            event = .permissionsUpdate(serverId: serverId, version: envelope.version)
 
         case "welcome":
             guard let peerId = envelope.peerId,

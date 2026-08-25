@@ -24,7 +24,7 @@ That is a **demo account inside pqp** (Clerk email + password) so Apple’s
 reviewers can open the app. It is **not**:
 
 - your Apple Developer login
-- Sign in with Apple (only required if you offer Google/etc. as a primary login)
+- Sign in with Apple (which pqp does offer, and does need: see below)
 
 ### Create the demo account (Rafael)
 
@@ -69,10 +69,42 @@ VITE_TESTFLIGHT_URL=https://testflight.apple.com/join/XXXXXXXX
 
 Redeploy the web app (`Deploy Web` after CI on `main`, or `workflow_dispatch`).
 
-## Sign in with Apple?
+## Sign in with Apple
 
-Only if Clerk shows **Google (or another listed social login)** as a way to create
-the primary account. Email/password-only → SIWA not required for review.
+**Settled: it is required, and it is offered.** The question this section used to
+leave open is answered by the live Clerk instance. `clerk.pqp.gg` has both
+`oauth_google` and `oauth_apple` enabled and authenticatable, which you can read
+back at any time:
+
+```bash
+curl -s 'https://clerk.pqp.gg/v1/environment?__clerk_api_version=2021-02-05&_clerk_js_version=5.0.0' \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["user_settings"]["social"])'
+```
+
+Google being enabled is what makes Sign in with Apple mandatory under Guideline
+4.8. Apple being enabled is what satisfies it: the app's sign-in sheet is Clerk's
+`AuthView`, which renders one button per enabled provider, so both appear with no
+code of ours involved.
+
+**Build 12 and earlier shipped that button broken.** Clerk's iOS SDK takes the
+native path for Apple (`ASAuthorizationAppleIDProvider`), and the app carried no
+`com.apple.developer.applesignin` entitlement, so the request fails. Google was
+fine, because it goes through `ASWebAuthenticationSession`, which needs no
+entitlement. The entitlement is now declared in `ios/project.yml`.
+
+Before the next archive, on the developer portal:
+
+1. App ID `gg.pqp.app` → enable the **Sign in with Apple** capability.
+2. Re-mint the **`pqp appstore`** provisioning profile so it carries it.
+3. Otherwise Release signing fails with "provisioning profile doesn't include the
+   com.apple.developer.applesignin entitlement". Debug and simulator builds do
+   not sign and are unaffected.
+4. Then tap **Continue with Apple** on a device once. That is the only way to
+   know it works.
+
+A review account with **email + password** (below) keeps a reviewer off the
+social path entirely, which is why this was never caught. That is luck, not a
+mitigation: reviewers do test Sign in with Apple.
 
 ## Related
 

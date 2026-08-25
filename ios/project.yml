@@ -167,6 +167,31 @@ targets:
         # exports a TestFlight/App Store archive — so Xcode-run builds get
         # sandbox device tokens, TestFlight onwards production.
         aps-environment: development
+        # Sign in with Apple, which the app already OFFERS and could not until
+        # now complete.
+        #
+        # The sign-in sheet is Clerk's `AuthView`, and it renders one button per
+        # provider enabled on the Clerk instance. clerk.pqp.gg has both
+        # `oauth_google` and `oauth_apple` enabled, so the sheet shows "Continue
+        # with Apple" beside "Continue with Google" on every build. Clerk's iOS
+        # SDK takes the *native* path for Apple (`Auth+Apple.swift` calls
+        # `SignInWithAppleHelper`, i.e. `ASAuthorizationAppleIDProvider`), and a
+        # native request from a process without this entitlement fails. So the
+        # button was advertised and broken, which is both a Guideline 4.8 problem
+        # (Sign in with Apple offered alongside Google) and a plain 2.1 one (a
+        # sign-in path that does not work). Google was unaffected: it goes
+        # through `ASWebAuthenticationSession`, which needs no entitlement.
+        #
+        # `Default` is the plain first-party flow. There is no Apple ID sharing
+        # here, so no `com.apple.developer.applesignin` scopes beyond it.
+        #
+        # LIKE THE OTHER THREE, this must also be enabled on the App ID
+        # `gg.pqp.app` in the developer portal and the `pqp appstore` profile
+        # re-minted, or Release signing fails with "provisioning profile doesn't
+        # include the com.apple.developer.applesignin entitlement". Debug and
+        # simulator builds do not sign, so they are unaffected either way.
+        com.apple.developer.applesignin:
+          - Default
 
   # ReplayKit broadcast upload extension — system-wide screen sharing, which is
   # the only kind iOS offers. See pqp/Broadcast/SampleHandler.swift.
