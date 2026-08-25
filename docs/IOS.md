@@ -198,6 +198,127 @@ and took the only handle on the microphone with it: deafen then silenced the
 screen and left the presenter's voice playing, and the per-person slider reached
 half of what that person was sending. Neither logged anything.
 
+### Cameras
+
+Cameras work in a **server voice channel** as well as in a DM call, matching the
+web client (PR #77). The mesh never cared which kind of room it was carrying:
+`VoiceClient` publishes and classifies video identically either way, and until
+now a voice channel simply had no button and no tiles. It filed every peer's
+`cameraStreamId` correctly and drew nothing with the answer, so the app received
+everyone's camera and showed none of them.
+
+Turning one on is `VoiceModel.toggleCamera`, which is the same three calls
+`CallModel` already made: publish, announce over `set-camera`, switch the audio
+session to `.videoChat`. Faces take the space the speaker icon had when nobody is
+sharing a screen, and a rail beside the screen when somebody is. Tapping your own
+tile flips the camera, as on the DM stage.
+
+### Quality
+
+One picker, in Settings, governing **both** the camera and the screen share:
+auto / 1080p / 720p / 480p / 360p, mirroring `client/src/lib/video-quality.ts`.
+Device-local (`UserDefaults`, like the web's `LocalSettings`) rather than an
+account preference, because what a phone can encode and what its uplink can carry
+are facts about the phone. It applies live, to senders already on the wire.
+
+**A label names a size, and a size is not a bitrate.** The web ladder shipped as
+a `maxBitrate` and nothing else, and every rung below 1080p still arrived at the
+far end as 1920x1080: a ceiling with nothing behind it does not make a smaller
+picture, it makes the same picture worse. That was caught by eye and fixed in
+PR #84. So every rung here also sets `scaleResolutionDownBy`, computed from the
+source's own line count rather than hard-coded, because it is a divisor: a
+constant 3 is 360p on a 1080-line source and 480p on a 1440-line one.
+
+**Until now this client called `setParameters` nowhere at all.** No sender had a
+bitrate ceiling, a frame rate, a size, or a degradation preference, on any track,
+ever. That is almost certainly why a share documented as 720p was reported from a
+phone arriving at roughly 360p: the default preference is `maintain-framerate`,
+which means *shrink the picture* under pressure, and with no ceiling to reach for
+there was nothing holding the encoder at the size it captured. Both senders now
+state a ceiling, a frame rate and a size, and the screen's ceiling is split
+across the room by `meshScreenBitrate` the way the web splits it, because a mesh
+uploads one copy per peer.
+
+Both roles ask for `maintain-framerate`. An earlier draft gave the screen
+`maintain-resolution`, on the argument that a legible slideshow beats a smooth
+blur; that argument assumed the 12 fps below, and Rafael's verdict on 12 fps was
+"unusable". Under pressure the picture now gets smaller rather than stuttering,
+which is what the web has always asked for too. The ladder is the lever: on a
+link that cannot do 720p30, picking 480p buys a crisp 480p30.
+
+`videoSource(forScreenCast:)` was considered and deliberately not used: it turns
+the quality scaler off, but it also puts VP8 into `ScreenshareLayers`, whose base
+temporal layer targets about 5 fps. See the comment in `startScreenShare`.
+
+**The size ceiling is unchanged and is the real limit on the top rung.** The
+broadcast extension still packs at `ScreenShareWire.maxLongSide` (1280), for the
+memory reasons in that file's header, so 1080p and 720p send the same picture
+with a different allowance behind it. Settings says so out loud. Raising it means
+letting the extension read the choice out of the App Group, in a ~50 MB process,
+on a path nobody has yet run on a phone.
+
+### 30 fps
+
+The wire ran at 12 fps until it was called unusable from a phone, which it is.
+The old constant was defended on two grounds and neither survives contact.
+
+"Screen content is mostly static" is a claim about the *average* frame, and the
+average is what a codec already handles for free: a still page costs almost
+nothing however often it is sampled. What a frame rate buys is the moments that
+are not static, which is every moment anybody is scrolling, dragging, playing
+something or moving a cursor. Sampling those at 12 Hz does not make them cheaper,
+it makes them unreadable.
+
+"Every frame is an encode per peer in a mesh" is true, and is an argument for a
+governor rather than for this constant. The governor now exists:
+`meshScreenBitrate` splits one 5 Mbps upload budget across the room, so a crowded
+call spends its budget on fewer bits per frame, which WebRTC decides continuously
+and well, rather than on a frame rate chosen once by a number that could not see
+the room. The web has run its screen at 30 since it had one
+(`SCREEN_MAX_FRAMERATE`); this was never a considered difference between the
+platforms, only an unexamined one.
+
+**What 30 costs on the local bridge.** 720p NV12 is ~1.38 MB a frame, so the
+socket carries ~41 MB/s rather than ~17. An iPhone's memory bandwidth is GB/s, so
+the copy was never the wall; the walls are syscalls and buffers in flight inside
+a ~50 MB process, and both are now addressed where they live:
+
+- the extension **allocates nothing per frame**. `ScreenShareScaler` keeps its
+  planes and hands them out in place, and the socket writes the header and the
+  planes separately. The `Data` concatenation that used to sit between them cost
+  two 1.38 MB copies a frame, which at 30 fps would be 83 MB/s of pure churn in
+  the one process the OS kills rather than warns;
+- send and receive buffers are raised to about one and a half frames, so a
+  frame's write is usually one pass instead of hundreds of kernel round trips;
+- the app reads 256 KB at a time instead of 64 KB, into a buffer it keeps: six
+  syscalls a frame rather than twenty two;
+- a frame is **dropped whole** when the socket is not writable at all, rather
+  than parking ReplayKit's thread inside a write while more frames queue behind
+  it. Dropped is not failed, and only failed tears the bridge down.
+
+**Battery and thermals are the honest open question.** 720p30 is 27.6 Mpx/s of
+encode *per peer*, so a four-way mesh asks the phone for four of those. Nobody
+has run it on hardware, so there is no number to quote here. What can be said is
+that the rungs trade against each other almost exactly: 720p12 was 11.1 Mpx/s and
+480p30 is 12.3, so somebody who finds 720p30 too warm has a real answer in the
+picker rather than a regression to report.
+
+### Reading what is actually transmitted
+
+`VideoSendReport` polls `outbound-rtp` on the live connections and Settings shows
+it: the encoded size, the frame rate, the kbps, and `qualityLimitationReason`
+(your connection / this phone / the encoder). **This is an instrument, not a
+readout.** What a sender asks for and what its encoder produces are different
+things, only the second reaches anybody, and every check that compared a request
+against a request passed while the web ladder was broken. iOS could not say what
+it transmitted at all, which is why "the iOS share arrives at 360p" had to be
+reported by eye and could not be confirmed by anyone without a phone.
+
+To settle it: join a call, share the screen or turn the camera on, open Settings,
+read the Video section. Numbers well under the choice with "limited by your
+connection" is bandwidth; under it with "limited by this phone" is the encoder
+giving up on CPU; at the choice is the ladder working.
+
 A call survives a socket drop by being **rebuilt, not resumed**. The server
 drops the voice peer when the socket closes and a reconnect mints a *new* peer
 id, so the old mesh is unusable; `ready` tears everything down and rejoins.
@@ -242,7 +363,7 @@ works".
 
 The extension is a **separate process**, and the WebRTC peer connections live in
 the app, so frames cross an App Group (`group.gg.pqp.app`) over a **Unix domain
-socket** carrying tightly packed NV12 at ≤720p / 12fps. The reasoning for both
+socket** carrying tightly packed NV12 at ≤720p / 30fps. The reasoning for both
 choices is in the header comment of `ScreenShareWire.swift`; the short version is
 that a socket gives ordering and backpressure for free and a failed write tells
 the extension the app is gone, and that raw NV12 avoids an encode/decode round
@@ -338,9 +459,10 @@ unsupported. It is cheap to settle: one build, one phone, thirty seconds.
 
 Per-peer volume is done. Screen share receiving is done; screen share sending is
 written and, as of build 12, reported broken from a phone (see above).
-Camera-in-voice-channels **shipped on web** in PR #77 and is still not built
-here: this app publishes a camera in DM calls only, and drops the ones it
-receives in a channel on the floor.
+Camera-in-voice-channels is done, and so is the camera and screen quality ladder
+that the web got in PR #84. Neither has been seen on a phone yet: the picture a
+quality choice produces exists only on a live connection, which is what
+`VideoSendReport` and the Video section of Settings are for.
 
 ## Copy and pt-BR
 
@@ -581,8 +703,8 @@ Still only on web, as of 2026-08-25:
 | Gap | Note |
 |---|---|
 | **Roles and permissions** (PR #75) | 20 permission bits, role management, per-channel overwrites. iOS knows only the legacy `owner`/`admin`/`member` rank (`Moderation.swift`). **Not a leak:** `listChannels` resolves VIEW_CHANNEL in Postgres and the server evicts sockets, so a permission-blind client is never shown content it should not have. What iOS now also does is act on `permissions-update` and re-read the list, so a channel you have lost no longer sits in the sidebar until relaunch. |
-| **Camera in a channel call** (PR #77) | iOS publishes a camera in DM calls only. It already *classifies* peers' `cameraStreamId` in a channel (`VoiceModel`), so it receives them and then draws nothing. |
-| **Screen-share quality selector** | Web has a 1080p/720p/480p/360p ladder for camera and screen. iOS is fixed at `maxLongSide = 1280` and 12fps, with no picker. |
+| ~~Camera in a channel call~~ | **Done.** See **Cameras** above. |
+| ~~Screen-share quality selector~~ | **Done**, with one platform difference: the screen is still *captured* at 1280 on the long side, so the top two rungs send the same picture. See **Quality** above. |
 | **In-app sounds** (PR #62) | No cue playback of any kind on iOS. Haptics only. |
 | **Game connections** (PR #58) | Steam / Battle.net / Twitch are absent entirely. |
 | **Public profile viewer** | The handle can be claimed and shared from Settings, but `UserProfileSheet` shows the `name#1234` tag and never a `pqp.gg/@handle`, and there is no deep link for one. |

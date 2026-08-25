@@ -81,6 +81,8 @@ struct AccountSettingsView: View {
                     ))
                 }
 
+                VideoQualitySection()
+
                 Section("Blocked") {
                     if blocked.isEmpty {
                         Text("Nobody blocked.").foregroundStyle(Palette.paperMuted)
@@ -184,6 +186,72 @@ struct AccountSettingsView: View {
             self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
         }
         saving = false
+    }
+}
+
+/// Camera and screen-share quality, plus what is actually going out.
+///
+/// ITS OWN VIEW WITH NO SAVE BUTTON, unlike everything above it in this form.
+/// The choice is device-local (`UserDefaults`, like the web's `LocalSettings`)
+/// because what a phone can encode and what its uplink can carry are facts about
+/// the phone, not about the account: syncing it would push a laptop's answer
+/// onto a handset. It applies the moment it is tapped, live senders included.
+///
+/// THE READOUT IS THE POINT OF THE SECTION, not decoration. A quality control
+/// that can only report what it *asked* for is how the web ladder shipped broken
+/// for weeks: every rung below 1080p set a bitrate ceiling, no rung changed the
+/// size, and every test passed because they all compared a request against a
+/// request. These numbers come from `outbound-rtp` on the live connection, which
+/// is the encoder saying what it produced. `qualityLimitationReason` is the
+/// second half of the answer, and the one nobody can guess from a screenshot: a
+/// small picture because of the link, because of this phone, or because of the
+/// setting right above it are three different problems.
+private struct VideoQualitySection: View {
+    var body: some View {
+        @Bindable var settings = VideoQualitySettings.shared
+        let report = VideoSendReport.shared
+
+        return Section {
+            Picker("Camera and screen quality", selection: $settings.quality) {
+                ForEach(VideoQuality.allCases, id: \.self) { quality in
+                    Text(quality.label).tag(quality)
+                }
+            }
+            if let screen = report.screen {
+                LabeledContent("Screen going out", value: Self.line(screen))
+            }
+            if let camera = report.camera {
+                LabeledContent("Camera going out", value: Self.line(camera))
+            }
+            if report.screen == nil, report.camera == nil {
+                Text("Turn your camera on or share your screen during a call to see what is really going out.")
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.paperMuted)
+            }
+        } header: {
+            Text("Video")
+        } footer: {
+            Text("One choice for your camera and your screen share. Auto asks the camera for 720p and lets the connection decide from there. A fixed choice asks for that size and sends your screen at that size too. Your screen is captured at 720p on a phone whatever you pick, so 1080p and 720p send the same picture with more bits behind it. The picture still drops below your choice when the link cannot carry it.")
+        }
+    }
+
+    /// Deliberately not localised beyond the words: a size, a rate and a rate
+    /// are values, and `Text(verbatim:)` is what keeps them out of the
+    /// catalogue as a key no translator could do anything with.
+    private static func line(_ stats: VideoSendStats) -> String {
+        var text = "\(stats.size) at \(stats.frameRate) fps, \(stats.kbps) kbps"
+        if stats.limitation != "none" {
+            text += " (\(limitationLabel(stats.limitation)))"
+        }
+        return text
+    }
+
+    private static func limitationLabel(_ reason: String) -> String {
+        switch reason {
+        case "bandwidth": String(localized: "limited by your connection")
+        case "cpu": String(localized: "limited by this phone")
+        default: String(localized: "limited by the encoder")
+        }
     }
 }
 

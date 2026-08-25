@@ -80,13 +80,13 @@ actor VoiceClient {
     private var peerAvatarUrls: [String: String] = [:]
     private var peerConnectionState: [String: String] = [:]
 
-    // MARK: - Video (conversation calls)
+    // MARK: - Video
     //
-    // Voice channels never touch any of this: nothing below runs until
-    // `startCamera` is called, and no camera track is ever created for a server
-    // voice room. It lives here rather than in a second RTC stack because a
-    // camera is one more track on the same peer connections — a parallel
-    // manager would mean two meshes to the same peers.
+    // Nothing below runs until `startCamera` is called, and it is called from a
+    // voice channel and a DM call alike: the mesh does not know or care which
+    // kind of room it is carrying, and it never did. It lives here rather than
+    // in a second RTC stack because a camera is one more track on the same peer
+    // connections; a parallel manager would mean two meshes to the same peers.
 
     /// Our own capture. The source outlives a camera flip; the capturer does not.
     private var cameraSource: RTCVideoSource?
@@ -129,6 +129,27 @@ actor VoiceClient {
     /// Re-offer retries in flight, so a teardown can cancel them.
     private var renegotiationTasks: [String: Task<Void, Never>] = [:]
 
+    // MARK: - Video quality
+    //
+    // See `VideoQuality.swift` for the ladder and for the scar it carries. The
+    // three fields below are what turn a label into a picture: the choice, and
+    // the two line counts the divisor has to be solved against.
+
+    private var videoQuality: VideoQuality = .auto
+    /// Lines the camera's chosen capture format really produces, measured on its
+    /// short side, which is what "720p" means for a phone camera whichever way
+    /// the phone is held. Zero until a capture starts.
+    private var cameraCaptureLines = 0
+    /// Lines the last screen frame really carried, once turned the right way up.
+    /// Zero until a frame arrives.
+    private var screenCaptureLines = 0
+    private var onSendStats: (@Sendable (VideoSendSnapshot) -> Void)?
+    /// Ticks of the 300ms speaking poll since the last video stats sample.
+    private var sendStatsTick = 0
+    /// Bytes and timestamp of the last sample per ssrc, so a rate can be
+    /// derived. `outbound-rtp` reports totals, never a rate.
+    private var lastSendBytes: [String: (bytes: Double, at: TimeInterval)] = [:]
+
     enum VoiceSignal: Sendable {
         case offer(to: String, sdp: String)
         case answer(to: String, sdp: String)
@@ -150,12 +171,14 @@ actor VoiceClient {
         iceServers: [IceServerConfig],
         onStateChange: @escaping @Sendable ([VoicePeerState]) -> Void,
         signal: @escaping @Sendable (VoiceSignal) -> Void,
-        onVideoChange: (@Sendable ([String: PeerVideo]) -> Void)? = nil
+        onVideoChange: (@Sendable ([String: PeerVideo]) -> Void)? = nil,
+        onSendStats: (@Sendable (VideoSendSnapshot) -> Void)? = nil
     ) {
         self.selfPeerId = selfPeerId
         self.onStateChange = onStateChange
         self.signal = signal
         self.onVideoChange = onVideoChange
+        self.onSendStats = onSendStats
         self.iceServers = iceServers.map { config in
             if let username = config.username, let credential = config.credential {
                 return RTCIceServer(urlStrings: config.urlList,
@@ -252,6 +275,134 @@ actor VoiceClient {
         remoteAudio.setVolume(volume, for: peerId)
     }
 
+    // MARK: - Quality
+
+    /// Change what the camera and the screen are allowed to send.
+    ///
+    /// Safe at any moment, including with nothing publishing: the choice is kept
+    /// and applied to whatever starts next. A live camera is re-captured at the
+    /// new format on the *same* source and track, exactly the way `flipCamera`
+    /// swaps devices, so nothing renegotiates and the far end sees the picture
+    /// change rather than a stream restart.
+    func setVideoQuality(_ quality: VideoQuality) async {
+        guard quality != videoQuality else { return }
+        videoQuality = quality
+        await restartCameraCapture()
+        tuneVideoSenders()
+    }
+
+    var currentVideoQuality: VideoQuality { videoQuality }
+
+    /// Apply the chosen ladder to every video sender on every connection.
+    ///
+    /// WHY EVERY FIELD AND NOT JUST THE BITRATE. This is the mistake the web
+    /// ladder shipped with, and the iOS mistake is its mirror image: this client
+    /// has never called `setParameters` at all, so no sender has ever had a
+    /// ceiling, a frame rate, a size, or a degradation preference. The default
+    /// preference for a source that has not declared itself a screen is
+    /// "maintain framerate", which means *shrink the picture* the moment the
+    /// encoder is under pressure, and sharp text at a low frame rate keeps it
+    /// under pressure permanently. A share documented as 720p was reported
+    /// arriving at roughly 360p, which is two of those steps.
+    ///
+    /// BOTH ROLES ASK FOR `maintainFramerate`, and the screen's half of that was
+    /// decided the hard way. An earlier version of this change gave the screen
+    /// `maintainResolution` on the reasoning that a shared screen is read, so a
+    /// legible slideshow beats a smooth blur. That reasoning had a hidden
+    /// premise: that the frame rate was 12 and there was hardly any of it left
+    /// to protect. Rafael's verdict on 12 was "unusable", which settles it.
+    /// Under pressure something has to give, and the answer for this product is
+    /// that the picture gets smaller rather than that it stutters, which is also
+    /// what the web client has always asked for.
+    ///
+    /// The size is still pinned, which is the part that makes this safe rather
+    /// than a return to the old collapse: `scaleResolutionDownBy` states what the
+    /// rung promises, `meshScreenBitrate` gives the encoder enough to reach it,
+    /// and the preference only governs what happens *below* the label when the
+    /// link genuinely cannot carry even that. The user's lever is the ladder: on
+    /// a link that cannot do 720p30, choosing 480p buys a crisp 480p30 instead
+    /// of a soft automatic something.
+    private func tuneVideoSenders() {
+        let camera = cameraEncoding()
+        for sender in cameraSenders.values {
+            Self.apply(camera, to: sender, preference: .maintainFramerate)
+        }
+        let screen = screenEncoding()
+        for sender in screenSenders.values {
+            Self.apply(screen, to: sender, preference: .maintainFramerate)
+        }
+    }
+
+    /// The numbers one video sender is to be held to.
+    private struct VideoEncoding {
+        let maxBitrate: Int
+        let frameRate: Int
+        /// `scaleResolutionDownBy`, never below 1. See `videoScaleFactor`.
+        let scale: Double
+    }
+
+    private func cameraEncoding() -> VideoEncoding {
+        let profile = videoQuality.cameraProfile
+        return VideoEncoding(
+            maxBitrate: profile.maxBitrate,
+            frameRate: profile.frameRate,
+            scale: videoScaleFactor(
+                for: videoQuality,
+                sourceLines: cameraCaptureLines,
+                fallbackLines: profile.lines
+            )
+        )
+    }
+
+    private func screenEncoding() -> VideoEncoding {
+        VideoEncoding(
+            // Split across the room, because a mesh uploads a copy per peer and
+            // a per-peer rate therefore multiplies. Re-derived on every tune, so
+            // a joiner makes everyone give bitrate back and a leaver hands it
+            // out again; without the second half a call that started at six and
+            // dropped to two would encode at the six-way rate forever.
+            maxBitrate: meshScreenBitrate(
+                peerCount: connections.count, quality: videoQuality
+            ),
+            frameRate: Int(ScreenShareWire.defaultFrameRate),
+            scale: videoScaleFactor(
+                for: videoQuality,
+                sourceLines: screenCaptureLines,
+                // The extension caps the long side, so an upright phone screen
+                // arrives with about that many lines. A guess is only in force
+                // until the first frame lands and re-tunes for real.
+                fallbackLines: ScreenShareWire.maxLongSide
+            )
+        )
+    }
+
+    /// Writes the numbers onto a sender.
+    ///
+    /// Every field is applied on top of the parameters WebRTC already produced.
+    /// Replacing the object wholesale would drop the SSRCs and RTX settings the
+    /// connection is already using, which is the same rule the web client
+    /// follows for the same reason.
+    ///
+    /// A sender whose parameters have no encodings yet is left alone rather than
+    /// forced: that state means the transceiver has not been associated, and
+    /// every path that produces one (a track added before the pair negotiated,
+    /// a peer that has just arrived) re-tunes afterwards.
+    private static func apply(
+        _ encoding: VideoEncoding,
+        to sender: RTCRtpSender,
+        preference: RTCDegradationPreference
+    ) {
+        let parameters = sender.parameters
+        guard !parameters.encodings.isEmpty else { return }
+        parameters.degradationPreference = NSNumber(value: preference.rawValue)
+        for entry in parameters.encodings {
+            entry.maxBitrateBps = NSNumber(value: encoding.maxBitrate)
+            entry.maxFramerate = NSNumber(value: encoding.frameRate)
+            entry.scaleResolutionDownBy = NSNumber(value: encoding.scale)
+        }
+        sender.parameters = parameters
+    }
+
     // MARK: - Camera
 
     /// Opens the camera and publishes it to every peer.
@@ -265,13 +416,14 @@ actor VoiceClient {
             return (UncheckedBox(localVideoTrack), localCameraStreamId)
         }
         guard let device = Self.captureDevice(front: usesFrontCamera),
-              let format = Self.bestFormat(for: device) else { return nil }
+              let chosen = Self.bestFormat(for: device, lines: videoQuality.cameraProfile.lines)
+        else { return nil }
 
         let source = factory.videoSource()
         let capturer = RTCCameraVideoCapturer(delegate: source)
-        let fps = Int(min(30, format.videoSupportedFrameRateRanges
-            .map(\.maxFrameRate).max() ?? 30))
-        try? await capturer.startCapture(with: device, format: format, fps: fps)
+        let fps = Self.captureFrameRate(for: chosen.format, ceiling: videoQuality.cameraProfile.frameRate)
+        cameraCaptureLines = chosen.lines
+        try? await capturer.startCapture(with: device, format: chosen.format, fps: fps)
 
         // Unique per capture, not per app: the id is the receiver's whole basis
         // for telling this stream from a screen share, and a constant would
@@ -286,6 +438,7 @@ actor VoiceClient {
         for (peerId, connection) in connections {
             cameraSenders[peerId] = connection.add(track, streamIds: [streamId])
         }
+        tuneVideoSenders()
         // Adding a track needs a new offer regardless of politeness — the same
         // thing `setLocalCameraStream` does in the web client. Glare, if any, is
         // resolved by perfect negotiation on whichever side receives it.
@@ -308,6 +461,7 @@ actor VoiceClient {
         cameraSource = nil
         localVideoTrack = nil
         localCameraStreamId = nil
+        cameraCaptureLines = 0
         for peerId in connections.keys {
             await negotiate(with: peerId)
         }
@@ -316,17 +470,33 @@ actor VoiceClient {
     /// Front ↔ back. The source and the track survive, so nothing renegotiates
     /// and the far end sees the picture change rather than a stream restart.
     func flipCamera() {
-        guard let capturer = cameraCapturer else {
-            usesFrontCamera.toggle()
-            return
-        }
         usesFrontCamera.toggle()
+        restartCapture()
+    }
+
+    /// Re-open the current camera at the current quality's format.
+    ///
+    /// A no-op with nothing running, which is what makes `setVideoQuality` safe
+    /// to call from a settings screen with no call in progress.
+    private func restartCameraCapture() async {
+        guard cameraCapturer != nil else { return }
+        restartCapture()
+    }
+
+    /// The shared half of flipping and re-sizing: same source, same track, new
+    /// device or format. `cameraCaptureLines` is refreshed here because it is
+    /// the divisor's denominator, and a stale one would size the encoder against
+    /// a format that is no longer running.
+    private func restartCapture() {
+        guard let capturer = cameraCapturer else { return }
         guard let device = Self.captureDevice(front: usesFrontCamera),
-              let format = Self.bestFormat(for: device) else { return }
-        let fps = Int(min(30, format.videoSupportedFrameRateRanges
-            .map(\.maxFrameRate).max() ?? 30))
+              let chosen = Self.bestFormat(for: device, lines: videoQuality.cameraProfile.lines)
+        else { return }
+        let fps = Self.captureFrameRate(for: chosen.format, ceiling: videoQuality.cameraProfile.frameRate)
+        cameraCaptureLines = chosen.lines
         capturer.stopCapture()
-        capturer.startCapture(with: device, format: format, fps: fps)
+        capturer.startCapture(with: device, format: chosen.format, fps: fps)
+        tuneVideoSenders()
     }
 
     var isCameraOn: Bool { localVideoTrack != nil }
@@ -341,6 +511,24 @@ actor VoiceClient {
     /// presenter per room and the server enforces it.
     func startScreenShare() async -> String? {
         if let localScreenStreamId { return localScreenStreamId }
+        // NOT `videoSource(forScreenCast: true)`, which looks like the obvious
+        // call for a screen and is the wrong one here.
+        //
+        // `is_screencast` turns the quality scaler off, and the quality scaler
+        // is what steps the *resolution* down when the encoder's QP stays high.
+        // Turning it off sounds like a straight win after a 720p share was
+        // reported arriving at roughly 360p. But it also puts VP8 into
+        // `ScreenshareLayers`, whose base temporal layer targets about 5 fps,
+        // and VP8 is entirely possible between this app and a Chrome peer. Given
+        // that the standing complaint about this feature is now "12 fps is
+        // unusable", a flag that can quietly produce 5 is not one to reach for.
+        //
+        // So the arrangement is the web client's, exactly: an ordinary source,
+        // `maintainFramerate`, a pinned `scaleResolutionDownBy`, and a mesh
+        // budget generous enough that the encoder can hold the size it was told
+        // to. The scaler stays on and is allowed to shrink the picture below the
+        // label when the link truly cannot carry it, which is the trade this
+        // product has now chosen twice.
         let source = factory.videoSource()
         let capturer = RTCVideoCapturer(delegate: source)
         // Distinct from `pqp-camera-…` and unique per share: the id IS the
@@ -357,6 +545,7 @@ actor VoiceClient {
         for (peerId, connection) in connections {
             screenSenders[peerId] = connection.add(track, streamIds: [streamId])
         }
+        tuneVideoSenders()
         for peerId in connections.keys {
             await negotiate(with: peerId)
         }
@@ -374,6 +563,7 @@ actor VoiceClient {
         screenCapturer = nil
         localScreenStreamId = nil
         screenAdaptedSize = (0, 0)
+        screenCaptureLines = 0
         for peerId in connections.keys {
             await negotiate(with: peerId)
         }
@@ -404,6 +594,21 @@ actor VoiceClient {
                 height: height,
                 fps: Int32(ScreenShareWire.defaultFrameRate)
             )
+            // The divisor is solved against the picture the far end will see, so
+            // a rotated buffer counts its width as its height. Re-tuned here
+            // rather than only at publish time because a phone turning, and a
+            // capture that has only just started, both move this number under a
+            // sender that is already running.
+            let lines = uprightVideoLines(
+                width: Int(width), height: Int(height), rotation: rotation
+            )
+            if lines != screenCaptureLines {
+                screenCaptureLines = lines
+                let encoding = screenEncoding()
+                for sender in screenSenders.values {
+                    Self.apply(encoding, to: sender, preference: .maintainFramerate)
+                }
+            }
         }
         let frame = RTCVideoFrame(
             buffer: RTCCVPixelBuffer(pixelBuffer: pixelBuffer),
@@ -427,20 +632,53 @@ actor VoiceClient {
         return devices.first { $0.position == (front ? .front : .back) } ?? devices.first
     }
 
-    /// The smallest format at or above 640×480.
+    /// The smallest capture format that can carry the chosen number of lines.
     ///
-    /// Deliberately not the best the camera can do: a mesh call encodes one
-    /// stream per peer on a battery, and 720p of a face in a phone-sized tile
-    /// buys nothing but heat.
-    private static func bestFormat(for device: AVCaptureDevice) -> AVCaptureDevice.Format? {
+    /// MEASURED ON THE SHORT SIDE, because that is what the label means for a
+    /// camera: a phone's 720p format is 1280x720 whether the phone is upright or
+    /// on its side, and picking on total pixels instead would call a 960x540
+    /// format "720p" on a device that offers no 720 line format at all.
+    ///
+    /// Smallest-that-fits rather than best-available: a mesh call encodes one
+    /// copy per peer on a battery, so capturing beyond the choice buys nothing
+    /// but heat. And when nothing fits, the largest the device has, because the
+    /// worst outcome allowed here is a smaller picture than asked for, never no
+    /// camera at all, which is the promise `captureCamera` makes on the web.
+    ///
+    /// Returns the lines the format really carries as well as the format, since
+    /// that is the denominator the encoder's divisor is solved against and
+    /// re-deriving it at the call site is how the two drift apart.
+    private static func bestFormat(
+        for device: AVCaptureDevice,
+        lines: Int
+    ) -> (format: AVCaptureDevice.Format, lines: Int)? {
         let formats = RTCCameraVideoCapturer.supportedFormats(for: device)
-        let sized = formats.map { format -> (AVCaptureDevice.Format, Int32) in
+        let sized = formats.map { format -> (format: AVCaptureDevice.Format, lines: Int, pixels: Int) in
             let dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
-            return (format, dimensions.width * dimensions.height)
+            return (
+                format,
+                Int(min(dimensions.width, dimensions.height)),
+                Int(dimensions.width) * Int(dimensions.height)
+            )
         }
-        let target: Int32 = 640 * 480
-        return sized.filter { $0.1 >= target }.min { $0.1 < $1.1 }?.0
-            ?? sized.max { $0.1 < $1.1 }?.0
+        let carriers = sized.filter { $0.lines >= lines }
+        if let best = carriers.min(by: { $0.pixels < $1.pixels }) {
+            return (best.format, best.lines)
+        }
+        guard let biggest = sized.max(by: { $0.pixels < $1.pixels }) else { return nil }
+        return (biggest.format, biggest.lines)
+    }
+
+    /// What to ask the capture session for, bounded by what the format offers.
+    ///
+    /// A format that cannot reach the profile's rate would otherwise be started
+    /// at a rate it refuses, and `startCapture` fails rather than approximating.
+    private static func captureFrameRate(
+        for format: AVCaptureDevice.Format,
+        ceiling: Int
+    ) -> Int {
+        let supported = format.videoSupportedFrameRateRanges.map(\.maxFrameRate).max() ?? 30
+        return max(1, Int(min(Double(ceiling), supported)))
     }
 
     /// File a peer's announced camera stream id, from the roster.
@@ -528,6 +766,15 @@ actor VoiceClient {
     }
 
     private func sampleAudioLevels() async {
+        // One stats report answers both questions, so the video sample rides
+        // along with the audio one rather than opening a second query loop over
+        // the same connections. Every sixth tick is a shade under two seconds,
+        // which is slow enough to be free and fast enough that somebody moving
+        // the quality picker sees the number follow them.
+        sendStatsTick += 1
+        let wantsSendStats = onSendStats != nil && sendStatsTick % 6 == 0
+        var snapshot = VideoSendSnapshot()
+
         var loud: Set<String> = []
         for (peerId, connection) in connections {
             let report = await connection.statistics()
@@ -536,10 +783,71 @@ actor VoiceClient {
                     loud.insert(peerId)
                 }
             }
+            guard wantsSendStats else { continue }
+            let cameraSsrc = Self.ssrc(of: cameraSenders[peerId])
+            let screenSsrc = Self.ssrc(of: screenSenders[peerId])
+            for (_, stat) in report.statistics where stat.type == "outbound-rtp" {
+                guard stat.values["kind"] as? String == "video" else { continue }
+                guard let ssrc = (stat.values["ssrc"] as? NSNumber)?.uint32Value else { continue }
+                guard let sample = sendSample(from: stat, ssrc: ssrc) else { continue }
+                // The biggest picture any peer is being sent. A mesh encodes a
+                // copy per peer and they adapt independently, so there is no one
+                // answer; the largest is the one that says what this phone is
+                // managing to produce, which is the question being asked.
+                if ssrc == cameraSsrc {
+                    snapshot.camera = Self.larger(snapshot.camera, sample)
+                } else if ssrc == screenSsrc {
+                    snapshot.screen = Self.larger(snapshot.screen, sample)
+                }
+            }
+        }
+
+        if wantsSendStats {
+            onSendStats?(snapshot)
         }
         guard loud != speaking else { return }
         speaking = loud
         emit()
+    }
+
+    private static func ssrc(of sender: RTCRtpSender?) -> UInt32? {
+        sender?.parameters.encodings.compactMap { $0.ssrc?.uint32Value }.first
+    }
+
+    private static func larger(_ a: VideoSendStats?, _ b: VideoSendStats) -> VideoSendStats {
+        guard let a else { return b }
+        return a.width * a.height >= b.width * b.height ? a : b
+    }
+
+    /// One `outbound-rtp` entry, turned into what a person can read.
+    ///
+    /// `frameWidth`/`frameHeight` are the encoded size, which is the number this
+    /// whole exercise is about: what a sender *asked* for and what its encoder
+    /// *produced* are different things, and only the second one reaches anybody.
+    /// A stat with no size yet (nothing encoded since the track was added) is
+    /// dropped rather than reported as 0x0.
+    private func sendSample(from stat: RTCStatistics, ssrc: UInt32) -> VideoSendStats? {
+        guard let width = (stat.values["frameWidth"] as? NSNumber)?.intValue,
+              let height = (stat.values["frameHeight"] as? NSNumber)?.intValue,
+              width > 0, height > 0 else { return nil }
+        let bytes = (stat.values["bytesSent"] as? NSNumber)?.doubleValue ?? 0
+        let now = Date().timeIntervalSince1970
+        let key = String(ssrc)
+        var kbps = 0
+        if let previous = lastSendBytes[key] {
+            let seconds = now - previous.at
+            if seconds > 0.2, bytes >= previous.bytes {
+                kbps = Int(((bytes - previous.bytes) * 8 / seconds) / 1000)
+            }
+        }
+        lastSendBytes[key] = (bytes, now)
+        return VideoSendStats(
+            width: width,
+            height: height,
+            frameRate: Int(((stat.values["framesPerSecond"] as? NSNumber)?.doubleValue ?? 0).rounded()),
+            kbps: kbps,
+            limitation: stat.values["qualityLimitationReason"] as? String ?? "none"
+        )
     }
 
     /// Whether *we* open the connection to this peer.
@@ -611,6 +919,7 @@ actor VoiceClient {
         localVideoTrack = nil
         localCameraStreamId = nil
         cameraSenders.removeAll()
+        cameraCaptureLines = 0
         // The share dies with the room. The broadcast extension outlives this —
         // it is a system recording, not ours to stop — but the track it feeds is
         // gone, and `pushScreenFrame` drops its frames from here on.
@@ -620,6 +929,10 @@ actor VoiceClient {
         localScreenStreamId = nil
         screenSenders.removeAll()
         screenAdaptedSize = (0, 0)
+        screenCaptureLines = 0
+        lastSendBytes.removeAll()
+        sendStatsTick = 0
+        onSendStats?(VideoSendSnapshot())
         remoteVideoTracks.removeAll()
         remoteCameraStreamIds.removeAll()
         emitVideo()
@@ -674,6 +987,11 @@ actor VoiceClient {
                 screenTrack, streamIds: [localScreenStreamId]
             )
         }
+        // A sender is per connection, so the ladder has to be written onto each
+        // new one. Without this the person who joined last is the only one
+        // receiving an untuned stream, which is the hardest kind of report to
+        // believe: everybody else in the room is looking at the right picture.
+        tuneVideoSenders()
         return connection
     }
 

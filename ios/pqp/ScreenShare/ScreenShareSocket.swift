@@ -7,8 +7,22 @@ import Foundation
 /// own serial queue, and a blocking write there is the backpressure: if the app
 /// cannot keep up, the extension waits rather than growing a queue inside a
 /// process with a 50 MB ceiling.
+///
+/// AT 30 fps THAT BACKPRESSURE NEEDED A LITTLE SLACK. A frame is ~1.38 MB and
+/// the default send buffer on a Unix stream socket is a few kilobytes, so every
+/// write used to be several hundred round trips through the kernel, each one
+/// parked until the app happened to read again. At 12 fps there were 83 ms of
+/// room per frame to absorb that; at 30 there are 33. So the buffer is raised to
+/// hold roughly one frame and a half: enough that a frame's write is usually one
+/// pass and a moment of app-side jitter is absorbed rather than felt, and small
+/// enough that it cannot become a queue measured in seconds, which is the whole
+/// thing blocking writes exist to prevent.
 final class ScreenShareSocketClient {
     private var descriptor: Int32 = -1
+
+    /// Roughly one and a half 720p NV12 frames. Requested, not demanded: the
+    /// kernel clamps to its own maximum and a refusal is not worth failing over.
+    private static let sendBufferBytes: Int32 = 2 * 1024 * 1024
 
     var isConnected: Bool { descriptor >= 0 }
 
@@ -23,6 +37,11 @@ final class ScreenShareSocketClient {
         // takes the extension down with it, mid-broadcast.
         var on: Int32 = 1
         setsockopt(socketDescriptor, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+        var sendBuffer = Self.sendBufferBytes
+        setsockopt(
+            socketDescriptor, SOL_SOCKET, SO_SNDBUF,
+            &sendBuffer, socklen_t(MemoryLayout<Int32>.size)
+        )
 
         let connected = withUnsafePointer(to: &address) { pointer in
             pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPointer in
@@ -37,28 +56,74 @@ final class ScreenShareSocketClient {
         return true
     }
 
-    /// Writes every byte, retrying short writes. False means the link is dead and
-    /// the caller should stop trying.
-    @discardableResult
-    func write(_ data: Data) -> Bool {
-        guard descriptor >= 0 else { return false }
-        return data.withUnsafeBytes { raw -> Bool in
-            var offset = 0
-            while offset < raw.count {
-                let written = Darwin.write(
-                    descriptor,
-                    raw.baseAddress!.advanced(by: offset),
-                    raw.count - offset
-                )
-                if written > 0 {
-                    offset += written
-                    continue
-                }
-                if written < 0 && errno == EINTR { continue }
-                return false
+    /// What happened to one frame.
+    ///
+    /// `dropped` is not `failed`, and conflating them is how a busy moment
+    /// would tear down a working broadcast. A dropped frame is the bridge doing
+    /// its job; a failed one means the app is gone.
+    enum WriteOutcome {
+        case sent
+        case dropped
+        case failed
+    }
+
+    /// Writes one frame: its header, then its two planes, in place.
+    ///
+    /// NOTHING IS CONCATENATED. The three regions go out back to back on a
+    /// stream socket, which is exactly what the reader reassembles anyway, so
+    /// joining them first would only buy two 1.38 MB allocations and copies per
+    /// frame. At 30 fps that is 83 MB/s of churn inside a process the OS kills
+    /// rather than warns.
+    ///
+    /// A frame is dropped whole or sent whole. The check is made before the
+    /// first byte, because a stream has no way to un-send half a frame: once the
+    /// header is out, the reader is waiting for exactly that many bytes and
+    /// abandoning it desynchronises the link.
+    func write(
+        header: Data,
+        luma: UnsafeRawBufferPointer,
+        chroma: UnsafeRawBufferPointer
+    ) -> WriteOutcome {
+        guard descriptor >= 0 else { return .failed }
+        // Not writable at all means the app has stopped reading: its own queue
+        // is full and ours is about to be. Better to skip this frame than to
+        // park ReplayKit's thread inside a write while more frames arrive
+        // behind it.
+        guard isWritable() else { return .dropped }
+        return header.withUnsafeBytes { headerBytes -> WriteOutcome in
+            for region in [headerBytes, luma, chroma] where region.count > 0 {
+                guard writeAll(region) else { return .failed }
             }
-            return true
+            return .sent
         }
+    }
+
+    /// Writes every byte of one region, retrying short writes.
+    private func writeAll(_ region: UnsafeRawBufferPointer) -> Bool {
+        guard let base = region.baseAddress else { return true }
+        var offset = 0
+        while offset < region.count {
+            let written = Darwin.write(descriptor, base.advanced(by: offset), region.count - offset)
+            if written > 0 {
+                offset += written
+                continue
+            }
+            if written < 0 && errno == EINTR { continue }
+            return false
+        }
+        return true
+    }
+
+    /// Whether the kernel would take anything at all right now.
+    private func isWritable() -> Bool {
+        var descriptorSet = pollfd(fd: descriptor, events: Int16(POLLOUT), revents: 0)
+        let result = withUnsafeMutablePointer(to: &descriptorSet) {
+            Darwin.poll($0, 1, 0)
+        }
+        // A poll that errors is not evidence the link is dead; let the write
+        // find out for certain rather than dropping frames on a guess.
+        guard result >= 0 else { return true }
+        return result > 0 && descriptorSet.revents & Int16(POLLOUT) != 0
     }
 
     func close() {
@@ -84,9 +149,22 @@ final class ScreenShareSocketServer: @unchecked Sendable {
     private var clientDescriptor: Int32 = -1
     private var parser = ScreenShareFrameParser()
     private let onFrame: @Sendable (ScreenShareFrameHeader, Data) -> Void
+    /// Held across reads rather than allocated per read. A 720p frame is ~1.38
+    /// MB, so at 30 fps this loop runs a few hundred times a second and a fresh
+    /// buffer each time would be pure garbage.
+    private var chunk = [UInt8](repeating: 0, count: readChunkBytes)
 
     /// Longest `sockaddr_un.sun_path` Darwin accepts, including its terminator.
     static let maximumPathLength = 104
+
+    /// 256 KB rather than 64: a frame is about 1.38 MB, so this is the
+    /// difference between six syscalls per frame and twenty two, and at 30 fps
+    /// that is 180 a second instead of 660.
+    private static let readChunkBytes = 256 * 1024
+
+    /// The other half of the client's raised send buffer. A reader with a small
+    /// receive buffer makes the sender block whatever the sender asked for.
+    private static let receiveBufferBytes: Int32 = 2 * 1024 * 1024
 
     init(onFrame: @escaping @Sendable (ScreenShareFrameHeader, Data) -> Void) {
         self.onFrame = onFrame
@@ -158,6 +236,11 @@ final class ScreenShareSocketServer: @unchecked Sendable {
         setNonBlocking(accepted)
         var on: Int32 = 1
         setsockopt(accepted, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+        var receiveBuffer = Self.receiveBufferBytes
+        setsockopt(
+            accepted, SOL_SOCKET, SO_RCVBUF,
+            &receiveBuffer, socklen_t(MemoryLayout<Int32>.size)
+        )
         parser.reset()
         clientDescriptor = accepted
     }
@@ -165,7 +248,6 @@ final class ScreenShareSocketServer: @unchecked Sendable {
     private func readAvailable() {
         let descriptor = clientDescriptor
         guard descriptor >= 0, poll(descriptor, timeoutMs: 200) else { return }
-        var chunk = [UInt8](repeating: 0, count: 64 * 1024)
         let read = chunk.withUnsafeMutableBytes { raw in
             Darwin.read(descriptor, raw.baseAddress, raw.count)
         }

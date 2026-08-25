@@ -34,12 +34,23 @@ final class VoiceModel {
     }
     private(set) var selfPeerId: String?
     /// Per-peer incoming video, already sorted into camera vs screen by
-    /// `VoiceClient`. A voice channel has no cameras — nobody publishes one into
-    /// a server voice room — so in practice this is screen shares, which is
-    /// exactly what a voice channel is used for.
+    /// `VoiceClient`.
+    ///
+    /// Both halves are used. This model classified `cameraStreamId` from the
+    /// day the roster carried it and then drew nothing with the result, so a
+    /// voice channel received everybody's camera and showed none of them: the
+    /// tracks arrived, were filed correctly, and were dropped on the floor one
+    /// layer above. The web client has published cameras into voice channels
+    /// since PR #77.
     private(set) var video: [String: PeerVideo] = [:] {
         didSet { noteCallProgress() }
     }
+    /// Our own capture, for the self preview. Never handed to a renderer twice.
+    private(set) var localCamera: RTCVideoTrack?
+    private(set) var isCameraOn = false
+    /// A refusal worth putting in front of somebody: permission, or a camera
+    /// that would not open. Cleared by the next successful toggle.
+    private(set) var cameraError: String?
     /// The roster by peer id: who is muted, and who is presenting.
     private(set) var roster: [String: VoiceParticipant] = [:]
     /// Outgoing screen share, driven by the ReplayKit bridge.
@@ -151,6 +162,75 @@ final class VoiceModel {
 
     func isMuted(_ peerId: String) -> Bool { roster[peerId]?.muted ?? false }
 
+    // MARK: - Camera
+    //
+    // The same three calls `CallModel` makes for a DM call, against the same
+    // `VoiceClient`. The mesh never cared which kind of room it was carrying;
+    // what was missing was a screen with a button on it.
+
+    func camera(for peerId: String) -> RTCVideoTrack? { video[peerId]?.camera }
+
+    /// Everyone whose camera is on, in roster order, so the tiles do not
+    /// reshuffle every time somebody starts speaking.
+    var cameraPeers: [VoicePeerState] {
+        peers.filter { video[$0.peerId]?.camera != nil }
+    }
+
+    /// Whether there is any picture of a person to show, ours included.
+    var hasCameras: Bool { isCameraOn || !cameraPeers.isEmpty }
+
+    func toggleCamera() async {
+        if isCameraOn {
+            await disableCamera()
+        } else {
+            await enableCamera()
+        }
+    }
+
+    func flipCamera() async {
+        await voice.flipCamera()
+    }
+
+    private func enableCamera() async {
+        guard status == .connected else { return }
+        guard await Self.requestCamera() else {
+            cameraError = String(localized: "Camera access is off. Enable it in Settings.")
+            return
+        }
+        guard let started = await voice.startCamera() else {
+            cameraError = String(localized: "Could not start the camera.")
+            return
+        }
+        localCamera = started.track.value
+        isCameraOn = true
+        cameraError = nil
+        await voice.setVideoMode(true)
+        // The announcement is what lets everyone file the arriving track as a
+        // face rather than a screen. Sent after publishing because the stream id
+        // does not exist until then; the roster re-check on the receiving side
+        // (`setPeerCameraStreamId`) is what makes either ordering correct.
+        await session?.realtime.setCamera(streamId: started.streamId)
+    }
+
+    private func disableCamera() async {
+        isCameraOn = false
+        localCamera = nil
+        // Told before the track goes: a peer that watches the stream vanish with
+        // no announcement reclassifies it as a screen share and draws the last
+        // frame of your face forever.
+        await session?.realtime.setCamera(streamId: nil)
+        await voice.stopCamera()
+        await voice.setVideoMode(false)
+    }
+
+    private static func requestCamera() async -> Bool {
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized: return true
+        case .denied, .restricted: return false
+        default: return await AVCaptureDevice.requestAccess(for: .video)
+        }
+    }
+
     func join(channel: Channel, session: SessionStore, ratings: CallRatingModel? = nil) async {
         self.session = session
         self.ratings = ratings
@@ -204,8 +284,20 @@ final class VoiceModel {
                 // either way, then hands the answer to nobody.
                 onVideoChange: { [weak self] video in
                     Task { @MainActor in self?.video = video }
+                },
+                onSendStats: { snapshot in
+                    Task { @MainActor in VideoSendReport.shared.apply(snapshot) }
                 }
             )
+            await voice.setVideoQuality(VideoQualitySettings.shared.quality)
+            // A choice made in Settings has to reach senders that are already on
+            // the wire, and Settings is presented from a screen that is not this
+            // one, so the push is a registration rather than an `onChange` on
+            // a view that may not be in the hierarchy when the picker moves.
+            VideoQualitySettings.shared.addListener(handlerKey) { [weak self] quality in
+                guard let self else { return }
+                Task { await self.voice.setVideoQuality(quality) }
+            }
             await session.realtime.joinVoice(channelId: channel.id)
         } catch {
             status = .failed((error as? APIError)?.errorDescription ?? error.localizedDescription)
@@ -215,6 +307,14 @@ final class VoiceModel {
     func leave() async {
         await screenShare.disarm()
         intendedChannel = nil
+        VideoQualitySettings.shared.removeListener(handlerKey)
+        VideoSendReport.shared.clear()
+        // Announced before the socket work below, while the frame can still be
+        // sent: a room that never hears the camera go off keeps drawing the last
+        // thing it saw of you.
+        if isCameraOn {
+            await session?.realtime.setCamera(streamId: nil)
+        }
         session?.eventHandlers.removeValue(forKey: handlerKey)
         // Skipped when the server already took our peer: this socket's peer now
         // belongs to whatever displaced us, so the frame would hang *that* up.
@@ -232,6 +332,9 @@ final class VoiceModel {
         selfPeerId = nil
         isMuted = false
         isDeafened = false
+        localCamera = nil
+        isCameraOn = false
+        cameraError = nil
     }
 
     /// One moment of this call, for the rating that may follow it.
@@ -336,6 +439,11 @@ final class VoiceModel {
             guard let intendedChannel, status != .idle else { return }
             Task {
                 await voice.disconnectAll()
+                // The capture went with the mesh, so the button has to go back
+                // to off rather than claiming a camera that is no longer
+                // publishing anywhere.
+                self.localCamera = nil
+                self.isCameraOn = false
                 try? await voice.startAudio()
                 await session?.realtime.joinVoice(channelId: intendedChannel.id)
             }
@@ -354,6 +462,8 @@ final class VoiceModel {
                     intendedChannel = nil
                     peers = []
                     selfPeerId = nil
+                    localCamera = nil
+                    isCameraOn = false
                     status = .failed(String(
                         localized: "You joined another voice room, so this one was left."
                     ))

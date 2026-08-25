@@ -30,8 +30,14 @@ import Foundation
 /// extension and no decode in the app — an encoder in a 50 MB process, feeding a
 /// decoder, to cross a link that is local memory, would be pure loss. The link
 /// is bounded instead by shrinking the picture: ≤720p on the long side at
-/// `defaultFrameRate`, which is ~16 MB/s of memcpy, and the H.264 encode that
+/// `defaultFrameRate`, which is ~41 MB/s of memcpy, and the H.264 encode that
 /// actually costs something happens once, in WebRTC, where it always did.
+///
+/// 41 MB/s is a real number to hold in a ~50 MB process, so the path that
+/// carries it allocates nothing per frame: the scaler keeps its destination
+/// planes across frames and the socket writes header and planes in place. The
+/// concatenation that used to sit between them cost two 1.38 MB copies a frame,
+/// which at this rate would be 83 MB/s of pure churn for no purpose at all.
 enum ScreenShareWire {
     /// Shared by the app and the extension. Must match the App Groups
     /// entitlement of both targets exactly.
@@ -49,9 +55,41 @@ enum ScreenShareWire {
     /// call on a phone battery stops being worth it.
     static let maxLongSide = 1280
 
-    /// Frames per second. Screen content is mostly static, and every frame is
-    /// an encode per peer in a mesh.
-    static let defaultFrameRate: Double = 12
+    /// Frames per second.
+    ///
+    /// **30, and it was 12, and 12 was wrong.** The old number was defended on
+    /// two grounds and both of them fail on inspection.
+    ///
+    /// "Screen content is mostly static" is an argument about the *average*
+    /// frame, and it is the average that a codec already handles for free: a
+    /// still page costs almost nothing to encode however often it is sampled,
+    /// because inter-frame prediction has nothing to predict. What a frame rate
+    /// actually buys is the moments that are not static, which is every moment
+    /// anybody is scrolling, dragging, playing something or moving a cursor.
+    /// Sampling those at 12 Hz does not make them cheaper, it makes them
+    /// unreadable. Reported from a phone as "12 fps is unusable", which it is.
+    ///
+    /// "Every frame is an encode per peer in a mesh" is true and is not an
+    /// argument for this constant. The mesh cost is paid in the *encoder*, and
+    /// the encoder already has a governor: `meshScreenBitrate` splits one upload
+    /// budget across the room, and `maxFramerate` on the sender is derived from
+    /// this number rather than fixed. A crowded room now spends its budget on
+    /// fewer bits per frame, which is a decision WebRTC makes continuously and
+    /// well, instead of on a frame rate chosen once by a constant that could not
+    /// see the room.
+    ///
+    /// The web client has run its screen at 30 since it had a screen to run
+    /// (`SCREEN_MAX_FRAMERATE`). This was never a considered difference between
+    /// the platforms, only an unexamined one.
+    ///
+    /// WHAT IT COSTS ON THE WIRE. 720p NV12 is about 1.38 MB a frame, so this is
+    /// ~41 MB/s of local memcpy rather than ~17. An iPhone's memory bandwidth is
+    /// measured in GB/s, so the copy is not the wall; the wall would be syscalls
+    /// and buffers in flight inside a ~50 MB process, and both are addressed
+    /// where they live rather than by sampling less (see `ScreenShareSocket` for
+    /// the socket buffers, and `ScreenShareScaler` for the allocation this path
+    /// no longer makes).
+    static let defaultFrameRate: Double = 30
 
     /// How long a silent bridge is tolerated before the app unpublishes.
     ///
