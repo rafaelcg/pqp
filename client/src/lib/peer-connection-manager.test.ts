@@ -421,3 +421,220 @@ describe("receiving a peer's screen share", () => {
     expect(ctx.peers()[0]!.screenStream?.id).toBe("share-1");
   });
 });
+
+/**
+ * A camera and a screen share, live at the same time, from one peer.
+ *
+ * This is the arrangement the product is advertised on ("voz, texto, tela e
+ * câmera"), and it is also the exact collision that produced the black
+ * re-share: two video tracks from a single peer connection, told apart by
+ * nothing but the announced `cameraStreamId`. Everything above tests one of
+ * them at a time; this tests them overlapping, in both orders, because the
+ * order is what decides insertion order in `videoStreams` and `classifyVideo`
+ * is first-wins.
+ *
+ * The receiving half is where a mistake is invisible: a `<video>` bound to the
+ * wrong stream still has an `srcObject` and still reports a `readyState`, so
+ * the only honest assertion is which MediaStream landed in which slot.
+ */
+describe("a camera and a screen share at the same time", () => {
+  function arriveVideo(pc: FakePeerConnection, streamId: string) {
+    const incoming = track("video", `${streamId}:video`);
+    pc.ontrack?.({
+      track: incoming,
+      streams: [fakeStream(streamId, [incoming])],
+    });
+    return incoming;
+  }
+
+  // --- sending ------------------------------------------------------------
+
+  it("publishes both, each under its own stream id, camera first", async () => {
+    const ctx = setup();
+    ctx.manager.connectToPeer(REMOTE);
+    await settle();
+
+    await ctx.manager.setLocalCameraStream(
+      fakeStream("cam", [track("video", "cam-v")]),
+    );
+    await ctx.manager.setLocalScreenStream(
+      fakeStream("cap", [track("video", "cap-v"), track("audio", "cap-a")]),
+    );
+
+    // Two distinct msids is the whole disambiguation mechanism: the receiver
+    // matches the announced `cameraStreamId` against these ids and calls the
+    // rest screen. Publishing both under one stream would make them
+    // indistinguishable on the wire.
+    expect(
+      ctx.pc().added.map((entry) => [entry.track.id, entry.streamId]),
+    ).toEqual([
+      ["cam-v", "cam"],
+      ["cap-v", "cap"],
+      ["cap-a", "cap"],
+    ]);
+  });
+
+  it("publishes both in the other order too", async () => {
+    const ctx = setup();
+    ctx.manager.connectToPeer(REMOTE);
+    await settle();
+
+    await ctx.manager.setLocalScreenStream(
+      fakeStream("cap", [track("video", "cap-v")]),
+    );
+    await ctx.manager.setLocalCameraStream(
+      fakeStream("cam", [track("video", "cam-v")]),
+    );
+
+    expect(
+      ctx.pc().added.map((entry) => [entry.track.id, entry.streamId]),
+    ).toEqual([
+      ["cap-v", "cap"],
+      ["cam-v", "cam"],
+    ]);
+  });
+
+  it("stops the share without taking the camera off the wire", async () => {
+    const ctx = setup();
+    ctx.manager.connectToPeer(REMOTE);
+    await settle();
+    await ctx.manager.setLocalCameraStream(
+      fakeStream("cam", [track("video", "cam-v")]),
+    );
+    await ctx.manager.setLocalScreenStream(
+      fakeStream("cap", [track("video", "cap-v"), track("audio", "cap-a")]),
+    );
+
+    await ctx.manager.setLocalScreenStream(null);
+
+    // Senders are looked up by role, never by `track.kind` — both video
+    // senders are video, and a lookup by kind would remove whichever came
+    // first, which here is the camera.
+    expect(ctx.pc().senders.map((s) => s.track?.id)).toEqual(["cam-v"]);
+  });
+
+  it("stops the camera without taking the share off the wire", async () => {
+    const ctx = setup();
+    ctx.manager.connectToPeer(REMOTE);
+    await settle();
+    await ctx.manager.setLocalCameraStream(
+      fakeStream("cam", [track("video", "cam-v")]),
+    );
+    await ctx.manager.setLocalScreenStream(
+      fakeStream("cap", [track("video", "cap-v"), track("audio", "cap-a")]),
+    );
+
+    await ctx.manager.setLocalCameraStream(null);
+
+    expect(ctx.pc().senders.map((s) => s.track?.id)).toEqual([
+      "cap-v",
+      "cap-a",
+    ]);
+  });
+
+  it("gives a peer that joins mid-call both, still apart", async () => {
+    const ctx = setup();
+    await ctx.manager.setLocalScreenStream(
+      fakeStream("cap", [track("video", "cap-v"), track("audio", "cap-a")]),
+    );
+    await ctx.manager.setLocalCameraStream(
+      fakeStream("cam", [track("video", "cam-v")]),
+    );
+
+    ctx.manager.connectToPeer(REMOTE);
+    await settle();
+
+    expect(
+      ctx.pc().added.map((entry) => [entry.track.id, entry.streamId]),
+    ).toEqual([
+      ["cap-v", "cap"],
+      ["cap-a", "cap"],
+      ["cam-v", "cam"],
+    ]);
+  });
+
+  // --- receiving ----------------------------------------------------------
+
+  it("keeps a peer's camera and share in their own slots, camera first", () => {
+    const ctx = setup();
+    ctx.manager.connectToPeer(REMOTE);
+    ctx.manager.setPeerCameraStreamId(REMOTE, "their-cam");
+    arriveVideo(ctx.pc(), "their-cam");
+    ctx.manager.setPeerSharingScreen(REMOTE, true);
+    arriveVideo(ctx.pc(), "share-1");
+
+    const peer = ctx.peers()[0]!;
+    expect(peer.cameraStream?.id).toBe("their-cam");
+    expect(peer.screenStream?.id).toBe("share-1");
+  });
+
+  it("does the same when the share started first", () => {
+    const ctx = setup();
+    ctx.manager.connectToPeer(REMOTE);
+    ctx.manager.setPeerSharingScreen(REMOTE, true);
+    arriveVideo(ctx.pc(), "share-1");
+    ctx.manager.setPeerCameraStreamId(REMOTE, "their-cam");
+    arriveVideo(ctx.pc(), "their-cam");
+
+    const peer = ctx.peers()[0]!;
+    expect(peer.cameraStream?.id).toBe("their-cam");
+    expect(peer.screenStream?.id).toBe("share-1");
+  });
+
+  it("does not let a camera track arriving ahead of its roster frame take the share", () => {
+    const ctx = setup();
+    ctx.manager.connectToPeer(REMOTE);
+    ctx.manager.setPeerSharingScreen(REMOTE, true);
+    arriveVideo(ctx.pc(), "share-1");
+    // The camera is announced before its track in `toggleCamera`, but the two
+    // still race across a reconnect. Until the announcement lands the camera
+    // is just "video that is not the camera" — and the screen slot being
+    // first-wins is what stops it evicting the live share.
+    arriveVideo(ctx.pc(), "their-cam");
+    expect(ctx.peers()[0]!.screenStream?.id).toBe("share-1");
+
+    ctx.manager.setPeerCameraStreamId(REMOTE, "their-cam");
+
+    const peer = ctx.peers()[0]!;
+    expect(peer.cameraStream?.id).toBe("their-cam");
+    expect(peer.screenStream?.id).toBe("share-1");
+  });
+
+  it("does not hand the screen slot to a camera that just turned off", () => {
+    const ctx = setup();
+    ctx.manager.connectToPeer(REMOTE);
+    ctx.manager.setPeerCameraStreamId(REMOTE, "their-cam");
+    arriveVideo(ctx.pc(), "their-cam");
+    ctx.manager.setPeerSharingScreen(REMOTE, true);
+    arriveVideo(ctx.pc(), "share-1");
+
+    // Camera off, share still going. The dead camera stream has to be dropped
+    // rather than left in the map: it was inserted first, so a reclassified
+    // one would win the screen slot outright and the live share would vanish
+    // behind a frozen webcam frame.
+    ctx.manager.setPeerCameraStreamId(REMOTE, null);
+
+    const peer = ctx.peers()[0]!;
+    expect(peer.cameraStream).toBeNull();
+    expect(peer.screenStream?.id).toBe("share-1");
+  });
+
+  it("shows a re-share behind a camera that never went off", () => {
+    const ctx = setup();
+    ctx.manager.connectToPeer(REMOTE);
+    ctx.manager.setPeerCameraStreamId(REMOTE, "their-cam");
+    arriveVideo(ctx.pc(), "their-cam");
+    ctx.manager.setPeerSharingScreen(REMOTE, true);
+    arriveVideo(ctx.pc(), "share-1");
+
+    // Stop and share again, with the camera untouched throughout. No
+    // `onended` on the stop, because that is what the real receiver gets.
+    ctx.manager.setPeerSharingScreen(REMOTE, false);
+    ctx.manager.setPeerSharingScreen(REMOTE, true);
+    arriveVideo(ctx.pc(), "share-2");
+
+    const peer = ctx.peers()[0]!;
+    expect(peer.screenStream?.id).toBe("share-2");
+    expect(peer.cameraStream?.id).toBe("their-cam");
+  });
+});

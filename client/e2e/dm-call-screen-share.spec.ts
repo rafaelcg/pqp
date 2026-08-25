@@ -1,24 +1,38 @@
-import { expect, test, type Browser, type Page } from "@playwright/test";
+import {
+  expect,
+  test,
+  type Browser,
+  type Locator,
+  type Page,
+} from "@playwright/test";
 
 /**
- * Screen share inside a DM *video* call — the reported regression shape.
+ * A camera and a screen share from the same person, at the same time.
  *
  * Two real clients (dev-bypass accounts, same pattern as
- * `dm-call-video-stage.spec.ts`): a 1:1 conversation call with BOTH cameras
- * on, then the caller starts a screen share mid-call. What must hold on the
- * other end:
+ * `dm-call-video-stage.spec.ts`) in a 1:1 conversation call, doing it in both
+ * orders — camera first then share, and share first then camera. What must
+ * hold on the other end:
  *
  *  - the stage flips to the "screen" layout (presenter line visible),
- *  - the share is bound to a <video> that actually renders frames
- *    (videoWidth > 0 — a black box with the right class is the bug),
- *  - the camera tiles survive as thumbnails (camera vs screen tracks must not
- *    be confused while both are live),
- *  - stopping the share returns the stage to the camera spotlight.
+ *  - the share renders real frames,
+ *  - the camera tiles keep rendering real frames while it does,
+ *  - stopping the share leaves the camera running and returns the stage to
+ *    the camera spotlight.
  *
- * The camera-and-share-together case matters: mesh classification files an
- * incoming video stream as "screen" only because its id differs from the
- * roster's announced `cameraStreamId`, and this is the scenario where both
- * kinds are on the wire at once.
+ * WHY BOTH ORDERS. Mesh classification files an incoming video stream as
+ * "screen" only because its id differs from the roster's announced
+ * `cameraStreamId`, and `classifyVideo` is first-wins over insertion order —
+ * so which of the two arrives first is a genuinely different code path, not a
+ * restatement of the same one.
+ *
+ * WHY FRAMES AND NOT `videoWidth`. This file used to assert `videoWidth > 0`,
+ * which cannot fail here. A `<video>` bound to a dead remote track keeps the
+ * dimensions of the last frame it decoded, still reports `readyState: 4`,
+ * still has an `srcObject`, is still "visible", and renders a black
+ * rectangle — which is exactly what the camera/screen mix-up produces. So
+ * every liveness check below measures decoded frames advancing across a
+ * window of real time instead. See CONTRIBUTING.md, "On tests".
  */
 
 const API = process.env.E2E_API_URL ?? "http://localhost:3101";
@@ -137,16 +151,39 @@ async function openCallee(browser: Browser, pair: CallPair) {
   return { context, page };
 }
 
-/** Wait until a tile's <video> is actually rendering frames. */
-async function expectVideoPlaying(page: Page, tileName: string) {
-  const video = page.locator(`[data-call-tile="${tileName}"] video`).first();
+/**
+ * Frames genuinely decoded into one element, sampled across real time.
+ *
+ * `getVideoPlaybackQuality().totalVideoFrames` is per-element, so it cannot be
+ * satisfied by some other live video elsewhere on the stage — which matters
+ * enormously here, where a camera tile and a share are on screen together and
+ * the bug shape is one of them being pointed at the other's dead stream. The
+ * delta is what carries the assertion: a count that is merely non-zero is a
+ * count that stopped moving some time ago.
+ */
+async function expectDecodingFrames(video: Locator, what: string) {
   await expect(video).toBeVisible({ timeout: 30_000 });
+  const frames = () =>
+    video.evaluate((el) => {
+      const media = el as HTMLVideoElement;
+      return media.getVideoPlaybackQuality?.().totalVideoFrames ?? 0;
+    });
   await expect
-    .poll(
-      () => video.evaluate((el) => (el as HTMLVideoElement).videoWidth > 0),
-      { timeout: 30_000 },
-    )
-    .toBe(true);
+    .poll(frames, { timeout: 30_000, message: `${what}: no frame ever decoded` })
+    .toBeGreaterThan(0);
+  const before = await frames();
+  // Long enough that even a badly throttled encoder clears one frame, short
+  // enough that four of these do not dominate the test's runtime.
+  await video.page().waitForTimeout(1_500);
+  expect(await frames(), `${what}: decoding stalled`).toBeGreaterThan(before);
+}
+
+/** The same, for the camera tile belonging to one named participant. */
+async function expectTileDecodingFrames(page: Page, tileName: string) {
+  await expectDecodingFrames(
+    page.locator(`[data-call-tile="${tileName}"] video`).first(),
+    `${tileName}'s camera`,
+  );
 }
 
 /**
@@ -181,9 +218,9 @@ test("a screen share started mid-video-call reaches the other side's stage", asy
     // Both cameras live before the share starts — the classification-under-
     // load scenario. The caller's camera came on with the video call; the
     // callee turns theirs on from the stage.
-    await expectVideoPlaying(callee.page, pair.callerName);
+    await expectTileDecodingFrames(callee.page, pair.callerName);
     await callee.page.getByRole("button", { name: "Turn camera on" }).click();
-    await expectVideoPlaying(page, pair.calleeName);
+    await expectTileDecodingFrames(page, pair.calleeName);
 
     // Mid-call, the caller starts sharing.
     await page
@@ -200,17 +237,11 @@ test("a screen share started mid-video-call reaches the other side's stage", asy
 
     // …and actually render the shared frames, not a black placeholder.
     const share = screenVideo(callee.page);
-    await expect(share).toBeVisible({ timeout: 20_000 });
-    await expect
-      .poll(
-        () => share.evaluate((el) => (el as HTMLVideoElement).videoWidth > 0),
-        { timeout: 30_000 },
-      )
-      .toBe(true);
+    await expectDecodingFrames(share, "the share");
 
     // Camera tiles survive as thumbnails on the rail — the share must not have
     // eaten the caller's camera tile (screen vs camera confusion).
-    await expectVideoPlaying(callee.page, pair.callerName);
+    await expectTileDecodingFrames(callee.page, pair.callerName);
 
     // Stop the share: the callee's stage returns to the camera spotlight and
     // the caller's camera keeps playing.
@@ -221,7 +252,59 @@ test("a screen share started mid-video-call reaches the other side's stage", asy
       callee.page.getByText(`${pair.callerName} is presenting`),
     ).not.toBeVisible({ timeout: 20_000 });
     await expect(share).not.toBeVisible({ timeout: 20_000 });
-    await expectVideoPlaying(callee.page, pair.callerName);
+    // The assertion the whole file exists for: the camera outlives the share.
+    // Nothing weaker than a frame delta can make this one fail, because the
+    // element is still bound to a stream that decoded frames a moment ago.
+    await expectTileDecodingFrames(callee.page, pair.callerName);
+  } finally {
+    await callee.context.close();
+  }
+});
+
+test("a camera turned on during a share joins it instead of replacing it", async ({
+  page,
+  browser,
+}) => {
+  const pair = await seedConversation("share-c", "share-d");
+  const callee = await openCallee(browser, pair);
+
+  try {
+    await openConversation(page, pair.conversationId, pair.callerSuffix);
+
+    // A voice call, so no camera exists yet anywhere: this is the order the
+    // other test cannot reach, where the share is the first video the callee
+    // ever sees from the caller and the camera arrives on top of it.
+    await page
+      .getByRole("button", { name: "Start voice call", exact: true })
+      .click();
+    await expect(page.getByTestId("call-stage")).toBeVisible({
+      timeout: 20_000,
+    });
+    await callee.page
+      .getByRole("button", { name: "Accept" })
+      .click({ timeout: 20_000 });
+
+    await page
+      .getByRole("button", { name: "Share your screen", exact: true })
+      .click();
+    await expect(page.getByText("You are presenting")).toBeVisible({
+      timeout: 20_000,
+    });
+    await expect(
+      callee.page.getByText(`${pair.callerName} is presenting`),
+    ).toBeVisible({ timeout: 20_000 });
+    const share = screenVideo(callee.page);
+    await expectDecodingFrames(share, "the share");
+
+    // Now the camera, with the share already up. On the mesh this is a second
+    // video track on a connection that already carries one, and the callee
+    // tells them apart by the `cameraStreamId` the roster announces.
+    await page.getByRole("button", { name: "Turn camera on" }).click();
+
+    // Both, together: the camera arrives as its own tile and the share is
+    // still the share. Either one pointing at the other's stream is the bug.
+    await expectTileDecodingFrames(callee.page, pair.callerName);
+    await expectDecodingFrames(share, "the share, with a camera alongside it");
   } finally {
     await callee.context.close();
   }

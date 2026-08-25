@@ -40,7 +40,7 @@ They cost days, not weeks.
 | 8 | ✅ Per-server and per-channel notification levels | notifications | high | medium |
 | 9 | Installable PWA (manifest, icons, service worker) | platform | high | small |
 | 10 | ✅ Message search | discovery | high | medium |
-| 11 | Screen share with audio | screen-share | critical | large |
+| 11 | ✅ Screen share with audio | screen-share | critical | large |
 | 12 | Call quality indicators and a TURN-relay badge | diagnostics | medium | small |
 | 13 | ✅ Theming: light mode, a token layer, and synced user preferences | theming | medium | medium |
 | 14 | ✅ Channel categories and drag-to-reorder | server-structure | high | medium |
@@ -269,39 +269,35 @@ UI: a small bars component in `PeerRow` and an aggregate in voice-status-bar.tsx
 
 This is a disproportionate win for a self-hostable product: CLAUDE.md pitfall 1 records a whole debugging cycle on cross-NAT failure that a relay badge would have made obvious in one glance, and every operator who wires their own `TURN_*` vars will hit the same question.
 
-#### 11. Screen share with audio
+#### 11. ✅ Screen share with audio
 
-*critical pain · large · screen-share*
+*critical pain · large · screen-share — shipped 2026-08*
 
 **Why it matters.** Watching someone's screen while talking is why most groups open a voice channel at all, so the moment anyone says "let me show you" the whole group leaves for Discord or Meet.
 
-**Today.** Nothing. `createMicPipeline` (client/src/hooks/use-voice.ts:95) calls getUserMedia with `video: false`, and there is no `getDisplayMedia` call anywhere in client/src. The LiveKit path explicitly drops non-audio tracks (client/src/lib/livekit-session.ts:82-95, `if (track.kind !== Track.Kind.Audio) return`). Electron allows the `display-capture` permission (electron/main.js:260-281) but registers no handler, so getDisplayMedia would reject there.
+**What shipped, and where it differs from the original sketch.** Screen share works on both transports, with the capture's system audio when the browser offers one. `startScreenShare` (client/src/hooks/use-voice.ts) calls `getDisplayMedia`, `setLocalScreenStream` (client/src/lib/peer-connection-manager.ts) publishes it to every peer, and `publishScreen` (client/src/lib/livekit-session.ts) does the same on the SFU. Electron registers `setDisplayMediaRequestHandler` over `desktopCapturer` (electron/main.js) with an in-app source picker, as sketched.
 
-**Sketch.**
+**No `onnegotiationneeded`.** The sketched hard blocker was real but was solved by negotiating explicitly rather than by the event: `setLocalScreenStream` issues one offer covering both new m-lines (a second offer while the first answer is in flight is glare, which perfect negotiation resolves by dropping it), and `scheduleRenegotiation` re-offers a local track that ended up with no m-line at all, which is the case an answer landing at the wrong moment used to lose silently.
 
-HARD BLOCKER FIRST (mesh): client/src/lib/peer-connection-manager.ts never sets `pc.onnegotiationneeded` — offers are only created in `connectToPeer` (:449), `retryPeer` (:513) and `restartIce` (:164), so adding a track to a live PC never renegotiates. Add an `onnegotiationneeded` handler feeding the existing perfect-negotiation logic (`isImpolite`/`applyRemoteDescription`); the offer/answer/ice-candidate protocol in packages/shared/src/signaling.ts supports it unchanged.
+**Track routing went four ways, not two.** `RemotePeer` carries `stream` (their microphone), `screenStream`, `cameraStream` and `screenAudioStream`. Incoming media is held in `videoStreams`/`audioStreams` maps keyed by the *sender-side* MediaStream id, and re-classified whenever either a track or a roster frame arrives, because the two race. Screen audio is deliberately kept out of the microphone slot: the two play through different sinks, and merging them would put a film under the same speaking detection as the presenter's voice.
 
-TRACK ROUTING: `ontrack` (peer-connection-manager.ts:257) overwrites `managed.stream` with `event.streams[0]`, so a second track from the same peer clobbers the audio stream. Split `RemotePeer` into `audioStream`/`videoStream` (or key by `track.kind` + transceiver mid) and publish the screen with `addTrack(track, screenStream)` under a distinct stream id.
+**The protocol is stream ids, not a `publishing` bitfield.** `voiceParticipantSchema` (packages/shared/src/signaling.ts) carries `sharingScreen`, `cameraStreamId` and `screenAudioStreamId`; the client frames are `set-sharing-screen` and `set-camera`. The ids exist because a mesh receiver has no other way to tell a camera track from a screen track, or a presentation's sound from a voice. The screen *video* is the one incoming stream with nothing announced. It is defined negatively, as "video that is not the announced camera", which is why `setPeerSharingScreen` exists at all: without it, a share ending leaves a dead stream in the map and the next share renders black behind it.
 
-PROTOCOL: extend `voiceParticipantSchema` with `publishing: { camera: boolean, screen: boolean }` and add `{ type: "voice-publish", kind, active }` client → `peer-publish` broadcast in packages/shared/src/signaling.ts and server/src/ws/voice.ts, so the sidebar shows a LIVE badge before media arrives and peers know a renegotiation is coming.
+**A camera and a screen share run at the same time**, on both transports, and this is the arrangement most of the tests are about. Mesh publishes them as two video senders under two stream ids, looked up by role and never by `track.kind`; LiveKit publishes them under `Track.Source.Camera` and `Track.Source.ScreenShare`. Coverage: `client/src/lib/peer-connection-manager.test.ts`, `client/src/lib/livekit-session.test.ts`, `client/src/hooks/use-voice-calls.test.ts` and the two-browser `client/e2e/dm-call-screen-share.spec.ts`.
 
-SFU: server/src/voice/backends.ts:58 sets `canPublishData:false` and no `canPublishSources` — allow `microphone`/`screen_share`/`screen_share_audio`. In livekit-session.ts use `room.localParticipant.setScreenShareEnabled(true, { audio: true })`, stop filtering video in TrackSubscribed, flip `adaptiveStream` to true (currently false, :56), enable simulcast.
+**Caps and bitrates.** `SCREEN_SHARE_LIMIT` (packages/shared/src/voice-backend.ts) is 2 concurrent sharers on mesh and 4 on LiveKit, enforced server-side in the `set-sharing-screen` handler and answered with `screen-share-denied`. A mesh sender's ceiling is the user's chosen quality intersected with a budget divided by the room; an SFU sender gets the chosen ceiling whole, because it uploads one copy however many people are watching. Both video senders run `degradationPreference: "maintain-framerate"` and a `"motion"` content hint, which is what keeps a film from turning into stills.
 
-CLIENT UI: new `client/src/components/voice/screen-stage.tsx` (focused video + thumbnail strip), a `<video>` sink alongside client/src/components/voice/voice-audio-sinks.tsx, share/stop controls in voice-panel.tsx and voice-status-bar.tsx.
-
-ELECTRON: register `session.setDisplayMediaRequestHandler` with `desktopCapturer.getSources` in electron/main.js plus an in-app source picker over the `pqpDesktop` bridge. macOS system audio needs a loopback device — degrade to video-only with a clear message.
-
-MESH VS SFU: one sharer to N viewers on mesh is N independent encodes — cap mesh sharing at ~2-3 viewers / 720p15 and require the SFU above that, refusing with the existing `voice-room-full`-style server gate in server/src/ws/voice.ts.
+**Still open.** `adaptiveStream` is `false` and simulcast is off for both video sources on the SFU path. macOS still gives no system audio for a screen or window capture, which is a platform limit rather than a gap: the share goes ahead silent and says so.
 
 #### 15. Camera video in voice channels
 
 *medium pain · medium · video*
   
-Depends on: Screen share with audio — same renegotiation fix, same multi-track RemotePeer split, same video sink
+Depended on: Screen share with audio, which shipped. The renegotiation fix, the multi-track `RemotePeer` split and the video sink all exist now, and the camera rides on all three inside conversation calls. What is left is a voice channel that can show one.
 
-**Why it matters.** pqp advertises "Voice & Video" in its own settings UI and then offers no video, so anyone expecting a face-to-face standup gets a phone call.
+**Why it matters.** pqp advertises "Voice & Video" in its own settings UI, and a server voice channel still offers no video, so anyone expecting a face-to-face standup in the channel they already sit in gets a phone call.
 
-**Today.** Nothing. Audio-only end to end: mic capture is `video: false` (client/src/hooks/use-voice.ts:97), `VoiceAudioSinks` mounts only `<audio>` elements (client/src/components/voice/voice-audio-sinks.tsx:54), and `listAudioDevices` (client/src/lib/audio-devices.ts:28) enumerates only audioinput/audiooutput — there is no camera picker. The "Voice & Video" heading is at client/src/components/layout/settings-modal.tsx:432.
+**Today.** Half of it, in the wrong half of the product. A camera exists and works. `toggleCamera` (client/src/hooks/use-voice.ts) captures at the chosen quality, publishes alongside any screen share on both transports, and renders on the DM call stage (client/src/components/dm/dm-call-stage.tsx). But it is reachable only from a **conversation call**. A server voice channel offers no camera button and draws no remote camera: the voice panel renders `<audio>` sinks plus the screen stage, and nothing else. There is still no camera picker either: `listAudioDevices` (client/src/lib/audio-devices.ts) enumerates only audioinput/audiooutput, so the camera is whatever the OS calls the default. The "Voice & Video" heading is at client/src/components/layout/settings-modal.tsx.
 
 **Sketch.**
 

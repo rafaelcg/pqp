@@ -13,6 +13,8 @@ interface ManagerStub {
   peerIds: string[];
   cameraStreamIds: [string, string | null][];
   localCameraStreams: (MediaStream | null)[];
+  /** Every capture handed to the mesh, in order. `null` means "stop sharing". */
+  localScreenStreams: (MediaStream | null)[];
   /** Ceilings handed to the manager, in order. See the video-quality tests. */
   cameraMaxBitrates: number[];
   /** Screen qualities handed to the manager, in order. */
@@ -37,12 +39,15 @@ vi.mock("@/lib/peer-connection-manager", () => ({
       cameraMaxBitrates: [],
       screenQualities: [],
       localCameraStreams: [],
+      localScreenStreams: [],
       disposed: false,
     };
     managers.push(stub);
     return {
       setLocalStream: () => {},
-      setLocalScreenStream: async () => {},
+      setLocalScreenStream: async (stream: MediaStream | null) => {
+        stub.localScreenStreams.push(stream);
+      },
       setLocalCameraStream: async (stream: MediaStream | null) => {
         stub.localCameraStreams.push(stream);
       },
@@ -142,6 +147,10 @@ function installBrowserStubs() {
         }
         return fakeStream("camera", "video");
       },
+      // Present so `supportsScreenShare()` says yes: the camera and a share
+      // are separate features that have to run at the same time, and the
+      // combined tests below are the only ones here that reach for it.
+      getDisplayMedia: async () => fakeStream("screen", "video"),
     },
   });
   g.AudioContext = class {
@@ -531,5 +540,115 @@ describe("camera", () => {
     expect(
       managers[0]!.cameraStreamIds.some(([peerId]) => peerId === PEER),
     ).toBe(false);
+  });
+});
+
+/**
+ * The camera and a screen share, running together.
+ *
+ * The product is sold on this combination ("voz, texto, tela e câmera"), and
+ * nothing in the UI stops a person doing both, so the controller has to keep
+ * two captures and two announcements apart. The failure mode is not an error:
+ * it is one of the two silently going away, which is exactly what a person
+ * only notices once somebody on the other end tells them.
+ *
+ * The mesh's side of this is pinned in `lib/peer-connection-manager.test.ts`
+ * and the SFU's in `lib/livekit-session.test.ts`. What is left here is the
+ * controller: both captures held, both declared to the room, and stopping one
+ * leaving the other completely alone.
+ */
+describe("camera and screen share together", () => {
+  async function connectedController() {
+    const { transport, sent } = createTransport();
+    const voice = createVoiceController(transport);
+    await voice.join(CONVERSATION);
+    voice.handleSignaling(welcome([participant(REMOTE_PEER, REMOTE_USER)]));
+    await settle();
+    return { voice, sent };
+  }
+
+  it("runs both when the camera comes on during a share", async () => {
+    const { voice, sent } = await connectedController();
+
+    await voice.startScreenShare();
+    await voice.toggleCamera();
+
+    const state = voice.getState();
+    expect(state.isSharingScreen).toBe(true);
+    expect(state.isCameraOn).toBe(true);
+    expect(state.localScreenStream).not.toBeNull();
+    expect(state.localCameraStream).not.toBeNull();
+    // Both declared to the room. The share is what the roster's
+    // `sharingScreen` reads; the camera id is what receivers classify against,
+    // and neither declaration cancels the other.
+    expect(
+      sent
+        .filter((m) => m.type === "set-sharing-screen" || m.type === "set-camera")
+        .map((m) => [m.type, m.sharing ?? m.streamId]),
+    ).toEqual([
+      ["set-sharing-screen", true],
+      ["set-camera", "stream-camera"],
+    ]);
+    // And both captures reached the mesh, as two separate publications.
+    expect(managers[0]!.localScreenStreams).toHaveLength(1);
+    expect(managers[0]!.localCameraStreams).toHaveLength(1);
+  });
+
+  it("runs both when the share starts on top of a live camera", async () => {
+    const { voice, sent } = await connectedController();
+
+    await voice.toggleCamera();
+    await voice.startScreenShare();
+
+    const state = voice.getState();
+    expect(state.isCameraOn).toBe(true);
+    expect(state.isSharingScreen).toBe(true);
+    expect(
+      sent
+        .filter((m) => m.type === "set-sharing-screen" || m.type === "set-camera")
+        .map((m) => [m.type, m.sharing ?? m.streamId]),
+    ).toEqual([
+      ["set-camera", "stream-camera"],
+      ["set-sharing-screen", true],
+    ]);
+  });
+
+  it("stopping the share leaves the camera on", async () => {
+    const { voice, sent } = await connectedController();
+    await voice.toggleCamera();
+    await voice.startScreenShare();
+
+    await voice.stopScreenShare();
+
+    const state = voice.getState();
+    expect(state.isSharingScreen).toBe(false);
+    expect(state.isCameraOn).toBe(true);
+    expect(state.localCameraStream).not.toBeNull();
+    // The share's capture was released and the camera's was not: a webcam
+    // light left on is the one outcome this controller refuses everywhere.
+    expect(stoppedTracks).toContain("screen");
+    expect(stoppedTracks).not.toContain("camera");
+    // Nothing withdrew the camera from the roster on the way out.
+    expect(sent.filter((m) => m.type === "set-camera").map((m) => m.streamId))
+      .toEqual(["stream-camera"]);
+    expect(managers[0]!.localCameraStreams).toEqual([expect.anything()]);
+  });
+
+  it("turning the camera off leaves the share running", async () => {
+    const { voice, sent } = await connectedController();
+    await voice.startScreenShare();
+    await voice.toggleCamera();
+
+    await voice.toggleCamera();
+
+    const state = voice.getState();
+    expect(state.isCameraOn).toBe(false);
+    expect(state.isSharingScreen).toBe(true);
+    expect(state.localScreenStream).not.toBeNull();
+    expect(stoppedTracks).toContain("camera");
+    expect(stoppedTracks).not.toContain("screen");
+    // Only the camera was withdrawn; the share is still announced.
+    expect(sent.filter((m) => m.type === "set-sharing-screen")).toHaveLength(1);
+    expect(managers[0]!.localScreenStreams).toEqual([expect.anything()]);
   });
 });
