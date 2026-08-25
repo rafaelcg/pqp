@@ -56,12 +56,24 @@
     <string name="voice_participants">%1$d na chamada</string>
     <string name="voice_peer_unreachable">Não foi possível alcançar todo mundo na chamada</string>
 
+    <!-- Notificações -->
+    <string name="push_channel_messages">Menções e mensagens</string>
+    <string name="push_channel_messages_description">Quando alguém menciona você, responde você ou manda uma mensagem direta com o app fechado.</string>
+    <string name="push_fallback_body">Nova atividade</string>
+    <string name="push_settings_title">Notificações</string>
+    <string name="push_settings_summary">Avisar sobre menções, respostas e mensagens diretas com o app fechado.</string>
+    <string name="push_settings_unavailable">Esta versão do app não tem serviço de notificações configurado.</string>
+    <string name="push_settings_server_unsupported">Este servidor ainda não envia notificações para o Android.</string>
+    <string name="push_settings_denied">As notificações do pqp estão desativadas nos ajustes do Android.</string>
+    <string name="push_settings_working">Registrando…</string>
+
     <!-- Você -->
     <string name="you_title">Você</string>
     <string name="you_backend">Servidor</string>
     <string name="you_version">Versão</string>
 
     <!-- Genéricos -->
+    <string name="chat_untitled">Conversa</string>
     <string name="cancel">Cancelar</string>
     <string name="error_generic">Algo deu errado.</string>
     <string name="error_network">O servidor não respondeu.</string>

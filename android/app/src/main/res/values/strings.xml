@@ -56,12 +56,24 @@
     <string name="voice_participants">%1$d in this call</string>
     <string name="voice_peer_unreachable">Cannot reach everyone in this call</string>
 
+    <!-- Push notifications -->
+    <string name="push_channel_messages">Mentions and messages</string>
+    <string name="push_channel_messages_description">Someone mentioning you, replying to you, or sending you a direct message while the app is closed.</string>
+    <string name="push_fallback_body">New activity</string>
+    <string name="push_settings_title">Notifications</string>
+    <string name="push_settings_summary">Get notified about mentions, replies and direct messages while the app is closed.</string>
+    <string name="push_settings_unavailable">This build has no notification service configured.</string>
+    <string name="push_settings_server_unsupported">This server cannot send notifications to Android yet.</string>
+    <string name="push_settings_denied">Notifications are turned off for pqp in Android settings.</string>
+    <string name="push_settings_working">Registering…</string>
+
     <!-- You -->
     <string name="you_title">You</string>
     <string name="you_backend">Server</string>
     <string name="you_version">Version</string>
 
     <!-- Generic -->
+    <string name="chat_untitled">Conversation</string>
     <string name="cancel">Cancel</string>
     <string name="error_generic">Something went wrong.</string>
     <string name="error_network">The server did not answer.</string>

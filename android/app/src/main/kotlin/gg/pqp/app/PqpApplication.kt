@@ -37,6 +37,13 @@ class PqpApplication : Application(), SingletonImageLoader.Factory {
     lateinit var voice: gg.pqp.app.voice.VoiceController
         private set
 
+    /**
+     * Application-scoped because a push can arrive, be drawn and be tapped with
+     * no Activity in the process at all.
+     */
+    lateinit var push: gg.pqp.app.push.PushController
+        private set
+
     override fun onCreate() {
         super.onCreate()
 
@@ -51,6 +58,7 @@ class PqpApplication : Application(), SingletonImageLoader.Factory {
         http = gg.pqp.app.core.ApiClient.defaultHttpClient()
         session = SessionStore(appScope, http)
         voice = gg.pqp.app.voice.VoiceController(this, session, appScope)
+        push = gg.pqp.app.push.PushController(this, session, appScope)
     }
 
     /**

@@ -50,6 +50,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil3.compose.AsyncImage
@@ -59,6 +60,7 @@ import gg.pqp.app.core.Message
 import gg.pqp.app.core.RealtimeState
 import gg.pqp.app.core.SessionPhase
 import gg.pqp.app.core.SessionStore
+import gg.pqp.app.push.VisibleChannel
 import gg.pqp.app.ui.components.Avatar
 import java.time.Instant
 import java.time.ZoneId
@@ -72,10 +74,13 @@ fun ChatScreen(
     channelName: String,
     onBack: () -> Unit,
     /**
-     * What the app bar says. A server channel is `#name`; a conversation is a
-     * person's name, because there is no channel there to prefix.
+     * What the app bar says, when the caller knows better than this screen
+     * does. A conversation passes a person's name, because there is no channel
+     * there to prefix. Left null, a server channel renders `#name`, and a
+     * channel opened from a notification tap (which carries ids, never a
+     * channel record) renders a placeholder rather than a bare `#`.
      */
-    title: String = "#$channelName",
+    title: String? = null,
 ) {
     val model: ChatViewModel = viewModel(
         key = channelId,
@@ -85,6 +90,19 @@ fun ChatScreen(
     val connection by session.realtime.state.collectAsStateWithLifecycle()
     val phase by session.phase.collectAsStateWithLifecycle()
     val me = (phase as? SessionPhase.Ready)?.me
+
+    // What stops a push firing about the conversation already on screen.
+    //
+    // A lifecycle effect rather than a plain DisposableEffect, and that is the
+    // whole point: this has to be false the moment the app is backgrounded,
+    // which is exactly when a notification is wanted most. `LifecycleStartEffect`
+    // enters on START and leaves on STOP, so a chat still in the back stack
+    // behind a locked screen does not count as being read. See
+    // gg.pqp.app.push.PushPresentation.
+    LifecycleStartEffect(channelId) {
+        VisibleChannel.enter(channelId)
+        onStopOrDispose { VisibleChannel.leave(channelId) }
+    }
 
     val listState = rememberLazyListState()
     var draft by remember { mutableStateOf("") }
@@ -106,7 +124,18 @@ fun ChatScreen(
         topBar = {
             Column {
                 TopAppBar(
-                    title = { Text(title) },
+                    // A notification tap can open a channel whose name is not
+                    // known yet; "#" on its own is not a title.
+                    title = {
+                        Text(
+                            title
+                                ?: if (channelName.isBlank()) {
+                                    stringResource(R.string.chat_untitled)
+                                } else {
+                                    "#$channelName"
+                                },
+                        )
+                    },
                     navigationIcon = {
                         IconButton(onClick = onBack) {
                             Icon(

@@ -6,6 +6,12 @@ build/
 # publishable key). Never committed, like every other .env in this repo.
 local.properties
 
+# The Firebase project's client config. Not a secret in Google's sense, but it
+# names a live project on somebody's billing account, and this repo is public.
+# Its absence is also what keeps push switched off by default; see the note on
+# `pushAvailable` in app/build.gradle.kts.
+app/google-services.json
+
 *.iml
 .idea/
 captures/

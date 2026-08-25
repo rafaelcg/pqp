@@ -35,6 +35,7 @@ import gg.pqp.app.core.AuthMode
 import gg.pqp.app.core.Backend
 import gg.pqp.app.core.SessionPhase
 import gg.pqp.app.core.SessionStore
+import gg.pqp.app.push.PushSettingsSection
 import gg.pqp.app.ui.components.Avatar
 import kotlinx.coroutines.launch
 
@@ -106,6 +107,10 @@ fun YouScreen(session: SessionStore, onBack: () -> Unit) {
                 stringResource(R.string.you_version),
                 "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
             )
+
+            Spacer(Modifier.height(8.dp))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            PushSettingsSection()
 
             Spacer(Modifier.height(16.dp))
             OutlinedButton(
