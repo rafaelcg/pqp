@@ -467,6 +467,35 @@ xcodebuild -project pqp.xcodeproj -scheme pqp \
 
 They will fail without the server running. That is intentional.
 
+## Your own data: export and deletion
+
+**Account deletion is an App Store submission requirement, not a feature.**
+Review Guideline 5.1.1(v): an app that supports account creation must let the
+account be deleted from inside the app. Both rights live in the last section of
+Settings (`Sources/Home/AccountDataViews.swift`), against the same endpoints the
+web client uses.
+
+- **Export** — `GET /api/me/export`. The bytes are written to a temp file and
+  handed to the share sheet, because a phone has nowhere to "download" to. Same
+  arrangement as the community export in Server settings; both go through
+  `APIClient.rawGet`.
+- **Deletion** — `DELETE /api/me`, with the account's own tag typed by hand.
+  `AccountDeletion` mirrors `deleteConfirmationMatches` from `@pqp/shared`, so
+  the button being enabled and the server accepting the request cannot drift
+  apart. Three refusals matter: 400 (what was typed does not match), 409 with
+  `code: "owned_servers"` (communities other people are still in, listed by name
+  so the screen can say which), and 502 (the identity provider refused; nothing
+  was deleted and retrying is safe). Afterwards the app calls
+  `SessionStore.signOut`, which is the right local teardown even though there is
+  no session left to end.
+
+The UI test deletes a **throwaway** dev-bypass account rather than the shared
+one. `PQP_DEV_USER=<suffix>` makes `DevTokenProvider` send
+`dev-local-token:<suffix>`, which the server's bypass mints as a separate
+identity; without that, running the suite would destroy the servers,
+conversations and handle every other test reads. Debug-only, like
+`PQP_API_OVERRIDE`.
+
 ## Parity with the web client
 
 Both clients talk to the same API — there is no mobile backend and no BFF — so
@@ -487,6 +516,9 @@ per-peer volume.
 
 Also done: **native push notifications** (APNs — see above) and invite links that
 open the app, by universal link or `pqp://`.
+
+Also done: **your own data** — the personal export and account deletion, in
+their own Settings section. See below.
 
 Still only on web: drag-to-reorder within a category (channels can be moved
 between categories, but not dragged into a position).
