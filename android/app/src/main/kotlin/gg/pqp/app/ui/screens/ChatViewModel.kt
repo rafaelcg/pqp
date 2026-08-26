@@ -62,8 +62,18 @@ class ChatViewModel(
                     loading = false,
                 )
             }
-            .onFailure {
-                _state.value = _state.value.copy(loading = false, error = it.message)
+            .onFailure { failure ->
+                // `it.message` alone is not safe to test for "did this fail".
+                // `NetworkOnMainThreadException` carries a null message, so the
+                // failure that caused this whole investigation recorded itself
+                // as no failure at all and the screen said the channel was
+                // empty. Fall back to the class name so a thrown thing is
+                // always visibly a thrown thing.
+                _state.value = _state.value.copy(
+                    loading = false,
+                    error = failure.message?.takeIf { it.isNotBlank() }
+                        ?: failure::class.java.simpleName,
+                )
             }
         session.realtime.joinChannel(channelId)
     }

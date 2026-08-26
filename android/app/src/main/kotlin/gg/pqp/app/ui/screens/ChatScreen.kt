@@ -180,6 +180,16 @@ fun ChatScreen(
                     CircularProgressIndicator()
                 }
 
+                // A history fetch that failed is not an empty channel, and
+                // saying "Nothing here yet. Say something." to somebody whose
+                // transcript just failed to load invites them to retype a
+                // conversation that is still there. `loadInitial` has recorded
+                // the reason since it was written and nothing read it, so the
+                // one screen that could tell the truth showed the one sentence
+                // guaranteed to be wrong.
+                state.messages.isEmpty() && state.error != null ->
+                    EmptyState(stringResource(R.string.chat_load_failed, state.error.orEmpty()))
+
                 state.messages.isEmpty() -> EmptyState(stringResource(R.string.chat_empty))
 
                 else -> {

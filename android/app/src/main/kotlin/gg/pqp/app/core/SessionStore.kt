@@ -136,6 +136,34 @@ class SessionStore(
     }
 
     /**
+     * Delete a community, or leave one, then re-read the list.
+     *
+     * Both refusals are handed to [onError] in the server's own words, the way
+     * [createServer] and [redeemInvite] do: only the server knows whether a
+     * delete was refused because the caller is no longer the owner, or a leave
+     * because they are.
+     *
+     * These two are the reason `DELETE /api/me` is not a dead end on Android.
+     * Its 409 tells somebody to hand over or delete the communities they own,
+     * and until now the app had nowhere to do either.
+     */
+    fun deleteServer(serverId: String, onError: (String) -> Unit) {
+        scope.launch {
+            runCatching { api.deleteServer(serverId) }
+                .onSuccess { refreshServers() }
+                .onFailure { onError(it.message.orEmpty()) }
+        }
+    }
+
+    fun leaveServer(serverId: String, onError: (String) -> Unit) {
+        scope.launch {
+            runCatching { api.leaveServer(serverId) }
+                .onSuccess { refreshServers() }
+                .onFailure { onError(it.message.orEmpty()) }
+        }
+    }
+
+    /**
      * Redeem an invite and answer with the server it let us into, or null if it
      * was refused, in which case [linkError] carries the server's reason.
      *

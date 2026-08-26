@@ -22,6 +22,16 @@
     <string name="servers_create">Novo servidor</string>
     <string name="servers_create_name">Nome do servidor</string>
     <string name="servers_create_confirm">Criar</string>
+    <string name="server_actions">Ações da comunidade</string>
+    <string name="server_leave">Sair da comunidade</string>
+    <string name="server_leave_title">Sair de %1$s?</string>
+    <string name="server_leave_body">Você deixa de ver os canais e as mensagens de lá. Dá para voltar depois com um convite novo.</string>
+    <string name="server_leave_confirm">Sair</string>
+    <string name="server_delete">Excluir comunidade</string>
+    <string name="server_delete_title">Excluir %1$s?</string>
+    <string name="server_delete_body">Não tem como desfazer. Os canais, todas as mensagens neles e a participação de todo mundo vão junto.</string>
+    <string name="server_delete_confirm_prompt">Digite o nome da comunidade para confirmar</string>
+    <string name="server_delete_confirm">Excluir para sempre</string>
 
     <!-- Canais -->
     <string name="channels_empty">Nenhum canal aqui ainda.</string>
@@ -30,6 +40,7 @@
     <string name="chat_composer_hint">Mensagem</string>
     <string name="chat_send">Enviar</string>
     <string name="chat_empty">Nada aqui ainda. Diga alguma coisa.</string>
+    <string name="chat_load_failed">Não foi possível carregar esta conversa. %1$s</string>
     <string name="chat_edited">editada</string>
     <string name="chat_typing_one">%1$s está digitando…</string>
     <string name="chat_typing_many">Várias pessoas estão digitando…</string>
@@ -179,7 +190,7 @@
     <string name="delete_kept_reports">Denúncias que outras pessoas fizeram sobre você, sem o seu nome. Não podemos deixar que excluir a conta sirva para limpar o próprio histórico.</string>
     <string name="delete_kept_note">Tudo isso é descartado no ritmo de cada um. A política de privacidade explica em detalhe.</string>
     <string name="delete_blocking_title">Faça uma destas primeiro, em cada comunidade sua</string>
-    <string name="delete_blocking_note">Ainda tem gente nessas comunidades, então não vamos excluí-las por baixo delas. Nas configurações de cada comunidade, passe-a para outra pessoa ou exclua-a você mesmo.</string>
+    <string name="delete_blocking_note">Ainda tem gente nessas comunidades, então não vamos excluí-las por baixo delas. Volte para a lista de servidores, abra o menu da comunidade e exclua por ali, ou passe a comunidade para outra pessoa pelo app da web ou do computador.</string>
     <plurals name="delete_blocking_members">
         <item quantity="one">mais %1$d pessoa</item>
         <item quantity="other">mais %1$d pessoas</item>

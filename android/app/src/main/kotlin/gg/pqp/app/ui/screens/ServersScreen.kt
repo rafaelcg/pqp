@@ -14,10 +14,15 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
@@ -44,6 +49,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -68,6 +75,16 @@ fun ServersScreen(
 
     var refreshing by remember { mutableStateOf(false) }
     var creating by remember { mutableStateOf(false) }
+    var leaving by remember { mutableStateOf<ServerSummary?>(null) }
+    var deleting by remember { mutableStateOf<ServerSummary?>(null) }
+
+    // A refusal is the server's sentence, verbatim. Only it knows whether a
+    // delete was refused because the caller is no longer the owner, or a leave
+    // because they are. The fallback is used only when it said nothing at all.
+    val fallback = stringResource(R.string.error_network)
+    val refused: (String) -> Unit = { message ->
+        scope.launch { snackbars.showSnackbar(message.ifBlank { fallback }) }
+    }
 
     LaunchedEffect(Unit) { session.refreshServers() }
 
@@ -120,7 +137,12 @@ fun ServersScreen(
                     modifier = Modifier.fillMaxSize(),
                 ) {
                     items(servers, key = { it.id }) { server ->
-                        ServerRow(server) { onOpenServer(server) }
+                        ServerRow(
+                            server = server,
+                            onClick = { onOpenServer(server) },
+                            onLeave = { leaving = server },
+                            onDelete = { deleting = server },
+                        )
                     }
                 }
             }
@@ -138,10 +160,69 @@ fun ServersScreen(
             },
         )
     }
+
+    leaving?.let { server ->
+        LeaveServerDialog(
+            server = server,
+            onDismiss = { leaving = null },
+            onConfirm = {
+                leaving = null
+                session.leaveServer(server.id, refused)
+            },
+        )
+    }
+
+    deleting?.let { server ->
+        DeleteServerDialog(
+            server = server,
+            onDismiss = { deleting = null },
+            onConfirm = {
+                deleting = null
+                session.deleteServer(server.id, refused)
+            },
+        )
+    }
 }
 
+/**
+ * What a member can do to a community from the list, as values.
+ *
+ * Split out from the composables so the one rule with an edge to get wrong is
+ * testable: the typed name is compared the way `AccountDeletion` compares a
+ * typed tag, trimmed and case-insensitively, because the requirement is
+ * deliberate intent rather than typing accuracy.
+ */
+object ServerActions {
+
+    const val OWNER_ROLE = "owner"
+
+    /**
+     * A missing role is treated as *not* owner, so the row offers Leave. If
+     * that turns out to be wrong the server refuses it in its own words, which
+     * is better than offering a destructive action on a guess.
+     */
+    fun isOwner(role: String?): Boolean = role == OWNER_ROLE
+
+    fun deleteConfirmationMatches(typed: String, name: String): Boolean =
+        typed.trim().lowercase() == name.trim().lowercase()
+}
+
+/**
+ * A community, and the two things that can be done to it.
+ *
+ * The overflow menu is not decoration. `DELETE /api/me` refuses while the
+ * account still owns a community somebody else is in, and told people to go to
+ * that community's settings, which this app does not have. This is where an
+ * Android user actually unblocks their own account deletion.
+ */
 @Composable
-private fun ServerRow(server: ServerSummary, onClick: () -> Unit) {
+private fun ServerRow(
+    server: ServerSummary,
+    onClick: () -> Unit,
+    onLeave: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    var menuOpen by remember { mutableStateOf(false) }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -163,7 +244,114 @@ private fun ServerRow(server: ServerSummary, onClick: () -> Unit) {
                 )
             }
         }
+        Box {
+            IconButton(onClick = { menuOpen = true }) {
+                Icon(
+                    Icons.Filled.MoreVert,
+                    contentDescription = stringResource(R.string.server_actions),
+                )
+            }
+            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                if (ServerActions.isOwner(server.role)) {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.server_delete)) },
+                        onClick = {
+                            menuOpen = false
+                            onDelete()
+                        },
+                    )
+                } else {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.server_leave)) },
+                        onClick = {
+                            menuOpen = false
+                            onLeave()
+                        },
+                    )
+                }
+            }
+        }
     }
+}
+
+/**
+ * Leaving is reversible with a new invite and destroys nothing, so it is a
+ * plain confirmation rather than a typed one.
+ */
+@Composable
+private fun LeaveServerDialog(
+    server: ServerSummary,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.server_leave_title, server.name)) },
+        text = { Text(stringResource(R.string.server_leave_body)) },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text(stringResource(R.string.server_leave_confirm))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) }
+        },
+    )
+}
+
+/**
+ * Deleting is not, so it asks for the community's name to be typed, the same
+ * way `DeleteAccountDialog` asks for a tag: it says what goes before it asks,
+ * prints the name as a value to copy rather than a sentence to read, and keeps
+ * the destructive button dark until the typed name matches.
+ */
+@Composable
+private fun DeleteServerDialog(
+    server: ServerSummary,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    var typed by remember { mutableStateOf("") }
+    val confirmed = ServerActions.deleteConfirmationMatches(typed, server.name)
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.server_delete_title, server.name)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(stringResource(R.string.server_delete_body))
+                Text(stringResource(R.string.server_delete_confirm_prompt))
+                Text(
+                    text = server.name,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                OutlinedTextField(
+                    value = typed,
+                    onValueChange = { typed = it },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(
+                        capitalization = KeyboardCapitalization.None,
+                        autoCorrectEnabled = false,
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = onConfirm,
+                enabled = confirmed,
+                colors = ButtonDefaults.textButtonColors(
+                    contentColor = MaterialTheme.colorScheme.error,
+                ),
+            ) {
+                Text(stringResource(R.string.server_delete_confirm))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) }
+        },
+    )
 }
 
 @Composable

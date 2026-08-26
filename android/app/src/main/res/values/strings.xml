@@ -22,6 +22,16 @@
     <string name="servers_create">New server</string>
     <string name="servers_create_name">Server name</string>
     <string name="servers_create_confirm">Create</string>
+    <string name="server_actions">Community actions</string>
+    <string name="server_leave">Leave community</string>
+    <string name="server_leave_title">Leave %1$s?</string>
+    <string name="server_leave_body">You stop seeing its channels and messages. You can come back later with a new invite.</string>
+    <string name="server_leave_confirm">Leave</string>
+    <string name="server_delete">Delete community</string>
+    <string name="server_delete_title">Delete %1$s?</string>
+    <string name="server_delete_body">This cannot be undone. Its channels, every message in them and everybody\u2019s membership go with it.</string>
+    <string name="server_delete_confirm_prompt">Type the community name to confirm</string>
+    <string name="server_delete_confirm">Delete for ever</string>
 
     <!-- Channels -->
     <string name="channels_empty">No channels here yet.</string>
@@ -30,6 +40,7 @@
     <string name="chat_composer_hint">Message</string>
     <string name="chat_send">Send</string>
     <string name="chat_empty">Nothing here yet. Say something.</string>
+    <string name="chat_load_failed">Could not load this conversation. %1$s</string>
     <string name="chat_edited">edited</string>
     <string name="chat_typing_one">%1$s is typing…</string>
     <string name="chat_typing_many">Several people are typing…</string>
@@ -175,7 +186,7 @@
     <string name="delete_kept_reports">Reports other people filed about you, with your name removed. We are not able to let an account be deleted as a way of clearing its own record.</string>
     <string name="delete_kept_note">All of these are pruned on their own schedule. The privacy policy explains them in full.</string>
     <string name="delete_blocking_title">Do one of these first, for each community you own</string>
-    <string name="delete_blocking_note">Other people are still in these communities, so we will not delete them out from under them. In each community\u2019s settings, either hand it to another member or delete the community yourself.</string>
+    <string name="delete_blocking_note">Other people are still in these communities, so we will not delete them out from under them. Go back to the servers list, open the community\u2019s menu and delete it there, or hand it to another member from the web or desktop app.</string>
     <plurals name="delete_blocking_members">
         <item quantity="one">%1$d other member</item>
         <item quantity="other">%1$d other members</item>

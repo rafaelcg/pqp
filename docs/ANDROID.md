@@ -232,6 +232,61 @@ screen (`AgeGateScreen`). The date travels as a plain `YYYY-MM-DD` with no time
 and no zone, because attaching an instant to a date of birth is the classic way
 to refuse somebody on their own birthday.
 
+## The bug that made every real channel look empty
+
+Worth writing down in full, because the symptom pointed at the wrong layer and
+two passes read it that way.
+
+**Symptom.** A channel with more than about a dozen messages rendered as
+"Nothing here yet. Say something." A channel with a handful rendered fine. The
+threshold tracked **response size**, roughly 5 KB working and 10 KB not, which
+is what made it look like emulator networking: no client code branches on size.
+
+**It was not networking.** Putting a logging proxy between the device and the
+API settled it in one observation. The device asked for
+`/api/channels/:id/messages?limit=50` and the proxy delivered **28197 bytes of
+`application/json`, complete, status 200**. The bytes arrive. The same payload
+decodes to 50 messages in a JVM unit test. The failure is entirely ours and
+entirely after the socket.
+
+**Cause.** `ApiClient.execute` used `suspendCancellableCoroutine` around
+OkHttp's `enqueue`. `continuation.resume` resumes on the *coroutine's*
+dispatcher, and every caller is a `viewModelScope.launch`, which is
+`Dispatchers.Main`. So `response.body.string()` inside `decode` ran on the main
+thread, and `SocketInputStream.read` on the main thread is
+`android.os.NetworkOnMainThreadException`.
+
+**Why size mattered, which is the whole trick.** A small body is already sitting
+in okio's buffer by the time the response headers have been parsed, so reading
+it touches no socket and StrictMode never sees a thing. A body past that buffer
+has to go back to the socket for the remainder, and *that* read throws. The
+buffer boundary is the "threshold", and it is why the bug looked like a
+transport problem and why it never appeared in a test channel with three
+messages in it.
+
+**Why it was silent.** `ChatViewModel.loadInitial` recorded `error = it.message`
+and `ChatScreen` never rendered `error` at all, so a failed fetch fell through
+to the empty-channel state. Worse, `NetworkOnMainThreadException.getMessage()`
+returns **null**, so even code that checked `error != null` would have seen no
+error. Two independent silences stacked on one exception.
+
+**Fix.** `execute` now reads the body inside OkHttp's `onResponse`, on OkHttp's
+own dispatcher thread, and hands back a response carrying an in-memory copy. No
+caller can reach the socket from the wrong thread whatever it does afterwards,
+and `close()` / `use {}` stay correct. `loadInitial` falls back to the exception
+class name when the message is null, and `ChatScreen` renders the error instead
+of claiming the channel is empty.
+
+**Blast radius, before the fix.** Every response over the buffer, not just chat:
+the servers list for anybody in several servers, the friends list, the DM list,
+and `GET /api/me/export`, which is the data export behind account deletion and
+is never small. Any of them would have failed silently.
+
+**Regression cover.** A JVM test cannot catch this: `NetworkOnMainThreadException`
+comes from Android's StrictMode and the unit-test `android.jar` is stubs. It
+needs an instrumented test or a device. Until there is one, the check is: open a
+channel with a hundred messages in it.
+
 ## Decisions worth knowing
 
 **Sending a message is a WebSocket frame, not an HTTP call.** There is no

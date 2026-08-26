@@ -16,6 +16,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
+import okhttp3.ResponseBody.Companion.toResponseBody
 
 /**
  * A refusal the UI can say something about.
@@ -60,6 +61,34 @@ class ApiClient(
     suspend fun createServer(name: String): CreateServerResponse {
         val body = json.encodeToString(CreateServerRequest.serializer(), CreateServerRequest(name))
         return post("/api/servers", body)
+    }
+
+    /**
+     * `DELETE /api/servers/:serverId`. Owner only, and irreversible: the
+     * channels, every message in them and every membership go with it.
+     *
+     * The body is `{"ok": true}` and nothing reads that flag, so the response
+     * is closed rather than decoded. A refusal still arrives as an
+     * [ApiException] carrying the server's own sentence, which is the only
+     * thing that knows whether the caller stopped being the owner meanwhile.
+     */
+    suspend fun deleteServer(serverId: String) {
+        execute(Request.Builder().url(url("/api/servers/$serverId")).delete()).close()
+    }
+
+    /**
+     * `POST /api/servers/:serverId/leave`.
+     *
+     * Refused with a 400 for an owner, in the server's own words, because
+     * leaving would strand the community with nobody who can administer it.
+     * Show that sentence rather than a local guess about why.
+     */
+    suspend fun leaveServer(serverId: String) {
+        execute(
+            Request.Builder()
+                .url(url("/api/servers/$serverId/leave"))
+                .post("{}".toRequestBody(JSON_MEDIA_TYPE)),
+        ).close()
     }
 
     suspend fun channels(serverId: String): List<Channel> =
@@ -133,6 +162,27 @@ class ApiClient(
      *
      * The suspension is cancellable and cancels the call, so a screen that goes
      * away mid-request does not leave a socket held open behind it.
+     *
+     * **The body is read here, on OkHttp's own dispatcher thread, and the
+     * response handed back carries an in-memory copy of it.** That is not an
+     * optimisation, it is the fix for a bug that made every long channel look
+     * empty.
+     *
+     * `continuation.resume` resumes on the *coroutine's* dispatcher, and every
+     * caller of this is a `viewModelScope.launch`, which is `Dispatchers.Main`.
+     * So `response.body.string()` in `decode` ran on the main thread, and
+     * `SocketInputStream.read` there is a `NetworkOnMainThreadException`.
+     *
+     * It only ever fired on *large* responses, which is what made it look like
+     * a network fault. A small body is already sitting in okio's buffer by the
+     * time the headers have been parsed, so reading it touches no socket and
+     * StrictMode never sees anything; a body past that buffer has to go back to
+     * the socket for the rest and throws. The boundary was around 5 KB, so a
+     * short channel loaded and a real one did not.
+     *
+     * Reading it here means no caller can reach the socket from the wrong
+     * thread, whatever it does with the response afterwards. `close()` and
+     * `use {}` on the returned response stay correct and become no-ops.
      */
     suspend fun execute(builder: Request.Builder): Response {
         val token = tokens.currentToken()
@@ -148,11 +198,22 @@ class ApiClient(
                 }
 
                 override fun onResponse(call: Call, response: Response) {
-                    if (continuation.isActive) {
-                        continuation.resume(response)
-                    } else {
+                    if (!continuation.isActive) {
                         response.close()
+                        return
                     }
+                    val buffered = try {
+                        response.use {
+                            val bytes = it.body.bytes()
+                            it.newBuilder()
+                                .body(bytes.toResponseBody(it.body.contentType()))
+                                .build()
+                        }
+                    } catch (e: IOException) {
+                        continuation.resumeWithException(e)
+                        return
+                    }
+                    continuation.resume(buffered)
                 }
             })
         }
