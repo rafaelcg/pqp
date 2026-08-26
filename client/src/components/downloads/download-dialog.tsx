@@ -13,7 +13,8 @@ import { useTranslation } from "@/lib/i18n";
  * Opened from the user menu, only in a browser. The desktop shell already *is*
  * the app, so offering a download there would be a loop. The copy-link control
  * always copies the hosted URL: that is the string you paste into a chat, not
- * whatever origin this tab happens to be on.
+ * whatever origin this tab happens to be on. "See every platform" opens
+ * `/download` in a new tab so this one stays on the server they were looking at.
  */
 export function DownloadDialog({
   open,
@@ -73,6 +74,8 @@ export function DownloadDialog({
         <p className="text-sm text-paper-muted">
           <Link
             to={DOWNLOAD_PAGE_PATH}
+            target="_blank"
+            rel="noopener"
             className="underline decoration-paper-muted/40 underline-offset-4 hover:text-paper hover:decoration-paper/60"
             onClick={onClose}
           >

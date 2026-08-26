@@ -3,11 +3,16 @@ import { useEffect, useRef, useState } from "react";
 import { UserButton } from "@clerk/clerk-react";
 import type { ManualStatus, UserStatus } from "@pqp/shared";
 import { DownloadDialog } from "@/components/downloads/download-dialog";
+import { DownloadHint } from "@/components/downloads/download-hint";
 import { Button } from "@/components/ui/button";
 import { StatusDot } from "@/components/user/status-dot";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { isDesktopApp } from "@/lib/desktop";
 import { isDevAuthBypassEnabled } from "@/lib/dev-auth";
+import {
+  dismissDownloadHint,
+  isDownloadHintDismissed,
+} from "@/lib/download-hint";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
@@ -85,8 +90,10 @@ export function UserPanel({
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [downloadOpen, setDownloadOpen] = useState(false);
+  const [hintDismissed, setHintDismissed] = useState(isDownloadHintDismissed);
   const popoverRef = useRef<HTMLDivElement>(null);
   const showDownload = !isDesktopApp();
+  const showHint = showDownload && !hintDismissed;
 
   useEffect(() => {
     if (!open) {
@@ -118,14 +125,24 @@ export function UserPanel({
     manualStatus === "invisible" ? t("status.invisible") : undefined;
 
   return (
-    <div className="safe-pb relative flex items-center gap-2 border-t border-ink-4/60 bg-ink px-2 py-2">
-      {open && (
-        <div
-          ref={popoverRef}
-          role="menu"
-          aria-label={t("status.change")}
-          className="absolute bottom-full left-2 z-50 mb-2 w-64 overflow-hidden rounded-lg border border-ink-4 bg-ink-2 p-1 shadow-[var(--shadow-popover)] animate-fade-in"
-        >
+    <div className="safe-pb relative border-t border-ink-4/60 bg-ink">
+      {showHint && (
+        <DownloadHint
+          onOpen={() => setDownloadOpen(true)}
+          onDismiss={() => {
+            dismissDownloadHint();
+            setHintDismissed(true);
+          }}
+        />
+      )}
+      <div className="relative flex items-center gap-2 px-2 py-2">
+        {open && (
+          <div
+            ref={popoverRef}
+            role="menu"
+            aria-label={t("status.change")}
+            className="absolute bottom-full left-0 z-50 mb-2 w-64 overflow-hidden rounded-lg border border-ink-4 bg-ink-2 p-1 shadow-[var(--shadow-popover)] animate-fade-in"
+          >
           {CHOICES.map((choice) => {
             const selected = choice.manual === manualStatus;
             return (
@@ -204,10 +221,10 @@ export function UserPanel({
               {t("userMenu.download")}
             </button>
           )}
-        </div>
-      )}
+          </div>
+        )}
 
-      <button
+        <button
         type="button"
         aria-haspopup="menu"
         aria-expanded={open}
@@ -295,6 +312,7 @@ export function UserPanel({
       >
         <Settings className="h-4 w-4" />
       </Button>
+      </div>
       <DownloadDialog
         open={downloadOpen}
         onClose={() => setDownloadOpen(false)}
