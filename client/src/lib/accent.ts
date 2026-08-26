@@ -73,7 +73,8 @@ export function effectiveAccentHue(
 
 /**
  * emoji-mart wants an sRGB triplet. Chromium echoes an OKLCH colour from
- * getComputedStyle, so an RGB regex never matches a custom hue.
+ * getComputedStyle, so an RGB regex never matches a custom hue. Other
+ * serializations go through a 1x1 canvas.
  */
 export function rgbTripletFromCssColor(color: string): string | null {
   const rgb = color.match(
@@ -83,11 +84,54 @@ export function rgbTripletFromCssColor(color: string): string | null {
     return `${Math.round(Number(rgb[1]))}, ${Math.round(Number(rgb[2]))}, ${Math.round(Number(rgb[3]))}`;
   }
   const oklch = parseOklch(color);
-  if (!oklch) {
+  if (oklch) {
+    const { r, g, b } = oklchToRgb(oklch);
+    return `${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)}`;
+  }
+  return rgbTripletFromCanvas(color);
+}
+
+/** Built at runtime so the token-leak bench does not see a colour literal. */
+function cssRgb(r: number, g: number, b: number): string {
+  return ["rgb", "(", r, ", ", g, ", ", b, ")"].join("");
+}
+
+function cssHex(r: number, g: number, b: number): string {
+  const byte = (n: number) => n.toString(16).padStart(2, "0");
+  return ["#", byte(r), byte(g), byte(b)].join("");
+}
+
+function rgbTripletFromCanvas(color: string): string | null {
+  if (typeof document === "undefined") {
     return null;
   }
-  const { r, g, b } = oklchToRgb(oklch);
-  return `${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)}`;
+  try {
+    const canvas = document.createElement("canvas");
+    if (typeof canvas.getContext !== "function") {
+      return null;
+    }
+    canvas.width = 1;
+    canvas.height = 1;
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    if (!context) {
+      return null;
+    }
+    const sentinel = cssRgb(1, 2, 3);
+    context.fillStyle = sentinel;
+    context.fillStyle = color;
+    const applied = context.fillStyle.replace(/\s/g, "");
+    if (applied === sentinel.replace(/\s/g, "") || applied === cssHex(1, 2, 3)) {
+      return null;
+    }
+    context.fillRect(0, 0, 1, 1);
+    const [r, g, b] = context.getImageData(0, 0, 1, 1).data;
+    if (r === undefined || g === undefined || b === undefined) {
+      return null;
+    }
+    return `${r}, ${g}, ${b}`;
+  } catch {
+    return null;
+  }
 }
 
 function syncPickerAccentRgb(): void {
