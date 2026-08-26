@@ -34,7 +34,7 @@ it.
 
 ---
 
-## 0. The blocker that was here, and the one that replaced it
+## 0. Account deletion, which is done, and what it cost to prove it
 
 **The old blocker is closed.** This section used to say the Android app had no
 way to delete an account and that this was a launch blocker. That was true when
@@ -63,22 +63,35 @@ list. Both branches:
   member got the 409 back, and the dialog grew a section naming the community
   and its member count.
 
-### The new blocker: the refusal is a dead end on Android
+### The dead end the 409 used to lead to, and how it was closed
 
-The 409 branch renders correctly and then tells the person:
+The 409 branch renders correctly and used to tell the person:
 
 > In each community's settings, either hand it to another member or delete the
 > community yourself.
 
-**The Android app has no community settings.** No delete, no ownership
-transfer, no leave. So the one in-app route to deleting your account ends in an
-instruction the app cannot satisfy, which is a Play User Data policy risk in
+**The Android app had no community settings.** No delete, no ownership transfer,
+no leave. So the one in-app route to deleting your account ended in an
+instruction the app could not satisfy, which is a Play User Data policy risk in
 exactly the way the old missing-deletion blocker was.
 
-The smallest honest fix is a delete-community action on the servers list, which
-`DELETE /api/servers/:serverId` already supports with no server change
-(`server/src/api/index.ts:2574`; leave is at `:2585`). Ownership transfer needs
-a member picker the app does not have and is not the minimum.
+Closed on 2026-08-26. The servers list rows carry an overflow menu offering
+**Leave community** to a member and **Delete community** to an owner, the latter
+behind a typed confirmation of the community's name, matching the account
+deletion dialog. `DELETE /api/servers/:serverId` and
+`POST /api/servers/:serverId/leave` already existed
+(`server/src/api/index.ts:2574` and `:2585`), so no server change was needed.
+The blocked-deletion copy now points at that menu rather than at a screen that
+does not exist.
+
+Ownership **transfer** is still absent, and deliberately: it needs a member
+picker the app has no screen for, and deleting the community is enough to
+unblock the account deletion. Somebody who wants to hand a community over can do
+it from the web or desktop client, which the copy says.
+
+Verified end to end on a device: refused with the community named, deleted the
+community through the new menu, then deleted the account successfully, with the
+user row, the community and its messages all confirmed gone from Postgres.
 
 The **web** deletion URL Play asks for on the data-safety form is the same
 Settings dialog on `pqp.gg`; give Play a URL that explains the steps rather than
