@@ -11,7 +11,8 @@
 
     <!-- Verificação de idade -->
     <string name="age_gate_title">Uma pergunta antes</string>
-    <string name="age_gate_body">O pqp é para quem tem 13 anos ou mais. Informe sua data de nascimento para sabermos quais regras valem para a sua conta.</string>
+    <string name="age_gate_body">O pqp é para pessoas de 18 anos ou mais. Informe sua data de nascimento para sabermos quais regras valem para a sua conta.</string>
+    <string name="age_gate_warning">Você só pode responder uma vez. Se a data informada for de menor de 18 anos, esta conta será encerrada e você não poderá tentar outra data.</string>
     <string name="age_gate_confirm">Confirmar</string>
 
 

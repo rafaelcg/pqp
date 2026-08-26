@@ -15,3 +15,9 @@ app/google-services.json
 *.iml
 .idea/
 captures/
+
+# Belt and braces. The upload keystore is supposed to live outside this repo
+# entirely (see docs/ANDROID_RELEASE.md), so a *.jks in here is already a
+# mistake. This makes it a mistake that cannot be committed.
+*.jks
+*.keystore

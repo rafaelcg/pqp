@@ -11,7 +11,8 @@
 
     <!-- Age gate -->
     <string name="age_gate_title">One question first</string>
-    <string name="age_gate_body">pqp is for people aged 13 and over. Tell us your date of birth so we know which rules apply to your account.</string>
+    <string name="age_gate_body">pqp is for people aged 18 and over. Tell us your date of birth so we know which rules apply to your account.</string>
+    <string name="age_gate_warning">You can only answer this once. If the date you enter is under 18, this account will be closed and you will not be able to try a different date.</string>
     <string name="age_gate_confirm">Confirm</string>
 
 

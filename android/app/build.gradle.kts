@@ -26,6 +26,26 @@ fun config(name: String, fallback: String): String =
         ?: fallback
 
 /**
+ * The upload key, or nothing.
+ *
+ * Play refuses an APK or bundle signed with the debug key, and the key that
+ * signs the *first* accepted upload is permanent for the life of the listing.
+ * So it is a real keystore, and it is a file plus three secrets that must never
+ * be in this repo: `pqp.keystoreFile`, `pqp.keystorePassword`, `pqp.keyAlias`
+ * and `pqp.keyPassword`, read from `local.properties`, a `-P` flag or the
+ * environment (`PQP_KEYSTOREFILE` and friends) like every other build input
+ * here.
+ *
+ * When they are absent this is null, no release signing config is created, and
+ * `assembleRelease` produces an **unsigned** APK. It used to fall back to the
+ * debug key, which meant a release build looked like it had worked and was
+ * rejected at the Play upload days later. See `docs/ANDROID_RELEASE.md`.
+ */
+val releaseKeystore: File? = config("pqp.keystoreFile", "")
+    .takeIf { it.isNotBlank() }
+    ?.let { path -> File(path).takeIf { it.isAbsolute } ?: rootProject.file(path) }
+
+/**
  * Whether this build can talk to Firebase Cloud Messaging at all.
  *
  * `google-services.json` is a per-project file that nobody has created yet, and
@@ -77,6 +97,17 @@ android {
         localeFilters += listOf("en", "pt-rBR")
     }
 
+    signingConfigs {
+        if (releaseKeystore != null) {
+            create("release") {
+                storeFile = releaseKeystore
+                storePassword = config("pqp.keystorePassword", "")
+                keyAlias = config("pqp.keyAlias", "pqp-upload")
+                keyPassword = config("pqp.keyPassword", "")
+            }
+        }
+    }
+
     buildTypes {
         debug {
             applicationIdSuffix = ".debug"
@@ -102,10 +133,36 @@ android {
             buildConfigField("String", "WS_URL", "\"${config("pqp.wsUrl", "wss://api.pqp.gg/ws")}\"")
             buildConfigField("String", "CLERK_PUBLISHABLE_KEY", "\"${config("pqp.clerkPublishableKey", "")}\"")
 
-            // Debuggable signing so `assembleRelease` produces something
-            // installable without a keystore nobody has yet. Replace before any
-            // Play upload; see docs/ANDROID.md.
-            signingConfig = signingConfigs.getByName("debug")
+            // The upload key when there is one, and **no signing config at
+            // all** when there is not.
+            //
+            // It used to fall back to the debug key, which is worse than
+            // failing: `assembleRelease` printed BUILD SUCCESSFUL, produced an
+            // APK that installs fine, and the rejection arrived days later at
+            // the Play upload. An unsigned release artifact is a problem you
+            // find in the same minute you caused it. CI builds release this way
+            // on purpose, to prove the shrinker and the ProGuard rules survive
+            // without ever holding a key.
+            signingConfig = signingConfigs.findByName("release")
+        }
+    }
+
+    testOptions {
+        unitTests {
+            // The android.jar on the unit-test classpath is all stubs that
+            // throw. Returning defaults instead keeps a single `Log.w` from
+            // failing a test about something else entirely; nothing here
+            // asserts on an Android framework call.
+            isReturnDefaultValues = true
+            all { test ->
+                // A contract test's whole value is in its failure message. The
+                // default one-line summary hides it.
+                test.testLogging {
+                    exceptionFormat =
+                        org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+                    events("failed")
+                }
+            }
         }
     }
 

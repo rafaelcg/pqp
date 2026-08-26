@@ -74,6 +74,17 @@ fun AgeGateScreen(session: SessionStore) {
 
         DatePicker(state = pickerState, title = null, headline = null, showModeToggle = true)
 
+        // The declaration is irreversible and the server enforces it: a date
+        // under 18 closes the account for good, with no second attempt. The web
+        // client says so before the button; not saying it here would be asking
+        // somebody to answer honestly without telling them what honesty costs.
+        Spacer(Modifier.height(12.dp))
+        Text(
+            text = stringResource(R.string.age_gate_warning),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
         error?.let {
             Spacer(Modifier.height(8.dp))
             Text(
