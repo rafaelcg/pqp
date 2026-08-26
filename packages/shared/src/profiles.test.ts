@@ -251,8 +251,9 @@ describe("publicProfileSchema", () => {
     // Fields added since the first cut each had to argue: `bannerUrl` is an
     // image the account holder uploaded for this page, `depoimentos` are words
     // two people published to it, `memberSince` is a MONTH, `achievements`
-    // carry only a badge slug, and `connections` is an opt-in list of Steam /
-    // Battle.net / Twitch nicks — never a provider user id.
+    // carry a badge slug and an optional ordinal (not an account id), and
+    // `connections` is an opt-in list of Steam / Battle.net / Twitch nicks —
+    // never a provider user id.
     const keys = Object.keys(publicProfileSchema.shape).sort();
     expect(keys).toEqual([
       "achievements",
@@ -285,6 +286,22 @@ describe("publicProfileSchema", () => {
     expect(parsed.depoimentos).toEqual([]);
     expect(parsed.memberSince).toBeNull();
     expect(parsed.connections).toEqual([]);
+  });
+
+  it("defaults a missing achievement ordinal so an older API still parses", () => {
+    const parsed = publicProfileSchema.parse({
+      handle: "rafa",
+      displayName: "Rafa",
+      avatarUrl: null,
+      badges: [],
+      depoimentoCount: 0,
+      achievements: [{ badge: "caca-bugs", name: "Caça-bugs" }],
+    });
+    expect(parsed.achievements[0]).toEqual({
+      badge: "caca-bugs",
+      name: "Caça-bugs",
+      ordinal: null,
+    });
   });
 
   it("refuses a memberSince carrying a day", () => {

@@ -107,6 +107,8 @@
   "publicProfile.communities": "Communities",
   "publicProfile.achievements": "Achievements",
   "publicProfile.achievements.cacaBugs": "Found a real bug and told us",
+  "publicProfile.achievements.turma1000": "One of the first 1,000 people here",
+  "publicProfile.achievements.turma1000.chip": "Turma dos 1000 · #{n}",
   "publicProfile.communities.count": "member of {count} communities",
   "publicProfile.depoimentos": "{count} testimonials",
   "publicProfile.depoimentos.title": "Testimonials",

@@ -65,8 +65,9 @@ export const FEEDBACK_PAGE_MAX = 100;
  */
 export const CACA_BUGS_BADGE = "caca-bugs";
 
-export const profileAchievementSchema = z.object({
-  badge: z.string(),
-  name: z.string(),
-});
-export type ProfileAchievement = z.infer<typeof profileAchievementSchema>;
+export {
+  TURMA_1000_BADGE,
+  TURMA_1000_SIZE,
+  profileAchievementSchema,
+  type ProfileAchievement,
+} from "./badges.js";
