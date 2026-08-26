@@ -480,7 +480,7 @@ struct CommunityCard: View {
     ///
     /// THE PICTURE IS FRAMED AND CLIPPED BEFORE ANYTHING IS DRAWN ON IT. A
     /// `scaledToFill` image inside a ZStack grows the *stack*, not just itself —
-    /// so a 1024×360 banner laid out beside the category chip pushed that chip
+    /// so a wide banner laid out beside the category chip pushed that chip
     /// hundreds of points above the 78pt window and clipping took it away
     /// entirely. Everything that sits on top is an `overlay` applied after the
     /// frame, which measures against the strip rather than against the picture.

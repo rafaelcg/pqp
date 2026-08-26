@@ -167,6 +167,39 @@
   --rgb-picker-color: 232, 228, 214;
   --rgb-picker-accent: 196, 232, 72;
   --picker-border: oklch(0.3 0.018 250);
+
+  /*
+   * Static dark previews for the appearance picker. Not theme-followed.
+   * `-list` sits between `-rail` and `-surface` so the channel column reads
+   * as its own pane; `--swatch-ink` is the one light grey the fake message
+   * bars share (the previews are always dark, so one ink fits all four).
+   */
+  --swatch-ink: oklch(0.86 0.012 250);
+  --swatch-signal-rail: oklch(0.13 0.012 250);
+  --swatch-signal-list: oklch(0.165 0.013 250);
+  --swatch-signal-surface: oklch(0.21 0.014 250);
+  --swatch-signal-accent: oklch(0.88 0.19 125);
+  --swatch-harmony-rail: oklch(0.14 0.018 265);
+  --swatch-harmony-list: oklch(0.18 0.019 265);
+  --swatch-harmony-surface: oklch(0.23 0.02 265);
+  --swatch-harmony-accent: oklch(0.78 0.14 255);
+  --swatch-hearth-rail: oklch(0.28 0.09 340);
+  --swatch-hearth-list: oklch(0.2 0.011 80);
+  --swatch-hearth-surface: oklch(0.24 0.012 80);
+  --swatch-hearth-accent: oklch(0.68 0.12 200);
+  --swatch-night-rail: oklch(0 0 0);
+  --swatch-night-list: oklch(0.11 0.006 250);
+  --swatch-night-surface: oklch(0.17 0.008 250);
+  --swatch-night-accent: oklch(0.88 0.19 125);
+
+  /* Both stops at hue 0 + `longer hue` = the full wheel, left to right.
+     Without the direction, `linear-gradient` defaults to `to bottom` and the
+     wide flat slider renders a vertical rainbow. */
+  --accent-track: linear-gradient(
+    to right in oklch longer hue,
+    oklch(0.7 0.14 0) 0%,
+    oklch(0.7 0.14 0) 100%
+  );
 }
 
 /*
@@ -234,6 +267,466 @@
   --rgb-picker-color: 40, 44, 52;
   --rgb-picker-accent: 90, 130, 40;
   --picker-border: oklch(0.86 0.01 95);
+}
+
+/*
+ * Named skins. Brightness stays on `data-theme`; these only retint the roles.
+ * Two-attribute light selectors beat `:root[data-theme="light"]`. Keep
+ * unlayered so they outrank `@theme`. Do not copy another product's hex values.
+ */
+:root[data-appearance="harmony"] {
+  --color-surface-0: oklch(0.18 0.018 265);
+  --color-surface-1: oklch(0.22 0.02 265);
+  --color-surface-2: oklch(0.27 0.022 265);
+  --color-surface-3: oklch(0.33 0.024 265);
+  --color-rail: oklch(0.14 0.018 265);
+
+  --color-border: oklch(0.34 0.024 265);
+  --color-border-strong: oklch(0.44 0.026 265);
+
+  --color-text: oklch(0.94 0.012 265);
+  --color-text-muted: oklch(0.74 0.018 265);
+  --color-text-subtle: oklch(0.84 0.014 265);
+
+  --color-accent: oklch(0.78 0.14 255);
+  --color-accent-hover: oklch(0.68 0.13 255);
+  --color-on-accent: oklch(0.16 0.018 265);
+
+  --color-code-bg: oklch(0.16 0.018 265);
+  --color-code-text: oklch(0.78 0.14 255);
+
+  --color-focus-ring: oklch(0.78 0.14 255 / 0.6);
+  --color-selection: oklch(0.78 0.14 255 / 0.35);
+  --color-indicator: oklch(0.94 0.012 265);
+
+  --shadow-speaking: 0 0 10px oklch(0.78 0.14 255 / 0.45);
+  --glow-accent: oklch(0.45 0.12 255 / 0.28);
+  --glow-accent-soft: oklch(0.78 0.14 255 / 0.08);
+
+  --gradient-app-1: oklch(0.28 0.05 255 / 0.32);
+  --gradient-app-2: oklch(0.22 0.03 265 / 0.38);
+
+  --rgb-picker-background: 40, 42, 58;
+  --rgb-picker-input: 30, 32, 46;
+  --rgb-picker-color: 232, 232, 240;
+  --rgb-picker-accent: 150, 170, 245;
+  --picker-border: oklch(0.34 0.024 265);
+}
+
+:root[data-appearance="harmony"][data-theme="light"] {
+  --color-surface-0: oklch(0.97 0.008 265);
+  --color-surface-1: oklch(0.94 0.01 265);
+  --color-surface-2: oklch(0.9 0.012 265);
+  --color-surface-3: oklch(0.86 0.014 265);
+  --color-rail: oklch(0.91 0.012 265);
+
+  --color-border: oklch(0.84 0.014 265);
+  --color-border-strong: oklch(0.7 0.016 265);
+
+  --color-text: oklch(0.24 0.02 265);
+  --color-text-muted: oklch(0.42 0.022 265);
+  --color-text-subtle: oklch(0.36 0.02 265);
+
+  --color-accent: oklch(0.48 0.16 255);
+  --color-accent-hover: oklch(0.42 0.15 255);
+  --color-on-accent: oklch(0.99 0 0);
+
+  --color-code-bg: oklch(0.93 0.01 265);
+  --color-code-text: oklch(0.4 0.14 255);
+
+  --color-focus-ring: oklch(0.48 0.16 255 / 0.6);
+  --color-selection: oklch(0.48 0.16 255 / 0.25);
+  --color-indicator: oklch(0.24 0.02 265);
+
+  --shadow-speaking: 0 0 0 3px oklch(0.48 0.16 255 / 0.4);
+  --glow-accent: oklch(0.55 0.12 255 / 0.16);
+  --glow-accent-soft: oklch(0.48 0.16 255 / 0.06);
+
+  --gradient-app-1: oklch(0.88 0.04 255 / 0.22);
+  --gradient-app-2: oklch(0.9 0.03 265 / 0.28);
+
+  --rgb-picker-background: 246, 246, 252;
+  --rgb-picker-input: 232, 232, 242;
+  --rgb-picker-color: 36, 36, 52;
+  --rgb-picker-accent: 70, 90, 190;
+  --picker-border: oklch(0.84 0.014 265);
+}
+
+:root[data-appearance="hearth"] {
+  --color-surface-0: oklch(0.19 0.01 80);
+  --color-surface-1: oklch(0.23 0.012 80);
+  --color-surface-2: oklch(0.28 0.014 80);
+  --color-surface-3: oklch(0.34 0.016 80);
+  --color-rail: oklch(0.22 0.07 340);
+
+  --color-border: oklch(0.35 0.016 80);
+  --color-border-strong: oklch(0.46 0.018 80);
+
+  --color-text: oklch(0.93 0.012 80);
+  --color-text-muted: oklch(0.73 0.016 80);
+  --color-text-subtle: oklch(0.83 0.012 80);
+
+  --color-accent: oklch(0.72 0.12 200);
+  --color-accent-hover: oklch(0.62 0.11 200);
+  --color-on-accent: oklch(0.16 0.01 80);
+
+  --color-code-bg: oklch(0.17 0.01 80);
+  --color-code-text: oklch(0.72 0.12 200);
+
+  --color-focus-ring: oklch(0.72 0.12 200 / 0.6);
+  --color-selection: oklch(0.72 0.12 200 / 0.32);
+  --color-indicator: oklch(0.93 0.012 80);
+
+  --shadow-speaking: 0 0 10px oklch(0.72 0.12 200 / 0.4);
+  --glow-accent: oklch(0.4 0.08 200 / 0.22);
+  --glow-accent-soft: oklch(0.72 0.12 200 / 0.07);
+
+  --gradient-app-1: oklch(0.26 0.02 80 / 0.18);
+  --gradient-app-2: oklch(0.24 0.03 340 / 0.16);
+
+  --rgb-picker-background: 46, 42, 36;
+  --rgb-picker-input: 36, 34, 28;
+  --rgb-picker-color: 236, 230, 218;
+  --rgb-picker-accent: 56, 168, 186;
+  --picker-border: oklch(0.35 0.016 80);
+}
+
+:root[data-appearance="hearth"][data-theme="light"] {
+  --color-surface-0: oklch(0.99 0.004 95);
+  --color-surface-1: oklch(0.97 0.006 95);
+  --color-surface-2: oklch(0.93 0.008 95);
+  --color-surface-3: oklch(0.89 0.01 95);
+  --color-rail: oklch(0.9 0.04 340);
+
+  --color-border: oklch(0.86 0.01 95);
+  --color-border-strong: oklch(0.72 0.012 95);
+
+  --color-text: oklch(0.26 0.015 80);
+  --color-text-muted: oklch(0.44 0.018 80);
+  --color-text-subtle: oklch(0.36 0.016 80);
+
+  --color-accent: oklch(0.46 0.11 200);
+  --color-accent-hover: oklch(0.4 0.1 200);
+  --color-on-accent: oklch(0.99 0 0);
+
+  --color-code-bg: oklch(0.95 0.006 95);
+  --color-code-text: oklch(0.4 0.1 200);
+
+  --color-focus-ring: oklch(0.46 0.11 200 / 0.6);
+  --color-selection: oklch(0.46 0.11 200 / 0.22);
+  --color-indicator: oklch(0.26 0.015 80);
+
+  --shadow-speaking: 0 0 0 3px oklch(0.46 0.11 200 / 0.4);
+  --glow-accent: oklch(0.55 0.08 200 / 0.14);
+  --glow-accent-soft: oklch(0.46 0.11 200 / 0.06);
+
+  --gradient-app-1: oklch(0.94 0.02 95 / 0.2);
+  --gradient-app-2: oklch(0.92 0.03 340 / 0.16);
+
+  --rgb-picker-background: 252, 250, 246;
+  --rgb-picker-input: 242, 236, 228;
+  --rgb-picker-color: 48, 42, 36;
+  --rgb-picker-accent: 20, 120, 140;
+  --picker-border: oklch(0.86 0.01 95);
+}
+
+:root[data-appearance="night"] {
+  --color-surface-0: oklch(0 0 0);
+  --color-surface-1: oklch(0.16 0.008 250);
+  --color-surface-2: oklch(0.2 0.01 250);
+  --color-surface-3: oklch(0.26 0.012 250);
+  --color-rail: oklch(0 0 0);
+
+  --color-border: oklch(0.28 0.012 250);
+  --color-border-strong: oklch(0.4 0.014 250);
+
+  --color-text: oklch(0.95 0.012 95);
+  --color-text-muted: oklch(0.76 0.016 95);
+  --color-text-subtle: oklch(0.86 0.012 95);
+
+  --color-accent: oklch(0.88 0.19 125);
+  --color-accent-hover: oklch(0.75 0.14 125);
+  --color-on-accent: oklch(0.16 0.012 250);
+
+  --color-code-bg: oklch(0.1 0.006 250);
+  --color-code-text: oklch(0.88 0.19 125);
+
+  --color-focus-ring: oklch(0.88 0.19 125 / 0.6);
+  --color-selection: oklch(0.88 0.19 125 / 0.32);
+  --color-indicator: oklch(0.95 0.012 95);
+
+  --shadow-speaking: 0 0 10px oklch(0.88 0.19 125 / 0.4);
+  --glow-accent: oklch(0.35 0.12 125 / 0.18);
+  --glow-accent-soft: oklch(0.88 0.19 125 / 0.06);
+
+  --gradient-app-1: oklch(0.2 0.03 125 / 0.12);
+  --gradient-app-2: oklch(0.18 0.02 250 / 0.14);
+
+  --rgb-picker-background: 18, 18, 20;
+  --rgb-picker-input: 8, 8, 10;
+  --rgb-picker-color: 236, 232, 220;
+  --rgb-picker-accent: 196, 232, 72;
+  --picker-border: oklch(0.28 0.012 250);
+}
+
+:root[data-appearance="night"][data-theme="light"] {
+  --color-surface-0: oklch(0.995 0.002 250);
+  --color-surface-1: oklch(0.97 0.004 250);
+  --color-surface-2: oklch(0.935 0.006 250);
+  --color-surface-3: oklch(0.89 0.008 250);
+  --color-rail: oklch(0.94 0.004 250);
+
+  --color-border: oklch(0.84 0.008 250);
+  --color-border-strong: oklch(0.68 0.01 250);
+
+  --color-text: oklch(0.14 0.012 250);
+  --color-text-muted: oklch(0.36 0.014 250);
+  --color-text-subtle: oklch(0.26 0.012 250);
+
+  --color-accent: oklch(0.48 0.15 135);
+  --color-accent-hover: oklch(0.42 0.14 135);
+  --color-on-accent: oklch(0.99 0 0);
+
+  --color-code-bg: oklch(0.94 0.004 250);
+  --color-code-text: oklch(0.4 0.13 135);
+
+  --color-focus-ring: oklch(0.48 0.15 135 / 0.6);
+  --color-selection: oklch(0.48 0.15 135 / 0.22);
+  --color-indicator: oklch(0.14 0.012 250);
+
+  --shadow-speaking: 0 0 0 3px oklch(0.48 0.15 135 / 0.4);
+  --glow-accent: oklch(0.7 0.1 135 / 0.14);
+  --glow-accent-soft: oklch(0.48 0.15 135 / 0.05);
+
+  --gradient-app-1: oklch(0.92 0.02 135 / 0.14);
+  --gradient-app-2: oklch(0.94 0.016 250 / 0.16);
+
+  --rgb-picker-background: 250, 250, 252;
+  --rgb-picker-input: 236, 236, 240;
+  --rgb-picker-color: 28, 28, 36;
+  --rgb-picker-accent: 90, 130, 40;
+  --picker-border: oklch(0.84 0.008 250);
+}
+
+/*
+ * High contrast is an accessibility override, not a fourth skin. It only
+ * pushes text, muted text, borders and the indicator so they stay readable
+ * on whatever appearance is already active. Keep unlayered. Two-attribute
+ * light beats this one-attribute dark block.
+ */
+:root[data-contrast="more"] {
+  --color-text: oklch(0.99 0.01 95);
+  --color-text-muted: oklch(0.88 0.015 95);
+  --color-text-subtle: oklch(0.94 0.012 95);
+  --color-border: oklch(0.52 0.02 250);
+  --color-border-strong: oklch(0.7 0.022 250);
+  --color-indicator: oklch(0.99 0.01 95);
+}
+
+:root[data-theme="light"][data-contrast="more"] {
+  --color-text: oklch(0.12 0.02 250);
+  --color-text-muted: oklch(0.28 0.02 250);
+  --color-text-subtle: oklch(0.2 0.018 250);
+  --color-border: oklch(0.52 0.015 95);
+  --color-border-strong: oklch(0.34 0.016 95);
+  --color-indicator: oklch(0.12 0.02 250);
+}
+
+/*
+ * Custom accent hue. Stacks on the named look. Conservative lightness so
+ * yellows still clear the accent-on-surface floor in light. Keep unlayered.
+ */
+:root[data-accent="custom"] {
+  --color-accent: oklch(0.76 0.14 var(--accent-hue));
+  --color-accent-hover: oklch(0.68 0.13 var(--accent-hue));
+  --color-on-accent: oklch(0.16 0.02 var(--accent-hue));
+  --color-code-text: oklch(0.76 0.14 var(--accent-hue));
+  --color-focus-ring: oklch(0.76 0.14 var(--accent-hue) / 0.6);
+  --color-selection: oklch(0.76 0.14 var(--accent-hue) / 0.32);
+  --shadow-speaking: 0 0 10px oklch(0.76 0.14 var(--accent-hue) / 0.45);
+  --glow-accent: oklch(0.5 0.12 var(--accent-hue) / 0.24);
+  --glow-accent-soft: oklch(0.76 0.14 var(--accent-hue) / 0.08);
+}
+
+:root[data-theme="light"][data-accent="custom"] {
+  --color-accent: oklch(0.4 0.13 var(--accent-hue));
+  --color-accent-hover: oklch(0.34 0.12 var(--accent-hue));
+  --color-on-accent: oklch(0.99 0 0);
+  --color-code-text: oklch(0.36 0.12 var(--accent-hue));
+  --color-focus-ring: oklch(0.4 0.13 var(--accent-hue) / 0.6);
+  --color-selection: oklch(0.4 0.13 var(--accent-hue) / 0.22);
+  --shadow-speaking: 0 0 0 3px oklch(0.4 0.13 var(--accent-hue) / 0.4);
+  --glow-accent: oklch(0.48 0.1 var(--accent-hue) / 0.14);
+  --glow-accent-soft: oklch(0.4 0.13 var(--accent-hue) / 0.06);
+}
+
+/*
+ * The gradient lives on the runnable track, not the input, so WebKit cannot
+ * fall back to its native control rendering. `writing-mode` + `direction`
+ * pin the control horizontal regardless of ancestor styles.
+ */
+.accent-hue-slider {
+  width: 100%;
+  height: 1rem;
+  appearance: none;
+  -webkit-appearance: none;
+  writing-mode: horizontal-tb;
+  direction: ltr;
+  background: transparent;
+  cursor: pointer;
+}
+
+.accent-hue-slider::-webkit-slider-runnable-track {
+  height: 0.55rem;
+  border-radius: 999px;
+  background: var(--accent-track);
+}
+
+.accent-hue-slider::-moz-range-track {
+  height: 0.55rem;
+  border-radius: 999px;
+  background: var(--accent-track);
+}
+
+.accent-hue-slider::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  /* Centres the 1rem thumb on the 0.55rem track: (0.55 - 1) / 2. */
+  margin-top: -0.225rem;
+  width: 1rem;
+  height: 1rem;
+  border-radius: 999px;
+  background: var(--color-accent);
+  border: 2px solid var(--color-on-accent);
+  box-shadow: var(--shadow-popover);
+}
+
+.accent-hue-slider::-moz-range-thumb {
+  width: 1rem;
+  height: 1rem;
+  border-radius: 999px;
+  background: var(--color-accent);
+  border: 2px solid var(--color-on-accent);
+  box-shadow: var(--shadow-popover);
+}
+
+/*
+ * Resolve `--swatch-hue` on the button, not on :root. A custom property
+ * defined on :root computes `var(--swatch-hue)` there and every dot inherits
+ * the same colour.
+ */
+:root .accent-hue-dot {
+  background-color: oklch(0.72 0.2 var(--swatch-hue, 125));
+}
+
+/*
+ * Miniature app chrome: server rail / channel list / chat pane, always in the
+ * look's static dark swatches (`--preview-*` set inline by the picker card).
+ * The ring mixes from `--swatch-ink`, not the rail — Night's rail is pure
+ * black and would erase it.
+ */
+.appearance-preview {
+  display: flex;
+  height: 5rem;
+  overflow: hidden;
+  border-radius: 0.45rem;
+  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--swatch-ink) 18%, transparent);
+}
+
+.appearance-preview-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3rem;
+  width: 0.9rem;
+  padding-top: 0.45rem;
+  background: var(--preview-rail);
+}
+
+.appearance-preview-rail::before,
+.appearance-preview-rail::after {
+  content: "";
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 999px;
+}
+
+.appearance-preview-rail::before {
+  background: var(--preview-accent);
+}
+
+.appearance-preview-rail::after {
+  background: color-mix(in oklch, var(--swatch-ink) 55%, transparent);
+}
+
+.appearance-preview-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  width: 27%;
+  padding: 0.5rem 0.35rem;
+  background: var(--preview-list);
+}
+
+.appearance-preview-channel {
+  height: 0.28rem;
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--swatch-ink) 40%, transparent);
+}
+
+.appearance-preview-channel:first-child {
+  width: 70%;
+  background: color-mix(in oklch, var(--swatch-ink) 65%, transparent);
+}
+
+.appearance-preview-channel:nth-child(3) {
+  width: 80%;
+}
+
+.appearance-preview-chat {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.5rem 0.45rem;
+  background: var(--preview-surface);
+}
+
+.appearance-preview-message {
+  height: 0.28rem;
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--swatch-ink) 45%, transparent);
+}
+
+.appearance-preview-message:nth-child(1) {
+  width: 82%;
+}
+
+.appearance-preview-message:nth-child(2) {
+  width: 58%;
+}
+
+.appearance-preview-message:nth-child(3) {
+  width: 70%;
+}
+
+.appearance-preview-composer {
+  position: relative;
+  margin-top: auto;
+  height: 0.5rem;
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--swatch-ink) 16%, var(--preview-surface));
+}
+
+.appearance-preview-composer::after {
+  content: "";
+  position: absolute;
+  top: 0.09rem;
+  right: 0.09rem;
+  bottom: 0.09rem;
+  width: 1.1rem;
+  border-radius: 999px;
+  background: var(--preview-accent);
 }
 
 * {

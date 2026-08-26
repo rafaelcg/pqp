@@ -8,6 +8,12 @@
  */
 
 import type { ThemePreference } from "@pqp/shared";
+import {
+  appearanceForcesDark as isNightLook,
+  getAppearance,
+  subscribeAppearance,
+  type AppearancePreference,
+} from "@/lib/appearance";
 import { getDesktop } from "@/lib/desktop";
 import { queuePreferenceSync } from "@/lib/preferences";
 
@@ -65,11 +71,23 @@ export function systemTheme(): ResolvedTheme {
   return query.matches ? "dark" : "light";
 }
 
+function appearanceForcesDark(): boolean {
+  return isNightLook(getAppearance());
+}
+
 export function resolveTheme(preference: ThemePreference): ResolvedTheme {
+  // Night is a near-black look. Light Night is a contradiction, so brightness
+  // stays dark for as long as that skin is the one on the document.
+  if (appearanceForcesDark()) {
+    return "dark";
+  }
   return preference === "system" ? systemTheme() : preference;
 }
 
 export function applyTheme(resolved: ResolvedTheme): void {
+  if (typeof document === "undefined") {
+    return;
+  }
   document.documentElement.dataset.theme = resolved;
 }
 
@@ -123,8 +141,14 @@ function commit(preference: ThemePreference): void {
 
 /** A choice the user just made here: apply it, keep it, and send it on. */
 export function setThemePreference(preference: ThemePreference): void {
+  const already = preference === state.preference;
   storeTheme(preference);
   commit(preference);
+  // Night locks the radios to Dark. Arrow keys would otherwise re-PATCH
+  // `{theme:"dark"}` on every press of the only enabled option.
+  if (already) {
+    return;
+  }
   queuePreferenceSync({ theme: preference }, { immediate: true });
 }
 
@@ -136,10 +160,31 @@ export function setThemePreference(preference: ThemePreference): void {
  * since yesterday overwrite the choice the user made on another device since.
  * It is still persisted locally, so the boot script paints this theme rather
  * than the old one on the next load.
+ *
+ * Night wins over the stored brightness: a Light row cannot recreate
+ * Night plus Light, which would snap to Light when the look later changes.
  */
+/**
+ * Theme to persist when `/api/me` lands.
+ *
+ * Night is dark-only. A stale account that still has `theme: "light"` and no
+ * appearance must not overwrite a local Night look, or leaving Night later
+ * snaps to Light. Adopt never writes the account back.
+ */
+export function themeToAdopt(
+  serverTheme: ThemePreference | undefined,
+  appearance: AppearancePreference,
+): ThemePreference | undefined {
+  if (isNightLook(appearance)) {
+    return "dark";
+  }
+  return serverTheme;
+}
+
 export function adoptThemePreference(preference: ThemePreference): void {
-  storeTheme(preference);
-  commit(preference);
+  const next = isNightLook(getAppearance()) ? "dark" : preference;
+  storeTheme(next);
+  commit(next);
 }
 
 /** Re-resolve after the OS scheme changed. No-op unless following the system. */
@@ -162,6 +207,12 @@ export function forceTheme(theme: ResolvedTheme): () => void {
 
 // The `document` guard is for the node-environment unit tests.
 if (typeof document !== "undefined") {
+  // Night + a leftover light preference is not a valid UI state. Persist dark
+  // locally only: writing the account on boot would let a stale tab clobber.
+  if (appearanceForcesDark() && state.preference !== "dark") {
+    storeTheme("dark");
+    state = { preference: "dark", resolved: "dark" };
+  }
   // Only fills in when the boot script did not run — a future CSP without a
   // hash for it would otherwise leave the session on the wrong theme. Writing
   // unconditionally would undo the boot script's dark pin on marketing routes.
@@ -171,4 +222,14 @@ if (typeof document !== "undefined") {
   // `commit` only fires on change, so the desktop shell would otherwise learn
   // the theme only after the user next touched it.
   getDesktop()?.setTheme?.(state.resolved);
+  subscribeAppearance(() => {
+    if (appearanceForcesDark()) {
+      if (state.preference !== "dark") {
+        storeTheme("dark");
+      }
+      commit("dark");
+      return;
+    }
+    commit(state.preference);
+  });
 }

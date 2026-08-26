@@ -212,6 +212,61 @@ describe("userPreferencesSchema", () => {
     expect(userPreferencesSchema.safeParse({ theme: "neon" }).success).toBe(false);
   });
 
+  it("accepts the four appearance skins and rejects a brand name", () => {
+    expect(userPreferencesSchema.safeParse({ appearance: "signal" }).success).toBe(
+      true,
+    );
+    expect(userPreferencesSchema.safeParse({ appearance: "harmony" }).success).toBe(
+      true,
+    );
+    expect(userPreferencesSchema.parse({ appearance: "guild" })).toEqual({
+      appearance: "harmony",
+    });
+    expect(userPreferencesSchema.parse({ appearance: "accord" })).toEqual({
+      appearance: "harmony",
+    });
+    expect(userPreferencesSchema.safeParse({ appearance: "hearth" }).success).toBe(
+      true,
+    );
+    expect(userPreferencesSchema.safeParse({ appearance: "night" }).success).toBe(
+      true,
+    );
+    expect(
+      userPreferencesSchema.safeParse({ appearance: "discord" }).success,
+    ).toBe(false);
+    expect(
+      userPreferencesSchema.safeParse({ appearance: "onyx" }).success,
+    ).toBe(false);
+  });
+
+  it("accepts a default or integer accent hue", () => {
+    expect(userPreferencesSchema.safeParse({ accentHue: "default" }).success).toBe(
+      true,
+    );
+    expect(userPreferencesSchema.safeParse({ accentHue: 210 }).success).toBe(true);
+    expect(userPreferencesSchema.safeParse({ accentHue: 361 }).success).toBe(
+      false,
+    );
+    expect(userPreferencesSchema.safeParse({ accentHue: 12.5 }).success).toBe(
+      false,
+    );
+  });
+
+  it("accepts the three contrast preferences", () => {
+    expect(userPreferencesSchema.safeParse({ contrast: "default" }).success).toBe(
+      true,
+    );
+    expect(userPreferencesSchema.safeParse({ contrast: "more" }).success).toBe(
+      true,
+    );
+    expect(userPreferencesSchema.safeParse({ contrast: "system" }).success).toBe(
+      true,
+    );
+    expect(userPreferencesSchema.safeParse({ contrast: "loud" }).success).toBe(
+      false,
+    );
+  });
+
   it("drops audio device ids so they cannot follow a user to another machine", () => {
     const parsed = userPreferencesSchema.parse({
       muteOnJoin: true,

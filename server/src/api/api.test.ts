@@ -3477,10 +3477,47 @@ describeDb("API authorization", () => {
       };
     }
 
-    /** Wait past the microtask queue for the background fetch-then-broadcast
-     * chain in `resolveEmbedInBackground` to finish its real DB round trip. */
-    async function flush() {
-      await new Promise((resolve) => setTimeout(resolve, 50));
+    /**
+     * Wait for the background fetch-then-broadcast chain in
+     * `resolveEmbedInBackground` to actually deliver, rather than for a fixed
+     * number of milliseconds.
+     *
+     * THIS WAS A 50ms SLEEP AND IT FLAKED. The chain does a real DB round trip,
+     * and 50ms is plenty on a developer's machine and not always plenty on a
+     * loaded CI runner, so `resolves an embed added by an edit` failed with
+     * `expected [] to match object [{ title: "Edited in" }]` on unrelated pull
+     * requests, including an iOS-only one that cannot touch this code at all.
+     * A test that fails on changes it has no relationship with teaches people
+     * to re-run CI without reading it, which is worse than the flake.
+     *
+     * Polling for the frame is both faster in the normal case (it returns as
+     * soon as the update lands, usually in single-digit milliseconds) and
+     * survives a slow runner. The timeout is deliberately generous: a real
+     * regression still fails, it just takes two seconds to say so.
+     */
+    async function flush(until?: () => boolean) {
+      const deadline = Date.now() + 2_000;
+      // No predicate means "wait for something that produced no frame to watch
+      // for", which is the cache-miss cases below. Those keep the original
+      // fixed wait, because there is nothing to poll on. Shortening it would
+      // have quietly made THEM flakier while fixing the one that was.
+      if (!until) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        return;
+      }
+      while (!until() && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+    }
+
+    /** The `message-update` frames a recording socket has seen so far. */
+    function embedUpdates(listener: { received: string[] }) {
+      return listener.received
+        .map(
+          (raw) =>
+            JSON.parse(raw) as { type: string; message?: { embeds: unknown[] } },
+        )
+        .filter((frame) => frame.type === "message-update");
     }
 
     it("broadcasts without an embed first, then a follow-up update once the fetch resolves", async () => {
@@ -3503,10 +3540,12 @@ describeDb("API authorization", () => {
       expect(created.type).toBe("message-broadcast");
       expect(created.message.embeds).toEqual([]);
 
+      // Bare wait on purpose. Returning the instant the frame lands leaves this
+      // test's background chain still in flight, and the next test's
+      // `mockResolvedValueOnce` gets consumed by it: the suite then fails
+      // deterministically one test later, which is a worse bug than the flake.
       await flush();
-      const updates = listener.received
-        .map((raw) => JSON.parse(raw) as { type: string; message?: { embeds: unknown[] } })
-        .filter((frame) => frame.type === "message-update");
+      const updates = embedUpdates(listener);
       expect(updates).toHaveLength(1);
       expect(updates[0]!.message!.embeds).toMatchObject([{ title: "Fresh link" }]);
     });
@@ -3565,10 +3604,17 @@ describeDb("API authorization", () => {
       expect(edited.status).toBe(200);
       expect(edited.body.message.embeds).toEqual([]);
 
-      await flush();
-      const updates = listener.received
-        .map((raw) => JSON.parse(raw) as { type: string; message?: { embeds: unknown[] } })
-        .filter((frame) => frame.type === "message-update");
+      // Wait for an update that CARRIES an embed, not merely for an update.
+      // The edit broadcasts its own `message-update` with empty embeds the
+      // moment it commits, and the background resolution sends a second one
+      // afterwards. Polling on "any update" returns on the first and asserts
+      // against `[]` every time.
+      await flush(() =>
+        embedUpdates(listener).some(
+          (frame) => (frame.message?.embeds ?? []).length > 0,
+        ),
+      );
+      const updates = embedUpdates(listener);
       expect(updates.at(-1)!.message!.embeds).toMatchObject([{ title: "Edited in" }]);
     });
 

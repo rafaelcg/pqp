@@ -38,7 +38,7 @@ export const MAX_USER_BANNER_BYTES = 8 * 1024 * 1024;
 /**
  * The rectangle both clients crop and scale to.
  *
- * Wider and shorter than a server banner's 1024×360. A server banner sits in a
+ * Wider and shorter than a server banner's 1024×480. A server banner sits in a
  * 256px channel column; this one runs the full width of a page somebody
  * screenshots on a 390px phone and on a 1440px laptop, and 3:1 is the ratio at
  * which the same image is a band on the phone and a hero on the laptop without

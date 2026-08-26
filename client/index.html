@@ -73,6 +73,43 @@
           theme = "dark";
         }
         document.documentElement.dataset.theme = theme;
+        // Keep in lockstep with `normalizeAppearance` in client/src/lib/appearance.ts
+        // (and the Zod preprocess). This script cannot import that module.
+        const storedAppearance = localStorage.getItem("pqp-appearance");
+        const appearance =
+          storedAppearance === "guild" || storedAppearance === "accord"
+            ? "harmony"
+            : storedAppearance === "harmony" ||
+                storedAppearance === "hearth" ||
+                storedAppearance === "night"
+              ? storedAppearance
+              : "signal";
+        document.documentElement.dataset.appearance = appearance;
+        if (appearance === "night") {
+          document.documentElement.dataset.theme = "dark";
+        }
+        const storedHue = localStorage.getItem("pqp-accent-hue");
+        if (storedHue && storedHue !== "default") {
+          const hue = Number(storedHue);
+          if (Number.isInteger(hue) && hue >= 0 && hue <= 360) {
+            document.documentElement.dataset.accent = "custom";
+            document.documentElement.style.setProperty("--accent-hue", String(hue));
+          }
+        }
+        const storedContrast = localStorage.getItem("pqp-contrast");
+        const contrastPreference =
+          storedContrast === "more" || storedContrast === "default"
+            ? storedContrast
+            : "system";
+        const contrast =
+          contrastPreference === "system"
+            ? window.matchMedia("(prefers-contrast: more)").matches
+              ? "more"
+              : "default"
+            : contrastPreference;
+        if (contrast === "more") {
+          document.documentElement.dataset.contrast = "more";
+        }
       } catch {
         // Storage or matchMedia blocked, the stylesheet defaults to dark.
       }

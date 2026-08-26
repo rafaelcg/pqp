@@ -4,6 +4,7 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type CSSProperties,
   type KeyboardEvent,
   type ReactNode,
 } from "react";
@@ -37,6 +38,9 @@ import { Input } from "@/components/ui/input";
 import { AvatarPicker } from "@/components/user/avatar-picker";
 import { ConnectionsSection } from "@/components/connections/connections-section";
 import { useNotificationSettings } from "@/hooks/use-notifications";
+import { useAccentHue } from "@/hooks/use-accent-hue";
+import { useAppearance } from "@/hooks/use-appearance";
+import { useContrast } from "@/hooks/use-contrast";
 import { useTheme } from "@/hooks/use-theme";
 import { KeyBindingField } from "@/components/voice/key-binding-field";
 import { OutboundVideoReadout } from "@/components/voice/outbound-video-readout";
@@ -94,6 +98,13 @@ import {
   setPushDmDetails,
   type PushAvailability,
 } from "@/lib/push";
+import {
+  ACCENT_SWATCHES,
+  effectiveAccentHue,
+  type AccentHuePreference,
+} from "@/lib/accent";
+import type { AppearancePreference } from "@/lib/appearance";
+import type { ContrastPreference } from "@/lib/contrast";
 import type { ThemePreference } from "@/lib/theme";
 import {
   ApiError,
@@ -257,8 +268,9 @@ export function preferencesFromLocal(
  * it is the only copy that saw the change made on another device — while the
  * device keeps the parts the account does not carry.
  *
- * `theme` is absent on purpose: it lives in its own store under its own key,
- * because the boot script has to resolve it before this module exists.
+ * `theme`, `appearance`, `contrast` and `accentHue` are absent on purpose:
+ * each lives in its own store under its own key, because the boot script
+ * has to resolve them before this module exists.
  *
  * Notification levels are the same shape of thing — their own store, read by
  * the rail and the channel list rather than by any settings state — so this is
@@ -965,6 +977,208 @@ function VoiceSection({
 
 /* -------------------------------------------------------------- appearance */
 
+function SettingBlock({
+  label,
+  hint,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="space-y-2">
+      <div>
+        <h4 className="text-sm font-medium text-text">{label}</h4>
+        {hint ? (
+          <p className="mt-0.5 min-h-[2.5rem] text-xs text-text-muted">{hint}</p>
+        ) : null}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function segmentClass(selected: boolean, disabled = false): string {
+  return cn(
+    "flex h-9 items-center justify-center rounded-md px-3 text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent",
+    selected
+      ? "bg-surface-0 text-text shadow-sm"
+      : "text-text-muted hover:text-text",
+    disabled && "cursor-not-allowed opacity-40 hover:text-text-muted",
+  );
+}
+
+const APPEARANCE_OPTIONS: {
+  value: AppearancePreference;
+  label: MessageKey;
+}[] = [
+  { value: "signal", label: "settings.appearance.preset.signal" },
+  { value: "harmony", label: "settings.appearance.preset.harmony" },
+  { value: "hearth", label: "settings.appearance.preset.hearth" },
+  { value: "night", label: "settings.appearance.preset.night" },
+];
+
+function AppearancePicker() {
+  const { t } = useTranslation();
+  const { appearance, setAppearance } = useAppearance();
+
+  function choose(next: AppearancePreference) {
+    setAppearance(next);
+  }
+
+  function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    const step =
+      event.key === "ArrowRight" || event.key === "ArrowDown"
+        ? 1
+        : event.key === "ArrowLeft" || event.key === "ArrowUp"
+          ? -1
+          : 0;
+    if (step === 0) {
+      return;
+    }
+    event.preventDefault();
+    const current = APPEARANCE_OPTIONS.findIndex(
+      (option) => option.value === appearance,
+    );
+    const nextIndex =
+      (current + step + APPEARANCE_OPTIONS.length) % APPEARANCE_OPTIONS.length;
+    choose(APPEARANCE_OPTIONS[nextIndex].value);
+    const radios =
+      event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="radio"]');
+    radios[nextIndex]?.focus();
+  }
+
+  return (
+    <SettingBlock label={t("settings.appearance.preset")}>
+      <div
+        role="radiogroup"
+        aria-label={t("settings.appearance.preset")}
+        className="grid grid-cols-2 gap-2"
+        onKeyDown={handleKeyDown}
+      >
+        {APPEARANCE_OPTIONS.map((option) => {
+          const selected = option.value === appearance;
+          const darkOnly = option.value === "night";
+          return (
+            <button
+              key={option.value}
+              type="button"
+              role="radio"
+              aria-checked={selected}
+              tabIndex={selected ? 0 : -1}
+              onClick={() => choose(option.value)}
+              className={cn(
+                "flex flex-col gap-2 rounded-lg border p-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent",
+                selected
+                  ? "border-accent bg-surface-2 text-text"
+                  : "border-border text-text-muted hover:border-border-strong hover:text-text",
+              )}
+            >
+              <span
+                aria-hidden
+                className="appearance-preview"
+                style={
+                  {
+                    "--preview-rail": `var(--swatch-${option.value}-rail)`,
+                    "--preview-list": `var(--swatch-${option.value}-list)`,
+                    "--preview-surface": `var(--swatch-${option.value}-surface)`,
+                    "--preview-accent": `var(--swatch-${option.value}-accent)`,
+                  } as CSSProperties
+                }
+              >
+                <span className="appearance-preview-rail" />
+                <span className="appearance-preview-list">
+                  <span className="appearance-preview-channel" />
+                  <span className="appearance-preview-channel" />
+                  <span className="appearance-preview-channel" />
+                </span>
+                <span className="appearance-preview-chat">
+                  <span className="appearance-preview-message" />
+                  <span className="appearance-preview-message" />
+                  <span className="appearance-preview-message" />
+                  <span className="appearance-preview-composer" />
+                </span>
+              </span>
+              <span className="flex items-center justify-between gap-2">
+                <span className="text-sm font-medium">{t(option.label)}</span>
+                {option.value === "signal" ? (
+                  <span className="rounded bg-surface-3 px-1.5 py-0.5 text-[10px] font-medium text-text-muted">
+                    {t("settings.appearance.preset.signalDefault")}
+                  </span>
+                ) : darkOnly ? (
+                  <span className="rounded bg-surface-3 px-1.5 py-0.5 text-[10px] font-medium text-text-muted">
+                    {t("settings.appearance.preset.nightOnly")}
+                  </span>
+                ) : null}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </SettingBlock>
+  );
+}
+
+function AccentHuePicker() {
+  const { t } = useTranslation();
+  const { appearance } = useAppearance();
+  const { preference, setPreference } = useAccentHue();
+  const sliderHue = effectiveAccentHue(preference, appearance);
+  const isCustom = preference !== "default";
+
+  return (
+    <SettingBlock
+      label={t("settings.appearance.accent")}
+      hint={
+        isCustom
+          ? t("settings.appearance.accentCustomHint")
+          : t("settings.appearance.accentDefaultHint")
+      }
+    >
+      <div className="flex flex-col gap-2.5">
+        <input
+          type="range"
+          min={0}
+          max={360}
+          value={sliderHue}
+          aria-label={t("settings.appearance.accent")}
+          onChange={(event) =>
+            setPreference(Number(event.target.value) as AccentHuePreference)
+          }
+          className="accent-hue-slider"
+        />
+        <div className="flex flex-wrap items-center gap-1.5">
+          {ACCENT_SWATCHES.map((hue) => (
+            <button
+              key={hue}
+              type="button"
+              aria-label={t("settings.appearance.accentHue", { hue })}
+              aria-pressed={preference === hue}
+              onClick={() => setPreference(hue, { immediate: true })}
+              className={cn(
+                "accent-hue-dot h-7 w-7 rounded-full border-2 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent",
+                preference === hue
+                  ? "border-text"
+                  : "border-transparent hover:border-border-strong",
+              )}
+              style={{ "--swatch-hue": String(hue) } as CSSProperties}
+            />
+          ))}
+          <button
+            type="button"
+            onClick={() => setPreference("default")}
+            disabled={!isCustom}
+            className="ml-1 text-xs text-text-muted underline-offset-2 hover:text-text hover:underline disabled:cursor-default disabled:no-underline disabled:opacity-40"
+          >
+            {t("settings.appearance.accentReset")}
+          </button>
+        </div>
+      </div>
+    </SettingBlock>
+  );
+}
+
 const THEME_OPTIONS: { value: ThemePreference; label: MessageKey }[] = [
   { value: "light", label: "settings.appearance.theme.light" },
   { value: "dark", label: "settings.appearance.theme.dark" },
@@ -978,7 +1192,10 @@ const THEME_OPTIONS: { value: ThemePreference; label: MessageKey }[] = [
  */
 function ThemePicker() {
   const { t } = useTranslation();
+  const { appearance } = useAppearance();
   const { preference, resolved, setPreference } = useTheme();
+  const nightLocked = appearance === "night";
+  const shown = nightLocked ? "dark" : preference;
 
   function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     const step =
@@ -991,39 +1208,129 @@ function ThemePicker() {
       return;
     }
     event.preventDefault();
-    const current = THEME_OPTIONS.findIndex(
+    const enabled = THEME_OPTIONS.filter(
+      (option) => !nightLocked || option.value === "dark",
+    );
+    const current = enabled.findIndex((option) => option.value === shown);
+    const nextIndex = (current + step + enabled.length) % enabled.length;
+    setPreference(enabled[nextIndex].value);
+    const radios =
+      event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="radio"]');
+    const visualIndex = THEME_OPTIONS.findIndex(
+      (option) => option.value === enabled[nextIndex].value,
+    );
+    radios[visualIndex]?.focus();
+  }
+
+  return (
+    <SettingBlock
+      label={t("settings.appearance.theme")}
+      hint={
+        nightLocked
+          ? t("settings.appearance.themeNightLocked")
+          : preference === "system"
+            ? t("settings.appearance.themeFollowing", {
+                theme: t(
+                  resolved === "light"
+                    ? "settings.appearance.resolved.light"
+                    : "settings.appearance.resolved.dark",
+                ),
+              })
+            : t(
+                preference === "light"
+                  ? "settings.appearance.themeAlwaysLight"
+                  : "settings.appearance.themeAlwaysDark",
+              )
+      }
+    >
+      <div
+        role="radiogroup"
+        aria-label={t("settings.appearance.theme")}
+        className="grid auto-cols-fr grid-flow-col gap-0.5 rounded-lg bg-surface-2 p-0.5"
+        onKeyDown={handleKeyDown}
+      >
+        {THEME_OPTIONS.map((option) => {
+          const selected = option.value === shown;
+          const disabled = nightLocked && option.value !== "dark";
+          return (
+            <button
+              key={option.value}
+              type="button"
+              role="radio"
+              aria-checked={selected}
+              aria-disabled={disabled}
+              disabled={disabled}
+              tabIndex={selected ? 0 : -1}
+              onClick={() => {
+                if (!disabled) {
+                  setPreference(option.value);
+                }
+              }}
+              className={segmentClass(selected, disabled)}
+            >
+              {t(option.label)}
+            </button>
+          );
+        })}
+      </div>
+    </SettingBlock>
+  );
+}
+
+const CONTRAST_OPTIONS: { value: ContrastPreference; label: MessageKey }[] = [
+  { value: "default", label: "settings.appearance.contrast.default" },
+  { value: "more", label: "settings.appearance.contrast.more" },
+  { value: "system", label: "settings.appearance.contrast.system" },
+];
+
+function ContrastPicker() {
+  const { t } = useTranslation();
+  const { preference, resolved, setPreference } = useContrast();
+
+  function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    const step =
+      event.key === "ArrowRight" || event.key === "ArrowDown"
+        ? 1
+        : event.key === "ArrowLeft" || event.key === "ArrowUp"
+          ? -1
+          : 0;
+    if (step === 0) {
+      return;
+    }
+    event.preventDefault();
+    const current = CONTRAST_OPTIONS.findIndex(
       (option) => option.value === preference,
     );
     const nextIndex =
-      (current + step + THEME_OPTIONS.length) % THEME_OPTIONS.length;
-    setPreference(THEME_OPTIONS[nextIndex].value);
+      (current + step + CONTRAST_OPTIONS.length) % CONTRAST_OPTIONS.length;
+    setPreference(CONTRAST_OPTIONS[nextIndex].value);
     const radios =
       event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="radio"]');
     radios[nextIndex]?.focus();
   }
 
   return (
-    <Field
-      label={t("settings.appearance.theme")}
+    <SettingBlock
+      label={t("settings.appearance.contrast")}
       hint={
         preference === "system"
-          ? t("settings.appearance.themeFollowing", {
-              theme: t(
-                resolved === "light"
-                  ? "settings.appearance.resolved.light"
-                  : "settings.appearance.resolved.dark",
+          ? t("settings.appearance.contrastFollowing", {
+              contrast: t(
+                resolved === "more"
+                  ? "settings.appearance.resolved.more"
+                  : "settings.appearance.resolved.default",
               ),
             })
-          : t("settings.appearance.themeHint")
+          : t("settings.appearance.contrastHint")
       }
     >
       <div
         role="radiogroup"
-        aria-label={t("settings.appearance.theme")}
-        className="flex gap-1.5"
+        aria-label={t("settings.appearance.contrast")}
+        className="grid auto-cols-fr grid-flow-col gap-0.5 rounded-lg bg-surface-2 p-0.5"
         onKeyDown={handleKeyDown}
       >
-        {THEME_OPTIONS.map((option) => {
+        {CONTRAST_OPTIONS.map((option) => {
           const selected = option.value === preference;
           return (
             <button
@@ -1033,14 +1340,14 @@ function ThemePicker() {
               aria-checked={selected}
               tabIndex={selected ? 0 : -1}
               onClick={() => setPreference(option.value)}
-              className={chipClass(selected)}
+              className={segmentClass(selected)}
             >
               {t(option.label)}
             </button>
           );
         })}
       </div>
-    </Field>
+    </SettingBlock>
   );
 }
 
@@ -1083,14 +1390,14 @@ function LanguagePicker() {
   }
 
   return (
-    <Field
+    <SettingBlock
       label={t("settings.appearance.language")}
       hint={t("settings.appearance.languageHint")}
     >
       <div
         role="radiogroup"
         aria-label={t("settings.appearance.language")}
-        className="flex flex-wrap gap-1.5"
+        className="grid auto-cols-fr grid-flow-col gap-0.5 rounded-lg bg-surface-2 p-0.5"
       >
         {SUPPORTED_LOCALES.map((option) => {
           const selected = option === locale;
@@ -1101,14 +1408,14 @@ function LanguagePicker() {
               role="radio"
               aria-checked={selected}
               onClick={() => void choose(option)}
-              className={chipClass(selected)}
+              className={segmentClass(selected)}
             >
               {t(LOCALE_LABELS[option])}
             </button>
           );
         })}
       </div>
-    </Field>
+    </SettingBlock>
   );
 }
 
@@ -1122,21 +1429,27 @@ function AppearanceSection({
   const { t } = useTranslation();
   return (
     <div className="space-y-6">
+      <p className="text-xs text-text-muted">
+        {t("settings.appearance.syncHint")}
+      </p>
       <ThemePicker />
-      <LanguagePicker />
-      <Field label={t("settings.appearance.chat")}>
-        <label className="flex cursor-pointer items-center gap-3">
-          <input
-            type="checkbox"
-            checked={showLinkEmbeds}
-            onChange={(e) => onShowLinkEmbeds(e.target.checked)}
-            className="h-4 w-4 accent-[var(--color-signal)]"
-          />
-          <span className="text-sm">
-            {t("settings.appearance.linkPreviews")}
-          </span>
-        </label>
-      </Field>
+      <AppearancePicker />
+      <AccentHuePicker />
+      <ContrastPicker />
+      <div className="space-y-6 border-t border-border pt-6">
+        <LanguagePicker />
+        <SettingBlock label={t("settings.appearance.chat")}>
+          <label className="flex cursor-pointer items-center gap-3 text-sm">
+            <input
+              type="checkbox"
+              checked={showLinkEmbeds}
+              onChange={(e) => onShowLinkEmbeds(e.target.checked)}
+              className="h-4 w-4 accent-[var(--color-accent)]"
+            />
+            <span>{t("settings.appearance.linkPreviews")}</span>
+          </label>
+        </SettingBlock>
+      </div>
     </div>
   );
 }
@@ -2569,7 +2882,7 @@ export function SettingsModal({
             role="tabpanel"
             aria-labelledby={`${tabIdPrefix}-${section}`}
             tabIndex={0}
-            className="min-w-0 flex-1 overflow-y-auto overscroll-contain px-5 py-5 focus-visible:outline-none"
+            className="min-w-0 flex-1 overflow-y-auto overscroll-contain [scrollbar-gutter:stable] px-5 py-5 focus-visible:outline-none"
           >
             <SectionHeader section={active} />
 

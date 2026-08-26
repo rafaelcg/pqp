@@ -452,7 +452,7 @@ private struct CommunityBanner: View {
     var body: some View {
         // FRAMED AND CLIPPED BEFORE THE SCRIM AND THE NAME GO ON. A
         // `scaledToFill` image grows the stack it is in, not only itself, so a
-        // 1024×360 banner laid out as a sibling of the name would push the name
+        // wide banner laid out as a sibling of the name would push the name
         // far below the 120pt window and clipping would then remove it. The two
         // things drawn on top are overlays, which measure against the strip.
         ZStack {
