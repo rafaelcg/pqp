@@ -338,64 +338,79 @@ private fun ShareScreenButton(state: VoiceState, controller: VoiceController) {
 }
 
 /**
- * "Somebody is sharing a screen", with a way to look at it.
+ * "Somebody is sharing a screen", with a way to look at each one.
  *
- * Two conditions, not one: the roster has to say somebody is presenting *and* a
- * video track has to have arrived. The roster is the faster of the two and can
- * be true for a second before any frames exist, so offering to open a viewer on
- * the roster alone puts a black rectangle in front of people.
+ * Two conditions per presenter, not one: the roster has to say they are
+ * presenting *and* a video track has to have arrived from them. The roster is
+ * the faster of the two and can be true for a second before any frames exist,
+ * so offering to open a viewer on the roster alone puts a black rectangle in
+ * front of people.
+ *
+ * A row per presenter, because two people can share at once. Naming whoever is
+ * being watched is what makes that usable: with one line reading "watch" and
+ * two shares behind it, opening the viewer is a coin toss.
  */
 @Composable
 private fun WatchScreenRow(state: VoiceState, controller: VoiceController) {
-    val remoteScreen by controller.remoteScreen.collectAsStateWithLifecycle()
+    val remoteScreens by controller.remoteScreens.collectAsStateWithLifecycle()
     val eglContext = controller.eglContext
-    val presenter = state.presenter
-    var watching by remember { mutableStateOf(false) }
+    var watchingPeerId by remember { mutableStateOf<String?>(null) }
+
+    // Somebody the roster calls a presenter *and* whose picture has arrived.
+    // Our own capture is on the roster too and never sends itself a track, so
+    // it drops out here without needing a special case.
+    val watchable = state.presenters.mapNotNull { participant ->
+        remoteScreens[participant.peerId]?.let { participant to it }
+    }
 
     AnimatedVisibility(
-        visible = presenter != null && remoteScreen != null && eglContext != null,
+        visible = watchable.isNotEmpty() && eglContext != null,
         enter = expandVertically(),
         exit = shrinkVertically(),
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = Spacing.gutter, end = Spacing.sm, bottom = Spacing.xs),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Text(
-                text = stringResource(
-                    R.string.voice_watch_screen,
-                    presenter?.displayName.orEmpty(),
-                ),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f, fill = false),
-            )
-            TextButton(onClick = { watching = true }) {
-                Text(stringResource(R.string.voice_watch))
+        Column {
+            watchable.forEach { (participant, _) ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = Spacing.gutter, end = Spacing.sm, bottom = Spacing.xs),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text(
+                        text = stringResource(
+                            R.string.voice_watch_screen,
+                            participant.displayName,
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    TextButton(onClick = { watchingPeerId = participant.peerId }) {
+                        Text(stringResource(R.string.voice_watch))
+                    }
+                }
             }
         }
     }
 
-    val track = remoteScreen
+    val watched = watchable.firstOrNull { it.first.peerId == watchingPeerId }
 
     // The presenter stopped while the viewer was open. Closed from an effect
     // rather than from composition, because writing state while composing is
     // how a recomposition loop starts.
-    LaunchedEffect(track, eglContext) {
-        if (track == null || eglContext == null) watching = false
+    LaunchedEffect(watched, eglContext) {
+        if (watched == null || eglContext == null) watchingPeerId = null
     }
 
-    if (watching && track != null && eglContext != null) {
+    if (watched != null && eglContext != null) {
         ScreenShareDialog(
-            track = track,
+            track = watched.second,
             eglContext = eglContext,
-            presenter = presenter?.displayName.orEmpty(),
-            onClose = { watching = false },
+            presenter = watched.first.displayName,
+            onClose = { watchingPeerId = null },
         )
     }
 }
