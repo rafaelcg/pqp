@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import en from "./en/translation.json";
 import ptBR from "./pt-BR/translation.json";
+// `?raw` rather than node:fs: this is the client project and its tsconfig
+// carries no node types, which is what the blog bodies already do for the
+// same reason (see `lib/blog/bodies.ts`).
+import indexHtml from "../../index.html?raw";
 
 /**
  * No em dash reaches a user, in either language.
@@ -44,6 +48,28 @@ describe("user-facing copy carries no dash punctuation", () => {
 
   it("en", () => {
     expect(offences(en as Record<string, unknown>)).toEqual([]);
+  });
+
+  /**
+   * The static head, which the catalogues do not reach.
+   *
+   * `client/index.html` carries the `<title>`, the Open Graph and Twitter
+   * cards, and the JSON-LD description. That copy is not in either catalogue,
+   * so this guard walked straight past it and it drifted: six user-facing em
+   * dashes, including `og:title`, which is the line that renders on every link
+   * card the project posts. It was live for as long as anybody had been
+   * enforcing the rule everywhere else.
+   *
+   * The whole file is scanned rather than the user-facing attributes alone.
+   * Parsing HTML to decide which strings a person will read is more ways to be
+   * wrong than the thing is worth, and nothing in this file has a legitimate
+   * use for the character, comments included.
+   */
+  it("the static head in index.html", () => {
+    const found = Object.entries(BANNED)
+      .filter(([char]) => indexHtml.includes(char))
+      .map(([, name]) => name);
+    expect(found).toEqual([]);
   });
 
   it("catches one if it comes back", () => {

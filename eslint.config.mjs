@@ -123,4 +123,17 @@ export default tseslint.config(
       "@typescript-eslint/no-require-imports": "off",
     },
   },
+
+  {
+    // `electron/picker/picker.js` is the one file under electron/ that runs in
+    // a renderer rather than in Node: it is the share picker's page, loaded
+    // from a plain `<script>` tag off a `file://` URL, so it has `document`
+    // and no module system at all. Linting it as a main-process CommonJS file
+    // fails on every DOM call it makes.
+    files: ["electron/picker/picker.js"],
+    languageOptions: {
+      globals: globals.browser,
+      sourceType: "script",
+    },
+  },
 );

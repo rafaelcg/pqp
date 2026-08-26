@@ -3,6 +3,7 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { VitePWA } from "vite-plugin-pwa";
 import path from "node:path";
+import { googleAds } from "./src/lib/google-ads-tag";
 
 /**
  * `/edge-config.json` — the only thing the Cloudflare Pages middleware needs to
@@ -78,6 +79,9 @@ export default defineConfig({
     react(),
     edgeConfig(),
     umami(),
+    // Same gate as Umami above, same reason. See `src/lib/google-ads-tag.ts`;
+    // it lives under `src/` so `vitest` can prove the gate holds.
+    googleAds(process.env),
     tailwindcss(),
     VitePWA({
       // `prompt`, never `autoUpdate`. This client holds live WebSocket state and

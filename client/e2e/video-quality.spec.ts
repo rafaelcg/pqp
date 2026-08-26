@@ -434,7 +434,7 @@ async function wakeControls(page: Page): Promise<void> {
 async function chooseQuality(page: Page, label: string): Promise<void> {
   await wakeControls(page);
   await page
-    .getByRole("button", { name: /^Camera and screen quality:/ })
+    .getByRole("button", { name: /^Video you send:/ })
     .click({ timeout: 10_000 });
   await page
     .getByRole("menuitemradio", { name: label, exact: true })
@@ -803,7 +803,7 @@ async function joinVoice(page: Page): Promise<void> {
  */
 async function chooseChannelQuality(page: Page, label: string): Promise<void> {
   await page
-    .getByRole("button", { name: /^Camera and screen quality:/ })
+    .getByRole("button", { name: /^Video you send:/ })
     .click({ timeout: 10_000 });
   await page
     .getByRole("menuitemradio", { name: label, exact: true })

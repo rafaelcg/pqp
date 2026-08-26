@@ -1,4 +1,4 @@
-import { SignInButton, SignUpButton, useAuth } from "@clerk/clerk-react";
+import { SignInButton, SignUpButton, useAuth, useUser } from "@clerk/clerk-react";
 import { Lock, Menu, Phone, Users, Video, WifiOff } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
@@ -157,6 +157,7 @@ import { shouldRunOnboarding } from "@/lib/onboarding";
 import { firstRunDismissedPatch } from "@/lib/first-run";
 import { browserStorage, hasArrived, rememberArrival } from "@/lib/arrival";
 import { takeAcquisition } from "@/lib/acquisition";
+import { reportSignupConversion } from "@/lib/google-ads";
 import { ArrivalBanner } from "@/components/onboarding/arrival-banner";
 import { translateMessage, useTranslation } from "@/lib/i18n";
 import {
@@ -295,6 +296,21 @@ function ClerkMainApp() {
   const { getToken } = useAuth();
   const getTokenRef = useRef(getToken);
   getTokenRef.current = getToken;
+  /**
+   * The only place in the app that can say an account was *created*, as opposed
+   * to signed in. Read here rather than deeper down because `MainAppContent` is
+   * shared with the dev-auth-bypass path, which renders no `ClerkProvider` at
+   * all and would throw on any Clerk hook. A bypass account passing through
+   * `undefined` is also correct on its own terms: it is not a sign-up.
+   */
+  const { user: clerkUser } = useUser();
+  const clerkAccount = useMemo(
+    () =>
+      clerkUser
+        ? { id: clerkUser.id, createdAt: clerkUser.createdAt ?? null }
+        : null,
+    [clerkUser],
+  );
 
   // Stable callback — Clerk's getToken identity changes often and must not
   // remount the app / tear down the WebSocket (that looked like a full refresh).
@@ -306,12 +322,24 @@ function ClerkMainApp() {
     [],
   );
 
-  return <MainAppContent resolveToken={resolveToken} showUserButton />;
+  return (
+    <MainAppContent
+      resolveToken={resolveToken}
+      showUserButton
+      clerkAccount={clerkAccount}
+    />
+  );
 }
 
 interface MainAppContentProps {
   resolveToken: TokenResolver;
   showUserButton?: boolean;
+  /**
+   * Identity and creation instant straight from Clerk, or null where there is
+   * no Clerk (the dev auth bypass). Only the Google Ads sign-up conversion
+   * reads it; everything else about the person comes from `/api/me`.
+   */
+  clerkAccount?: { id: string; createdAt: Date | null } | null;
 }
 
 interface ChannelPromptState {
@@ -329,6 +357,7 @@ export interface UnreadState {
 function MainAppContent({
   resolveToken,
   showUserButton = false,
+  clerkAccount = null,
 }: MainAppContentProps) {
   const { t } = useTranslation();
   const [user, setUser] = useState<User | null>(null);
@@ -2518,6 +2547,45 @@ function MainAppContent({
     // changes is intentional — selection changes write the URL via syncRoute.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bootstrapReady, location.pathname]);
+
+  /**
+   * "Somebody just made an account", told to Google Ads once.
+   *
+   * WHY HERE. The same three conditions the arrival intents below wait for are
+   * the ones that make this a real sign-up: the account exists, it has cleared
+   * the 18+ gate, and it has a working token. Reporting any earlier would count
+   * accounts that the gate is about to refuse, which is a conversion an
+   * advertiser would be bidding to buy more of.
+   *
+   * WHY NOT AT SIGN-IN, WHICH IS THE OBVIOUS WRONG ANSWER. This effect runs on
+   * every load for every signed-in person, including somebody who joined in
+   * March. What makes it fire for a sign-up and only a sign-up is
+   * `reportSignupConversion`: Clerk's `createdAt` has to be inside a half-hour
+   * window and this browser must not already have reported that account id. The
+   * argument for that pair, and for what it deliberately gets wrong, is in
+   * `lib/google-ads.ts`.
+   *
+   * NO REF GUARD, UNLIKE THE EFFECT BELOW. It would be the weaker guard of the
+   * two: a ref covers StrictMode's double invocation and nothing else, while
+   * the stored note covers that *and* reloads, remounts and navigating back
+   * into `/app`. The note is written before the event is sent, so the second
+   * StrictMode pass reads it back and stops.
+   *
+   * Inert on a self-hosted build, where no Google tag was injected and
+   * `window.gtag` does not exist, and under the dev auth bypass, where there is
+   * no Clerk account to have been created.
+   */
+  useEffect(() => {
+    if (!bootstrapReady || !clerkAccount) {
+      return;
+    }
+    reportSignupConversion({
+      accountCreatedAt: clerkAccount.createdAt,
+      userId: clerkAccount.id,
+      storage: browserStorage(),
+      gtag: window.gtag,
+    });
+  }, [bootstrapReady, clerkAccount]);
 
   /**
    * The three intentions somebody arrived with, acted on exactly once.

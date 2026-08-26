@@ -71,6 +71,49 @@ describe("marketingPageFromMetaPath", () => {
 });
 
 describe("the duplicated copy is pinned to the JSON catalogues", () => {
+  /**
+   * Every marketing path that has catalogue copy, checked in one table.
+   *
+   * WHY A TABLE AND NOT ANOTHER `it` PER PAGE. The per-page tests below cover
+   * landing, vs-discord, tela and claim. `/beta` was never added, and it
+   * drifted: #88 corrected the catalogue when `/beta` was found to be
+   * promising an iPhone screen share that has never worked, but the hardcoded
+   * pair here was left behind, so the edge kept injecting the false copy into
+   * every link card for another two hours. Nobody noticed because nothing
+   * looked at that page.
+   *
+   * A list of pages that must each be remembered is a list that will be
+   * forgotten. This one is derived, so a new marketing page with catalogue
+   * copy is covered the moment it exists.
+   */
+  const PINNED: ReadonlyArray<{ path: MarketingPage; prefix: string }> = [
+    { path: "/", prefix: "landing" },
+    { path: "/vs-discord", prefix: "vsDiscord" },
+    { path: "/tela", prefix: "tela" },
+    { path: "/beta", prefix: "betaPage" },
+    { path: "/claim", prefix: "claim" },
+  ];
+
+  for (const { path, prefix } of PINNED) {
+    it(`${path} matches the catalogue in both languages`, () => {
+      for (const [locale, catalogue] of [
+        ["en", en],
+        ["pt-BR", ptBR],
+      ] as const) {
+        const head = renderMarketingHead(path, locale);
+        const title = (catalogue as Record<string, string>)[`${prefix}.seo.title`];
+        const description = (catalogue as Record<string, string>)[
+          `${prefix}.seo.description`
+        ];
+        expect(title, `${prefix}.seo.title missing from ${locale}`).toBeTruthy();
+        expect(head, `${path} ${locale} title`).toContain(`<title>${title}</title>`);
+        if (description) {
+          expect(head, `${path} ${locale} description`).toContain(description);
+        }
+      }
+    });
+  }
+
   it("landing title and description", () => {
     const head = renderMarketingHead("/", "en");
     expect(head).toContain(`<title>${en["landing.seo.title"]}</title>`);

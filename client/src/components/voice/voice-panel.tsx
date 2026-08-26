@@ -504,9 +504,20 @@ export function VoicePanel({
    * channel is not selected at all.
    */
   const [qualityRequested, setQualityRequested] = useState(false);
+  /**
+   * Somebody else's camera or share is on the wire right now.
+   *
+   * Read off the peers rather than off `screenSharePeerIds`, which is the
+   * roster's *claim* and includes this machine's own share. What decides
+   * whether there is anything to report is whether a stream actually arrived.
+   */
+  const hasIncomingVideo = remotePeers.some(
+    (peer) => peer.cameraStream !== null || peer.screenStream !== null,
+  );
   const qualityContext = {
     isCameraOn,
     isSharingScreen,
+    hasIncomingVideo,
     collapsed: false,
   };
   const showQuality =
@@ -830,16 +841,19 @@ export function VoicePanel({
                 </Button>
               )}
               {/* The quality control, immediately to the right of the camera
-                  and on the same rule as the conversation call's: present only
-                  while this machine is actually sending video, because that is
-                  the only time it has anything to govern or to report. Somebody
-                  who wants to pin a size before joining still has Settings. */}
+                  and on the same rule as the conversation call's: present
+                  whenever this call carries video in EITHER direction. Sending
+                  gets the sizes; watching gets the measurement of what is
+                  arriving, which is the only true answer available to a viewer.
+                  Somebody who wants to pin a size before joining still has
+                  Settings. */}
               {showQuality && (
                 <VideoQualityMenu
                   value={videoQuality}
                   open={qualityOpen}
                   onOpenChange={setQualityRequested}
                   onChange={(quality) => onVideoQualityChange?.(quality)}
+                  isSendingVideo={isCameraOn || isSharingScreen}
                   buttonClassName="h-9 w-9 shrink-0"
                   iconClassName="h-4 w-4"
                 />

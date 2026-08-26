@@ -338,8 +338,19 @@ final class CallModel {
                 },
                 onVideoChange: { [weak self] video in
                     Task { @MainActor in self?.video = video }
+                },
+                onSendStats: { snapshot in
+                    Task { @MainActor in VideoSendReport.shared.apply(snapshot) }
                 }
             )
+            await voice.setVideoQuality(VideoQualitySettings.shared.quality)
+            // Registered rather than observed in a view, because the one screen
+            // that could observe it is routinely not on screen: a collapsed call
+            // is still publishing a camera behind a chat transcript.
+            VideoQualitySettings.shared.addListener(Self.handlerKey) { [weak self] quality in
+                guard let self else { return }
+                Task { await self.voice.setVideoQuality(quality) }
+            }
             await session.realtime.joinVoice(channelId: conversationId)
         } catch {
             fail((error as? APIError)?.errorDescription ?? error.localizedDescription)
@@ -609,6 +620,8 @@ final class CallModel {
     /// Everything about the call itself. `incoming` is deliberately spared: a
     /// second person ringing while this call ends is a separate invitation.
     private func clearCallState() {
+        VideoQualitySettings.shared.removeListener(Self.handlerKey)
+        VideoSendReport.shared.clear()
         conversationId = nil
         conversation = nil
         peers = []

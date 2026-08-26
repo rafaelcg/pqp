@@ -30,8 +30,8 @@ export const cookiesEn: LegalDocument = {
       body: (
         <>
           <p>
-            <strong>The pqp app itself sets no cookies.</strong> The only
-            cookies on pqp.gg come from{" "}
+            <strong>The pqp app itself sets no cookies.</strong> Every cookie on
+            pqp.gg is set by one of two third parties. The first is{" "}
             <a href="https://clerk.com" target="_blank" rel="noreferrer">
               Clerk
             </a>
@@ -42,9 +42,34 @@ export const cookiesEn: LegalDocument = {
             individual cookie names and lifetimes on its own site.
           </p>
           <p>
-            We set no advertising cookies, no analytics cookies, and no
-            cross-site tracking cookies of any kind — not on the app and not on
-            the marketing pages.
+            The second is <strong>Google Ads conversion tracking</strong>. pqp.gg
+            buys a small amount of advertising, and Google&apos;s tag loads on
+            every page here so we can tell whether an ad produced an account
+            rather than just a click. It sets first-party cookies on the pqp.gg
+            domain whose names begin <code>_gcl_</code>, which record that your
+            visit arrived from an ad and let a later sign-up be matched back to
+            it. These are <strong>not</strong> strictly necessary: block them and
+            everything works exactly as before, and the sign-up simply goes
+            uncounted. Google documents the names and lifetimes on its own site.
+          </p>
+          <p>
+            One event goes to Google, once, and only when an account is created:
+            that a sign-up happened. It carries no name, no email, no user id and
+            nothing you typed. We upload no account data to Google, we have not
+            switched on enhanced conversions or any customer-data matching, and
+            we run no remarketing or audience lists. Signing in again sends
+            nothing.
+          </p>
+          <p>
+            Those are all of them. We set no analytics cookies and no
+            cross-site tracking cookies of any kind, on the app or on the
+            marketing pages.
+          </p>
+          <p>
+            <strong>This applies to pqp.gg only.</strong> The Google tag is added
+            when the hosted site is built, and only when that build is given our
+            advertising account id, so a self-hosted copy of pqp contacts no
+            Google advertising server and sets no Google cookie.
           </p>
         </>
       ),
@@ -56,8 +81,9 @@ export const cookiesEn: LegalDocument = {
         <>
           <p>
             These are stored by your browser under the pqp.gg origin. They stay
-            on your device, are never used for advertising, and are readable
-            only by pqp.gg.
+            on your device and are readable only by pqp.gg. None of them is ever
+            sent to an advertiser, including the last one in this list, which
+            exists to stop something being sent.
           </p>
           <ul>
             <li>
@@ -105,6 +131,14 @@ export const cookiesEn: LegalDocument = {
               your device the first time the app loads after you sign in,
               when it is sent to your account once. If you never sign up it
               simply expires.
+            </li>
+            <li>
+              <code>pqp:ads-signup-reported</code>: the identifier of the
+              account whose sign-up has already been counted by the Google Ads
+              conversion tag described above, so that reloading the app cannot
+              count the same sign-up twice. It is written once, when you create
+              an account, and never leaves your device. If you never sign up it
+              is never written at all.
             </li>
           </ul>
           <p>
@@ -173,6 +207,11 @@ export const cookiesEn: LegalDocument = {
               attachments are enabled, your browser uploads and downloads those
               files directly to storage.
             </li>
+            <li>
+              <strong>Google Ads</strong> loads the conversion tag described
+              under &quot;Cookies&quot; from{" "}
+              <code>www.googletagmanager.com</code>, on every page of pqp.gg.
+            </li>
           </ul>
           <p>
             Link-preview images are the exception: we proxy those through our
@@ -188,10 +227,12 @@ export const cookiesEn: LegalDocument = {
       body: (
         <>
           <p>
-            No advertising or retargeting pixel, no session recording, no
-            error-reporting SDK, no device fingerprinting, and no
+            No retargeting or remarketing pixel, no audience list, no session
+            recording, no error-reporting SDK, no device fingerprinting, and no
             push-notification service. Desktop notifications are raised locally
-            by your own browser and are not routed through anyone else.
+            by your own browser and are not routed through anyone else. The
+            Google tag under &quot;Cookies&quot; above is the one piece of
+            advertising machinery here, and it only ever counts sign-ups.
           </p>
           <p>
             We do use <strong>Cloudflare Web Analytics</strong> to count visits
@@ -221,7 +262,9 @@ export const cookiesEn: LegalDocument = {
           You can clear cookies, local storage and cached data for pqp.gg in
           your browser settings, and block third-party requests with a browser
           extension if you prefer. Blocking Clerk&apos;s cookies will prevent
-          sign-in. Clearing local storage resets your theme, language and
+          sign-in. Blocking Google&apos;s costs you nothing and costs us one
+          uncounted sign-up. Clearing local storage resets your theme, language
+          and
           notification preferences on that device but does not touch your
           account.
         </p>

@@ -66,16 +66,20 @@ class SampleHandler: RPBroadcastSampleHandler {
         let target = screenShareTargetSize(width: source.width, height: source.height)
         guard target.width > 0, target.height > 0 else { return }
 
-        guard let payload = scaler.packedNV12(from: pixelBuffer, size: target) else { return }
+        guard scaler.scale(pixelBuffer, to: target) else { return }
         let header = ScreenShareFrameHeader(
             width: target.width,
             height: target.height,
             rotation: Self.rotation(of: sampleBuffer)
         )
-        var frame = header.encoded()
-        frame.append(payload)
-        if !client.write(frame) {
-            // The app went away — closing means the next frame reconnects rather
+        // Header and planes go out in place. Joining them into one buffer first
+        // would cost two 1.38 MB allocations and copies per frame, which at 30
+        // fps is 83 MB/s of churn in a process the OS kills rather than warns.
+        let outcome = scaler.withPlanes { luma, chroma in
+            client.write(header: header.encoded(), luma: luma, chroma: chroma)
+        }
+        if outcome == .failed {
+            // The app went away. Closing means the next frame reconnects rather
             // than writing into a dead descriptor forever.
             client.close()
         }
@@ -138,20 +142,50 @@ class SampleHandler: RPBroadcastSampleHandler {
 ///
 /// The destination buffers are held across frames on purpose: allocating two
 /// megabytes per frame in this process is how a broadcast extension gets killed.
+/// They are also *handed out* rather than copied into a `Data`, for the same
+/// reason at three times the rate: see `withPlanes`.
 final class ScreenShareScaler {
     private var luma: [UInt8] = []
     private var chroma: [UInt8] = []
+    /// Whether the planes hold a whole frame. False before the first scale and
+    /// after a failed one, so a caller cannot send the previous frame twice.
+    private var isFilled = false
 
-    func packedNV12(from pixelBuffer: CVPixelBuffer, size: (width: Int, height: Int)) -> Data? {
-        guard CVPixelBufferGetPlaneCount(pixelBuffer) == 2 else { return nil }
+    /// Scales one frame into the planes this object keeps. They stay valid until
+    /// the next call, which is exactly as long as the caller needs them.
+    @discardableResult
+    func scale(_ pixelBuffer: CVPixelBuffer, to size: (width: Int, height: Int)) -> Bool {
+        isFilled = fill(from: pixelBuffer, size: size)
+        return isFilled
+    }
+
+    /// Reads the scaled planes in place.
+    ///
+    /// The whole point is that nothing is copied: `body` receives the same
+    /// memory `vImageScale` just wrote, which the socket then writes straight
+    /// out. A version of this that returned `Data` would allocate and copy 1.38
+    /// MB per frame, and the caller would concatenate it into another 1.38 MB.
+    func withPlanes<R>(
+        _ body: (UnsafeRawBufferPointer, UnsafeRawBufferPointer) -> R
+    ) -> R? {
+        guard isFilled else { return nil }
+        return luma.withUnsafeBytes { lumaBytes in
+            chroma.withUnsafeBytes { chromaBytes in
+                body(lumaBytes, chromaBytes)
+            }
+        }
+    }
+
+    private func fill(from pixelBuffer: CVPixelBuffer, size: (width: Int, height: Int)) -> Bool {
+        guard CVPixelBufferGetPlaneCount(pixelBuffer) == 2 else { return false }
         guard CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly) == kCVReturnSuccess else {
-            return nil
+            return false
         }
         defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
 
         guard let lumaSource = CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, 0),
               let chromaSource = CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, 1) else {
-            return nil
+            return false
         }
         let lumaBytes = size.width * size.height
         let chromaBytes = size.width * (size.height / 2)
@@ -182,7 +216,7 @@ final class ScreenShareScaler {
             )
             scaled = vImageScale_Planar8(&sourceLuma, &destinationLuma, nil, flags)
         }
-        guard scaled == kvImageNoError else { return nil }
+        guard scaled == kvImageNoError else { return false }
 
         chroma.withUnsafeMutableBytes { destination in
             // `width` counts CbCr *pairs*, so the row is twice as many bytes.
@@ -194,11 +228,8 @@ final class ScreenShareScaler {
             )
             scaled = vImageScale_CbCr8(&sourceChroma, &destinationChroma, nil, flags)
         }
-        guard scaled == kvImageNoError else { return nil }
+        guard scaled == kvImageNoError else { return false }
 
-        var packed = Data(capacity: lumaBytes + chromaBytes)
-        packed.append(contentsOf: luma)
-        packed.append(contentsOf: chroma)
-        return packed
+        return true
     }
 }

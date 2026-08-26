@@ -1,4 +1,5 @@
 import SwiftUI
+import WebRTC
 
 struct VoiceView: View {
     @Environment(SessionStore.self) private var session
@@ -29,12 +30,30 @@ struct VoiceView: View {
                         onFocus: { model.focusScreen($0) }
                     )
                         .frame(maxHeight: 260)
+                    // A rail rather than a grid: the screen is what people are
+                    // looking at, and faces beside it are for knowing who is
+                    // still here.
+                    cameraRail
+                    participants
+                } else if model.hasCameras {
+                    // Faces take the space the speaker icon had. That icon says
+                    // "this is audio", which stops being true the moment anyone
+                    // turns a camera on.
+                    compactHeader
+                    cameraGrid
                     participants
                 } else {
                     header
                     participants
                 }
                 Spacer(minLength: 0)
+                if let message = model.cameraError {
+                    Text(message)
+                        .font(Typography.caption)
+                        .foregroundStyle(Palette.danger)
+                        .multilineTextAlignment(.center)
+                        .padding(.bottom, 6)
+                }
                 ScreenSharePresenterBanner(
                     isSharing: model.screenShare.isSharing,
                     errorMessage: model.screenShare.errorMessage
@@ -42,6 +61,7 @@ struct VoiceView: View {
                 controls
             }
             .animation(Motion.standard, value: model.remoteScreen != nil)
+            .animation(Motion.standard, value: model.hasCameras)
             .padding(.horizontal, Metrics.hPadding)
             .padding(.top, 12)
             .padding(.bottom, 20)
@@ -106,6 +126,74 @@ struct VoiceView: View {
         }
     }
 
+    /// Every camera in the room, ours last.
+    ///
+    /// Ours last rather than first because the tile order is the roster's, and
+    /// jumping our own face to the front would reorder everybody else's row the
+    /// moment we joined the video.
+    @ViewBuilder
+    private var cameraGrid: some View {
+        let columns = [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)]
+        ScrollView {
+            LazyVGrid(columns: columns, spacing: 8) {
+                ForEach(model.cameraPeers) { peer in
+                    VoiceCameraTile(
+                        track: model.camera(for: peer.peerId),
+                        name: peer.displayName,
+                        isSpeaking: peer.isSpeaking,
+                        isMuted: model.isMuted(peer.peerId)
+                    )
+                    .aspectRatio(4 / 3, contentMode: .fit)
+                }
+                if model.isCameraOn, let local = model.localCamera {
+                    VoiceCameraTile(
+                        track: local,
+                        name: String(localized: "You"),
+                        isSpeaking: false,
+                        isMuted: model.isMuted,
+                        mirrored: true
+                    )
+                    .aspectRatio(4 / 3, contentMode: .fit)
+                    .onTapGesture { Task { await model.flipCamera() } }
+                    .accessibilityLabel("Flip camera")
+                }
+            }
+        }
+        .frame(maxHeight: 320)
+    }
+
+    @ViewBuilder
+    private var cameraRail: some View {
+        if model.hasCameras {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(model.cameraPeers) { peer in
+                        VoiceCameraTile(
+                            track: model.camera(for: peer.peerId),
+                            name: peer.displayName,
+                            isSpeaking: peer.isSpeaking,
+                            isMuted: model.isMuted(peer.peerId)
+                        )
+                        .frame(width: 128, height: 96)
+                    }
+                    if model.isCameraOn, let local = model.localCamera {
+                        VoiceCameraTile(
+                            track: local,
+                            name: String(localized: "You"),
+                            isSpeaking: false,
+                            isMuted: model.isMuted,
+                            mirrored: true
+                        )
+                        .frame(width: 128, height: 96)
+                        .onTapGesture { Task { await model.flipCamera() } }
+                        .accessibilityLabel("Flip camera")
+                    }
+                }
+            }
+            .frame(height: 96)
+        }
+    }
+
     private var participants: some View {
         VStack(spacing: 8) {
             if case .connected = model.status {
@@ -127,42 +215,63 @@ struct VoiceView: View {
         }
     }
 
+    /// The control row.
+    ///
+    /// SIZED BY WHAT FITS, not by a constant. A camera button makes six
+    /// controls, and six 60pt circles with 10pt between them is 410pt: wider
+    /// than every iPhone this app supports. `ViewThatFits` takes the first row
+    /// that does fit, so a large phone keeps the size this screen shipped with
+    /// and a small one gets the same six controls slightly smaller, rather than
+    /// a hang-up button pushed off the edge.
     private var controls: some View {
-        HStack(spacing: 10) {
-            Button {
+        ViewThatFits(in: .horizontal) {
+            controlRow(side: 60, spacing: 10)
+            controlRow(side: 52, spacing: 8)
+            controlRow(side: 46, spacing: 6)
+        }
+    }
+
+    private func controlRow(side: CGFloat, spacing: CGFloat) -> some View {
+        HStack(spacing: spacing) {
+            circleButton(
+                icon: model.isMuted ? "mic.slash.fill" : "mic.fill",
+                tint: model.isMuted ? Palette.danger : Palette.paper,
+                side: side
+            ) {
                 model.isMuted.toggle()
-            } label: {
-                Image(systemName: model.isMuted ? "mic.slash.fill" : "mic.fill")
-                    .font(.system(size: 20))
-                    .foregroundStyle(model.isMuted ? Palette.danger : Palette.paper)
-                    .frame(width: 60, height: 60)
-                    .background(Circle().fill(Palette.surfaceRaised))
             }
             .accessibilityIdentifier("voice.mute")
             .accessibilityLabel(model.isMuted ? "Unmute" : "Mute")
             .disabled(model.status != .connected)
 
-            Button {
+            circleButton(
+                icon: model.isDeafened ? "speaker.slash.fill" : "headphones",
+                tint: model.isDeafened ? Palette.danger : Palette.paper,
+                side: side
+            ) {
                 model.isDeafened.toggle()
-            } label: {
-                Image(systemName: model.isDeafened ? "speaker.slash.fill" : "headphones")
-                    .font(.system(size: 20))
-                    .foregroundStyle(model.isDeafened ? Palette.danger : Palette.paper)
-                    .frame(width: 60, height: 60)
-                    .background(Circle().fill(Palette.surfaceRaised))
             }
             .accessibilityIdentifier("voice.deafen")
             .accessibilityLabel(model.isDeafened ? "Undeafen" : "Deafen")
             .disabled(model.status != .connected)
 
-            Button {
+            circleButton(
+                icon: model.isCameraOn ? "video.fill" : "video.slash.fill",
+                tint: model.isCameraOn ? Palette.signal : Palette.paper,
+                side: side
+            ) {
+                Task { await model.toggleCamera() }
+            }
+            .accessibilityIdentifier("voice.camera")
+            .accessibilityLabel(model.isCameraOn ? "Turn camera off" : "Turn camera on")
+            .disabled(model.status != .connected)
+
+            circleButton(
+                icon: model.isSpeakerOn ? "speaker.wave.3.fill" : "iphone.gen3",
+                tint: model.isSpeakerOn ? Palette.signal : Palette.paper,
+                side: side
+            ) {
                 model.isSpeakerOn.toggle()
-            } label: {
-                Image(systemName: model.isSpeakerOn ? "speaker.wave.3.fill" : "iphone.gen3")
-                    .font(.system(size: 20))
-                    .foregroundStyle(model.isSpeakerOn ? Palette.signal : Palette.paper)
-                    .frame(width: 60, height: 60)
-                    .background(Circle().fill(Palette.surfaceRaised))
             }
             .accessibilityIdentifier("voice.speaker")
             .accessibilityLabel(model.isSpeakerOn ? "Switch to earpiece" : "Switch to speaker")
@@ -172,14 +281,14 @@ struct VoiceView: View {
             // run in the simulator, and the bridge refuses to arm there, so a
             // button that opened a sheet leading nowhere would be a lie.
             if model.screenShare.isAvailable {
-                // 60pt to match the controls either side, passed *in* rather
-                // than imposed with an outer `.frame`: the painted circle, the
-                // system picker and Apple's own button all have to be the same
-                // square, or part of what looks tappable is not.
+                // The size is passed *in* rather than imposed with an outer
+                // `.frame`: the painted circle, the system picker and Apple's
+                // own button all have to be the same square, or part of what
+                // looks tappable is not. See `ScreenSharePickerTests`.
                 ScreenShareControlButton(
                     isSharing: model.screenShare.isSharing,
                     identifier: "voice.share",
-                    side: 60,
+                    side: side,
                     onTap: { model.screenShare.noteTapped() }
                 )
                 .opacity(model.status == .connected ? 1 : 0.4)
@@ -193,12 +302,69 @@ struct VoiceView: View {
                 }
             } label: {
                 Image(systemName: "phone.down.fill")
-                    .font(.system(size: 20))
+                    .font(.system(size: side / 3))
                     .foregroundStyle(Palette.inkDeep)
-                    .frame(width: 60, height: 60)
+                    .frame(width: side, height: side)
                     .background(Circle().fill(Palette.danger))
             }
         }
+    }
+
+    private func circleButton(
+        icon: String,
+        tint: Color,
+        side: CGFloat,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: side / 3))
+                .foregroundStyle(tint)
+                .frame(width: side, height: side)
+                .background(Circle().fill(Palette.surfaceRaised))
+        }
+    }
+}
+
+/// One face on the voice-channel screen.
+///
+/// Never an empty rectangle: a track that has not produced its first frame is
+/// indistinguishable from a broken one, so the ground shows through until it
+/// does. The name sits on the picture rather than under it, because the tiles
+/// are small and a caption row would take a third of the height.
+private struct VoiceCameraTile: View {
+    let track: RTCVideoTrack?
+    let name: String
+    var isSpeaking: Bool = false
+    var isMuted: Bool = false
+    var mirrored: Bool = false
+
+    var body: some View {
+        VideoTile(track: track, mirrored: mirrored)
+            .clipShape(RoundedRectangle(cornerRadius: Metrics.cornerRadiusSmall,
+                                        style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: Metrics.cornerRadiusSmall, style: .continuous)
+                    .strokeBorder(isSpeaking ? Palette.success : Palette.border,
+                                  lineWidth: isSpeaking ? 2 : 1)
+            )
+            .overlay(alignment: .bottomLeading) {
+                HStack(spacing: 4) {
+                    if isMuted {
+                        Image(systemName: "mic.slash.fill")
+                            .font(.system(size: 9))
+                            .foregroundStyle(Palette.danger)
+                    }
+                    Text(name)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(Palette.paper)
+                        .lineLimit(1)
+                }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background(Capsule().fill(Palette.inkDeep.opacity(0.7)))
+                .padding(6)
+            }
     }
 }
 
