@@ -51,6 +51,7 @@
     <string name="chat_typing_one">%1$s está digitando…</string>
     <string name="chat_typing_many">Várias pessoas estão digitando…</string>
     <string name="chat_back">Voltar</string>
+    <string name="chat_message_actions">Ações da mensagem</string>
 
     <!-- Conexão -->
     <string name="connection_connecting">Conectando…</string>

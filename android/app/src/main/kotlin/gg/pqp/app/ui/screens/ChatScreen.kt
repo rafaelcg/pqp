@@ -5,10 +5,13 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -34,12 +37,14 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -67,6 +72,7 @@ import coil3.compose.AsyncImage
 import gg.pqp.app.R
 import gg.pqp.app.core.Backend
 import gg.pqp.app.core.Message
+import gg.pqp.app.core.Reaction
 import gg.pqp.app.core.RealtimeState
 import gg.pqp.app.core.SessionPhase
 import gg.pqp.app.core.SessionStore
@@ -136,6 +142,13 @@ fun ChatScreen(
     val listState = rememberLazyListState()
     var draft by remember { mutableStateOf("") }
     var reporting by remember { mutableStateOf<Message?>(null) }
+    // The long press opens this; "Report" inside it is what sets `reporting`.
+    var acting by remember { mutableStateOf<Message?>(null) }
+
+    // So an incoming `reaction-broadcast` naming us can mark its own pill.
+    // Set from the session rather than inferred, because a reaction of ours
+    // made on another device arrives here as somebody else's frame.
+    LaunchedEffect(me?.id) { model.setCurrentUser(me?.id) }
 
     // Follow the tail only when the reader is already there. Yanking somebody
     // back down while they are reading history is the single most annoying
@@ -263,7 +276,10 @@ fun ChatScreen(
                             MessageRow(
                                 message = message,
                                 grouped = shouldGroup(previous, message),
-                                onReport = { reporting = message },
+                                onOpenActions = { acting = message },
+                                onToggleReaction = { emoji ->
+                                    model.toggleReaction(message.id, emoji, me)
+                                },
                             )
                         }
 
@@ -283,13 +299,35 @@ fun ChatScreen(
     }
 
     /*
-     * A long press on a message reports it.
+     * A long press on a message opens what can be done to it.
      *
-     * The one interaction a message row has, deliberately: Play requires a way
-     * to report user-generated content from inside the app, and this screen
-     * had no per-message gesture at all. It is not the start of a general
-     * message action menu.
+     * It used to go straight to the report sheet, because reporting was the
+     * only thing a message row could do and Play requires a way to report
+     * user-generated content from inside the app. Reacting is the second thing,
+     * and it needed the same gesture: a phone has no hover, so there is nowhere
+     * else on a message row for an affordance to live without putting a button
+     * on every line of the transcript.
      *
+     * Report keeps its own entry in the sheet and its own sheet behind it. It
+     * is a Play requirement rather than a feature, and burying it inside a menu
+     * with no label would be the way to lose it.
+     */
+    acting?.let { message ->
+        MessageActionsSheet(
+            message = message,
+            onReact = { emoji ->
+                model.toggleReaction(message.id, emoji, me)
+                acting = null
+            },
+            onReport = {
+                reporting = message
+                acting = null
+            },
+            onDismiss = { acting = null },
+        )
+    }
+
+    /*
      * The sheet hangs off the screen rather than off the row that opened it,
      * so scrolling the list underneath cannot tear it down mid-report. Nothing
      * about the channel travels with it: the server reads the channel, and
@@ -402,19 +440,23 @@ private val TEXT_COLUMN_INSET = Sizes.avatarRow + Spacing.md
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun MessageRow(message: Message, grouped: Boolean, onReport: () -> Unit) {
+private fun MessageRow(
+    message: Message,
+    grouped: Boolean,
+    onOpenActions: () -> Unit,
+    onToggleReaction: (String) -> Unit,
+) {
     if (message.blocked) return
 
-    // `onLongClickLabel` is what puts "Report this message" in TalkBack's
-    // actions menu, which is the only place the gesture is discoverable
-    // without a visible affordance.
-    val longPressLabel = stringResource(R.string.report_message_long_press)
+    // `onLongClickLabel` is what puts the gesture in TalkBack's actions menu,
+    // which is the only place it is discoverable without a visible affordance.
+    val longPressLabel = stringResource(R.string.chat_message_actions)
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .combinedClickable(
                 onClick = {},
-                onLongClick = onReport,
+                onLongClick = onOpenActions,
                 onLongClickLabel = longPressLabel,
             )
             // Above only. A transcript's rhythm is the gap before a new
@@ -551,6 +593,160 @@ private fun MessageRow(message: Message, grouped: Boolean, onReport: () -> Unit)
                         )
                     }
                 }
+            }
+
+            ReactionRow(message.reactions, onToggleReaction)
+        }
+    }
+}
+
+/**
+ * The pills under a message.
+ *
+ * A `FlowRow` because the count is unbounded: eight people can each pick a
+ * different emoji, and a single row would push the last of them off the screen
+ * on a phone. Nothing is drawn at all when there are none, so an ordinary
+ * transcript is exactly as dense as it was.
+ *
+ * Tapping a pill toggles that emoji, which is the whole interaction. Adding a
+ * *new* one lives behind the long press, because a phone has no hover and an
+ * always-visible "add reaction" button on every line is a button on every line.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ReactionRow(reactions: List<Reaction>, onToggle: (String) -> Unit) {
+    if (reactions.isEmpty()) return
+
+    FlowRow(
+        modifier = Modifier.padding(top = Spacing.xs),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
+        verticalArrangement = Arrangement.spacedBy(Spacing.xs),
+    ) {
+        reactions.forEach { reaction ->
+            val mine = reaction.me
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .clip(MaterialTheme.shapes.small)
+                    .background(
+                        if (mine) {
+                            MaterialTheme.colorScheme.primaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.surfaceContainer
+                        },
+                    )
+                    .border(
+                        width = Sizes.hairline,
+                        // Ours is outlined as well as filled. Fill alone is not
+                        // enough of a difference at this size, and "did my
+                        // reaction land" is the only question this control has
+                        // to answer.
+                        color = if (mine) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.outline
+                        },
+                        shape = MaterialTheme.shapes.small,
+                    )
+                    .clickable { onToggle(reaction.emoji) }
+                    .padding(horizontal = Spacing.sm, vertical = 2.dp),
+            ) {
+                Text(text = reaction.emoji, style = MaterialTheme.typography.bodySmall)
+                Spacer(Modifier.width(Spacing.xs))
+                Text(
+                    text = reaction.count.toString(),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (mine) {
+                        MaterialTheme.colorScheme.onPrimaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                )
+            }
+        }
+    }
+}
+
+/**
+ * What a long press on a message offers.
+ *
+ * Two things, and the second is not optional: Play requires a way to report
+ * user-generated content from inside the app, so "Report message" is a labelled
+ * row rather than an icon somewhere in the emoji strip.
+ *
+ * The quick set is [QUICK_REACTIONS], which is the web client's list in the web
+ * client's order. A channel with two clients in it must not have two different
+ * vocabularies.
+ */
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@Composable
+private fun MessageActionsSheet(
+    message: Message,
+    onReact: (String) -> Unit,
+    onReport: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        modifier = Modifier.testTag("message.actions"),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(bottom = Spacing.lg),
+        ) {
+            FlowRow(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = Spacing.gutter),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+            ) {
+                QUICK_REACTIONS.forEach { emoji ->
+                    val mine = message.reactions.any { it.emoji == emoji && it.me }
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(MaterialTheme.shapes.small)
+                            .background(
+                                if (mine) {
+                                    MaterialTheme.colorScheme.primaryContainer
+                                } else {
+                                    MaterialTheme.colorScheme.surfaceContainer
+                                },
+                            )
+                            .clickable { onReact(emoji) },
+                    ) {
+                        Text(text = emoji, style = MaterialTheme.typography.titleMedium)
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(Spacing.md))
+            ChromeDivider()
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onReport)
+                    .padding(horizontal = Spacing.gutter, vertical = Spacing.md),
+            ) {
+                Icon(
+                    imageVector = PqpIcons.Warning,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(Sizes.iconAction),
+                )
+                Spacer(Modifier.width(Spacing.md))
+                Text(
+                    text = stringResource(R.string.report_message_long_press),
+                    style = MaterialTheme.typography.bodyLarge,
+                )
             }
         }
     }

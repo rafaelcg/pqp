@@ -54,6 +54,7 @@
     <string name="chat_typing_one">%1$s is typing…</string>
     <string name="chat_typing_many">Several people are typing…</string>
     <string name="chat_back">Back</string>
+    <string name="chat_message_actions">Message actions</string>
 
     <!-- Connection -->
     <string name="connection_connecting">Connecting…</string>

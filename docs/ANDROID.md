@@ -876,6 +876,70 @@ No window or app picker of our own: Android's consent dialog offers "one app"
 or "entire screen", and that is the platform's choice to present, not ours. No
 quality menu: there is one rung, and it is 720 lines.
 
+## Reactions
+
+Built and verified between two emulators and the web client. The transcript
+already decoded `reactions` off every message and drew none of them, and the
+socket already carried both halves of the protocol; this is the client that
+uses them.
+
+- The pills sit under a message and wrap, because eight people can pick eight
+  emoji and a single row would push the last of them off a phone.
+- Tapping a pill toggles that emoji. Adding a *new* one is on the long press,
+  which now opens a small actions sheet instead of going straight to the report
+  flow. **Report keeps a labelled row in that sheet**: it is a Play requirement
+  rather than a feature, and burying it behind an icon would be how it gets
+  lost.
+- The quick set is `QUICK_REACTIONS` from
+  `client/src/lib/emoji-shortcodes.ts`, read off that file by a test, so a
+  channel does not have two vocabularies depending on which client somebody is
+  holding.
+
+### The one thing worth reading before changing it
+
+`reaction-broadcast` is a **delta**: "this person added or removed this emoji".
+Everything a pill shows is the client's own running total, and the server only
+re-sends the true list on the next page load. So a fold applied twice is wrong
+forever, on that device, with nothing erroring anywhere.
+
+This client is optimistic where the web client is not: the pill moves the
+instant it is tapped, because a control that waits for a socket round trip
+reads as dead and gets tapped again, which sends a second toggle and undoes the
+first. That optimism is what makes the double fold reachable here and not on
+the web, and it is why `applyReactionBroadcast` has a guard the web version
+does not: **a broadcast about us that agrees with `me` has already been
+applied.**
+
+That is not a theoretical hazard. It shipped in this branch and two emulators
+found it in about ten seconds: taking your own reaction back off a message two
+people had liked took the count from 2 to 1 optimistically, and then the echo
+of your own frame ran the reducer again, saw `count <= 1`, and deleted the
+pill. The other person's reaction vanished from your screen until the next page
+load. Every unit test passed the whole time, because the one that covered
+idempotent removal only covered the case where the count was already 1.
+
+### Verified by running
+
+Two emulators plus the web client, one message:
+
+- Ana reacts. Both emulators show the pill; hers is filled, Bruno's is
+  outlined. One row in `message_reactions`.
+- Bruno taps the pill. Both show 2, both filled. Two rows.
+- Bruno taps again. Both show **1**, Ana's filled, Bruno's outlined. One row.
+  (This is the case that was broken; before the fix Bruno's pill disappeared.)
+- The web client shows "You and Ana Beatriz reacted with 🔥" and 🔥 2, and a
+  reaction made from the web appears on the Android transcript live.
+
+A message that has not been acknowledged yet cannot be reacted to: its id is
+the client's own nonce, which names nothing server-side, so the frame would be
+dropped in silence and the pill would sit there looking applied. The web client
+refuses the same case. That guard is written, and it is the one part of this
+that was **not** exercised on a device, because reproducing it needs a message
+to sit un-acknowledged for as long as it takes to long-press it.
+
+**Not verified:** that guard, and the server's cap on how many distinct emoji
+one message may carry.
+
 ## Direct messages and the friends list
 
 Three peer destinations behind a bottom `NavigationBar`: **Servers**, with the
