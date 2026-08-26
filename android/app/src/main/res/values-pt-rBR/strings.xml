@@ -35,6 +35,10 @@
     <string name="server_delete_confirm_prompt">Digite o nome da comunidade para confirmar</string>
     <string name="server_delete_confirm">Excluir para sempre</string>
 
+    <string name="role_owner">Dono</string>
+    <string name="role_admin">Admin</string>
+    <string name="role_member">Membro</string>
+
     <!-- Canais -->
     <string name="channels_empty">Nenhum canal aqui ainda.</string>
 

@@ -356,9 +356,18 @@ private fun ServerRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            server.role?.let {
+            server.role?.let { role ->
+                val label = when (role) {
+                    "owner" -> stringResource(R.string.role_owner)
+                    "admin" -> stringResource(R.string.role_admin)
+                    "member" -> stringResource(R.string.role_member)
+                    // A role this build has not heard of. Showing the wire word
+                    // is better than showing nothing, and it is the only case
+                    // where an untranslated word can reach the screen.
+                    else -> role
+                }
                 Text(
-                    text = it,
+                    text = label,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
