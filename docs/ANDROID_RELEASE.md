@@ -138,7 +138,34 @@ pqp.keystoreFile=/Users/rafael/keys/pqp-upload.jks
 pqp.keystorePassword=<store password>
 pqp.keyAlias=pqp-upload
 pqp.keyPassword=<key password>
+
+# Five properties, not four. See below: a bundle without this one installs,
+# launches, and cannot sign anybody in.
+pqp.clerkPublishableKey=pk_live_<the production key>
 ```
+
+### The fifth property is not optional, whatever it looks like
+
+A Clerk **publishable** key is public by design; the web client ships one in its
+JS bundle. It is a build input here only because it differs per deployment. But
+a release bundle built without it is useless, and used to be useless *quietly*:
+`Backend.authMode` fell back to the dev bypass in every variant, so the signed
+release aimed at `https://api.pqp.gg` offered "Continue as a local dev account"
+as the only button on its sign-in screen, and that token is refused by any
+server not running `DEV_AUTH_BYPASS`.
+
+That is fixed. A release build with no key now says so, on screen, instead of
+offering the button. It is still a wasted upload, so pass the key.
+
+**It has to be the production key.** The one in `client/.env` locally is
+`pk_test_…`; a release built with it renders Clerk's sign-in card with
+"Development mode" printed on it, and its tokens come from the dev Clerk
+instance, which the hosted API will reject. The live value is the
+`VITE_CLERK_PUBLISHABLE_KEY` GitHub secret that `deploy-web.yml` uses.
+
+Verified on a device against an R8-shrunk signed release build: with the key,
+Clerk's `AuthView` renders in full. The Clerk SDK survives the shrinker with the
+ProGuard rules as they stand.
 
 Then confirm, from `android/`:
 
@@ -152,7 +179,7 @@ export ANDROID_HOME="$HOME/Library/Android/sdk"
 ```
 
 The `.aab` to upload is `android/app/build/outputs/bundle/release/app-release.aab`.
-If the four properties are absent the build still succeeds and produces
+If the keystore properties are absent the build still succeeds and produces
 `app-release-unsigned.apk`. That is deliberate, and it is what CI does. An
 unsigned artifact is a problem you notice in the same minute you caused it; a
 debug-signed one is a rejection three days later.
