@@ -94,13 +94,19 @@ jobs:
         run: |
           set -uo pipefail
           # Android ships minor platform releases now, so the package id is
-          # sometimes `platforms;android-37` and sometimes `platforms;android-37.0`.
-          # Try both. If neither resolves, AGP downloads the platform itself
-          # (the licences are already accepted), so this is a warning rather
-          # than a failure — and the `ls` below records which one was used.
+          # `platforms;android-37.0` on a current SDK and plain
+          # `platforms;android-37` on an older one. The versioned spelling is
+          # tried first because it is the one that exists today; the plain one
+          # is the fallback rather than the other way round, so the ordinary
+          # path leaves no "Failed to find package" line in the log to
+          # misread later.
+          #
+          # If neither resolves, AGP downloads the platform itself (the
+          # licences are already accepted), so this warns rather than fails —
+          # and the `ls` below records what was actually there.
           sdkmanager "platform-tools" "build-tools;${BUILD_TOOLS}" || true
-          sdkmanager "platforms;android-${COMPILE_SDK}" \
-            || sdkmanager "platforms;android-${COMPILE_SDK}.0" \
+          sdkmanager "platforms;android-${COMPILE_SDK}.0" \
+            || sdkmanager "platforms;android-${COMPILE_SDK}" \
             || echo "::warning::No platforms;android-${COMPILE_SDK} package resolved; letting AGP fetch it."
           echo "--- installed platforms"
           ls "$ANDROID_HOME/platforms" || true
