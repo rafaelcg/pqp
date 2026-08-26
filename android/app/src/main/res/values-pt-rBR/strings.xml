@@ -7,6 +7,8 @@
     <string name="sign_in_subtitle">Voz e texto que não atrapalham.</string>
     <string name="sign_in_dev_action">Continuar com uma conta local de desenvolvimento</string>
     <string name="sign_in_dev_note">Só em builds de debug. O servidor precisa estar rodando com DEV_AUTH_BYPASS ligado.</string>
+    <string name="sign_in_unavailable_title">Este app não consegue fazer login</string>
+    <string name="sign_in_unavailable_body">Ele foi publicado sem a chave que precisa para falar com o serviço de login. Não tem nada que dê para fazer por aqui. Avise a gente que publicamos uma versão corrigida.</string>
     <string name="sign_out">Sair</string>
 
     <!-- Verificação de idade -->
@@ -199,4 +201,34 @@
     <string name="delete_keep">Manter minha conta</string>
     <string name="delete_confirm">Excluir para sempre</string>
     <string name="delete_working">Excluindo\u2026</string>
+
+    <!-- Denúncias. A Play exige que um app com conteúdo de usuário tenha um
+         jeito de denunciar de dentro do próprio app; é este. O valor que vai
+         para o servidor é o enum de REPORT_REASONS, sem tradução, então só
+         estes rótulos são localizados. -->
+    <string name="report_action">Denunciar</string>
+    <string name="report_message_long_press">Denunciar esta mensagem</string>
+    <string name="report_subject_message">Denunciar uma mensagem de %1$s</string>
+    <string name="report_subject_user">Denunciar %1$s</string>
+    <string name="report_subject_community">Denunciar a comunidade %1$s</string>
+    <string name="report_body_message">Quem modera vai ver uma cópia desta mensagem, quem enviou e o que você escrever abaixo.</string>
+    <string name="report_body_user">Quem modera vai ver quem você denunciou e o que você escrever abaixo. Nenhuma mensagem vai junto.</string>
+    <string name="report_body_community">Isso vai para quem cuida do pqp, não para o dono da comunidade. Conta o que tem de errado.</string>
+    <string name="report_reason_prompt">O que aconteceu?</string>
+    <string name="report_reason_spam">Spam</string>
+    <string name="report_reason_harassment">Assédio</string>
+    <string name="report_reason_hate_speech">Discurso de ódio</string>
+    <string name="report_reason_violence">Violência ou ameaça</string>
+    <string name="report_reason_sexual_content">Conteúdo sexual</string>
+    <string name="report_reason_self_harm">Automutilação</string>
+    <string name="report_reason_illegal_content">Conteúdo ilegal</string>
+    <string name="report_reason_other">Outra coisa</string>
+    <string name="report_details_label">Mais alguma coisa? (opcional)</string>
+    <string name="report_details_placeholder">Contexto, links, ou o que aconteceu antes disso.</string>
+    <string name="report_send">Enviar denúncia</string>
+    <string name="report_sending">Enviando\u2026</string>
+    <string name="report_failed">Não deu para enviar esta denúncia. Tente de novo daqui a pouco.</string>
+    <string name="report_sent_title">Denúncia enviada</string>
+    <string name="report_sent_body">Quem modera vai olhar. Seu nome não é mostrado para quem você denunciou.</string>
+    <string name="report_done">Pronto</string>
 </resources>

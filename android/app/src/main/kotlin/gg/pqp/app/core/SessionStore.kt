@@ -64,6 +64,11 @@ class SessionStore(
     var tokens: TokenProvider = when (Backend.authMode) {
         AuthMode.Clerk -> ClerkTokenProvider()
         AuthMode.DevBypass -> DevTokenProvider()
+        // A release build with no Clerk key. It has no credential to offer, and
+        // handing out the dev token here would send a request that any real
+        // server refuses, so this answers null and every call 401s honestly.
+        // `SignInScreen` shows the explanation; this just refuses to invent one.
+        AuthMode.Misconfigured -> TokenProvider { null }
     }
         private set
 

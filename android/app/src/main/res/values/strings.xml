@@ -7,6 +7,8 @@
     <string name="sign_in_subtitle">Voice and text that stays out of the way.</string>
     <string name="sign_in_dev_action">Continue as a local dev account</string>
     <string name="sign_in_dev_note">Debug builds only. The server has to be running with DEV_AUTH_BYPASS on.</string>
+    <string name="sign_in_unavailable_title">This build cannot sign in</string>
+    <string name="sign_in_unavailable_body">It was packaged without the key it needs to reach the sign-in service. Nothing you can do on this screen will help. Please report this and we will publish a fixed build.</string>
     <string name="sign_out">Sign out</string>
 
     <!-- Age gate -->
@@ -195,4 +197,34 @@
     <string name="delete_keep">Keep my account</string>
     <string name="delete_confirm">Delete for ever</string>
     <string name="delete_working">Deleting\u2026</string>
+
+    <!-- Reporting. Play requires an app carrying user-generated content to
+         offer a way to report it from inside the app; this is that way. The
+         reason values on the wire are the untranslated enum from
+         REPORT_REASONS, so only these labels are ever localised. -->
+    <string name="report_action">Report</string>
+    <string name="report_message_long_press">Report this message</string>
+    <string name="report_subject_message">Report a message by %1$s</string>
+    <string name="report_subject_user">Report %1$s</string>
+    <string name="report_subject_community">Report the community %1$s</string>
+    <string name="report_body_message">Moderators will see a copy of this message, who sent it, and anything you add below.</string>
+    <string name="report_body_user">Moderators will see who you reported and anything you add below. No messages are attached.</string>
+    <string name="report_body_community">This goes to the people who run pqp, not to this community\u2019s owner. Tell us what is wrong with it.</string>
+    <string name="report_reason_prompt">What is wrong?</string>
+    <string name="report_reason_spam">Spam</string>
+    <string name="report_reason_harassment">Harassment</string>
+    <string name="report_reason_hate_speech">Hate speech</string>
+    <string name="report_reason_violence">Violence or threats</string>
+    <string name="report_reason_sexual_content">Sexual content</string>
+    <string name="report_reason_self_harm">Self-harm</string>
+    <string name="report_reason_illegal_content">Illegal content</string>
+    <string name="report_reason_other">Something else</string>
+    <string name="report_details_label">Anything else? (optional)</string>
+    <string name="report_details_placeholder">Context, links, or what happened before this.</string>
+    <string name="report_send">Send report</string>
+    <string name="report_sending">Sending\u2026</string>
+    <string name="report_failed">Could not send this report. Try again in a moment.</string>
+    <string name="report_sent_title">Report sent</string>
+    <string name="report_sent_body">The moderators will take a look. You will not be named to the person you reported.</string>
+    <string name="report_done">Done</string>
 </resources>

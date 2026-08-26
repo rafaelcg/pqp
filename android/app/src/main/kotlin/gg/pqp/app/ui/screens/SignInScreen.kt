@@ -48,6 +48,41 @@ fun SignInScreen(session: SessionStore) {
     when (Backend.authMode) {
         AuthMode.Clerk -> ClerkSignIn(session)
         AuthMode.DevBypass -> DevSignIn(session)
+        AuthMode.Misconfigured -> MisconfiguredSignIn()
+    }
+}
+
+/**
+ * A release build packaged without a Clerk publishable key.
+ *
+ * Deliberately a dead end with an explanation rather than a button. The only
+ * credential such a build could offer is the dev bypass token, which the hosted
+ * API refuses, so any button here would be a lie. Saying what is wrong is worth
+ * more: whoever is holding the build can report one sentence that names the
+ * missing build input.
+ */
+@Composable
+private fun MisconfiguredSignIn() {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .safeDrawingPadding()
+            .padding(horizontal = 28.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            text = stringResource(R.string.sign_in_unavailable_title),
+            style = MaterialTheme.typography.headlineSmall,
+            textAlign = TextAlign.Center,
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = stringResource(R.string.sign_in_unavailable_body),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+        )
     }
 }
 

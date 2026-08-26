@@ -17,15 +17,27 @@ object Backend {
         BuildConfig.CLERK_PUBLISHABLE_KEY.takeIf { it.isNotBlank() }
 
     /**
-     * Clerk when a key is present, otherwise the dev bypass.
+     * Clerk when a key is present. Otherwise the dev bypass in a debug build,
+     * and a build that admits it is broken in a release one.
      *
-     * Stated this way round on purpose: a release build with no key should be
-     * loudly unable to authenticate rather than quietly falling back to a token
-     * that only a local server accepts. Same rule as `AppConfig.authMode` on
-     * iOS.
+     * The comment here used to promise exactly that, and the code did the
+     * opposite: with no key it answered `DevBypass` in **every** variant, so a
+     * signed release aimed at `https://api.pqp.gg` offered "Continue as a local
+     * dev account" as the only button on its sign-in screen. That token is
+     * refused by any server not running `DEV_AUTH_BYPASS`, and the bypass is
+     * ignored outright when `NODE_ENV=production`, so it could never have
+     * worked. A tester would install the build, press the only thing on screen
+     * and be unable to sign in at all.
+     *
+     * `BuildConfig.DEBUG` is what separates the two now, rather than the key
+     * alone. The key still selects Clerk; the variant decides whether falling
+     * back is allowed to happen.
      */
-    val authMode: AuthMode =
-        if (clerkPublishableKey == null) AuthMode.DevBypass else AuthMode.Clerk
+    val authMode: AuthMode = when {
+        clerkPublishableKey != null -> AuthMode.Clerk
+        BuildConfig.DEBUG -> AuthMode.DevBypass
+        else -> AuthMode.Misconfigured
+    }
 
     /**
      * Several fields on the wire are root-relative (`/api/avatars/…`,
@@ -40,4 +52,19 @@ object Backend {
     }
 }
 
-enum class AuthMode { Clerk, DevBypass }
+enum class AuthMode {
+    Clerk,
+    DevBypass,
+
+    /**
+     * A release build with no Clerk publishable key compiled into it. There is
+     * no way to sign in and pretending otherwise wastes a tester's time, so the
+     * screen says so instead of offering a button that cannot work.
+     *
+     * Reaching this in a build somebody is holding is a packaging mistake, not
+     * a runtime one: pass `pqp.clerkPublishableKey` (a `-P` flag,
+     * `local.properties` or `PQP_CLERKPUBLISHABLEKEY`) when building the
+     * bundle. See docs/ANDROID_RELEASE.md.
+     */
+    Misconfigured,
+}
