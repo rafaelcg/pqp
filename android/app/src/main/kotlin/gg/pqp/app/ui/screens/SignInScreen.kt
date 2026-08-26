@@ -4,10 +4,13 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
@@ -26,6 +29,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.clerk.api.Clerk
+import com.clerk.api.ui.ClerkColors
+import com.clerk.api.ui.ClerkTheme
 import com.clerk.ui.auth.AuthView
 import gg.pqp.app.R
 import gg.pqp.app.core.AuthMode
@@ -88,6 +93,7 @@ private fun MisconfiguredSignIn() {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ClerkSignIn(session: SessionStore) {
     val initialized by Clerk.isInitialized.collectAsStateWithLifecycle()
@@ -101,13 +107,66 @@ private fun ClerkSignIn(session: SessionStore) {
         if (clerkSession != null && authFlowComplete) session.restore()
     }
 
+    // The lift exists to spend dead space, so it is given up the moment there
+    // is none. Clerk's scaffold applies no IME inset and does not scroll, so
+    // with the keyboard up the form stays exactly where it was and whatever is
+    // under the fold is simply covered: holding on to 32dp there would put the
+    // "Continue" button behind the top row of keys on a shorter phone.
+    val lift = if (WindowInsets.isImeVisible) 0.dp else Spacing.xxl
+
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         if (!initialized) {
             CircularProgressIndicator()
         } else {
-            AuthView(isDismissible = false)
+            AuthView(
+                // `AuthView` is `Modifier.fillMaxSize().then(modifier)`
+                // internally, so it always takes the whole window and this
+                // padding insets its content rather than shrinking the sheet.
+                // It is the only lever on vertical placement there is: the form
+                // is top-aligned inside Clerk's own full-screen `Scaffold`,
+                // which is why the screen used to open with the title jammed
+                // under the status bar and a third of the window empty
+                // underneath. Modest on purpose, because that `Scaffold` does
+                // not scroll: every dp spent here is a dp the tallest step of
+                // the flow no longer has.
+                modifier = Modifier.padding(top = lift),
+                // The ground, which is ours to set even though the form is not.
+                // Clerk's dark default is #131316, a neutral near-black that
+                // sits visibly lighter and greyer than `Ink`, so without this
+                // the padding above would read as a band rather than as space.
+                // Only the background is overridden; the rest of Clerk's
+                // palette is left alone rather than half-restyled.
+                clerkTheme = ClerkTheme(
+                    colors = ClerkColors(background = MaterialTheme.colorScheme.background),
+                ),
+                // Clerk renders this centred in its own top bar, which was
+                // otherwise an empty row. So the brand mark costs almost
+                // nothing in height, stands above the form the way a sign-in
+                // screen's mark should, and stays there through every later
+                // step of the flow: the code entry, MFA, the lot.
+                logo = { PqpMark() },
+                isDismissible = false,
+            )
         }
     }
+}
+
+/**
+ * The pqp mark: the launcher icon's foreground, which is the speech bubble with
+ * the typing dots, drawn on nothing.
+ *
+ * 80dp rather than the 96 the dev screen uses. The drawable is a 108dp
+ * viewport with the art inside the central 72dp launcher safe zone, so 80dp of
+ * box is about 53dp of bubble, and every dp of box is height the form below it
+ * does not get.
+ */
+@Composable
+private fun PqpMark() {
+    Image(
+        painter = painterResource(R.drawable.ic_launcher_foreground),
+        contentDescription = null,
+        modifier = Modifier.size(80.dp),
+    )
 }
 
 /**

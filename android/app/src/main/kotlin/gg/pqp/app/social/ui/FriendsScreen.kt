@@ -184,6 +184,12 @@ fun FriendsScreen(
                 LargeTopAppBar(
                     title = { Text(stringResource(R.string.friends_title)) },
                     colors = pqpLargeTopBarColors(),
+                    // Same height as the other two tabs. This screen pays for
+                    // the default twice over: the bar and the tab strip under
+                    // it are one piece of chrome, so 28dp of empty bar pushes
+                    // the strip down too and the list starts lower than it does
+                    // on either sibling.
+                    expandedHeight = Sizes.largeTopBarExpanded,
                     scrollBehavior = scrollBehavior,
                 )
                 PrimaryTabRow(

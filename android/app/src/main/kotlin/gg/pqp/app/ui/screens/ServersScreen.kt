@@ -149,8 +149,9 @@ fun ServersScreen(
                     // the headline still has room to breathe above the list and
                     // the first two servers are on screen at rest instead of
                     // one. The collapse behaviour is untouched; only the height
-                    // it collapses from moves.
-                    expandedHeight = 124.dp,
+                    // it collapses from moves. The number lives in `Sizes`
+                    // because the two sibling tabs have to agree with it.
+                    expandedHeight = Sizes.largeTopBarExpanded,
                     scrollBehavior = scrollBehavior,
                 )
                 ChromeDivider()

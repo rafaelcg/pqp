@@ -107,6 +107,12 @@ fun ConversationsScreen(
                 LargeTopAppBar(
                     title = { Text(stringResource(R.string.dms_title)) },
                     colors = pqpLargeTopBarColors(),
+                    // The same height the servers tab stands at. This bar has
+                    // no action in its top row, so on Material's 152dp default
+                    // it was 28dp of nothing above a one-word title, and the
+                    // title dropped by that much every time somebody crossed
+                    // over from Servers.
+                    expandedHeight = Sizes.largeTopBarExpanded,
                     scrollBehavior = scrollBehavior,
                 )
                 // The bar and the list are two different kinds of surface, so
