@@ -118,6 +118,15 @@ ten seconds with the host firewall off and the server bound to `*:3001`. The
 tunnel works identically on an emulator and on a phone plugged in over USB, so
 it is one instruction instead of two.
 
+The cause turned up later, and it is not the emulator. API 36 added local
+network protection: an app needs the `ACCESS_LOCAL_NETWORK` app op before it may
+open a socket to an RFC 1918 address, and `10.0.2.2` is one. The same `nc` call
+succeeds from `adb shell` and times out under `run-as gg.pqp.app.debug`, which
+is the tell; `appops get gg.pqp.app.debug ACCESS_LOCAL_NETWORK` reads `ignore`
+on a fresh install and the uid-level mode overrides anything set per package.
+Loopback is exempt, so the reverse tunnel sidesteps the whole thing rather than
+working around it.
+
 The server itself, with the dev bypass on:
 
 ```bash
@@ -334,6 +343,25 @@ member of the union has to be ignored, not thrown on.
 WebSocket *is* one exchange, so a ceiling there would kill every socket on
 schedule. `docs/IOS.md` records that exact failure on URLSession, where it
 looked like a live connection that dropped everything it was asked to send.
+
+## How it looks, and why
+
+The visual language lives in its own document: **[`ANDROID_DESIGN.md`](./ANDROID_DESIGN.md)**.
+Read it before touching anything under `ui/`.
+
+The short version. The first build carried pqp's palette onto stock Material 3
+and stopped there, so the app was idiomatic Android and not designed: Roboto,
+Material's density, Material's shapes and `Icons.Default`. It has since been
+given two shipped typefaces (Instrument Sans and Gabarito, the web's pair), a
+stated type scale, a surface hierarchy in which chrome is **deeper** than
+content, Material's tonal elevation switched off so no surface drifts off that
+ramp, a Lucide icon set drawn from checked-in path data, and row heights chosen
+per row rather than inherited. The palette itself did not change. What changed
+is where each colour is allowed to appear, and the lime signal now has a written
+list of the places it may show up.
+
+None of that touched navigation, gestures or platform behaviour, which were
+already right and are listed below.
 
 ## Android conventions, deliberately
 

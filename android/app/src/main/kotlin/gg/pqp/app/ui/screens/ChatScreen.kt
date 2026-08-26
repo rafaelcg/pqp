@@ -1,34 +1,38 @@
 package gg.pqp.app.ui.screens
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -45,12 +49,16 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -66,6 +74,14 @@ import gg.pqp.app.push.VisibleChannel
 import gg.pqp.app.reports.ReportTarget
 import gg.pqp.app.reports.ui.ReportSheet
 import gg.pqp.app.ui.components.Avatar
+import gg.pqp.app.ui.components.ChromeDivider
+import gg.pqp.app.ui.components.EmptyState
+import gg.pqp.app.ui.components.pqpTopBarColors
+import gg.pqp.app.ui.theme.Motion
+import gg.pqp.app.ui.theme.PqpIcons
+import gg.pqp.app.ui.theme.Sizes
+import gg.pqp.app.ui.theme.Spacing
+import gg.pqp.app.ui.theme.TabularFigures
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -139,44 +155,69 @@ fun ChatScreen(
             Column {
                 TopAppBar(
                     // A notification tap can open a channel whose name is not
-                    // known yet; "#" on its own is not a title.
+                    // known yet; "#" on its own is not a title. The glyph is
+                    // therefore tied to the same condition as the name it
+                    // labels: a conversation passes a person's name and gets no
+                    // hash, and an unknown channel gets the placeholder alone.
                     title = {
-                        Text(
-                            title
-                                ?: if (channelName.isBlank()) {
-                                    stringResource(R.string.chat_untitled)
-                                } else {
-                                    "#$channelName"
-                                },
-                        )
+                        val known = channelName.isNotBlank()
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (title == null && known) {
+                                Icon(
+                                    imageVector = PqpIcons.TextChannel,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(Sizes.iconInline),
+                                )
+                                Spacer(Modifier.width(Spacing.sm))
+                            }
+                            Text(
+                                text = title
+                                    ?: if (known) channelName else stringResource(R.string.chat_untitled),
+                                style = MaterialTheme.typography.titleLarge,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
                     },
                     navigationIcon = {
                         IconButton(onClick = onBack) {
                             Icon(
-                                Icons.AutoMirrored.Filled.ArrowBack,
+                                PqpIcons.Back,
                                 contentDescription = stringResource(R.string.chat_back),
+                                modifier = Modifier.size(Sizes.iconAction),
                             )
                         }
                     },
+                    colors = pqpTopBarColors(),
                 )
+                ChromeDivider()
                 ConnectionBanner(connection)
             }
         },
         bottomBar = {
-            Composer(
-                value = draft,
-                onValueChange = {
-                    draft = it
-                    if (it.isNotEmpty()) model.typing()
-                },
-                onSend = {
-                    // Cleared only once the frame has actually left the phone.
-                    // A send during a reconnect returns false, and swallowing
-                    // the box's contents there is how somebody loses a sentence
-                    // they watched themselves type.
-                    if (model.send(draft, me)) draft = ""
-                },
-            )
+            Column {
+                // The one hairline this end of the screen gets, and it is above
+                // everything that stands on the composer's surface rather than
+                // between the two halves of it: the typing strip and the
+                // composer are one continuous piece of chrome.
+                ChromeDivider()
+                TypingStrip(state.typing)
+                Composer(
+                    value = draft,
+                    onValueChange = {
+                        draft = it
+                        if (it.isNotEmpty()) model.typing()
+                    },
+                    onSend = {
+                        // Cleared only once the frame has actually left the
+                        // phone. A send during a reconnect returns false, and
+                        // swallowing the box's contents there is how somebody
+                        // loses a sentence they watched themselves type.
+                        if (model.send(draft, me)) draft = ""
+                    },
+                )
+            }
         },
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
@@ -191,11 +232,17 @@ fun ChatScreen(
                 // conversation that is still there. `loadInitial` has recorded
                 // the reason since it was written and nothing read it, so the
                 // one screen that could tell the truth showed the one sentence
-                // guaranteed to be wrong.
-                state.messages.isEmpty() && state.error != null ->
-                    EmptyState(stringResource(R.string.chat_load_failed, state.error.orEmpty()))
+                // guaranteed to be wrong. The alert icon carries the same
+                // distinction to anyone reading the shape before the words.
+                state.messages.isEmpty() && state.error != null -> EmptyState(
+                    text = stringResource(R.string.chat_load_failed, state.error.orEmpty()),
+                    icon = PqpIcons.Warning,
+                )
 
-                state.messages.isEmpty() -> EmptyState(stringResource(R.string.chat_empty))
+                state.messages.isEmpty() -> EmptyState(
+                    text = stringResource(R.string.chat_empty),
+                    icon = PqpIcons.Messages,
+                )
 
                 else -> {
                     // Reversed so the newest message is index 0 and the list
@@ -205,7 +252,7 @@ fun ChatScreen(
                     LazyColumn(
                         state = listState,
                         reverseLayout = true,
-                        contentPadding = PaddingValues(vertical = 12.dp),
+                        contentPadding = PaddingValues(vertical = Spacing.md),
                         modifier = Modifier.fillMaxSize(),
                     ) {
                         items(rows.size, key = { rows[it].id }) { index ->
@@ -224,28 +271,13 @@ fun ChatScreen(
                             item(key = "older") {
                                 LaunchedEffect(Unit) { model.loadOlder() }
                                 Box(
-                                    Modifier.fillMaxWidth().padding(16.dp),
+                                    Modifier.fillMaxWidth().padding(Spacing.gutter),
                                     contentAlignment = Alignment.Center,
                                 ) { CircularProgressIndicator(Modifier.width(24.dp)) }
                             }
                         }
                     }
                 }
-            }
-
-            state.typing.takeIf { it.isNotEmpty() }?.let { names ->
-                Text(
-                    text = if (names.size == 1) {
-                        stringResource(R.string.chat_typing_one, names.first())
-                    } else {
-                        stringResource(R.string.chat_typing_many)
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier
-                        .align(Alignment.BottomStart)
-                        .padding(horizontal = 20.dp, vertical = 4.dp),
-                )
             }
         }
     }
@@ -286,12 +318,63 @@ private fun ConnectionBanner(state: RealtimeState) {
         else -> null
     } ?: return
 
-    Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh) {
+    // Connecting is a fact and the other two are a problem, so only the other
+    // two are marked. A warning glyph on the first second of every launch would
+    // be crying wolf, and then nobody reads the strip that matters.
+    val warn = state == RealtimeState.Reconnecting || state == RealtimeState.Refused
+
+    Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Spacing.gutter, vertical = Spacing.xs + 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (warn) {
+                Icon(
+                    imageVector = PqpIcons.Warning,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(16.dp),
+                )
+                Spacer(Modifier.width(Spacing.sm))
+            }
+            Text(
+                text = text,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/**
+ * Who is mid-sentence, on its own strip immediately above the composer.
+ *
+ * It used to float over the bottom of the transcript, which meant the newest
+ * message, the one somebody is most likely reading, was the one it covered.
+ * A strip costs a row of height only while somebody is actually typing, and it
+ * stands on the composer's own surface so the two read as one piece of chrome
+ * rather than as a caption that landed on the wrong sheet.
+ */
+@Composable
+private fun TypingStrip(typing: Set<String>) {
+    val names = typing.takeIf { it.isNotEmpty() } ?: return
+
+    Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
         Text(
-            text = text,
+            text = if (names.size == 1) {
+                stringResource(R.string.chat_typing_one, names.first())
+            } else {
+                stringResource(R.string.chat_typing_many)
+            },
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Spacing.gutter, vertical = Spacing.xs),
         )
     }
 }
@@ -308,6 +391,14 @@ private fun shouldGroup(previous: Message?, message: Message): Boolean {
 }
 
 private val TIME_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
+
+/**
+ * How far in from the page gutter a message's text starts: the avatar, then the
+ * gutter between it and the words. Derived rather than written as 48 so that a
+ * grouped row, which draws nothing where the avatar was, cannot drift off the
+ * column its own header sits on the day somebody changes `Sizes.avatarRow`.
+ */
+private val TEXT_COLUMN_INSET = Sizes.avatarRow + Spacing.md
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -326,17 +417,27 @@ private fun MessageRow(message: Message, grouped: Boolean, onReport: () -> Unit)
                 onLongClick = onReport,
                 onLongClickLabel = longPressLabel,
             )
-            .padding(horizontal = 16.dp, vertical = if (grouped) 1.dp else 6.dp),
+            // Above only. A transcript's rhythm is the gap before a new
+            // speaker, and padding both ends doubles every one of those gaps
+            // into something that reads as a list of cards.
+            .padding(
+                start = Spacing.gutter,
+                end = Spacing.gutter,
+                top = if (grouped) 2.dp else Spacing.xs + 2.dp,
+            ),
     ) {
         if (grouped) {
-            Spacer(Modifier.width(48.dp))
+            Spacer(Modifier.width(TEXT_COLUMN_INSET))
         } else {
             Avatar(
                 name = message.authorName,
                 url = message.authorAvatarUrl,
-                size = 36.dp,
+                size = Sizes.avatarRow,
+                // The id, not the name. Two people called "Ana" are two
+                // colours, and one person who renames themselves keeps theirs.
+                seed = message.authorId,
             )
-            Spacer(Modifier.width(12.dp))
+            Spacer(Modifier.width(Spacing.md))
         }
 
         Column(Modifier.weight(1f)) {
@@ -345,12 +446,20 @@ private fun MessageRow(message: Message, grouped: Boolean, onReport: () -> Unit)
                     Text(
                         text = message.authorName,
                         style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold,
                     )
-                    Spacer(Modifier.width(8.dp))
+                    Spacer(Modifier.width(Spacing.sm))
                     Text(
                         text = formatTime(message.createdAt),
-                        style = MaterialTheme.typography.labelSmall,
+                        // Tabular, because a column of clock times beside a
+                        // column of names is exactly the case proportional
+                        // digits ruin: 11:11 and 10:04 should be the same width.
+                        //
+                        // `labelMedium`, not `labelSmall`: the small role
+                        // carries 1.1sp of tracking because it is the app's
+                        // uppercase section rule, and that tracking on a
+                        // lowercase 12:04 reads as a gap between the digits.
+                        style = MaterialTheme.typography.labelMedium
+                            .copy(fontFeatureSettings = TabularFigures),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
@@ -358,45 +467,116 @@ private fun MessageRow(message: Message, grouped: Boolean, onReport: () -> Unit)
             }
 
             message.replyTo?.let { reply ->
-                Text(
-                    text = "${reply.authorName.orEmpty()} ${reply.excerpt}".trim(),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                )
+                Row(
+                    modifier = Modifier
+                        .height(IntrinsicSize.Min)
+                        .padding(bottom = 2.dp),
+                ) {
+                    // The rule is what says "quoted" rather than "first
+                    // sentence". `primaryContainer` is the scheme's spelling of
+                    // SignalDim, so it dims with the palette in light mode
+                    // instead of staying a dark lime on white paper.
+                    Box(
+                        Modifier
+                            .width(2.dp)
+                            .fillMaxHeight()
+                            .background(MaterialTheme.colorScheme.primaryContainer),
+                    )
+                    Spacer(Modifier.width(Spacing.sm))
+                    Text(
+                        text = "${reply.authorName.orEmpty()} ${reply.excerpt}".trim(),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
 
             if (message.body.isNotEmpty()) {
                 Text(
-                    text = if (message.editedAt != null) {
-                        message.body + "  " + stringResource(R.string.chat_edited)
-                    } else {
-                        message.body
-                    },
-                    style = MaterialTheme.typography.bodyMedium,
+                    text = bodyWithEditMark(message),
+                    style = MaterialTheme.typography.bodyLarge,
                 )
             }
 
             message.attachments.forEach { attachment ->
-                Spacer(Modifier.height(6.dp))
+                Spacer(Modifier.height(Spacing.sm))
                 if (attachment.isImage) {
                     AsyncImage(
                         model = Backend.absolute(attachment.url),
                         contentDescription = attachment.filename,
-                        contentScale = ContentScale.Fit,
+                        contentScale = ContentScale.Crop,
                         modifier = Modifier
                             .fillMaxWidth(0.8f)
-                            .height(200.dp),
+                            // A frame with a floor and a ceiling rather than one
+                            // fixed height: the floor is what the picture loads
+                            // into, so the transcript does not jump when it
+                            // arrives, and the ceiling is what stops a tall
+                            // screenshot owning the whole screen.
+                            .heightIn(min = 120.dp, max = 260.dp)
+                            .clip(MaterialTheme.shapes.medium)
+                            .background(MaterialTheme.colorScheme.surfaceContainer)
+                            .border(
+                                width = Sizes.hairline,
+                                color = MaterialTheme.colorScheme.outline,
+                                shape = MaterialTheme.shapes.medium,
+                            ),
                     )
                 } else {
-                    Text(
-                        text = attachment.filename,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
+                    // A chip, and deliberately not lime. Lime means "act on
+                    // this"; a file somebody attached is a thing, not an action,
+                    // and colouring it like a link is what made the old row look
+                    // like the only tappable object on the screen.
+                    Row(
+                        modifier = Modifier
+                            .clip(MaterialTheme.shapes.small)
+                            .background(MaterialTheme.colorScheme.surfaceContainer)
+                            .padding(horizontal = Spacing.md, vertical = Spacing.sm),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            imageVector = PqpIcons.Attach,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(Sizes.iconInline),
+                        )
+                        Spacer(Modifier.width(Spacing.sm))
+                        Text(
+                            text = attachment.filename,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
             }
         }
+    }
+}
+
+/**
+ * The body, with the edit mark as its own muted piece rather than two spaces
+ * and a word glued onto the end of what somebody wrote.
+ *
+ * One `Text`, so the mark still wraps with the last line instead of hanging on
+ * a row of its own, and a span style rather than a nested composable, so a
+ * message that ends mid-line does not push the mark to the next one.
+ */
+@Composable
+private fun bodyWithEditMark(message: Message): AnnotatedString {
+    if (message.editedAt == null) return AnnotatedString(message.body)
+
+    val mark = stringResource(R.string.chat_edited)
+    val style = MaterialTheme.typography.labelMedium
+        .toSpanStyle()
+        .copy(color = MaterialTheme.colorScheme.onSurfaceVariant)
+
+    return buildAnnotatedString {
+        append(message.body)
+        append(" ")
+        withStyle(style) { append(mark) }
     }
 }
 
@@ -410,45 +590,97 @@ private fun formatTime(iso: String): String = runCatching {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun Composer(value: String, onValueChange: (String) -> Unit, onSend: () -> Unit) {
+    // Whether there is anything to send, which is the one thing this whole
+    // surface animates on.
+    val active = value.isNotBlank()
+    val sendContainer by animateColorAsState(
+        targetValue = if (active) {
+            MaterialTheme.colorScheme.primary
+        } else {
+            MaterialTheme.colorScheme.surfaceContainerHigh
+        },
+        animationSpec = tween(Motion.QUICK_MILLIS),
+        label = "composer-send-container",
+    )
+    val sendContent by animateColorAsState(
+        targetValue = if (active) {
+            MaterialTheme.colorScheme.onPrimary
+        } else {
+            MaterialTheme.colorScheme.onSurfaceVariant
+        },
+        animationSpec = tween(Motion.QUICK_MILLIS),
+        label = "composer-send-content",
+    )
+
     Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
-        Column {
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .imePadding()
-                    .navigationBarsPadding()
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                TextField(
-                    value = value,
-                    onValueChange = onValueChange,
-                    placeholder = { Text(stringResource(R.string.chat_composer_hint)) },
-                    modifier = Modifier
-                        .weight(1f)
-                        .testTag("composer.input"),
-                    maxLines = 6,
-                    shape = RoundedCornerShape(24.dp),
-                    colors = TextFieldDefaults.colors(
-                        focusedIndicatorColor = Color.Transparent,
-                        unfocusedIndicatorColor = Color.Transparent,
-                        disabledIndicatorColor = Color.Transparent,
-                    ),
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                    keyboardActions = KeyboardActions(onSend = { onSend() }),
-                )
-                FilledIconButton(
-                    onClick = onSend,
-                    enabled = value.isNotBlank(),
-                    modifier = Modifier.testTag("composer.send"),
-                ) {
-                    Icon(
-                        Icons.AutoMirrored.Filled.Send,
-                        contentDescription = stringResource(R.string.chat_send),
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .imePadding()
+                .navigationBarsPadding()
+                .padding(horizontal = Spacing.md, vertical = Spacing.sm),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+        ) {
+            TextField(
+                value = value,
+                onValueChange = onValueChange,
+                placeholder = {
+                    Text(
+                        text = stringResource(R.string.chat_composer_hint),
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                }
+                },
+                modifier = Modifier
+                    .weight(1f)
+                    // Material floors a text field at 56dp, which is a form
+                    // field's height and half again what one line of 15sp
+                    // needs. The floor is only applied when nothing above has
+                    // asked for a minimum, so asking for one here is how the
+                    // pill gets to be the height of its own contents.
+                    .heightIn(min = 44.dp)
+                    .testTag("composer.input"),
+                textStyle = MaterialTheme.typography.bodyLarge,
+                maxLines = 6,
+                shape = MaterialTheme.shapes.extraLarge,
+                colors = TextFieldDefaults.colors(
+                    // One container colour in every state. A field that changes
+                    // shade on focus is a second thing moving on a surface that
+                    // already has the send button waking up on it.
+                    focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    focusedTextColor = MaterialTheme.colorScheme.onSurface,
+                    unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
+                    cursorColor = MaterialTheme.colorScheme.primary,
+                    focusedIndicatorColor = Color.Transparent,
+                    unfocusedIndicatorColor = Color.Transparent,
+                    disabledIndicatorColor = Color.Transparent,
+                ),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                keyboardActions = KeyboardActions(onSend = { onSend() }),
+            )
+            FilledIconButton(
+                onClick = onSend,
+                enabled = value.isNotBlank(),
+                modifier = Modifier.testTag("composer.send"),
+                // The disabled pair is the same animated pair on purpose. The
+                // button is disabled exactly while the draft is empty, and
+                // Material's default disabled fill is a translucent grey that
+                // reads as broken rather than as waiting.
+                colors = IconButtonDefaults.filledIconButtonColors(
+                    containerColor = sendContainer,
+                    contentColor = sendContent,
+                    disabledContainerColor = sendContainer,
+                    disabledContentColor = sendContent,
+                ),
+            ) {
+                Icon(
+                    PqpIcons.Send,
+                    contentDescription = stringResource(R.string.chat_send),
+                    modifier = Modifier.size(Sizes.iconAction),
+                )
             }
         }
     }

@@ -12,6 +12,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDefaults
 import androidx.compose.material3.DatePickerState
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
@@ -28,6 +29,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import gg.pqp.app.R
 import gg.pqp.app.core.SessionStore
+import gg.pqp.app.ui.theme.Spacing
 import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
@@ -56,23 +58,38 @@ fun AgeGateScreen(session: SessionStore) {
             .fillMaxSize()
             .safeDrawingPadding()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 20.dp),
+            .padding(horizontal = Spacing.gutter),
         verticalArrangement = Arrangement.Center,
     ) {
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(Spacing.xl))
         Text(
             text = stringResource(R.string.age_gate_title),
-            style = MaterialTheme.typography.headlineSmall,
+            style = MaterialTheme.typography.headlineMedium,
         )
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(Spacing.md))
         Text(
             text = stringResource(R.string.age_gate_body),
-            style = MaterialTheme.typography.bodyMedium,
+            style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(Spacing.lg))
 
-        DatePicker(state = pickerState, title = null, headline = null, showModeToggle = true)
+        DatePicker(
+            state = pickerState,
+            title = null,
+            headline = null,
+            showModeToggle = true,
+            // The picker is part of this page rather than a card dropped onto
+            // it, so it sits on the page's own colour. Material would give it
+            // `surfaceContainerHigh`, which on this ramp is the colour a row
+            // takes when it is pressed. Today's date loses its lime ring for
+            // the same reason the ring exists at all: the one loud thing on
+            // this screen has to be the day the reader picked.
+            colors = DatePickerDefaults.colors(
+                containerColor = MaterialTheme.colorScheme.surface,
+                todayDateBorderColor = MaterialTheme.colorScheme.outline,
+            ),
+        )
 
         // The declaration is irreversible and the server enforces it: a date
         // under 18 closes the account for good, with no second attempt. The web
@@ -86,7 +103,7 @@ fun AgeGateScreen(session: SessionStore) {
         )
 
         error?.let {
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(Spacing.sm))
             Text(
                 text = it,
                 color = MaterialTheme.colorScheme.error,
@@ -94,7 +111,7 @@ fun AgeGateScreen(session: SessionStore) {
             )
         }
 
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(Spacing.lg))
         Button(
             onClick = {
                 val date = selected ?: return@Button
@@ -106,11 +123,14 @@ fun AgeGateScreen(session: SessionStore) {
                 }
             },
             enabled = selected != null && !submitting,
-            modifier = Modifier.fillMaxWidth(),
+            shape = MaterialTheme.shapes.small,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(52.dp),
         ) {
             Text(stringResource(R.string.age_gate_confirm))
         }
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(Spacing.xl))
     }
 }
 

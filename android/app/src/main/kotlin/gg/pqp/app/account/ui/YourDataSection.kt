@@ -3,13 +3,12 @@ package gg.pqp.app.account.ui
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -19,18 +18,21 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
 import gg.pqp.app.R
 import gg.pqp.app.account.exportMyData
 import gg.pqp.app.core.ApiException
 import gg.pqp.app.core.SessionStore
+import gg.pqp.app.ui.components.SectionLabel
+import gg.pqp.app.ui.components.SettingsRow
+import gg.pqp.app.ui.theme.PqpIcons
+import gg.pqp.app.ui.theme.Spacing
 import java.time.LocalDate
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * The two rights the privacy policy promises, as buttons.
+ * The two rights the privacy policy promises, as rows.
  *
  * **PLAY REQUIRES THE SECOND ONE.** An app that supports account creation must
  * let the account be deleted from inside the app, and a submission without it
@@ -40,6 +42,12 @@ import kotlinx.coroutines.withContext
  *
  * Its own section rather than a footer at the end of a scroll: the right to
  * leave belongs somewhere a person can find it on purpose.
+ *
+ * They were two full-width buttons, which made the whole account screen read as
+ * a form. They are rows now, the same rows as everything above them, and the
+ * delete one carries `error` on both its glyph and its label: this is the only
+ * place on the screen where a single tap starts something irreversible, and it
+ * should not look like the row above it.
  *
  * The confirmation is **not** presented from here. It hangs off the screen that
  * owns this section, so that it cannot be torn down by a recomposition of the
@@ -80,14 +88,15 @@ fun YourDataSection(session: SessionStore, onRequestDelete: () -> Unit) {
         }
     }
 
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(
-            text = stringResource(R.string.you_data_title).uppercase(),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+    Column {
+        SectionLabel(stringResource(R.string.you_data_title))
 
-        OutlinedButton(
+        SettingsRow(
+            icon = PqpIcons.Export,
+            label = stringResource(
+                if (exporting) R.string.you_data_exporting else R.string.you_data_export,
+            ),
+            enabled = !exporting,
             onClick = {
                 // Fetched *before* the picker opens, so a failure is a message
                 // rather than an empty file somebody has already named and
@@ -110,23 +119,12 @@ fun YourDataSection(session: SessionStore, onRequestDelete: () -> Unit) {
                         }
                 }
             },
-            enabled = !exporting,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text(
-                stringResource(
-                    if (exporting) R.string.you_data_exporting else R.string.you_data_export,
-                ),
-            )
-        }
-
-        Text(
-            text = stringResource(R.string.you_data_export_note),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
+        Note(stringResource(R.string.you_data_export_note))
+
         message?.let {
+            Spacer(Modifier.height(Spacing.sm))
             Text(
                 text = it,
                 style = MaterialTheme.typography.bodySmall,
@@ -135,20 +133,35 @@ fun YourDataSection(session: SessionStore, onRequestDelete: () -> Unit) {
                 } else {
                     MaterialTheme.colorScheme.primary
                 },
+                modifier = Modifier.padding(horizontal = Spacing.gutter),
             )
         }
 
-        TextButton(onClick = onRequestDelete, modifier = Modifier.fillMaxWidth()) {
-            Text(
-                text = stringResource(R.string.you_data_delete),
-                color = MaterialTheme.colorScheme.error,
-            )
-        }
-
-        Text(
-            text = stringResource(R.string.you_data_delete_note),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        Spacer(Modifier.height(Spacing.sm))
+        SettingsRow(
+            icon = PqpIcons.Delete,
+            label = stringResource(R.string.you_data_delete),
+            contentColor = MaterialTheme.colorScheme.error,
+            onClick = onRequestDelete,
         )
+
+        Note(stringResource(R.string.you_data_delete_note))
     }
+}
+
+/**
+ * The sentence under a row.
+ *
+ * Indented to the row's own gutter rather than to its glyph, because it belongs
+ * to the section and not to the icon, and set small and muted so the row above
+ * it is still the thing being read first.
+ */
+@Composable
+private fun Note(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(horizontal = Spacing.gutter),
+    )
 }

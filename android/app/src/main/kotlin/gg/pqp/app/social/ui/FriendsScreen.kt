@@ -1,6 +1,11 @@
 package gg.pqp.app.social.ui
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -9,23 +14,22 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.PersonAdd
-import androidx.compose.material.icons.filled.People
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Badge
-import androidx.compose.material3.BadgedBox
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.LargeTopAppBar
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.PrimaryTabRow
@@ -47,6 +51,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -61,7 +67,14 @@ import gg.pqp.app.social.DmSummary
 import gg.pqp.app.social.Friend
 import gg.pqp.app.social.FriendRequestEntry
 import gg.pqp.app.social.SocialRepository
-import gg.pqp.app.ui.screens.EmptyState
+import gg.pqp.app.ui.components.ChromeDivider
+import gg.pqp.app.ui.components.EmptyState
+import gg.pqp.app.ui.components.SectionLabel
+import gg.pqp.app.ui.components.pqpLargeTopBarColors
+import gg.pqp.app.ui.theme.Motion
+import gg.pqp.app.ui.theme.PqpIcons
+import gg.pqp.app.ui.theme.Sizes
+import gg.pqp.app.ui.theme.Spacing
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -159,36 +172,76 @@ fun FriendsScreen(
             .fillMaxSize()
             .nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
-            Column {
+            // The bar and the tab strip are one piece of chrome, so they share
+            // one ground and the hairline goes under the pair of them rather
+            // than between them. Material would put a divider under the tab row
+            // by default and lighten the bar on scroll; both are turned off,
+            // because two rules and two shades of grey where one seam exists is
+            // exactly the settings-screen look this pass is undoing.
+            Column(
+                modifier = Modifier.background(MaterialTheme.colorScheme.surfaceContainerLowest),
+            ) {
                 LargeTopAppBar(
                     title = { Text(stringResource(R.string.friends_title)) },
+                    colors = pqpLargeTopBarColors(),
                     scrollBehavior = scrollBehavior,
                 )
-                PrimaryTabRow(selectedTabIndex = tab.ordinal) {
+                PrimaryTabRow(
+                    selectedTabIndex = tab.ordinal,
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+                    contentColor = MaterialTheme.colorScheme.primary,
+                    divider = {},
+                ) {
                     FriendsTab.entries.forEach { entry ->
                         Tab(
                             selected = tab == entry,
                             onClick = { tab = entry },
+                            selectedContentColor = MaterialTheme.colorScheme.primary,
+                            unselectedContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
                             text = {
-                                if (entry == FriendsTab.Pending && data.pendingCount > 0) {
-                                    BadgedBox(badge = { Badge { Text(data.pendingCount.toString()) } }) {
-                                        Text(stringResource(entry.label))
+                                // The count sits BESIDE the word rather than
+                                // over its shoulder. A tab here is a third of
+                                // the screen wide and the overlaid form landed
+                                // the badge on the last two letters of
+                                // "Pending" and on the edge of "Pendentes".
+                                // Lime for the same reason as on the bottom
+                                // bar: a request is a thing to act on, and it
+                                // is the only one on the strip.
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        text = stringResource(entry.label),
+                                        style = MaterialTheme.typography.labelLarge,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    if (entry == FriendsTab.Pending) {
+                                        CountBadge(data.pendingCount, loud = true)
                                     }
-                                } else {
-                                    Text(stringResource(entry.label))
                                 }
                             },
                             modifier = Modifier.testTag("friends.tab.${entry.name.lowercase()}"),
                         )
                     }
                 }
+                ChromeDivider()
             }
         },
         floatingActionButton = {
             ExtendedFloatingActionButton(
                 onClick = { adding = true },
-                icon = { Icon(Icons.Filled.PersonAdd, contentDescription = null) },
+                icon = {
+                    Icon(
+                        imageVector = PqpIcons.AddFriend,
+                        contentDescription = null,
+                        modifier = Modifier.size(Sizes.iconAction),
+                    )
+                },
                 text = { Text(stringResource(R.string.friends_add)) },
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary,
                 modifier = Modifier.testTag("friends.add"),
             )
         },
@@ -210,13 +263,14 @@ fun FriendsScreen(
                     }
                     if (rows.isEmpty()) {
                         EmptyState(
-                            stringResource(
+                            text = stringResource(
                                 if (tab == FriendsTab.Online) {
                                     R.string.friends_empty_online
                                 } else {
                                     R.string.friends_empty_all
                                 },
                             ),
+                            icon = PqpIcons.People,
                         )
                     } else {
                         LazyColumn(
@@ -246,7 +300,10 @@ fun FriendsScreen(
 
                 FriendsTab.Pending -> {
                     if (data.incoming.isEmpty() && data.outgoing.isEmpty()) {
-                        EmptyState(stringResource(R.string.friends_empty_pending))
+                        EmptyState(
+                            text = stringResource(R.string.friends_empty_pending),
+                            icon = PqpIcons.People,
+                        )
                     } else {
                         LazyColumn(
                             contentPadding = PaddingValues(bottom = 96.dp),
@@ -261,13 +318,20 @@ fun FriendsScreen(
                                 items(data.incoming, key = { "in-${it.id}" }) { entry ->
                                     RequestRow(entry) {
                                         // A request needs one tap to answer, not
-                                        // a menu, so both verbs are inline.
-                                        TextButton(onClick = {
-                                            scope.launch { social.acceptFriend(entry.id) }
-                                        }) { Text(stringResource(R.string.friends_accept)) }
-                                        TextButton(onClick = {
-                                            scope.launch { social.removeFriend(entry.id) }
-                                        }) { Text(stringResource(R.string.friends_decline)) }
+                                        // a menu, so both verbs are inline. The
+                                        // accept is the one lime object in the
+                                        // row and the decline is deliberately
+                                        // quiet: declining is free and silent,
+                                        // and a row that shouts both ways makes
+                                        // the reader weigh a decision that does
+                                        // not need weighing.
+                                        AcceptAction(
+                                            onClick = { scope.launch { social.acceptFriend(entry.id) } },
+                                        )
+                                        DeclineAction(
+                                            description = stringResource(R.string.friends_decline),
+                                            onClick = { scope.launch { social.removeFriend(entry.id) } },
+                                        )
                                     }
                                 }
                             }
@@ -277,6 +341,11 @@ fun FriendsScreen(
                                 }
                                 items(data.outgoing, key = { "out-${it.id}" }) { entry ->
                                     RequestRow(entry) {
+                                        // Named rather than drawn as a bare
+                                        // cross: it is the only action on the
+                                        // row, it has the width, and "cancel"
+                                        // and "decline" are different verbs
+                                        // that would otherwise be one glyph.
                                         TextButton(onClick = {
                                             scope.launch { social.removeFriend(entry.id) }
                                         }) { Text(stringResource(R.string.friends_cancel_request)) }
@@ -320,19 +389,27 @@ fun FriendsScreen(
             title = { Text(stringResource(pending.prompt, pending.person.displayName)) },
             text = { Text(stringResource(pending.explanation)) },
             confirmButton = {
-                TextButton(onClick = {
-                    val target = pending
-                    confirming = null
-                    scope.launch {
-                        when (target) {
-                            is Confirmation.Remove -> social.removeFriend(target.person.id)
-                            // No separate unfriend call: the block's own trigger
-                            // deletes the friendship row, and issuing both would
-                            // race it.
-                            is Confirmation.Block -> social.block(target.person.id)
+                TextButton(
+                    onClick = {
+                        val target = pending
+                        confirming = null
+                        scope.launch {
+                            when (target) {
+                                is Confirmation.Remove -> social.removeFriend(target.person.id)
+                                // No separate unfriend call: the block's own trigger
+                                // deletes the friendship row, and issuing both would
+                                // race it.
+                                is Confirmation.Block -> social.block(target.person.id)
+                            }
                         }
-                    }
-                }) { Text(stringResource(pending.action)) }
+                    },
+                    // Both of these end a relationship, so the verb is drawn in
+                    // the error colour rather than in the signal. The signal
+                    // means "do this"; this one is "are you sure".
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error,
+                    ),
+                ) { Text(stringResource(pending.action)) }
             },
             dismissButton = {
                 TextButton(onClick = { confirming = null }) { Text(stringResource(R.string.cancel)) }
@@ -380,19 +457,41 @@ private fun FriendRow(
 ) {
     var menuOpen by remember { mutableStateOf(false) }
 
+    val interactions = remember { MutableInteractionSource() }
+    val pressed by interactions.collectIsPressedAsState()
+    val rowColor by animateColorAsState(
+        targetValue = if (pressed) MaterialTheme.colorScheme.surfaceContainerHigh else Color.Transparent,
+        // Instant on the way in and `QUICK_MILLIS` on the way out. A row that
+        // fades in its own highlight feels like the phone is thinking about it.
+        animationSpec = tween(if (pressed) 0 else Motion.QUICK_MILLIS),
+        label = "friend-press",
+    )
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onMessage)
-            .padding(start = 16.dp, end = 4.dp, top = 10.dp, bottom = 10.dp),
+            .heightIn(min = Sizes.personRow)
+            .clickable(
+                interactionSource = interactions,
+                indication = null,
+                onClick = onMessage,
+            )
+            .background(rowColor)
+            .padding(start = Spacing.gutter, end = Spacing.xs, top = Spacing.sm, bottom = Spacing.sm),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        PersonAvatar(friend.displayName, friend.avatarUrl, friend.status)
-        Spacer(Modifier.width(14.dp))
+        PersonAvatar(
+            name = friend.displayName,
+            avatarUrl = friend.avatarUrl,
+            status = friend.status,
+            seed = friend.id,
+        )
+        Spacer(Modifier.width(Spacing.md))
         Column(Modifier.weight(1f)) {
             Text(
                 text = friend.displayName,
-                style = MaterialTheme.typography.titleMedium,
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -401,23 +500,32 @@ private fun FriendRow(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
         }
         Box {
             IconButton(onClick = { menuOpen = true }) {
-                Icon(Icons.Filled.MoreVert, contentDescription = stringResource(R.string.friends_more))
+                Icon(
+                    imageVector = PqpIcons.More,
+                    contentDescription = stringResource(R.string.friends_more),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(Sizes.iconAction),
+                )
             }
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                 DropdownMenuItem(
                     text = { Text(stringResource(R.string.friends_message)) },
+                    leadingIcon = { MenuGlyph(PqpIcons.Messages) },
                     onClick = { menuOpen = false; onMessage() },
                 )
                 DropdownMenuItem(
                     text = { Text(stringResource(R.string.friends_remove)) },
+                    leadingIcon = { MenuGlyph(PqpIcons.Close) },
                     onClick = { menuOpen = false; onRemove() },
                 )
                 DropdownMenuItem(
                     text = { Text(stringResource(R.string.friends_block)) },
+                    leadingIcon = { MenuGlyph(PqpIcons.Block) },
                     onClick = { menuOpen = false; onBlock() },
                 )
                 // Beside Block, not instead of it. Blocking stops somebody
@@ -433,21 +541,71 @@ private fun FriendRow(
     }
 }
 
+/** A menu's leading glyph: inline size, muted, never tinted. */
+@Composable
+private fun MenuGlyph(icon: ImageVector) {
+    Icon(
+        imageVector = icon,
+        contentDescription = null,
+        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.size(Sizes.iconInline),
+    )
+}
+
+/** Yes. The one lime object in a request row. */
+@Composable
+private fun AcceptAction(onClick: () -> Unit) {
+    FilledIconButton(
+        onClick = onClick,
+        shape = MaterialTheme.shapes.small,
+        colors = IconButtonDefaults.filledIconButtonColors(
+            containerColor = MaterialTheme.colorScheme.primary,
+            contentColor = MaterialTheme.colorScheme.onPrimary,
+        ),
+    ) {
+        Icon(
+            imageVector = PqpIcons.Confirm,
+            contentDescription = stringResource(R.string.friends_accept),
+            modifier = Modifier.size(Sizes.iconAction),
+        )
+    }
+}
+
+/** No, quietly. Declining is silent on the wire and it looks silent here too. */
+@Composable
+private fun DeclineAction(description: String, onClick: () -> Unit) {
+    IconButton(onClick = onClick) {
+        Icon(
+            imageVector = PqpIcons.Close,
+            contentDescription = description,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(Sizes.iconAction),
+        )
+    }
+}
+
 @Composable
 private fun RequestRow(entry: FriendRequestEntry, actions: @Composable () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+            .heightIn(min = Sizes.personRow)
+            .padding(start = Spacing.gutter, end = Spacing.sm, top = Spacing.sm, bottom = Spacing.sm),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         // No status dot: the server sends none for a pending entry, on purpose.
-        PersonAvatar(entry.displayName, entry.avatarUrl, status = null)
-        Spacer(Modifier.width(14.dp))
+        PersonAvatar(
+            name = entry.displayName,
+            avatarUrl = entry.avatarUrl,
+            status = null,
+            seed = entry.id,
+        )
+        Spacer(Modifier.width(Spacing.md))
         Column(Modifier.weight(1f)) {
             Text(
                 text = entry.displayName,
-                style = MaterialTheme.typography.titleMedium,
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -456,21 +614,16 @@ private fun RequestRow(entry: FriendRequestEntry, actions: @Composable () -> Uni
                     text = it,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(0.dp)) { actions() }
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
+            verticalAlignment = Alignment.CenterVertically,
+        ) { actions() }
     }
-}
-
-@Composable
-private fun SectionLabel(text: String) {
-    Text(
-        text = text.uppercase(),
-        style = MaterialTheme.typography.labelMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 4.dp),
-    )
 }
 
 private fun statusLabel(status: String): Int = when (status) {
@@ -489,8 +642,5 @@ private fun List<Friend>.onlineFirst(): List<Friend> =
         compareBy<Friend> { if (it.status == "offline") 1 else 0 }
             .thenBy { it.displayName.lowercase() },
     )
-
-/** The icon the bottom bar uses for this tab. */
-val FriendsIcon = Icons.Filled.People
 
 private const val PRESENCE_POLL_MS = 15_000L

@@ -1,28 +1,34 @@
 package gg.pqp.app.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
+import androidx.compose.foundation.layout.size
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButtonDefaults
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import gg.pqp.app.R
+import gg.pqp.app.ui.theme.PqpIcons
+import gg.pqp.app.ui.theme.Sizes
+import gg.pqp.app.ui.theme.Spacing
 import org.webrtc.EglBase
 import org.webrtc.RendererCommon
 import org.webrtc.SurfaceViewRenderer
@@ -44,6 +50,14 @@ import org.webrtc.VideoTrack
  * `SCALE_ASPECT_FIT` rather than fill, because this is a screen and not a
  * portrait video: cropping a shared screen to a phone's aspect ratio hides
  * whatever the presenter was pointing at.
+ *
+ * The frame around it is the design pass's only addition here. Aspect-fit
+ * letterboxes, so an unframed share is a black rectangle inside a near-black
+ * app, which reads as a hole punched in the page rather than as a thing to
+ * look at. A hairline of `outline` and the `medium` radius make it an object.
+ * The hairline is drawn by Compose *around* the view rather than by clipping
+ * it: a `SurfaceView` composites in its own layer and does not take a Compose
+ * clip, so the corners are rounded by the line and by the black behind it.
  */
 @Composable
 fun RemoteScreenView(
@@ -69,7 +83,15 @@ fun RemoteScreenView(
         onDispose { runCatching { renderer.release() } }
     }
 
-    AndroidView(factory = { renderer }, modifier = modifier)
+    val shape = MaterialTheme.shapes.medium
+    Box(
+        modifier = modifier
+            .clip(shape)
+            .background(Color.Black, shape)
+            .border(Sizes.hairline, MaterialTheme.colorScheme.outline, shape),
+    ) {
+        AndroidView(factory = { renderer }, modifier = Modifier.fillMaxSize())
+    }
 }
 
 /**
@@ -80,6 +102,11 @@ fun RemoteScreenView(
  * stops is a screen with nothing on it and a back button that goes somewhere
  * unexpected. A dialog is dismissed by the same gesture and disappears with the
  * track.
+ *
+ * The controls are laid over the picture on the safe-area inset, and the
+ * presenter's name is a chip rather than white text on black: a name printed
+ * straight onto the video disappears the moment the presenter opens something
+ * pale.
  */
 @Composable
 fun ScreenShareDialog(
@@ -100,26 +127,43 @@ fun ScreenShareDialog(
             RemoteScreenView(
                 track = track,
                 eglContext = eglContext,
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(Spacing.sm),
             )
-            Text(
-                text = presenter,
-                color = Color.White,
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceContainer,
+                shape = MaterialTheme.shapes.small,
                 modifier = Modifier
                     .align(Alignment.TopStart)
                     .safeDrawingPadding()
-                    .padding(16.dp),
-            )
+                    .padding(Spacing.lg),
+            ) {
+                Text(
+                    text = presenter,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.padding(
+                        horizontal = Spacing.md,
+                        vertical = Spacing.sm,
+                    ),
+                )
+            }
             FilledTonalIconButton(
                 onClick = onClose,
+                colors = IconButtonDefaults.filledTonalIconButtonColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                    contentColor = MaterialTheme.colorScheme.onSurface,
+                ),
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .safeDrawingPadding()
-                    .padding(12.dp),
+                    .padding(Spacing.md),
             ) {
                 Icon(
-                    Icons.Filled.Close,
+                    imageVector = PqpIcons.ExitFullscreen,
                     contentDescription = stringResource(R.string.voice_close_screen),
+                    modifier = Modifier.size(Sizes.iconAction),
                 )
             }
         }

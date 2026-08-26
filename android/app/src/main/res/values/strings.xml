@@ -35,6 +35,13 @@
     <string name="server_delete_confirm_prompt">Type the community name to confirm</string>
     <string name="server_delete_confirm">Delete for ever</string>
 
+    <!-- Membership roles. The API answers with the raw word ("owner"), which
+         is a wire value, not UI copy: rendering it straight put an English
+         word on a Portuguese screen. -->
+    <string name="role_owner">Owner</string>
+    <string name="role_admin">Admin</string>
+    <string name="role_member">Member</string>
+
     <!-- Channels -->
     <string name="channels_empty">No channels here yet.</string>
 

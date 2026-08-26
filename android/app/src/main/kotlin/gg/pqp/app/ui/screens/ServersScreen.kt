@@ -1,6 +1,12 @@
 package gg.pqp.app.ui.screens
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -9,16 +15,13 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
@@ -47,11 +50,12 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardCapitalization
-import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import gg.pqp.app.R
@@ -61,6 +65,13 @@ import gg.pqp.app.reports.ReportDraft
 import gg.pqp.app.reports.ReportTarget
 import gg.pqp.app.reports.ui.ReportSheet
 import gg.pqp.app.ui.components.Avatar
+import gg.pqp.app.ui.components.ChromeDivider
+import gg.pqp.app.ui.components.EmptyState
+import gg.pqp.app.ui.components.pqpLargeTopBarColors
+import gg.pqp.app.ui.theme.Motion
+import gg.pqp.app.ui.theme.PqpIcons
+import gg.pqp.app.ui.theme.Sizes
+import gg.pqp.app.ui.theme.Spacing
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -97,21 +108,72 @@ fun ServersScreen(
             .fillMaxSize()
             .nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
-            LargeTopAppBar(
-                title = { Text(stringResource(R.string.servers_title)) },
-                actions = {
-                    IconButton(onClick = onOpenProfile) {
-                        Icon(Icons.Filled.Person, contentDescription = stringResource(R.string.you_title))
-                    }
-                },
-                scrollBehavior = scrollBehavior,
-            )
+            // The bar and its hairline are one piece of chrome, so they are one
+            // slot. The rule is drawn always rather than only once the list has
+            // scrolled: it is what says "the bar is the frame and the list is
+            // the page", and a line that appears halfway through a scroll reads
+            // as a shadow arriving late.
+            Column {
+                LargeTopAppBar(
+                    title = {
+                        // Material renders this slot twice, once in each row of
+                        // a large bar, and crossfades between them. It cannot be
+                        // given two type styles, so the style is chosen from how
+                        // far the bar has collapsed: Gabarito at 30sp while the
+                        // bar is a headline, at 19sp once it is a label above a
+                        // list.
+                        val collapsed = scrollBehavior.state.collapsedFraction > 0.5f
+                        Text(
+                            text = stringResource(R.string.servers_title),
+                            style = if (collapsed) {
+                                MaterialTheme.typography.titleLarge
+                            } else {
+                                MaterialTheme.typography.headlineLarge
+                            },
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    },
+                    actions = {
+                        IconButton(onClick = onOpenProfile) {
+                            Icon(
+                                imageVector = PqpIcons.Person,
+                                contentDescription = stringResource(R.string.you_title),
+                                modifier = Modifier.size(Sizes.iconAction),
+                            )
+                        }
+                    },
+                    colors = pqpLargeTopBarColors(),
+                    // Material's large bar is 152dp expanded, which is a
+                    // two-line hero for a title that is one short word. At 124
+                    // the headline still has room to breathe above the list and
+                    // the first two servers are on screen at rest instead of
+                    // one. The collapse behaviour is untouched; only the height
+                    // it collapses from moves.
+                    expandedHeight = 124.dp,
+                    scrollBehavior = scrollBehavior,
+                )
+                ChromeDivider()
+            }
         },
         floatingActionButton = {
+            // The one lime object on this screen, and the reason the rows below
+            // are not allowed a second one. `primary` rather than the default
+            // `primaryContainer`, which on this palette is `SignalDim` and is
+            // reserved for the pressed state of something already lime.
             ExtendedFloatingActionButton(
                 onClick = { creating = true },
-                icon = { Icon(Icons.Filled.Add, contentDescription = null) },
+                icon = {
+                    Icon(
+                        imageVector = PqpIcons.Add,
+                        contentDescription = null,
+                        modifier = Modifier.size(Sizes.iconAction),
+                    )
+                },
                 text = { Text(stringResource(R.string.servers_create)) },
+                shape = MaterialTheme.shapes.large,
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary,
             )
         },
         snackbarHost = { SnackbarHost(snackbars) },
@@ -134,10 +196,10 @@ fun ServersScreen(
                 .padding(padding),
         ) {
             if (servers.isEmpty()) {
-                EmptyState(stringResource(R.string.servers_empty))
+                EmptyState(stringResource(R.string.servers_empty), icon = PqpIcons.Server)
             } else {
                 LazyColumn(
-                    contentPadding = PaddingValues(bottom = 96.dp),
+                    contentPadding = PaddingValues(top = Spacing.sm, bottom = 96.dp),
                     modifier = Modifier.fillMaxSize(),
                 ) {
                     items(servers, key = { it.id }) { server ->
@@ -237,31 +299,86 @@ private fun ServerRow(
     onReport: () -> Unit,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
+    val interactions = remember { MutableInteractionSource() }
+    val pressed by interactions.collectIsPressedAsState()
+
+    // A row takes its highlight the instant a finger lands and gives it back
+    // over 140ms. Fading it in as well makes the whole list feel like it is
+    // catching up with the hand.
+    val surface by animateColorAsState(
+        targetValue = if (pressed) {
+            MaterialTheme.colorScheme.surfaceContainerHigh
+        } else {
+            Color.Transparent
+        },
+        animationSpec = if (pressed) snap() else tween(Motion.QUICK_MILLIS),
+        label = "server-row-press",
+    )
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
+            .heightIn(min = Sizes.serverRow)
+            // Full bleed and square: a server row is one of a continuous stack,
+            // not a card, so its press runs edge to edge. The channel list is
+            // the screen where a row is a pill, and it is a pill there because
+            // it is a sidebar.
+            .background(surface)
+            .clickable(
+                interactionSource = interactions,
+                // No ripple: the surface above already is the press, and a
+                // ripple on top of it is a second answer to the same touch.
+                indication = null,
+                onClick = onClick,
+            )
+            .padding(horizontal = Spacing.gutter, vertical = Spacing.sm),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         // Squircle rather than a circle: a server is a place, a person is a
         // circle, and Material draws the distinction the same way.
-        Avatar(name = server.name, url = server.iconUrl, size = 48.dp, cornerRadius = 16.dp)
-        Spacer(Modifier.width(14.dp))
+        //
+        // The seed is the id, not the name. Two servers called "casa" are two
+        // different places and should not be the same colour, and a server that
+        // is renamed should not change colour under the people already in it.
+        Avatar(
+            name = server.name,
+            url = server.iconUrl,
+            size = Sizes.avatarServer,
+            cornerRadius = 14.dp,
+            seed = server.id,
+        )
+        Spacer(Modifier.width(Spacing.md))
         Column(Modifier.weight(1f)) {
-            Text(server.name, style = MaterialTheme.typography.titleMedium)
-            server.role?.let {
+            Text(
+                text = server.name,
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            server.role?.let { role ->
+                val label = when (role) {
+                    "owner" -> stringResource(R.string.role_owner)
+                    "admin" -> stringResource(R.string.role_admin)
+                    "member" -> stringResource(R.string.role_member)
+                    // A role this build has not heard of. Showing the wire word
+                    // is better than showing nothing, and it is the only case
+                    // where an untranslated word can reach the screen.
+                    else -> role
+                }
                 Text(
-                    text = it,
+                    text = label,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
         }
         Box {
             IconButton(onClick = { menuOpen = true }) {
                 Icon(
-                    Icons.Filled.MoreVert,
+                    PqpIcons.More,
                     contentDescription = stringResource(R.string.server_actions),
                 )
             }
@@ -385,13 +502,20 @@ private fun CreateServerDialog(onDismiss: () -> Unit, onCreate: (String) -> Unit
     var name by remember { mutableStateOf("") }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.servers_create)) },
+        title = {
+            Text(
+                text = stringResource(R.string.servers_create),
+                style = MaterialTheme.typography.titleMedium,
+            )
+        },
         text = {
             OutlinedTextField(
                 value = name,
                 onValueChange = { name = it.take(100) },
                 label = { Text(stringResource(R.string.servers_create_name)) },
                 singleLine = true,
+                shape = MaterialTheme.shapes.small,
+                modifier = Modifier.fillMaxWidth(),
             )
         },
         confirmButton = {
@@ -405,43 +529,14 @@ private fun CreateServerDialog(onDismiss: () -> Unit, onCreate: (String) -> Unit
         dismissButton = {
             TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) }
         },
+        // Both stated rather than inherited, and both are corrections rather
+        // than taste. `AlertDialogDefaults.shape` reads `shapes.extraLarge`,
+        // which is the 28dp meant for a bottom sheet; the shape scale gives a
+        // dialog 20dp. `AlertDialogDefaults.containerColor` reads
+        // `surfaceContainerHigh`, which on this ramp is the colour of a pressed
+        // row, and a dialog is a thing that lifts rather than a thing that
+        // reacts.
+        shape = MaterialTheme.shapes.large,
+        containerColor = MaterialTheme.colorScheme.surfaceContainer,
     )
-}
-
-@Composable
-fun EmptyState(text: String) {
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(32.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = text,
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center,
-        )
-    }
-}
-
-@Composable
-fun FailedScreen(reason: String, onRetry: (() -> Unit)?) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(32.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Text(
-            text = reason.ifBlank { stringResource(R.string.error_network) },
-            style = MaterialTheme.typography.bodyLarge,
-            textAlign = TextAlign.Center,
-        )
-        if (onRetry != null) {
-            Spacer(Modifier.height(16.dp))
-            TextButton(onClick = onRetry) { Text(stringResource(R.string.connection_retry)) }
-        }
-    }
 }
