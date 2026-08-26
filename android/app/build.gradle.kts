@@ -125,6 +125,32 @@ android {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
+
+            // Native crash reports, in names rather than in addresses.
+            //
+            // Play warns on every bundle that carries native code with no
+            // symbol file, and the warning is not cosmetic: without one, a
+            // crash inside libwebrtc arrives as a column of raw addresses, and
+            // the one part of this app most likely to crash on a device nobody
+            // here owns is the one part written in C++.
+            //
+            // SYMBOL_TABLE rather than FULL, and that is the honest ceiling
+            // here rather than a preference. The WebRTC artifact
+            // (`io.github.webrtc-sdk:android`) ships **already stripped**: its
+            // `libjingle_peerconnection_so.so` carries `.dynsym` and nothing
+            // else, no `.symtab` and no `.debug_*` sections at all. FULL would
+            // ask for DWARF that is not in the file. What SYMBOL_TABLE can
+            // still hand Play is the exported symbols, which resolves a frame
+            // to the nearest exported function instead of to a hex address.
+            //
+            // AGP writes the result into the bundle itself, under
+            // `BUNDLE-METADATA/com.android.tools.build.debugsymbols/`, so Play
+            // reads it off the upload and there is no separate file to send.
+            // It applies to `bundleRelease` only; `assembleRelease` (what CI
+            // runs) produces an APK and is unaffected.
+            ndk {
+                debugSymbolLevel = "SYMBOL_TABLE"
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
