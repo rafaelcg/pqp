@@ -147,4 +147,40 @@
     <string name="status_idle">Idle</string>
     <string name="status_dnd">Do not disturb</string>
     <string name="status_offline">Offline</string>
+
+    <!-- Your data. Both rights the privacy policy promises, and the second one
+         is what Play requires of any app that lets you create an account. -->
+    <string name="you_data_title">Your data</string>
+    <string name="you_data_export">Download my data</string>
+    <string name="you_data_exporting">Preparing\u2026</string>
+    <string name="you_data_export_note">It includes your profile, your settings, every message you wrote, the communities you are in, and who you have blocked. It does not include messages other people wrote, including their side of your direct messages. Those are their words, not your data, and you can still read them here in the app.</string>
+    <string name="you_data_export_saved">Saved.</string>
+    <string name="you_data_export_failed">Could not build your export.</string>
+    <string name="you_data_delete">Delete my account</string>
+    <string name="you_data_delete_note">Permanent. There is no undo and no backup to restore from.</string>
+
+    <string name="delete_title">Delete your account</string>
+    <string name="delete_intro">This cannot be undone. We keep no backup you can be restored from, and nobody at pqp can bring your account back.</string>
+    <string name="delete_removed_title">What is deleted</string>
+    <string name="delete_removed_profile">Your profile, handle, avatar and settings.</string>
+    <string name="delete_removed_messages">Every message you have written, everywhere, including in direct messages. Other people will see gaps where your messages were.</string>
+    <string name="delete_removed_files">Your files and images, and the reactions you left.</string>
+    <string name="delete_removed_memberships">Your memberships, your conversations, and the list of people you blocked.</string>
+    <string name="delete_removed_signin">Your sign-in. You will not be able to log back in.</string>
+    <string name="delete_removed_solo_servers">Any community you own on your own, with nobody else in it.</string>
+    <string name="delete_kept_title">What is kept, and why</string>
+    <string name="delete_kept_audit">Moderation records of actions you took in other people\u2019s communities, with your name removed. Deleting an account must not erase the record of how it was used to moderate somebody else.</string>
+    <string name="delete_kept_bans">Bans you issued. Removing them would let everybody you banned back into communities you no longer have anything to do with.</string>
+    <string name="delete_kept_reports">Reports other people filed about you, with your name removed. We are not able to let an account be deleted as a way of clearing its own record.</string>
+    <string name="delete_kept_note">All of these are pruned on their own schedule. The privacy policy explains them in full.</string>
+    <string name="delete_blocking_title">Do one of these first, for each community you own</string>
+    <string name="delete_blocking_note">Other people are still in these communities, so we will not delete them out from under them. In each community\u2019s settings, either hand it to another member or delete the community yourself.</string>
+    <plurals name="delete_blocking_members">
+        <item quantity="one">%1$d other member</item>
+        <item quantity="other">%1$d other members</item>
+    </plurals>
+    <string name="delete_confirm_title">Type your handle to confirm</string>
+    <string name="delete_keep">Keep my account</string>
+    <string name="delete_confirm">Delete for ever</string>
+    <string name="delete_working">Deleting\u2026</string>
 </resources>

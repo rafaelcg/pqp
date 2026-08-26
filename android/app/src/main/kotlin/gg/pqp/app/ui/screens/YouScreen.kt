@@ -9,6 +9,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -22,7 +24,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
@@ -31,6 +36,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.clerk.api.Clerk
 import gg.pqp.app.BuildConfig
 import gg.pqp.app.R
+import gg.pqp.app.account.ui.DeleteAccountDialog
+import gg.pqp.app.account.ui.YourDataSection
 import gg.pqp.app.core.AuthMode
 import gg.pqp.app.core.Backend
 import gg.pqp.app.core.SessionPhase
@@ -45,6 +52,39 @@ fun YouScreen(session: SessionStore, onBack: () -> Unit) {
     val phase by session.phase.collectAsStateWithLifecycle()
     val me = (phase as? SessionPhase.Ready)?.me
     val scope = rememberCoroutineScope()
+    var confirmingDelete by remember { mutableStateOf(false) }
+
+    /**
+     * Ends the Clerk session first, while the call can still authenticate.
+     * Clearing local state first would leave a live session on the device with
+     * nothing able to revoke it.
+     */
+    fun signOut() {
+        scope.launch {
+            if (Backend.authMode == AuthMode.Clerk) {
+                runCatching { Clerk.auth.signOut() }
+            }
+            session.signOutLocally()
+        }
+    }
+
+    // Hung off the screen rather than off the row that opens it, so that a
+    // recomposition of the section cannot take the one screen in the app whose
+    // next action is irreversible down with it.
+    if (confirmingDelete) {
+        DeleteAccountDialog(
+            session = session,
+            tag = me?.tag,
+            onDismiss = { confirmingDelete = false },
+            onDeleted = {
+                confirmingDelete = false
+                // The account is gone server-side. Signing out locally is what
+                // takes the app back to the sign-in screen; there is nothing
+                // left to authenticate with.
+                signOut()
+            },
+        )
+    }
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -66,6 +106,11 @@ fun YouScreen(session: SessionStore, onBack: () -> Unit) {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
+                // Scrollable because "Your data" put real copy on this screen:
+                // on a short phone in a large font the delete button would
+                // otherwise be below the fold with no way to reach it, which on
+                // a Play requirement is the same as not having it.
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
@@ -114,22 +159,16 @@ fun YouScreen(session: SessionStore, onBack: () -> Unit) {
 
             Spacer(Modifier.height(16.dp))
             OutlinedButton(
-                onClick = {
-                    scope.launch {
-                        // Ending the Clerk session first, while the call can
-                        // still authenticate. Clearing local state first would
-                        // leave a live session on the device with nothing able
-                        // to revoke it.
-                        if (Backend.authMode == AuthMode.Clerk) {
-                            runCatching { Clerk.auth.signOut() }
-                        }
-                        session.signOutLocally()
-                    }
-                },
+                onClick = ::signOut,
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Text(stringResource(R.string.sign_out))
             }
+
+            Spacer(Modifier.height(8.dp))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            YourDataSection(session) { confirmingDelete = true }
+            Spacer(Modifier.height(24.dp))
         }
     }
 }

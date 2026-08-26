@@ -151,4 +151,40 @@
     <string name="status_idle">Ausente</string>
     <string name="status_dnd">Não perturbe</string>
     <string name="status_offline">Offline</string>
+
+    <!-- Seus dados. Os dois direitos que a política de privacidade promete, e o
+         segundo é exigido pela Play de qualquer app que deixa criar conta. -->
+    <string name="you_data_title">Seus dados</string>
+    <string name="you_data_export">Baixar meus dados</string>
+    <string name="you_data_exporting">Preparando\u2026</string>
+    <string name="you_data_export_note">Inclui seu perfil, suas configurações, todas as mensagens que você escreveu, as comunidades das quais você faz parte e quem você bloqueou. Não inclui mensagens escritas por outras pessoas, nem o lado delas nas suas conversas diretas. São palavras delas, não dados seus, e você continua podendo lê-las aqui no app.</string>
+    <string name="you_data_export_saved">Salvo.</string>
+    <string name="you_data_export_failed">Não foi possível gerar sua exportação.</string>
+    <string name="you_data_delete">Excluir minha conta</string>
+    <string name="you_data_delete_note">Permanente. Não há como desfazer e não existe backup para restaurar.</string>
+
+    <string name="delete_title">Excluir sua conta</string>
+    <string name="delete_intro">Isso não pode ser desfeito. Não guardamos nenhum backup que possa restaurar você, e ninguém no pqp consegue trazer sua conta de volta.</string>
+    <string name="delete_removed_title">O que é excluído</string>
+    <string name="delete_removed_profile">Seu perfil, seu identificador, sua foto e suas configurações.</string>
+    <string name="delete_removed_messages">Todas as mensagens que você escreveu, em qualquer lugar, inclusive nas conversas diretas. As outras pessoas vão ver lacunas onde estavam suas mensagens.</string>
+    <string name="delete_removed_files">Seus arquivos e imagens, e as reações que você deixou.</string>
+    <string name="delete_removed_memberships">Suas participações, suas conversas e a lista de pessoas que você bloqueou.</string>
+    <string name="delete_removed_signin">Seu acesso. Você não vai mais conseguir entrar.</string>
+    <string name="delete_removed_solo_servers">Qualquer comunidade que só você tenha, sem mais ninguém dentro.</string>
+    <string name="delete_kept_title">O que fica, e por quê</string>
+    <string name="delete_kept_audit">Registros de moderação de ações que você tomou em comunidades de outras pessoas, sem o seu nome. Excluir uma conta não pode apagar o registro de como ela foi usada para moderar outra pessoa.</string>
+    <string name="delete_kept_bans">Banimentos que você aplicou. Removê-los deixaria todo mundo que você baniu voltar a comunidades com as quais você não tem mais nenhuma relação.</string>
+    <string name="delete_kept_reports">Denúncias que outras pessoas fizeram sobre você, sem o seu nome. Não podemos deixar que excluir a conta sirva para limpar o próprio histórico.</string>
+    <string name="delete_kept_note">Tudo isso é descartado no ritmo de cada um. A política de privacidade explica em detalhe.</string>
+    <string name="delete_blocking_title">Faça uma destas primeiro, em cada comunidade sua</string>
+    <string name="delete_blocking_note">Ainda tem gente nessas comunidades, então não vamos excluí-las por baixo delas. Nas configurações de cada comunidade, passe-a para outra pessoa ou exclua-a você mesmo.</string>
+    <plurals name="delete_blocking_members">
+        <item quantity="one">mais %1$d pessoa</item>
+        <item quantity="other">mais %1$d pessoas</item>
+    </plurals>
+    <string name="delete_confirm_title">Digite seu identificador para confirmar</string>
+    <string name="delete_keep">Manter minha conta</string>
+    <string name="delete_confirm">Excluir para sempre</string>
+    <string name="delete_working">Excluindo\u2026</string>
 </resources>

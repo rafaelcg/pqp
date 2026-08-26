@@ -74,6 +74,10 @@ the order to cut from the bottom:
 5. DMs and the friends list. **Done, and verified between two clients.**
 6. Attachments, reactions, invites, everything on the parity list.
 
+Data export and account deletion are not on that list because they are not a
+feature to be cut from it: **Play refuses a submission without in-app account
+deletion.** Both are built. See **Your data** below.
+
 If time runs short, cut from **6 upward**.
 
 ## Running it
@@ -180,6 +184,7 @@ the clone is done by hand.
 | `app/src/main/kotlin/gg/pqp/app/social` | Friends, blocks, conversations: wire shapes, endpoints, the live repository |
 | `app/src/main/kotlin/gg/pqp/app/social/ui` | The three-tab home, the inbox, the friends screen, the two people pickers |
 | `app/src/main/kotlin/gg/pqp/app/push` | FCM registration, the notification payload, deep links, per-channel settings |
+| `app/src/main/kotlin/gg/pqp/app/account` | Data export and account deletion: the confirmation rule, the two endpoints, the two screens |
 | `app/src/test/kotlin` | JVM unit tests for the pure parts: capture sizing, stats parsing, deep links, push presentation |
 | `app/src/main/res/values` | English copy |
 | `app/src/main/res/values-pt-rBR` | Portuguese copy |
@@ -1224,6 +1229,87 @@ Also unbuilt: no toggle for `dmDetails` (the server owns it and the client only
 reads it), no ringing-call notification, and no notification actions such as
 reply or mark-as-read.
 
+## Your data: export and account deletion
+
+**This is a Play Store submission blocker, not a nicety.** Google requires an
+app that supports account creation to let the account be deleted from inside
+the app, which is the same rule that held the iOS build at App Store Guideline
+5.1.1(v) until build 12. Before this, `YouScreen` offered Sign out and nothing
+else, and the only route to deletion on an Android phone was to email an
+address and wait for somebody to run SQL by hand.
+
+Nothing was needed on the server. `GET /api/me/export` and `DELETE /api/me`
+have existed since the privacy policy promised them (LGPD art. 18, IV and VI),
+and this is the same flow the web client and iOS use against the same
+endpoints. `gg/pqp/app/account/` holds it, in its own package rather than as
+more lines in `ui/screens`, and it is its own section on the profile screen
+rather than a footer at the end of a scroll: the right to leave belongs
+somewhere a person can find it on purpose.
+
+### The confirmation rule lives in three languages, and must not drift
+
+`AccountDeletion.confirmationMatches` is a Kotlin mirror of
+`deleteConfirmationMatches` in `packages/shared/src/api.ts` and of
+`ios/pqp/Sources/Core/AccountDeletion.swift`. Its whole job is that the button
+lighting up and the request being accepted can never disagree: the server
+refuses with a 400 when the typed value does not match, and a client that
+enabled the button on a looser rule would produce a refusal the user could do
+nothing about.
+
+The fallback phrase for an account with no `name#1234` yet is
+`delete my account`, **in English even in Portuguese**, because the server
+compares against that exact string. It is drawn in a monospace face for the
+same reason: it is a value to copy, not a sentence to read.
+
+### The refusals are acted on, not printed
+
+- **400**, the confirmation does not match. Cannot happen from this client,
+  because the button is disabled until it does; the rule above is what
+  guarantees that.
+- **409**, `code: "owned_servers"`, the caller owns communities other people
+  are in. The body lists them **by name** with a member count, and the screen
+  renders them under *Do one of these first, for each community you own* with
+  the two remedies. A delete button that fails silently on this is worse than
+  no delete button at all, which is why `ApiException` now carries the whole
+  refusal body rather than only its sentence.
+- **502**, Clerk would not delete the identity. Nothing local was touched and
+  retrying is safe; the server's own sentence says so and is shown verbatim.
+
+### Export goes through the system file picker
+
+The web client mints a blob URL and clicks an invisible link; iOS writes a temp
+file and hands it to the share sheet. Android's own answer is
+`ActivityResultContracts.CreateDocument`, which needs **no** `FileProvider`
+entry in the manifest and no storage permission, and which lets somebody put the
+file where they will find it again rather than where the app chose.
+
+The bytes are fetched **before** the picker opens. The other order is a file the
+user has already named and filed away that turns out to be empty.
+
+### What is verified
+
+On an emulator against a live local server:
+
+- The export saved as `pqp-my-data-2026-08-26.json` through the system picker,
+  4494 bytes, valid JSON, `format: "pqp.personal-data-export.v1"` with
+  `account`, `messages`, `servers`, `conversations`, `blockedUsers`,
+  `auditEntries` and `reportsYouFiled` present.
+- *Delete for ever* stayed disabled for an empty field and for
+  `dev_user_integ1#617`, one character short, and lit up on the exact tag.
+- The 409 rendered the blocking community by name (*Integracao*, *2 other
+  members*) with the remedy, rather than failing quietly.
+- A throwaway account deleted itself for real: the app dropped to the sign-in
+  screen and the `users` row and every `server_members` row for that id were
+  gone from Postgres.
+
+**Unverified:** the 502 path, which needs Clerk to refuse, and deletion under a
+real Clerk session rather than the dev bypass. One dev-bypass artefact worth
+knowing about: the bypass token is a fixed string that mints an account on any
+authenticated request, so a socket that reconnects in the moment between the
+delete returning and the sign-out landing creates a *fresh* account with the
+same `clerk_id` and a new id. That cannot happen with Clerk, where the identity
+itself is gone and no token works.
+
 ## CI
 
 **Deliberately not added.** The build needs an Android SDK, an accepted licence
@@ -1302,10 +1388,15 @@ arithmetic, the stats parsing, deep-link parsing and push presentation. There
 are still **no instrumented tests**, and nothing proves a new `stringResource`
 has a Portuguese counterpart.
 
+Built and **verified against a live local server**: personal data export and
+in-app account deletion, including the 409 that lists the communities blocking
+deletion by name. The Play requirement is met. The detail, and the two things
+about it that are not proven, are in **Your data** above.
+
 **Not built:** attachments, reactions, replies, editing, pinning, threads,
-search, members and moderation surfaces, invites, profile editing, communities,
-game connections, data export and account deletion. No camera (send or
-receive), no screen-share audio, no speaking indicators, no per-peer volume, no
-push-to-talk. LiveKit rooms are refused rather than joined. `assembleRelease`
-signs with the debug key and needs a real keystore before it goes anywhere near
-Play.
+search, members and moderation surfaces, profile editing, communities, game
+connections. Invites can be redeemed from a link but not created or shown. No
+camera (send or receive), no screen-share audio, no speaking indicators, no
+per-peer volume, no push-to-talk. LiveKit rooms are refused rather than joined.
+`assembleRelease` signs with the debug key and needs a real keystore before it
+goes anywhere near Play.

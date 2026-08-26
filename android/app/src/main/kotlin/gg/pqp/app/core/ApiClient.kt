@@ -6,6 +6,7 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.HttpUrl
@@ -22,11 +23,19 @@ import okhttp3.Response
  * Every error body in this API is `{"error": string}`, so the server's own
  * sentence is carried through rather than replaced: only the server knows
  * whether an invite was expired, revoked, exhausted, or the caller banned.
+ *
+ * [body] is the whole thing, undecoded, because a few refusals carry more than
+ * a sentence and the caller has to *act* on it. `DELETE /api/me` answers 409
+ * with the communities blocking deletion listed by name; reducing that to its
+ * message would leave somebody to go and work out for themselves which
+ * community is the problem, which is exactly what the server took the trouble
+ * to avoid.
  */
 class ApiException(
     val status: Int,
     val serverMessage: String?,
     val code: String? = null,
+    val body: JsonObject? = null,
 ) : IOException(serverMessage ?: "HTTP $status") {
     val isUnauthorized: Boolean get() = status == 401
     val isAgeGated: Boolean get() = status == 403
@@ -152,7 +161,10 @@ class ApiClient(
             val raw = runCatching { response.body.string() }.getOrNull()
             response.close()
             val parsed = raw?.let { runCatching { json.decodeFromString<ApiError>(it) }.getOrNull() }
-            throw ApiException(response.code, parsed?.error, parsed?.code)
+            val body = raw?.let {
+                runCatching { json.decodeFromString(JsonObject.serializer(), it) }.getOrNull()
+            }
+            throw ApiException(response.code, parsed?.error, parsed?.code, body)
         }
         return response
     }
