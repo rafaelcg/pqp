@@ -130,6 +130,13 @@ interface FakeCaptureTrack {
   kind: "video" | "audio";
   onended: (() => void) | null;
   stop: () => void;
+  /**
+   * Only the video track has one, and only when the test cares which surface
+   * the picker returned. Absent is a real shape: Safari and Firefox omit
+   * `displaySurface`, and older engines have no `getSettings` on a capture
+   * track at all.
+   */
+  getSettings?: () => { displaySurface?: string };
 }
 
 interface FakeCapture {
@@ -146,9 +153,18 @@ interface FakeCapture {
  * Without is the case that must keep working untouched: Safari, Firefox, and
  * every macOS screen or window share land here.
  */
-function fakeCapture(id: string, withAudio: boolean): FakeCapture {
+function fakeCapture(
+  id: string,
+  withAudio: boolean,
+  displaySurface?: string,
+): FakeCapture {
   let tracks: FakeCaptureTrack[] = [
-    { kind: "video", onended: null, stop: () => stoppedTracks.push(`${id}:video`) },
+    {
+      kind: "video",
+      onended: null,
+      stop: () => stoppedTracks.push(`${id}:video`),
+      ...(displaySurface ? { getSettings: () => ({ displaySurface }) } : {}),
+    },
   ];
   if (withAudio) {
     tracks.push({
@@ -185,6 +201,10 @@ function installBrowserStubs() {
     configurable: true,
     value: {
       getUserMedia: async () => fakeStream("mic"),
+      // Chrome desktop 141+ knows `restrictOwnAudio`. Stubbed as the modern
+      // shape so the constraint's feature detection is exercised rather than
+      // silently skipped by a stub that answers nothing.
+      getSupportedConstraints: () => ({ restrictOwnAudio: true }),
       getDisplayMedia: async (options: unknown) => {
         displayMediaCalls.push(options);
         return displayMedia();
@@ -294,18 +314,69 @@ describe("screen share audio", () => {
     return { voice, sent };
   }
 
-  it("asks for system audio, and for a picker that cannot offer our own tab", async () => {
+  it("does not ask for the machine's audio, and hides our own tab from the picker", async () => {
+    // The 23 Aug 2026 echo report, pinned. `systemAudio: "include"` was what
+    // captured the call off the machine's own mixer and sent it back to the
+    // people who were speaking. Audio is still REQUESTED, because that is what
+    // keeps a Chrome tab share carrying that tab's sound, which cannot echo.
     const { voice } = await connectedMesh();
     await voice.startScreenShare();
 
     expect(displayMediaCalls).toHaveLength(1);
     expect(displayMediaCalls[0]).toMatchObject({
-      audio: { echoCancellation: false },
-      systemAudio: "include",
+      audio: { echoCancellation: false, restrictOwnAudio: true },
+      systemAudio: "exclude",
       // The anti-feedback rule: sharing the call's own tab would put the call
       // back into the call.
       selfBrowserSurface: "exclude",
     });
+  });
+
+  it("asks for the machine's audio only when the caller opted in", async () => {
+    const { voice } = await connectedMesh();
+    await voice.startScreenShare(true);
+
+    expect(displayMediaCalls[0]).toMatchObject({
+      systemAudio: "include",
+      audio: { restrictOwnAudio: true },
+    });
+  });
+
+  it("flags a whole-screen share that carries sound", async () => {
+    // The only surface that can be carrying everybody's voices, and the one
+    // the UI says so about while it is live.
+    displayMedia = async () => fakeCapture("cap-mon", true, "monitor");
+    const { voice } = await connectedMesh();
+    await voice.startScreenShare(true);
+
+    expect(voice.getState().isSharingSystemAudio).toBe(true);
+  });
+
+  it("does not flag a tab share that carries sound", async () => {
+    // The recommended route. A tab capture contains that tab and nothing else.
+    displayMedia = async () => fakeCapture("cap-tab", true, "browser");
+    const { voice } = await connectedMesh();
+    await voice.startScreenShare(true);
+
+    expect(voice.getState().isSharingScreenAudio).toBe(true);
+    expect(voice.getState().isSharingSystemAudio).toBe(false);
+  });
+
+  it("does not flag a silent whole-screen share", async () => {
+    displayMedia = async () => fakeCapture("cap-quiet", false, "monitor");
+    const { voice } = await connectedMesh();
+    await voice.startScreenShare();
+
+    expect(voice.getState().isSharingSystemAudio).toBe(false);
+  });
+
+  it("drops the flag when the share stops", async () => {
+    displayMedia = async () => fakeCapture("cap-mon2", true, "monitor");
+    const { voice } = await connectedMesh();
+    await voice.startScreenShare(true);
+    await voice.stopScreenShare();
+
+    expect(voice.getState().isSharingSystemAudio).toBe(false);
   });
 
   it("publishes the capture and announces its audio stream id", async () => {

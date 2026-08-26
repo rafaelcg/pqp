@@ -6,6 +6,7 @@ import {
   Mic,
   MicOff,
   Minimize2,
+  MonitorSpeaker,
   Phone,
   PhoneOff,
   ScreenShare,
@@ -355,6 +356,8 @@ export function DmCallStage({
   onVideoQualityChange,
   onStartScreenShare,
   onStopScreenShare,
+  shareSystemAudio = false,
+  onShareSystemAudioChange,
   onFocusScreenShare,
 }: {
   conversation: DmSummary;
@@ -373,6 +376,9 @@ export function DmCallStage({
   onToggleCamera: () => void;
   onVideoQualityChange: (quality: VideoQuality) => void;
   onStartScreenShare?: () => void;
+  /** The standing opt-in to sending this machine's sound with a share. */
+  shareSystemAudio?: boolean;
+  onShareSystemAudioChange?: (next: boolean) => void;
   onStopScreenShare?: () => void;
   onFocusScreenShare?: (peerId: string) => void;
 }) {
@@ -436,6 +442,8 @@ export function DmCallStage({
       onToggleCamera={onToggleCamera}
       onVideoQualityChange={onVideoQualityChange}
       onStartScreenShare={onStartScreenShare}
+      shareSystemAudio={shareSystemAudio}
+      onShareSystemAudioChange={onShareSystemAudioChange}
       onStopScreenShare={onStopScreenShare}
       onFocusScreenShare={onFocusScreenShare}
     />
@@ -455,6 +463,8 @@ function ActiveCall({
   onVideoQualityChange,
   onStartScreenShare,
   onStopScreenShare,
+  shareSystemAudio = false,
+  onShareSystemAudioChange,
   onFocusScreenShare,
 }: {
   conversation: DmSummary;
@@ -468,6 +478,9 @@ function ActiveCall({
   onToggleCamera: () => void;
   onVideoQualityChange: (quality: VideoQuality) => void;
   onStartScreenShare?: () => void;
+  /** The standing opt-in to sending this machine's sound with a share. */
+  shareSystemAudio?: boolean;
+  onShareSystemAudioChange?: (next: boolean) => void;
   onStopScreenShare?: () => void;
   onFocusScreenShare?: (peerId: string) => void;
 }) {
@@ -733,6 +746,8 @@ function ActiveCall({
       qualityMenuOpen={qualityMenuOpen}
       onQualityMenuOpenChange={setQualityMenuRequested}
       onStartScreenShare={onStartScreenShare}
+      shareSystemAudio={shareSystemAudio}
+      onShareSystemAudioChange={onShareSystemAudioChange}
       onStopScreenShare={onStopScreenShare}
       onToggleCollapsed={() => onSetCollapsed(!collapsed)}
       onLeave={onLeave}
@@ -989,6 +1004,14 @@ function ActiveCall({
                       ({t("voice.share.noAudioShort")})
                     </span>
                   )}
+                {/* Said while it is happening. The presenter's own machine is
+                    playing what they shared, so they are the one person who
+                    cannot hear the echo they are causing. */}
+                {voiceState.isSharingSystemAudio && (
+                  <span className="ml-1 block text-warning">
+                    {t("voice.share.systemAudioLive")}
+                  </span>
+                )}
               </span>
             )}
           </p>
@@ -1043,6 +1066,8 @@ function CallControls({
   onQualityMenuOpenChange,
   onStartScreenShare,
   onStopScreenShare,
+  shareSystemAudio = false,
+  onShareSystemAudioChange,
   onToggleCollapsed,
   onLeave,
 }: {
@@ -1058,6 +1083,9 @@ function CallControls({
   qualityMenuOpen: boolean;
   onQualityMenuOpenChange: (open: boolean) => void;
   onStartScreenShare?: () => void;
+  /** The standing opt-in to sending this machine's sound with a share. */
+  shareSystemAudio?: boolean;
+  onShareSystemAudioChange?: (next: boolean) => void;
   onStopScreenShare?: () => void;
   onToggleCollapsed: () => void;
   onLeave: () => void;
@@ -1153,6 +1181,34 @@ function CallControls({
           iconClassName={iconSize}
         />
       )}
+      {/* The opt-in to sending this machine's sound. Off unless armed, and
+          only while nothing is being shared: it changes the NEXT capture, and
+          a control that looks like it acts on the live share and does not is
+          worse than no control. Sending system audio is what re-broadcast
+          everyone's voices back into the call; see
+          `lib/screen-capture-audio.ts`. */}
+      {!collapsed &&
+        canShare &&
+        onStartScreenShare &&
+        onShareSystemAudioChange &&
+        !voiceState.isSharingScreen && (
+          <button
+            type="button"
+            title={t("voice.control.shareSound")}
+            aria-label={t("voice.control.shareSound")}
+            aria-pressed={shareSystemAudio}
+            className={cn(
+              "flex items-center justify-center rounded-full",
+              size,
+              shareSystemAudio
+                ? "bg-signal/20 text-signal"
+                : "bg-ink-3 text-paper hover:bg-ink-4",
+            )}
+            onClick={() => onShareSystemAudioChange(!shareSystemAudio)}
+          >
+            <MonitorSpeaker className={iconSize} />
+          </button>
+        )}
       {!collapsed && canShare && (onStartScreenShare || onStopScreenShare) && (
         <button
           type="button"

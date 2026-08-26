@@ -11,6 +11,7 @@ import {
   ScreenShareOff,
   Video,
   VideoOff,
+  MonitorSpeaker,
   Volume2,
   VolumeX,
 } from "lucide-react";
@@ -403,6 +404,15 @@ interface VoicePanelProps {
   isSharingScreen?: boolean;
   /** Whether our own live share is carrying the machine's audio. */
   isSharingScreenAudio?: boolean;
+  /**
+   * Whether our live share is carrying the machine's WHOLE output, i.e. the
+   * shape that sends everybody's voices back to them. The presenter is the one
+   * person in the room who cannot hear that happening.
+   */
+  isSharingSystemAudio?: boolean;
+  /** The user's standing opt-in to sending the machine's sound with a share. */
+  shareSystemAudio?: boolean;
+  onShareSystemAudioChange?: (next: boolean) => void;
   /** This machine's camera is on. Discord-style: it may run alongside a share. */
   isCameraOn?: boolean;
   /** Our own camera, for the self tile's preview. */
@@ -457,6 +467,9 @@ export function VoicePanel({
   usingSfu = false,
   isSharingScreen = false,
   isSharingScreenAudio = false,
+  isSharingSystemAudio = false,
+  shareSystemAudio = false,
+  onShareSystemAudioChange,
   isCameraOn = false,
   localCameraStream = null,
   videoQuality = DEFAULT_VIDEO_QUALITY,
@@ -858,6 +871,50 @@ export function VoicePanel({
                   iconClassName="h-4 w-4"
                 />
               )}
+              {/* The opt-in to sending this machine's sound, next to the
+                  button it changes and off unless somebody turned it on.
+                  Sharing system audio used to be silent and automatic, and it
+                  is what put every participant's voice back into the call (see
+                  `lib/screen-capture-audio.ts`). It is still worth having for
+                  a game or a film, so it is a choice rather than a removal,
+                  and pressing it says out loud what it will do.
+
+                  Hidden while a share is live: it changes the NEXT capture,
+                  and a control that appears to do something to the share you
+                  are watching, and does not, is worse than no control. */}
+              {onStartScreenShare &&
+                onShareSystemAudioChange &&
+                !screenShareBlocked &&
+                !isSharingScreen && (
+                  <Button
+                    variant="secondary"
+                    size="icon"
+                    aria-label={t("voice.control.shareSound")}
+                    aria-pressed={shareSystemAudio}
+                    onClick={() => {
+                      const next = !shareSystemAudio;
+                      onShareSystemAudioChange(next);
+                      setHint(
+                        t(
+                          next
+                            ? "voice.share.systemAudioOn"
+                            : "voice.share.systemAudioOff",
+                        ),
+                      );
+                    }}
+                  >
+                    {/* A screen with a speaker, not a bare volume icon: the
+                        row already carries a mic and a headphone, and a third
+                        loudspeaker in it would read as "output volume". Tinted
+                        when armed, on the same rule as the camera button. */}
+                    <MonitorSpeaker
+                      className={cn(
+                        "h-4 w-4",
+                        shareSystemAudio && "text-signal",
+                      )}
+                    />
+                  </Button>
+                )}
               {(onStartScreenShare || onStopScreenShare) &&
                 (screenShareBlocked ? (
                   /* Not `disabled`: a disabled button cannot be tapped, and on
@@ -902,7 +959,13 @@ export function VoicePanel({
                       // dialog explains what it is for. Saying it here, on the
                       // press that opens it, is the only moment the sentence
                       // can still change what the user does.
-                      setHint(t("voice.share.tickAudio"));
+                      setHint(
+                        t(
+                          shareSystemAudio
+                            ? "voice.share.systemAudioOn"
+                            : "voice.share.tickAudio",
+                        ),
+                      );
                       onStartScreenShare?.();
                     }}
                   >
@@ -918,6 +981,21 @@ export function VoicePanel({
                 {t("voice.control.leave")}
               </Button>
             </div>
+
+            {/* Said while it is happening, not once at the picker. The
+                presenter's own machine is playing what they shared, so they
+                are the only person in the room who cannot hear the echo they
+                are causing, and the fix stays available the whole time: stop,
+                turn the sound off, share again. Not shown alone in a channel,
+                where there is nobody to echo at. */}
+            {isSharingSystemAudio && connectedCount > 1 && (
+              <p
+                role="status"
+                className="mt-1.5 text-center text-[11px] text-warning"
+              >
+                {t("voice.share.systemAudioLive")}
+              </p>
+            )}
 
             {sharingSilently && (
               <p

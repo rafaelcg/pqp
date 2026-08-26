@@ -603,6 +603,18 @@ function MainAppContent({
   );
   const voice = useMemo(() => createVoiceController(transport), [transport]);
   const [voiceState, setVoiceState] = useState(voice.getState());
+  /**
+   * The standing opt-in to sending this machine's whole sound with a share.
+   *
+   * SESSION STATE ON PURPOSE, not a stored preference. Sending system audio is
+   * what re-broadcast everyone's voices back into the call (the 23 Aug 2026
+   * echo report; see `lib/screen-capture-audio.ts`), and the failure is silent
+   * from the presenter's side. A preference remembered across reloads is a
+   * preference somebody set once for one game and then forgot, and the next
+   * time it costs the whole room. Re-arming is one press, in the call, next to
+   * the button it changes.
+   */
+  const [shareSystemAudio, setShareSystemAudio] = useState(false);
   // --- voice state ---
   // Mirror this client's mute/deafen onto the wire so the roster can badge it
   // for everyone else. Lives outside the voice controller: it is display
@@ -3353,8 +3365,10 @@ function MainAppContent({
           onToggleMute={() => voice.toggleMute()}
           onToggleCamera={() => void voice.toggleCamera()}
           onVideoQualityChange={handleVideoQualityChange}
-          onStartScreenShare={() => void voice.startScreenShare()}
+          onStartScreenShare={() => void voice.startScreenShare(shareSystemAudio)}
           onStopScreenShare={() => void voice.stopScreenShare()}
+          shareSystemAudio={shareSystemAudio}
+          onShareSystemAudioChange={setShareSystemAudio}
           onFocusScreenShare={(peerId) => voice.focusScreenShare(peerId)}
         />
       )}
@@ -3928,6 +3942,9 @@ function MainAppContent({
                 participants={voiceState.occupancy[selectedChannel.id] ?? []}
                 isSharingScreen={voiceState.isSharingScreen}
                 isSharingScreenAudio={voiceState.isSharingScreenAudio}
+                isSharingSystemAudio={voiceState.isSharingSystemAudio}
+                shareSystemAudio={shareSystemAudio}
+                onShareSystemAudioChange={setShareSystemAudio}
                 // The camera is only ever this machine's when the call in
                 // progress is *this* channel's; the state is a single
                 // controller, so a stale preview would otherwise show up in a
@@ -3958,7 +3975,7 @@ function MainAppContent({
                 onRetryPeer={(peerId) => {
                   void voice.retryPeer(peerId);
                 }}
-                onStartScreenShare={() => void voice.startScreenShare()}
+                onStartScreenShare={() => void voice.startScreenShare(shareSystemAudio)}
                 onStopScreenShare={() => void voice.stopScreenShare()}
                 onToggleCamera={() => void voice.toggleCamera()}
                 // The same handler the conversation call and the Settings
