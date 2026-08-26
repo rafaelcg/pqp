@@ -118,6 +118,15 @@ ten seconds with the host firewall off and the server bound to `*:3001`. The
 tunnel works identically on an emulator and on a phone plugged in over USB, so
 it is one instruction instead of two.
 
+The cause turned up later, and it is not the emulator. API 36 added local
+network protection: an app needs the `ACCESS_LOCAL_NETWORK` app op before it may
+open a socket to an RFC 1918 address, and `10.0.2.2` is one. The same `nc` call
+succeeds from `adb shell` and times out under `run-as gg.pqp.app.debug`, which
+is the tell; `appops get gg.pqp.app.debug ACCESS_LOCAL_NETWORK` reads `ignore`
+on a fresh install and the uid-level mode overrides anything set per package.
+Loopback is exempt, so the reverse tunnel sidesteps the whole thing rather than
+working around it.
+
 The server itself, with the dev bypass on:
 
 ```bash
