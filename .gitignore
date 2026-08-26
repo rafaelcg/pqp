@@ -70,3 +70,17 @@ __pycache__/
 
 # pnpm store cache — never commit
 .pnpm-store/
+
+# Firebase. Neither of these belongs in the repo.
+#
+# `google-services.json` is client config rather than a secret (it ships inside
+# every APK), but it names the project and is per-developer, so it is fetched
+# from the Firebase console rather than committed. `docs/ANDROID.md` says where
+# to put it, and the build gates on its absence.
+#
+# The admin SDK service account IS a secret: it can send push as this project.
+# It must never be in the working tree at all. Keep it outside the repo and
+# load it into the server through Fly secrets.
+google-services.json
+**/google-services.json
+*firebase-adminsdk*.json
