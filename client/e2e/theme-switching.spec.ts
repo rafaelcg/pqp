@@ -308,6 +308,22 @@ test.describe("stage 2 — light and system", () => {
         page.evaluate(() => document.documentElement.dataset.accent ?? ""),
       )
       .toBe("custom");
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          getComputedStyle(document.documentElement)
+            .getPropertyValue("--rgb-picker-accent")
+            .trim(),
+        ),
+      )
+      .not.toBe("");
+    expect(
+      await page.evaluate(() =>
+        getComputedStyle(document.documentElement)
+          .getPropertyValue("--rgb-picker-accent")
+          .trim(),
+      ),
+    ).not.toBe("196, 232, 72");
   });
 
   test("a stored appearance is applied before first paint", async ({ page }) => {

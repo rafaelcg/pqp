@@ -12,6 +12,7 @@ import {
   appearanceForcesDark as isNightLook,
   getAppearance,
   subscribeAppearance,
+  type AppearancePreference,
 } from "@/lib/appearance";
 import { getDesktop } from "@/lib/desktop";
 import { queuePreferenceSync } from "@/lib/preferences";
@@ -84,6 +85,9 @@ export function resolveTheme(preference: ThemePreference): ResolvedTheme {
 }
 
 export function applyTheme(resolved: ResolvedTheme): void {
+  if (typeof document === "undefined") {
+    return;
+  }
   document.documentElement.dataset.theme = resolved;
 }
 
@@ -156,10 +160,31 @@ export function setThemePreference(preference: ThemePreference): void {
  * since yesterday overwrite the choice the user made on another device since.
  * It is still persisted locally, so the boot script paints this theme rather
  * than the old one on the next load.
+ *
+ * Night wins over the stored brightness: a Light row cannot recreate
+ * Night plus Light, which would snap to Light when the look later changes.
  */
+/**
+ * Theme to persist when `/api/me` lands.
+ *
+ * Night is dark-only. A stale account that still has `theme: "light"` and no
+ * appearance must not overwrite a local Night look, or leaving Night later
+ * snaps to Light. Adopt never writes the account back.
+ */
+export function themeToAdopt(
+  serverTheme: ThemePreference | undefined,
+  appearance: AppearancePreference,
+): ThemePreference | undefined {
+  if (isNightLook(appearance)) {
+    return "dark";
+  }
+  return serverTheme;
+}
+
 export function adoptThemePreference(preference: ThemePreference): void {
-  storeTheme(preference);
-  commit(preference);
+  const next = isNightLook(getAppearance()) ? "dark" : preference;
+  storeTheme(next);
+  commit(next);
 }
 
 /** Re-resolve after the OS scheme changed. No-op unless following the system. */

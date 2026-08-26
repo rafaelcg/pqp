@@ -6,6 +6,7 @@
  */
 
 import type { AccentHuePreference, AppearancePreference } from "@pqp/shared";
+import { oklchToRgb, parseOklch } from "@/lib/oklch";
 import { queuePreferenceSync } from "@/lib/preferences";
 
 export type { AccentHuePreference };
@@ -70,6 +71,58 @@ export function effectiveAccentHue(
   return preference === "default" ? APPEARANCE_ACCENT_HUE[appearance] : preference;
 }
 
+/**
+ * emoji-mart wants an sRGB triplet. Chromium echoes `oklch()` from
+ * `getComputedStyle`, so an rgb() regex never matches a custom hue.
+ */
+export function rgbTripletFromCssColor(color: string): string | null {
+  const rgb = color.match(
+    /rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)/,
+  );
+  if (rgb) {
+    return `${Math.round(Number(rgb[1]))}, ${Math.round(Number(rgb[2]))}, ${Math.round(Number(rgb[3]))}`;
+  }
+  const oklch = parseOklch(color);
+  if (oklch) {
+    const { r, g, b } = oklchToRgb(oklch);
+    return `${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)}`;
+  }
+  return rgbTripletFromCanvas(color);
+}
+
+function rgbTripletFromCanvas(color: string): string | null {
+  if (typeof document === "undefined") {
+    return null;
+  }
+  try {
+    const canvas = document.createElement("canvas");
+    if (typeof canvas.getContext !== "function") {
+      return null;
+    }
+    canvas.width = 1;
+    canvas.height = 1;
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    if (!context) {
+      return null;
+    }
+    // Sentinel so an unparsed colour does not become 0, 0, 0.
+    context.fillStyle = "rgb(1, 2, 3)";
+    context.fillStyle = color;
+    const applied = context.fillStyle.replace(/\s/g, "");
+    if (applied === "rgb(1,2,3)" || applied === "#010203") {
+      return null;
+    }
+    context.fillRect(0, 0, 1, 1);
+    const [r, g, b] = context.getImageData(0, 0, 1, 1).data;
+    if (r === undefined || g === undefined || b === undefined) {
+      return null;
+    }
+    return `${r}, ${g}, ${b}`;
+  } catch {
+    return null;
+  }
+}
+
 function syncPickerAccentRgb(): void {
   if (
     typeof document === "undefined" ||
@@ -81,15 +134,10 @@ function syncPickerAccentRgb(): void {
   const probe = document.createElement("div");
   probe.style.color = "var(--color-accent)";
   document.body.appendChild(probe);
-  const match = getComputedStyle(probe).color.match(
-    /(\d+)[,\s]+(\d+)[,\s]+(\d+)/,
-  );
+  const triplet = rgbTripletFromCssColor(getComputedStyle(probe).color);
   probe.remove();
-  if (match) {
-    document.documentElement.style.setProperty(
-      "--rgb-picker-accent",
-      `${match[1]}, ${match[2]}, ${match[3]}`,
-    );
+  if (triplet) {
+    document.documentElement.style.setProperty("--rgb-picker-accent", triplet);
   }
 }
 

@@ -215,6 +215,88 @@ test.describe("stage 3 — preferences follow the user", () => {
         document.documentElement.style.getPropertyValue("--accent-hue"),
       ),
     ).toBe("40");
+    await expect
+      .poll(
+        () =>
+          page.evaluate(() =>
+            getComputedStyle(document.documentElement)
+              .getPropertyValue("--rgb-picker-accent")
+              .trim(),
+          ),
+        { timeout: 10_000 },
+      )
+      .not.toBe("");
+    const picker = await page.evaluate(() =>
+      getComputedStyle(document.documentElement)
+        .getPropertyValue("--rgb-picker-accent")
+        .trim(),
+    );
+    expect(picker).not.toBe("196, 232, 72");
+    await context.close();
+  });
+
+  test("local Night does not adopt a server Light when the account has no appearance", async ({
+    browser,
+  }) => {
+    await ensureServer();
+    await resetPreferences();
+    await writePreferences({ theme: "light" });
+
+    const context = await browser.newContext({ colorScheme: "dark" });
+    const page = await context.newPage();
+    await page.addInitScript(() => {
+      window.localStorage.setItem("pqp-appearance", "night");
+      window.localStorage.setItem("pqp-theme", "dark");
+    });
+    await page.route("**/api/me", async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.continue();
+        return;
+      }
+      const response = await route.fetch();
+      const body = (await response.json()) as {
+        preferences?: Record<string, unknown>;
+      };
+      const preferences = { ...(body.preferences ?? {}) };
+      delete preferences.appearance;
+      preferences.theme = "light";
+      await route.fulfill({
+        response,
+        json: { ...body, preferences },
+      });
+    });
+    await page.goto("/app?lang=en");
+    await expect(page.getByText("Dev auth bypass")).toBeVisible({
+      timeout: 20_000,
+    });
+
+    await expect
+      .poll(
+        () =>
+          page.evaluate(() => document.documentElement.dataset.appearance ?? ""),
+        { timeout: 10_000 },
+      )
+      .toBe("night");
+    expect(await themeAttr(page)).toBe("dark");
+    expect(await page.evaluate(() => localStorage.getItem("pqp-theme"))).toBe(
+      "dark",
+    );
+
+    await page.getByRole("button", { name: "Open settings" }).click();
+    await page.getByRole("tab", { name: "Appearance & Language" }).click();
+    await page.getByRole("radio", { name: /classic|clássico/i }).click();
+
+    await expect
+      .poll(
+        () =>
+          page.evaluate(() => document.documentElement.dataset.appearance ?? ""),
+        { timeout: 10_000 },
+      )
+      .toBe("signal");
+    expect(await themeAttr(page)).toBe("dark");
+    expect(await page.evaluate(() => localStorage.getItem("pqp-theme"))).toBe(
+      "dark",
+    );
     await context.close();
   });
 

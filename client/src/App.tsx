@@ -200,9 +200,9 @@ import { useChannelNotifications } from "@/hooks/use-notifications";
 import { useUserStatus } from "@/hooks/use-status";
 import { createRealtimeTransport, type RealtimeStatus } from "@/lib/realtime";
 import { adoptAccentHuePreference } from "@/lib/accent";
-import { adoptAppearancePreference } from "@/lib/appearance";
+import { adoptAppearancePreference, getAppearance } from "@/lib/appearance";
 import { adoptContrastPreference } from "@/lib/contrast";
-import { adoptThemePreference } from "@/lib/theme";
+import { adoptThemePreference, themeToAdopt } from "@/lib/theme";
 import { isMeshForced } from "@/lib/voice-backend";
 import type { VideoQuality } from "@/lib/video-quality";
 import { cn } from "@/lib/utils";
@@ -1381,10 +1381,12 @@ function MainAppContent({
         if (me.preferences?.appearance) {
           adoptAppearancePreference(me.preferences.appearance);
         }
-        if (me.preferences?.appearance === "night") {
-          adoptThemePreference("dark");
-        } else if (me.preferences?.theme) {
-          adoptThemePreference(me.preferences.theme);
+        const nextTheme = themeToAdopt(
+          me.preferences?.theme,
+          getAppearance(),
+        );
+        if (nextTheme) {
+          adoptThemePreference(nextTheme);
         }
         if (me.preferences?.contrast) {
           adoptContrastPreference(me.preferences.contrast);

@@ -5,6 +5,7 @@ vi.mock("./preferences", () => ({
 }));
 
 import { queuePreferenceSync } from "./preferences";
+import { oklchToRgb } from "./oklch";
 import {
   ACCENT_HUE_STORAGE_KEY,
   adoptAccentHuePreference,
@@ -13,6 +14,7 @@ import {
   hydrateAccentHue,
   parseStoredAccentHue,
   readStoredAccentHue,
+  rgbTripletFromCssColor,
   setAccentHuePreference,
 } from "./accent";
 
@@ -23,6 +25,24 @@ describe("parseStoredAccentHue", () => {
     expect(parseStoredAccentHue("361")).toBeNull();
     expect(parseStoredAccentHue("blue")).toBeNull();
     expect(parseStoredAccentHue(null)).toBeNull();
+  });
+});
+
+describe("rgbTripletFromCssColor", () => {
+  it("reads an rgb() computed style", () => {
+    expect(rgbTripletFromCssColor("rgb(10, 20, 30)")).toBe("10, 20, 30");
+    expect(rgbTripletFromCssColor("rgba(10, 20, 30, 0.5)")).toBe("10, 20, 30");
+  });
+
+  it("converts the oklch() form Chromium echoes", () => {
+    const { r, g, b } = oklchToRgb({ l: 0.76, c: 0.14, h: 210 });
+    expect(rgbTripletFromCssColor("oklch(0.76 0.14 210)")).toBe(
+      `${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)}`,
+    );
+  });
+
+  it("returns null for a colour it cannot parse", () => {
+    expect(rgbTripletFromCssColor("rebeccapurple")).toBeNull();
   });
 });
 
@@ -118,5 +138,35 @@ describe("stored accent hue", () => {
     hydrateAccentHue();
 
     expect(setProperty).toHaveBeenCalledWith("--rgb-picker-accent", "10, 20, 30");
+  });
+
+  it("probes an oklch() computed style the way Chromium returns one", () => {
+    const setProperty = vi.fn();
+    const dataset: Record<string, string | undefined> = { accent: "custom" };
+    const { r, g, b } = oklchToRgb({ l: 0.76, c: 0.14, h: 210 });
+    vi.stubGlobal("document", {
+      documentElement: {
+        dataset,
+        style: { setProperty, removeProperty: () => {} },
+      },
+      createElement: () => ({ style: {}, remove: () => {} }),
+      body: { appendChild: () => {} },
+    });
+    vi.stubGlobal("getComputedStyle", () => ({
+      color: "oklch(0.76 0.14 210)",
+    }));
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      cb(0);
+      return 0;
+    });
+
+    adoptAccentHuePreference(210);
+    setProperty.mockClear();
+    hydrateAccentHue();
+
+    expect(setProperty).toHaveBeenCalledWith(
+      "--rgb-picker-accent",
+      `${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)}`,
+    );
   });
 });
