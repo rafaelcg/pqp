@@ -4,8 +4,9 @@
 > `client/src/components/layout/settings-modal.tsx`, `client/src/main.tsx` and
 > `server/src/schema.sql` as they actually are, not as the docs describe them.
 
-Recommended cut line: **stages 1–3, about 1.5–2 weeks.** Stages 4–6 are upside. Stage 7 is a
-trap and should stay off the roadmap permanently.
+Stages 1–5 shipped (role tokens, light/dark/system, synced preferences, named
+appearance presets including Night, high contrast, accent hue). Stage 6 remains
+upside. Stage 7 stays off the roadmap.
 
 ## Why now
 
@@ -131,16 +132,47 @@ Add `PATCH /api/me/preferences` (upsert, shallow merge, last-write-wins), deboun
 because `patchLocal` fires on every slider tick. Server wins on read, user action wins on
 write — never reconcile-and-write on boot, or a stale tab clobbers the phone.
 
-## Worth pulling forward
+## Stage 3.5 — high contrast
 
-**High-contrast preset.** Roughly a 22-line block once the token layer exists, mapped to
-`prefers-contrast: more`. It is the one later-stage item with a real accessibility need behind
-it.
+A third axis, not a fourth appearance. Preference is `default | more | system`.
+Resolved is `default | more`. `system` follows `prefers-contrast: more`.
+
+The stylesheet keys off `data-contrast="more"` on `<html>`. The attribute is
+absent at default, so existing skins keep their current specificity. High
+contrast only retints text, muted text, borders and the indicator. It does not
+change layout or accent hue. `--overlay` stays dark in both themes.
+
+Storage is `pqp-contrast` and `user_preferences.settings.contrast`, same
+boot-script rule as theme and appearance.
+
+## Stage 4 — named appearance presets
+
+A second axis, not a second `data-theme` value. Brightness stays
+`light | dark | system`. The skin is `signal | harmony | hearth | night`, stored as
+`pqp-appearance` and `user_preferences.settings.appearance`.
+
+`signal` is the default pqp look (labelled Classic / Clássico in the picker). `harmony` and `hearth` retint role tokens only.
+`night` is a near-black look (true black page and rail, lifted panels). It is
+dark-only: picking it pins brightness to dark, and Light / System stay off
+until another look is chosen. They do not change layout. They do not use another product's
+name or brand hex values. Hearth tints the rail; it does not paint a two-tone
+sidebar, because that needs an `--color-on-sidebar` token the message pane does
+not share.
+
+## Stage 5 — accent hue
+
+A fourth axis. Preference is `default` or an integer 0–360. `default` keeps the
+look's own accent. A number sets `data-accent="custom"` and `--accent-hue`.
+
+The stylesheet retints accent, hover, on-accent, code text, focus, selection
+and glows. Surfaces stay with the named look. Light uses a darker lightness so
+yellows still meet the accent-on-surface floor.
+
+Storage is `pqp-accent-hue` and `user_preferences.settings.accentHue`.
 
 ## Later stages (upside, not scoped here)
 
-- **Accent picker.** Users choose an accent hue; everything else derives. Cheap once roles exist.
-- **User custom themes** as a constrained set of token values — a form, not a stylesheet.
+- **User custom themes** as a constrained set of token values. A form, not a stylesheet.
 - **Per-server branding.** Tempting, but it fights the user's own theme choice and needs a clear
   rule about who wins. Do not start it without that rule.
 
@@ -153,7 +185,7 @@ into "disable your theme and retry".
 
 The safe subset is **CSS custom property values only**, validated against a known token list,
 each parsed as a colour rather than passed through as a string. That is a form with colour
-inputs — which is stage 5, and it is enough.
+inputs. Stage 5 is a hue only. A full token form is stage 6, and it is enough.
 
 ## Effort summary
 
@@ -162,6 +194,8 @@ inputs — which is stage 5, and it is enough.
 | 1 | Role tokens, extract literals, `color-scheme` | 1–2 days | Fixes native-control chrome |
 | 2 | Light + System, Clerk bridge, anti-flash | 3–4 days | The actual feature |
 | 3 | `user_preferences`, settings sync | ~2 days | All settings follow the user |
-| 3.5 | High-contrast preset | ~half a day | Accessibility |
-| 4–6 | Accent picker, custom themes, server branding | — | Upside |
+| 3.5 | High contrast (`default` / `more` / `system`) | ~half a day | Accessibility |
+| 4 | Named presets (`signal` / `harmony` / `hearth` / `night`) | ~1 day | Extra looks without layout clones |
+| 5 | Accent hue picker | ~half a day | Colour without a new skin |
+| 6 | Custom themes, server branding | — | Upside |
 | 7 | Free-form CSS | — | Never |

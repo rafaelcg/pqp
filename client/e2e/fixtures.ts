@@ -97,6 +97,9 @@ export async function ensureServer(): Promise<void> {
  */
 const DEFAULT_PREFERENCES = {
   theme: "system",
+  appearance: "signal",
+  contrast: "system",
+  accentHue: "default",
   muteOnJoin: false,
   compactPeers: false,
   inputVolume: 1,

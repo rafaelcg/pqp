@@ -39,7 +39,10 @@ test.describe("stage 3 — preferences follow the user", () => {
     await openApp(page);
     await page.getByRole("button", { name: "Open settings" }).click();
     await page.getByRole("tab", { name: "Appearance & Language" }).click();
-    await page.getByRole("radio", { name: /light/i }).click();
+    await page
+      .getByRole("radiogroup", { name: /brightness|claridade/i })
+      .getByRole("radio", { name: /light|claro/i })
+      .click();
 
     // The write is debounced, so poll rather than assuming it has landed.
     await expect
@@ -112,6 +115,255 @@ test.describe("stage 3 — preferences follow the user", () => {
     const stored = await readPreferences();
     expect(stored.inputDeviceId).toBeUndefined();
     expect(stored.outputDeviceId).toBeUndefined();
+  });
+
+  test("an appearance chosen in the UI reaches the server", async ({ page }) => {
+    await openApp(page);
+    await page.getByRole("button", { name: "Open settings" }).click();
+    await page.getByRole("tab", { name: "Appearance & Language" }).click();
+    await page.getByRole("radio", { name: /hearth/i }).click();
+
+    await expect
+      .poll(async () => (await readPreferences()).appearance, { timeout: 10_000 })
+      .toBe("hearth");
+  });
+
+  test("an appearance stored server-side applies on a fresh device", async ({
+    browser,
+  }) => {
+    await ensureServer();
+    await resetPreferences();
+    await writePreferences({ appearance: "harmony" });
+
+    const context = await browser.newContext({ colorScheme: "dark" });
+    const page = await context.newPage();
+    await page.goto("/app");
+    await expect(page.getByText("Dev auth bypass")).toBeVisible({ timeout: 20_000 });
+
+    await expect
+      .poll(
+        () =>
+          page.evaluate(() => document.documentElement.dataset.appearance ?? ""),
+        { timeout: 10_000 },
+      )
+      .toBe("harmony");
+    await context.close();
+  });
+
+  test("an invalid appearance is rejected rather than stored", async ({
+    page,
+  }) => {
+    await openApp(page);
+    await writePreferences({ appearance: "signal" });
+
+    const response = await fetch(`${API}/api/me/preferences`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ appearance: "discord" }),
+    });
+    expect(response.status).toBe(400);
+    expect((await readPreferences()).appearance).toBe("signal");
+  });
+
+  test("a night appearance chosen in the UI reaches the server", async ({
+    page,
+  }) => {
+    await openApp(page);
+    await page.getByRole("button", { name: "Open settings" }).click();
+    await page.getByRole("tab", { name: "Appearance & Language" }).click();
+    await page.getByRole("radio", { name: /night|noite/i }).click();
+
+    await expect
+      .poll(async () => (await readPreferences()).appearance, { timeout: 10_000 })
+      .toBe("night");
+    await expect
+      .poll(async () => (await readPreferences()).theme, { timeout: 10_000 })
+      .toBe("dark");
+  });
+
+  test("an accent hue chosen in the UI reaches the server", async ({ page }) => {
+    await openApp(page);
+    await page.getByRole("button", { name: "Open settings" }).click();
+    await page.getByRole("tab", { name: "Appearance & Language" }).click();
+    await page.getByRole("button", { name: /hue 210|matiz 210/i }).click();
+
+    await expect
+      .poll(async () => (await readPreferences()).accentHue, { timeout: 10_000 })
+      .toBe(210);
+  });
+
+  test("an accent hue stored server-side applies on a fresh device", async ({
+    browser,
+  }) => {
+    await ensureServer();
+    await resetPreferences();
+    await writePreferences({ accentHue: 40 });
+
+    const context = await browser.newContext({ colorScheme: "dark" });
+    const page = await context.newPage();
+    await page.goto("/app");
+    await expect(page.getByText("Dev auth bypass")).toBeVisible({ timeout: 20_000 });
+
+    await expect
+      .poll(
+        () => page.evaluate(() => document.documentElement.dataset.accent ?? ""),
+        { timeout: 10_000 },
+      )
+      .toBe("custom");
+    expect(
+      await page.evaluate(() =>
+        document.documentElement.style.getPropertyValue("--accent-hue"),
+      ),
+    ).toBe("40");
+    await expect
+      .poll(
+        () =>
+          page.evaluate(() =>
+            getComputedStyle(document.documentElement)
+              .getPropertyValue("--rgb-picker-accent")
+              .trim(),
+          ),
+        { timeout: 10_000 },
+      )
+      .not.toBe("");
+    const picker = await page.evaluate(() =>
+      getComputedStyle(document.documentElement)
+        .getPropertyValue("--rgb-picker-accent")
+        .trim(),
+    );
+    expect(picker).not.toBe("196, 232, 72");
+    await context.close();
+  });
+
+  test("local Night does not adopt a server Light when the account has no appearance", async ({
+    browser,
+  }) => {
+    await ensureServer();
+    await resetPreferences();
+    await writePreferences({ theme: "light" });
+
+    const context = await browser.newContext({ colorScheme: "dark" });
+    const page = await context.newPage();
+    await page.addInitScript(() => {
+      window.localStorage.setItem("pqp-appearance", "night");
+      window.localStorage.setItem("pqp-theme", "dark");
+    });
+    await page.route("**/api/me", async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.continue();
+        return;
+      }
+      const response = await route.fetch();
+      const body = (await response.json()) as {
+        preferences?: Record<string, unknown>;
+      };
+      const preferences = { ...(body.preferences ?? {}) };
+      delete preferences.appearance;
+      preferences.theme = "light";
+      await route.fulfill({
+        response,
+        json: { ...body, preferences },
+      });
+    });
+    await page.goto("/app?lang=en");
+    await expect(page.getByText("Dev auth bypass")).toBeVisible({
+      timeout: 20_000,
+    });
+
+    await expect
+      .poll(
+        () =>
+          page.evaluate(() => document.documentElement.dataset.appearance ?? ""),
+        { timeout: 10_000 },
+      )
+      .toBe("night");
+    expect(await themeAttr(page)).toBe("dark");
+    expect(await page.evaluate(() => localStorage.getItem("pqp-theme"))).toBe(
+      "dark",
+    );
+
+    await page.getByRole("button", { name: "Open settings" }).click();
+    await page.getByRole("tab", { name: "Appearance & Language" }).click();
+    await page.getByRole("radio", { name: /classic|clássico/i }).click();
+
+    await expect
+      .poll(
+        () =>
+          page.evaluate(() => document.documentElement.dataset.appearance ?? ""),
+        { timeout: 10_000 },
+      )
+      .toBe("signal");
+    expect(await themeAttr(page)).toBe("dark");
+    expect(await page.evaluate(() => localStorage.getItem("pqp-theme"))).toBe(
+      "dark",
+    );
+    await context.close();
+  });
+
+  test("an invalid accent hue is rejected rather than stored", async ({
+    page,
+  }) => {
+    await openApp(page);
+    await writePreferences({ accentHue: "default" });
+
+    const response = await fetch(`${API}/api/me/preferences`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ accentHue: 999 }),
+    });
+    expect(response.status).toBe(400);
+    expect((await readPreferences()).accentHue).toBe("default");
+  });
+
+  test("a contrast chosen in the UI reaches the server", async ({ page }) => {
+    await openApp(page);
+    await page.getByRole("button", { name: "Open settings" }).click();
+    await page.getByRole("tab", { name: "Appearance & Language" }).click();
+    await page
+      .getByRole("radiogroup", { name: /contrast|contraste/i })
+      .getByRole("radio", { name: /high|alto/i })
+      .click();
+
+    await expect
+      .poll(async () => (await readPreferences()).contrast, { timeout: 10_000 })
+      .toBe("more");
+  });
+
+  test("a contrast stored server-side applies on a fresh device", async ({
+    browser,
+  }) => {
+    await ensureServer();
+    await resetPreferences();
+    await writePreferences({ contrast: "more" });
+
+    const context = await browser.newContext({ colorScheme: "dark" });
+    const page = await context.newPage();
+    await page.goto("/app");
+    await expect(page.getByText("Dev auth bypass")).toBeVisible({ timeout: 20_000 });
+
+    await expect
+      .poll(
+        () =>
+          page.evaluate(() => document.documentElement.dataset.contrast ?? ""),
+        { timeout: 10_000 },
+      )
+      .toBe("more");
+    await context.close();
+  });
+
+  test("an invalid contrast is rejected rather than stored", async ({
+    page,
+  }) => {
+    await openApp(page);
+    await writePreferences({ contrast: "default" });
+
+    const response = await fetch(`${API}/api/me/preferences`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ contrast: "loud" }),
+    });
+    expect(response.status).toBe(400);
+    expect((await readPreferences()).contrast).toBe("default");
   });
 
   test("an invalid preference is rejected rather than stored", async ({ page }) => {

@@ -69,7 +69,9 @@
 
 Feature gaps versus Discord are ranked with implementation sketches in
 [`DISCORD_GAPS.md`](./DISCORD_GAPS.md); the theming entry is scoped separately in
-[`THEMING.md`](./THEMING.md), and choices that shape work not yet built are recorded in
+[`THEMING.md`](./THEMING.md) (stages 1–5 shipped: role tokens, light/dark/system,
+synced preferences, Classic / Harmony / Hearth / Night, high contrast, and accent
+hue), and choices that shape work not yet built are recorded in
 [`DECISIONS.md`](./DECISIONS.md). Gaps marked ✅ in the ranked list have shipped: the three
 shipped-but-broken items (permalink route, per-channel drafts, `@mention` autocomplete), plus
 replies, theming, message search, desktop notifications, per-server/channel notification

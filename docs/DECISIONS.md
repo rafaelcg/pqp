@@ -117,3 +117,64 @@ review-gated. A Connect button that 503s forever is worse than not offering it.
 - The in-app card uses the same audience as depoimentos (friends or a shared server).
 - Reconnect of the same provider account keeps visibility; a different account resets it.
 - See [`CONNECTIONS.md`](./CONNECTIONS.md).
+
+## Appearances: second axis, named presets (2026-08-25)
+
+User-facing looks are named token skins (`signal`, `harmony`, `hearth`,
+`night`), not a second brightness value and not a layout clone.
+
+**Why a second axis.** `data-theme` already means resolved brightness
+(`light` | `dark`). Stuffing skins into it would break System, the marketing
+dark pin, Clerk, emoji-mart, and the Electron window background.
+
+**Why these names.** The default look's id stays `signal` (the old
+`--color-signal` token). The picker label is Classic / Clássico, because
+"Signal" / "Sinal" is an internal token name and does not describe the look.
+Harmony / Harmonia is the pun on the other big community chat app, without
+using that app's name. Acordo was rejected: in Portuguese it also reads as
+"I wake up". Hearth is the warm workspace look. Night / Noite is the
+near-black skin. Not Onyx: that name belongs to another product. Night is
+dark-only. Light Night is a contradiction, so the look pins brightness to dark.
+
+**Why not a two-tone Hearth sidebar.** Channel-list text uses `--color-text`,
+which the message pane also uses. Painting the channel column a saturated wine
+needs an `--color-on-sidebar` token and class changes. That is a later cut.
+v1 only tints `--color-rail`.
+
+**Implications.**
+- Storage key `pqp-appearance`, same boot-script rule as `pqp-theme`.
+- Validated on `userPreferencesSchema`. Invalid values (including brand names)
+  are rejected, not stored.
+- Marketing routes still force dark. They do not pin Signal.
+- Free-form user CSS stays rejected. See [`THEMING.md`](./THEMING.md).
+
+## Contrast: third axis, not a fourth skin (2026-08-25)
+
+High contrast stacks on Signal / Harmony / Hearth / Night and on light / dark.
+It is an accessibility preference, not another named look.
+
+**Why not a Teams clone.** Teams High Contrast is the useful idea. Teams
+purple as a fourth skin is a worse Harmony.
+
+**Why `system` is the default.** The OS already has `prefers-contrast: more`.
+Starting at `default` would ignore a setting the user already made.
+
+**Implications.**
+- Storage key `pqp-contrast`. Attribute `data-contrast="more"` only when
+  resolved contrast is high. Delete the attribute at default.
+- Validated on `userPreferencesSchema`. Values are `default`, `more`, `system`.
+- Token overrides stay unlayered and cover text, muted text, borders and the
+  indicator. Do not override `--overlay`.
+
+## Accent hue: fourth axis, not a fifth skin (2026-08-25)
+
+Users pick a hue. Surfaces stay with the named look. This is Linear's lesson
+(derive from a hue) without cloning Linear's chrome.
+
+**Why not free-form CSS.** A hue is a number. A stylesheet is untrusted input.
+See [`THEMING.md`](./THEMING.md).
+
+**Implications.**
+- Storage key `pqp-accent-hue`. Values are `default` or an integer 0–360.
+- Attribute `data-accent="custom"` plus `--accent-hue` only when a hue is set.
+- Slider writes are debounced. Reset to the look syncs immediately.

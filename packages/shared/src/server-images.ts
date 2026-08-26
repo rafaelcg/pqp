@@ -41,7 +41,7 @@ export const MAX_SERVER_ICON_BYTES = 5 * 1024 * 1024;
  *
  * A banner is roughly three times the pixels of an icon and is the one image in
  * the app a person will deliberately pick a photograph for. The cap is not a
- * storage budget — the client re-encodes to a 1024×360 JPEG that lands in the
+ * storage budget — the client re-encodes to a 1024×480 JPEG that lands in the
  * low hundreds of kilobytes — it is the ceiling on what a client that ignores
  * the convention can push through a signed URL.
  */
@@ -53,16 +53,19 @@ export const SERVER_ICON_SIZE = 512;
 /**
  * The rectangle a banner is cropped and scaled to.
  *
+ * This is the channel-column band, not a second shape. The column is 256px
+ * wide and 120px tall (16rem × 7.5rem). 1024×480 is that ratio at 4×, so the
+ * file and the box match: a center crop on upload is the last crop. Display
+ * uses the same ratio via `aspect-ratio`, so a narrower drawer does not invent
+ * a second crop.
+ *
  * Enforced by neither side, exactly as `AVATAR_IMAGE_SIZE` is not: the server
  * would have to decode an attacker-controlled image to check, which is the
- * thing the presigned-upload design exists to avoid. So this is a convention
- * both clients honour and the byte cap above is what actually bounds ignoring
- * it. 1024×360 is a hair under 2.85:1 — wide enough to read as a banner at the
- * 256px-wide channel column, tall enough that a 120px-tall strip is a downscale
- * rather than an upscale on a retina screen.
+ * thing the presigned-upload design exists to avoid. The byte cap above is
+ * what actually bounds ignoring it.
  */
 export const SERVER_BANNER_WIDTH = 1024;
-export const SERVER_BANNER_HEIGHT = 360;
+export const SERVER_BANNER_HEIGHT = 480;
 
 /** Bytes allowed for one kind. The two callers that need it both have a kind. */
 export function maxServerImageBytes(kind: ServerImageKind): number {

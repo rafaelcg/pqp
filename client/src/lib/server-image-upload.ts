@@ -48,7 +48,7 @@ export async function uploadServerImage(
     throw new Error("That file is not an image this browser can read.");
   }
 
-  // Should be unreachable — a 1024×360 JPEG is a couple of hundred kilobytes —
+  // Should be unreachable — a 1024×480 JPEG is a couple of hundred kilobytes —
   // but the mint would answer 413 and this says why in words to act on.
   if (cropped.size > maxServerImageBytes(kind)) {
     throw new Error("That image is too large, even after resizing.");
