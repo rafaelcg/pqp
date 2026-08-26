@@ -39,6 +39,17 @@ const {
   updateChannel,
 } = await import("./servers.js");
 const { banMember, kickMember } = await import("./moderation.js");
+const {
+  assignRole,
+  createRole,
+  deleteChannelOverwrite,
+  listRoles,
+  reorderRoles,
+  unassignRole,
+  updateRole,
+  upsertChannelOverwrite,
+} = await import("./roles.js");
+const { parsePermissions, Permission } = await import("@pqp/shared");
 const { hideConversation, openConversation } = await import("./dms.js");
 const { blockUser, listBlockersOf } = await import("./blocks.js");
 
@@ -230,6 +241,186 @@ describeDb("channel audience cache", () => {
     await addChannelMember(privateChannelId, outsider.id);
 
     expect(await audience(privateChannelId)).toContain(outsider.id);
+  });
+
+  // -------------------------------------------------------------- roles
+
+  /**
+   * The invalidation edges the roles feature added, which are the youngest and
+   * least-proven ones here.
+   *
+   * Before roles, an audience changed only when a *membership row* changed, and
+   * every test above is of that shape. `channel_viewable` now also reads
+   * `roles.permissions`, `member_roles` and `channel_overwrites`, so three more
+   * tables can silently narrow access with no membership row touched at all.
+   * These pin that each of them still invalidates.
+   */
+
+  /** The @everyone role, which every server bootstraps and nothing deletes. */
+  async function everyoneRole() {
+    return (await listRoles(serverId)).find((role) => role.is_everyone)!;
+  }
+
+  it("drops a member denied VIEW by a member overwrite immediately", async () => {
+    expect(await audience(publicChannelId)).toContain(member.id);
+
+    await upsertChannelOverwrite(
+      publicChannelId,
+      serverId,
+      "member",
+      member.id,
+      0n,
+      Permission.VIEW_CHANNEL,
+    );
+
+    expect(await audience(publicChannelId)).not.toContain(member.id);
+    expect(await audience(publicChannelId)).toEqual(
+      await byPredicate(publicChannelId),
+    );
+  });
+
+  it("readmits them when the overwrite is deleted", async () => {
+    // The widening direction of the same edge. `deleteChannelOverwrite` is a
+    // separate function from the upsert and invalidates on its own account.
+    await upsertChannelOverwrite(
+      publicChannelId,
+      serverId,
+      "member",
+      member.id,
+      0n,
+      Permission.VIEW_CHANNEL,
+    );
+    expect(await audience(publicChannelId)).not.toContain(member.id);
+
+    await deleteChannelOverwrite(publicChannelId, serverId, "member", member.id);
+
+    expect(await audience(publicChannelId)).toContain(member.id);
+  });
+
+  it("drops a member the moment they are given a role that denies VIEW", async () => {
+    // Two writes, two tables, and only the second one touches the member:
+    // the overwrite names a role nobody holds yet, so the audience cannot
+    // change until `assignRole` writes the `member_roles` row.
+    const role = await createRole(serverId, { name: "Silenced", permissions: 0n });
+    await upsertChannelOverwrite(
+      publicChannelId,
+      serverId,
+      "role",
+      role.id,
+      0n,
+      Permission.VIEW_CHANNEL,
+    );
+    expect(await audience(publicChannelId)).toContain(member.id);
+
+    await assignRole(serverId, member.id, role.id);
+
+    expect(await audience(publicChannelId)).not.toContain(member.id);
+    expect(await audience(publicChannelId)).toEqual(
+      await byPredicate(publicChannelId),
+    );
+  });
+
+  it("readmits them the moment that role is taken away", async () => {
+    const role = await createRole(serverId, { name: "Silenced", permissions: 0n });
+    await upsertChannelOverwrite(
+      publicChannelId,
+      serverId,
+      "role",
+      role.id,
+      0n,
+      Permission.VIEW_CHANNEL,
+    );
+    await assignRole(serverId, member.id, role.id);
+    expect(await audience(publicChannelId)).not.toContain(member.id);
+
+    await unassignRole(serverId, member.id, role.id);
+
+    expect(await audience(publicChannelId)).toContain(member.id);
+  });
+
+  it("drops everyone when @everyone loses VIEW on the server", async () => {
+    // The widest narrowing there is, and it touches no channel row and no
+    // membership row: editing one role's bits. Owner stays, because
+    // `channel_viewable` returns early for them.
+    expect(await audience(publicChannelId)).toContain(member.id);
+    const everyone = await everyoneRole();
+
+    await updateRole(everyone, {
+      permissions: parsePermissions(everyone.permissions) & ~Permission.VIEW_CHANNEL,
+    });
+
+    expect(await audience(publicChannelId)).not.toContain(member.id);
+    expect(await audience(publicChannelId)).toEqual(
+      await byPredicate(publicChannelId),
+    );
+  });
+
+  it("admits a member as soon as a role grants them Administrator", async () => {
+    // Administrator is a short-circuit inside `channel_viewable`, so this is
+    // the one grant that opens a private channel without an overwrite or a
+    // list row anywhere.
+    expect(await audience(privateChannelId)).not.toContain(outsider.id);
+    await getPool().query(
+      `INSERT INTO server_members (server_id, user_id, role) VALUES ($1, $2, 'member')`,
+      [serverId, outsider.id],
+    );
+    const role = await createRole(serverId, {
+      name: "Staff",
+      permissions: Permission.ADMINISTRATOR,
+    });
+
+    await assignRole(serverId, outsider.id, role.id);
+
+    expect(await audience(privateChannelId)).toContain(outsider.id);
+  });
+
+  it("does not invalidate on a reorder, because rank cannot change who sees what", async () => {
+    // A deliberate NON-invalidation, pinned so it stays deliberate.
+    //
+    // `reorderRoles` bumps `permissions_version` and every other write that
+    // does so also invalidates, which makes its absence here look like an
+    // oversight. It is not: `channel_viewable` aggregates role overwrites with
+    // `bit_or` and never reads `roles.position`, so the resolved VIEW bit is
+    // order-independent by construction. If that ever stops being true — a
+    // highest-role-wins rule, say — this test fails and the invalidation has
+    // to be added with it.
+    const low = await createRole(serverId, { name: "Low", permissions: 0n });
+    const high = await createRole(serverId, { name: "High", permissions: 0n });
+    await upsertChannelOverwrite(
+      publicChannelId,
+      serverId,
+      "role",
+      low.id,
+      Permission.VIEW_CHANNEL,
+      0n,
+    );
+    await upsertChannelOverwrite(
+      publicChannelId,
+      serverId,
+      "role",
+      high.id,
+      0n,
+      Permission.VIEW_CHANNEL,
+    );
+    await assignRole(serverId, member.id, low.id);
+    await assignRole(serverId, member.id, high.id);
+    const before = await audience(publicChannelId);
+
+    // Every movable role, not just the two made here: `createServer`
+    // bootstraps system roles too, and a reorder must name all of them.
+    const movable = (await listRoles(serverId))
+      .filter((role) => !role.is_everyone)
+      .map((role) => role.id);
+    await reorderRoles(serverId, [...movable].reverse(), {
+      isOwner: true,
+      hasAdministrator: true,
+      position: 0,
+    });
+
+    expect(await audience(publicChannelId)).toEqual(before);
+    expect(await audience(publicChannelId)).toEqual(
+      await byPredicate(publicChannelId),
+    );
   });
 
   // ------------------------------------------------------------- blocks
