@@ -180,6 +180,31 @@ async function fetchMeteredIceServers(): Promise<IceServerConfig[] | null> {
  * Brazilian user base. Nobody has measured this yet. See TURN_PREFER_STATIC
  * below for how to undo it in one command if the hypothesis is wrong.
  *
+ * WHAT THIS COSTS, so nobody has to guess later.
+ *
+ * Cloudflare meters **only what the edge sends to the TURN client**, which is
+ * what a relayed participant receives, including TURN overhead. $0.05 per GB,
+ * after a free tier of 1,000 GB per month. `stun.cloudflare.com` is free and
+ * unlimited, and TURN-to-Cloudflare-SFU traffic is not charged at all, which
+ * matters only if their SFU is ever evaluated against LiveKit.
+ *
+ * Against this codebase's own constants, per relayed participant-hour:
+ *
+ *   voice only, 4-person room   ~3 Opus streams, ~100 kbps   ~0.045 GB
+ *   watching a screen share     SCREEN_UPLOAD_BUDGET_BPS is
+ *                               5 Mbps split by peer count,
+ *                               so roughly 2 Mbps             ~0.9 GB
+ *
+ * **Screen share costs about twenty times what voice does**, so voice will
+ * never be the relay bill and screen share might. The free tier is therefore
+ * roughly 1,100 hours of relayed screen-share viewing per month.
+ *
+ * The practical conclusion, as of 2026-08-26: this is free at current scale
+ * and stays cheap through several doublings, so there is no cost argument for
+ * paying a static TURN vendor, and no cost argument for an SFU either. The
+ * reasons to want an SFU are the mesh peer ceiling and the fact that every
+ * participant uploads their stream N-1 times; relay spend is not one of them.
+ *
  * A self-host with only TURN_* set is unaffected: the dynamic lookups return
  * null without a network call when their keys are absent.
  */
