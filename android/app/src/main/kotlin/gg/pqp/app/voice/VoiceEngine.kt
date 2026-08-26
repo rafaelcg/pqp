@@ -114,6 +114,18 @@ class VoiceEngine(
 
     private val peers = ConcurrentHashMap<String, Peer>()
 
+    /**
+     * Which of each peer's incoming videos is their screen.
+     *
+     * Keyed by peer, because a room can hold more than one presenter and a
+     * single handle would let the second share overwrite the first. Guarded by
+     * [videoLock] rather than made concurrent: every mutation is a read, a
+     * re-classification and a write that have to happen together, and the
+     * callers are libwebrtc's signalling thread and the controller's coroutines.
+     */
+    private val remoteVideo = RemoteVideoIndex<VideoTrack>()
+    private val videoLock = Any()
+
     @Volatile private var localPeerId: String? = null
     @Volatile private var iceServers: List<PeerConnection.IceServer> = emptyList()
     @Volatile private var deafened: Boolean = false
@@ -199,9 +211,6 @@ class VoiceEngine(
          * the presenter's voice playing. Neither half logs anything.
          */
         val remoteAudio = ConcurrentHashMap<String, AudioTrack>()
-
-        /** This peer's incoming screen share, when they have one. */
-        @Volatile var remoteScreen: VideoTrack? = null
 
         /** Our screen video on this connection, so it can be removed again. */
         @Volatile var screenSender: RtpSender? = null
@@ -298,7 +307,9 @@ class VoiceEngine(
 
     fun removePeer(remotePeerId: String) {
         val peer = peers.remove(remotePeerId) ?: return
-        if (peer.remoteScreen != null) onRemoteScreen(remotePeerId, null)
+        if (synchronized(videoLock) { remoteVideo.forget(remotePeerId) }) {
+            onRemoteScreen(remotePeerId, null)
+        }
         runCatching { peer.connection.dispose() }
         retuneScreenSenders()
     }
@@ -548,11 +559,9 @@ class VoiceEngine(
         statsJob?.cancel()
         statsJob = null
         releaseScreenCapture()
-        peers.forEach { (peerId, peer) ->
-            if (peer.remoteScreen != null) onRemoteScreen(peerId, null)
-            runCatching { peer.connection.dispose() }
-        }
+        peers.forEach { (_, peer) -> runCatching { peer.connection.dispose() } }
         peers.clear()
+        synchronized(videoLock) { remoteVideo.clear() }.forEach { onRemoteScreen(it, null) }
         localPeerId = null
     }
 
@@ -573,7 +582,35 @@ class VoiceEngine(
     fun statsFor(remotePeerId: String): PeerMediaStats? = peers[remotePeerId]?.stats
 
     /** This peer's incoming screen video, for a renderer to attach to. */
-    fun remoteScreenFor(remotePeerId: String): VideoTrack? = peers[remotePeerId]?.remoteScreen
+    fun remoteScreenFor(remotePeerId: String): VideoTrack? =
+        synchronized(videoLock) { remoteVideo.screenFor(remotePeerId) }
+
+    /**
+     * The roster named a peer's camera capture, or said their camera is off.
+     *
+     * Fed from every roster frame rather than only from a change, because the
+     * roster and the track race in both directions: a camera can be announced
+     * before its track arrives or after. The index absorbs a repeat for free.
+     */
+    fun setPeerCameraStreamId(remotePeerId: String, streamId: String?) {
+        val changed = synchronized(videoLock) {
+            remoteVideo.setCameraStreamId(remotePeerId, streamId)
+        }
+        if (changed) onRemoteScreen(remotePeerId, remoteScreenFor(remotePeerId))
+    }
+
+    /**
+     * The roster says a peer is or is not presenting.
+     *
+     * The only end-of-share signal that can be trusted for a *re*-share: see
+     * [RemoteVideoIndex.setSharingScreen].
+     */
+    fun setPeerSharingScreen(remotePeerId: String, sharing: Boolean) {
+        val changed = synchronized(videoLock) {
+            remoteVideo.setSharingScreen(remotePeerId, sharing)
+        }
+        if (changed) onRemoteScreen(remotePeerId, remoteScreenFor(remotePeerId))
+    }
 
     // --- is anybody actually hearing anybody ---
 
@@ -793,12 +830,19 @@ class VoiceEngine(
                 }
 
                 is VideoTrack -> {
-                    // Every video this client receives is a screen share: the
-                    // roster's `cameraStreamId` is what marks a camera, and this
-                    // app never renders one. Kept and announced so a viewer can
-                    // attach a renderer.
-                    peers[remotePeerId]?.remoteScreen = track
-                    onRemoteScreen(remotePeerId, track)
+                    // Not automatically a screen share. A web peer with their
+                    // camera on and their screen shared sends both down this
+                    // one connection, and the stream id is the only thing that
+                    // tells them apart. The roster announced which id is the
+                    // camera; the index does the elimination, exactly as
+                    // `classifyVideo` does on the web.
+                    val streamId = streams.firstOrNull()?.id ?: return
+                    val changed = synchronized(videoLock) {
+                        remoteVideo.trackAdded(remotePeerId, streamId, track.id(), track)
+                    }
+                    if (changed) {
+                        onRemoteScreen(remotePeerId, remoteScreenFor(remotePeerId))
+                    }
                 }
 
                 else -> Unit
@@ -807,12 +851,15 @@ class VoiceEngine(
 
         override fun onRemoveTrack(receiver: RtpReceiver) {
             val track = receiver.track() ?: return
-            val peer = peers[remotePeerId] ?: return
             if (track.kind() == MediaStreamTrack.VIDEO_TRACK_KIND) {
-                peer.remoteScreen = null
-                onRemoteScreen(remotePeerId, null)
+                val changed = synchronized(videoLock) {
+                    remoteVideo.trackRemoved(remotePeerId, track.id())
+                }
+                if (changed) {
+                    onRemoteScreen(remotePeerId, remoteScreenFor(remotePeerId))
+                }
             } else {
-                peer.remoteAudio.remove(track.id())
+                peers[remotePeerId]?.remoteAudio?.remove(track.id())
             }
         }
 
