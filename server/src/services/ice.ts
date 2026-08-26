@@ -74,16 +74,35 @@ async function fetchCloudflareIceServers(): Promise<IceServerConfig[] | null> {
   }
 
   const data = (await response.json()) as {
-    iceServers?: IceServerConfig[];
+    iceServers?: IceServerConfig | IceServerConfig[];
   };
 
-  if (!data.iceServers || data.iceServers.length === 0) {
+  /**
+   * Cloudflare answers with a single `iceServers` OBJECT, not an array.
+   *
+   * This used to be typed and handled as an array only, so `.length` on the
+   * object was `undefined`, the guard below treated it as empty, and the
+   * function returned null every time. The effect was silent and total: with
+   * static TURN also configured the caller just used that instead, so a
+   * permanently broken integration looked exactly like a working one with a
+   * different provider.
+   *
+   * Both shapes are accepted now. Their docs describe the object; an array is
+   * the shape this code already assumed and costs one line to keep. Normalise
+   * rather than pick, because being wrong about which one arrives is precisely
+   * the failure being fixed, and it is not worth a second silent outage to
+   * save a line.
+   */
+  const raw = data.iceServers;
+  const list: IceServerConfig[] = Array.isArray(raw) ? raw : raw ? [raw] : [];
+
+  if (list.length === 0) {
     console.error("[ice] Cloudflare TURN returned empty iceServers");
     return null;
   }
 
   // Port 53 is blocked in browsers; drop it to avoid long ICE timeouts.
-  return data.iceServers.map((server) => {
+  return list.map((server) => {
     const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
     const filtered = urls.filter((url) => !url.includes(":53"));
     return {
@@ -129,14 +148,53 @@ async function fetchMeteredIceServers(): Promise<IceServerConfig[] | null> {
  * Build ICE server list for WebRTC.
  *
  * Priority:
- * 1. Static TURN_* (or VITE_TURN_*) on the API
- * 2. Cloudflare Realtime TURN (CLOUDFLARE_TURN_KEY_ID + CLOUDFLARE_TURN_API_TOKEN)
- * 3. Metered / Open Relay REST (METERED_API_KEY + optional METERED_DOMAIN)
+ * 1. Cloudflare Realtime TURN (CLOUDFLARE_TURN_KEY_ID + CLOUDFLARE_TURN_API_TOKEN)
+ * 2. Metered / Open Relay REST (METERED_API_KEY + optional METERED_DOMAIN)
+ * 3. Static TURN_* (or VITE_TURN_*) on the API
  * 4. Public STUN only (cross-NAT mesh will fail without TURN)
+ *
+ * WHY STATIC TURN MOVED FROM FIRST TO LAST.
+ *
+ * It used to return early, before the dynamic providers were consulted at all.
+ * With both configured, as production is today, that had two consequences:
+ *
+ *  - **The dynamic provider was dead code in production.** Credentials were
+ *    deployed, cost something to hold, and were never once handed to a client.
+ *  - **There was no failover.** A static relay that is throttled, saturated or
+ *    simply down took cross-network voice down with it, because the code
+ *    returned its address without ever asking whether anything else was
+ *    available. That is pitfall 1 in CLAUDE.md, and it is the failure this
+ *    project has already had once.
+ *
+ * Reordering makes the list a real chain rather than a first-match: dynamic
+ * first, static as the thing that catches a dynamic outage. Strictly more
+ * resilient than before in every configuration, because the old order could
+ * never fall *forward* and the new one can still fall back.
+ *
+ * The secondary reason is geography, and it is a hypothesis rather than a
+ * measurement, so it is written down as one. A relayed path adds the round
+ * trip to the relay and back, and WebRTC's congestion controller answers a
+ * worse round trip by *lowering the bitrate*, which users see as blurry video
+ * rather than as a network problem. An anycast relay with a São Paulo presence
+ * should therefore beat a fixed endpoint that may sit outside Brazil, for a
+ * Brazilian user base. Nobody has measured this yet. See TURN_PREFER_STATIC
+ * below for how to undo it in one command if the hypothesis is wrong.
+ *
+ * A self-host with only TURN_* set is unaffected: the dynamic lookups return
+ * null without a network call when their keys are absent.
  */
 export async function getIceServers(): Promise<IceServerConfig[]> {
   const staticTurn = getStaticTurnFromEnv();
-  if (staticTurn) {
+
+  /**
+   * The escape hatch, deliberately an env var and not a code change.
+   *
+   * If preferring the dynamic provider turns out to be wrong, this restores
+   * the old behaviour with one `fly secrets set` and a restart, with no
+   * revert, no CI run and no wait. Rolling back a voice regression should not
+   * require a deploy pipeline.
+   */
+  if (staticTurn && process.env.TURN_PREFER_STATIC === "true") {
     return [...STUN_SERVERS, ...staticTurn];
   }
 
@@ -169,8 +227,14 @@ export async function getIceServers(): Promise<IceServerConfig[]> {
     console.error("[ice] Dynamic TURN fetch failed:", error);
   }
 
+  // Not cached: a dynamic provider that is failing right now should be retried
+  // on the next call rather than have its absence pinned for an hour.
+  if (staticTurn) {
+    return [...STUN_SERVERS, ...staticTurn];
+  }
+
   console.warn(
-    "[ice] No TURN configured — cross-network voice will fail. Set CLOUDFLARE_TURN_* , METERED_API_KEY, or TURN_URL/USERNAME/CREDENTIAL on the API.",
+    "[ice] No TURN configured. Cross-network voice will fail. Set CLOUDFLARE_TURN_* , METERED_API_KEY, or TURN_URL/USERNAME/CREDENTIAL on the API.",
   );
   return [...STUN_SERVERS];
 }
