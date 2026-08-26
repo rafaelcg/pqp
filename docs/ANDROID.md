@@ -1055,6 +1055,61 @@ path is server-side and untried from this client), attachments in a DM, and
 anything about how the list behaves at a few hundred conversations. There are
 still no instrumented tests. Blocking is wired but was not exercised end to end.
 
+## Attachments
+
+Sending a file is built and verified end to end. Receiving already worked: the
+transcript has rendered images and file chips since the first PR, because
+`messageSchema` carries them and `mapMessage` mints a presigned GET per row on
+every read.
+
+The client half is the flow in [`ATTACHMENTS.md`](./ATTACHMENTS.md), unchanged:
+`POST /api/channels/:id/attachments` to mint, a `PUT` straight to object storage,
+then `message-create` carrying `attachmentIds`. No protocol was added and nothing
+server-side was touched.
+
+Three things about it are worth knowing before quoting it.
+
+**The attach button is absent, not disabled, when the deployment has no
+storage.** `GET /api/attachments/config` decides, the same switch the web
+composer uses. A self-host with no `S3_*` shows no paperclip at all.
+
+**A message cannot be sent while an upload is running or after one failed.**
+That is not politeness, it is the only thing standing between a user and a
+message that arrives with the picture missing: the server HEADs each object
+before the claim transaction opens and silently drops the rows that are not
+there. A failed chip says "Did not upload", stays put, and retries on tap.
+
+**The upload does not go through `ApiClient`.** The `PUT` is addressed to object
+storage and signed in the query string, so adding our `Authorization: Bearer`
+header makes S3 refuse it as doubly authenticated. It is built against the raw
+OkHttp client, on `Dispatchers.IO`, and both facts are load-bearing.
+
+### Verified by running
+
+Two emulators against a local server with MinIO, plus the web client in the same
+channel:
+
+- An image alone, an image with a caption, and a PNG plus a PDF in one message.
+  Every one of them arrives on the other emulator, and the row in
+  `message_attachments` has `message_id` set (claimed), the right content type,
+  the right byte size, and the width and height read off the file.
+- The **web client** renders the Android upload at its true 900x600, which is
+  the cross-platform half.
+- The failure path, by removing the `adb reverse` for MinIO's port: the chip
+  turns red, the send button greys out, and tapping the chip after restoring the
+  tunnel uploads it and re-enables the send.
+
+**Not verified:** R2 rather than MinIO (the presigned PUT has been proven against
+R2 from the server's own test suite, not from this client), a file large enough
+to make the in-memory read hurt, and the image-scanning path in
+[`CONTENT_SAFETY.md`](./CONTENT_SAFETY.md), which is off on this machine.
+
+Local dev note: debug builds reach the API through `adb reverse tcp:3001`, and
+the presigned upload URL points at `S3_ENDPOINT`, which is `localhost:9000` for
+MinIO. So local attachment testing needs a second tunnel,
+`adb reverse tcp:9000 tcp:9000`. Hosted builds do not, because R2 is a public
+host.
+
 ## Push notifications: the client is built, the server leg is not
 
 The client half is here and works. The server half does not exist, cannot be
@@ -1540,7 +1595,7 @@ in-app account deletion, including the 409 that lists the communities blocking
 deletion by name. The Play requirement is met. The detail, and the two things
 about it that are not proven, are in **Your data** above.
 
-**Not built:** attachments, reactions, replies, editing, pinning, threads,
+**Not built:** reactions, replies, editing, pinning, threads,
 search, members and moderation surfaces, profile editing, communities, game
 connections. Invites can be redeemed from a link but not created or shown. No
 camera (send or receive), no screen-share audio, no speaking indicators, no

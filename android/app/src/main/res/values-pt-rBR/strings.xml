@@ -52,6 +52,15 @@
     <string name="chat_typing_many">Várias pessoas estão digitando…</string>
     <string name="chat_back">Voltar</string>
     <string name="chat_message_actions">Ações da mensagem</string>
+    <string name="chat_attach">Anexar um arquivo</string>
+    <string name="chat_attachment_remove">Remover %1$s</string>
+    <string name="chat_attachment_retry">Tentar %1$s de novo</string>
+    <string name="chat_attachment_failed">Não subiu</string>
+    <string name="chat_attachment_uploading">Enviando…</string>
+    <string name="chat_attachment_too_large">Esse arquivo passa de %1$s, que é o máximo que este servidor aceita.</string>
+    <string name="chat_attachment_unsupported">Este servidor não aceita esse tipo de arquivo.</string>
+    <string name="chat_attachment_too_many">Uma mensagem leva no máximo %1$d arquivos.</string>
+    <string name="chat_attachment_unreadable">Não foi possível ler esse arquivo.</string>
 
     <!-- Conexão -->
     <string name="connection_connecting">Conectando…</string>

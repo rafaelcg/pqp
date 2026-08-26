@@ -72,9 +72,16 @@ data class VoiceState(
 ) {
     val isActive: Boolean get() = stage == VoiceStage.Joining || stage == VoiceStage.Connected
 
-    /** Somebody other than us is presenting. */
-    val presenter: VoiceParticipant?
-        get() = participants.firstOrNull { it.sharingScreen }
+    /**
+     * Everybody the roster says is presenting, in roster order.
+     *
+     * A list rather than a single participant: two people can share at once.
+     * `self` is on the roster too, so a device sharing its own screen appears
+     * here; the caller pairs this with the tracks that actually arrived, and no
+     * track ever arrives for our own capture.
+     */
+    val presenters: List<VoiceParticipant>
+        get() = participants.filter { it.sharingScreen }
 }
 
 enum class Refusal { RoomFull, TransportUnsupported, ScreenShareDenied }
@@ -96,10 +103,19 @@ class VoiceController(
     private val _state = MutableStateFlow(VoiceState())
     val state: StateFlow<VoiceState> = _state.asStateFlow()
 
-    private val _remoteScreen = MutableStateFlow<VideoTrack?>(null)
+    private val _remoteScreens = MutableStateFlow<Map<String, VideoTrack>>(emptyMap())
 
-    /** The screen somebody else is sharing, for a renderer to attach to. */
-    val remoteScreen: StateFlow<VideoTrack?> = _remoteScreen.asStateFlow()
+    /**
+     * Every screen being shared *to* this device, keyed by the presenter's peer
+     * id.
+     *
+     * A map rather than one handle because a voice room can hold more than one
+     * presenter: the server allows it and the web client renders it. Held as a
+     * single track, the second share to arrive simply overwrote the first, so
+     * one of the two presenters disappeared from this device with nothing
+     * anywhere saying why.
+     */
+    val remoteScreens: StateFlow<Map<String, VideoTrack>> = _remoteScreens.asStateFlow()
 
     private val peerMedia = java.util.concurrent.ConcurrentHashMap<String, PeerMediaState>()
 
@@ -120,7 +136,11 @@ class VoiceController(
                 },
             )
         },
-        onRemoteScreen = { _, track -> _remoteScreen.value = track },
+        onRemoteScreen = { peerId, track ->
+            _remoteScreens.value = _remoteScreens.value.toMutableMap().apply {
+                if (track == null) remove(peerId) else put(peerId, track)
+            }
+        },
         // Posted rather than run inline: this arrives on the projection's own
         // callback thread, from inside the capturer we are about to dispose.
         onScreenShareEnded = { scope.launch { stopScreenShare() } },
@@ -415,7 +435,7 @@ class VoiceController(
                     needsRejoin = true
                     engine.stop()
                     peerMedia.clear()
-                    _remoteScreen.value = null
+                    _remoteScreens.value = emptyMap()
                     // `engine.stop` released the capture, so the service must
                     // stop claiming the projection type as well. A foreground
                     // service that declares `mediaProjection` with no live
@@ -452,6 +472,7 @@ class VoiceController(
 
         val peers = frame.participants("peers")
         peers.forEach { engine.addPeer(it.peerId) }
+        applyVideoRoster(peers)
 
         _state.value = _state.value.copy(
             stage = VoiceStage.Connected,
@@ -476,6 +497,7 @@ class VoiceController(
         if (!_state.value.isActive) return
         val peer = frame.participant("peer") ?: return
         engine.addPeer(peer.peerId)
+        applyVideoRoster(listOf(peer))
         _state.value = _state.value.copy(
             participants = _state.value.participants.filterNot { it.peerId == peer.peerId } + peer,
         )
@@ -492,7 +514,30 @@ class VoiceController(
 
     private fun onRoster(frame: JsonObject) {
         if (frame.str("voiceChannelId") != _state.value.channelId) return
-        _state.value = _state.value.copy(participants = frame.participants("participants"))
+        val participants = frame.participants("participants")
+        _state.value = _state.value.copy(participants = participants)
+        applyVideoRoster(participants)
+    }
+
+    /**
+     * Tell the engine what the roster says about everybody's video.
+     *
+     * Two facts travel on every participant and neither can be read off the
+     * media itself. `cameraStreamId` names which of a peer's video streams is
+     * their camera, and without it every inbound video is filed as a screen
+     * share: a web peer with their camera on had it rendered as if it were
+     * their desktop. `sharingScreen` is the only end-of-share signal there is,
+     * because the screen is the one stream defined negatively and so announces
+     * no id to go null.
+     *
+     * Re-applied from whole rosters rather than from diffs. The roster and the
+     * track race in both directions, and the index absorbs a repeat for free.
+     */
+    private fun applyVideoRoster(participants: List<VoiceParticipant>) {
+        participants.forEach { participant ->
+            engine.setPeerCameraStreamId(participant.peerId, participant.cameraStreamId)
+            engine.setPeerSharingScreen(participant.peerId, participant.sharingScreen)
+        }
     }
 
     private fun onRefused(frame: JsonObject, refusal: Refusal) {
@@ -650,7 +695,7 @@ class VoiceController(
     private fun teardown() {
         engine.stop()
         peerMedia.clear()
-        _remoteScreen.value = null
+        _remoteScreens.value = emptyMap()
         releaseAudioFocus()
         VoiceService.stop(context)
     }

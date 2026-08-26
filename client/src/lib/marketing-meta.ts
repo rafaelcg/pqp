@@ -28,7 +28,8 @@
  * DELIBERATELY DEPENDENCY-FREE, like its two siblings: wrangler's esbuild
  * bundles this outside the pnpm workspace, so it cannot import the i18n
  * JSON. The strings below are duplicates of `landing.seo.*`,
- * `vsDiscord.seo.*`, `tela.seo.*`, `claim.seo.*`, `vsDiscord.faq.*` and
+ * `vsDiscord.seo.*`, `tela.seo.*`, `claim.seo.*`, `betaPage.seo.*`,
+ * `downloadPage.seo.*`, `vsDiscord.faq.*` and
  * `tela.faq.*`, and
  * `marketing-meta.test.ts` pins each pair against the JSON catalogues — the
  * duplication cannot drift without failing the suite.
@@ -42,6 +43,7 @@ export type MarketingPage =
   | "/vs-discord"
   | "/tela"
   | "/beta"
+  | "/download"
   | "/garanta"
   | "/claim"
   | "/privacy"
@@ -56,6 +58,7 @@ const MARKETING_PATHS: ReadonlySet<string> = new Set([
   "/vs-discord",
   "/tela",
   "/beta",
+  "/download",
   "/garanta",
   "/claim",
   "/privacy",
@@ -146,6 +149,18 @@ const PAGE_COPY: Record<MarketingPage, PageCopy> = {
       "pt-BR":
         "Acesso antecipado ao pqp no iPhone. Voz, texto e as telas que o pessoal compartilha, direto do bolso. Vagas pelo TestFlight, de graça e em beta aberto.",
       en: "Early access to pqp on iPhone. Voice, text, and the screens other people are sharing, from your pocket. Spots via TestFlight, free and in open beta.",
+    },
+  },
+  "/download": {
+    canonicalPath: "/download",
+    title: {
+      "pt-BR": "Baixar o pqp",
+      en: "Download pqp",
+    },
+    description: {
+      "pt-BR":
+        "App de desktop pra Windows, Mac e Linux, e um beta de iPhone pelo TestFlight. O navegador continua funcionando sem instalar nada.",
+      en: "Desktop app for Windows, Mac, and Linux, plus an iPhone beta on TestFlight. The browser still works with nothing to install.",
     },
   },
   "/garanta": {

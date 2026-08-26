@@ -3,6 +3,15 @@ package gg.pqp.app.ui.screens
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import gg.pqp.app.attachments.AttachmentApi
+import gg.pqp.app.attachments.AttachmentConfig
+import gg.pqp.app.attachments.AttachmentFiles
+import gg.pqp.app.attachments.AttachmentRefusal
+import gg.pqp.app.attachments.CreateAttachmentRequest
+import gg.pqp.app.attachments.PendingAttachment
+import gg.pqp.app.attachments.attachmentIdsFor
+import gg.pqp.app.attachments.refuseAttachment
+import gg.pqp.app.core.Attachment
 import gg.pqp.app.core.Message
 import gg.pqp.app.core.PqpJson
 import gg.pqp.app.core.RealtimeState
@@ -26,6 +35,21 @@ data class ChatState(
     val loadingOlder: Boolean = false,
     val typing: Set<String> = emptySet(),
     val error: String? = null,
+    /**
+     * Whether this deployment has object storage at all.
+     *
+     * False until `GET /api/attachments/config` answers, and false forever on a
+     * self-host with no `S3_*` configured. The attach button is absent in that
+     * state rather than present and failing, which is the shape the web client
+     * uses for the same switch.
+     */
+    val attachmentsEnabled: Boolean = false,
+    /** This deployment's own cap, which may be lower than the built-in one. */
+    val maxAttachmentBytes: Long = gg.pqp.app.attachments.DEFAULT_MAX_ATTACHMENT_BYTES,
+    /** Files picked for the message being written, in the order picked. */
+    val attachments: List<PendingAttachment> = emptyList(),
+    /** The last refusal, for the composer to say out loud. Cleared on the next pick. */
+    val attachmentRefusal: AttachmentRefusal? = null,
 )
 
 /**
@@ -41,7 +65,16 @@ data class ChatState(
 class ChatViewModel(
     private val session: SessionStore,
     private val channelId: String,
+    /**
+     * How a picked file is read, or null on a surface that cannot pick one.
+     *
+     * Injected rather than reached for through a Context, so the upload logic
+     * above it is exercised by a JVM test with no device and no provider.
+     */
+    private val files: AttachmentFiles? = null,
 ) : ViewModel() {
+
+    private val attachmentApi = AttachmentApi(session.api)
 
     private val _state = MutableStateFlow(ChatState())
     val state: StateFlow<ChatState> = _state.asStateFlow()
@@ -53,6 +86,160 @@ class ChatViewModel(
         viewModelScope.launch { loadInitial() }
         viewModelScope.launch { listen() }
         viewModelScope.launch { followConnection() }
+        viewModelScope.launch { loadAttachmentConfig() }
+    }
+
+    // --- attachments ---
+
+    /**
+     * Ask whether this deployment can take a file at all.
+     *
+     * A failure is off, not an error: with no `S3_*` configured the endpoint
+     * answers `enabled: false`, and an older server has no endpoint at all.
+     * Both mean the same thing to the composer, and neither is worth putting a
+     * banner on a chat screen for.
+     */
+    private suspend fun loadAttachmentConfig() {
+        if (files == null) return
+        val config = runCatching { attachmentApi.config() }.getOrDefault(AttachmentConfig())
+        _state.value = _state.value.copy(
+            attachmentsEnabled = config.enabled,
+            maxAttachmentBytes = config.maxBytes,
+        )
+    }
+
+    /**
+     * Take a file the picker returned: describe it, show it, then upload it.
+     *
+     * The chip appears before the upload starts, because that is when the
+     * person expects to see what they just picked. It cannot be sent until the
+     * upload finishes, which is what [gg.pqp.app.attachments.composerReadiness]
+     * enforces: a `message-create` naming a row whose object was never PUT is
+     * dropped at claim time, and the message then arrives with the picture
+     * missing and nothing anywhere explaining it.
+     */
+    fun attach(uri: String) {
+        val reader = files ?: return
+        val current = _state.value
+        if (!current.attachmentsEnabled) return
+
+        val localId = UUID.randomUUID().toString()
+        _state.value = current.copy(attachmentRefusal = null)
+
+        viewModelScope.launch {
+            val local = reader.read(uri, current.maxAttachmentBytes)
+            if (local == null) {
+                _state.value = _state.value.copy(attachmentRefusal = AttachmentRefusal.Unreadable)
+                return@launch
+            }
+
+            val size = local.bytes.size.toLong()
+            val refusal = refuseAttachment(
+                contentType = local.contentType,
+                byteSize = size,
+                maxBytes = _state.value.maxAttachmentBytes,
+                alreadyAttached = _state.value.attachments.size,
+            )
+            if (refusal != null) {
+                _state.value = _state.value.copy(attachmentRefusal = refusal)
+                return@launch
+            }
+
+            val contentType = local.contentType!!
+            val pending = PendingAttachment(
+                localId = localId,
+                uri = uri,
+                filename = local.filename,
+                contentType = contentType,
+                byteSize = size,
+            )
+            _state.value = _state.value.copy(attachments = _state.value.attachments + pending)
+
+            upload(localId, contentType, local.filename, size, local.width, local.height, local.bytes)
+        }
+    }
+
+    private suspend fun upload(
+        localId: String,
+        contentType: String,
+        filename: String,
+        byteSize: Long,
+        width: Int?,
+        height: Int?,
+        bytes: ByteArray,
+    ) {
+        val minted = runCatching {
+            val response = attachmentApi.mint(
+                channelId,
+                CreateAttachmentRequest(
+                    filename = filename,
+                    contentType = contentType,
+                    byteSize = byteSize,
+                    width = width,
+                    height = height,
+                ),
+            )
+            // The type declared here is the one signed into the URL, so the PUT
+            // has to send the same string back. Re-deriving it would be a
+            // second chance to disagree with the signature.
+            attachmentApi.upload(response.uploadUrl, contentType, bytes)
+            response.attachmentId
+        }.getOrNull()
+
+        _state.value = _state.value.copy(
+            attachments = _state.value.attachments.map { attachment ->
+                if (attachment.localId != localId) {
+                    attachment
+                } else {
+                    attachment.copy(attachmentId = minted, failed = minted == null)
+                }
+            },
+        )
+    }
+
+    fun removeAttachment(localId: String) {
+        _state.value = _state.value.copy(
+            attachments = _state.value.attachments.filterNot { it.localId == localId },
+            attachmentRefusal = null,
+        )
+    }
+
+    /** Read the file again and start over. The URI grant outlives the picker. */
+    fun retryAttachment(localId: String) {
+        val reader = files ?: return
+        val attachment = _state.value.attachments.firstOrNull { it.localId == localId } ?: return
+        if (!attachment.failed) return
+
+        _state.value = _state.value.copy(
+            attachments = _state.value.attachments.map {
+                if (it.localId == localId) it.copy(failed = false) else it
+            },
+        )
+
+        viewModelScope.launch {
+            val local = reader.read(attachment.uri, _state.value.maxAttachmentBytes)
+            if (local == null) {
+                _state.value = _state.value.copy(
+                    attachments = _state.value.attachments.map {
+                        if (it.localId == localId) it.copy(failed = true) else it
+                    },
+                )
+                return@launch
+            }
+            upload(
+                localId,
+                attachment.contentType,
+                local.filename,
+                local.bytes.size.toLong(),
+                local.width,
+                local.height,
+                local.bytes,
+            )
+        }
+    }
+
+    fun dismissAttachmentRefusal() {
+        _state.value = _state.value.copy(attachmentRefusal = null)
     }
 
     private suspend fun loadInitial() {
@@ -294,13 +481,27 @@ class ChatViewModel(
      */
     fun send(body: String, author: gg.pqp.app.core.Me?): Boolean {
         val trimmed = body.trim()
-        if (trimmed.isEmpty()) return false
+        val attachments = _state.value.attachments
+        val attachmentIds = attachmentIdsFor(attachments)
+
+        // A message may be text, attachments, or both, never neither: the same
+        // rule `requireBodyOrAttachment` puts on the frame server-side. And
+        // never while an upload is still running or has failed, because the
+        // claim would drop that row and the picture would simply not be there.
+        if (attachments.any { it.uploading || it.failed }) return false
+        if (trimmed.isEmpty() && attachmentIds.isEmpty()) return false
 
         val nonce = UUID.randomUUID().toString()
         pending += nonce
 
         // The optimistic row borrows the nonce as its id, which is what makes
         // retiring it a plain filter when the broadcast arrives.
+        //
+        // Its attachments are drawn from the local URIs rather than from the
+        // presigned GETs the server has not sent yet: the file is already on
+        // the phone, and a picture that blinks out of the bubble and back in
+        // when the broadcast lands is worse than one that never moves. Coil
+        // loads a `content://` URI exactly as happily as an https one.
         val optimistic = Message(
             id = nonce,
             channelId = channelId,
@@ -309,20 +510,33 @@ class ChatViewModel(
             authorAvatarUrl = author?.avatarUrl,
             body = trimmed,
             createdAt = java.time.Instant.now().toString(),
+            attachments = attachments.mapNotNull { attachment ->
+                attachment.attachmentId?.let { id ->
+                    Attachment(
+                        id = id,
+                        filename = attachment.filename,
+                        contentType = attachment.contentType,
+                        byteSize = attachment.byteSize,
+                        url = attachment.uri,
+                    )
+                }
+            },
         )
         _state.value = _state.value.copy(messages = _state.value.messages + optimistic)
 
-        if (!session.realtime.sendMessage(channelId, trimmed, nonce)) {
+        if (!session.realtime.sendMessage(channelId, trimmed, nonce, attachmentIds = attachmentIds)) {
             // The frame did not leave the phone. `RealtimeClient` is already
             // reconnecting; the row is dropped rather than left looking sent,
             // because a message that silently never arrives is the failure this
-            // whole path exists to avoid.
+            // whole path exists to avoid. The attachments stay in the composer:
+            // they are uploaded and still claimable, so a retry costs nothing.
             pending -= nonce
             _state.value = _state.value.copy(
                 messages = _state.value.messages.filterNot { it.id == nonce },
             )
             return false
         }
+        _state.value = _state.value.copy(attachments = emptyList(), attachmentRefusal = null)
         return true
     }
 
@@ -390,10 +604,14 @@ class ChatViewModel(
         internal fun shouldSendTyping(nowMs: Long, lastSentMs: Long): Boolean =
             lastSentMs == 0L || nowMs - lastSentMs >= TYPING_THROTTLE_MS
 
-        fun factory(session: SessionStore, channelId: String) = object : ViewModelProvider.Factory {
+        fun factory(
+            session: SessionStore,
+            channelId: String,
+            files: AttachmentFiles? = null,
+        ) = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T =
-                ChatViewModel(session, channelId) as T
+                ChatViewModel(session, channelId, files) as T
         }
     }
 }

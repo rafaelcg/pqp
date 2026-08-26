@@ -34,6 +34,7 @@ describe("marketingPageFromMetaPath", () => {
       "/vs-discord",
       "/tela",
       "/beta",
+      "/download",
       "/garanta",
       "/claim",
       "/privacy",
@@ -91,6 +92,7 @@ describe("the duplicated copy is pinned to the JSON catalogues", () => {
     { path: "/vs-discord", prefix: "vsDiscord" },
     { path: "/tela", prefix: "tela" },
     { path: "/beta", prefix: "betaPage" },
+    { path: "/download", prefix: "downloadPage" },
     { path: "/claim", prefix: "claim" },
   ];
 
@@ -228,6 +230,7 @@ describe("renderMarketingHead", () => {
     );
     expect(renderMarketingHead("/", "pt-BR")).not.toContain('"FAQPage"');
     expect(renderMarketingHead("/beta", "pt-BR")).not.toContain('"FAQPage"');
+    expect(renderMarketingHead("/download", "pt-BR")).not.toContain('"FAQPage"');
     expect(renderMarketingHead("/privacy", "pt-BR")).not.toContain('"FAQPage"');
   });
 
