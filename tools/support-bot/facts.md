@@ -63,7 +63,7 @@ possível deste sistema.
 - A versão atual é 0.1.3.
 - No Windows o SmartScreen avisa na primeira vez porque o build ainda não é assinado. Mac é assinado.
 - Compartilhar tela no app de desktop funciona a partir da 0.1.3.
-- O app carrega o mesmo site do navegador, então o produto atualiza sozinho.
+- O app carrega o mesmo site do navegador, então a interface fica sempre atualizada. O app em si não se atualiza sozinho: recursos que dependem do app (como compartilhar tela) pedem baixar a versão nova em pqp.gg/download.
 
 ## iPhone e app
 

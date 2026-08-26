@@ -27,7 +27,12 @@ export function DownloadDialog({
   const [copied, setCopied] = useState(false);
 
   function copy() {
-    void navigator.clipboard.writeText(DOWNLOAD_PAGE_URL).then(
+    const clipboard = navigator.clipboard;
+    if (!clipboard) {
+      setCopied(false);
+      return;
+    }
+    void clipboard.writeText(DOWNLOAD_PAGE_URL).then(
       () => {
         setCopied(true);
         window.setTimeout(() => setCopied(false), 1600);
