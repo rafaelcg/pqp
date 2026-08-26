@@ -1,5 +1,7 @@
 package gg.pqp.app.ui.screens
 
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -61,6 +63,8 @@ import gg.pqp.app.core.RealtimeState
 import gg.pqp.app.core.SessionPhase
 import gg.pqp.app.core.SessionStore
 import gg.pqp.app.push.VisibleChannel
+import gg.pqp.app.reports.ReportTarget
+import gg.pqp.app.reports.ui.ReportSheet
 import gg.pqp.app.ui.components.Avatar
 import java.time.Instant
 import java.time.ZoneId
@@ -115,6 +119,7 @@ fun ChatScreen(
 
     val listState = rememberLazyListState()
     var draft by remember { mutableStateOf("") }
+    var reporting by remember { mutableStateOf<Message?>(null) }
 
     // Follow the tail only when the reader is already there. Yanking somebody
     // back down while they are reading history is the single most annoying
@@ -211,6 +216,7 @@ fun ChatScreen(
                             MessageRow(
                                 message = message,
                                 grouped = shouldGroup(previous, message),
+                                onReport = { reporting = message },
                             )
                         }
 
@@ -242,6 +248,32 @@ fun ChatScreen(
                 )
             }
         }
+    }
+
+    /*
+     * A long press on a message reports it.
+     *
+     * The one interaction a message row has, deliberately: Play requires a way
+     * to report user-generated content from inside the app, and this screen
+     * had no per-message gesture at all. It is not the start of a general
+     * message action menu.
+     *
+     * The sheet hangs off the screen rather than off the row that opened it,
+     * so scrolling the list underneath cannot tear it down mid-report. Nothing
+     * about the channel travels with it: the server reads the channel, and
+     * therefore the server or the conversation this belongs to, off the
+     * message itself, which is what stops a client aiming a report at the
+     * wrong moderators.
+     */
+    reporting?.let { message ->
+        ReportSheet(
+            api = session.api,
+            target = ReportTarget.Message(
+                messageId = message.id,
+                authorName = message.authorName,
+            ),
+            onDismiss = { reporting = null },
+        )
     }
 }
 
@@ -277,13 +309,23 @@ private fun shouldGroup(previous: Message?, message: Message): Boolean {
 
 private val TIME_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun MessageRow(message: Message, grouped: Boolean) {
+private fun MessageRow(message: Message, grouped: Boolean, onReport: () -> Unit) {
     if (message.blocked) return
 
+    // `onLongClickLabel` is what puts "Report this message" in TalkBack's
+    // actions menu, which is the only place the gesture is discoverable
+    // without a visible affordance.
+    val longPressLabel = stringResource(R.string.report_message_long_press)
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .combinedClickable(
+                onClick = {},
+                onLongClick = onReport,
+                onLongClickLabel = longPressLabel,
+            )
             .padding(horizontal = 16.dp, vertical = if (grouped) 1.dp else 6.dp),
     ) {
         if (grouped) {

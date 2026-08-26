@@ -57,6 +57,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import gg.pqp.app.R
 import gg.pqp.app.core.ServerSummary
 import gg.pqp.app.core.SessionStore
+import gg.pqp.app.reports.ReportDraft
+import gg.pqp.app.reports.ReportTarget
+import gg.pqp.app.reports.ui.ReportSheet
 import gg.pqp.app.ui.components.Avatar
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -77,6 +80,7 @@ fun ServersScreen(
     var creating by remember { mutableStateOf(false) }
     var leaving by remember { mutableStateOf<ServerSummary?>(null) }
     var deleting by remember { mutableStateOf<ServerSummary?>(null) }
+    var reporting by remember { mutableStateOf<ServerSummary?>(null) }
 
     // A refusal is the server's sentence, verbatim. Only it knows whether a
     // delete was refused because the caller is no longer the owner, or a leave
@@ -142,6 +146,7 @@ fun ServersScreen(
                             onClick = { onOpenServer(server) },
                             onLeave = { leaving = server },
                             onDelete = { deleting = server },
+                            onReport = { reporting = server },
                         )
                     }
                 }
@@ -169,6 +174,14 @@ fun ServersScreen(
                 leaving = null
                 session.leaveServer(server.id, refused)
             },
+        )
+    }
+
+    reporting?.let { server ->
+        ReportSheet(
+            api = session.api,
+            target = ReportTarget.Community(serverId = server.id, name = server.name),
+            onDismiss = { reporting = null },
         )
     }
 
@@ -221,6 +234,7 @@ private fun ServerRow(
     onClick: () -> Unit,
     onLeave: () -> Unit,
     onDelete: () -> Unit,
+    onReport: () -> Unit,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     Row(
@@ -266,6 +280,18 @@ private fun ServerRow(
                         onClick = {
                             menuOpen = false
                             onLeave()
+                        },
+                    )
+                }
+                // Only a listed community can be reported: the route answers
+                // 404 for anything else, and an item that can only ever fail is
+                // worse than no item. See ReportDraft.canReportCommunity.
+                if (ReportDraft.canReportCommunity(server.isCommunity)) {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.report_action)) },
+                        onClick = {
+                            menuOpen = false
+                            onReport()
                         },
                     )
                 }

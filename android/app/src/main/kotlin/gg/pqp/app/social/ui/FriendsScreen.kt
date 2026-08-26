@@ -54,6 +54,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import gg.pqp.app.R
+import gg.pqp.app.core.ApiClient
+import gg.pqp.app.reports.ReportTarget
+import gg.pqp.app.reports.ui.ReportSheet
 import gg.pqp.app.social.DmSummary
 import gg.pqp.app.social.Friend
 import gg.pqp.app.social.FriendRequestEntry
@@ -83,6 +86,11 @@ import kotlinx.coroutines.launch
 @Composable
 fun FriendsScreen(
     social: SocialRepository,
+    /**
+     * Passed in rather than reached through [social], which keeps its session
+     * private. Reporting is one POST and belongs to no repository.
+     */
+    api: ApiClient,
     onOpenConversation: (DmSummary) -> Unit,
 ) {
     val data by social.friends.collectAsStateWithLifecycle()
@@ -97,6 +105,7 @@ fun FriendsScreen(
     var tab by remember { mutableStateOf(FriendsTab.Online) }
     var adding by remember { mutableStateOf(false) }
     var confirming by remember { mutableStateOf<Confirmation?>(null) }
+    var reporting by remember { mutableStateOf<Friend?>(null) }
     var pickedTabForEmptyAccount by remember { mutableStateOf(false) }
 
     /**
@@ -228,6 +237,7 @@ fun FriendsScreen(
                                     },
                                     onRemove = { confirming = Confirmation.Remove(friend) },
                                     onBlock = { confirming = Confirmation.Block(friend) },
+                                    onReport = { reporting = friend },
                                 )
                             }
                         }
@@ -289,6 +299,18 @@ fun FriendsScreen(
                 data.outgoing.forEach { add(it.id) }
             },
             onDismiss = { adding = false },
+        )
+    }
+
+    // No server id: a report filed from the friends list is about a person and
+    // not about their conduct in any one place, so it goes to the instance
+    // queue rather than to some community's moderators. The server decides
+    // that from the absent `serverId`, not from anything said here.
+    reporting?.let { friend ->
+        ReportSheet(
+            api = api,
+            target = ReportTarget.Person(userId = friend.id, displayName = friend.displayName),
+            onDismiss = { reporting = null },
         )
     }
 
@@ -354,6 +376,7 @@ private fun FriendRow(
     onMessage: () -> Unit,
     onRemove: () -> Unit,
     onBlock: () -> Unit,
+    onReport: () -> Unit,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
 
@@ -396,6 +419,14 @@ private fun FriendRow(
                 DropdownMenuItem(
                     text = { Text(stringResource(R.string.friends_block)) },
                     onClick = { menuOpen = false; onBlock() },
+                )
+                // Beside Block, not instead of it. Blocking stops somebody
+                // reaching you and tells nobody; reporting asks a moderator to
+                // do something about them. They are different acts and a person
+                // in trouble usually wants both.
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.report_action)) },
+                    onClick = { menuOpen = false; onReport() },
                 )
             }
         }

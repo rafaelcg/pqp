@@ -135,6 +135,7 @@ fun HomeScreen(
 
                 HomeTab.Friends -> FriendsScreen(
                     social = social,
+                    api = session.api,
                     onOpenConversation = open,
                 )
             }
