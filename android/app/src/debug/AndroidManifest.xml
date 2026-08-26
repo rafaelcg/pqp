@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <application android:networkSecurityConfig="@xml/network_security_config">
+
+        <!-- Drives a fake push through the real delivery path from adb, so the
+             half of this feature that does not need Firebase can be verified
+             without it. Debug builds only, by living in this manifest: an
+             exported receiver that draws arbitrary notifications has no
+             business in a release. `exported` is true because `am broadcast`
+             is another process. -->
+        <receiver
+            android:name=".push.PushDebugReceiver"
+            android:exported="true"
+            tools:ignore="ExportedReceiver" />
+    </application>
+</manifest>

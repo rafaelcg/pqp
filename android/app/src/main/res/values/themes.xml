@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+
+    <!--
+      The XML theme exists for two things Compose cannot do: the window
+      background painted before the first frame, and the splash screen. Every
+      colour the app actually draws comes from PqpTheme in Kotlin.
+    -->
+    <style name="Theme.Pqp" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/pqp_ink</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLayoutInDisplayCutoutMode" tools:targetApi="27">shortEdges</item>
+    </style>
+
+    <style name="Theme.Pqp.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/pqp_ink</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+        <item name="postSplashScreenTheme">@style/Theme.Pqp</item>
+    </style>
+</resources>

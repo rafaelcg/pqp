@@ -22,6 +22,8 @@ For current product status and open work, see [`docs/HANDOVER.md`](./docs/HANDOV
 | `server/` | `@pqp/server` | API, WS chat + voice signaling, optional static serve |
 | `packages/shared/` | `@pqp/shared` | Shared types / Zod / voice config |
 | `electron/` | `@pqp/electron` | Desktop shell |
+| `ios/` | (Xcode) | Native SwiftUI iOS client |
+| `android/` | (Gradle) | Native Kotlin + Compose Android client |
 
 ## How to run (local)
 
@@ -109,5 +111,5 @@ CI workflows: `.github/workflows/ci.yml`, `deploy-web.yml`, `deploy-api-fly.yml`
 
 - Do not invent secret values in docs or commits.
 - Point humans to `docs/I18N.md` for adding UI copy (i18next, `{name}` slots, `_one`/`_other`, Electron menus); `docs/HANDLES.md` for public handles, the `/@` profile page and its edge-injected SEO; `docs/CONNECTIONS.md` for Steam / Battle.net / Twitch linking; `docs/ambient-deploy.md` for character accounts and the ambient-life runner (the house cast); `tools/support-bot/README.md` for the QG support bot, its fact file and the disclosure seam (it is a **disclosed bot**, not a resident, and the QG still gets no AI residents); `docs/CLERK_SETUP.md` for Clerk CLI setup; `docs/SSO.md` for SAML/enterprise domain joining; `docs/voice-backends.md` for SFU notes; `docs/ATTACHMENTS.md` for R2/MinIO setup; `docs/CONTENT_SAFETY.md` for image scanning, what is
- *not* scanned, and the CSAM reporting runbook; `docs/PWA.md` for the mobile/installable app; `docs/TESTFLIGHT.md` for the iOS beta / App Review demo account; `tools/admin-dashboard/README.md` for the operator dashboard (`pqp-admin` Worker) and its `ADMIN_METRICS_TOKEN` / Basic Auth secrets.
+ *not* scanned, and the CSAM reporting runbook; `docs/PWA.md` for the mobile/installable app; `docs/ANDROID.md` for the native Android client, why it is native rather than a TWA, and what is actually verified; `docs/TESTFLIGHT.md` for the iOS beta / App Review demo account; `tools/admin-dashboard/README.md` for the operator dashboard (`pqp-admin` Worker) and its `ADMIN_METRICS_TOKEN` / Basic Auth secrets.
 - Update `docs/HANDOVER.md` + `docs/PLAN_STATUS.md` when phase status changes.

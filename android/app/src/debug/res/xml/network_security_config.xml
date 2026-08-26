@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Debug builds only. Android has refused cleartext HTTP by default since API 28,
+  and the local dev server is plain http on 10.0.2.2:3001 (the host machine as
+  the emulator sees it). This file lives in src/debug so a release build cannot
+  inherit the exemption.
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">10.0.2.2</domain>
+        <domain includeSubdomains="true">localhost</domain>
+        <domain includeSubdomains="true">127.0.0.1</domain>
+    </domain-config>
+</network-security-config>
