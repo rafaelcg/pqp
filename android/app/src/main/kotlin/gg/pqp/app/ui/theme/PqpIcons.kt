@@ -217,6 +217,12 @@ private object Lucide {
     val phone by lucide(
         "M13.832 16.568a1 1 0 0 0 1.213-.303l.355-.465A2 2 0 0 1 17 15h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2A18 18 0 0 1 2 4a2 2 0 0 1 2-2h3a2 2 0 0 1 2 2v3a2 2 0 0 1-.8 1.6l-.468.351a1 1 0 0 0-.292 1.233 14 14 0 0 0 6.392 6.384",
     )
+    val play by lucide(
+        // Lucide draws this as `<polygon points="6 3 20 12 6 21 6 3"/>`.
+        // Rewritten as path data because `lucide()` takes `d` strings only,
+        // and closed with `Z` so the round join at the back edge is drawn.
+        "M6 3 20 12 6 21Z",
+    )
     val plus by lucide(
         "M5 12h14",
         "M12 5v14",
@@ -334,6 +340,9 @@ object PqpIcons {
     val Notifications get() = Lucide.bell
     val Warning get() = Lucide.circleAlert
     val Attach get() = Lucide.paperclip
+
+    /** Start playing a video attachment. */
+    val Play get() = Lucide.play
 
     /** A place with channels in it. */
     val Server get() = Lucide.layers

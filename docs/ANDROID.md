@@ -1595,7 +1595,47 @@ in-app account deletion, including the 409 that lists the communities blocking
 deletion by name. The Play requirement is met. The detail, and the two things
 about it that are not proven, are in **Your data** above.
 
-**Not built:** reactions, replies, editing, pinning, threads,
+### Media in a message
+
+This is about **rendering**. Sending is its own section (**Attachments**
+above) and is built for files; there is still no GIF picker on Android, so a
+picker GIF is always one somebody sent from the web or the iOS client.
+
+- **GIFs animate.** They did not before `coil-gif` was added, and nothing said
+  so: Coil decodes a still image with no help, so an `ImageLoader` with no
+  animated decoder registered answers a GIF with its first frame and no error
+  anywhere. Both attachment routes are covered, because both arrive as
+  `image/gif` and go through the same decoder: the picker's (`POST
+  /api/channels/:id/attachments/gif`, a row holding a GIPHY URL) and a `.gif`
+  uploaded as a file, which since **Attachments** can now be uploaded from here
+  too. `AnimatedImageDecoder` is registered from API 28 and `GifDecoder` below
+  it, because `minSdk` here is 26 and the former is `@RequiresApi(28)`.
+- **A pasted GIF link renders as the GIF**, the way
+  `client/src/lib/gif-media.ts` does it, so a Tenor URL somebody typed does not
+  read as a hundred characters of text on the phone and a picture everywhere
+  else. The host allowlist is copied from `packages/shared/src/gifs.ts` into
+  `ui/media/GifLinks.kt` and pinned against it by `MediaContractTest`.
+- **Video plays, in the app.** Before this there was no player in the module at
+  all, so a `video/mp4` fell through to the download chip: not broken, never
+  written. It is a full-screen Media3 player opened by tapping the attachment,
+  and the card itself fetches nothing until then, which is what `preload="none"`
+  buys the web. The honest consequence is that there is no poster frame, since
+  producing one means downloading the video to decide whether to download the
+  video. The cheaper hand-off to the system player was rejected on two grounds:
+  the read URL is presigned and expires, and `toPublicAttachment` signs
+  everything that is not an image with `Content-Disposition: attachment`, so an
+  external handler is as likely to download it as to stream it.
+- **One player at a time**, and only while the dialog is open. A per-row
+  `ExoPlayer` means a `MediaCodec`, a surface and a buffer per visible video in
+  a `LazyColumn`, all bidding for the same audio focus as a call.
+- **It costs 0.72 MB.** `media3-exoplayer` plus `media3-ui` plus `coil-gif`,
+  measured as the difference between two shrunk release APKs rather than from
+  the artifact sizes, on a 55 MB APK that is mostly the WebRTC native libs.
+- **Audio attachments are still a download chip.** The web renders an `<audio>`
+  element with `preload="none"`; this does not. That is the next obvious piece,
+  and `MediaContractTest` pins it as a decision rather than an oversight.
+
+**Not built:** a GIF picker, replies, editing, pinning, threads,
 search, members and moderation surfaces, profile editing, communities, game
 connections. Invites can be redeemed from a link but not created or shown. No
 camera (send or receive), no screen-share audio, no speaking indicators, no

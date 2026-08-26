@@ -127,7 +127,41 @@ data class Attachment(
     val url: String,
 ) {
     val isImage: Boolean get() = contentType.startsWith("image/")
+
+    /**
+     * Media that needs a player rather than a decoder.
+     *
+     * Split from [isImage] for the reason `isVideoContentType` is split from
+     * `isImageContentType` in `packages/shared/src/attachments.ts`: an image is
+     * fetched on sight, and a video must cost nothing at all until somebody
+     * asks for it. The allowlist is `video/mp4` and `video/webm`; the prefix
+     * test matches shared rather than enumerating them here.
+     */
+    val isVideo: Boolean get() = contentType.startsWith("video/")
+
+    /**
+     * Whether this is an animated format, which is only ever a hint.
+     *
+     * Nothing branches on it to *decide* how to draw: Coil sniffs the bytes.
+     * It exists so the accessible name can say "GIF" for a picker GIF whose
+     * filename is a title rather than a file, which is the common case.
+     */
+    val isAnimatedImage: Boolean
+        get() = contentType == "image/gif" || contentType == "image/webp"
 }
+
+/**
+ * `GET /api/attachments/:id/url`: a freshly presigned read URL.
+ *
+ * `expiresAt` is on the wire and nothing here reads it. A player that has
+ * already failed is a better signal than a clock the device may not agree
+ * with, so the retry is driven by the error rather than by the expiry.
+ */
+@Serializable
+data class AttachmentUrlResponse(
+    val url: String,
+    val expiresAt: String? = null,
+)
 
 @Serializable
 data class ReplyRef(

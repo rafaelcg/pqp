@@ -62,6 +62,13 @@
     <string name="chat_attachment_too_many">Uma mensagem leva no máximo %1$d arquivos.</string>
     <string name="chat_attachment_unreadable">Não foi possível ler esse arquivo.</string>
 
+    <!-- Anexos -->
+    <string name="attachment_animated_image">%1$s, animado</string>
+    <string name="attachment_gif">GIF</string>
+    <string name="attachment_play_video">Reproduzir %1$s</string>
+    <string name="attachment_video_failed">Não foi possível reproduzir este vídeo.</string>
+    <string name="attachment_video_close">Fechar</string>
+
     <!-- Conexão -->
     <string name="connection_connecting">Conectando…</string>
     <string name="connection_offline">Sem conexão. Tentando reconectar…</string>

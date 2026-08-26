@@ -373,6 +373,14 @@ dependencies {
 
     implementation(libs.coil.compose)
     implementation(libs.coil.network.okhttp)
+    // Without this artifact Coil has no animated decoder at all, so it reads a
+    // GIF's first frame and stops. See the components block in PqpApplication.
+    implementation(libs.coil.gif)
+
+    // The only thing in the module that can play a video. There is no
+    // VideoView and no MediaPlayer here either; see ui/media/VideoPlayer.kt.
+    implementation(libs.media3.exoplayer)
+    implementation(libs.media3.ui)
 
     implementation(libs.clerk.ui)
     implementation(libs.webrtc)
