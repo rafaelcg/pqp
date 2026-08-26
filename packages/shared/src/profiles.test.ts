@@ -95,6 +95,11 @@ describe("validateHandle", () => {
     expect(validateHandle("tela")).toBe("reserved");
   });
 
+  it("reserves the download landing's path", () => {
+    expect(validateHandle("download")).toBe("reserved");
+    expect(validateHandle("downloads")).toBe("reserved");
+  });
+
   it("refuses slurs, and refuses them through leetspeak and padding", () => {
     expect(validateHandle("viado")).toBe("blocked");
     expect(validateHandle("v1ado_oficial2")).toBe("blocked");

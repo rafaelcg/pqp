@@ -7,6 +7,7 @@ client the browser runs.
 - Code: [`electron/`](../electron) — see [`electron/README.md`](../electron/README.md) for the runtime/IPC surface.
 - CI: [`.github/workflows/electron.yml`](../.github/workflows/electron.yml)
 - Distribution: GitHub Releases on `rafaelcg/pqp`, tags matching `v*`.
+- Public page: [`https://pqp.gg/download`](https://pqp.gg/download)
 
 ---
 

@@ -59,16 +59,15 @@ possível deste sistema.
 
 ## app de desktop
 
-- O app de desktop publicado é a versão 0.1.0, de 7 de agosto.
-- Nessa versão o compartilhamento de tela não funciona: o app não consegue
-  perguntar qual tela você quer.
-- Já está corrigido no código, mas ainda não saiu build novo com a correção.
-- Enquanto isso, compartilhar tela pelo navegador funciona normalmente. Essa é a
-  saída pra quem precisa hoje.
+- Tem app de desktop pra Windows, Mac e Linux. O link pra baixar é pqp.gg/download.
+- A versão atual é 0.1.3.
+- No Windows o SmartScreen avisa na primeira vez porque o build ainda não é assinado. Mac é assinado.
+- Compartilhar tela no app de desktop funciona a partir da 0.1.3.
+- O app carrega o mesmo site do navegador, então o produto atualiza sozinho.
 
 ## iPhone e app
 
-- Existe um beta de iPhone pelo TestFlight, em pqp.gg/beta.
+- Existe um beta de iPhone pelo TestFlight, em pqp.gg/beta. Também está em pqp.gg/download.
 - O app **não** está na App Store.
 - No **app** do iPhone dá pra assistir tela compartilhada.
 - Transmitir a tela do iPhone: o app tem o código pra isso, mas **ninguém

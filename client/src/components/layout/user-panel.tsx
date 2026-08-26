@@ -1,10 +1,12 @@
-import { Bug, Check, Mic, MicOff, Settings } from "lucide-react";
+import { Bug, Check, Download, Mic, MicOff, Settings } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { UserButton } from "@clerk/clerk-react";
 import type { ManualStatus, UserStatus } from "@pqp/shared";
+import { DownloadDialog } from "@/components/downloads/download-dialog";
 import { Button } from "@/components/ui/button";
 import { StatusDot } from "@/components/user/status-dot";
 import { UserAvatar } from "@/components/user/user-avatar";
+import { isDesktopApp } from "@/lib/desktop";
 import { isDevAuthBypassEnabled } from "@/lib/dev-auth";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -82,7 +84,9 @@ export function UserPanel({
 }: UserPanelProps) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
+  const [downloadOpen, setDownloadOpen] = useState(false);
   const popoverRef = useRef<HTMLDivElement>(null);
+  const showDownload = !isDesktopApp();
 
   useEffect(() => {
     if (!open) {
@@ -183,6 +187,23 @@ export function UserPanel({
             <Bug className="h-4 w-4 shrink-0 text-paper-muted" aria-hidden />
             {t("userMenu.feedback")}
           </button>
+          {showDownload && (
+            <button
+              type="button"
+              role="menuitem"
+              className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm text-paper outline-none hover:bg-ink-3 focus-visible:bg-ink-3"
+              onClick={() => {
+                setDownloadOpen(true);
+                setOpen(false);
+              }}
+            >
+              <Download
+                className="h-4 w-4 shrink-0 text-paper-muted"
+                aria-hidden
+              />
+              {t("userMenu.download")}
+            </button>
+          )}
         </div>
       )}
 
@@ -274,6 +295,10 @@ export function UserPanel({
       >
         <Settings className="h-4 w-4" />
       </Button>
+      <DownloadDialog
+        open={downloadOpen}
+        onClose={() => setDownloadOpen(false)}
+      />
     </div>
   );
 }
