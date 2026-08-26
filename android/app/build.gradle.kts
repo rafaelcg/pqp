@@ -1,4 +1,7 @@
+import com.android.build.api.artifact.SingleArtifact
+import com.android.build.api.variant.BuiltArtifactsLoader
 import java.util.Properties
+import java.util.zip.ZipFile
 
 plugins {
     alias(libs.plugins.android.application)
@@ -192,6 +195,122 @@ android {
         // a release is held to the stricter bar.
         abortOnError = false
         checkReleaseBuilds = true
+    }
+}
+
+/**
+ * Proves that the classes libwebrtc looks up **from native code** are still in
+ * the shrunk artifact.
+ *
+ * This exists because of a crash that reached the Play internal testing track:
+ * R8 removed `org.jni_zero.JniInit`, nothing in Kotlin names it, and
+ * `JNI_OnLoad` inside `libjingle_peerconnection_so.so` aborts the process when
+ * `FindClass` cannot find it. Tapping a voice channel killed the app on every
+ * device. Debug builds are not minified, so it was invisible on every emulator
+ * this project has ever used, and CI's release build proved only that the
+ * artifact *compiles*, which it did, perfectly.
+ *
+ * A keep rule alone would not catch it a second time, because the failure mode
+ * is a rule that is **missing**, not one that is wrong. So this checks the
+ * artifact rather than the configuration. The dex format stores every class as
+ * a plain descriptor string, so the presence of `Lorg/jni_zero/JniInit;` in the
+ * bytes is a direct answer to "did the class survive", with no dex parser to
+ * keep in step with a format.
+ *
+ * It cannot check every class the JNI layer resolves and does not pretend to.
+ * It checks one from each package the WebRTC artifact ships, which is the level
+ * at which the keep rules are written and therefore the level at which one goes
+ * missing.
+ */
+abstract class VerifyNativeJniClassesTask : DefaultTask() {
+
+    /** The `.apk` or `.aab` files to look inside. */
+    @get:InputFiles
+    abstract val archives: ConfigurableFileCollection
+
+    /** Descriptors, as they appear in a dex file's string table. */
+    @get:Input
+    abstract val required: ListProperty<String>
+
+    @TaskAction
+    fun verify() {
+        val targets = archives.files.filter {
+            it.isFile && (it.name.endsWith(".apk") || it.name.endsWith(".aab"))
+        }
+        check(targets.isNotEmpty()) { "No .apk or .aab to verify" }
+
+        for (archive in targets) {
+            // An AAB keeps its dex at `base/dex/classes.dex`, an APK at the
+            // root, so the entries are matched by extension rather than by
+            // path.
+            val dex = ZipFile(archive).use { zip ->
+                zip.entries()
+                    .toList()
+                    .filter { it.name.endsWith(".dex") }
+                    .map { entry ->
+                        zip.getInputStream(entry).use { String(it.readBytes(), Charsets.ISO_8859_1) }
+                    }
+            }
+            check(dex.isNotEmpty()) { "No dex inside ${archive.name}" }
+
+            val missing = required.get().filter { descriptor ->
+                dex.none { it.contains(descriptor) }
+            }
+            check(missing.isEmpty()) {
+                buildString {
+                    appendLine("${archive.name} is missing classes libwebrtc loads by name:")
+                    missing.forEach { appendLine("  $it") }
+                    appendLine()
+                    appendLine("R8 removed them because nothing in Kotlin references them.")
+                    appendLine("`JNI_OnLoad` aborts the process when FindClass fails, so this")
+                    appendLine("artifact would crash with SIGTRAP the moment somebody joins a")
+                    appendLine("voice channel. Add a -keep rule in app/proguard-rules.pro.")
+                }
+            }
+            logger.lifecycle("${archive.name}: all ${required.get().size} native JNI classes present")
+        }
+    }
+}
+
+/**
+ * One from each package `io.github.webrtc-sdk:android` ships. `JniInit` is the
+ * one that was actually missing.
+ */
+val nativeJniClasses = listOf(
+    "Lorg/jni_zero/JniInit;",
+    "Lorg/webrtc/PeerConnectionFactory;",
+    "Lorg/webrtc/audio/JavaAudioDeviceModule;",
+)
+
+androidComponents {
+    // Release only: the debug variant is not minified, so there is nothing that
+    // could go missing and nothing to verify.
+    onVariants(selector().withBuildType("release")) { variant ->
+        val name = variant.name.replaceFirstChar { it.uppercase() }
+
+        val verifyApk = tasks.register<VerifyNativeJniClassesTask>("verify${name}NativeJniClasses") {
+            group = "verification"
+            description = "Fails when R8 has removed a class libwebrtc resolves from native code."
+            archives.from(variant.artifacts.get(SingleArtifact.APK).map { it.asFileTree })
+            required.set(nativeJniClasses)
+        }
+
+        // The bundle is checked separately rather than being trusted to the
+        // APK's result. It is the artifact that goes to Play, it is the one
+        // that crashed, and a human uploading one may never build the other.
+        val verifyBundle =
+            tasks.register<VerifyNativeJniClassesTask>("verify${name}BundleNativeJniClasses") {
+                group = "verification"
+                description = "The same check, against the .aab that is uploaded."
+                archives.from(variant.artifacts.get(SingleArtifact.BUNDLE))
+                required.set(nativeJniClasses)
+            }
+
+        // `matching {}.configureEach {}` rather than `named()`: neither task
+        // exists yet while variants are being configured, and `named` on a task
+        // that is not there yet fails the configuration outright.
+        tasks.matching { it.name == "assemble$name" }.configureEach { dependsOn(verifyApk) }
+        tasks.matching { it.name == "bundle$name" }.configureEach { dependsOn(verifyBundle) }
     }
 }
 
