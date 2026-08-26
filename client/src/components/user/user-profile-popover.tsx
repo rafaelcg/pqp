@@ -16,6 +16,7 @@ import {
   TIMEOUT_REASON_MAX_LENGTH,
   type Depoimento,
   type DmSummary,
+  type ProfileAchievement,
   type ProfileCommunityList,
   type VisibleConnection,
 } from "@pqp/shared";
@@ -34,11 +35,13 @@ import {
   DepoimentosSection,
 } from "@/components/depoimentos/depoimentos-section";
 import { ConnectionBadges } from "@/components/connections/connection-badges";
+import { Achievements } from "@/components/profile/achievements";
 import {
   ApiError,
   banMember,
   createConversation,
   fetchUserConnections,
+  fetchUserAchievements,
   kickMember,
   liftTimeout,
   timeoutMember,
@@ -330,6 +333,9 @@ function UserProfileCard({
    * has nothing to do with.
    */
   const [depoimentos, setDepoimentos] = useState<Depoimento[] | null>(null);
+  const [achievements, setAchievements] = useState<ProfileAchievement[] | null>(
+    null,
+  );
   const [communities, setCommunities] = useState<ProfileCommunityList | null>(
     null,
   );
@@ -405,18 +411,18 @@ function UserProfileCard({
   /**
    * The card's own content, read once on open.
    *
-   * Both requests are safe against every viewer: the depoimento read answers an
-   * empty list to somebody outside the audience rather than a 403, and the
-   * community read is already filtered to listed, unsuspended, opted-in rooms.
-   * So there is nothing to gate here — a failure just leaves the sections
-   * hidden, which is exactly what a card with nothing to show looks like.
+   * These reads are safe against every viewer: depoimentos and achievements
+   * answer an empty list rather than a 403, and the community read is already
+   * filtered to listed, unsuspended, opted-in rooms. A failure just leaves
+   * the sections hidden, which is what a card with nothing to show looks like.
    */
   useEffect(() => {
     let alive = true;
     void (async () => {
       try {
-        const [list, badges, linked] = await Promise.all([
+        const [list, earned, badges, linked] = await Promise.all([
           fetchDepoimentos(subject.id),
+          fetchUserAchievements(subject.id),
           fetchProfileCommunities(subject.id),
           fetchUserConnections(subject.id),
         ]);
@@ -424,6 +430,7 @@ function UserProfileCard({
           return;
         }
         setDepoimentos(list.depoimentos);
+        setAchievements(earned.achievements);
         setCommunities(badges);
         setConnections(linked.connections);
       } catch {
@@ -432,6 +439,7 @@ function UserProfileCard({
         // error banner on somebody's profile card for.
         if (alive) {
           setDepoimentos([]);
+          setAchievements([]);
           setCommunities(null);
           setConnections([]);
         }
@@ -1061,6 +1069,10 @@ function UserProfileCard({
             only on your own card: a published depoimento is yours to take down
             at any time, without notice, and that is what makes publishing one
             safe to do in the first place. */}
+        <Achievements
+          achievements={achievements ?? []}
+          className="mt-3"
+        />
         <DepoimentosSection
           depoimentos={depoimentos ?? []}
           busy={busy}

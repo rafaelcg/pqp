@@ -9,6 +9,7 @@ import {
   it,
   vi,
 } from "vitest";
+import { TURMA_1000_BADGE } from "@pqp/shared";
 
 /**
  * Public handles and the page they address, end to end over HTTP.
@@ -324,6 +325,47 @@ describeDb("public handles and profiles", () => {
       "handle",
       "memberSince",
     ]);
+  });
+
+  it("puts a numbered founding mark on the public profile and nowhere identifying", async () => {
+    await call(alice, "PATCH", "/api/me", { handle: "rafa" });
+    await getPool().query(
+      `INSERT INTO user_badges (user_id, badge, ordinal) VALUES ($1, $2, 847)`,
+      [alice.id, TURMA_1000_BADGE],
+    );
+    const response = await anonymous<{
+      profile: {
+        achievements: { badge: string; name: string; ordinal: number | null }[];
+      };
+    }>("/api/public/profiles/rafa");
+    expect(response.body.profile.achievements).toEqual([
+      { badge: TURMA_1000_BADGE, name: "Turma dos 1000", ordinal: 847 },
+    ]);
+
+    const card = await call<{
+      achievements: { badge: string; ordinal: number | null }[];
+    }>(bob, "GET", `/api/users/${alice.id}/achievements`);
+    expect(card.status).toBe(200);
+    expect(card.body.achievements).toEqual([
+      { badge: TURMA_1000_BADGE, name: "Turma dos 1000", ordinal: 847 },
+    ]);
+  });
+
+  it("answers an empty achievement list to any signed-in viewer, never 403", async () => {
+    const empty = await call<{ achievements: unknown[] }>(
+      bob,
+      "GET",
+      `/api/users/${alice.id}/achievements`,
+    );
+    expect(empty.status).toBe(200);
+    expect(empty.body.achievements).toEqual([]);
+
+    const missing = await call(
+      bob,
+      "GET",
+      "/api/users/11111111-1111-4111-8111-111111111111/achievements",
+    );
+    expect(missing.status).toBe(404);
   });
 
   it("puts only public connections on the public page, without the provider id", async () => {

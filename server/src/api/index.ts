@@ -313,6 +313,7 @@ import {
 import {
   createFeedback,
   listFeedback,
+  listUserAchievements,
   resolveFeedback,
 } from "../services/feedback.js";
 import { recordCallRating } from "../services/call-ratings.js";
@@ -1161,6 +1162,18 @@ router.delete(
 router.get("/api/users/:userId/connections", async ({ user }, { userId }) => ({
   connections: await listCardConnections(user.id, userId!),
 }));
+
+/**
+ * Earned marks. These already sit on the unauthenticated public profile, so
+ * returning them here is not a relationship leak. Unknown user 404s. Everybody
+ * else gets 200, including an empty list. Never 403.
+ */
+router.get("/api/users/:userId/achievements", async (_ctx, { userId }) => {
+  if (!(await getUserById(userId!))) {
+    throw new NotFound("User not found");
+  }
+  return { achievements: await listUserAchievements(userId!) };
+});
 
 // --------------------------------------------- LGPD art. 18 (own account)
 

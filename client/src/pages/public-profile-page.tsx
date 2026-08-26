@@ -17,6 +17,7 @@ import { Seo } from "@/components/marketing/seo";
 import { Button } from "@/components/ui/button";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { ConnectionBadges } from "@/components/connections/connection-badges";
+import { Achievements } from "@/components/profile/achievements";
 import { fetchPublicProfile } from "@/lib/api";
 import { resolveUploadedImageUrl } from "@/lib/avatar";
 import { isDevAuthBypassEnabled } from "@/lib/dev-auth";
@@ -403,50 +404,6 @@ function ClaimedProfile({ profile }: { profile: PublicProfile }) {
  * as the category enum, so the lookup is total by construction and falls
  * through to the globe for anything unknown.
  */
-/**
- * Earned marks — today only caça-bugs, for a confirmed bug report. A chip row
- * and not a tile in `CommunityBadges`, because that grid is rooms somebody
- * chose and its heading counts communities; an achievement is a thing somebody
- * did, and mixing the two would make both headings lie.
- */
-const ACHIEVEMENT_GLYPHS: Record<string, string> = {
-  "caca-bugs": "🐛",
-};
-
-function Achievements({
-  achievements,
-}: {
-  achievements: { badge: string; name: string }[];
-}) {
-  const { t } = useTranslation();
-  if (achievements.length === 0) {
-    return null;
-  }
-  return (
-    <ul
-      className="mt-4 flex flex-wrap gap-2"
-      aria-label={t("publicProfile.achievements")}
-    >
-      {achievements.map((achievement) => (
-        <li
-          key={achievement.badge}
-          title={
-            achievement.badge === "caca-bugs"
-              ? t("publicProfile.achievements.cacaBugs")
-              : undefined
-          }
-          className="inline-flex items-center gap-1.5 rounded-full border border-signal/30 bg-signal/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wider text-signal"
-        >
-          <span aria-hidden>
-            {ACHIEVEMENT_GLYPHS[achievement.badge] ?? "⭐"}
-          </span>
-          {achievement.name}
-        </li>
-      ))}
-    </ul>
-  );
-}
-
 const BADGE_GLYPHS: Record<string, string> = {
   games: "🎮",
   musica: "🎧",

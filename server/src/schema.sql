@@ -2350,17 +2350,30 @@ CREATE TABLE IF NOT EXISTS feedback (
 CREATE INDEX IF NOT EXISTS idx_feedback_status_id
   ON feedback (status, id DESC);
 
--- Earned marks, keyed by a stable badge slug ('caca-bugs' is the only one
--- today). Deliberately generic — the next achievement is one INSERT away —
--- and deliberately NOT the community-membership "badges" on the public
--- profile, which are derived from server_members at read time and mean
--- membership, not merit.
+-- Earned marks, keyed by a stable badge slug ('caca-bugs', 'turma-1000').
+-- Deliberately generic — the next achievement is one INSERT away — and
+-- deliberately NOT the community-membership "badges" on the public profile,
+-- which are derived from server_members at read time and mean membership,
+-- not merit.
+--
+-- `ordinal` is the signup-order number for numbered badges (Turma dos 1000).
+-- Null on unnumbered marks. The unique pair forbids two people sharing #47.
+-- Deleting an account cascades the row and leaves a gap; numbers are not
+-- recycled (the stamp is one-shot: if any turma-1000 row exists, it stops).
 CREATE TABLE IF NOT EXISTS user_badges (
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   badge TEXT NOT NULL,
   granted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (user_id, badge)
 );
+
+ALTER TABLE user_badges ADD COLUMN IF NOT EXISTS ordinal INTEGER;
+ALTER TABLE user_badges DROP CONSTRAINT IF EXISTS user_badges_ordinal_positive;
+ALTER TABLE user_badges ADD CONSTRAINT user_badges_ordinal_positive
+  CHECK (ordinal IS NULL OR ordinal >= 1);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_badges_badge_ordinal
+  ON user_badges (badge, ordinal)
+  WHERE ordinal IS NOT NULL;
 
 -- ------------------------------------------------------ call ratings
 --
