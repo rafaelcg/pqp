@@ -197,6 +197,54 @@ If the keystore properties are absent the build still succeeds and produces
 unsigned artifact is a problem you notice in the same minute you caused it; a
 debug-signed one is a rejection three days later.
 
+### The shrinker can produce an APK that installs and then dies
+
+Version code 1 on the internal testing track **crashes the moment anybody joins
+a voice channel**, on every device. It is fixed on this branch, and the shape of
+it is worth keeping.
+
+```
+W jni_zero: jni_zero.cc:38 Failed to find class org/jni_zero/JniInit
+F libc   : Fatal signal 5 (SIGTRAP), code 1 (TRAP_BRKPT)
+```
+
+`io.github.webrtc-sdk:android` is generated with **jni_zero**, Chromium's JNI
+generator, and ships four packages: `org.webrtc`, `org.webrtc.audio`,
+`org.jni_zero` and `org.jni_zero.internal`. `proguard-rules.pro` kept the first
+two. Nothing in Kotlin ever names anything in `org.jni_zero`, so R8 removed it;
+`JNI_OnLoad` inside `libjingle_peerconnection_so.so` calls
+`FindClass("org/jni_zero/JniInit")`, does not find it, and aborts the process.
+
+The call site is `PeerConnectionFactory.initialize` in `VoiceEngine.start`,
+which runs on the `welcome` frame, so the trigger is "tap a voice channel". It
+has nothing to do with being alone in the room, with the network, or with the
+device.
+
+**Why nothing caught it.** Debug builds are not minified, so every emulator this
+project has ever used was fine. CI builds `assembleRelease` on purpose, to prove
+"the shrinker and the ProGuard rules survive". But building is not running, and
+a stripped class is a perfectly successful build.
+
+**What catches it now.** `verifyReleaseNativeJniClasses` and
+`verifyReleaseBundleNativeJniClasses` open the built `.apk` and `.aab`, read the
+dex entries, and fail if a class libwebrtc resolves by name is not in them. They
+are wired into `assembleRelease` and `bundleRelease`, so neither the CI step nor
+a human preparing an upload can produce an artifact with this hole in it. A dex
+file stores class descriptors as plain strings, so the check is a byte search
+and has no format to keep up with.
+
+To see it fail, delete `-keep class org.jni_zero.** { *; }` and run
+`./gradlew :app:assembleRelease`.
+
+**The general rule this leaves behind:** a dependency that resolves Java classes
+from native code needs a keep rule for **every package it ships**, not for the
+package whose name you recognise. Check with:
+
+```bash
+unzip -l "$(find ~/.gradle/caches -path '*webrtc*' -name classes.jar | head -1)" \
+  | awk '{print $4}' | grep '\.class$' | sed 's|/[^/]*$||' | sort -u
+```
+
 ### Native debug symbols, and why the Play warning may not go away
 
 Play warns on every bundle that carries native code with no symbol file, because
