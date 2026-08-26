@@ -70,7 +70,7 @@ object DeepLink {
         if (segments.isEmpty()) return null
 
         if (segments[0] == "invite" && segments.size >= 2) {
-            return DeepLinkTarget.Invite(segments[1])
+            return if (isUsableCode(segments[1])) DeepLinkTarget.Invite(segments[1]) else null
         }
         if (segments[0] != "app") return null
 
@@ -96,10 +96,24 @@ object DeepLink {
         if (rest.isEmpty()) return null
         val parts = rest.split('/').filter { it.isNotEmpty() }
         return when {
-            parts.size >= 2 && parts[0] == "invite" -> DeepLinkTarget.Invite(parts[1])
+            parts.size >= 2 && parts[0] == "invite" && isUsableCode(parts[1]) ->
+                DeepLinkTarget.Invite(parts[1])
             else -> null
         }
     }
+
+    /**
+     * What an invite code may contain, before it is put in a URL path.
+     *
+     * Any app on the phone can fire a `pqp://` intent at this activity, so the
+     * segment that becomes `POST /api/invites/<code>/join` is checked here
+     * rather than trusted. The generator makes short alphanumeric codes
+     * (`server/src/services/invites.ts`); the cap is generous rather than
+     * exact, which is the same call `ios/pqp/Sources/Core/DeepLink.swift`
+     * makes. The Swift twin of this function.
+     */
+    private fun isUsableCode(code: String): Boolean =
+        code.length in 1..64 && code.all { it.isLetterOrDigit() || it == '-' || it == '_' }
 
     /**
      * The path, minus scheme, host, query and fragment, split on `/`.

@@ -101,6 +101,15 @@ fun ChatScreen(
     // gg.pqp.app.push.PushPresentation.
     LifecycleStartEffect(channelId) {
         VisibleChannel.enter(channelId)
+
+        // And, in the same breath, take the socket's single channel
+        // subscription back. There is more than one chat surface now: a
+        // conversation, or a chat opened by a notification tap, can be pushed
+        // on top of this one and will have claimed it. Popping that screen off
+        // does not hand it back, so the screen underneath would sit there
+        // looking connected and receive nothing.
+        model.resubscribe()
+
         onStopOrDispose { VisibleChannel.leave(channelId) }
     }
 
@@ -156,8 +165,11 @@ fun ChatScreen(
                     if (it.isNotEmpty()) model.typing()
                 },
                 onSend = {
-                    model.send(draft, me)
-                    draft = ""
+                    // Cleared only once the frame has actually left the phone.
+                    // A send during a reconnect returns false, and swallowing
+                    // the box's contents there is how somebody loses a sentence
+                    // they watched themselves type.
+                    if (model.send(draft, me)) draft = ""
                 },
             )
         },

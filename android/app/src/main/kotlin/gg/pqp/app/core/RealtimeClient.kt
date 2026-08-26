@@ -195,16 +195,29 @@ class RealtimeClient(
      */
     fun send(frame: JsonObject): Boolean {
         val live = socket
+        val ready = _state.value == RealtimeState.Ready
         val sent = live != null &&
-            _state.value == RealtimeState.Ready &&
+            ready &&
             live.send(PqpJson.encodeToString(JsonObject.serializer(), frame))
-        if (!sent && wanted) {
-            Log.w(TAG, "send could not leave; reconnecting")
-            socket?.cancel()
-            socket = null
-            if (connectJob?.isActive != true) connect()
+        if (sent || !wanted) return sent
+
+        if (fallbackFor(ready, connectJob?.isActive == true) == SendFallback.Wait) {
+            // The socket is not ready *yet*, and an attempt is already in
+            // flight. `socket` is non-null from the moment `newWebSocket`
+            // returns, right through the auth handshake, so the old test
+            // ("no socket") was never true here and every frame sent during a
+            // reconnect cancelled the attempt that was about to succeed. With
+            // a `typing` frame per keystroke that is one aborted attempt per
+            // character, each one bumping the backoff, which walked it to the
+            // 30 second cap while somebody typed a sentence.
+            return false
         }
-        return sent
+
+        Log.w(TAG, "send could not leave; reconnecting")
+        socket?.cancel()
+        socket = null
+        if (connectJob?.isActive != true) connect()
+        return false
     }
 
     fun joinChannel(channelId: String): Boolean {
@@ -217,7 +230,20 @@ class RealtimeClient(
         )
     }
 
-    fun leaveChannel() {
+    /**
+     * Give up the subscription, but only if it is still ours.
+     *
+     * The channel id is required, and that is the whole fix. There is one
+     * subscription per connection, and there is now more than one screen that
+     * takes it: a server channel and a conversation are both `ChatScreen`, and
+     * a notification tap can stack a second one on top of the first. Whichever
+     * closes second used to unsubscribe unconditionally, which meant closing a
+     * conversation could silently stop a channel underneath it from receiving
+     * anything, with no visible symptom until somebody noticed the messages had
+     * stopped.
+     */
+    fun leaveChannel(channelId: String) {
+        if (subscribedChannelId != channelId) return
         subscribedChannelId = null
         send(buildJsonObject { put("type", "leave-channel") })
     }
@@ -244,8 +270,21 @@ class RealtimeClient(
 
     private data class CloseReason(val code: Int, val reason: String)
 
+    /** What a frame that could not leave should make this client do. */
+    internal enum class SendFallback { Wait, Reconnect }
+
     companion object {
         private const val TAG = "pqp.realtime"
+
+        /**
+         * Whether a failed send should tear the socket down, or wait.
+         *
+         * Pure so that the one rule that matters can be pinned by a test:
+         * a connect attempt that has not finished yet is not a broken socket,
+         * and cancelling it restarts the handshake and grows the backoff.
+         */
+        internal fun fallbackFor(ready: Boolean, attemptInFlight: Boolean): SendFallback =
+            if (!ready && attemptInFlight) SendFallback.Wait else SendFallback.Reconnect
 
         /** The server's own close codes. Neither is an ordinary disconnect. */
         private const val CLOSE_UNAUTHORIZED = 4401

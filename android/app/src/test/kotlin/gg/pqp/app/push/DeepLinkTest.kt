@@ -92,4 +92,26 @@ class DeepLinkTest {
         val target = DeepLink.target("/app/server/never-opened/channel/never-seen")
         assertEquals(DeepLinkTarget.Channel("never-opened", "never-seen"), target)
     }
+
+    /**
+     * Any app on the phone can fire a `pqp://` intent at `MainActivity`, and
+     * the segment that arrives becomes a path in `POST /api/invites/…/join`.
+     * A code with a slash or a `..` in it is refused here rather than sent.
+     */
+    @Test
+    fun `an invite code that is not a code is refused`() {
+        assertNull(DeepLink.target("pqp://invite/../../api/me"))
+        assertNull(DeepLink.target("pqp://invite/" + "A".repeat(65)))
+        assertNull(DeepLink.target("/app/invite/has space"))
+    }
+
+    @Test
+    fun `an ordinary invite code still parses through both shapes`() {
+        assertEquals(DeepLinkTarget.Invite("aB3-x_9"), DeepLink.target("pqp://invite/aB3-x_9"))
+        assertEquals(DeepLinkTarget.Invite("aB3-x_9"), DeepLink.target("/invite/aB3-x_9"))
+        assertEquals(
+            DeepLinkTarget.Invite("aB3-x_9"),
+            DeepLink.target("https://pqp.gg/invite/aB3-x_9"),
+        )
+    }
 }

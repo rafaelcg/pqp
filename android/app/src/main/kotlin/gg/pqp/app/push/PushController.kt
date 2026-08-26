@@ -284,7 +284,16 @@ class PushController(
     // ------------------------------------------------------------ navigation
 
     /**
-     * A notification tap, as it arrives on `MainActivity`'s intent.
+     * Anything that arrives on `MainActivity`'s intent and names a destination:
+     * a notification tap, or a `pqp://` link somebody followed.
+     *
+     * The two are handled together because they are the same question ("where
+     * does this intent want the app to go?") answered by the same parser, and
+     * because both have to be *consumed*. The link half was the missing half:
+     * `AndroidManifest.xml` has registered the `pqp` scheme since the first
+     * commit and nothing ever read `intent.data`, so every invite link opened
+     * the app on the server list and said nothing. Advertising a scheme and
+     * dropping what arrives through it is worse than not registering it.
      *
      * Returns whether the intent was one of ours, so the caller can leave a
      * plain launcher start alone.
@@ -292,17 +301,20 @@ class PushController(
     fun onActivityIntent(intent: Intent?): Boolean {
         val path = intent?.getStringExtra(PushNotifier.EXTRA_PATH)
         val tag = intent?.getStringExtra(PushNotifier.EXTRA_TAG)
-        if (path == null && tag == null) return false
+        val link = intent?.data?.toString()
+        if (path == null && tag == null && link == null) return false
 
-        // The extras are consumed once. An Activity is re-created on every
-        // rotation with the same intent attached, and without this the app
-        // would jump back to the notification's channel every time the phone
-        // was turned.
+        // Consumed once, all three. An Activity is re-created on every rotation
+        // with the same intent attached, and without this the app would jump
+        // back to the notification's channel, or re-redeem the invite, every
+        // time the phone was turned.
         intent.removeExtra(PushNotifier.EXTRA_PATH)
         intent.removeExtra(PushNotifier.EXTRA_TAG)
+        intent.data = null
 
         val target = DeepLink.target(path)
             ?: tag?.let { DeepLinkTarget.Conversation(it) }
+            ?: DeepLink.target(link)
             ?: return false
         _pendingTarget.value = target
         return true

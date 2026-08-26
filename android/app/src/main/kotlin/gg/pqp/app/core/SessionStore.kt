@@ -46,6 +46,16 @@ class SessionStore(
     val servers: StateFlow<List<ServerSummary>> = _servers.asStateFlow()
 
     /**
+     * Why the last `pqp://` link went nowhere, in the server's own words.
+     *
+     * A followed link that silently does nothing is indistinguishable from a
+     * broken app, and only the server knows whether the invite was expired,
+     * revoked, exhausted, or the account banned from that server.
+     */
+    private val _linkError = MutableStateFlow<String?>(null)
+    val linkError: StateFlow<String?> = _linkError.asStateFlow()
+
+    /**
      * Swapped when the account changes, which is why it is a `var` behind a
      * delegating provider rather than a constructor argument: the API and the
      * socket are built once and must not be rebuilt on sign-in.
@@ -125,9 +135,35 @@ class SessionStore(
         }
     }
 
+    /**
+     * Redeem an invite and answer with the server it let us into, or null if it
+     * was refused, in which case [linkError] carries the server's reason.
+     *
+     * The name is taken from the response rather than looked up in [servers]
+     * afterwards: `refreshServers` is a separate round trip and the caller
+     * navigates immediately, so a lookup would find nothing and title the
+     * screen blank on the one path where the name is guaranteed to be known.
+     */
+    suspend fun redeemInvite(code: String): JoinInviteResponse? = try {
+        _linkError.value = null
+        val joined = api.joinInvite(code)
+        refreshServers()
+        joined
+    } catch (cancelled: kotlinx.coroutines.CancellationException) {
+        throw cancelled
+    } catch (error: Throwable) {
+        _linkError.value = (error as? ApiException)?.serverMessage ?: error.message.orEmpty()
+        null
+    }
+
+    fun clearLinkError() {
+        _linkError.value = null
+    }
+
     fun signOutLocally() {
         realtime.disconnect()
         _servers.value = emptyList()
+        _linkError.value = null
         _phase.value = SessionPhase.SignedOut
     }
 

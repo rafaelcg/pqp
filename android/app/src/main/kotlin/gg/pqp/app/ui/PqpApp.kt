@@ -11,23 +11,31 @@ import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
+import gg.pqp.app.R
 import gg.pqp.app.core.SessionPhase
 import gg.pqp.app.core.SessionStore
 import gg.pqp.app.push.DeepLinkTarget
 import gg.pqp.app.push.PushController
+import gg.pqp.app.social.SocialRepository
+import gg.pqp.app.social.ui.ConversationRoute
 import gg.pqp.app.social.ui.HomeScreen
 import gg.pqp.app.social.ui.conversationDestination
+import gg.pqp.app.social.ui.titleOr
 import gg.pqp.app.ui.components.CallBar
 import gg.pqp.app.ui.screens.AgeGateScreen
 import gg.pqp.app.ui.screens.ChannelsScreen
@@ -122,6 +130,24 @@ private fun SignedInNav(session: SessionStore, voice: VoiceController, push: Pus
             push.consumeTarget()
             navigateToPush(nav, session, target)
         }
+    }
+
+    // A `pqp://` link that went nowhere, in the server's own words. A dialog
+    // rather than a banner: somebody who followed a link is waiting for an
+    // answer, and "nothing happened" is the one answer that reads as a broken
+    // app.
+    val linkError by session.linkError.collectAsStateWithLifecycle()
+    linkError?.let { message ->
+        AlertDialog(
+            onDismissRequest = session::clearLinkError,
+            title = { Text(stringResource(R.string.invite_failed_title)) },
+            text = { Text(message.ifBlank { stringResource(R.string.error_generic) }) },
+            confirmButton = {
+                TextButton(onClick = session::clearLinkError) {
+                    Text(stringResource(R.string.ok))
+                }
+            },
+        )
     }
 
     Column(Modifier.fillMaxSize()) {
@@ -229,15 +255,35 @@ private suspend fun navigateToPush(
         is DeepLinkTarget.Server ->
             nav.navigate(ChannelsRoute(target.serverId, serverName(target.serverId)))
 
-        // A conversation id IS a channel id, so the transcript opens with the
-        // machinery that is already here. There is no DM list on this client
-        // yet to put behind it, which is the one thing this path is missing.
-        is DeepLinkTarget.Conversation ->
-            nav.navigate(ChatRoute(target.channelId))
+        // A conversation id IS a channel id, but it is not a *channel* route:
+        // a conversation's app bar is a person's name and opening one moves a
+        // read cursor. Both belong to `conversationDestination`, so this goes
+        // there rather than to the `#channel` screen it used to open, which
+        // titled a DM "Conversation" and left its unread badge standing.
+        is DeepLinkTarget.Conversation -> {
+            val known = SocialRepository.of(session).conversations.value
+                .firstOrNull { it.channelId == target.channelId }
+            nav.navigate(
+                ConversationRoute(
+                    channelId = target.channelId,
+                    // Empty rather than invented when the list has not loaded
+                    // or the conversation is one this client has not seen: the
+                    // screen renders a placeholder, and a wrong name is worse
+                    // than none.
+                    title = known?.titleOr("").orEmpty(),
+                ),
+            )
+        }
 
-        // Redeeming one needs a screen this client does not have. Dropped
-        // rather than half-handled: a tap that lands nowhere is better than one
-        // that lands somewhere wrong.
-        is DeepLinkTarget.Invite -> Unit
+        // `pqp://invite/<code>`, which is what the manifest has advertised
+        // since the first commit. Redeemed here rather than shown on a
+        // confirmation screen there is no design for, because the server's
+        // redeem is idempotent: already being a member returns the same server
+        // and burns no use, so following a link twice just takes you there.
+        // A refusal is the server's own sentence, surfaced by `linkError`.
+        is DeepLinkTarget.Invite -> {
+            val joined = session.redeemInvite(target.code) ?: return
+            nav.navigate(ChannelsRoute(joined.serverId, joined.serverName))
+        }
     }
 }

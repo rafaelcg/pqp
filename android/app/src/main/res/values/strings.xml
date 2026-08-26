@@ -85,6 +85,8 @@
     <!-- Generic -->
     <string name="chat_untitled">Conversation</string>
     <string name="cancel">Cancel</string>
+    <string name="ok">OK</string>
+    <string name="invite_failed_title">That invite did not work</string>
     <string name="error_generic">Something went wrong.</string>
     <string name="error_network">The server did not answer.</string>
 

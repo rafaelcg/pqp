@@ -79,6 +79,16 @@ data class CreateServerResponse(
 )
 
 /**
+ * What redeeming an invite answers with.
+ *
+ * Already being a member is a *success* and needs no special case: the server
+ * inserts `ON CONFLICT DO NOTHING`, does not burn a use, and returns the same
+ * server. Following a link twice therefore just takes you there.
+ */
+@Serializable
+data class JoinInviteResponse(val serverId: String, val serverName: String = "")
+
+/**
  * `kind` is what the row *is* (`server` / `dm` / `group`); `type` is what it
  * *carries* (`text` / `voice` / `category`). They are two different fields and
  * conflating them is how a category ends up rendered as an empty text channel.

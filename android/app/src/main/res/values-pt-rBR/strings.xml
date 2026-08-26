@@ -85,6 +85,8 @@
     <!-- Genéricos -->
     <string name="chat_untitled">Conversa</string>
     <string name="cancel">Cancelar</string>
+    <string name="ok">OK</string>
+    <string name="invite_failed_title">Esse convite não funcionou</string>
     <string name="error_generic">Algo deu errado.</string>
     <string name="error_network">O servidor não respondeu.</string>
 

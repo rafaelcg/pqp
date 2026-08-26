@@ -1,11 +1,15 @@
 package gg.pqp.app.social
 
+import android.os.SystemClock
 import android.util.Log
 import gg.pqp.app.core.ApiException
 import gg.pqp.app.core.SessionPhase
 import gg.pqp.app.core.SessionStore
 import java.time.Instant
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -30,14 +34,24 @@ import kotlinx.serialization.json.jsonPrimitive
  * all rather than a `collect` inside a screen:
  *
  * Closing a conversation deletes only your own `channel_members` row. The
- * channel, its history and the other person are untouched, and the server puts
- * you back in it the instant either side speaks (`restoreDmParticipants`, run
- * *before* the message is written so you are in its audience). So a
- * `channel-activity` frame naming a conversation this client has never heard of
- * is not a frame to drop. It is a conversation that has just come back, and
- * only the server knows who is in it. Dropping it leaves a reopened DM that
- * reaches nobody: the other side sees their message land, and it never appears
- * here until a manual refresh.
+ * channel, its history and the other person are untouched, and **for a 1:1**
+ * the server puts you back in it the instant either side speaks
+ * (`restoreDmParticipants`, run *before* the message is written so you are in
+ * its audience). So a `channel-activity` frame naming a conversation this
+ * client has never heard of is not a frame to drop. It is a conversation that
+ * has just come back, and only the server knows who is in it. Dropping it
+ * leaves a reopened DM that reaches nobody: the other side sees their message
+ * land, and it never appears here until a manual refresh.
+ *
+ * **A group is not restored, and this is not a detail.** Restoration reads
+ * `dm_pairs`, and only a 1:1 has a row there; `restoreDmParticipants` on a
+ * group channel matches nothing and inserts nothing, so no frame is sent to
+ * somebody who left one (`server/src/services/dms.ts`, which says it outright:
+ * "leaving a group is leaving it"). Nothing here can soften that, and the
+ * user-facing strings already do not promise otherwise. This comment used to,
+ * which is worse than saying nothing: a reader would have gone looking for the
+ * client bug that loses a reopened group, and there is no such bug and no such
+ * reopening.
  */
 class SocialRepository(
     private val session: SessionStore,
@@ -84,15 +98,60 @@ class SocialRepository(
         }
     }
 
+    /**
+     * Re-read `GET /api/dms`, at most one at a time.
+     *
+     * The guard is not tidiness. Every `channel-activity` frame for a
+     * conversation this client does not know about calls this, and that is the
+     * normal state of a closed DM coming back, so five messages typed quickly
+     * into one opened five concurrent reads of the whole inbox. A request that
+     * arrives while one is in flight is *coalesced* rather than dropped: the
+     * in-flight read may have been sent before the row it is being asked about
+     * existed, so exactly one more has to follow it.
+     */
     fun refreshConversations() {
-        scope.launch {
+        if (refreshJob?.isActive == true) {
+            refreshAgain = true
+            return
+        }
+        refreshJob = scope.launch {
             _loadingConversations.value = true
-            runCatching { session.api.conversations() }
-                .onSuccess { _conversations.value = it }
-                .onFailure { Log.w(TAG, "conversations failed: ${it.message}") }
+            do {
+                refreshAgain = false
+                val startedAt = SystemClock.elapsedRealtime()
+                runCatching { session.api.conversations() }
+                    .onSuccess { _conversations.value = it.map { row -> row.honouringRead(startedAt) } }
+                    .onFailure { Log.w(TAG, "conversations failed: ${it.message}") }
+            } while (refreshAgain)
             _loadingConversations.value = false
         }
     }
+
+    private var refreshJob: Job? = null
+
+    @Volatile private var refreshAgain = false
+
+    /**
+     * Conversations whose badge this client has cleared, with the moment the
+     * server confirmed it. The web calls this an unread hold.
+     *
+     * `GET /api/dms` counts unread from the read cursor, so a snapshot that was
+     * requested before `POST /api/channels/:id/read` landed still carries the
+     * old count, and applying it puts the badge straight back on the
+     * conversation somebody is reading. Comparing against when the read
+     * *settled* is what makes the hold release itself: the first read started
+     * after that point is trustworthy again, with no timer to tune and no set
+     * to remember to empty.
+     */
+    private val readSettledAt = mutableMapOf<String, Long>()
+    private val readInFlight = mutableSetOf<String>()
+
+    private fun DmSummary.honouringRead(snapshotStartedAt: Long): DmSummary =
+        if (readHoldApplies(snapshotStartedAt, readSettledAt[channelId], channelId in readInFlight)) {
+            copy(unread = UnreadCounts())
+        } else {
+            this
+        }
 
     // --- friend actions ---
     //
@@ -191,9 +250,16 @@ class SocialRepository(
         _conversations.value = _conversations.value.map {
             if (it.channelId == channelId) it.copy(unread = UnreadCounts()) else it
         }
+        readInFlight += channelId
         scope.launch {
             runCatching { session.api.markChannelRead(channelId) }
                 .onFailure { Log.w(TAG, "mark read failed: ${it.message}") }
+            // Recorded even on failure. The hold exists to stop a snapshot
+            // *older than the read* undoing it; a read that never happened has
+            // nothing to protect, and the server is then right to put the badge
+            // back on the next refresh.
+            readSettledAt[channelId] = SystemClock.elapsedRealtime()
+            readInFlight -= channelId
         }
     }
 
@@ -253,7 +319,10 @@ class SocialRepository(
         }
 
         val bumped = known.copy(
-            lastMessageAt = Instant.now().toString(),
+            lastMessageAt = bumpedTimestamp(
+                Instant.now(),
+                _conversations.value.mapNotNull { it.lastMessageAt }.maxOrNull(),
+            ),
             unread = UnreadCounts(
                 count = known.unread.count + 1,
                 mentions = known.unread.mentions + if (mention) 1 else 0,
@@ -320,6 +389,8 @@ class SocialRepository(
                 _conversations.value = emptyList()
                 _friendNudge.value = null
                 _error.value = null
+                readSettledAt.clear()
+                readInFlight.clear()
             }
             wasReady = ready
         }
@@ -367,6 +438,60 @@ class SocialRepository(
 
     companion object {
         private const val TAG = "pqp.social"
+
+        /**
+         * Whether a snapshot's unread count for one conversation is older than
+         * this client's own read of it, and so must not be applied.
+         *
+         * Pure, because the whole fix is this comparison. A read still in
+         * flight always wins; otherwise the snapshot is trusted only if it was
+         * *started after* the read settled, which is the point from which the
+         * server's own cursor is guaranteed to be the one it answers from.
+         */
+        internal fun readHoldApplies(
+            snapshotStartedAt: Long,
+            settledAt: Long?,
+            inFlight: Boolean,
+        ): Boolean = inFlight || (settledAt != null && snapshotStartedAt <= settledAt)
+
+        /**
+         * The server's own timestamp format: UTC, exactly three fractional
+         * digits, `Z`. What JavaScript's `toISOString()` prints, which is what
+         * every `lastMessageAt` in this list is compared against.
+         */
+        private val SERVER_TIME: DateTimeFormatter =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'").withZone(ZoneOffset.UTC)
+
+        /**
+         * A timestamp for a message that has just arrived: two bugs, one value.
+         *
+         * `Instant.now().toString()` is the wrong shape. It prints as many
+         * fractional digits as the clock has, so a phone with microsecond
+         * resolution writes `…:04.123456Z` where the server writes
+         * `…:04.123Z`, and these strings are ordered lexicographically: `'4'`
+         * is below `'Z'`, so the row this client just bumped sorts *under* a
+         * server row from the same millisecond instead of above it.
+         *
+         * And it is the wrong clock. The phone's is not the server's, so a
+         * device running even a few seconds slow stamps a message that just
+         * arrived into the middle of the list. Taking the newest timestamp the
+         * server has already given us as a floor removes the skew from the
+         * comparison entirely: whatever the phone thinks the time is, a message
+         * that has just arrived is newer than every message already listed.
+         */
+        internal fun bumpedTimestamp(now: Instant, newestKnown: String?): String {
+            // Compared at the precision it will be *printed* at. A phone clock
+            // that is 400 microseconds ahead of the newest server row is not
+            // ahead of it at all once both are three digits long, and the two
+            // would come out equal, which leaves the order to whatever the
+            // sort happened to be given.
+            val at = Instant.ofEpochMilli(now.toEpochMilli())
+            val floor = newestKnown
+                ?.let { runCatching { Instant.parse(it) }.getOrNull() }
+                ?.let { Instant.ofEpochMilli(it.toEpochMilli()) }
+            val stamped = if (floor != null && !at.isAfter(floor)) floor.plusMillis(1) else at
+            return SERVER_TIME.format(stamped)
+        }
 
         /**
          * `name#1234`, as typed into a lookup box. One separator and something

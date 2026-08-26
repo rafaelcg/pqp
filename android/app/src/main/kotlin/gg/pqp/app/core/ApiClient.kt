@@ -75,6 +75,17 @@ class ApiClient(
         },
     )
 
+    /**
+     * Redeem an invite code and answer with the server it let us into.
+     *
+     * A refusal is a 400 carrying the server's own sentence, and it is the only
+     * thing that knows which refusal it was: expired, revoked, out of uses, or
+     * the caller banned. Show it verbatim; a friendlier local paraphrase would
+     * be a guess.
+     */
+    suspend fun joinInvite(code: String): JoinInviteResponse =
+        post("/api/invites/$code/join", "{}")
+
     suspend fun iceServers(): List<IceServer> =
         get<IceServersResponse>("/api/ice-servers").iceServers
 

@@ -172,9 +172,18 @@ class ChatViewModel(
         }
     }
 
-    fun send(body: String, author: gg.pqp.app.core.Me?) {
+    /**
+     * Say something, and answer whether it left the phone.
+     *
+     * The boolean is load-bearing rather than informational: the composer
+     * clears the box on `true` and keeps the typed text on `false`. It used to
+     * clear unconditionally, which meant a send during a reconnect swallowed
+     * the sentence somebody had just written, with the optimistic row removed a
+     * frame later so there was nothing left on screen to retry from.
+     */
+    fun send(body: String, author: gg.pqp.app.core.Me?): Boolean {
         val trimmed = body.trim()
-        if (trimmed.isEmpty()) return
+        if (trimmed.isEmpty()) return false
 
         val nonce = UUID.randomUUID().toString()
         pending += nonce
@@ -201,15 +210,52 @@ class ChatViewModel(
             _state.value = _state.value.copy(
                 messages = _state.value.messages.filterNot { it.id == nonce },
             )
+            return false
         }
+        return true
     }
 
+    /**
+     * Tell the channel somebody is typing, at most once every
+     * [TYPING_THROTTLE_MS].
+     *
+     * The composer calls this on every keystroke, because that is the only
+     * moment it knows about. Forwarding every one of them put a frame on the
+     * socket per character, which is what the web client's own 2.5 second
+     * throttle exists to avoid, and which made a reconnect during typing far
+     * worse than a reconnect on its own.
+     */
     fun typing() {
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (!shouldSendTyping(now, lastTypingAt)) return
+        lastTypingAt = now
         session.realtime.sendTyping(channelId)
     }
 
+    /**
+     * Monotonic, not wall clock: `elapsedRealtime` cannot go backwards when the
+     * phone's clock is corrected, which would otherwise strand the throttle
+     * closed for however far it jumped.
+     */
+    private var lastTypingAt = 0L
+
     override fun onCleared() {
-        session.realtime.leaveChannel()
+        // Named, because there is more than one chat surface now and the
+        // subscription is one per connection. See RealtimeClient.leaveChannel.
+        session.realtime.leaveChannel(channelId)
+    }
+
+    /**
+     * Re-assert this screen's subscription.
+     *
+     * Called when the screen comes back to the foreground. A second chat opened
+     * on top of this one (a notification tap, a conversation) took the single
+     * per-connection subscription with it, and popping it back off does not
+     * hand it back. Without this the screen underneath sits there looking
+     * connected and receives nothing.
+     */
+    fun resubscribe() {
+        session.realtime.joinChannel(channelId)
     }
 
     private fun JsonObject.string(key: String): String? =
@@ -221,6 +267,17 @@ class ChatViewModel(
 
     companion object {
         private const val TYPING_TTL_MS = 4_000L
+
+        /**
+         * Matches `TYPING_THROTTLE_MS` in the web client. The server's own
+         * `typing` fan-out has a shorter life than this on the receiving side,
+         * which is why it is a floor on sends and not a ceiling on anything.
+         */
+        internal const val TYPING_THROTTLE_MS = 2_500L
+
+        /** Pure, so the one rule here is pinned by a test. */
+        internal fun shouldSendTyping(nowMs: Long, lastSentMs: Long): Boolean =
+            lastSentMs == 0L || nowMs - lastSentMs >= TYPING_THROTTLE_MS
 
         fun factory(session: SessionStore, channelId: String) = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")

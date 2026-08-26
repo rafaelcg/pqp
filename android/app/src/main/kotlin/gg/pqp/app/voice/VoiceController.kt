@@ -457,6 +457,19 @@ class VoiceController(
             stage = VoiceStage.Connected,
             participants = peers + listOfNotNull(frame.participant("self")),
         )
+
+        // Re-declare mute and deafen, every single join.
+        //
+        // The server creates the peer with `muted: false, deafened: false` and
+        // waits to be told otherwise (`server/src/ws/voice.ts`, where the reset
+        // is commented as expecting exactly this frame). It is not an
+        // optimisation to skip it when both are false: this client only ever
+        // sent `set-voice-state` from the two toggles, so joining with a
+        // standing mute, switching channels, or rebuilding the room after a
+        // dropped socket all left everyone else's roster saying this person was
+        // live while their microphone was off. The web does the same thing on
+        // every new peer id (`client/src/components/voice/voice-state-sync.ts`).
+        pushVoiceState()
     }
 
     private fun onPeerJoined(frame: JsonObject) {
