@@ -335,6 +335,25 @@ WebSocket *is* one exchange, so a ceiling there would kill every socket on
 schedule. `docs/IOS.md` records that exact failure on URLSession, where it
 looked like a live connection that dropped everything it was asked to send.
 
+## How it looks, and why
+
+The visual language lives in its own document: **[`ANDROID_DESIGN.md`](./ANDROID_DESIGN.md)**.
+Read it before touching anything under `ui/`.
+
+The short version. The first build carried pqp's palette onto stock Material 3
+and stopped there, so the app was idiomatic Android and not designed: Roboto,
+Material's density, Material's shapes and `Icons.Default`. It has since been
+given two shipped typefaces (Instrument Sans and Gabarito, the web's pair), a
+stated type scale, a surface hierarchy in which chrome is **deeper** than
+content, Material's tonal elevation switched off so no surface drifts off that
+ramp, a Lucide icon set drawn from checked-in path data, and row heights chosen
+per row rather than inherited. The palette itself did not change. What changed
+is where each colour is allowed to appear, and the lime signal now has a written
+list of the places it may show up.
+
+None of that touched navigation, gestures or platform behaviour, which were
+already right and are listed below.
+
 ## Android conventions, deliberately
 
 - **Edge to edge**, with `SystemBarStyle.auto` rather than `dark`. Pinning the

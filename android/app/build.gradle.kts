@@ -216,7 +216,11 @@ dependencies {
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
-    implementation(libs.androidx.compose.material.icons.extended)
+    // material-icons-extended is deliberately absent. Every icon in the app now
+    // comes from `ui/theme/PqpIcons.kt`, which is checked-in Lucide path data
+    // and no dependency at all, so the artifact was buying nothing but a very
+    // large set of glyphs the design language does not use. See
+    // docs/ANDROID_DESIGN.md, section Iconography.
 
     implementation(libs.okhttp)
     implementation(libs.kotlinx.serialization.json)

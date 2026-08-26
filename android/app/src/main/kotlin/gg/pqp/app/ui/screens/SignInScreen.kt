@@ -1,5 +1,6 @@
 package gg.pqp.app.ui.screens
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -30,6 +31,7 @@ import gg.pqp.app.R
 import gg.pqp.app.core.AuthMode
 import gg.pqp.app.core.Backend
 import gg.pqp.app.core.SessionStore
+import gg.pqp.app.ui.theme.Spacing
 
 /**
  * Sign in, in whichever of the two modes this build was configured for.
@@ -108,6 +110,13 @@ private fun ClerkSignIn(session: SessionStore) {
     }
 }
 
+/**
+ * The other mode, which is the only one this pass could style.
+ *
+ * One mark, one heading in the display face, one sentence under it and one lime
+ * button. Everything else on the screen is neutral, which is the whole rule:
+ * the loud colour appears once and it is on the thing to press.
+ */
 @Composable
 private fun DevSignIn(session: SessionStore) {
     Column(
@@ -118,39 +127,42 @@ private fun DevSignIn(session: SessionStore) {
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        androidx.compose.foundation.Image(
+        Image(
             painter = painterResource(R.drawable.ic_launcher_foreground),
             contentDescription = null,
             modifier = Modifier.size(96.dp),
         )
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(Spacing.lg))
         Text(
             text = stringResource(R.string.sign_in_title),
-            style = MaterialTheme.typography.headlineMedium,
+            style = MaterialTheme.typography.displaySmall,
             textAlign = TextAlign.Center,
         )
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(Spacing.md))
         Text(
             text = stringResource(R.string.sign_in_subtitle),
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
         )
-        Spacer(Modifier.height(36.dp))
+        Spacer(Modifier.height(Spacing.xxl))
         Button(
             onClick = { session.useDevAccount() },
-            modifier = Modifier.fillMaxWidth(),
+            shape = MaterialTheme.shapes.small,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(52.dp),
         ) {
             Text(stringResource(R.string.sign_in_dev_action))
         }
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(Spacing.md))
         Text(
             text = stringResource(R.string.sign_in_dev_note),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
         )
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(Spacing.sm))
         TextButton(onClick = session::restore) {
             Text(stringResource(R.string.connection_retry))
         }

@@ -12,14 +12,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Close
+import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.InputChip
+import androidx.compose.material3.InputChipDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
@@ -41,6 +41,10 @@ import gg.pqp.app.social.DM_MAX_RECIPIENTS
 import gg.pqp.app.social.DmSummary
 import gg.pqp.app.social.PublicUser
 import gg.pqp.app.social.SocialRepository
+import gg.pqp.app.ui.components.SectionLabel
+import gg.pqp.app.ui.theme.PqpIcons
+import gg.pqp.app.ui.theme.Sizes
+import gg.pqp.app.ui.theme.Spacing
 import kotlinx.coroutines.launch
 
 /**
@@ -87,7 +91,15 @@ fun NewConversationSheet(
     }
     val rows = if (search.isTyping) search.results else suggestions
 
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        shape = pqpSheetShape(),
+        containerColor = MaterialTheme.colorScheme.surfaceContainer,
+        dragHandle = {
+            BottomSheetDefaults.DragHandle(color = MaterialTheme.colorScheme.onSurfaceVariant)
+        },
+    ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -95,28 +107,45 @@ fun NewConversationSheet(
         ) {
             Text(
                 text = stringResource(R.string.dms_new),
-                style = MaterialTheme.typography.headlineSmall,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                style = MaterialTheme.typography.headlineMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.xs),
             )
             PeopleSearchField(
                 state = search,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                modifier = Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.md),
                 tag = "dms.new.search",
             )
 
             if (selected.isNotEmpty()) {
                 FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp),
+                        .padding(horizontal = Spacing.gutter),
                 ) {
                     selected.forEach { user ->
                         InputChip(
                             selected = true,
                             onClick = { selected.remove(user) },
                             label = { Text(user.displayName) },
-                            trailingIcon = { Icon(Icons.Filled.Close, contentDescription = null) },
+                            trailingIcon = {
+                                Icon(
+                                    imageVector = PqpIcons.Close,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(InputChipDefaults.IconSize),
+                                )
+                            },
+                            // A picked person is a fact, not an action: the
+                            // reacting surface rather than the signal, so the
+                            // one lime object on this sheet stays the button
+                            // that opens the conversation.
+                            colors = InputChipDefaults.inputChipColors(
+                                selectedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                selectedLabelColor = MaterialTheme.colorScheme.onSurface,
+                                selectedTrailingIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            ),
+                            border = null,
                         )
                     }
                 }
@@ -127,7 +156,7 @@ fun NewConversationSheet(
                     text = stringResource(R.string.dms_group_limit),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    modifier = Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.sm),
                 )
             }
 
@@ -144,24 +173,19 @@ fun NewConversationSheet(
                     color = MaterialTheme.colorScheme.error,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                        .padding(horizontal = Spacing.gutter, vertical = Spacing.sm)
                         .testTag("dms.new.error"),
                 )
             }
 
             if (!search.isTyping && suggestions.isNotEmpty()) {
-                Text(
-                    text = stringResource(R.string.friends_title),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(start = 16.dp, top = 8.dp, bottom = 4.dp),
-                )
+                SectionLabel(stringResource(R.string.friends_title))
             } else {
                 PeopleSearchStatus(search, stringResource(R.string.dms_new_no_friends))
             }
 
             LazyColumn(
-                contentPadding = PaddingValues(bottom = 8.dp),
+                contentPadding = PaddingValues(bottom = Spacing.sm),
                 modifier = Modifier
                     .heightIn(max = 360.dp)
                     .testTag("dms.new.results"),
@@ -182,9 +206,10 @@ fun NewConversationSheet(
                         trailing = {
                             if (isSelected) {
                                 Icon(
-                                    Icons.Filled.Check,
+                                    imageVector = PqpIcons.Confirm,
                                     contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(Sizes.iconInline),
                                 )
                             }
                         },
@@ -211,20 +236,35 @@ fun NewConversationSheet(
                         }
                     },
                     enabled = !opening,
+                    shape = MaterialTheme.shapes.small,
+                    // The one lime object on the sheet, and the only thing on
+                    // it that does anything irreversible.
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary,
+                    ),
+                    contentPadding = PaddingValues(vertical = Spacing.md, horizontal = Spacing.xl),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(16.dp)
+                        .padding(Spacing.gutter)
                         .testTag("dms.new.start"),
                 ) {
                     if (opening) {
-                        CircularProgressIndicator(Modifier.padding(end = 8.dp).size(18.dp))
+                        CircularProgressIndicator(
+                            modifier = Modifier
+                                .padding(end = Spacing.sm)
+                                .size(Sizes.iconInline),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.onPrimary,
+                        )
                     }
                     Text(
-                        if (selected.size == 1) {
+                        text = if (selected.size == 1) {
                             stringResource(R.string.dms_new_start_one, selected[0].displayName)
                         } else {
                             stringResource(R.string.dms_new_start_group, selected.size + 1)
                         },
+                        style = MaterialTheme.typography.labelLarge,
                     )
                 }
             }

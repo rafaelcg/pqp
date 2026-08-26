@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The dark half of the pair in values/colors.xml. -->
+    <color name="pqp_window">#090E12</color>
+    <color name="pqp_window_ink">#F0EEE8</color>
+</resources>

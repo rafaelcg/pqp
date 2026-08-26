@@ -8,9 +8,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.PersonAdd
+import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
@@ -31,6 +29,9 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import gg.pqp.app.R
 import gg.pqp.app.social.SocialRepository
+import gg.pqp.app.ui.theme.PqpIcons
+import gg.pqp.app.ui.theme.Sizes
+import gg.pqp.app.ui.theme.Spacing
 import kotlinx.coroutines.launch
 
 /**
@@ -62,7 +63,17 @@ fun AddFriendSheet(
     val requestSent = stringResource(R.string.friends_request_sent)
     val nowFriends = stringResource(R.string.friends_now_friends)
 
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        shape = pqpSheetShape(),
+        // A sheet is a thing that lifts, so it sits one step up the ramp from
+        // the page it covers rather than on the same colour as it.
+        containerColor = MaterialTheme.colorScheme.surfaceContainer,
+        dragHandle = {
+            BottomSheetDefaults.DragHandle(color = MaterialTheme.colorScheme.onSurfaceVariant)
+        },
+    ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -70,18 +81,19 @@ fun AddFriendSheet(
         ) {
             Text(
                 text = stringResource(R.string.friends_add),
-                style = MaterialTheme.typography.headlineSmall,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                style = MaterialTheme.typography.headlineMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.xs),
             )
             PeopleSearchField(
                 state = search,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                modifier = Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.md),
                 tag = "friends.add.search",
             )
             PeopleSearchStatus(search, stringResource(R.string.friends_add_hint))
 
             LazyColumn(
-                contentPadding = PaddingValues(bottom = 24.dp),
+                contentPadding = PaddingValues(bottom = Spacing.xl),
                 modifier = Modifier.testTag("friends.add.results"),
             ) {
                 items(search.results, key = { it.id }) { user ->
@@ -90,21 +102,35 @@ fun AddFriendSheet(
                         user = user,
                         trailing = {
                             when {
-                                busyId == user.id -> CircularProgressIndicator(Modifier.padding(8.dp).size(20.dp))
+                                busyId == user.id -> CircularProgressIndicator(
+                                    modifier = Modifier
+                                        .padding(Spacing.sm)
+                                        .size(Sizes.iconInline),
+                                    strokeWidth = 2.dp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                // The result of the tap, in the row that was
+                                // tapped. Muted rather than lime: it is a
+                                // record of something that already happened,
+                                // and the signal colour means "act on this".
                                 outcome != null -> Text(
                                     text = outcome,
                                     style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.primary,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                                 // Somebody already in one of the three lists is
                                 // not offered again: the server would answer 200
                                 // and change nothing, which reads as a tap that
                                 // did not work.
                                 user.id in known -> Icon(
-                                    Icons.Filled.Check,
+                                    imageVector = PqpIcons.Confirm,
                                     contentDescription = null,
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(Sizes.iconInline),
                                 )
+                                // Tonal, not lime. There is one of these per
+                                // result row and a column of lime buttons is a
+                                // column of things all shouting at once.
                                 else -> FilledTonalButton(
                                     onClick = {
                                         busyId = user.id
@@ -127,10 +153,14 @@ fun AddFriendSheet(
                                         }
                                     },
                                 ) {
-                                    Icon(Icons.Filled.PersonAdd, contentDescription = null)
+                                    Icon(
+                                        imageVector = PqpIcons.AddFriend,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(Sizes.iconInline),
+                                    )
                                     Text(
                                         text = stringResource(R.string.friends_add_action),
-                                        modifier = Modifier.padding(start = 8.dp),
+                                        modifier = Modifier.padding(start = Spacing.sm),
                                     )
                                 }
                             }

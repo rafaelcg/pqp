@@ -1,16 +1,22 @@
 package gg.pqp.app.social.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Dns
-import androidx.compose.material3.Badge
+import androidx.compose.foundation.layout.size
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -28,7 +34,11 @@ import gg.pqp.app.core.ServerSummary
 import gg.pqp.app.core.SessionStore
 import gg.pqp.app.social.DmSummary
 import gg.pqp.app.social.SocialRepository
+import gg.pqp.app.ui.components.ChromeDivider
 import gg.pqp.app.ui.screens.ServersScreen
+import gg.pqp.app.ui.theme.Motion
+import gg.pqp.app.ui.theme.PqpIcons
+import gg.pqp.app.ui.theme.Sizes
 
 /**
  * The signed-in home: servers, messages, friends.
@@ -45,6 +55,16 @@ import gg.pqp.app.ui.screens.ServersScreen
  * back gesture starts doing two different things depending on how you got here.
  * `BackHandler` gives the platform behaviour instead: back from any tab returns
  * to the first, and back from the first leaves.
+ *
+ * ## The bar itself
+ *
+ * This is the one piece of chrome on screen on every tab, so it is the piece
+ * that decides whether the app looks like pqp or like Settings. It sits on
+ * `surfaceContainerLowest` with a hairline above it, which is deeper than the
+ * page it frames: the design language's whole claim is that a screen is a sheet
+ * laid on a rail, and Material's instinct to lighten a bar is the thing being
+ * argued with. The selected destination is the one lime object here, and it is
+ * lime three times over (indicator, glyph, label) because they are one object.
  */
 @Composable
 fun HomeScreen(
@@ -79,35 +99,68 @@ fun HomeScreen(
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         bottomBar = {
-            NavigationBar {
-                HomeTab.entries.forEach { entry ->
-                    val badge = when (entry) {
-                        HomeTab.Messages -> unreadConversations
-                        HomeTab.Friends -> pendingRequests
-                        HomeTab.Servers -> 0
-                    }
-                    NavigationBarItem(
-                        selected = tab == entry,
-                        onClick = { tab = entry },
-                        icon = {
-                            BadgedBox(
-                                badge = {
-                                    if (badge > 0) Badge { Text(badge.toString()) }
-                                },
-                            ) {
-                                Icon(
-                                    imageVector = when (entry) {
-                                        HomeTab.Servers -> Icons.Filled.Dns
-                                        HomeTab.Messages -> ConversationsIcon
-                                        HomeTab.Friends -> FriendsIcon
+            Column {
+                ChromeDivider()
+                NavigationBar(
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+                ) {
+                    HomeTab.entries.forEach { entry ->
+                        val badge = when (entry) {
+                            HomeTab.Messages -> unreadConversations
+                            HomeTab.Friends -> pendingRequests
+                            HomeTab.Servers -> 0
+                        }
+                        NavigationBarItem(
+                            selected = tab == entry,
+                            onClick = { tab = entry },
+                            icon = {
+                                BadgedBox(
+                                    badge = {
+                                        // A pending friend request is a thing to
+                                        // act on, and acting on it is the only
+                                        // way it goes away, so it earns the loud
+                                        // colour. Unread conversations do not:
+                                        // the number already says there is
+                                        // something there, and a second lime
+                                        // object on the bar would make neither
+                                        // of them mean anything.
+                                        CountBadge(
+                                            count = badge,
+                                            loud = entry == HomeTab.Friends,
+                                        )
                                     },
-                                    contentDescription = null,
+                                ) {
+                                    Icon(
+                                        imageVector = when (entry) {
+                                            HomeTab.Servers -> PqpIcons.Server
+                                            HomeTab.Messages -> PqpIcons.Messages
+                                            HomeTab.Friends -> PqpIcons.People
+                                        },
+                                        contentDescription = null,
+                                        modifier = Modifier.size(Sizes.iconAction),
+                                    )
+                                }
+                            },
+                            label = {
+                                Text(
+                                    text = stringResource(entry.label),
+                                    style = MaterialTheme.typography.labelLarge,
                                 )
-                            }
-                        },
-                        label = { Text(stringResource(entry.label)) },
-                        modifier = Modifier.testTag("home.tab.${entry.name.lowercase()}"),
-                    )
+                            },
+                            colors = NavigationBarItemDefaults.colors(
+                                selectedIconColor = MaterialTheme.colorScheme.primary,
+                                selectedTextColor = MaterialTheme.colorScheme.primary,
+                                // Low alpha, because a solid lime pill behind a
+                                // lime glyph would leave the glyph unreadable
+                                // and would be the loudest thing on every
+                                // screen in the app at once.
+                                indicatorColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.18f),
+                                unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            ),
+                            modifier = Modifier.testTag("home.tab.${entry.name.lowercase()}"),
+                        )
+                    }
                 }
             }
         },
@@ -120,24 +173,38 @@ fun HomeScreen(
                 .fillMaxSize()
                 .padding(bottom = padding.calculateBottomPadding()),
         ) {
-            when (tab) {
-                HomeTab.Servers -> ServersScreen(
-                    session = session,
-                    onOpenServer = onOpenServer,
-                    onOpenProfile = onOpenProfile,
-                )
+            // A cross-fade and deliberately not a slide. The three tabs are
+            // peers: a slide has a direction, a direction implies an order, and
+            // the back gesture here does not honour that order (back from any
+            // tab goes to the first, not to the one on its left). Fading says
+            // "a different thing is here now" without claiming anything about
+            // where it came from.
+            AnimatedContent(
+                targetState = tab,
+                transitionSpec = {
+                    fadeIn(tween(Motion.QUICK_MILLIS)) togetherWith fadeOut(tween(Motion.QUICK_MILLIS))
+                },
+                label = "home-tab",
+            ) { current ->
+                when (current) {
+                    HomeTab.Servers -> ServersScreen(
+                        session = session,
+                        onOpenServer = onOpenServer,
+                        onOpenProfile = onOpenProfile,
+                    )
 
-                HomeTab.Messages -> ConversationsScreen(
-                    social = social,
-                    onOpen = open,
-                    onNewConversation = { startingConversation = true },
-                )
+                    HomeTab.Messages -> ConversationsScreen(
+                        social = social,
+                        onOpen = open,
+                        onNewConversation = { startingConversation = true },
+                    )
 
-                HomeTab.Friends -> FriendsScreen(
-                    social = social,
-                    api = session.api,
-                    onOpenConversation = open,
-                )
+                    HomeTab.Friends -> FriendsScreen(
+                        social = social,
+                        api = session.api,
+                        onOpenConversation = open,
+                    )
+                }
             }
         }
     }

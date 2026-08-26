@@ -40,7 +40,7 @@ import gg.pqp.app.ui.components.CallBar
 import gg.pqp.app.ui.screens.AgeGateScreen
 import gg.pqp.app.ui.screens.ChannelsScreen
 import gg.pqp.app.ui.screens.ChatScreen
-import gg.pqp.app.ui.screens.FailedScreen
+import gg.pqp.app.ui.components.FailedScreen
 import gg.pqp.app.ui.screens.SignInScreen
 import gg.pqp.app.ui.screens.YouScreen
 import gg.pqp.app.voice.VoiceController
