@@ -8,9 +8,10 @@ direct messages and the friends list are built and verified end to end against a
 live local server. Voice carries audio between two clients, measured at both
 ends rather than inferred from a connection state. Screen sharing sends and
 receives, and the resolution was checked where it arrives rather than where it
-was asked for. Push is built on the client and has no server leg. The honest
-boundaries, including the one thing about audio that is still not proven, are in
-**What is real** at the bottom.
+was asked for. Push is built on the client and has **no server leg at all**. The
+honest boundaries, including the one thing about audio that is still not proven,
+are in **What is real** at the bottom, and what the integration itself fixed is
+in **What the integration fixed** below.
 
 ## Why native, and not the four cheaper options
 
@@ -310,6 +311,95 @@ Android has no `.stringsdata`, so nothing currently proves that a new
 `stringResource` call has a Portuguese counterpart, or that a Portuguese string
 is still reachable from English. A lint rule or a small script comparing the two
 files' `name` attributes would cover most of it and is not written.
+
+## What the integration fixed, and how each fix was checked
+
+Four branches (#103 foundation, #106 DMs and friends, #105 the FCM client,
+#107 voice audio and screen sharing) are one branch here. The conflicts were
+small and are listed in the PR; the bugs each branch's review had found were
+not, and they are fixed on the integrated branch rather than in whichever branch
+happened to notice them.
+
+Every claim below was checked on a running emulator against a live local server,
+and where a check needed a third party it was measured **on the wire** rather
+than inferred from the UI. The one thing no emulator can prove is at the bottom.
+
+**Mute and deafen survive a join.** The server creates a voice peer
+`muted: false` and waits to be told otherwise; `server/src/ws/voice.ts` says so
+in a comment. Android only ever sent `set-voice-state` from the two toggles, so
+a standing mute, a channel switch, or a room rebuilt after a dropped socket left
+everyone else's roster saying a person with their microphone off was live.
+`onWelcome` now re-declares both, as `voice-state-sync.ts` does on the web.
+*Checked* by joining as a third account on a plain WebSocket and reading the
+roster: on rejoin the frames were `peer-joined muted=false` at `00:48:18.816`
+and `voice-roster muted=true` at `00:48:18.828`, twelve milliseconds later,
+which is the re-declaration arriving and correcting the server.
+
+**A send during a reconnect no longer cancels the reconnect.** `socket` is
+non-null from the moment `newWebSocket` returns, right through the auth
+handshake, so "there is no socket" was never true while an attempt was in
+flight; every frame sent during one cancelled the attempt that was about to
+succeed. `RealtimeClient.fallbackFor` now waits on an attempt in flight and
+tears down only a socket that is `Ready` and still will not take the frame.
+*Checked* by putting a killable TCP proxy between the phone and the dev server:
+with the proxy down, thirty keystrokes and a send produced **no**
+`send could not leave; reconnecting` lines at all, and the retry timestamps
+(17.2s, 17.8s, 19.1s, 22.0s, 27.7s, 36.8s) are the plain backoff, untouched.
+
+**Typing is throttled to 2.5 seconds**, the web's own figure, because
+`ChatScreen` calls `typing()` per keystroke and that is what made the bug above
+so much worse. *Checked* on the wire: a third account watching the channel
+counted **one** `typing-broadcast` for thirty-six characters typed.
+
+**A failed send keeps the typed text.** `ChatViewModel.send` answers whether the
+frame left the phone and the composer clears on that, rather than clearing first
+and dropping the optimistic row a moment later. *Checked* with the proxy down:
+the sentence stayed in the box under *Offline. Trying to reconnect…*, survived
+the reconnect, and sent on the next tap.
+
+**`pqp://` links are read.** The manifest has advertised the scheme since the
+first commit and nothing ever looked at `intent.data`. Links are now consumed
+like a notification's extras, an invite code is validated before it becomes a
+URL path (any app on the phone can fire that intent), and redeeming is
+idempotent server-side so following a link twice just takes you there. A refusal
+is shown in the server's own words. *Checked* both ways on a second emulator:
+`pqp://invite/<code>` landed on the server's channel list with its name filled
+in from the redeem response and the membership row present in Postgres;
+`pqp://invite/NOPENOPE` showed *That invite did not work / Invite not found*.
+
+**The chat subscription is owned, not global.** There is one `join-channel` per
+connection and there are now two chat surfaces. `leaveChannel` takes the channel
+it is leaving and ignores a subscription somebody else has taken, and a chat
+returning to the foreground re-asserts its own, because popping a screen off the
+top does not hand the subscription back. *Checked* by opening `#general`,
+stacking a conversation on it through a notification-shaped intent, popping it,
+and then watching a message sent from the other phone arrive live. Without the
+fix the screen underneath stays subscribed to nothing and shows nothing, with no
+visible symptom until somebody notices the messages stopped.
+
+From the DM review, all four:
+
+- The comment claiming a closed conversation comes back "the instant either side
+  speaks" now says *which* conversations. A group has no `dm_pairs` row, so
+  `restoreDmParticipants` matches nothing and no frame is sent. The strings were
+  always right; only the comment lied, which is worse than saying nothing.
+- `refreshConversations` runs one at a time, coalescing rather than dropping a
+  request that arrives during one, because the in-flight read may predate the
+  row it is being asked about. Five fast messages into a closed DM used to open
+  five concurrent reads of the whole inbox.
+- A locally bumped `lastMessageAt` is written in the server's format and floored
+  at the newest timestamp the server has given us. `Instant.now().toString()`
+  prints more fractional digits than `toISOString()` does and these strings are
+  compared lexicographically, so a row this client bumped sorted *under* a
+  server row from the same millisecond; and a phone running slow filed a message
+  that had just arrived into the middle of the list. Six unit tests.
+- `markRead` holds the badge it cleared until a snapshot started *after* the
+  server confirmed the read. The hold releases itself, so there is no timer to
+  tune and no set to remember to empty. Four unit tests.
+
+Also: a notification tap on a conversation opens the conversation destination
+rather than the `#channel` screen, which titled a DM "Conversation" and left its
+unread badge standing.
 
 ## Voice
 
