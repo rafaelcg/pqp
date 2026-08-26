@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
 import { BetaTag } from "@/components/ui/beta-tag";
-import { RELEASES_PAGE_URL, SOURCE_REPO_URL } from "@/lib/downloads";
+import { DOWNLOAD_PAGE_PATH, SOURCE_REPO_URL } from "@/lib/downloads";
 import { useTranslation } from "@/lib/i18n";
 
 const FOOTER_LINK =
@@ -30,6 +30,11 @@ export function MarketingFooter() {
             <Link to="/app" className={FOOTER_LINK}>
               {t("nav.openApp")}
             </Link>
+            {/* Filenames on GitHub carry the version, so this page is the
+                URL that cannot 404 on the next tag. */}
+            <Link to={DOWNLOAD_PAGE_PATH} className={FOOTER_LINK}>
+              {t("footer.desktop")}
+            </Link>
             <a href="/#how" className={FOOTER_LINK}>
               {t("nav.howItWorks")}
             </a>
@@ -49,17 +54,6 @@ export function MarketingFooter() {
             <Link to="/tela" className={FOOTER_LINK}>
               {t("footer.tela")}
             </Link>
-            {/* The releases page, not a direct asset: the filenames carry the
-                version, so only GitHub can say what the newest one is called.
-                See `lib/downloads.ts`. */}
-            <a
-              href={RELEASES_PAGE_URL}
-              target="_blank"
-              rel="noopener"
-              className={FOOTER_LINK}
-            >
-              {t("footer.desktop")}
-            </a>
             {/* The footer drives to the /beta landing, not straight to
                 TestFlight: the page sells the beta and carries the honest
                 framing before the external hop. */}

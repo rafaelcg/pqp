@@ -40,6 +40,9 @@ export function MarketingNav({ variant = "solid" }: MarketingNavProps) {
         <a href="/#how" className={linkClass}>
           {t("nav.howItWorks")}
         </a>
+        <Link to="/download" className={linkClass}>
+          {t("nav.download")}
+        </Link>
         <a href="/#communities" className={linkClass}>
           {t("nav.communities")}
         </a>

@@ -38,6 +38,15 @@ export const SOURCE_REPO_URL = `https://github.com/${REPO}`;
  *  These links go live with the first `v*` tag. */
 export const RELEASES_PAGE_URL = `https://github.com/${REPO}/releases/latest`;
 
+/**
+ * The page a person can paste into a chat. Filenames on GitHub carry the
+ * version, so a "latest .exe" URL goes 404 on the next tag; this path does not.
+ */
+export const DOWNLOAD_PAGE_PATH = "/download";
+
+/** Canonical URL to copy and send. Always the hosted origin, even in local preview. */
+export const DOWNLOAD_PAGE_URL = `https://pqp.gg${DOWNLOAD_PAGE_PATH}`;
+
 /** Where the SmartScreen / unsigned-build situation is written down. */
 export const DESKTOP_DOCS_URL = `https://github.com/${REPO}/blob/main/docs/DESKTOP.md#4-windows`;
 
