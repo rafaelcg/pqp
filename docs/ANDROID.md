@@ -87,8 +87,12 @@ Then, from `android/`:
 
 ```bash
 ./gradlew :app:assembleDebug     # build
+./gradlew :app:testDebugUnitTest # the JVM tests CI runs; no device needed
 ./gradlew :app:installDebug      # build and install on the running emulator
 ```
+
+`installDebug` installs to **every** attached device. With more than one
+emulator up, pin it: `ANDROID_SERIAL=emulator-5554 ./gradlew :app:installDebug`.
 
 Opening `android/` in Android Studio works too and needs neither variable.
 
@@ -160,6 +164,8 @@ emulator -avd Pixel_10_Pro -read-only -port 5556 &
 | `app/src/main/res/values` | English copy |
 | `app/src/main/res/values-pt-rBR` | Portuguese copy |
 | `app/src/debug` | Cleartext exemption for the local server, debug builds only |
+| `app/src/test/kotlin/gg/pqp/app/protocol` | The wire-contract tests, which read `packages/shared` off disk |
+| `app/src/test/kotlin/gg/pqp/app/core` | Decoder, backoff, URL and `ApiClient` tests |
 
 ## Auth
 
@@ -426,36 +432,86 @@ and fans out to Web Push and APNs from one place. FCM would be a third leg of
 the same feature and the client would re-decide none of it. That is server work
 plus a `FirebaseMessagingService` here, and neither exists.
 
-## CI
+## CI and tests
 
-**Deliberately not added.** The build needs an Android SDK, an accepted licence
-and a JDK, and the existing `ci.yml` is a pnpm/Node pipeline; bolting an Android
-job onto it risks the pipeline that guards the API for a build nobody is
-releasing yet. What it would look like, when it is wanted, as its own workflow
-file (`.github/workflows/android.yml`) so a failure cannot block the web or API
-deploys:
+`.github/workflows/android.yml`, its own workflow file so that a broken Android
+build can never be the reason an API fix does not deploy. It runs on
+`android/**` and, deliberately, on `packages/shared/src/**`,
+`server/src/ws/**` and `client/src/lib/peer-connection-manager.ts` as well,
+because the tests below read those to check this client still agrees with them.
 
-```yaml
-name: android
-on:
-  pull_request:
-    paths: ["android/**", ".github/workflows/android.yml"]
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with: { distribution: temurin, java-version: "21" }
-      - uses: android-actions/setup-android@v3
-      - run: ./gradlew :app:assembleDebug lint
-        working-directory: android
-```
+Four steps, in this order: `:app:testDebugUnitTest`, `:app:lint`,
+`:app:assembleDebug`, `:app:assembleRelease`. The release build is **unsigned on
+purpose** — the job holds no keystore and never will. What it proves is that R8,
+the resource shrinker and `proguard-rules.pro` survive the release variant,
+which is where a kotlinx-serialization or WebRTC keep rule goes missing and the
+app crashes on a tester's phone and nowhere else. A debug APK is uploaded as a
+run artifact, so "does it actually run" no longer needs one particular laptop
+either.
 
-Two things to know before writing it: `compileSdk = 37` is newer than AGP 9.3.2
-knows about (hence `android.suppressUnsupportedCompileSdk` in
-`gradle.properties`), and CI would need that platform installed or the compile
-SDK lowered to 36.
+The SDK platform is installed by name in the workflow rather than assumed, which
+is the whole point: before this existed, "the Android build works" was a
+property of one machine. The iOS side already paid for that once, when a build
+was honestly reported as succeeding against a generated Xcode project `main`
+could not produce.
+
+### What the tests actually pin
+
+`android/app/src/test/kotlin` — 71 JVM unit tests, no device needed. The
+interesting ones do not assert that a Kotlin constant equals itself. They read
+`packages/shared/src/*.ts`, `server/src/ws/index.ts` and
+`client/src/lib/peer-connection-manager.ts` **off disk** and compare, because
+every wire fact in this module is a hand-copy and nothing generated it:
+
+- **`WireProtocolTest`** extracts every `type: z.literal("…")` from `chat.ts`
+  and `signaling.ts`, extracts every frame type this client sends and dispatches
+  on out of the Kotlin sources, and asserts the second is a subset of the first.
+  That is the check that catches a **rename**, which otherwise has no runtime
+  symptom at all: a `when` on a String ignores a renamed frame exactly as
+  quietly as an unknown one. It also pins `DEV_AUTH_TOKEN`, the close codes
+  4401/4429 against `server/src/ws/index.ts`, `MESSAGE_PAGE_MAX`, the age-gate
+  literals and the transport name.
+- **`ModelShapeTest`** compares each model's *serializer descriptor* against the
+  keys of the zod object that produces it. One direction only: every field
+  Kotlin names must exist on the schema. The other direction is a feature gap by
+  design.
+- **`PolitenessTest`** parses `isImpolite` out of the web client's source and
+  asserts the direction matches. Inverting it deadlocks every mixed room and no
+  single-client test can see it.
+- **`ApiClientTest`** runs `ApiClient` against a real socket (the JDK's own
+  `HttpServer`, so no new dependency): the page clamp reaching the query string,
+  a fresh token per request, `{"error": …}` surviving as `serverMessage`.
+- **`LocalizationTest`** is the missing `check-localization.py`: every English
+  string has a pt-BR counterpart, neither has outlived the other, and the format
+  slots match.
+- **`BackoffTest`** and **`DecodeTest`** cover the reconnect schedule and the
+  four `PqpJson` settings, each of which is load-bearing and silent when wrong.
+
+They were mutation-checked rather than assumed: inverting the politeness rule,
+misspelling `message-broadcast` and changing the page clamp each fail the
+expected tests and nothing else.
+
+**`compileSdk` stayed at 37**, and the plan's A5 (drop to 36) was tried and
+reverted: sixteen dependencies floor at 37, including the whole Compose BOM,
+`androidx.core:core:1.19.0` and `okhttp-android:5.5.0`. AGP 9.3.2 turns out to
+know API 37 fine, so `android.suppressUnsupportedCompileSdk` is gone — it was
+suppressing nothing and would have hidden the next real warning. See
+[`ANDROID_RELEASE.md`](./ANDROID_RELEASE.md) §Why compileSdk is still 37.
+
+## Releasing it
+
+[`ANDROID_RELEASE.md`](./ANDROID_RELEASE.md) is the ordered, human-only runbook:
+the upload keystore, Play App Signing, the foreground-service justification, the
+data-safety form and the pt-BR listing. `signingConfigs.release` now reads a
+keystore from `local.properties`, a `-P` flag or the environment, and
+`assembleRelease` **no longer falls back to the debug key**: with no keystore it
+produces an unsigned APK, which is a problem you notice immediately, rather than
+a debug-signed one Play rejects days later.
+
+**The one launch blocker that is not build configuration:** the app has no
+in-app account deletion. Play requires it for any app with accounts, and it is
+the exact thing that held the iOS build back. `DELETE /api/me` and
+`GET /api/me/export` already exist server-side and are unused here.
 
 ## What is real
 
@@ -473,8 +529,17 @@ until somebody has heard somebody.
 
 **Not built:** screen sharing, push, DMs, attachments, reactions, replies,
 editing, pinning, threads, search, members and moderation, invites, profile
-editing, communities, game connections, data export and account deletion. There
-are no instrumented tests. `assembleRelease` signs with the debug key and needs
-a real keystore before it goes anywhere near Play.
+editing, communities, game connections, data export and **account deletion** —
+that last one is a **Play launch blocker**, not a parity gap, and is the exact
+thing that held the iOS build back. See
+[`ANDROID_RELEASE.md`](./ANDROID_RELEASE.md) §0.
+
+**Tested:** 71 JVM unit tests run on every PR (see §CI and tests). There are
+still **no instrumented tests** — nothing runs on a device or an emulator in CI,
+so every claim about how a screen behaves is a claim a human made by hand.
+
+`assembleRelease` no longer signs with the debug key. Without a keystore it
+produces an unsigned APK; the keystore itself is a human step in
+[`ANDROID_RELEASE.md`](./ANDROID_RELEASE.md).
 
 This is a foundation with one real feature on it. It is not the app yet.

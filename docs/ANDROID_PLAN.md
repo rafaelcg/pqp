@@ -40,6 +40,17 @@ permanent once the first APK is accepted.
 **Size:** one evening. **Depends on:** nothing.
 **Rafael only.** Do not let an agent generate or hold a keystore.
 
+**Gradle half done, 2026-08-26.** `signingConfigs.release` reads
+`pqp.keystoreFile` / `pqp.keystorePassword` / `pqp.keyAlias` / `pqp.keyPassword`
+from `local.properties`, a `-P` flag or the environment, and **the debug-key
+fallback is gone**: with no keystore `assembleRelease` now emits an *unsigned*
+APK. That matters more than it sounds. The fallback meant a release build
+printed BUILD SUCCESSFUL and produced an installable artifact, and the rejection
+arrived days later at the Play upload. Verified end to end against a throwaway
+keystore that was deleted immediately; `bundleRelease` produces the `.aab` too.
+The keystore itself and the Console steps are in `ANDROID_RELEASE.md`, still
+Rafael-only.
+
 ### A2. In-app account deletion and data export
 **What:** a Settings row calling `DELETE /api/me` behind a confirmation, and
 `GET /api/me/export`. Both endpoints already exist
@@ -49,6 +60,14 @@ route, which `pqp.gg` can answer.
 accounts. This was the exact blocker that held the iOS build back (see
 `HANDOVER.md`, build 12), so it is a known, already-paid-for lesson.
 **Size:** one evening. **Depends on:** nothing.
+
+**Confirmed missing, 2026-08-26.** `YouScreen.kt` offers Sign out and nothing
+else, and there is no `DELETE /api/me` or `GET /api/me/export` call anywhere in
+`android/app/src/main/kotlin`. This is the single item on line A that is a hard
+Play rejection rather than paperwork, and it is app feature code, so it belongs
+to whoever holds `YouScreen.kt`. The web's confirmation semantics are in
+`client/src/components/layout/settings-modal.tsx`; the expected confirmation
+string is `expectedDeleteConfirmation(tag)` in `packages/shared/src/api.ts`.
 
 ### A3. Foreground service declarations in the Play Console
 **What:** the FGS use case form for `microphone`, plus a demo video, plus the
@@ -79,6 +98,16 @@ year and is not worth guessing at.
 **Size:** minutes. **Depends on:** nothing. **Do it first**, because A6 cannot
 be written until it is done.
 
+**Done, as a "no", 2026-08-26.** 36 was tried and does not build: sixteen
+dependencies floor at 37, including the whole Compose 2026.08.00 BOM,
+`androidx.core:core:1.19.0`, `androidx.lifecycle:*:2.11.0` and
+`okhttp-android:5.5.0`. Lowering `compileSdk` means downgrading all sixteen.
+The half of the reasoning that was right is fixed properly instead: A6 installs
+the platform by name, so "it builds" is a property of the repo rather than of
+one laptop. `android.suppressUnsupportedCompileSdk` was deleted — AGP 9.3.2
+knows API 37 and emitted no warning, so the flag was suppressing nothing and
+would have hidden the next real one. See `ANDROID_RELEASE.md`.
+
 ### A6. `.github/workflows/android.yml`
 **What:** the workflow already drafted in `ANDROID.md` §CI, path-filtered to
 `android/**` so it can never block the API or web deploys. Add
@@ -87,6 +116,14 @@ be written until it is done.
 an unverifiable claim. Every Android PR from here should be gated by a build
 that runs somewhere neutral.
 **Size:** half an evening. **Depends on:** A5.
+
+**Done, 2026-08-26.** Runs unit tests, lint, `assembleDebug` and an **unsigned**
+`assembleRelease` (which is what proves R8 and the ProGuard rules survive
+without the job ever holding a key). Path-filtered to `android/**` plus
+`packages/shared/src/**`, `server/src/ws/**` and
+`client/src/lib/peer-connection-manager.ts`, because B12's tests read those and
+a protocol change has to be able to fail this build. Uploads the debug APK and
+the reports.
 
 ### A7. Prove voice carries audio, or hide it
 **What:** run the two-device runbook in `ANDROID.md` §What voice is verified to
@@ -356,6 +393,17 @@ type is ignored just as quietly. Worse, `ChatViewModel.message()` and
 `runCatching { }.getOrNull()`, so a shape change drops the message with no log
 at all. Tests are the only thing standing between that and a silent regression.
 **Size:** one evening. **Depends on:** A6, so they actually run somewhere.
+
+**Done, 2026-08-26.** 71 tests in `android/app/src/test/kotlin`. They do not
+assert Kotlin constants against themselves: `WireProtocolTest` and
+`ModelShapeTest` parse `packages/shared/src/*.ts` off disk, `PolitenessTest`
+parses `isImpolite` out of the web client, and the close codes come from
+`server/src/ws/index.ts`. Mutation-checked — inverting the politeness rule,
+misspelling `message-broadcast` and moving the page clamp each fail. One seam
+was added to app code for it: `voice/Politeness.kt`, which is the rule that
+`VoiceEngine` had written out twice, now written once and called from both
+sites. What is **not** covered: nothing runs on a device, so no screen, no
+service lifecycle and no media path is under test.
 
 ---
 
