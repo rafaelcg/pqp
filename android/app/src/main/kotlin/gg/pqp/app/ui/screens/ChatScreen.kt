@@ -1,7 +1,12 @@
 package gg.pqp.app.ui.screens
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -23,12 +28,17 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -52,6 +62,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
@@ -65,6 +76,14 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil3.compose.AsyncImage
 import gg.pqp.app.R
+import gg.pqp.app.attachments.ATTACHMENT_MIME_ALLOWLIST
+import gg.pqp.app.attachments.AttachmentRefusal
+import gg.pqp.app.attachments.ComposerReadiness
+import gg.pqp.app.attachments.ContentAttachmentFiles
+import gg.pqp.app.attachments.MAX_ATTACHMENTS_PER_MESSAGE
+import gg.pqp.app.attachments.PendingAttachment
+import gg.pqp.app.attachments.composerReadiness
+import gg.pqp.app.attachments.formatAttachmentSize
 import gg.pqp.app.core.Backend
 import gg.pqp.app.core.Message
 import gg.pqp.app.core.RealtimeState
@@ -102,9 +121,13 @@ fun ChatScreen(
      */
     title: String? = null,
 ) {
+    val context = LocalContext.current
+    // Built from the application context, so the reader outlives this
+    // composition without holding the Activity that started it.
+    val files = remember(context) { ContentAttachmentFiles(context) }
     val model: ChatViewModel = viewModel(
         key = channelId,
-        factory = ChatViewModel.factory(session, channelId),
+        factory = ChatViewModel.factory(session, channelId, files),
     )
     val state by model.state.collectAsStateWithLifecycle()
     val connection by session.realtime.state.collectAsStateWithLifecycle()
@@ -216,6 +239,13 @@ fun ChatScreen(
                         // loses a sentence they watched themselves type.
                         if (model.send(draft, me)) draft = ""
                     },
+                    attachmentsEnabled = state.attachmentsEnabled,
+                    attachments = state.attachments,
+                    refusal = state.attachmentRefusal,
+                    maxAttachmentBytes = state.maxAttachmentBytes,
+                    onAttach = model::attach,
+                    onRemoveAttachment = model::removeAttachment,
+                    onRetryAttachment = model::retryAttachment,
                 )
             }
         },
@@ -589,10 +619,35 @@ private fun formatTime(iso: String): String = runCatching {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun Composer(value: String, onValueChange: (String) -> Unit, onSend: () -> Unit) {
+private fun Composer(
+    value: String,
+    onValueChange: (String) -> Unit,
+    onSend: () -> Unit,
+    attachmentsEnabled: Boolean,
+    attachments: List<PendingAttachment>,
+    refusal: AttachmentRefusal?,
+    maxAttachmentBytes: Long,
+    onAttach: (String) -> Unit,
+    onRemoveAttachment: (String) -> Unit,
+    onRetryAttachment: (String) -> Unit,
+) {
     // Whether there is anything to send, which is the one thing this whole
-    // surface animates on.
-    val active = value.isNotBlank()
+    // surface animates on. It is no longer "is there text": a message may be
+    // nothing but a picture, and it may not go while an upload is still
+    // running or has failed.
+    val readiness = composerReadiness(value, attachments)
+    val active = readiness == ComposerReadiness.Ready
+
+    // `OpenMultipleDocuments` rather than `PickVisualMedia`: the allowlist is
+    // not only pictures, and a chat app that can send a photo but not a PDF has
+    // solved the easy half. The MIME filter is the allowlist itself, so the
+    // picker refuses what the server would refuse, in the place where a refusal
+    // is still just a greyed-out file.
+    val picker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenMultipleDocuments(),
+    ) { uris ->
+        uris.take(MAX_ATTACHMENTS_PER_MESSAGE).forEach { onAttach(it.toString()) }
+    }
     val sendContainer by animateColorAsState(
         targetValue = if (active) {
             MaterialTheme.colorScheme.primary
@@ -613,15 +668,34 @@ private fun Composer(value: String, onValueChange: (String) -> Unit, onSend: () 
     )
 
     Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .imePadding()
-                .navigationBarsPadding()
-                .padding(horizontal = Spacing.md, vertical = Spacing.sm),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                .navigationBarsPadding(),
         ) {
+            AttachmentRefusalLine(refusal, maxAttachmentBytes)
+            AttachmentStrip(attachments, onRemoveAttachment, onRetryAttachment)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = Spacing.md, vertical = Spacing.sm),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+            ) {
+            if (attachmentsEnabled) {
+                IconButton(
+                    onClick = { picker.launch(ATTACHMENT_MIME_ALLOWLIST.toTypedArray()) },
+                    enabled = attachments.size < MAX_ATTACHMENTS_PER_MESSAGE,
+                    modifier = Modifier.testTag("composer.attach"),
+                ) {
+                    Icon(
+                        PqpIcons.Attach,
+                        contentDescription = stringResource(R.string.chat_attach),
+                        modifier = Modifier.size(Sizes.iconAction),
+                    )
+                }
+            }
             TextField(
                 value = value,
                 onValueChange = onValueChange,
@@ -663,12 +737,17 @@ private fun Composer(value: String, onValueChange: (String) -> Unit, onSend: () 
             )
             FilledIconButton(
                 onClick = onSend,
-                enabled = value.isNotBlank(),
+                // `readiness`, not "is there text". A message may be nothing
+                // but a picture, and it may not go while an upload is still
+                // running. Gating this on the draft alone painted the button
+                // lime for an attachment-only message and then swallowed every
+                // tap on it, which is the worst of both answers.
+                enabled = active,
                 modifier = Modifier.testTag("composer.send"),
                 // The disabled pair is the same animated pair on purpose. The
-                // button is disabled exactly while the draft is empty, and
-                // Material's default disabled fill is a translucent grey that
-                // reads as broken rather than as waiting.
+                // button is disabled exactly while there is nothing to send,
+                // and Material's default disabled fill is a translucent grey
+                // that reads as broken rather than as waiting.
                 colors = IconButtonDefaults.filledIconButtonColors(
                     containerColor = sendContainer,
                     contentColor = sendContent,
@@ -680,6 +759,179 @@ private fun Composer(value: String, onValueChange: (String) -> Unit, onSend: () 
                     PqpIcons.Send,
                     contentDescription = stringResource(R.string.chat_send),
                     modifier = Modifier.size(Sizes.iconAction),
+                )
+            }
+            }
+        }
+    }
+}
+
+/**
+ * Why the last pick did not become an attachment.
+ *
+ * On the composer rather than in a snackbar: the refusal is about the thing the
+ * person is looking at, and a snackbar that has already gone by the time they
+ * look up answers nothing. Every branch names the actual limit, because "that
+ * did not work" is the sentence this line exists to replace.
+ */
+@Composable
+private fun AttachmentRefusalLine(refusal: AttachmentRefusal?, maxAttachmentBytes: Long) {
+    AnimatedVisibility(
+        visible = refusal != null,
+        enter = expandVertically(),
+        exit = shrinkVertically(),
+    ) {
+        Text(
+            text = when (refusal) {
+                AttachmentRefusal.TooLarge -> stringResource(
+                    R.string.chat_attachment_too_large,
+                    formatAttachmentSize(maxAttachmentBytes),
+                )
+
+                AttachmentRefusal.UnsupportedType ->
+                    stringResource(R.string.chat_attachment_unsupported)
+
+                AttachmentRefusal.TooMany -> stringResource(
+                    R.string.chat_attachment_too_many,
+                    MAX_ATTACHMENTS_PER_MESSAGE,
+                )
+
+                AttachmentRefusal.Unreadable, null ->
+                    stringResource(R.string.chat_attachment_unreadable)
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+            modifier = Modifier.padding(
+                start = Spacing.md,
+                end = Spacing.md,
+                top = Spacing.sm,
+            ),
+        )
+    }
+}
+
+/**
+ * The files waiting to go, above the box they will go with.
+ *
+ * A row that scrolls rather than a grid that grows: the composer must not eat
+ * the transcript, and ten attachments is a legal message. Each chip carries its
+ * own state, because they upload independently and one failing says nothing
+ * about the rest.
+ */
+@Composable
+private fun AttachmentStrip(
+    attachments: List<PendingAttachment>,
+    onRemove: (String) -> Unit,
+    onRetry: (String) -> Unit,
+) {
+    AnimatedVisibility(
+        visible = attachments.isNotEmpty(),
+        enter = expandVertically(),
+        exit = shrinkVertically(),
+    ) {
+        LazyRow(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Spacing.md, vertical = Spacing.sm),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+        ) {
+            items(attachments, key = { it.localId }) { attachment ->
+                AttachmentChip(attachment, onRemove, onRetry)
+            }
+        }
+    }
+}
+
+@Composable
+private fun AttachmentChip(
+    attachment: PendingAttachment,
+    onRemove: (String) -> Unit,
+    onRetry: (String) -> Unit,
+) {
+    val shape = MaterialTheme.shapes.medium
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shape = shape,
+        modifier = Modifier
+            .heightIn(min = 56.dp)
+            // Tapping a failed chip retries it. Nothing else about a chip is
+            // tappable, so the gesture is unambiguous and the alternative is
+            // making somebody remove and re-pick the same file.
+            .clickable(enabled = attachment.failed) { onRetry(attachment.localId) },
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+            modifier = Modifier.padding(
+                start = if (attachment.isImage) 0.dp else Spacing.md,
+                end = Spacing.xs,
+            ),
+        ) {
+            if (attachment.isImage) {
+                // The local URI, not a presigned GET: the bytes are on the
+                // phone and this is drawn before anything has been uploaded.
+                AsyncImage(
+                    model = attachment.uri,
+                    contentDescription = attachment.filename,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .size(56.dp)
+                        .clip(shape),
+                )
+            }
+            Column(
+                modifier = Modifier
+                    .widthIn(max = 160.dp)
+                    .padding(vertical = Spacing.sm),
+            ) {
+                Text(
+                    text = attachment.filename,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = when {
+                        attachment.failed -> stringResource(R.string.chat_attachment_failed)
+                        attachment.uploading -> stringResource(R.string.chat_attachment_uploading)
+                        else -> formatAttachmentSize(attachment.byteSize)
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (attachment.failed) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    maxLines = 1,
+                )
+            }
+            when {
+                attachment.uploading -> CircularProgressIndicator(
+                    strokeWidth = 2.dp,
+                    modifier = Modifier.size(Sizes.iconInline),
+                )
+
+                attachment.failed -> Icon(
+                    PqpIcons.Retry,
+                    contentDescription = stringResource(
+                        R.string.chat_attachment_retry,
+                        attachment.filename,
+                    ),
+                    tint = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.size(Sizes.iconInline),
+                )
+
+                else -> Unit
+            }
+            IconButton(onClick = { onRemove(attachment.localId) }) {
+                Icon(
+                    PqpIcons.Close,
+                    contentDescription = stringResource(
+                        R.string.chat_attachment_remove,
+                        attachment.filename,
+                    ),
+                    tint = LocalContentColor.current,
+                    modifier = Modifier.size(Sizes.iconInline),
                 )
             }
         }

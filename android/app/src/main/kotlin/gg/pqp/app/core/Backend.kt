@@ -43,10 +43,18 @@ object Backend {
      * Several fields on the wire are root-relative (`/api/avatars/…`,
      * `/api/servers/:id/icon`). Attachment URLs are presigned absolutes. One
      * helper so no call site has to know which it is holding.
+     *
+     * `content://` and `file://` are passed through untouched for the same
+     * reason: an optimistic message drawn the instant its attachment is sent
+     * points at the file still sitting on the phone, because the presigned GET
+     * does not exist until the broadcast comes back. Prefixing those with the
+     * API's host produced `http://host/content://…`, which is a broken image in
+     * the sender's own bubble for as long as the round trip takes.
      */
     fun absolute(url: String?): String? = when {
         url.isNullOrBlank() -> null
         url.startsWith("http://") || url.startsWith("https://") -> url
+        url.startsWith("content://") || url.startsWith("file://") -> url
         url.startsWith("/") -> apiUrl + url
         else -> "$apiUrl/$url"
     }

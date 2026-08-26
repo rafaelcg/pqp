@@ -248,7 +248,24 @@ class RealtimeClient(
         send(buildJsonObject { put("type", "leave-channel") })
     }
 
-    fun sendMessage(channelId: String, body: String, nonce: String, replyToId: String? = null): Boolean =
+    /**
+     * [attachmentIds] are rows already minted by
+     * `POST /api/channels/:channelId/attachments` and not yet claimed. Ids and
+     * nothing else travel: filename, type and size are re-read server-side from
+     * the row and from the stored object, so a sender cannot describe its own
+     * upload into something it is not.
+     *
+     * The key is omitted rather than sent empty for an ordinary message, which
+     * keeps this frame byte-identical to the one this client sent before
+     * attachments existed.
+     */
+    fun sendMessage(
+        channelId: String,
+        body: String,
+        nonce: String,
+        replyToId: String? = null,
+        attachmentIds: List<String> = emptyList(),
+    ): Boolean =
         send(
             buildJsonObject {
                 put("type", "message-create")
@@ -256,6 +273,14 @@ class RealtimeClient(
                 put("body", body)
                 put("nonce", nonce)
                 if (replyToId != null) put("replyToId", replyToId)
+                if (attachmentIds.isNotEmpty()) {
+                    put(
+                        "attachmentIds",
+                        kotlinx.serialization.json.buildJsonArray {
+                            attachmentIds.forEach { add(kotlinx.serialization.json.JsonPrimitive(it)) }
+                        },
+                    )
+                }
             },
         )
 
