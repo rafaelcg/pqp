@@ -152,7 +152,8 @@ class VoiceEngine(
         peers[remotePeerId] = peer
 
         // Exactly one side offers, and it is the one whose id sorts higher.
-        if (local > remotePeerId) negotiate(remotePeerId, peer)
+        // See `Politeness.kt`, which is the single copy of that rule.
+        if (isImpolite(local, remotePeerId)) negotiate(remotePeerId, peer)
     }
 
     fun removePeer(remotePeerId: String) {
@@ -333,7 +334,9 @@ class VoiceEngine(
                     // The impolite side drives the restart, for the same reason
                     // it drives the first offer: two simultaneous restarts are
                     // glare wearing a different hat.
-                    if (peer != null && local != null && !peer.restarted && local > remotePeerId) {
+                    if (peer != null && local != null && !peer.restarted &&
+                        isImpolite(local, remotePeerId)
+                    ) {
                         peer.restarted = true
                         Log.i(TAG, "peer $remotePeerId failed; restarting ICE")
                         negotiate(remotePeerId, peer, iceRestart = true)
