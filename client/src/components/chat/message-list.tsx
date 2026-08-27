@@ -44,6 +44,7 @@ import {
   type ContextMenuItemDef,
 } from "@/components/ui/context-menu";
 import { Button } from "@/components/ui/button";
+import { Tooltip } from "@/components/ui/tooltip";
 import { useProfilePopover } from "@/components/user/user-profile-popover";
 import type { ProfileSubject } from "@/components/user/profile-relations";
 import type { ChatMessage, TypingUser } from "@/hooks/use-chat";
@@ -1989,78 +1990,90 @@ const MessageRow = memo(function MessageRow({
               )}
               onContextMenu={forwardRowContextMenu}
             >
+              {/* Hover-only by construction: this whole bar is out of tab
+                  order (see above), so its tooltips are too. Nothing is lost —
+                  the keyboard and screen-reader path to every one of these
+                  actions is the row's context menu, which names them in a
+                  list. */}
               {HOVER_QUICK_REACTIONS.map((emoji) => {
                 const mine = reactions.some((r) => r.emoji === emoji && r.me);
                 return (
-                  <Button
+                  <Tooltip
                     key={emoji}
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    tabIndex={-1}
-                    aria-label={
+                    label={
                       mine
                         ? t("chat.removeReaction", { emoji })
                         : t("chat.reactWith", { emoji })
                     }
-                    className={cn("h-6 w-6 text-sm", mine && "bg-ink-3")}
-                    onClick={() => onToggleReaction(message.id, emoji)}
                   >
-                    {emoji}
-                  </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      tabIndex={-1}
+                      className={cn("h-6 w-6 text-sm", mine && "bg-ink-3")}
+                      onClick={() => onToggleReaction(message.id, emoji)}
+                    >
+                      {emoji}
+                    </Button>
+                  </Tooltip>
                 );
               })}
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                tabIndex={-1}
-                aria-label={t("chat.addReaction")}
-                className="h-6 w-6"
-                onClick={onOpenPicker}
-              >
-                <SmilePlus className="h-3.5 w-3.5" />
-              </Button>
-              {canReply && (
+              <Tooltip label={t("chat.addReaction")}>
                 <Button
                   type="button"
                   variant="ghost"
                   size="icon"
                   tabIndex={-1}
-                  aria-label={t("chat.reply")}
                   className="h-6 w-6"
-                  onClick={onReply}
+                  onClick={onOpenPicker}
                 >
-                  <Reply className="h-3.5 w-3.5" />
+                  <SmilePlus className="h-3.5 w-3.5" />
                 </Button>
+              </Tooltip>
+              {canReply && (
+                <Tooltip label={t("chat.reply")}>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    tabIndex={-1}
+                    className="h-6 w-6"
+                    onClick={onReply}
+                  >
+                    <Reply className="h-3.5 w-3.5" />
+                  </Button>
+                </Tooltip>
               )}
               {isMine && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  tabIndex={-1}
-                  aria-label={t("chat.edit")}
-                  className="h-6 w-6"
-                  onClick={onStartEdit}
-                >
-                  <Pencil className="h-3.5 w-3.5" />
-                </Button>
+                <Tooltip label={t("chat.edit")}>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    tabIndex={-1}
+                    className="h-6 w-6"
+                    onClick={onStartEdit}
+                  >
+                    <Pencil className="h-3.5 w-3.5" />
+                  </Button>
+                </Tooltip>
               )}
               <div ref={moreRef} className="relative">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  tabIndex={-1}
-                  aria-haspopup="menu"
-                  aria-expanded={moreOpen}
-                  aria-label={t("chat.more")}
-                  className="h-6 w-6"
-                  onClick={() => setMoreOpen((open) => !open)}
-                >
-                  <MoreHorizontal className="h-3.5 w-3.5" />
-                </Button>
+                <Tooltip label={t("chat.more")}>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    tabIndex={-1}
+                    aria-haspopup="menu"
+                    aria-expanded={moreOpen}
+                    className="h-6 w-6"
+                    onClick={() => setMoreOpen((open) => !open)}
+                  >
+                    <MoreHorizontal className="h-3.5 w-3.5" />
+                  </Button>
+                </Tooltip>
                 {moreOpen && (
                   <div
                     role="menu"

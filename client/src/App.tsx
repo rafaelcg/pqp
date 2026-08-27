@@ -98,6 +98,7 @@ import { ShareHandleButton } from "@/components/handle/share-handle-button";
 import { BetaTag } from "@/components/ui/beta-tag";
 import { Dialog } from "@/components/ui/dialog";
 import { PromptDialog } from "@/components/ui/prompt-dialog";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { Seo } from "@/components/marketing/seo";
 import {
   createChatController,
@@ -220,14 +221,23 @@ interface AppProps {
 export function App({ devBypass = false }: AppProps) {
   const { t } = useTranslation();
 
+  // One tooltip group for the whole shell, so hovering the second icon in a
+  // control bar answers instantly instead of waiting its own delay again.
+  //
+  // Here rather than in `main.tsx` on purpose: every tooltipped control lives
+  // inside this chunk, and the landing page is the one surface where a
+  // visitor's first paint is measured. Putting the provider at the router root
+  // would drag Radix's popper into the marketing bundle to serve nothing.
   if (devBypass) {
     return (
-      <MainAppContent resolveToken={() => Promise.resolve(devAuthToken())} />
+      <TooltipProvider>
+        <MainAppContent resolveToken={() => Promise.resolve(devAuthToken())} />
+      </TooltipProvider>
     );
   }
 
   return (
-    <>
+    <TooltipProvider>
       <Seo
         title={t("app.seo.title")}
         description={t("app.seo.description")}
@@ -235,7 +245,7 @@ export function App({ devBypass = false }: AppProps) {
         noIndex
       />
       <ClerkAppGate />
-    </>
+    </TooltipProvider>
   );
 }
 

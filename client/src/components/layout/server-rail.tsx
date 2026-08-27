@@ -6,6 +6,7 @@ import {
 } from "@/components/layout/channel-list";
 import { ServerIcon } from "@/components/layout/server-identity";
 import { Button } from "@/components/ui/button";
+import { Tooltip } from "@/components/ui/tooltip";
 import {
   ContextMenu,
   type ContextMenuItemDef,
@@ -103,11 +104,13 @@ export function ServerRail({
     <nav className="flex h-full w-[72px] shrink-0 flex-col items-center gap-2 overflow-y-auto border-r border-ink-4/40 bg-rail py-3">
       {/* Above the servers, and separated from them: conversations belong to no
           server, so putting Home in the list would read as one more of them. */}
+      {/* Every bubble on this rail points right. The rail is 72px against the
+          left edge of the window, so a bubble above or below a tile would sit
+          on the tile next to it, and one on the left would be off-screen. */}
+      <Tooltip label={t("chrome.directMessages")} side="right">
       <button
         type="button"
         onClick={onSelectHome}
-        title={t("chrome.directMessages")}
-        aria-label={t("chrome.directMessages")}
         aria-current={homeSelected ? "page" : undefined}
         className={cn(
           "relative flex h-12 w-12 items-center justify-center rounded-2xl transition-all duration-200 hover:rounded-xl",
@@ -162,6 +165,7 @@ export function ServerRail({
           </span>
         )}
       </button>
+      </Tooltip>
       <span
         aria-hidden="true"
         className="h-px w-8 shrink-0 rounded-full bg-ink-4/70"
@@ -222,6 +226,13 @@ export function ServerRail({
         }
 
         return (
+          // The one tile on this rail that keeps a native `title`. Radix's
+          // context-menu trigger and its tooltip trigger both want to BE this
+          // button, and neither forwards props through the other, so pairing
+          // them means composing both primitives onto one element by hand.
+          // Not worth it here: a server tile shows its own picture, its name is
+          // the first thing in the header the moment you click it, and the
+          // right-click menu is the interaction this tile is really for.
           <ContextMenu key={server.id} items={items}>
             <button
               type="button"
@@ -267,26 +278,26 @@ export function ServerRail({
           </ContextMenu>
         );
       })}
-      <Button
-        variant="secondary"
-        size="icon"
-        className="h-12 w-12 rounded-2xl hover:rounded-xl"
-        onClick={onCreateServer}
-        title={t("empty.createServer")}
-        aria-label={t("empty.createServer")}
-      >
-        <Plus className="h-5 w-5" />
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon"
-        className="h-12 w-12 rounded-2xl hover:rounded-xl"
-        onClick={onJoinServer}
-        title={t("chrome.joinInvite")}
-        aria-label={t("chrome.joinInvite")}
-      >
-        <UserPlus className="h-5 w-5" />
-      </Button>
+      <Tooltip label={t("empty.createServer")} side="right">
+        <Button
+          variant="secondary"
+          size="icon"
+          className="h-12 w-12 rounded-2xl hover:rounded-xl"
+          onClick={onCreateServer}
+        >
+          <Plus className="h-5 w-5" />
+        </Button>
+      </Tooltip>
+      <Tooltip label={t("chrome.joinInvite")} side="right">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-12 w-12 rounded-2xl hover:rounded-xl"
+          onClick={onJoinServer}
+        >
+          <UserPlus className="h-5 w-5" />
+        </Button>
+      </Tooltip>
 
       {/* Communities, at the FOOT of the rail and separated from everything
           above it.
@@ -306,25 +317,25 @@ export function ServerRail({
             aria-hidden="true"
             className="mt-auto h-px w-8 shrink-0 rounded-full bg-ink-4/70"
           />
-          <button
-            type="button"
-            data-communities-rail
-            onClick={onOpenCommunities}
-            title={t("communities.title")}
-            aria-label={t("communities.title")}
-            aria-current={communitiesSelected ? "page" : undefined}
-            className={cn(
-              "relative flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl transition-all duration-200 hover:rounded-xl",
-              communitiesSelected
-                ? "rounded-xl bg-signal text-ink"
-                : "bg-ink-3 text-paper hover:bg-signal hover:text-ink",
-            )}
-          >
-            {communitiesSelected && (
-              <span className="absolute -left-3 h-8 w-1 rounded-r bg-signal" />
-            )}
-            <Compass className="h-5 w-5" />
-          </button>
+          <Tooltip label={t("communities.title")} side="right">
+            <button
+              type="button"
+              data-communities-rail
+              onClick={onOpenCommunities}
+              aria-current={communitiesSelected ? "page" : undefined}
+              className={cn(
+                "relative flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl transition-all duration-200 hover:rounded-xl",
+                communitiesSelected
+                  ? "rounded-xl bg-signal text-ink"
+                  : "bg-ink-3 text-paper hover:bg-signal hover:text-ink",
+              )}
+            >
+              {communitiesSelected && (
+                <span className="absolute -left-3 h-8 w-1 rounded-r bg-signal" />
+              )}
+              <Compass className="h-5 w-5" />
+            </button>
+          </Tooltip>
         </>
       )}
     </nav>

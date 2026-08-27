@@ -618,6 +618,7 @@
   "voice.control.shareUnavailable": "Compartilhar a tela (indisponível neste aparelho)",
   "voice.control.shareLimit": "Essa call já tem {limit} telas sendo compartilhadas",
   "voice.control.shareSound": "Enviar o som do computador junto",
+  "voice.control.shareSoundDetail": "Vem desligado. Ligado, vai tudo o que a máquina toca, inclusive as vozes da própria chamada, então as pessoas se ouvem de volta.",
   "voice.control.cameraOn": "Ligar a câmera",
   "voice.control.cameraOff": "Desligar a câmera",
   "voice.control.leave": "Sair",

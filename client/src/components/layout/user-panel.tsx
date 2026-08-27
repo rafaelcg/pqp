@@ -5,6 +5,7 @@ import type { ManualStatus, UserStatus } from "@pqp/shared";
 import { DownloadDialog } from "@/components/downloads/download-dialog";
 import { DownloadHint } from "@/components/downloads/download-hint";
 import { Button } from "@/components/ui/button";
+import { Tooltip } from "@/components/ui/tooltip";
 import { StatusDot } from "@/components/user/status-dot";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { isDesktopApp } from "@/lib/desktop";
@@ -286,32 +287,46 @@ export function UserPanel({
           appearance={{ elements: { avatarBox: "h-8 w-8 rounded-md" } }}
         />
       )}
-      <Button
-        variant="ghost"
-        size="icon"
-        className="h-8 w-8 shrink-0"
-        onClick={onToggleMute}
-        disabled={!inVoice}
-        title={isMuted ? t("userPanel.unmute") : t("userPanel.mute")}
-        aria-label={isMuted ? t("userPanel.unmuteMic") : t("userPanel.muteMic")}
-        aria-pressed={isMuted}
+      {/* The short/long split the old `title` + `aria-label` pair already had,
+          kept but made honest: the bubble says "Mute", the reader hears "Mute
+          microphone", and both now come from one call instead of two
+          attributes that nothing stopped from drifting apart.
+
+          Off voice this button is `disabled`, so no tooltip fires — which is
+          not a regression, because `Button` disables pointer events and the
+          native `title` never fired there either. */}
+      <Tooltip
+        label={isMuted ? t("userPanel.unmute") : t("userPanel.mute")}
+        name={isMuted ? t("userPanel.unmuteMic") : t("userPanel.muteMic")}
       >
-        {isMuted ? (
-          <MicOff className="h-4 w-4 text-danger" />
-        ) : (
-          <Mic className="h-4 w-4" />
-        )}
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon"
-        className="h-8 w-8 shrink-0"
-        onClick={onOpenSettings}
-        title={t("userPanel.settings")}
-        aria-label={t("userPanel.openSettings")}
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8 shrink-0"
+          onClick={onToggleMute}
+          disabled={!inVoice}
+          aria-pressed={isMuted}
+        >
+          {isMuted ? (
+            <MicOff className="h-4 w-4 text-danger" />
+          ) : (
+            <Mic className="h-4 w-4" />
+          )}
+        </Button>
+      </Tooltip>
+      <Tooltip
+        label={t("userPanel.settings")}
+        name={t("userPanel.openSettings")}
       >
-        <Settings className="h-4 w-4" />
-      </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8 shrink-0"
+          onClick={onOpenSettings}
+        >
+          <Settings className="h-4 w-4" />
+        </Button>
+      </Tooltip>
       </div>
       <DownloadDialog
         open={downloadOpen}

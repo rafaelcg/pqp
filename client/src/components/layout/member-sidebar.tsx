@@ -9,6 +9,7 @@ import {
 } from "react";
 import type { ProfileUpdate, PublicUser, VoiceParticipant } from "@pqp/shared";
 import { ContextMenu, type ContextMenuItemDef } from "@/components/ui/context-menu";
+import { Tooltip } from "@/components/ui/tooltip";
 import { StatusDot } from "@/components/user/status-dot";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { useProfilePopover } from "@/components/user/user-profile-popover";
@@ -593,15 +594,17 @@ export function MemberSidebar({
               count: total,
             })}
           </p>
-          <button
-            type="button"
-            className="shrink-0 rounded-md p-1.5 text-paper-muted hover:bg-ink-3 hover:text-paper"
-            aria-label={t("memberList.close")}
-            title={t("memberList.close")}
-            onClick={onClose}
-          >
-            <X className="h-4 w-4" />
-          </button>
+          {/* `side="left"`: this sits in the top-right corner of the window,
+              where a bubble above or beside it would run off the edge. */}
+          <Tooltip label={t("memberList.close")} side="left">
+            <button
+              type="button"
+              className="shrink-0 rounded-md p-1.5 text-paper-muted hover:bg-ink-3 hover:text-paper"
+              onClick={onClose}
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </Tooltip>
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 py-3">

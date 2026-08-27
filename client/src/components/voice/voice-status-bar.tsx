@@ -8,6 +8,7 @@ import {
   ScreenShare,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Tooltip } from "@/components/ui/tooltip";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
@@ -113,15 +114,18 @@ export function VoiceStatusBar({
             SFU
           </span>
         )}
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-7 w-7 shrink-0"
-          aria-label={t("voice.bar.leave")}
-          onClick={onLeave}
-        >
-          <PhoneOff className="h-4 w-4 text-danger" />
-        </Button>
+        {/* This widget is pinned to the bottom-left corner, so every bubble in
+            it points up and away from the window edge rather than off it. */}
+        <Tooltip label={t("voice.bar.leave")}>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 shrink-0"
+            onClick={onLeave}
+          >
+            <PhoneOff className="h-4 w-4 text-danger" />
+          </Button>
+        </Tooltip>
       </div>
 
       <div className="mt-1 flex items-center gap-1">
@@ -134,40 +138,44 @@ export function VoiceStatusBar({
           <Mic className="mr-1 inline-block h-3 w-3 align-[-1px] text-paper-muted" />
           {channelName}
         </button>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-7 w-7 shrink-0"
-          aria-label={
-            isMuted ? t("voice.control.unmute") : t("voice.control.mute")
-          }
-          aria-pressed={isMuted}
-          onClick={onToggleMute}
+        <Tooltip
+          label={isMuted ? t("voice.control.unmute") : t("voice.control.mute")}
         >
-          {isMuted ? (
-            <MicOff className="h-4 w-4 text-danger" />
-          ) : (
-            <Mic className="h-4 w-4" />
-          )}
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-7 w-7 shrink-0"
-          aria-label={
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 shrink-0"
+            aria-pressed={isMuted}
+            onClick={onToggleMute}
+          >
+            {isMuted ? (
+              <MicOff className="h-4 w-4 text-danger" />
+            ) : (
+              <Mic className="h-4 w-4" />
+            )}
+          </Button>
+        </Tooltip>
+        <Tooltip
+          label={
             isDeafened
               ? t("voice.control.undeafen")
               : t("voice.control.deafen")
           }
-          aria-pressed={isDeafened}
-          onClick={onToggleDeafen}
         >
-          {isDeafened ? (
-            <HeadphoneOff className="h-4 w-4 text-danger" />
-          ) : (
-            <Headphones className="h-4 w-4" />
-          )}
-        </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 shrink-0"
+            aria-pressed={isDeafened}
+            onClick={onToggleDeafen}
+          >
+            {isDeafened ? (
+              <HeadphoneOff className="h-4 w-4 text-danger" />
+            ) : (
+              <Headphones className="h-4 w-4" />
+            )}
+          </Button>
+        </Tooltip>
       </div>
     </div>
   );

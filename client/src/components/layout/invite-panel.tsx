@@ -2,6 +2,7 @@ import { Check, Copy, Link2, Share2, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Invite } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
+import { Tooltip } from "@/components/ui/tooltip";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { useTranslation, type Translator } from "@/lib/i18n";
@@ -335,76 +336,96 @@ export function InvitePanel({
                           mostly) — straight into WhatsApp, same journey as
                           the iOS app. Desktop browsers lack the API and get
                           copy-the-link, which is the desktop journey anyway. */}
+                      {/* Four near-identical glyphs on one row is the case a
+                          tooltip is actually for: share, link, code and bin
+                          differ by a couple of strokes, and three of them do
+                          something silent that a person cannot verify by
+                          looking. The bubbles reuse the labels these buttons
+                          already carried, code and all — a list can hold
+                          several invites, and "Copy invite link" alone would
+                          not say which row you are on. */}
                       {typeof navigator.share === "function" && (
+                        <Tooltip
+                          label={t("invite.create.share", {
+                            code: invite.code,
+                          })}
+                        >
+                          <Button
+                            size="icon"
+                            variant="secondary"
+                            className="h-8 w-8 shrink-0"
+                            onClick={() =>
+                              void navigator
+                                .share({ url: inviteLink(invite.code) })
+                                .catch(() => {})
+                            }
+                          >
+                            <Share2 className="h-4 w-4" />
+                          </Button>
+                        </Tooltip>
+                      )}
+                      <Tooltip
+                        label={t("invite.create.copyLink", {
+                          code: invite.code,
+                        })}
+                      >
                         <Button
                           size="icon"
                           variant="secondary"
                           className="h-8 w-8 shrink-0"
-                          aria-label={t("invite.create.share", {
-                            code: invite.code,
-                          })}
                           onClick={() =>
-                            void navigator
-                              .share({ url: inviteLink(invite.code) })
-                              .catch(() => {})
+                            void copyToClipboard(
+                              `link:${invite.id}`,
+                              inviteLink(invite.code),
+                            )
                           }
                         >
-                          <Share2 className="h-4 w-4" />
+                          {copied === `link:${invite.id}` ? (
+                            <Check className="h-4 w-4 text-success" />
+                          ) : (
+                            <Link2 className="h-4 w-4" />
+                          )}
                         </Button>
-                      )}
-                      <Button
-                        size="icon"
-                        variant="secondary"
-                        className="h-8 w-8 shrink-0"
-                        aria-label={t("invite.create.copyLink", {
+                      </Tooltip>
+                      <Tooltip
+                        label={t("invite.create.copyCode", {
                           code: invite.code,
                         })}
-                        onClick={() =>
-                          void copyToClipboard(
-                            `link:${invite.id}`,
-                            inviteLink(invite.code),
-                          )
-                        }
                       >
-                        {copied === `link:${invite.id}` ? (
-                          <Check className="h-4 w-4 text-success" />
-                        ) : (
-                          <Link2 className="h-4 w-4" />
-                        )}
-                      </Button>
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        className="h-8 w-8 shrink-0"
-                        aria-label={t("invite.create.copyCode", {
-                          code: invite.code,
-                        })}
-                        onClick={() =>
-                          void copyToClipboard(
-                            `code:${invite.id}`,
-                            invite.code,
-                          )
-                        }
-                      >
-                        {copied === `code:${invite.id}` ? (
-                          <Check className="h-4 w-4 text-success" />
-                        ) : (
-                          <Copy className="h-4 w-4" />
-                        )}
-                      </Button>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-8 w-8 shrink-0"
+                          onClick={() =>
+                            void copyToClipboard(
+                              `code:${invite.id}`,
+                              invite.code,
+                            )
+                          }
+                        >
+                          {copied === `code:${invite.id}` ? (
+                            <Check className="h-4 w-4 text-success" />
+                          ) : (
+                            <Copy className="h-4 w-4" />
+                          )}
+                        </Button>
+                      </Tooltip>
                       {canManage && (
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        className="h-8 w-8 shrink-0"
-                        aria-label={t("invite.create.revoke", {
+                      <Tooltip
+                        label={t("invite.create.revoke", {
                           code: invite.code,
                         })}
-                        disabled={pendingId === invite.id}
-                        onClick={() => void handleRevoke(invite.id)}
                       >
-                        <Trash2 className="h-4 w-4 text-danger" />
-                      </Button>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-8 w-8 shrink-0"
+                          disabled={pendingId === invite.id}
+                          onClick={() => void handleRevoke(invite.id)}
+                        >
+                          <Trash2 className="h-4 w-4 text-danger" />
+                        </Button>
+                      </Tooltip>
                       )}
                     </div>
                     <p className="mt-2 text-xs text-paper-muted">
