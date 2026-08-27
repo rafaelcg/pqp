@@ -84,8 +84,22 @@ android {
         applicationId = "gg.pqp.app"
         minSdk = 26
         targetSdk = 37
-        versionCode = 1
-        versionName = "0.1.0"
+        // Bumped to 2 because version code 1 is on the Play closed track and it
+        // is the build that dies on SIGTRAP the moment anybody taps a voice
+        // channel: R8 stripped `org.jni_zero`, `JNI_OnLoad` could not find
+        // `org/jni_zero/JniInit`, and the process aborted. See ANDROID_RELEASE.md
+        // "The shrinker can produce an APK that installs and then dies".
+        //
+        // The fix landed in 25cce80 and did NOT bump this number, so every build
+        // cut since then still claimed to be version 1. Play refuses to reuse a
+        // version code, which means the fix could never have reached the track:
+        // the crashing artifact stays live until this number moves.
+        //
+        // Bump this for every upload, forever. A version code is not a version,
+        // it is a monotonic upload counter, and the day it stops moving is the
+        // day a fix silently cannot ship.
+        versionCode = 2
+        versionName = "0.1.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
