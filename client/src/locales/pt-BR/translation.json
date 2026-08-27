@@ -184,7 +184,7 @@
   "downloadPage.ios.body": "Um beta pelo TestFlight, não uma listagem da App Store. De graça, leva um minuto.",
   "downloadPage.ios.cta": "Entrar no beta do iOS",
   "downloadPage.android": "Android",
-  "downloadPage.android.body": "Ainda não tem na loja. Abre o pqp no navegador, ou adiciona na tela de início pelo menu.",
+  "downloadPage.android.body": "Ja tem beta fechado no Android. Entra em pqp.gg/android pra pegar uma vaga. No iPhone, e pelo TestFlight.",
   "downloadPage.web.cta": "Abrir no navegador",
   "downloadDialog.title": "Baixar o app",
   "downloadDialog.body": "Tem app de desktop pra Windows, Mac e Linux, e um beta de iPhone. O site no navegador continua valendo, sem instalar nada.",
