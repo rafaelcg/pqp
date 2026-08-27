@@ -102,6 +102,18 @@ A sampler probes each component once a minute into `status_samples` (pruned at
 component that is not configured reports `disabled` and is excluded from the
 headline: an instance with attachments turned off is healthy, not degraded.
 
+### `/up`, and why there are three health endpoints
+
+`/status.json` answers **200 while reporting a component as down** — the state
+is in the body — so it cannot drive a status-code monitor. `/health` can, but it
+is Fly's release gate (`fly.toml`) and carries the deployed commit. So a third
+path exists whose entire contract is the status code: `GET /up`, 200 when the
+process reached its database and 503 only after that has failed continuously for
+45 seconds. It is unauthenticated like the other two and says strictly less than
+either — `{"ok":true|false}`, no version, no counts, no error text. The whole
+decision is `server/src/services/readiness.ts`; the reasoning and the recommended
+UptimeRobot settings are in [`docs/MONITORING.md`](./docs/MONITORING.md).
+
 ## Attachments
 
 An optional feature — with no `S3_*` env the whole path is absent and the composer hides the

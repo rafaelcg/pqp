@@ -2,6 +2,11 @@ import pg from "pg";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  clearPoolStats,
+  noteRuntimeSample,
+  registerPoolStats,
+} from "./lib/runtime.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -28,18 +33,38 @@ export function getPool(): pg.Pool {
     if (!connectionString) {
       throw new Error("DATABASE_URL is required");
     }
-    pool = new pg.Pool({
+    const max = Number(process.env.PG_POOL_MAX ?? 10);
+    const created = new pg.Pool({
       connectionString,
-      max: Number(process.env.PG_POOL_MAX ?? 10),
+      max,
       idleTimeoutMillis: 30_000,
       connectionTimeoutMillis: 10_000,
       ...pgSslConfig(),
     });
+    pool = created;
     // Idle-client errors (Postgres restart, network blip) are emitted on the
     // pool; without a listener they crash the process.
-    pool.on("error", (error) => {
+    created.on("error", (error) => {
       console.error("[db] idle client error:", error);
     });
+
+    // Saturation, for the operator dashboard's `runtime` block. All four are
+    // plain property reads, so exposing them costs nothing and adds no query;
+    // `max` is closed over rather than read back off the pool so this does not
+    // depend on a pg internal. See lib/runtime.ts.
+    registerPoolStats(() => ({
+      max,
+      total: created.totalCount,
+      idle: created.idleCount,
+      waiting: created.waitingCount,
+    }));
+    // A checkout is the only moment the queue is observable from outside pg:
+    // there is no event for *joining* the queue, and a 30-second poll would
+    // miss a stampede that forms and drains between two reads (a deploy makes
+    // every connected client reconnect at once, and one person opening the app
+    // costs on the order of a hundred checkouts). The listener is four number
+    // comparisons and never touches the network.
+    created.on("acquire", noteRuntimeSample);
   }
   return pool;
 }
@@ -47,6 +72,9 @@ export function getPool(): pg.Pool {
 export async function closePool(): Promise<void> {
   const current = pool;
   pool = null;
+  // Before the await: nothing should be able to read counters off a pool that
+  // is being torn down.
+  clearPoolStats();
   await current?.end().catch(() => {});
 }
 

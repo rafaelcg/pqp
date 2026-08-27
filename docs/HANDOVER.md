@@ -17,7 +17,8 @@ Cold-start status for agents and humans. Companion: [`../CLAUDE.md`](../CLAUDE.m
 | Web (Cloudflare Pages, project `pqp`) | https://pqp.gg (also https://pqp-3yr.pages.dev) |
 | API (Fly.io app `pqp-api`, region `gru`) | https://api.pqp.gg |
 | WebSocket | `wss://api.pqp.gg/ws` |
-| Status | `GET https://api.pqp.gg/status.json` |
+| Status | `GET https://api.pqp.gg/status.json` (always 200 — the state is in the body) |
+| Uptime probe | `GET https://api.pqp.gg/up` (**200 or 503**; the one endpoint whose status code is the answer, for UptimeRobot — see [`docs/MONITORING.md`](./MONITORING.md)) |
 
 ICE config: `GET https://api.pqp.gg/api/ice-servers`.
 

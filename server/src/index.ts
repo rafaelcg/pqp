@@ -23,6 +23,7 @@ import {
   sendError,
 } from "./lib/http.js";
 import { logEvent } from "./lib/log.js";
+import { noteRuntimeSample, registerSocketCount } from "./lib/runtime.js";
 import {
   clientAddress,
   createRateLimiter,
@@ -40,6 +41,7 @@ import { pruneExpiredTimeouts } from "./services/sanctions.js";
 import { sweepMessageRetention } from "./services/retention.js";
 import { sweepExpiredConnectionStates } from "./services/connections.js";
 import { sweepChannelAudiences } from "./services/servers.js";
+import { checkReadiness, READINESS_PATH } from "./services/readiness.js";
 import {
   getStatusSummary,
   pruneStatusSamples,
@@ -184,6 +186,24 @@ const httpServer = createServer((req, res) => {
       return;
     }
 
+    if (pathname === READINESS_PATH) {
+      // The external-monitor endpoint. The status code IS the payload; the
+      // body is a constant. `services/readiness.ts` holds the whole decision,
+      // including why a saturated pool and a draining process are both 200.
+      //
+      // Answered before `serveStatic`, so a self-hosted deployment that serves
+      // the SPA from this process cannot shadow it with a client-side route.
+      // No CORS on purpose: this is for a monitor, not for a browser.
+      const verdict = await checkReadiness();
+      res.writeHead(verdict.status, {
+        "Content-Type": "application/json",
+        "Cache-Control": "no-store",
+        ...SECURITY_HEADERS,
+      });
+      res.end(JSON.stringify({ ok: verdict.ok }));
+      return;
+    }
+
     if (pathname === "/status.json") {
       // This route is answered before `handleApi`, which is where every /api/
       // route picks up CORS — so it has to do it itself. Without this the
@@ -273,7 +293,16 @@ const wss = new WebSocketServer({
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const socketLiveness = new WeakMap<import("ws").WebSocket, boolean>();
 
+// One live number for the operator dashboard: every signed-in client holds a
+// socket open for its whole session, so this is the closest thing the process
+// has to "people connected". A Set's `size`, read only when the dashboard asks.
+registerSocketCount(() => wss.clients.size);
+
 wss.on("connection", (socket, req) => {
+  // Take a peak sample here rather than on a timer: the maximum number of
+  // concurrent sockets is always reached immediately after one opens, so
+  // sampling on this event makes `peakSockets` exact rather than sampled.
+  noteRuntimeSample();
   socketLiveness.set(socket, true);
   socket.on("pong", () => {
     socketLiveness.set(socket, true);
@@ -286,6 +315,9 @@ wss.on("error", (error) => {
 });
 
 const heartbeat = setInterval(() => {
+  // Free ride on a loop that already runs: keeps the pool high-water marks
+  // moving on a quiet server, where nothing else is sampling them.
+  noteRuntimeSample();
   for (const client of wss.clients) {
     if (socketLiveness.get(client) === false) {
       // Reaping a socket that missed the previous heartbeat — log it so a

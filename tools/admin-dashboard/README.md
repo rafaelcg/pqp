@@ -10,10 +10,12 @@ not part of the product and it is not linked from anywhere.
 ## What it shows
 
 A strip of **signals** sits directly under the header: one pill per thing that
-can need attention (health, message volume, call quality, voice load, house-cast
-share), coloured by state, so a scan does not have to read every figure below.
+can need attention (health, **capacity**, message volume, call quality, voice
+load, house-cast share), coloured by state, so a scan does not have to read
+every figure below.
 Under it, one line of provenance: which account kinds the numbers exclude, the
-server's cache window, and the page's own refresh interval.
+server's cache window (and that the capacity card sits outside it), and the
+page's own refresh interval.
 
 Under that, **seven tabs**. The whole payload arrives in one read, so switching
 a tab is a pane toggle and never a request; the choice lives in the URL hash, so
@@ -28,7 +30,50 @@ between them.
 | **comunidades** | the directory: listed, suspended, addressed, by category, and the communities themselves. Off by default, and it says so (see below) |
 | **voz e chamadas** | the rooms open *right now* with who is sharing a screen, the voice summary against the mesh limit, and the full call-quality distribution with notes |
 | **moderação** | the report queue (open / actioned / dismissed / new today), bans, timeouts in force, and the feedback queue with the last eight entries. The tab carries a count badge when anything is open |
-| **infra** | deployed commit, region, database latency, worst-component uptime over 24h and 7d, and availability per component |
+| **infra** | **capacity right now** (open WebSockets and the Postgres pool, see below), then the deployed commit, region, database latency, worst-component uptime over 24h and 7d, and availability per component |
+
+### The capacity card is the one live thing on the page
+
+Every other number here is from the API's 30-second cache. The `runtime` block
+is not: the API samples it on each request, because a *cached* queue length
+reads as calm during the one event it exists to report.
+
+It shows two things, and they are different kinds of number:
+
+- **WebSockets open now**, plus the peak. Every signed-in client holds one for
+  its whole session, so this is the closest thing the process has to "people
+  connected". The peak is exact rather than sampled — the API measures it on
+  every connection, and a maximum is always reached immediately after one opens.
+- **The Postgres pool**: one block per connection it may hold (`PG_POOL_MAX`),
+  filled by how many are checked out, amber from 80% and red the moment anything
+  queues. Beside it: in use, **na fila**, and the peak queue length.
+
+**`na fila` above zero is the earliest honest warning this system can give**:
+nothing is broken, nothing is slow enough for anybody to complain, and requests
+are already standing in line for a connection.
+
+**It is not, on its own, proof that the pool is exhausted.** pg queues a request
+whenever it cannot hand it a connection *in the same tick* — including while the
+pool is still opening its first connections, which is every cold start. Measured
+locally: a single `/api/admin/metrics` call against a fresh pool queues 14
+requests even with `PG_POOL_MAX=40`, where there was never any shortage. So:
+
+| Reading | Means |
+|---|---|
+| queue > 0, pool **not** full | amber. A burst the pool absorbed. Normal after a deploy. |
+| queue > 0, pool **full** | red. The ceiling is the constraint. This is the wall. |
+| `pico em uso` == `PG_POOL_MAX` | the wall was hit at some point since the card started counting, even if everything looks calm now. |
+
+Red is reserved for that middle row, because a colour that appears on every
+deploy stops being read.
+
+The queue is deliberately not drawn as more blocks — it is unbounded, and 170
+people waiting must not render as a wider bar that looks like more capacity.
+
+The peak queue is observed at checkout (there is no event for *joining* the pool
+queue), so it can sit slightly below the true instantaneous peak and can never
+exceed it. Both peaks reset on deploy and at São Paulo midnight, and the card
+says which by naming the time it has been counting from.
 
 ### Nothing on this page is illustrative
 
@@ -61,6 +106,11 @@ explaining that the zeros mean the feature is off rather than unused.
 
 Live, from `GET https://api.pqp.gg/api/admin/metrics` (proxied as `/metrics`):
 
+- **`runtime`**: open WebSockets and the connection pool (`max` / `total` /
+  `idle` / `waiting`, plus `busy` and a `pressure` verdict), with peaks for
+  sockets, queue and checked-out connections since `peakTrackedSince`. Sampled
+  per request, not cached, and it costs nothing: every value is a property
+  read, never a query
 - users (total, new in 24h, new per hour, new per day over 14 days), servers
 - messages in 24h and per hour, last hour, delta against the previous 24h,
   distinct senders, active text channels
@@ -159,7 +209,10 @@ endpoint with their own Clerk session; the token exists because the Worker has
 no session. Everybody else gets a 404, the same answer as a route that does not
 exist. Server side: `server/src/services/metrics.ts`, gate in
 `server/src/api/index.ts`, tests in `server/src/api/metrics.test.ts`. The
-payload is cached in memory for 30 seconds.
+counts are cached in memory for 30 seconds; the `runtime` block is not, and the
+cache is typed as `Omit<AdminMetrics, "runtime">` so it cannot become so by
+accident. The live values themselves come from `server/src/lib/runtime.ts`
+(tested in `runtime.test.ts`), which nothing queries.
 
 ## Deploy
 
