@@ -1,0 +1,247 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">pqp</string>
+
+    <!-- Sign in -->
+    <string name="sign_in_title">Talk to your people</string>
+    <string name="sign_in_subtitle">Voice and text that stays out of the way.</string>
+    <string name="sign_in_dev_action">Continue as a local dev account</string>
+    <string name="sign_in_dev_note">Debug builds only. The server has to be running with DEV_AUTH_BYPASS on.</string>
+    <string name="sign_in_unavailable_title">This build cannot sign in</string>
+    <string name="sign_in_unavailable_body">It was packaged without the key it needs to reach the sign-in service. Nothing you can do on this screen will help. Please report this and we will publish a fixed build.</string>
+    <string name="sign_out">Sign out</string>
+
+    <!-- Age gate -->
+    <string name="age_gate_title">One question first</string>
+    <string name="age_gate_body">pqp is for people aged 18 and over. Tell us your date of birth so we know which rules apply to your account.</string>
+    <string name="age_gate_warning">You can only answer this once. If the date you enter is under 18, this account will be closed and you will not be able to try a different date.</string>
+    <string name="age_gate_confirm">Confirm</string>
+
+
+    <!-- Servers -->
+    <string name="servers_title">Servers</string>
+    <string name="servers_empty">You are not in any server yet.</string>
+    <string name="servers_create">New server</string>
+    <string name="servers_create_name">Server name</string>
+    <string name="servers_create_confirm">Create</string>
+    <string name="server_actions">Community actions</string>
+    <string name="server_leave">Leave community</string>
+    <string name="server_leave_title">Leave %1$s?</string>
+    <string name="server_leave_body">You stop seeing its channels and messages. You can come back later with a new invite.</string>
+    <string name="server_leave_confirm">Leave</string>
+    <string name="server_delete">Delete community</string>
+    <string name="server_delete_title">Delete %1$s?</string>
+    <string name="server_delete_body">This cannot be undone. Its channels, every message in them and everybody\u2019s membership go with it.</string>
+    <string name="server_delete_confirm_prompt">Type the community name to confirm</string>
+    <string name="server_delete_confirm">Delete for ever</string>
+
+    <!-- Membership roles. The API answers with the raw word ("owner"), which
+         is a wire value, not UI copy: rendering it straight put an English
+         word on a Portuguese screen. -->
+    <string name="role_owner">Owner</string>
+    <string name="role_admin">Admin</string>
+    <string name="role_member">Member</string>
+
+    <!-- Channels -->
+    <string name="channels_empty">No channels here yet.</string>
+
+    <!-- Chat -->
+    <string name="chat_composer_hint">Message</string>
+    <string name="chat_send">Send</string>
+    <string name="chat_empty">Nothing here yet. Say something.</string>
+    <string name="chat_load_failed">Could not load this conversation. %1$s</string>
+    <string name="chat_edited">edited</string>
+    <string name="chat_typing_one">%1$s is typing…</string>
+    <string name="chat_typing_many">Several people are typing…</string>
+    <string name="chat_back">Back</string>
+    <string name="chat_message_actions">Message actions</string>
+    <string name="chat_attach">Attach a file</string>
+    <string name="chat_attachment_remove">Remove %1$s</string>
+    <string name="chat_attachment_retry">Try %1$s again</string>
+    <string name="chat_attachment_failed">Did not upload</string>
+    <string name="chat_attachment_uploading">Uploading…</string>
+    <string name="chat_attachment_too_large">That file is larger than %1$s, which is the most this server takes.</string>
+    <string name="chat_attachment_unsupported">This server does not take that kind of file.</string>
+    <string name="chat_attachment_too_many">A message carries at most %1$d files.</string>
+    <string name="chat_attachment_unreadable">That file could not be read.</string>
+
+    <!-- Connection -->
+    <string name="connection_connecting">Connecting…</string>
+    <string name="connection_offline">Offline. Trying to reconnect…</string>
+    <string name="connection_retry">Retry</string>
+
+    <!-- Voice -->
+    <string name="voice_leave">Leave</string>
+    <string name="voice_mute">Mute</string>
+    <string name="voice_unmute">Unmute</string>
+    <string name="voice_deafen">Deafen</string>
+    <string name="voice_undeafen">Undeafen</string>
+    <string name="voice_connecting">Joining…</string>
+    <string name="voice_room_full">This channel is full.</string>
+    <string name="voice_mic_denied">pqp needs the microphone to join a call.</string>
+    <string name="voice_notification_channel">Ongoing call</string>
+    <string name="voice_notification_channel_description">Shown while you are in a voice channel, which is what keeps the call alive when the app is in the background.</string>
+    <string name="voice_notification_title">In voice</string>
+    <string name="voice_notification_hang_up">Hang up</string>
+    <string name="voice_transport_unsupported">This call runs on a server this app cannot join yet.</string>
+    <string name="voice_participants">%1$d in this call</string>
+    <string name="voice_peer_unreachable">Cannot reach everyone in this call</string>
+    <string name="voice_notification_sharing">Sharing your screen</string>
+    <string name="voice_share_screen">Share your screen</string>
+    <string name="voice_stop_sharing">Stop sharing</string>
+    <string name="voice_screen_share_denied">This call already has as many screens as it can carry.</string>
+    <string name="voice_screen_share_failed">Android would not start the screen capture.</string>
+    <string name="voice_watch_screen">%1$s is sharing a screen</string>
+    <string name="voice_watch">Watch</string>
+    <string name="voice_close_screen">Close</string>
+    <string name="voice_speaker_on">Speaker</string>
+    <string name="voice_speaker_off">Earpiece</string>
+
+    <!-- Push notifications -->
+    <string name="push_channel_messages">Mentions and messages</string>
+    <string name="push_channel_messages_description">Someone mentioning you, replying to you, or sending you a direct message while the app is closed.</string>
+    <string name="push_fallback_body">New activity</string>
+    <string name="push_settings_title">Notifications</string>
+    <string name="push_settings_summary">Get notified about mentions, replies and direct messages while the app is closed.</string>
+    <string name="push_settings_unavailable">This build has no notification service configured.</string>
+    <string name="push_settings_server_unsupported">This server cannot send notifications to Android yet.</string>
+    <string name="push_settings_denied">Notifications are turned off for pqp in Android settings.</string>
+    <string name="push_settings_working">Registering…</string>
+
+    <!-- You -->
+    <string name="you_title">You</string>
+    <string name="you_backend">Server</string>
+    <string name="you_version">Version</string>
+
+    <!-- Generic -->
+    <string name="chat_untitled">Conversation</string>
+    <string name="cancel">Cancel</string>
+    <string name="ok">OK</string>
+    <string name="invite_failed_title">That invite did not work</string>
+    <string name="error_generic">Something went wrong.</string>
+    <string name="error_network">The server did not answer.</string>
+
+    <!-- Conversations -->
+    <string name="dms_title">Messages</string>
+    <string name="dms_empty">No conversations yet. Start one and it shows up here.</string>
+    <string name="dms_new">New message</string>
+    <string name="dms_no_messages">No messages yet</string>
+    <string name="dms_empty_conversation">Empty conversation</string>
+    <plurals name="dms_group_people">
+        <item quantity="one">%1$d person</item>
+        <item quantity="other">%1$d people</item>
+    </plurals>
+    <string name="dms_close">Close</string>
+    <string name="dms_close_prompt">Close %1$s?</string>
+    <string name="dms_close_explanation">It only leaves your list. Nothing is deleted, and a one to one conversation comes back with its history the moment either of you says something.</string>
+    <string name="dms_group_limit">A group conversation tops out at ten people.</string>
+    <string name="dms_new_no_friends">No friends yet. Search a full handle like name#1234, or add someone from Friends first.</string>
+    <string name="dms_new_start_one">Message %1$s</string>
+    <string name="dms_new_start_group">Start a group of %1$d</string>
+
+    <!-- Finding people -->
+    <string name="people_search_hint">Search by handle</string>
+    <string name="people_search_no_matches">No matches. Try their full handle, like name#1234.</string>
+    <string name="people_search_no_tag">No one with that tag.</string>
+
+    <!-- Friends -->
+    <string name="friends_title">Friends</string>
+    <string name="friends_tab_online">Online</string>
+    <string name="friends_tab_all">All</string>
+    <string name="friends_tab_pending">Pending</string>
+    <string name="friends_add">Add friend</string>
+    <string name="friends_add_hint">Search a full handle, like name#1234.</string>
+    <string name="friends_add_action">Add</string>
+    <string name="friends_empty_online">Nobody is around. Your friends show up here when they come online.</string>
+    <string name="friends_empty_all">No friends yet. Add someone with their full handle, like name#1234.</string>
+    <string name="friends_empty_pending">Nothing pending. Requests waiting on you, and the ones you sent, land here.</string>
+    <string name="friends_section_incoming">Waiting on you</string>
+    <string name="friends_section_outgoing">Sent</string>
+    <string name="friends_accept">Accept</string>
+    <string name="friends_decline">Decline</string>
+    <string name="friends_cancel_request">Cancel</string>
+    <string name="friends_message">Message</string>
+    <string name="friends_remove">Remove friend</string>
+    <string name="friends_block">Block</string>
+    <string name="friends_more">More</string>
+    <string name="friends_remove_prompt">Remove %1$s?</string>
+    <string name="friends_remove_explanation">They will not be told. You can add each other again later.</string>
+    <string name="friends_block_prompt">Block %1$s?</string>
+    <string name="friends_block_explanation">Blocking also ends the friendship and hides their messages.</string>
+    <string name="friends_request_sent">Request sent</string>
+    <string name="friends_now_friends">You are friends</string>
+    <string name="friends_nudge_request">Someone sent you a friend request.</string>
+    <string name="friends_nudge_accepted">Your friend request was accepted.</string>
+
+    <!-- Status -->
+    <string name="status_online">Online</string>
+    <string name="status_idle">Idle</string>
+    <string name="status_dnd">Do not disturb</string>
+    <string name="status_offline">Offline</string>
+
+    <!-- Your data. Both rights the privacy policy promises, and the second one
+         is what Play requires of any app that lets you create an account. -->
+    <string name="you_data_title">Your data</string>
+    <string name="you_data_export">Download my data</string>
+    <string name="you_data_exporting">Preparing\u2026</string>
+    <string name="you_data_export_note">It includes your profile, your settings, every message you wrote, the communities you are in, and who you have blocked. It does not include messages other people wrote, including their side of your direct messages. Those are their words, not your data, and you can still read them here in the app.</string>
+    <string name="you_data_export_saved">Saved.</string>
+    <string name="you_data_export_failed">Could not build your export.</string>
+    <string name="you_data_delete">Delete my account</string>
+    <string name="you_data_delete_note">Permanent. There is no undo and no backup to restore from.</string>
+
+    <string name="delete_title">Delete your account</string>
+    <string name="delete_intro">This cannot be undone. We keep no backup you can be restored from, and nobody at pqp can bring your account back.</string>
+    <string name="delete_removed_title">What is deleted</string>
+    <string name="delete_removed_profile">Your profile, handle, avatar and settings.</string>
+    <string name="delete_removed_messages">Every message you have written, everywhere, including in direct messages. Other people will see gaps where your messages were.</string>
+    <string name="delete_removed_files">Your files and images, and the reactions you left.</string>
+    <string name="delete_removed_memberships">Your memberships, your conversations, and the list of people you blocked.</string>
+    <string name="delete_removed_signin">Your sign-in. You will not be able to log back in.</string>
+    <string name="delete_removed_solo_servers">Any community you own on your own, with nobody else in it.</string>
+    <string name="delete_kept_title">What is kept, and why</string>
+    <string name="delete_kept_audit">Moderation records of actions you took in other people\u2019s communities, with your name removed. Deleting an account must not erase the record of how it was used to moderate somebody else.</string>
+    <string name="delete_kept_bans">Bans you issued. Removing them would let everybody you banned back into communities you no longer have anything to do with.</string>
+    <string name="delete_kept_reports">Reports other people filed about you, with your name removed. We are not able to let an account be deleted as a way of clearing its own record.</string>
+    <string name="delete_kept_note">All of these are pruned on their own schedule. The privacy policy explains them in full.</string>
+    <string name="delete_blocking_title">Do one of these first, for each community you own</string>
+    <string name="delete_blocking_note">Other people are still in these communities, so we will not delete them out from under them. Go back to the servers list, open the community\u2019s menu and delete it there, or hand it to another member from the web or desktop app.</string>
+    <plurals name="delete_blocking_members">
+        <item quantity="one">%1$d other member</item>
+        <item quantity="other">%1$d other members</item>
+    </plurals>
+    <string name="delete_confirm_title">Type your handle to confirm</string>
+    <string name="delete_keep">Keep my account</string>
+    <string name="delete_confirm">Delete for ever</string>
+    <string name="delete_working">Deleting\u2026</string>
+
+    <!-- Reporting. Play requires an app carrying user-generated content to
+         offer a way to report it from inside the app; this is that way. The
+         reason values on the wire are the untranslated enum from
+         REPORT_REASONS, so only these labels are ever localised. -->
+    <string name="report_action">Report</string>
+    <string name="report_message_long_press">Report this message</string>
+    <string name="report_subject_message">Report a message by %1$s</string>
+    <string name="report_subject_user">Report %1$s</string>
+    <string name="report_subject_community">Report the community %1$s</string>
+    <string name="report_body_message">Moderators will see a copy of this message, who sent it, and anything you add below.</string>
+    <string name="report_body_user">Moderators will see who you reported and anything you add below. No messages are attached.</string>
+    <string name="report_body_community">This goes to the people who run pqp, not to this community\u2019s owner. Tell us what is wrong with it.</string>
+    <string name="report_reason_prompt">What is wrong?</string>
+    <string name="report_reason_spam">Spam</string>
+    <string name="report_reason_harassment">Harassment</string>
+    <string name="report_reason_hate_speech">Hate speech</string>
+    <string name="report_reason_violence">Violence or threats</string>
+    <string name="report_reason_sexual_content">Sexual content</string>
+    <string name="report_reason_self_harm">Self-harm</string>
+    <string name="report_reason_illegal_content">Illegal content</string>
+    <string name="report_reason_other">Something else</string>
+    <string name="report_details_label">Anything else? (optional)</string>
+    <string name="report_details_placeholder">Context, links, or what happened before this.</string>
+    <string name="report_send">Send report</string>
+    <string name="report_sending">Sending\u2026</string>
+    <string name="report_failed">Could not send this report. Try again in a moment.</string>
+    <string name="report_sent_title">Report sent</string>
+    <string name="report_sent_body">The moderators will take a look. You will not be named to the person you reported.</string>
+    <string name="report_done">Done</string>
+</resources>

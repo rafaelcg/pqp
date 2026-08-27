@@ -301,6 +301,21 @@ describe("captureResponse", () => {
     assert.deepEqual(captureResponse(source, "win32", false), { video: source });
   });
 
+  it("is the echo switch: no request, no whole-system loopback", () => {
+    // The 23 Aug 2026 report. `"loopback"` is the machine's entire output with
+    // no per-process exclusion, so on Windows it carried the call's own audio
+    // straight back into the call. The web client now sends `audio: false`
+    // from the shell unless the user opted in (see
+    // `client/src/lib/screen-capture-audio.ts`), and this is the assertion
+    // that says a false `audioRequested` is honoured rather than second
+    // guessed. It has to hold for every source kind, not just a display.
+    for (const candidate of [source, { id: "window:12:0", name: "Game" }]) {
+      const response = captureResponse(candidate, "win32", false);
+      assert.equal(response.audio, undefined);
+      assert.equal(response.video, candidate);
+    }
+  });
+
   it("returns null when there is no source", () => {
     assert.equal(captureResponse(null, "win32", true), null);
     assert.equal(captureResponse(undefined, "darwin", false), null);

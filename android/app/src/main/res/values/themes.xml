@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+
+    <!--
+      The XML theme exists for two things Compose cannot do: the window
+      background painted before the first frame, and the splash screen. Every
+      colour the app actually draws comes from PqpTheme in Kotlin.
+
+      `DayNight` rather than a fixed dark parent. The window background is what
+      is on screen between the process starting and the first Compose frame,
+      and pinning it to ink meant a light-mode launch opened on a black
+      rectangle that then flashed to paper. `pqp_window` carries both halves.
+    -->
+    <style name="Theme.Pqp" parent="android:Theme.DeviceDefault.DayNight">
+        <item name="android:windowActionBar">false</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowBackground">@color/pqp_window</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLayoutInDisplayCutoutMode" tools:targetApi="27">shortEdges</item>
+    </style>
+
+    <!--
+      The splash stays on ink in both modes. See the note in colors.xml: the
+      launch screen is the product's surface, not the reader's, and the mark is
+      a lime bubble that has nothing to sit on if the ground goes white.
+    -->
+    <style name="Theme.Pqp.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/pqp_ink</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+        <item name="postSplashScreenTheme">@style/Theme.Pqp</item>
+    </style>
+</resources>

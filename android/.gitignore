@@ -1,0 +1,23 @@
+build/
+.gradle/
+.cxx/
+
+# Machine-local: the SDK path and any build inputs (API URLs, the Clerk
+# publishable key). Never committed, like every other .env in this repo.
+local.properties
+
+# The Firebase project's client config. Not a secret in Google's sense, but it
+# names a live project on somebody's billing account, and this repo is public.
+# Its absence is also what keeps push switched off by default; see the note on
+# `pushAvailable` in app/build.gradle.kts.
+app/google-services.json
+
+*.iml
+.idea/
+captures/
+
+# Belt and braces. The upload keystore is supposed to live outside this repo
+# entirely (see docs/ANDROID_RELEASE.md), so a *.jks in here is already a
+# mistake. This makes it a mistake that cannot be committed.
+*.jks
+*.keystore

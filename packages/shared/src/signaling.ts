@@ -1,4 +1,8 @@
 import { z } from "zod";
+import {
+  setWatchPartyMessageSchema,
+  watchPartyMessageSchema,
+} from "./watch-party.js";
 
 export const iceCandidateInitSchema = z.object({
   candidate: z.string().optional(),
@@ -284,6 +288,8 @@ export const voiceSignalingMessageSchema = z.discriminatedUnion("type", [
   callDeclinedMessageSchema,
   // --- voice moderation ---
   voiceModerationMessageSchema,
+  // --- watch party ---
+  watchPartyMessageSchema,
 ]);
 
 export type VoiceParticipant = z.infer<typeof voiceParticipantSchema>;
@@ -380,6 +386,8 @@ export const voiceClientMessageSchema = z.discriminatedUnion("type", [
   setCameraMessageSchema,
   // --- voice state ---
   setVoiceStateMessageSchema,
+  // --- watch party ---
+  setWatchPartyMessageSchema,
 ]);
 
 export type VoiceClientMessage = z.infer<typeof voiceClientMessageSchema>;

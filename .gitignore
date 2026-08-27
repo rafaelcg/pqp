@@ -70,3 +70,18 @@ __pycache__/
 
 # pnpm store cache — never commit
 .pnpm-store/
+
+# Android signing, and the file that holds its passwords.
+#
+# `android/local.properties` is where `pqp.keystoreFile`, `pqp.keystorePassword`
+# and `pqp.keyPassword` live (see android/app/build.gradle.kts). None of these
+# were ignored until now, and nothing sensitive had been committed yet, but a
+# single `git add -A` after generating an upload key would have published the
+# key and its passwords to a public AGPL repo.
+#
+# The upload key is recoverable through Play App Signing if it is ever lost.
+# A leaked one is not: anybody holding it can upload builds as this developer.
+local.properties
+*.jks
+*.keystore
+*.p12

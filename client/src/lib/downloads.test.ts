@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  DOWNLOAD_PAGE_PATH,
+  DOWNLOAD_PAGE_URL,
   detectDownloadPlan,
   detectMacArch,
   detectPlatform,
@@ -41,6 +43,13 @@ function uaData(
         : () => Promise.resolve({ architecture, bitness: "64" }),
   };
 }
+
+describe("the public download URL", () => {
+  it("is a stable path on pqp.gg, not a versioned GitHub filename", () => {
+    expect(DOWNLOAD_PAGE_PATH).toBe("/download");
+    expect(DOWNLOAD_PAGE_URL).toBe("https://pqp.gg/download");
+  });
+});
 
 describe("detectPlatform", () => {
   it("reads a Mac", () => {

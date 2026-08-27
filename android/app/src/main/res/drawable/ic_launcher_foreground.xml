@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The pqp mark: a speech bubble with three dots, the same typing indicator the
+  web icons draw (client/public/icons, scripts/generate-icons.py). Drawn rather
+  than typeset, because the wordmark needs Unbounded and three letters are
+  illegible at launcher size anyway.
+
+  108dp viewport with the art inside the central 72dp safe zone, which is what
+  every launcher mask is guaranteed not to crop.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <path
+        android:fillColor="#BBEC4C"
+        android:pathData="M31,32 L77,32 A10,10 0 0 1 87,42 L87,64 A10,10 0 0 1 77,74 L52,74 L40,84 L40,74 L31,74 A10,10 0 0 1 21,64 L21,42 A10,10 0 0 1 31,32 Z" />
+
+    <path
+        android:fillColor="#090E12"
+        android:pathData="M38,53 m-5,0 a5,5 0 1,0 10,0 a5,5 0 1,0 -10,0 Z" />
+    <path
+        android:fillColor="#090E12"
+        android:pathData="M54,53 m-5,0 a5,5 0 1,0 10,0 a5,5 0 1,0 -10,0 Z" />
+    <path
+        android:fillColor="#090E12"
+        android:pathData="M70,53 m-5,0 a5,5 0 1,0 10,0 a5,5 0 1,0 -10,0 Z" />
+</vector>

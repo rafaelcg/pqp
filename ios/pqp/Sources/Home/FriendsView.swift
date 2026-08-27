@@ -182,24 +182,41 @@ struct FriendsView: View {
             .padding(.top, 30)
         } else {
             ForEach(rows) { friend in
-                FriendRow(friend: friend, isBusy: model.busyId == friend.id)
-                    .contextMenu {
-                        Button {
-                            Task { opened = await model.openConversation(with: friend.id) }
-                        } label: {
-                            Label("Message", systemImage: "bubble.left")
-                        }
-                        Button(role: .destructive) {
-                            model.confirming = .remove(friend)
-                        } label: {
-                            Label("Remove friend", systemImage: "person.badge.minus")
-                        }
-                        Button(role: .destructive) {
-                            model.confirming = .block(friend)
-                        } label: {
-                            Label("Block", systemImage: "hand.raised")
-                        }
+                // Tapping the row opens the conversation.
+                //
+                // This used to be reachable ONLY from the context menu below,
+                // which meant the whole list looked interactive and did nothing
+                // when you touched it. A long press is not a discoverable way to
+                // start a chat with a friend, and nobody found it.
+                //
+                // "Message" stays in the context menu as well. Losing it there
+                // would be a regression for anyone who did learn the long press,
+                // and a menu whose first entry is the row's own default action
+                // is a normal iOS pattern.
+                Button {
+                    Task { opened = await model.openConversation(with: friend.id) }
+                } label: {
+                    FriendRow(friend: friend, isBusy: model.busyId == friend.id)
+                }
+                .buttonStyle(.plain)
+                .disabled(model.busyId == friend.id)
+                .contextMenu {
+                    Button {
+                        Task { opened = await model.openConversation(with: friend.id) }
+                    } label: {
+                        Label("Message", systemImage: "bubble.left")
                     }
+                    Button(role: .destructive) {
+                        model.confirming = .remove(friend)
+                    } label: {
+                        Label("Remove friend", systemImage: "person.badge.minus")
+                    }
+                    Button(role: .destructive) {
+                        model.confirming = .block(friend)
+                    } label: {
+                        Label("Block", systemImage: "hand.raised")
+                    }
+                }
             }
         }
     }
@@ -570,7 +587,9 @@ private struct FriendRow: View {
             if isBusy {
                 ProgressView().tint(Palette.signal)
             } else {
-                Image(systemName: "ellipsis")
+                // A chevron, not an ellipsis: the row navigates now, and an
+                // ellipsis promises a menu that a tap does not open.
+                Image(systemName: "chevron.right")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(Palette.paperMuted)
             }

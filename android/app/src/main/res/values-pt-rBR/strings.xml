@@ -1,0 +1,248 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">pqp</string>
+
+    <!-- Entrar -->
+    <string name="sign_in_title">Fale com a sua gente</string>
+    <string name="sign_in_subtitle">Voz e texto que não atrapalham.</string>
+    <string name="sign_in_dev_action">Continuar com uma conta local de desenvolvimento</string>
+    <string name="sign_in_dev_note">Só em builds de debug. O servidor precisa estar rodando com DEV_AUTH_BYPASS ligado.</string>
+    <string name="sign_in_unavailable_title">Este app não consegue fazer login</string>
+    <string name="sign_in_unavailable_body">Ele foi publicado sem a chave que precisa para falar com o serviço de login. Não tem nada que dê para fazer por aqui. Avise a gente que publicamos uma versão corrigida.</string>
+    <string name="sign_out">Sair</string>
+
+    <!-- Verificação de idade -->
+    <string name="age_gate_title">Uma pergunta antes</string>
+    <string name="age_gate_body">O pqp é para pessoas de 18 anos ou mais. Informe sua data de nascimento para sabermos quais regras valem para a sua conta.</string>
+    <string name="age_gate_warning">Você só pode responder uma vez. Se a data informada for de menor de 18 anos, esta conta será encerrada e você não poderá tentar outra data.</string>
+    <string name="age_gate_confirm">Confirmar</string>
+
+
+    <!-- Servidores -->
+    <string name="servers_title">Servidores</string>
+    <string name="servers_empty">Você ainda não está em nenhum servidor.</string>
+    <string name="servers_create">Novo servidor</string>
+    <string name="servers_create_name">Nome do servidor</string>
+    <string name="servers_create_confirm">Criar</string>
+    <string name="server_actions">Ações da comunidade</string>
+    <string name="server_leave">Sair da comunidade</string>
+    <string name="server_leave_title">Sair de %1$s?</string>
+    <string name="server_leave_body">Você deixa de ver os canais e as mensagens de lá. Dá para voltar depois com um convite novo.</string>
+    <string name="server_leave_confirm">Sair</string>
+    <string name="server_delete">Excluir comunidade</string>
+    <string name="server_delete_title">Excluir %1$s?</string>
+    <string name="server_delete_body">Não tem como desfazer. Os canais, todas as mensagens neles e a participação de todo mundo vão junto.</string>
+    <string name="server_delete_confirm_prompt">Digite o nome da comunidade para confirmar</string>
+    <string name="server_delete_confirm">Excluir para sempre</string>
+
+    <string name="role_owner">Dono</string>
+    <string name="role_admin">Admin</string>
+    <string name="role_member">Membro</string>
+
+    <!-- Canais -->
+    <string name="channels_empty">Nenhum canal aqui ainda.</string>
+
+    <!-- Conversa -->
+    <string name="chat_composer_hint">Mensagem</string>
+    <string name="chat_send">Enviar</string>
+    <string name="chat_empty">Nada aqui ainda. Diga alguma coisa.</string>
+    <string name="chat_load_failed">Não foi possível carregar esta conversa. %1$s</string>
+    <string name="chat_edited">editada</string>
+    <string name="chat_typing_one">%1$s está digitando…</string>
+    <string name="chat_typing_many">Várias pessoas estão digitando…</string>
+    <string name="chat_back">Voltar</string>
+    <string name="chat_message_actions">Ações da mensagem</string>
+    <string name="chat_attach">Anexar um arquivo</string>
+    <string name="chat_attachment_remove">Remover %1$s</string>
+    <string name="chat_attachment_retry">Tentar %1$s de novo</string>
+    <string name="chat_attachment_failed">Não subiu</string>
+    <string name="chat_attachment_uploading">Enviando…</string>
+    <string name="chat_attachment_too_large">Esse arquivo passa de %1$s, que é o máximo que este servidor aceita.</string>
+    <string name="chat_attachment_unsupported">Este servidor não aceita esse tipo de arquivo.</string>
+    <string name="chat_attachment_too_many">Uma mensagem leva no máximo %1$d arquivos.</string>
+    <string name="chat_attachment_unreadable">Não foi possível ler esse arquivo.</string>
+
+    <!-- Conexão -->
+    <string name="connection_connecting">Conectando…</string>
+    <string name="connection_offline">Sem conexão. Tentando reconectar…</string>
+    <string name="connection_retry">Tentar de novo</string>
+
+    <!-- Voz -->
+    <string name="voice_leave">Sair</string>
+    <string name="voice_mute">Mudo</string>
+    <string name="voice_unmute">Tirar do mudo</string>
+    <string name="voice_deafen">Silenciar tudo</string>
+    <string name="voice_undeafen">Voltar a ouvir</string>
+    <string name="voice_connecting">Entrando…</string>
+    <string name="voice_room_full">Este canal está cheio.</string>
+    <string name="voice_mic_denied">O pqp precisa do microfone para entrar na chamada.</string>
+    <string name="voice_notification_channel">Chamada em andamento</string>
+    <string name="voice_notification_channel_description">Aparece enquanto você está em um canal de voz, e é o que mantém a chamada viva com o app em segundo plano.</string>
+    <string name="voice_notification_title">Na chamada</string>
+    <string name="voice_notification_hang_up">Desligar</string>
+    <string name="voice_transport_unsupported">Esta chamada usa um transporte que este app ainda não sabe usar.</string>
+    <string name="voice_participants">%1$d na chamada</string>
+    <string name="voice_peer_unreachable">Não foi possível alcançar todo mundo na chamada</string>
+    <string name="voice_notification_sharing">Compartilhando sua tela</string>
+    <string name="voice_share_screen">Compartilhar sua tela</string>
+    <string name="voice_stop_sharing">Parar de compartilhar</string>
+    <string name="voice_screen_share_denied">Esta chamada já tem todas as telas que consegue carregar.</string>
+    <string name="voice_screen_share_failed">O Android não iniciou a captura de tela.</string>
+    <string name="voice_watch_screen">%1$s está compartilhando uma tela</string>
+    <string name="voice_watch">Assistir</string>
+    <string name="voice_close_screen">Fechar</string>
+    <string name="voice_speaker_on">Viva-voz</string>
+    <string name="voice_speaker_off">Fone</string>
+
+    <!-- Notificações -->
+    <string name="push_channel_messages">Menções e mensagens</string>
+    <string name="push_channel_messages_description">Quando alguém menciona você, responde você ou manda uma mensagem direta com o app fechado.</string>
+    <string name="push_fallback_body">Nova atividade</string>
+    <string name="push_settings_title">Notificações</string>
+    <string name="push_settings_summary">Avisar sobre menções, respostas e mensagens diretas com o app fechado.</string>
+    <string name="push_settings_unavailable">Esta versão do app não tem serviço de notificações configurado.</string>
+    <string name="push_settings_server_unsupported">Este servidor ainda não envia notificações para o Android.</string>
+    <string name="push_settings_denied">As notificações do pqp estão desativadas nos ajustes do Android.</string>
+    <string name="push_settings_working">Registrando…</string>
+
+    <!-- Você -->
+    <string name="you_title">Você</string>
+    <string name="you_backend">Servidor</string>
+    <string name="you_version">Versão</string>
+
+    <!-- Genéricos -->
+    <string name="chat_untitled">Conversa</string>
+    <string name="cancel">Cancelar</string>
+    <string name="ok">OK</string>
+    <string name="invite_failed_title">Esse convite não funcionou</string>
+    <string name="error_generic">Algo deu errado.</string>
+    <string name="error_network">O servidor não respondeu.</string>
+
+    <!-- Conversas -->
+    <string name="dms_title">Mensagens</string>
+    <string name="dms_empty">Nenhuma conversa ainda. Comece uma e ela aparece aqui.</string>
+    <string name="dms_new">Nova mensagem</string>
+    <string name="dms_no_messages">Sem mensagens ainda</string>
+    <string name="dms_empty_conversation">Conversa vazia</string>
+    <!-- "many" nunca aparece aqui: um grupo vai no máximo até dez pessoas.
+         Está definido porque o CLDR do português tem essa categoria e a
+         ferramenta cobra a forma completa. -->
+    <plurals name="dms_group_people">
+        <item quantity="one">%1$d pessoa</item>
+        <item quantity="many">%1$d de pessoas</item>
+        <item quantity="other">%1$d pessoas</item>
+    </plurals>
+    <string name="dms_close">Fechar</string>
+    <string name="dms_close_prompt">Fechar %1$s?</string>
+    <string name="dms_close_explanation">Sai só da sua lista. Nada é apagado, e uma conversa entre duas pessoas volta com o histórico assim que qualquer um dos dois falar.</string>
+    <string name="dms_group_limit">Uma conversa em grupo vai até dez pessoas.</string>
+    <string name="dms_new_no_friends">Nenhum amigo ainda. Procure pelo identificador completo, como nome#1234, ou adicione alguém em Amigos primeiro.</string>
+    <string name="dms_new_start_one">Enviar mensagem para %1$s</string>
+    <string name="dms_new_start_group">Criar um grupo de %1$d</string>
+
+    <!-- Encontrar pessoas -->
+    <string name="people_search_hint">Buscar pelo identificador</string>
+    <string name="people_search_no_matches">Nada encontrado. Tente o identificador completo, como nome#1234.</string>
+    <string name="people_search_no_tag">Ninguém com essa tag.</string>
+
+    <!-- Amigos -->
+    <string name="friends_title">Amigos</string>
+    <string name="friends_tab_online">Online</string>
+    <string name="friends_tab_all">Todos</string>
+    <string name="friends_tab_pending">Pendentes</string>
+    <string name="friends_add">Adicionar amigo</string>
+    <string name="friends_add_hint">Busque pelo identificador completo, como nome#1234.</string>
+    <string name="friends_add_action">Adicionar</string>
+    <string name="friends_empty_online">Ninguém por aqui. Seus amigos aparecem aqui quando ficarem online.</string>
+    <string name="friends_empty_all">Nenhum amigo ainda. Adicione alguém pelo identificador completo, como nome#1234.</string>
+    <string name="friends_empty_pending">Nada pendente. Os pedidos esperando por você, e os que você enviou, chegam aqui.</string>
+    <string name="friends_section_incoming">Esperando por você</string>
+    <string name="friends_section_outgoing">Enviados</string>
+    <string name="friends_accept">Aceitar</string>
+    <string name="friends_decline">Recusar</string>
+    <string name="friends_cancel_request">Cancelar</string>
+    <string name="friends_message">Mensagem</string>
+    <string name="friends_remove">Remover amigo</string>
+    <string name="friends_block">Bloquear</string>
+    <string name="friends_more">Mais</string>
+    <string name="friends_remove_prompt">Remover %1$s?</string>
+    <string name="friends_remove_explanation">A pessoa não será avisada. Vocês podem se adicionar de novo depois.</string>
+    <string name="friends_block_prompt">Bloquear %1$s?</string>
+    <string name="friends_block_explanation">Bloquear também encerra a amizade e esconde as mensagens da pessoa.</string>
+    <string name="friends_request_sent">Pedido enviado</string>
+    <string name="friends_now_friends">Vocês são amigos</string>
+    <string name="friends_nudge_request">Alguém te enviou um pedido de amizade.</string>
+    <string name="friends_nudge_accepted">Seu pedido de amizade foi aceito.</string>
+
+    <!-- Status -->
+    <string name="status_online">Online</string>
+    <string name="status_idle">Ausente</string>
+    <string name="status_dnd">Não perturbe</string>
+    <string name="status_offline">Offline</string>
+
+    <!-- Seus dados. Os dois direitos que a política de privacidade promete, e o
+         segundo é exigido pela Play de qualquer app que deixa criar conta. -->
+    <string name="you_data_title">Seus dados</string>
+    <string name="you_data_export">Baixar meus dados</string>
+    <string name="you_data_exporting">Preparando\u2026</string>
+    <string name="you_data_export_note">Inclui seu perfil, suas configurações, todas as mensagens que você escreveu, as comunidades das quais você faz parte e quem você bloqueou. Não inclui mensagens escritas por outras pessoas, nem o lado delas nas suas conversas diretas. São palavras delas, não dados seus, e você continua podendo lê-las aqui no app.</string>
+    <string name="you_data_export_saved">Salvo.</string>
+    <string name="you_data_export_failed">Não foi possível gerar sua exportação.</string>
+    <string name="you_data_delete">Excluir minha conta</string>
+    <string name="you_data_delete_note">Permanente. Não há como desfazer e não existe backup para restaurar.</string>
+
+    <string name="delete_title">Excluir sua conta</string>
+    <string name="delete_intro">Isso não pode ser desfeito. Não guardamos nenhum backup que possa restaurar você, e ninguém no pqp consegue trazer sua conta de volta.</string>
+    <string name="delete_removed_title">O que é excluído</string>
+    <string name="delete_removed_profile">Seu perfil, seu identificador, sua foto e suas configurações.</string>
+    <string name="delete_removed_messages">Todas as mensagens que você escreveu, em qualquer lugar, inclusive nas conversas diretas. As outras pessoas vão ver lacunas onde estavam suas mensagens.</string>
+    <string name="delete_removed_files">Seus arquivos e imagens, e as reações que você deixou.</string>
+    <string name="delete_removed_memberships">Suas participações, suas conversas e a lista de pessoas que você bloqueou.</string>
+    <string name="delete_removed_signin">Seu acesso. Você não vai mais conseguir entrar.</string>
+    <string name="delete_removed_solo_servers">Qualquer comunidade que só você tenha, sem mais ninguém dentro.</string>
+    <string name="delete_kept_title">O que fica, e por quê</string>
+    <string name="delete_kept_audit">Registros de moderação de ações que você tomou em comunidades de outras pessoas, sem o seu nome. Excluir uma conta não pode apagar o registro de como ela foi usada para moderar outra pessoa.</string>
+    <string name="delete_kept_bans">Banimentos que você aplicou. Removê-los deixaria todo mundo que você baniu voltar a comunidades com as quais você não tem mais nenhuma relação.</string>
+    <string name="delete_kept_reports">Denúncias que outras pessoas fizeram sobre você, sem o seu nome. Não podemos deixar que excluir a conta sirva para limpar o próprio histórico.</string>
+    <string name="delete_kept_note">Tudo isso é descartado no ritmo de cada um. A política de privacidade explica em detalhe.</string>
+    <string name="delete_blocking_title">Faça uma destas primeiro, em cada comunidade sua</string>
+    <string name="delete_blocking_note">Ainda tem gente nessas comunidades, então não vamos excluí-las por baixo delas. Volte para a lista de servidores, abra o menu da comunidade e exclua por ali, ou passe a comunidade para outra pessoa pelo app da web ou do computador.</string>
+    <plurals name="delete_blocking_members">
+        <item quantity="one">mais %1$d pessoa</item>
+        <item quantity="other">mais %1$d pessoas</item>
+    </plurals>
+    <string name="delete_confirm_title">Digite seu identificador para confirmar</string>
+    <string name="delete_keep">Manter minha conta</string>
+    <string name="delete_confirm">Excluir para sempre</string>
+    <string name="delete_working">Excluindo\u2026</string>
+
+    <!-- Denúncias. A Play exige que um app com conteúdo de usuário tenha um
+         jeito de denunciar de dentro do próprio app; é este. O valor que vai
+         para o servidor é o enum de REPORT_REASONS, sem tradução, então só
+         estes rótulos são localizados. -->
+    <string name="report_action">Denunciar</string>
+    <string name="report_message_long_press">Denunciar esta mensagem</string>
+    <string name="report_subject_message">Denunciar uma mensagem de %1$s</string>
+    <string name="report_subject_user">Denunciar %1$s</string>
+    <string name="report_subject_community">Denunciar a comunidade %1$s</string>
+    <string name="report_body_message">Quem modera vai ver uma cópia desta mensagem, quem enviou e o que você escrever abaixo.</string>
+    <string name="report_body_user">Quem modera vai ver quem você denunciou e o que você escrever abaixo. Nenhuma mensagem vai junto.</string>
+    <string name="report_body_community">Isso vai para quem cuida do pqp, não para o dono da comunidade. Conta o que tem de errado.</string>
+    <string name="report_reason_prompt">O que aconteceu?</string>
+    <string name="report_reason_spam">Spam</string>
+    <string name="report_reason_harassment">Assédio</string>
+    <string name="report_reason_hate_speech">Discurso de ódio</string>
+    <string name="report_reason_violence">Violência ou ameaça</string>
+    <string name="report_reason_sexual_content">Conteúdo sexual</string>
+    <string name="report_reason_self_harm">Automutilação</string>
+    <string name="report_reason_illegal_content">Conteúdo ilegal</string>
+    <string name="report_reason_other">Outra coisa</string>
+    <string name="report_details_label">Mais alguma coisa? (opcional)</string>
+    <string name="report_details_placeholder">Contexto, links, ou o que aconteceu antes disso.</string>
+    <string name="report_send">Enviar denúncia</string>
+    <string name="report_sending">Enviando\u2026</string>
+    <string name="report_failed">Não deu para enviar esta denúncia. Tente de novo daqui a pouco.</string>
+    <string name="report_sent_title">Denúncia enviada</string>
+    <string name="report_sent_body">Quem modera vai olhar. Seu nome não é mostrado para quem você denunciou.</string>
+    <string name="report_done">Pronto</string>
+</resources>

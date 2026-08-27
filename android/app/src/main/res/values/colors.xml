@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      The brand ground: oklch(0.16 0.012 250). Kept in step with
+      client/src/index.css and ios/pqp/Sources/Design/Theme.swift.
+
+      This is the SPLASH colour, and it does not have a light variant on
+      purpose. A launch screen is the one surface that is the product's own
+      rather than the reader's, so the mark always appears on ink, the way it
+      does on the web's og:image and on the launcher icon.
+    -->
+    <color name="pqp_ink">#090E12</color>
+
+    <!--
+      The window behind the first frame, which DOES follow the reader. Painted
+      before Compose has drawn anything, so if it disagrees with the theme the
+      app opens on a flash of the wrong colour. Light values live in
+      values-night's absence; see values-night/colors.xml for the dark pair.
+    -->
+    <color name="pqp_window">#FBFAF7</color>
+    <color name="pqp_window_ink">#14181C</color>
+</resources>

@@ -52,6 +52,7 @@
 | Incoming webhooks | Done (Discord wire-compatible payload shape; per-channel management UI; pseudo-user authors messages so no read path had to change; audit-logged) |
 | i18n (en + pt-BR) | Done (i18next core, lazy pt-BR, Electron menus in `electron/locales/`) |
 | Mobile PWA | Done (installable, shell precache + offline fallback, prompted updates, iOS safe-area/`dvh`, SW notification path for Android — `docs/PWA.md`) |
+| Native Android app | **Partial** (Kotlin + Compose + Material 3 in `android/`: auth, age gate, servers, channels, text chat all verified against a live local server; mesh voice with a foreground service negotiates between two clients but its media path is unproven for want of TURN; no screen share, no push, no CI job. See `docs/ANDROID.md`) |
 | Public status page | Done (`/status` + unauthenticated `/status.json`; per-component probes sampled once a minute, real 24h/7d uptime kept 30 days) |
 | SSO / SAML readiness | Done (Clerk federates; app adds verified-email-domain joining per server, owner-only, exact-match, bans still apply — `docs/SSO.md`) |
 | Screen share | Done (mesh: second video track + manual renegotiation per peer; SFU: LiveKit `Track.Source.ScreenShare`; concurrent presenters capped at 2 on mesh / 4 on LiveKit) |

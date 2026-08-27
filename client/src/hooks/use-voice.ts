@@ -16,7 +16,16 @@ import {
   screenShareUnavailableMessage,
   supportsScreenShare,
 } from "@/components/voice/capabilities";
-import { desktopContext, desktopPredatesScreenShare } from "@/lib/desktop";
+import {
+  desktopContext,
+  desktopPredatesScreenShare,
+  isDesktopApp,
+} from "@/lib/desktop";
+import {
+  capturesSystemAudio,
+  screenCaptureEnvironment,
+  screenCaptureOptions,
+} from "@/lib/screen-capture-audio";
 import { translateMessage, type MessageKey } from "@/lib/i18n";
 import {
   buildAudioConstraints,
@@ -177,6 +186,17 @@ export interface VoiceState {
    * from the other side of the call.
    */
   isSharingScreenAudio: boolean;
+  /**
+   * Whether our live share is carrying the MACHINE'S output rather than one
+   * tab's, i.e. the shape that re-broadcasts everybody's voices back at them.
+   *
+   * Read off what the picker actually returned (`displaySurface === "monitor"`
+   * with an audio track), not off what was asked for: the person may have opted
+   * in and then picked a tab, and a warning about a capture that is not
+   * happening is how a true warning gets ignored. Only ever true when the user
+   * opted in, because nothing else asks for system audio any more.
+   */
+  isSharingSystemAudio: boolean;
   // --- conversation calls ---
   /**
    * Conversations currently ringing this device, oldest first. Lives on the
@@ -344,62 +364,6 @@ function screenShareErrorMessage(err: unknown): string {
 }
 
 /**
- * The display-capture options the DOM lib does not know about yet.
- *
- * `systemAudio`, `selfBrowserSurface` and `surfaceSwitching` are Screen Capture
- * spec extensions that TypeScript's `DisplayMediaStreamOptions` still omits.
- * Declared narrowly, as the three fields we actually pass, so a typo stays a
- * compile error, where casting the call to `any` would hide exactly the
- * mistakes this feature is most likely to make. A browser that does not know a key
- * ignores it, which is the degradation we want.
- */
-interface ScreenCaptureOptions extends DisplayMediaStreamOptions {
-  /** Chromium: offer the machine's own output as a capturable source. */
-  systemAudio?: "include" | "exclude";
-  /** Chromium: whether the tab running this app may be picked. */
-  selfBrowserSurface?: "include" | "exclude";
-  /** Chromium: offer "share this tab instead" while a share is running. */
-  surfaceSwitching?: "include" | "exclude";
-}
-
-/**
- * What we ask a screen capture for.
- *
- * Audio is requested every time; a browser that cannot supply it answers with a
- * stream that simply has no audio track, and every path below treats that as
- * normal rather than as an error. The mic's processing chain is explicitly off:
- * echo cancellation and noise suppression exist for a person talking into a
- * laptop and would chew holes in a film's soundtrack.
- *
- * `selfBrowserSurface: "exclude"` is the anti-feedback rule. Sharing the pqp
- * tab itself would put the call's own audio back into the call, and the loop
- * gets louder every trip; the picker not offering that tab is a cheaper answer
- * than an echo nobody can locate.
- */
-const SCREEN_CAPTURE_OPTIONS: ScreenCaptureOptions = {
-  // `video: true` used to be the whole of this, and it is why a share arrived
-  // as a slideshow. With no frameRate asked for, a capture of a large surface
-  // is handed over at whatever rate the browser feels like, and with no ceiling
-  // on size a 4K or Retina display is captured at its full pixel count and then
-  // has to be scaled down inside the encoder every frame. 1080p30 is the shape
-  // of the thing people actually share, and asking for it is cheaper than
-  // paying for pixels nobody in the call can see.
-  video: {
-    frameRate: { ideal: 30, max: 30 },
-    width: { max: 1920 },
-    height: { max: 1080 },
-  },
-  audio: {
-    echoCancellation: false,
-    noiseSuppression: false,
-    autoGainControl: false,
-  },
-  systemAudio: "include",
-  selfBrowserSurface: "exclude",
-  surfaceSwitching: "include",
-};
-
-/**
  * Supplies an SFU session for a voice channel.
  *
  * Registering one is a statement of **capability**, not a choice of transport:
@@ -495,6 +459,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     audibleScreenPeerIds: [],
     localScreenStream: null,
     isSharingScreenAudio: false,
+    isSharingSystemAudio: false,
     incomingCalls: [],
     isCameraOn: false,
     localCameraStream: null,
@@ -841,6 +806,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     state.isSharingScreen = false;
     state.localScreenStream = null;
     state.isSharingScreenAudio = false;
+    state.isSharingSystemAudio = false;
   }
 
   /**
@@ -903,6 +869,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     screenCaptureStream.removeTrack(track);
     track.stop();
     state.isSharingScreenAudio = false;
+    state.isSharingSystemAudio = false;
     announceSharing();
     await manager?.setLocalScreenStream(screenCaptureStream);
     if (sfu) {
@@ -1628,6 +1595,7 @@ export function createVoiceController(transport: RealtimeTransport) {
         audibleScreenPeerIds: [],
         localScreenStream: null,
         isSharingScreenAudio: false,
+    isSharingSystemAudio: false,
         // Invitations from OTHER conversations are not our call state and
         // survive hanging up, the way a second phone line keeps ringing.
         incomingCalls: state.incomingCalls,
@@ -1709,7 +1677,14 @@ export function createVoiceController(transport: RealtimeTransport) {
       emit();
     },
 
-    async startScreenShare() {
+    /**
+     * @param shareSystemAudio The user's explicit opt-in to sending the whole
+     *   machine's sound. Defaults to false at every call site, and false does
+     *   NOT mean a silent share: a Chrome tab share still carries that tab's
+     *   own audio, which is the route that cannot echo. See
+     *   `lib/screen-capture-audio.ts` for why the default moved.
+     */
+    async startScreenShare(shareSystemAudio = false) {
       if (state.status !== "connected") {
         return;
       }
@@ -1739,7 +1714,10 @@ export function createVoiceController(transport: RealtimeTransport) {
       let stream: MediaStream;
       try {
         stream = await navigator.mediaDevices.getDisplayMedia(
-          SCREEN_CAPTURE_OPTIONS,
+          screenCaptureOptions(
+            shareSystemAudio,
+            screenCaptureEnvironment(isDesktopApp()),
+          ),
         );
       } catch (err) {
         // A browser that refuses the *shape* of the request rather than the
@@ -1797,6 +1775,20 @@ export function createVoiceController(transport: RealtimeTransport) {
       state.isSharingScreen = true;
       state.localScreenStream = stream;
       state.isSharingScreenAudio = hasAudio;
+      // Decided here, from the surface the picker returned, so the UI can say
+      // "this is going out" at the one moment the presenter can still change
+      // their mind. `getSettings` is guarded because a track handed over by a
+      // shell or an older engine need not implement it.
+      let displaySurface: string | undefined;
+      try {
+        displaySurface = track.getSettings().displaySurface;
+      } catch {
+        // Unknown surface reads as "not a monitor", which is the quiet answer.
+      }
+      state.isSharingSystemAudio = capturesSystemAudio({
+        displaySurface,
+        hasAudio,
+      });
       emit();
       announceSharing();
 

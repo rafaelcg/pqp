@@ -1,0 +1,184 @@
+name: Android
+
+# Its own workflow file, deliberately, and not a job bolted onto `ci.yml`.
+#
+# `ci.yml` guards the API and the web client, and `deploy-api-fly.yml` ships the
+# API from `main` minutes after a merge. An Android build that cannot find an
+# SDK platform must never be the reason an API fix does not deploy, so the two
+# pipelines share nothing: no runner, no toolchain, no required check.
+#
+# The reason it exists at all: before this file, "the Android build works" was a
+# property of one laptop. The iOS side already paid for that lesson once, when an
+# agent honestly reported BUILD SUCCEEDED against a generated Xcode project that
+# `main` could not produce.
+
+# The path lists are duplicated rather than shared through a YAML anchor:
+# GitHub's workflow parser does not expand aliases, so an anchor here silently
+# becomes an empty filter and the workflow runs on everything.
+#
+# The three non-Android entries are not padding. The Android client hand-copies
+# every wire fact out of them, and the tests in
+# `android/app/src/test/kotlin/gg/pqp/app/protocol` read them off disk to check
+# the copies still match. A protocol change on the server has to be able to fail
+# this build, or those tests are decoration.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "android/**"
+      - ".github/workflows/android.yml"
+      - "packages/shared/src/**"
+      - "server/src/ws/**"
+      - "client/src/lib/peer-connection-manager.ts"
+  pull_request:
+    paths:
+      - "android/**"
+      - ".github/workflows/android.yml"
+      - "packages/shared/src/**"
+      - "server/src/ws/**"
+      - "client/src/lib/peer-connection-manager.ts"
+  workflow_dispatch:
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # 37 because sixteen dependencies floor there. See the comment on
+  # `compileSdk` in android/app/build.gradle.kts. Named here so the platform the
+  # build compiles against is a fact of the repo rather than of whoever's
+  # machine happens to have it installed.
+  COMPILE_SDK: "37"
+  BUILD_TOOLS: "36.0.0"
+
+jobs:
+  build:
+    name: Build, test and lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        # The whole repo, not a sparse android/ checkout: the protocol tests
+        # read packages/shared, server/src/ws and client/src/lib off disk.
+
+      - name: Setup JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          # The laptop this was written on runs Android Studio's bundled JBR 25.
+          # The bytecode target is pinned at 17 in build.gradle.kts on both, so
+          # the JDK the compiler itself runs on is not part of the artifact.
+          java-version: "21"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          build-scan-publish: false
+          # Only `main` writes the cache, so a PR cannot poison it.
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          # Installs cmdline-tools and accepts the licences. The platform is
+          # installed in the next step, where a miss can be reported clearly.
+          packages: ""
+
+      - name: Install the compile SDK
+        shell: bash
+        run: |
+          set -uo pipefail
+          # Android ships minor platform releases now, so the package id is
+          # `platforms;android-37.0` on a current SDK and plain
+          # `platforms;android-37` on an older one. The versioned spelling is
+          # tried first because it is the one that exists today; the plain one
+          # is the fallback rather than the other way round, so the ordinary
+          # path leaves no "Failed to find package" line in the log to
+          # misread later.
+          #
+          # If neither resolves, AGP downloads the platform itself (the
+          # licences are already accepted), so this warns rather than fails,
+          # and the `ls` below records what was actually there.
+          sdkmanager "platform-tools" "build-tools;${BUILD_TOOLS}" || true
+          sdkmanager "platforms;android-${COMPILE_SDK}.0" \
+            || sdkmanager "platforms;android-${COMPILE_SDK}" \
+            || echo "::warning::No platforms;android-${COMPILE_SDK} package resolved; letting AGP fetch it."
+          echo "--- installed platforms"
+          ls "$ANDROID_HOME/platforms" || true
+
+      # Unit tests first, because they are the fastest way to a real answer and
+      # the protocol ones fail on a server change that compiles perfectly well.
+      - name: Unit tests
+        working-directory: android
+        run: ./gradlew :app:testDebugUnitTest --stacktrace
+
+      - name: Lint
+        working-directory: android
+        run: ./gradlew :app:lint --stacktrace
+
+      - name: Debug build
+        working-directory: android
+        run: ./gradlew :app:assembleDebug --stacktrace
+
+      # An UNSIGNED release, on purpose. This job holds no keystore and never
+      # will; what it proves is that R8, the resource shrinker and
+      # `proguard-rules.pro` survive the release variant, which is where a
+      # kotlinx-serialization or WebRTC rule goes missing and the app crashes on
+      # a tester's phone and nowhere else. Signing is a human step, documented
+      # in docs/ANDROID_RELEASE.md.
+      - name: Release build (unsigned, shrinker check)
+        working-directory: android
+        run: ./gradlew :app:assembleRelease --stacktrace
+
+      - name: Summarise
+        if: always()
+        shell: bash
+        run: |
+          set -uo pipefail
+          {
+            echo "### Android"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| compileSdk | ${COMPILE_SDK} |"
+            echo "| JDK | $(java -version 2>&1 | head -1) |"
+            for apk in android/app/build/outputs/apk/*/*.apk; do
+              [ -f "$apk" ] || continue
+              echo "| $(basename "$apk") | $(( $(stat -c%s "$apk") / 1024 / 1024 )) MB |"
+            done
+            tests=$(find android/app/build/test-results -name 'TEST-*.xml' 2>/dev/null | wc -l)
+            echo "| unit test classes | ${tests} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-reports
+          path: |
+            android/app/build/reports/**
+            android/app/build/test-results/**
+          if-no-files-found: warn
+          retention-days: 14
+
+      # The artifact a human installs to check a change by hand, so that
+      # "does it actually run" does not need the one laptop either.
+      #
+      # It is the plain debug build, so it points at `http://localhost:3001` and
+      # needs `adb reverse tcp:3001 tcp:3001` and a local server, exactly like a
+      # build off the laptop. It is deliberately NOT pointed at api.pqp.gg: a
+      # debug build carries no Clerk publishable key, so it would authenticate
+      # with the dev bypass token, which the hosted API refuses.
+      - name: Upload debug APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pqp-android-debug
+          path: android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14

@@ -153,12 +153,12 @@ Two server instances with **different** LiveKit config pin the same channel diff
 
 ## Screen-share audio
 
-The capture is requested with `audio` plus `systemAudio: "include"`, and most of the time the browser hands back no audio track at all. That is the expected answer, not a failure:
+The capture is requested with `audio` plus **`systemAudio: "exclude"`**, and most of the time the browser hands back no audio track at all. That is the expected answer, not a failure:
 
 | Browser / OS | Sound in a screen share? |
 |---|---|
 | Chrome or Edge, any OS, sharing a **tab** | Yes, when the user ticks "share tab audio" |
-| Chrome or Edge on **Windows or ChromeOS**, sharing the **whole screen** | Yes, when the user ticks "share system audio" |
+| Chrome or Edge on **Windows or ChromeOS**, sharing the **whole screen** | Only after the user arms "send this computer's sound" in the call controls, and then ticks "share system audio" |
 | Chrome on **macOS or Linux**, sharing a screen or a window | No. The OS does not hand the browser its own output |
 | **Safari**, anything | No display audio at all |
 | **Firefox**, anything | No display audio at all |
@@ -169,7 +169,31 @@ Playback is a second `<audio>` element in `VoiceAudioSinks`, next to the one tha
 
 That element is mounted for every peer in `audibleScreenPeerIds` (hook state: both shares when two people are presenting, the focused share when there are three or more). The roster is still the gate: an unannounced LiveKit `ScreenShareAudio` publication never makes that list, so it stays silent. The list lives on the voice controller, not on whether the stage is mounted, so navigating to a text channel does not mute a live share.
 
-Feedback control is one rule: `selfBrowserSurface: "exclude"`, so the pqp tab itself is not offered in the picker. Sharing a whole Windows screen with system audio while listening on speakers is still a loop the app cannot break; headphones are the answer there, as they are for the microphone.
+### The echo, and why system audio is opt-in (2026-08-26)
+
+A 3-star call rating on 23 Aug 2026: *"Quando alguém transmite, ele repete a Call de quem esta na chamada tbm. Aí fica com eco."* Somebody shares their screen and everybody hears themselves come back.
+
+`systemAudio: "include"` was the cause. It asks the picker to offer the machine's whole output, and the machine's whole output contains the call, so on a Windows whole-screen share every voice in the room was tapped off the render endpoint and sent back to the person speaking. Three things that look like the fix and are not:
+
+- **Echo cancellation cannot touch it.** AEC subtracts a known reference from what a *microphone* heard. System audio is tapped after the mixer and never goes near a microphone. `echoCancellation: false` on a screen-audio track is also correct: it is what keeps a film's soundtrack intact.
+- **Headphones do not help.** The Windows loopback tap is WASAPI's render endpoint, which is the same endpoint whether the sound then leaves via speakers or a headset. This doc used to say headphones were the answer. They are the answer for microphone echo and they do nothing here.
+- **`selfBrowserSurface: "exclude"` does not help.** It keeps our tab out of the *video* picker and says nothing about audio.
+
+What is done instead, in `client/src/lib/screen-capture-audio.ts`:
+
+1. **`systemAudio: "exclude"` by default.** The spec scopes that member to monitor surfaces, so a whole-screen share can no longer carry the machine's output and a **tab** share still carries its own sound. Measured on Chrome 151: a tab capture under `"exclude"` still hands over a `Tab audio` track. Tab share stays the recommended route because it is the only one that cannot echo.
+2. **An explicit opt-in**, next to the share button in both the channel panel and the conversation stage, session-scoped and off on every reload. Arming it says out loud that the call's audio goes with it.
+3. **`restrictOwnAudio: true`** whenever the browser knows the constraint (Chrome desktop 141+, feature-detected). The spec: *"the user agent MUST attempt to remove any audio from the audio being captured that was produced by the document that performed getDisplayMedia()."* Our document is the one playing everybody's voices. **Unverified against a real Windows loopback capture**, so it is a second line of defence, not the answer.
+4. **`audio: false` in the Electron shell** unless the user opted in. The shell answers `setDisplayMediaRequestHandler` with `{ video, audio: "loopback" }` on Windows (`electron/lib/display-sources.js`), which is whole-system loopback with no self-exclusion, and Electron 34 is Chromium 132, nine majors short of `restrictOwnAudio`. The shell only asks for loopback when the page asked for audio, so the page not asking is the off switch, and it works on shells that are already installed (the desktop app loads the live web client).
+5. **A warning while it is live**, when the capture came back as `displaySurface: "monitor"` with an audio track and somebody else is in the room. The presenter is the one person who cannot hear the echo they are causing.
+
+Neither native mobile client shares the defect: iOS drops every non-video `RPSampleBufferType` in `ios/pqp/Broadcast/SampleHandler.swift`, and the Android client never builds an `AudioPlaybackCaptureConfiguration`.
+
+**Not reproduced on Windows by anyone here.** The echo needs WASAPI loopback, and nobody on this project has a Windows machine in front of them. What was measured, on Chrome 151:
+
+- A real tab capture under `systemAudio: "exclude"` still hands over a `Tab audio` track, `displaySurface: "browser"`, `echoCancellation` still false, `restrictOwnAudio` honoured. This is the fact the new default rests on.
+- `getSupportedConstraints().restrictOwnAudio` is `true` in Chrome 151 and the setting comes back `true` when asked for.
+- Headless Chromium on macOS refuses `getDisplayMedia` for every surface and every option set (`NotSupportedError`), so `client/e2e/screen-share-system-audio.spec.ts` runs against Chromium's synthetic capture device, which always reports a monitor with a "Fake audio" track. That spec pins the options the app really sends, that a share's audio still reaches the other person, and that a monitor-plus-audio capture raises the warning. It cannot and does not claim to have heard an echo.
 
 ## Screen share on the SFU (verified)
 
