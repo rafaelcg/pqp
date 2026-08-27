@@ -17,6 +17,8 @@ Onde funciona hoje:
 
 Sem a caixinha, em qualquer lugar, continua indo só o vídeo. Isso não é erro, é limite do navegador, e o pqp fala isso na tela em vez de deixar você descobrir pelo silêncio do outro lado.
 
+Se você caiu aqui atrás de um jeito de passar a tela agora, tem uma página só sobre isso: [compartilhar tela no navegador](/tela), com as opções que funcionam hoje, incluindo as que não são a nossa.
+
 ## O vídeo
 
 Esse era o problema mais chato e a causa era vergonhosa: a gente nunca tinha dito pro navegador o que estava mandando. Sem essa dica, o codificador assume que tela compartilhada é planilha, e planilha se otimiza pra nitidez: ele segura a resolução e gasta o movimento. Ótimo pra texto parado, péssimo pra qualquer coisa que se mexe.

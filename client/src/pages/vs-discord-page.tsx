@@ -488,6 +488,19 @@ export function VsDiscordPage() {
                 {t("vsDiscord.cta.beta.hint")}
               </p>
             )}
+            {/* /tela already links here; until now nothing linked back, so the
+                two pages built for the same moment had a one-way relationship.
+                This is also the better page for a reader who does not want a
+                scoreboard, only the thing that works today. */}
+            <p className="mx-auto mt-8 max-w-2xl text-pretty text-sm text-paper-muted">
+              {t("vsDiscord.closing.tela.lead")}{" "}
+              <Link
+                to="/tela"
+                className="underline decoration-paper-muted/40 underline-offset-4 transition-colors duration-150 hover:text-paper hover:decoration-paper/60"
+              >
+                {t("vsDiscord.closing.tela.link")}
+              </Link>
+            </p>
           </section>
         </div>
       </main>

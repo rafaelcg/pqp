@@ -105,38 +105,37 @@ const PAGE_COPY: Record<MarketingPage, PageCopy> = {
   "/": {
     canonicalPath: "/",
     title: {
-      "pt-BR": "pqp: o chat em grupo é seu",
-      en: "pqp: group chat you own",
+      "pt-BR": "pqp: chat em grupo com voz e tela compartilhada",
+      en: "pqp: group chat with voice and screen sharing",
     },
     description: {
       "pt-BR":
-        "Chat em grupo com comunidades, canais e voz que simplesmente funciona. Código aberto, hospede você mesmo ou use o pqp.gg.",
-      en: "Chaotic group chat with communities, channels, and voice that just works. Open source, self-host or use pqp.gg.",
+        "Voz, texto e tela compartilhada pra sua galera, direto no navegador. Crie uma comunidade e mande o link. Código aberto, de graça, e o servidor pode ser seu.",
+      en: "Voice, text, and screen sharing for your people, straight from the browser. Make a community, send the link. Open source, free, and the server can be yours.",
     },
   },
   "/vs-discord": {
     canonicalPath: "/vs-discord",
     title: {
-      "pt-BR": "pqp vs Discord (2026): comparação honesta",
-      en: "pqp vs Discord (2026): an honest comparison",
+      "pt-BR": "Alternativa ao Discord em 2026: comparação honesta | pqp",
+      en: "A Discord alternative in 2026: an honest comparison | pqp",
     },
     description: {
       "pt-BR":
-        "Tela compartilhada e câmera nas chamadas funcionam no pqp. No Brasil, tela, vídeo e Go Live do Discord estão suspensos desde 17 ago 2026 (carta da Discord; sem data de volta). Grátis, código aberto, beta aberto.",
-      en: "Screen share and camera in calls work on pqp. In Brazil, Discord’s screen share, video, and Go Live have been suspended since 17 Aug 2026 (Discord’s letter; no return date). Free, open source, open beta.",
+        "Voz, texto e tela compartilhada funcionam no pqp, no navegador. A Discord suspendeu tela e vídeo no Brasil em 17/08/2026. Comparação linha a linha, de graça.",
+      en: "Voice, text, and screen sharing work on pqp, in the browser. Discord suspended screen share and video in Brazil on 17 Aug 2026. A line-by-line comparison, free.",
     },
   },
   "/tela": {
     canonicalPath: "/tela",
     title: {
-      "pt-BR":
-        "Compartilhar tela no navegador: o que usar hoje | pqp",
-      en: "Sharing your screen in the browser: what works today | pqp",
+      "pt-BR": "Alternativa ao Discord para compartilhar tela | pqp",
+      en: "A Discord alternative for sharing your screen | pqp",
     },
     description: {
       "pt-BR":
-        "Tela do Discord suspensa no Brasil desde 17/08? Veja o que funciona hoje pra compartilhar tela com os amigos no navegador, sem baixar nada. Comparação honesta, com o pqp e outras opções.",
-      en: "Discord screen share suspended in Brazil since 17 Aug? Here is what works today to share your screen with friends in the browser, nothing to download. An honest comparison, with pqp and other options.",
+        "Compartilhe a tela com os amigos sem Discord, direto do navegador e com som. Comparação honesta do que funciona hoje no Brasil. Grátis e de código aberto.",
+      en: "Share your screen with friends without Discord, straight from the browser, with audio. An honest comparison of what works today in Brazil. Free and open source.",
     },
   },
   "/beta": {
