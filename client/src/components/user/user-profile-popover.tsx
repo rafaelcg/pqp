@@ -1,4 +1,10 @@
-import { Loader2, MoreHorizontal, Phone, AtSign } from "lucide-react";
+import {
+  AtSign,
+  Loader2,
+  MessageCircle,
+  MoreHorizontal,
+  Phone,
+} from "lucide-react";
 import {
   createContext,
   useCallback,
@@ -8,6 +14,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ButtonHTMLAttributes,
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
@@ -23,6 +30,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { StatusDot } from "@/components/user/status-dot";
 import { UserAvatar } from "@/components/user/user-avatar";
+import { RankMarks } from "@/components/user/rank-marks";
+import { identityMarks } from "@/lib/author-display";
 import { useFriends } from "@/components/friends/use-friends";
 import { DepoimentoComposer } from "@/components/depoimentos/depoimento-composer";
 import {
@@ -45,8 +54,10 @@ import {
   kickMember,
   liftTimeout,
   timeoutMember,
+  updateMemberNickname,
+  updateMemberRole,
 } from "@/lib/api";
-import { useTranslation, type Translator } from "@/lib/i18n";
+import { useTranslation, type MessageKey, type Translator } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import {
   canBlock,
@@ -54,6 +65,7 @@ import {
   canMessage,
   canRemoveFriend,
   canReport,
+  cardRoleChips,
   friendsSince,
   moderationActions,
   moderationNeedsConfirmation,
@@ -64,10 +76,15 @@ import {
   offersDecline,
   resolveFriendshipState,
   resolvePresence,
+  roleChangeFor,
+  profileAboutTabs,
+  activeProfileAboutTab,
   type Placement,
+  type ProfileAboutTab,
   type ProfileModerationAction,
   type ProfileModerationContext,
   type ProfilePrimaryAction,
+  type ProfileRoleChange,
   type ProfileRoleChip,
   type ProfileSubject,
 } from "./profile-relations";
@@ -228,8 +245,19 @@ export function ProfilePopoverProvider({
  * Fixed coordinates, because the trigger usually sits inside a scroller (the
  * message list) whose `overflow` would clip an absolutely positioned child.
  * The arithmetic itself lives in `profile-relations.ts` so it can be tested.
+ *
+ * 320, not 288: the action strip below the name holds up to four equal-width
+ * tiles, and the relationship pill has to fit "Adicionar amigo" without
+ * truncating. 288 was the width at which the ellipsis wrapped onto its own
+ * line under the Portuguese labels.
  */
-const CARD_WIDTH = 288;
+const CARD_WIDTH = 320;
+
+const ABOUT_LABEL: Record<ProfileAboutTab, MessageKey> = {
+  depoimentos: "depoimentos.section",
+  connections: "profile.about.accounts",
+  communities: "depoimentos.communities",
+};
 
 /**
  * The preset the composer opens on — one hour, the second rung of
@@ -254,6 +282,37 @@ function describeTimeoutMinutes(minutes: number, t: Translator["t"]): string {
 }
 
 // --------------------------------------------------------------------- card
+
+/**
+ * One cell in the contact-sheet strip. The grey well is icon-only and equal
+ * with its siblings; the caption sits under the chrome, the way WhatsApp and
+ * iOS Phone draw Call / Message. Putting the word inside the well made
+ * `Mencionar` look like a wider button than `Mais` even when the cells were
+ * the same width. The whole column is still the hit target.
+ */
+interface ActionTileProps extends ButtonHTMLAttributes<HTMLButtonElement> {
+  label: string;
+}
+
+function ActionTile({ label, className, children, ...rest }: ActionTileProps) {
+  return (
+    <button
+      type="button"
+      className={cn(
+        "group flex w-full min-w-0 flex-col items-center gap-1.5 text-paper focus-visible:outline-none disabled:pointer-events-none disabled:opacity-40",
+        className,
+      )}
+      {...rest}
+    >
+      <span className="flex h-10 w-full items-center justify-center rounded-xl bg-ink-3/70 text-paper transition-colors group-hover:bg-ink-3 group-focus-visible:ring-2 group-focus-visible:ring-signal/60">
+        {children}
+      </span>
+      <span className="max-w-full text-center text-[11px] font-medium leading-tight text-paper-muted">
+        {label}
+      </span>
+    </button>
+  );
+}
 
 interface UserProfileCardProps {
   subject: ProfileSubject;
@@ -296,16 +355,10 @@ function UserProfileCard({
   const { data, loading, send, accept, remove, removeDepoimento } = useFriends();
   const cardRef = useRef<HTMLDivElement>(null);
   const mentionUsername = subject.username?.trim() || null;
-  const paintedRoles = useMemo(() => {
-    if (!roles?.length || !subject.roleIds?.length) {
-      return [];
-    }
-    const held = new Set(subject.roleIds);
-    return roles
-      .filter((role) => held.has(role.id) && !role.isEveryone)
-      .slice()
-      .sort((a, b) => b.position - a.position);
-  }, [roles, subject.roleIds]);
+  const paintedRoles = useMemo(
+    () => cardRoleChips(roles, subject.roleIds),
+    [roles, subject.roleIds],
+  );
   const [placement, setPlacement] = useState<Placement | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -342,6 +395,7 @@ function UserProfileCard({
   const [connections, setConnections] = useState<VisibleConnection[] | null>(
     null,
   );
+  const [aboutPick, setAboutPick] = useState<ProfileAboutTab | null>(null);
   /** Open while the composer is up. */
   const [writing, setWriting] = useState(false);
   /** The same fact, readable from listeners registered before it changes. */
@@ -363,8 +417,24 @@ function UserProfileCard({
     state === "self"
       ? []
       : moderationActions(subject.id, currentUserId, moderation);
+  // The owner-only rank change, derived apart from the ladder on purpose (see
+  // `roleChangeFor`). It needs no `state === "self"` guard of its own: the
+  // function already answers null for yourself.
+  const roleChange = roleChangeFor(subject.id, currentUserId, moderation);
   const presence = resolvePresence(subject.id, state, data, subject.status);
   const since = friendsSince(subject.id, data);
+  const aboutTabs = useMemo(
+    () =>
+      profileAboutTabs({
+        depoimentoCount: depoimentos?.length ?? 0,
+        connectionCount: connections?.length ?? 0,
+        communityCount: communities?.communities.length ?? 0,
+      }),
+    [depoimentos, connections, communities],
+  );
+  const aboutActive = activeProfileAboutTab(aboutTabs, aboutPick);
+  const aboutSegmented = aboutTabs.length > 1;
+  const aboutChrome = aboutSegmented ? "plain" : "well";
 
   // Measured after mount: the card's height depends on which state it is in,
   // so guessing it would put a friends card in the wrong place.
@@ -406,7 +476,7 @@ function UserProfileCard({
       window.removeEventListener("resize", reposition);
       window.removeEventListener("scroll", onScroll, true);
     };
-  }, [anchor, onClose, state, loading]);
+  }, [anchor, onClose, state, loading, aboutActive, aboutTabs.length]);
 
   /**
    * The card's own content, read once on open.
@@ -638,6 +708,67 @@ function UserProfileCard({
     });
   }
 
+  /**
+   * Change this person's nickname in the server the card was opened in.
+   *
+   * The same `window.prompt` the members panel uses, and the same gate: the
+   * panel offers it to yourself or to any manager, and the card only has a
+   * `moderation` context at all when the viewer manages this server — so
+   * "moderation exists" IS the panel's rule, minus the plain-member-changing-
+   * themselves case, which the panel's own context menu keeps.
+   */
+  function changeNickname() {
+    if (!moderation) {
+      return;
+    }
+    const { serverId } = moderation;
+    const next = window.prompt(
+      t("member.nicknamePrompt"),
+      subject.nickname ?? "",
+    );
+    if (next === null) {
+      return;
+    }
+    const trimmed = next.trim();
+    setNotice(null);
+    void run(async () => {
+      await updateMemberNickname(
+        serverId,
+        subject.id,
+        trimmed.length === 0 ? null : trimmed,
+      );
+      moderation.onModerated();
+      setNotice(t("profile.mod.nicknamed"));
+    });
+  }
+
+  /**
+   * Promote or demote. Unconfirmed, the way the panel's version is: the change
+   * is reversible in one tap and the `permissions-update` frame that follows
+   * it refreshes the roster every surface reads from.
+   */
+  function runRoleChange(which: ProfileRoleChange) {
+    if (!moderation) {
+      return;
+    }
+    const { serverId } = moderation;
+    setNotice(null);
+    void run(async () => {
+      await updateMemberRole(
+        serverId,
+        subject.id,
+        which === "promote" ? "admin" : "member",
+      );
+      moderation.onModerated();
+      setNotice(
+        t(
+          which === "promote" ? "profile.mod.promoted" : "profile.mod.demoted",
+          { name: subject.displayName },
+        ),
+      );
+    });
+  }
+
   const modLabel: Record<ProfileModerationAction, string> = {
     timeout: t("profile.mod.timeout"),
     endTimeout: t("profile.mod.endTimeout"),
@@ -713,30 +844,51 @@ function UserProfileCard({
           },
         ]
       : []),
-    // The ladder, last and in order: reversible first, then the two that end a
-    // membership. `moderationActions` returns [] for a conversation, for a
-    // non-manager and for anybody the rank rule protects — so a plain member
-    // reading this menu sees exactly what they saw before.
+  ];
+
+  const manageItems: {
+    id: string;
+    label: string;
+    danger?: boolean;
+    moderation?: ProfileModerationAction;
+    onSelect: () => void;
+  }[] = [
+    ...(moderation
+      ? [
+          {
+            id: "nickname",
+            label: t("member.nickname"),
+            onSelect: () => {
+              changeNickname();
+            },
+          },
+        ]
+      : []),
+    ...(roleChange
+      ? [
+          {
+            id: `role-${roleChange}`,
+            label:
+              roleChange === "promote"
+                ? t("member.promote")
+                : t("member.demote"),
+            onSelect: () => {
+              runRoleChange(roleChange);
+            },
+          },
+        ]
+      : []),
     ...modActions.map((which) => ({
       id: `mod-${which}`,
       label: modLabel[which],
-      // Red is exactly the set that needs confirming — the two that end a
-      // membership. A timeout is the REVERSIBLE rung: it expires on its own and
-      // is lifted from this same menu, so painting it the same colour as "Ban
-      // from server" would teach a moderator the opposite of the ladder the
-      // order is trying to express. The members panel makes this argument at
-      // length on its own copy of these rows; sharing the predicate with
-      // `moderationNeedsConfirmation` is what keeps the two in step.
       danger: moderationNeedsConfirmation(which),
       moderation: which,
       onSelect: () => {
-        setOverflowOpen(false);
         if (moderationNeedsConfirmation(which)) {
           setConfirmingModeration(which);
           return;
         }
         if (which === "timeout") {
-          // A duration has to be chosen, so the composer IS the confirmation.
           setTimeoutMinutes(DEFAULT_TIMEOUT_MINUTES);
           return;
         }
@@ -744,6 +896,128 @@ function UserProfileCard({
       },
     })),
   ];
+
+  /**
+   * The strip of things you do WITH somebody — message, call, mention — plus
+   * the ellipsis that hides block and report. Equal icon wells, captions
+   * under the chrome. Nickname, rank and the ladder live in the section
+   * below, not in this strip.
+   */
+  const tileMore = overflowItems.length > 0;
+  const tileMessage = canMessage(state);
+  const tileCall = canCall(state) && Boolean(onStartCall);
+  const tileMention = Boolean(onMention && mentionUsername);
+  const actionStrip =
+    tileMessage || tileCall || tileMention || tileMore ? (
+      <div className="mt-3 flex items-start gap-2">
+        {tileMessage && (
+          <div className="min-w-0 flex-1">
+            <ActionTile
+              label={t("friends.message")}
+              disabled={busy}
+              data-profile-message=""
+              onClick={handleMessage}
+            >
+              <MessageCircle aria-hidden className="h-[18px] w-[18px]" />
+            </ActionTile>
+          </div>
+        )}
+        {tileCall && (
+          <div className="min-w-0 flex-1">
+            <ActionTile
+              label={t("profile.call")}
+              disabled={busy}
+              data-profile-call=""
+              onClick={handleCall}
+            >
+              <Phone aria-hidden className="h-[18px] w-[18px]" />
+            </ActionTile>
+          </div>
+        )}
+        {tileMention && (
+          <div className="min-w-0 flex-1">
+            <ActionTile
+              label={t("member.mention")}
+              disabled={busy}
+              data-profile-mention=""
+              onClick={() => {
+                if (mentionUsername) {
+                  onMention?.(mentionUsername);
+                }
+                onClose();
+              }}
+            >
+              <AtSign aria-hidden className="h-[18px] w-[18px]" />
+            </ActionTile>
+          </div>
+        )}
+        {tileMore && (
+          <div className="relative min-w-0 flex-1">
+            <ActionTile
+              label={t("profile.more")}
+              aria-haspopup="menu"
+              aria-expanded={overflowOpen}
+              disabled={busy}
+              onClick={() => setOverflowOpen((was) => !was)}
+            >
+              <MoreHorizontal aria-hidden className="h-[18px] w-[18px]" />
+            </ActionTile>
+            {overflowOpen && (
+              <div
+                role="menu"
+                aria-label={t("profile.more")}
+                // Opens down, not up: the card itself scrolls, and an upward
+                // menu was clipped by that overflow (Block disappeared). A cap
+                // still keeps a tall owner menu inside the card.
+                className="absolute top-full right-0 z-10 mt-1 max-h-[15rem] w-48 overflow-y-auto rounded-lg border border-ink-4 bg-ink-2 p-1 shadow-[var(--shadow-popover)]"
+              >
+                {overflowItems.map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    role="menuitem"
+                    data-profile-mod={item.moderation}
+                    className={cn(
+                      "flex w-full items-center rounded-md px-2.5 py-1.5 text-left text-sm outline-none hover:bg-ink-3 focus-visible:bg-ink-3",
+                      item.danger ? "text-danger" : "text-paper",
+                    )}
+                    onClick={item.onSelect}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    ) : null;
+
+  const manageSection =
+    manageItems.length > 0 ? (
+      <div className="mt-3 overflow-hidden rounded-xl bg-ink-3/60">
+        <p className="px-3 pb-1 pt-2.5 text-[11px] font-semibold uppercase tracking-wide text-paper-muted">
+          {t("profile.mod.section")}
+        </p>
+        <div className="divide-y divide-ink-4/50">
+          {manageItems.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              data-profile-mod={item.moderation}
+              disabled={busy}
+              className={cn(
+                "flex w-full items-center px-3 py-2.5 text-left text-sm transition-colors hover:bg-ink-3 focus-visible:bg-ink-3 focus-visible:outline-none disabled:opacity-40",
+                item.danger ? "text-danger" : "text-paper",
+              )}
+              onClick={item.onSelect}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+      </div>
+    ) : null;
 
   return createPortal(
     <div
@@ -758,21 +1032,33 @@ function UserProfileCard({
         // Invisible until measured, so it never flashes at the top-left corner.
         visibility: placement ? "visible" : "hidden",
       }}
-      // NOT `overflow-hidden`, which it used to be. The overflow menu opens
-      // upward from a button near the bottom of the card, and once the ladder
-      // joined it the menu grew taller than the space above that button — so
-      // clipping the card silently ate the top item (Block). The banner does its
-      // own corner rounding below, which is the only thing the clip was for.
-      className="fixed z-[110] rounded-xl border border-ink-4 bg-ink-2 shadow-[var(--shadow-popover)] animate-fade-in"
+      // The whole card scrolls. A nested pane under the medals was not
+      // enough: at high zoom the identity and NESTA COMUNIDADE already fill
+      // the viewport cap, the inner scroller shrinks to nothing, and the
+      // bottom of the card is unreachable. overflow-y on this node is what
+      // a daft zoom needs. Mais opens downward so Block is not clipped.
+      className="fixed z-[110] max-h-[calc(100dvh-16px)] overflow-y-auto overscroll-contain rounded-2xl border border-ink-4 bg-ink-2 shadow-[var(--shadow-popover)] animate-fade-in"
     >
-      {/* No banner image exists on the server, so the band is a flat tint of
-          the same surface — enough to separate the identity block from the
-          actions without inventing a field to store one. Rounds its own top
-          corners now that the card no longer clips it. */}
-      <div aria-hidden="true" className="h-14 rounded-t-xl bg-ink-3" />
+      {/* No banner image exists on the server, so the band is a quiet wash of
+          the accent into the surface — enough depth that the card reads as an
+          object rather than a grey rectangle, without inventing an upload
+          field. Tokens only, so every theme tints its own way. Rounds its own
+          top corners now that the card no longer clips it. */}
+      <div
+        aria-hidden="true"
+        className="h-20 rounded-t-2xl"
+        style={{
+          background:
+            "linear-gradient(150deg, color-mix(in oklab, var(--color-accent) 20%, var(--color-surface-2)) 0%, var(--color-surface-2) 55%, color-mix(in oklab, var(--color-accent) 7%, var(--color-surface-1)) 100%)",
+        }}
+      />
 
       <div className="px-4 pb-4">
-        <div className="relative -mt-8 mb-2 w-fit">
+        {/* Identity, centred like a contact sheet: the person first, at rest,
+            with everything you can do about them in the rows below. Self and
+            other are the same object — the states differ only in which rows
+            follow. */}
+        <div className="relative mx-auto -mt-10 w-fit">
           {/* `UserAvatar`, not an `<img>`. This card used to point an `<img>`
               straight at `subject.avatarUrl`, and an UPLOADED avatar's URL is
               root-relative (`/api/avatars/<id>?v=…` — `avatarPath` in
@@ -789,8 +1075,8 @@ function UserProfileCard({
             name={subject.displayName}
             avatarUrl={subject.avatarUrl}
             rounded="full"
-            className="h-16 w-16 ring-4 ring-ink-2"
-            fallbackClassName="bg-ink-3 text-xl text-paper"
+            className="h-20 w-20 ring-4 ring-ink-2"
+            fallbackClassName="bg-ink-3 text-2xl text-paper"
           />
           {presence && (
             <StatusDot
@@ -802,20 +1088,26 @@ function UserProfileCard({
           )}
         </div>
 
-        <p
-          className="truncate font-display text-lg font-bold text-paper"
-          data-profile-name=""
-        >
-          {subject.displayName}
+        <p className="mt-2 flex items-center justify-center gap-1.5 font-display text-xl font-bold text-paper">
+          <span className="truncate" data-profile-name="">
+            {subject.displayName}
+          </span>
+          <RankMarks
+            size="card"
+            marks={identityMarks({
+              rank: subject.rank,
+              isCharacter: subject.isCharacter,
+            })}
+          />
         </p>
         {subject.tag && (
-          <p className="truncate font-mono text-xs text-paper-muted">
+          <p className="truncate text-center font-mono text-xs text-paper-muted">
             {subject.tag}
           </p>
         )}
         {paintedRoles.length > 0 && (
           <ul
-            className="mt-2 flex flex-wrap gap-1"
+            className="mt-2 flex flex-wrap justify-center gap-1"
             aria-label={t("profile.roles")}
           >
             {paintedRoles.map((role) => (
@@ -836,7 +1128,7 @@ function UserProfileCard({
           </ul>
         )}
         {since && (
-          <p className="mt-1 text-[11px] text-paper-muted">
+          <p className="mt-1 text-center text-[11px] text-paper-muted">
             {t("profile.friendsSince", {
               date: new Date(since).toLocaleDateString(undefined, {
                 month: "long",
@@ -847,184 +1139,86 @@ function UserProfileCard({
         )}
 
         {notice && (
-          <p className="mt-2 text-xs text-signal" role="status">
+          <p className="mt-2 text-center text-xs text-signal" role="status">
             {notice}
           </p>
         )}
         {error && (
-          <p className="mt-2 text-xs text-danger" role="alert">
+          <p className="mt-2 text-center text-xs text-danger" role="alert">
             {error}
           </p>
         )}
 
+        {/* THE ROW USED TO WRAP. Five mixed controls — a flexible labelled
+            primary, Decline, a labelled Message, two icon buttons — shared one
+            flex-wrap row, and the Portuguese labels pushed the ellipsis onto
+            its own line. The fix is structural, not a width tweak: the
+            relationship gets a full-width pill (label length can never crowd
+            anything), and everything else is the fixed-tile strip above, which
+            cannot wrap by construction. */}
         {state === "self" ? (
-          <div className="mt-3 flex flex-wrap items-center gap-1.5">
-            <p className="flex-1 text-xs text-paper-muted">{t("profile.isYou")}</p>
-            {onMention && mentionUsername && (
-              <Button
-                size="sm"
-                variant="secondary"
-                className="px-2"
-                title={t("member.mention")}
-                aria-label={t("member.mention")}
-                data-profile-mention=""
-                onClick={() => {
-                  onMention(mentionUsername);
-                  onClose();
-                }}
-              >
-                <AtSign aria-hidden className="h-4 w-4" />
-              </Button>
-            )}
-          </div>
+          <>
+            <p className="mt-3 text-center text-xs text-paper-muted">
+              {t("profile.isYou")}
+            </p>
+            {actionStrip}
+            {manageSection}
+          </>
         ) : loading ? (
-          <div className="mt-3 flex h-8 items-center text-paper-muted">
+          <div className="mt-4 flex h-9 items-center justify-center text-paper-muted">
             <Loader2 aria-hidden className="h-4 w-4 animate-spin" />
             <span className="sr-only">{t("profile.loading")}</span>
           </div>
         ) : (
-          <div className="mt-3 flex flex-wrap items-center gap-1.5">
-            {/* IT WRAPS, which it did not before. Five controls do not fit
-                across 288px in the one state that has five — an incoming
-                request draws Accept, Decline, Message, the phone and the
-                ellipsis — and without wrapping the row simply ran off the right
-                edge of the card. That was already true of the four it held
-                before the phone existed (`e2e/profile-popover-call.spec.ts`
-                measures it now); the phone only made it a third of a button
-                worse. Wrapping keeps the row self-adjusting rather than tuned
-                to whichever state somebody last looked at: every other state
-                still fits on one line, and the crowded one grows a second line
-                instead of spilling.
-
-                The relationship is the wide primary; the thing you might do
-                *with* somebody sits beside it; everything punitive is behind
-                the ellipsis, because a Block button the same size as Add
-                friend makes a profile card read as a moderation console. */}
-            <Button
-              size="sm"
-              variant={action === "alreadyFriends" ? "secondary" : "default"}
-              className="flex-1"
-              disabled={busy || primaryIsInert(action)}
-              data-profile-primary={action}
-              onClick={() => {
-                if (needsConfirmation(action)) {
-                  setConfirming(action);
-                  return;
-                }
-                runPrimary(action);
-              }}
+          <>
+            {/* The relationship is the one distinguished action, so it reads
+                as a statement under the name — accent when there is something
+                to do, quiet when it is just a fact ("Friends ✓"). An incoming
+                request splits the row in two: answering should cost one tap
+                either way. Community management sits in the grouped list
+                below. Block and report stay behind the ellipsis. */}
+            <div
+              className={cn(
+                "mt-4",
+                offersDecline(state) && "grid grid-cols-2 gap-2",
+              )}
             >
-              {busy && <Loader2 aria-hidden className="h-3.5 w-3.5 animate-spin" />}
-              {action === "alreadyFriends"
-                ? `${primaryLabel[action]} ✓`
-                : primaryLabel[action]}
-            </Button>
-
-            {offersDecline(state) && (
               <Button
                 size="sm"
-                variant="ghost"
-                disabled={busy}
-                onClick={() => void run(() => remove(subject.id))}
-              >
-                {t("friends.decline")}
-              </Button>
-            )}
-
-            {canMessage(state) && (
-              <Button
-                size="sm"
-                variant="secondary"
-                disabled={busy}
-                data-profile-message=""
-                onClick={handleMessage}
-              >
-                {t("friends.message")}
-              </Button>
-            )}
-
-            {/* Icon-only, and beside Message rather than under it. The card is
-                288px wide and that row already holds a flexible primary, a
-                Decline in one state and the ellipsis; a fourth *labelled*
-                button is what makes "Accept" truncate to nothing. The phone
-                glyph is the same one the DM list and the conversation header
-                use for the same errand, so it is not a new vocabulary. */}
-            {canCall(state) && onStartCall && (
-              <Button
-                size="sm"
-                variant="secondary"
-                className="px-2"
-                title={t("profile.call")}
-                aria-label={t("profile.call")}
-                disabled={busy}
-                data-profile-call=""
-                onClick={handleCall}
-              >
-                <Phone aria-hidden className="h-4 w-4" />
-              </Button>
-            )}
-
-            {onMention && mentionUsername && (
-              <Button
-                size="sm"
-                variant="secondary"
-                className="px-2"
-                title={t("member.mention")}
-                aria-label={t("member.mention")}
-                disabled={busy}
-                data-profile-mention=""
+                variant={action === "alreadyFriends" ? "secondary" : "default"}
+                className="h-9 w-full rounded-full"
+                disabled={busy || primaryIsInert(action)}
+                data-profile-primary={action}
                 onClick={() => {
-                  onMention(mentionUsername);
-                  onClose();
+                  if (needsConfirmation(action)) {
+                    setConfirming(action);
+                    return;
+                  }
+                  runPrimary(action);
                 }}
               >
-                <AtSign aria-hidden className="h-4 w-4" />
+                {busy && (
+                  <Loader2 aria-hidden className="h-3.5 w-3.5 animate-spin" />
+                )}
+                {action === "alreadyFriends"
+                  ? `${primaryLabel[action]} ✓`
+                  : primaryLabel[action]}
               </Button>
-            )}
-
-            {overflowItems.length > 0 && (
-              <div className="relative">
+              {offersDecline(state) && (
                 <Button
                   size="sm"
-                  variant="ghost"
-                  aria-haspopup="menu"
-                  aria-expanded={overflowOpen}
-                  aria-label={t("profile.more")}
-                  className="px-2"
-                  onClick={() => setOverflowOpen((was) => !was)}
+                  variant="secondary"
+                  className="h-9 w-full rounded-full"
+                  disabled={busy}
+                  onClick={() => void run(() => remove(subject.id))}
                 >
-                  <MoreHorizontal aria-hidden className="h-4 w-4" />
+                  {t("friends.decline")}
                 </Button>
-                {overflowOpen && (
-                  <div
-                    role="menu"
-                    aria-label={t("profile.more")}
-                    // Capped and scrollable: the menu is as tall as the viewer's
-                    // authority makes it (two entries for a member, five for an
-                    // owner), and a cap is what keeps the tallest version from
-                    // reaching past the top of the window on a short screen.
-                    className="absolute bottom-full right-0 z-10 mb-1 max-h-[15rem] w-48 overflow-y-auto rounded-lg border border-ink-4 bg-ink-2 p-1 shadow-[var(--shadow-popover)]"
-                  >
-                    {overflowItems.map((item) => (
-                      <button
-                        key={item.id}
-                        type="button"
-                        role="menuitem"
-                        data-profile-mod={item.moderation}
-                        className={cn(
-                          "flex w-full items-center rounded-md px-2.5 py-1.5 text-left text-sm outline-none hover:bg-ink-3 focus-visible:bg-ink-3",
-                          item.danger ? "text-danger" : "text-paper",
-                        )}
-                        onClick={item.onSelect}
-                      >
-                        {item.label}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
+              )}
+            </div>
+            {actionStrip}
+            {manageSection}
+          </>
         )}
 
         {/* "Escrever depoimento" — friends only, and its own row rather than a
@@ -1037,7 +1231,7 @@ function UserProfileCard({
           <Button
             size="sm"
             variant="secondary"
-            className="mt-2 w-full"
+            className="mt-3 w-full rounded-full"
             disabled={busy}
             data-depoimento-write=""
             onClick={() => {
@@ -1063,33 +1257,92 @@ function UserProfileCard({
           />
         )}
 
-        {/* The profile's own content, below everything you can DO about this
-            person. Both hide themselves when empty — see the section's own
-            note on why there is no "0 depoimentos". The remove control appears
-            only on your own card: a published depoimento is yours to take down
-            at any time, without notice, and that is what makes publishing one
-            safe to do in the first place. */}
-        <Achievements
-          achievements={achievements ?? []}
-          className="mt-3"
-        />
-        <DepoimentosSection
-          depoimentos={depoimentos ?? []}
-          busy={busy}
-          onRemove={
-            state === "self"
-              ? (id) =>
-                  void run(async () => {
-                    await removeDepoimento(id);
-                    setDepoimentos((current) =>
-                      (current ?? []).filter((one) => one.id !== id),
-                    );
-                  })
-              : undefined
-          }
-        />
-        {connections && <ConnectionBadges connections={connections} />}
-        {communities && <CommunityBadges communities={communities} />}
+        {/* Medals stay on the card. Depoimentos, connections and communities
+            share one pane when there is more than one of them: a stack is what
+            pushed Comunidades off a short window, and three accordions would
+            spend that height on chevrons. One segment at a time, leftover
+            height. Empty blocks stay omitted, including from the control. */}
+        {((achievements ?? []).length > 0 || aboutTabs.length > 0) && (
+          <div className="mt-4 border-t border-ink-4/60 pt-3">
+            <Achievements
+              achievements={achievements ?? []}
+              variant="compact"
+            />
+            {aboutSegmented && aboutActive && (
+              <div
+                role="tablist"
+                aria-label={t("profile.about.tabs")}
+                className="mt-3 grid gap-0.5 rounded-lg bg-ink-3/60 p-0.5"
+                style={{
+                  gridTemplateColumns: `repeat(${aboutTabs.length}, minmax(0, 1fr))`,
+                }}
+              >
+                {aboutTabs.map((tab) => {
+                  const selected = tab === aboutActive;
+                  return (
+                    <button
+                      key={tab}
+                      type="button"
+                      role="tab"
+                      aria-selected={selected}
+                      data-profile-about={tab}
+                      className={cn(
+                        "truncate rounded-md px-1.5 py-1 text-[11px] font-medium transition-colors",
+                        selected
+                          ? "bg-ink-2 text-paper"
+                          : "text-paper-muted hover:text-paper",
+                      )}
+                      onClick={() => setAboutPick(tab)}
+                    >
+                      {t(ABOUT_LABEL[tab])}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+            {aboutTabs.length > 0 && (
+              <div
+                role={aboutSegmented ? "tabpanel" : undefined}
+                data-profile-about-pane={aboutActive ?? undefined}
+                className={aboutSegmented ? "mt-2 rounded-xl bg-ink-3/60" : undefined}
+              >
+                {(!aboutSegmented || aboutActive === "depoimentos") && (
+                  <DepoimentosSection
+                    depoimentos={depoimentos ?? []}
+                    chrome={aboutChrome}
+                    busy={busy}
+                    onRemove={
+                      state === "self"
+                        ? (id) =>
+                            void run(async () => {
+                              await removeDepoimento(id);
+                              setDepoimentos((current) =>
+                                (current ?? []).filter((one) => one.id !== id),
+                              );
+                            })
+                        : undefined
+                    }
+                  />
+                )}
+                {connections &&
+                  (!aboutSegmented || aboutActive === "connections") && (
+                    <ConnectionBadges
+                      connections={connections}
+                      variant="card"
+                      chrome={aboutChrome}
+                    />
+                  )}
+                {communities &&
+                  (!aboutSegmented || aboutActive === "communities") && (
+                    <CommunityBadges
+                      communities={communities}
+                      chrome={aboutChrome}
+                    />
+                  )}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* The timeout composer. Inline rather than a modal for the reason the
             card exists: a moderator is looking at the message that prompted

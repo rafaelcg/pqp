@@ -16,8 +16,13 @@ import {
   resolvePresence,
   moderationActions,
   moderationNeedsConfirmation,
+  roleChangeFor,
+  cardRoleChips,
+  profileAboutTabs,
+  activeProfileAboutTab,
   type FriendshipState,
   type ProfileModerationContext,
+  type ProfileRoleChip,
 } from "./profile-relations";
 
 const ME = "00000000-0000-4000-8000-000000000000";
@@ -236,7 +241,9 @@ describe("friendsSince", () => {
 });
 
 describe("placeCard", () => {
-  const CARD = { width: 288, height: 320 };
+  // Mirrors the component's CARD_WIDTH — the strip of action tiles and the
+  // full-width relationship pill are budgeted against this number.
+  const CARD = { width: 320, height: 320 };
   const VIEWPORT = { width: 1280, height: 800 };
 
   it("sits to the right of the anchor when there is room", () => {
@@ -255,7 +262,7 @@ describe("placeCard", () => {
       CARD,
       VIEWPORT,
     );
-    expect(at.left).toBe(1100 - 8 - 288);
+    expect(at.left).toBe(1100 - 8 - 320);
   });
 
   it("stays inside a window too narrow for either side", () => {
@@ -383,5 +390,154 @@ describe("moderationNeedsConfirmation", () => {
     // be chosen — and lifting one takes nothing away at all.
     expect(moderationNeedsConfirmation("timeout")).toBe(false);
     expect(moderationNeedsConfirmation("endTimeout")).toBe(false);
+  });
+});
+
+/**
+ * The owner-only rank change, kept out of the ladder on purpose (see
+ * `roleChangeFor`). This covers who may be offered it and who may not.
+ */
+describe("roleChangeFor", () => {
+  const OTHER = "22222222-2222-4222-8222-222222222222";
+
+  function context(
+    overrides: Partial<ProfileModerationContext> = {},
+  ): ProfileModerationContext {
+    return {
+      serverId: "33333333-3333-4333-8333-333333333333",
+      actorRole: "owner",
+      memberRoles: new Map([
+        [ME, "owner"],
+        [THEM, "member"],
+        [OTHER, "admin"],
+      ]),
+      timedOutUserIds: new Set<string>(),
+      onModerated: () => {},
+      ...overrides,
+    };
+  }
+
+  it("offers promote for a member and demote for an admin, to the owner", () => {
+    expect(roleChangeFor(THEM, ME, context())).toBe("promote");
+    expect(roleChangeFor(OTHER, ME, context())).toBe("demote");
+  });
+
+  it("is owner-only: an admin is offered nothing, whatever the target", () => {
+    expect(roleChangeFor(THEM, OTHER, context({ actorRole: "admin" }))).toBeNull();
+    expect(
+      roleChangeFor(THEM, OTHER, context({ actorRole: "member" })),
+    ).toBeNull();
+  });
+
+  it("offers nothing against the owner or yourself", () => {
+    // ME is the owner in this map, so both cases ride the same fixture.
+    expect(roleChangeFor(ME, OTHER, context())).toBeNull();
+    expect(roleChangeFor(THEM, THEM, context())).toBeNull();
+  });
+
+  it("offers nothing without a server, or before the rank is known", () => {
+    expect(roleChangeFor(THEM, ME, null)).toBeNull();
+    expect(
+      roleChangeFor(THEM, ME, context({ memberRoles: new Map() })),
+    ).toBeNull();
+  });
+});
+
+describe("cardRoleChips", () => {
+  const admin: ProfileRoleChip = {
+    id: "admin",
+    name: "Admin",
+    color: null,
+    position: 50,
+    isEveryone: false,
+    systemKey: "admin",
+  };
+  const everyone: ProfileRoleChip = {
+    id: "everyone",
+    name: "@everyone",
+    color: null,
+    position: 0,
+    isEveryone: true,
+    systemKey: "everyone",
+  };
+  const vip: ProfileRoleChip = {
+    id: "vip",
+    name: "VIP",
+    color: "#ff00aa",
+    position: 10,
+    isEveryone: false,
+    systemKey: null,
+  };
+  const mods: ProfileRoleChip = {
+    id: "mods",
+    name: "Mods",
+    color: "#00aaff",
+    position: 20,
+    isEveryone: false,
+    systemKey: null,
+  };
+
+  it("drops seeded Admin and @everyone, keeps custom cargos", () => {
+    expect(
+      cardRoleChips(
+        [everyone, admin, vip, mods],
+        ["everyone", "admin", "vip", "mods"],
+      ).map((role) => role.id),
+    ).toEqual(["mods", "vip"]);
+  });
+
+  it("is empty when the person only holds rank", () => {
+    expect(cardRoleChips([everyone, admin], ["admin"])).toEqual([]);
+  });
+});
+
+describe("profileAboutTabs", () => {
+  it("omits empty blocks and keeps depoimentos first", () => {
+    expect(
+      profileAboutTabs({
+        depoimentoCount: 2,
+        connectionCount: 0,
+        communityCount: 4,
+      }),
+    ).toEqual(["depoimentos", "communities"]);
+  });
+
+  it("is empty when there is nothing to show", () => {
+    expect(
+      profileAboutTabs({
+        depoimentoCount: 0,
+        connectionCount: 0,
+        communityCount: 0,
+      }),
+    ).toEqual([]);
+  });
+});
+
+describe("activeProfileAboutTab", () => {
+  it("opens Contas by default when that pane exists", () => {
+    expect(
+      activeProfileAboutTab(
+        ["depoimentos", "connections", "communities"],
+        null,
+      ),
+    ).toBe("connections");
+  });
+
+  it("falls back to the first tab when there are no accounts", () => {
+    expect(
+      activeProfileAboutTab(["depoimentos", "communities"], null),
+    ).toBe("depoimentos");
+  });
+
+  it("falls back when the pick is gone", () => {
+    expect(
+      activeProfileAboutTab(["connections", "communities"], "depoimentos"),
+    ).toBe("connections");
+  });
+
+  it("keeps a pick that is still present", () => {
+    expect(
+      activeProfileAboutTab(["depoimentos", "communities"], "communities"),
+    ).toBe("communities");
   });
 });

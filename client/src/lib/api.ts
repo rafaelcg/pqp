@@ -929,6 +929,12 @@ export interface ServerMember {
   nickname?: string | null;
   roleIds?: string[];
   /**
+   * True when this row is a character account (house cast / disclosed bot),
+   * not a person. Optional so a client built against this shape still parses a
+   * response from an API that predates the flag.
+   */
+  isCharacter?: boolean;
+  /**
    * Resolved live by the server from its connection registry — never stored, and
    * never `invisible`: somebody hidden resolves to `offline` here exactly like
    * somebody who is genuinely away.

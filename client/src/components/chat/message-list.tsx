@@ -33,6 +33,7 @@ import {
 import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import { UserAvatar } from "@/components/user/user-avatar";
+import { RankMarks } from "@/components/user/rank-marks";
 import { StatusDot } from "@/components/user/status-dot";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
@@ -53,7 +54,7 @@ import { messageRoutePath } from "@/lib/app-route";
 import { QUICK_REACTIONS } from "@/lib/emoji-shortcodes";
 import { messageMentionsYou } from "@/lib/message-mentions-you";
 import { findFirstUnreadMessageId } from "@/lib/unread-divider";
-import { highestRoleColor, usernameFromTag } from "@/lib/author-display";
+import { highestRoleColor, identityMarks, usernameFromTag } from "@/lib/author-display";
 import { gifMessageMedia, type GifMedia } from "@/lib/gif-media";
 import {
   ANCHORED_PANEL_PAD,
@@ -111,6 +112,7 @@ export interface MessageAuthorInfo {
   roleIds?: string[];
   status?: UserStatus | null;
   username?: string | null;
+  isCharacter?: boolean;
 }
 
 export interface MessageRoleColor {
@@ -186,7 +188,7 @@ interface MessageListProps {
   unreadThreadIds?: ReadonlySet<string>;
   /** The thread the panel is currently showing, so its chip reads as open. */
   activeThreadId?: string | null;
-  /** Roster lookup for name colour, rank chips, and presence. */
+  /** Roster lookup for name colour, rank glyph, and presence. */
   authors?: ReadonlyMap<string, MessageAuthorInfo>;
   /** Painted roles, for the highest-position colour on a name. */
   roles?: readonly MessageRoleColor[];
@@ -1807,40 +1809,37 @@ const MessageRow = memo(function MessageRow({
             )}
             {startsGroup && (
               <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-                <AuthorButton
-                  message={message}
-                  author={authorInfo}
-                  tabIndex={controlTabIndex}
-                  onOpenProfile={openProfile}
-                  className={cn(
-                    "rounded font-semibold",
-                    !roleColor && (isMine ? "text-signal" : "text-paper"),
-                  )}
-                  style={roleColor ? { color: roleColor } : undefined}
-                >
-                  {message.authorName}
-                </AuthorButton>
+                <span className="inline-flex items-center gap-1">
+                  <AuthorButton
+                    message={message}
+                    author={authorInfo}
+                    tabIndex={controlTabIndex}
+                    onOpenProfile={openProfile}
+                    className={cn(
+                      "rounded font-semibold",
+                      !roleColor && (isMine ? "text-signal" : "text-paper"),
+                    )}
+                    style={roleColor ? { color: roleColor } : undefined}
+                  >
+                    {message.authorName}
+                  </AuthorButton>
+                  {/* The name#1234 tag is a lookup key, not reading material:
+                      it lives on the profile card. Rank is a quiet glyph;
+                      the role-coloured name is the primary signal. */}
+                  <RankMarks
+                    marks={identityMarks({
+                      rank: authorInfo?.rank,
+                      isCharacter: authorInfo?.isCharacter,
+                      isWebhook: message.isWebhook,
+                    })}
+                  />
+                </span>
                 {message.isWebhook && (
                   <span
                     className="rounded bg-ink-4 px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-paper-muted"
                     title={t("chat.webhookPosted")}
                   >
                     Webhook
-                  </span>
-                )}
-                {!message.isWebhook && authorInfo?.rank === "owner" && (
-                  <span className="rounded bg-ink-4 px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-paper-muted">
-                    {t("chat.badge.owner")}
-                  </span>
-                )}
-                {!message.isWebhook && authorInfo?.rank === "admin" && (
-                  <span className="rounded bg-ink-4 px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-paper-muted">
-                    {t("chat.badge.admin")}
-                  </span>
-                )}
-                {message.authorTag && (
-                  <span className="font-mono text-[11px] text-paper-muted">
-                    {message.authorTag}
                   </span>
                 )}
                 <time
@@ -2216,6 +2215,7 @@ function AuthorButton({
               author?.username ?? usernameFromTag(message.authorTag),
             roleIds: author?.roleIds,
             rank: author?.rank,
+            isCharacter: author?.isCharacter,
           },
           event.currentTarget,
         );

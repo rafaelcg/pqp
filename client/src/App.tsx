@@ -1055,6 +1055,7 @@ function MainAppContent({
         roleIds: member.roleIds,
         status: member.status ?? null,
         username: member.username ?? usernameFromTag(member.tag),
+        isCharacter: member.isCharacter,
       });
     }
     for (const person of conversationParticipants ?? []) {

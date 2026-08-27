@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { highestRoleColor, usernameFromTag } from "./author-display";
+import {
+  highestRoleColor,
+  identityMarks,
+  usernameFromTag,
+} from "./author-display";
 
 const roles = [
   { id: "low", color: "#111111", position: 1 },
@@ -20,6 +24,33 @@ describe("highestRoleColor", () => {
     expect(highestRoleColor(["plain"], roles)).toBeNull();
     expect(highestRoleColor([], roles)).toBeNull();
     expect(highestRoleColor(undefined, roles)).toBeNull();
+  });
+});
+
+describe("identityMarks", () => {
+  it("is empty for an ordinary member", () => {
+    expect(identityMarks({ rank: "member" })).toEqual([]);
+  });
+
+  it("gives the owner a crown and an admin a shield", () => {
+    expect(identityMarks({ rank: "owner" })).toEqual(["owner"]);
+    expect(identityMarks({ rank: "admin" })).toEqual(["admin"]);
+  });
+
+  it("marks a character as a bot, including next to rank", () => {
+    expect(identityMarks({ rank: "member", isCharacter: true })).toEqual([
+      "bot",
+    ]);
+    expect(identityMarks({ rank: "admin", isCharacter: true })).toEqual([
+      "admin",
+      "bot",
+    ]);
+  });
+
+  it("gives a webhook none of these, even if the payload carried rank", () => {
+    expect(
+      identityMarks({ rank: "owner", isCharacter: true, isWebhook: true }),
+    ).toEqual([]);
   });
 });
 

@@ -33,7 +33,7 @@ if (DATABASE_URL) {
 }
 
 const { getPool, initDb, closePool } = await import("../db.js");
-const { upsertUser, findUserByTag, searchUsersByPrefix } = await import(
+const { upsertUser, findUserByTag, searchUsersByPrefix, listServerMembers } = await import(
   "./users.js"
 );
 const {
@@ -368,6 +368,20 @@ describeDb("character accounts", () => {
         (u) => u.id,
       ),
     ).toContain(cast.user.id);
+  });
+
+  it("marks a character on the member roster so the client can badge it", async () => {
+    const owner = await person("Owner", "clerk_owner_roster");
+    const cast = await character("manual", "manual [bot]");
+    const { server } = await createPqpServer("QG", owner.id);
+    const invite = await createInvite(server.id, owner.id, {});
+    await redeemInvite(invite.code, cast.user.id);
+
+    const members = await listServerMembers(server.id);
+    expect(members.find((row) => row.id === cast.user.id)?.isCharacter).toBe(
+      true,
+    );
+    expect(members.find((row) => row.id === owner.id)?.isCharacter).toBe(false);
   });
 
   it("never hides an ordinary account from discovery", async () => {

@@ -154,6 +154,24 @@
      alone does not do that over a busy photograph. */
   --shadow-hero-avatar: 0 20px 44px -20px oklch(0 0 0 / 0.7);
   --shadow-testimonial: 0 10px 30px -18px oklch(0 0 0 / 0.55);
+
+  /*
+   * The Turma dos 1000 founding medal. A physical object, like the
+   * connection marks: it stays metal in both themes, because a gold coin
+   * that followed the accent would stop being a coin.
+   *
+   * One gold, one strike, all thousand — the engraved ordinal is the only
+   * difference between coins. (A black-nickel plating for 1–10 shipped once
+   * and read as the disabled state on the dark surface.) `engrave` is the
+   * number struck into the face; `relief` is the light its lower edge
+   * catches.
+   */
+  --medal-gold-hi: oklch(0.9 0.09 96);
+  --medal-gold: oklch(0.78 0.11 88);
+  --medal-gold-deep: oklch(0.6 0.1 78);
+  --medal-gold-engrave: oklch(0.22 0.05 55);
+  --medal-gold-relief: oklch(0.92 0.07 95);
+  --shadow-medal: 0 8px 20px -10px oklch(0 0 0 / 0.55);
   /* A barely-there accent wash behind a section, for the depoimento wall and
      the community stat block. Weaker than --glow-accent, which is a spotlight. */
   --glow-accent-soft: oklch(0.88 0.19 125 / 0.07);

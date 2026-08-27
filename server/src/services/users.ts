@@ -866,9 +866,11 @@ export async function listServerMembers(serverId: string) {
     role: "owner" | "admin" | "member";
     nickname: string | null;
     role_ids: string[];
+    is_character: boolean;
   }>(
     `SELECT u.id, u.display_name, u.username, u.discriminator, u.avatar_url, sm.role,
             sm.nickname,
+            COALESCE(u.is_character, FALSE) AS is_character,
             COALESCE(
               (SELECT array_agg(mr.role_id)
                  FROM member_roles mr
@@ -893,6 +895,7 @@ export async function listServerMembers(serverId: string) {
     role: row.role,
     nickname: row.nickname,
     roleIds: row.role_ids ?? [],
+    isCharacter: row.is_character,
   }));
 }
 
