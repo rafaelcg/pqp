@@ -9,6 +9,12 @@
   person on the service — which is precisely the enumeration surface the profile
   endpoint refuses to be). Profiles get found the way they are meant to: somebody
   shares one, and the Pages middleware makes that share unfurl.
+
+  `/claim` is deliberately absent too, for a different reason: it is the same
+  page as `/garanta` under an English name, and `marketing-meta.ts` canonicalises
+  it to `/garanta`. A sitemap is a list of the URLs we want indexed, so listing a
+  URL whose own head disclaims itself asks Google to resolve a contradiction we
+  created. It stays reachable, and `robots.txt` still allows it.
 -->
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
@@ -33,14 +39,14 @@
     <priority>0.8</priority>
   </url>
   <url>
+    <loc>https://pqp.gg/download</loc>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
     <loc>https://pqp.gg/garanta</loc>
     <changefreq>weekly</changefreq>
     <priority>0.9</priority>
-  </url>
-  <url>
-    <loc>https://pqp.gg/claim</loc>
-    <changefreq>weekly</changefreq>
-    <priority>0.5</priority>
   </url>
   <url>
     <loc>https://pqp.gg/privacy</loc>
