@@ -116,6 +116,38 @@ profile's image is a square avatar and gets `summary`, a community's is a 3:1
 banner and gets `summary_large_image`. See `docs/CONTENT_SAFETY.md` §Communities
 for what that page may and may not carry.
 
+### Invite links unfurl too, and name nothing
+
+The same middleware handles `/app/invite/<code>` through
+`client/src/lib/invite-meta.ts`. It is the most-shared URL in the product and it
+used to unfurl as the generic homepage, so the card now says an invitation
+exists and what clicking it does. It is the only head builder that **fetches
+nothing and names nothing**, and both are the design:
+
+- an invite is semi-public (whoever holds the link can walk in) but it is not a
+  licence to publish a private community's name to every forward, screenshot and
+  crawler the link ever reaches. `/@handle` and `/c/<slug>` carry a name because
+  somebody opted in; almost every invite points at a plain server that did not.
+- because nothing is looked up, a revoked, expired, exhausted or invented code
+  unfurls **identically** to a live one. No name to leak from a dead invite, and
+  no oracle telling a stranger with a guessed code whether it is real.
+- and therefore invite unfurls do not depend on `COMMUNITIES_ENABLED`, on the
+  invite belonging to a community at all, or on the API being up.
+
+Naming the community would need `GET /api/public/invites/:code`: unauthenticated,
+answering at most a name and an icon, and only for a server already listed in the
+public directory, 404 for everything else so revoked/private/never-existed stay
+indistinguishable. That endpoint does not exist. `GET /api/invites/:code` needs a
+Bearer token the edge does not have.
+
+The invite card is the only one that says `noindex, nofollow` and carries no
+canonical: a search result holding an invite is that link escaping the group it
+was sent to. `robots.txt` pairs with it — `Allow: /app/invite/` before the
+blanket `Disallow: /app`, because an unfurler has to fetch the bytes to draw a
+card and the bots that respect that file (Twitter's among them) were refusing
+to. Permission to fetch, refusal to index. Nothing is consumed by a crawler
+loading the page: joining is an authenticated POST.
+
 `robots.txt` allows `/@`, `/c/`, `/garanta` and `/claim`. The sitemap lists
 static pages only — generating one from the database would be a public,
 complete, machine-readable list of everybody on the service, which is exactly

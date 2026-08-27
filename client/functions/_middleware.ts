@@ -9,6 +9,10 @@ import {
   type CommunityMeta,
 } from "../src/lib/community-meta";
 import {
+  injectInviteHead,
+  inviteCodeFromMetaPath,
+} from "../src/lib/invite-meta";
+import {
   injectMarketingHead,
   marketingPageFromMetaPath,
 } from "../src/lib/marketing-meta";
@@ -29,18 +33,24 @@ import {
  * whose entire growth loop is somebody sharing their own page. This runs at the
  * edge, in front of the asset, and rewrites the bytes.
  *
- * THREE SURFACES, ONE MIDDLEWARE. `/@rafa` is a person, `/c/valorant` is a
- * room, and `/vs-discord` is the product arguing for itself — and they get
- * different cards: a square avatar with `summary` for the first, a 3:1 banner
- * with `summary_large_image` for the second, and static per-locale copy for
- * the third. The head builders live in `src/lib/profile-meta.ts`,
- * `src/lib/community-meta.ts` and `src/lib/marketing-meta.ts` and are
- * deliberately not one parameterised builder; see the file comment on the
- * community one for the argument. The marketing branch is also the only one
- * that fetches nothing — its copy is constant, so it runs before the API
- * origin is even resolved. What is shared is everything below: the API origin,
- * the timeout, the locale, and the rule that every failure path serves the
- * page unchanged.
+ * SEVERAL SURFACES, ONE MIDDLEWARE. `/@rafa` is a person, `/c/valorant` is a
+ * room, `/vs-discord` is the product arguing for itself, `/blog/…` is a release
+ * note, and `/app/invite/<code>` is a door — and they get different cards: a
+ * square avatar with `summary` for the first, a 3:1 banner with
+ * `summary_large_image` for the second, and static per-locale copy for the rest.
+ * The head builders live in `src/lib/profile-meta.ts`,
+ * `src/lib/community-meta.ts`, `src/lib/marketing-meta.ts`,
+ * `src/lib/blog-meta.ts` and `src/lib/invite-meta.ts` and are deliberately not
+ * one parameterised builder; see the file comment on the community one for the
+ * argument. The marketing, blog and invite branches fetch nothing — their copy
+ * is constant, so they run before the API origin is even resolved. What is
+ * shared is everything below: the API origin, the timeout, the locale, and the
+ * rule that every failure path serves the page unchanged.
+ *
+ * THE INVITE BRANCH IS THE ONLY ONE THAT NAMES NOTHING, and it is the only one
+ * that must not: an invite link is semi-public, so its card is written to leak
+ * no more than the closed door already does. `src/lib/invite-meta.ts` carries
+ * the argument, and the fact that it fetches nothing is the mechanism.
  *
  * WHAT IT DOES NOT DO. It does not render the page. The SPA still fetches and
  * draws it; this only fixes the head. Two fetches of the same JSON (one at the
@@ -266,12 +276,16 @@ export async function onRequest(context: PagesContext): Promise<Response> {
     handle || slug ? null : marketingPageFromMetaPath(url.pathname);
   const blog: BlogTarget | null =
     handle || slug || marketing ? null : blogTargetFromMetaPath(url.pathname);
+  const inviteCode =
+    handle || slug || marketing || blog
+      ? null
+      : inviteCodeFromMetaPath(url.pathname);
   // The overwhelmingly common case, and it must cost nothing: this middleware
   // is in front of every request the site serves, including every hashed
-  // asset. All four parsers are pure string checks — nothing is awaited
+  // asset. All five parsers are pure string checks — nothing is awaited
   // before this return.
   if (
-    (!handle && !slug && !marketing && !blog) ||
+    (!handle && !slug && !marketing && !blog && !inviteCode) ||
     context.request.method !== "GET"
   ) {
     return context.next();
@@ -302,6 +316,22 @@ export async function onRequest(context: PagesContext): Promise<Response> {
     // be written without asking the API anything.
     const html = await response.text();
     return rewritten(response, injectBlogHead(html, blog, locale));
+  }
+
+  if (inviteCode) {
+    // Also fetches nothing, and for a different reason than the two above: not
+    // because there is no data to fetch, but because fetching it would publish
+    // a private community's name to everyone the link ever reaches. See
+    // `invite-meta.ts`. The consequence is the good one — a revoked, expired
+    // or invented code unfurls exactly like a live one, so the card is not an
+    // oracle — and it means invite unfurls do not care whether
+    // `COMMUNITIES_ENABLED` is on, whether the invite belongs to a community
+    // at all, or whether the API is up.
+    const html = await response.text();
+    return rewritten(
+      response,
+      injectInviteHead(html, inviteCode, { siteOrigin: url.origin, locale }),
+    );
   }
 
   const apiOrigin = await resolveApiOrigin(context);
