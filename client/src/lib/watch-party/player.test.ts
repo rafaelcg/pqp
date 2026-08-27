@@ -42,17 +42,40 @@ class FakeYouTubePlayer implements YouTubePlayerLike {
   destroyed = 0;
   /** Set to make the handle throw the way a torn down iframe does. */
   throwing = false;
+  /**
+   * How the real player answers a cue, and why this fake has to answer too.
+   *
+   * A LOAD IS ASYNCHRONOUS AND THE SHELL DEPENDS ON THAT. `cueVideoById` takes
+   * roughly 176ms to settle and reports CUED when it has; anything said to the
+   * player in between is swallowed, which is why `createWatchPartyPlayer` holds
+   * the rest of the batch until this arrives. A fake that took a cue silently
+   * and instantly would let `load` then `play` look like it worked here while
+   * leaving a still frame with a play button on it in front of a real person.
+   * That is the failure shape `docs/WATCH_PARTY.md` warns about: a fake built
+   * from the same wrong belief as the code, agreeing with it.
+   *
+   * On a microtask rather than synchronously, because a synchronous report
+   * would re-enter `run` from inside the `load` arm it was called by, which is
+   * an ordering the real API cannot produce.
+   */
+  settle: ((code: number) => void) | null = null;
 
   private record(call: string): void {
     if (this.throwing) throw new Error("the iframe has gone away");
     this.calls.push(call);
   }
 
+  private lands(code: number): void {
+    queueMicrotask(() => this.settle?.(code));
+  }
+
   loadVideoById(videoId: string, startSeconds?: number): void {
     this.record(`loadVideoById:${videoId}:${startSeconds ?? ""}`);
+    this.lands(YOUTUBE_PLAYER_STATE.playing);
   }
   cueVideoById(videoId: string, startSeconds?: number): void {
     this.record(`cueVideoById:${videoId}:${startSeconds ?? ""}`);
+    this.lands(YOUTUBE_PLAYER_STATE.cued);
   }
   playVideo(): void {
     this.record("playVideo");
@@ -87,6 +110,13 @@ interface Harness {
   hooks(): CreateYouTubePlayerOptions;
   /** Let the injected factory resolve, then flush the microtasks it queued. */
   ready(): Promise<void>;
+  /**
+   * Let a cue reach CUED, the way the real player does about 176ms later.
+   *
+   * Needed after any `load`, because the shell holds everything behind it
+   * until then. See `FakeYouTubePlayer.settle`.
+   */
+  cueLands(): Promise<void>;
   /** Let the injected factory reject, as a blocked script does. */
   unavailable(): Promise<void>;
   clock: { ms: number };
@@ -150,9 +180,11 @@ function harness(
       return captured;
     },
     ready: async () => {
+      handle.settle = (code) => captured?.onStateChange(code);
       settle?.(handle);
       await flush();
     },
+    cueLands: flush,
     unavailable: async () => {
       refuse?.(new Error("blocked"));
       await flush();
@@ -241,6 +273,11 @@ describe("running commands", () => {
     h.player.play();
     h.player.seek(12_500);
     h.player.pause();
+    // Everything after the cue waits for it. `playVideo` in the same tick as
+    // `cueVideoById` is swallowed by the real player, which is a still frame
+    // with a play button on it for whoever started the party.
+    expect(h.handle.calls).toEqual(["cueVideoById:abc:30"]);
+    await h.cueLands();
     expect(h.handle.calls).toEqual([
       "cueVideoById:abc:30",
       "playVideo",
@@ -257,6 +294,9 @@ describe("running commands", () => {
       { kind: "seek", positionMs: 1_000 },
       { kind: "play" },
     ]);
+    // Held behind the cue, and then in the order they were given rather than
+    // in whatever order they became runnable.
+    await h.cueLands();
     expect(h.handle.calls).toEqual(["cueVideoById:abc:0", "seekTo:1:true", "playVideo"]);
   });
 
@@ -268,6 +308,52 @@ describe("running commands", () => {
     await h.ready();
     expect(h.events[0]).toEqual({ kind: "ready" });
     expect(h.handle.calls).toEqual(["cueVideoById:abc:0", "playVideo"]);
+  });
+
+  /**
+   * THE BUG: `load` then `play` left a still frame with a play button on it.
+   *
+   * Measured against the real player on 2026-08-27. `cueVideoById` followed in
+   * the same tick by `playVideo` runs unstarted, buffering, unstarted, CUED and
+   * the play is simply gone; the identical call two seconds later plays at
+   * once. It is the batch every party start and every join emits, so this was
+   * not an edge case, and it failed in the quietest possible way: the room said
+   * playing, this peer's status line said playing, and nothing moved.
+   *
+   * Delete the `cueing` guard in `run` and this goes red on the first
+   * assertion; delete the flush in `onStateChange` and it goes red on the last.
+   */
+  it("holds a play behind the cue it followed, and runs it once the cue lands", async () => {
+    const h = harness();
+    await h.ready();
+    h.player.executeAll([
+      { kind: "load", videoId: "abc", positionMs: 0 },
+      { kind: "play" },
+    ]);
+    expect(h.handle.calls).toEqual(["cueVideoById:abc:0"]);
+
+    // On the way, not arrived. Releasing on either of these puts the play back
+    // inside the window that eats it.
+    h.hooks().onStateChange(YOUTUBE_PLAYER_STATE.unstarted);
+    h.hooks().onStateChange(YOUTUBE_PLAYER_STATE.buffering);
+    expect(h.handle.calls).toEqual(["cueVideoById:abc:0"]);
+
+    h.hooks().onStateChange(YOUTUBE_PLAYER_STATE.cued);
+    expect(h.handle.calls).toEqual(["cueVideoById:abc:0", "playVideo"]);
+  });
+
+  /**
+   * A second video supersedes a first rather than queueing behind it. Loads are
+   * the one command the hold does not apply to, because last-writer-wins means
+   * the newer video is the answer and holding it would make the room wait on a
+   * cue nobody wants any more.
+   */
+  it("lets a second load through while the first is still settling", async () => {
+    const h = harness();
+    await h.ready();
+    h.player.load("abc", 0);
+    h.player.load("def", 0);
+    expect(h.handle.calls).toEqual(["cueVideoById:abc:0", "cueVideoById:def:0"]);
   });
 
   it("caps the backlog, dropping the oldest rather than growing without bound", async () => {

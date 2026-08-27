@@ -379,16 +379,45 @@ export function loadIframeApi(
  * into a child of the caller's container rather than into the container
  * itself. `YT.Player` replaces the element it is given, so mounting directly
  * would destroy the caller's node and leave the iframe as its own replacement,
- * with nothing left holding a reference to empty. Emptying the container after
- * `destroy()` is the belt to that braces: a player that failed before it was
- * ready can leave its iframe behind, and an iframe that outlives the panel is
- * a video that keeps buffering in a channel nobody is in.
+ * with nothing left holding a reference to empty. Dropping our own wrapper
+ * after `destroy()` is the belt to that braces: a player that failed before it
+ * was ready can leave its iframe behind, and an iframe that outlives the panel
+ * is a video that keeps buffering in a channel nobody is in.
+ *
+ * EACH PLAYER GETS ITS OWN WRAPPER, AND TEARDOWN REMOVES THE WRAPPER RATHER
+ * THAN EMPTYING THE HOST. This is the fix for a measured failure, not tidiness,
+ * so it needs the measurement written down.
+ *
+ * `await loadIframeApi()` above means construction is asynchronous, and the
+ * host is a React ref callback's node. React 19's StrictMode detaches and
+ * re-attaches that ref around the first commit, so the container builds a
+ * second player against THE SAME host node while the first one's construction
+ * is still in flight, and both iframes end up inside it. When the first one,
+ * long since abandoned and already `phase === "destroyed"`, finally reaches
+ * `onReady`, `createWatchPartyPlayer` releases it. A `host.replaceChildren()`
+ * there does not remove one player's iframe: it removes EVERY child of the
+ * shared host, including the live successor's. YouTube then logs "The YouTube
+ * player is not attached to the DOM", `onReady` never fires for the survivor,
+ * and fifteen seconds later the panel shows "the player gave up" over a video
+ * that was fine. Observed on 2026-08-27: two ADD <IFRAME> into one host, then
+ * two REMOVE 427ms later, leaving zero.
+ *
+ * The rule that survives the specific bug: A TEARDOWN MAY ONLY TOUCH NODES IT
+ * CREATED. The host belongs to the caller and may be shared with a player this
+ * one knows nothing about. Nothing here may reach outside `slot`.
  */
 export const createYouTubeIframePlayer: CreateYouTubePlayer = async (options) => {
   const api = await loadIframeApi();
   const host = options.host;
+  const slot = document.createElement("div");
+  // The host is sized by the panel; the wrapper and the iframe inside it just
+  // fill whatever that turns out to be. Without this the API's default 640x360
+  // iframe sits at a fixed size inside a responsive 16:9 box.
+  slot.style.width = "100%";
+  slot.style.height = "100%";
   const mount = document.createElement("div");
-  host.appendChild(mount);
+  slot.appendChild(mount);
+  host.appendChild(slot);
 
   const release = (player: YouTubePlayerLike | null) => {
     try {
@@ -396,7 +425,7 @@ export const createYouTubeIframePlayer: CreateYouTubePlayer = async (options) =>
     } catch (error) {
       console.error("[watch-party] YT destroy threw", error);
     }
-    host.replaceChildren();
+    slot.remove();
   };
 
   return await new Promise<YouTubePlayerLike>((resolve, reject) => {
@@ -411,6 +440,10 @@ export const createYouTubeIframePlayer: CreateYouTubePlayer = async (options) =>
 
     player = new api.Player(mount, {
       videoId: options.videoId ?? undefined,
+      // Percentages, so the iframe follows the panel's 16:9 box instead of the
+      // API's fixed 640x360 default.
+      width: "100%",
+      height: "100%",
       playerVars: {
         enablejsapi: 1,
         playsinline: 1,
@@ -622,6 +655,36 @@ export function createWatchPartyPlayer(
    */
   const queue: PlayerCommand[] = [];
 
+  /**
+   * A cue is in flight, so nothing else may be spoken to the player yet.
+   *
+   * MEASURED, NOT DEFENSIVE. `cueVideoById` followed in the same tick by
+   * `playVideo` leaves the player sitting at CUED for ever: on 2026-08-27 the
+   * pair was driven against the real player from a visible tab and the phase
+   * ran unstarted, buffering, unstarted, CUED, with the play simply gone. The
+   * same `playVideo` two seconds later plays immediately, and cueing then
+   * waiting for the CUED report and only then playing reaches PLAYING every
+   * time. The cue takes about 176ms to land.
+   *
+   * WHY THIS IS NOT THE PLAYER MAKING A DECISION, which is the rule this file
+   * exists to keep. Holding the command is not judging it: `state` said play,
+   * this module still plays, and the only thing that changed is that it waits
+   * for the API to be in a state where the call means anything. Dropping the
+   * command on the floor is the alternative, and that is not neutrality.
+   *
+   * WHY IT MATTERS SO MUCH HERE. `load` then `play` is what EVERY party start
+   * and EVERY join emits, so losing the play is not an edge case, it is the
+   * feature. And it fails silently: the room's state says playing, this peer's
+   * status line says playing, and the person is looking at a still frame with
+   * a play button on it. There is nothing on screen to say what went wrong.
+   *
+   * A `load` itself is never held, so a second video supersedes a first the
+   * way last-writer-wins expects. Nothing clears this on failure and nothing
+   * needs to: a failed player refuses every command anyway, and a retry builds
+   * a whole new one.
+   */
+  let cueing = false;
+
   function status(): WatchPartyPlayerStatus {
     return {
       phase,
@@ -679,6 +742,24 @@ export function createWatchPartyPlayer(
   function onStateChange(code: number): void {
     if (phase === "destroyed") return;
     playback = phaseFromStateCode(code);
+    /*
+     * The cue has landed, so whatever was held for it may go now.
+     *
+     * ONLY THESE THREE COUNT AS LANDED. A cue reports `unstarted` and
+     * `buffering` on its way, repeatedly, and flushing on either of those puts
+     * the play back inside the window that eats it. `cued` is where
+     * `cueVideoById` finishes; `playing` and `paused` are there because a
+     * future `load` command that used `loadVideoById` would end at one of them
+     * instead, and a settle condition that only one implementation satisfies is
+     * a trap for whoever changes the other line.
+     */
+    if (
+      cueing &&
+      (playback === "cued" || playback === "playing" || playback === "paused")
+    ) {
+      cueing = false;
+      flush();
+    }
     // Rebase before reporting. A phase change is exactly when the position
     // stops following the previous prediction, and leaving the old baseline in
     // place would turn the next tick into a fabricated jump.
@@ -774,11 +855,25 @@ export function createWatchPartyPlayer(
     }
   }
 
+  function hold(command: PlayerCommand): void {
+    if (queue.length >= MAX_QUEUED_COMMANDS) queue.shift();
+    queue.push(command);
+  }
+
+  function flush(): void {
+    const pending = queue.splice(0, queue.length);
+    for (const command of pending) run(command);
+  }
+
   function run(command: PlayerCommand): void {
     if (phase === "destroyed" || phase === "failed") return;
     if (phase !== "ready" || !player) {
-      if (queue.length >= MAX_QUEUED_COMMANDS) queue.shift();
-      queue.push(command);
+      hold(command);
+      return;
+    }
+    // A cue in flight swallows everything aimed at it. See `cueing`.
+    if (cueing && command.kind !== "load") {
+      hold(command);
       return;
     }
     switch (command.kind) {
@@ -800,6 +895,7 @@ export function createWatchPartyPlayer(
         // not spend the viewer's data on a stream they have not asked for.
         // Whether to play afterwards is a separate command, from the module
         // that knows whether the room is playing.
+        cueing = true;
         attempt("cueVideoById", (live) =>
           live.cueVideoById(command.videoId, Math.max(0, command.positionMs) / 1000),
         );
@@ -893,8 +989,7 @@ export function createWatchPartyPlayer(
       startPolling();
       announce();
       emit({ kind: "ready" });
-      const pending = queue.splice(0, queue.length);
-      for (const command of pending) run(command);
+      flush();
     })
     .catch((error: unknown) => {
       if (phase === "destroyed") return;

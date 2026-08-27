@@ -4,7 +4,7 @@ import en from "@/locales/en/translation.json";
 import ptBR from "@/locales/pt-BR/translation.json";
 import {
   failurePresentation,
-  keepsJoined,
+  nextJoined,
   showsComposer,
   showsPartyEditing,
   showsPlayer,
@@ -125,15 +125,57 @@ describe("the join gesture gates playback", () => {
   });
 
   it("forgets the click when the party is torn down", () => {
-    expect(keepsJoined(true, party())).toBe(true);
-    expect(keepsJoined(true, null)).toBe(false);
+    expect(nextJoined(true, { kind: "party", party: party() })).toBe(true);
+    expect(nextJoined(true, { kind: "party", party: null })).toBe(false);
   });
 
   it("keeps the click across a change of video", () => {
     // Autoplay activation is sticky per document, so a second gate would gate
     // nothing and would put a click between a group and the next thing they
     // chose to watch together.
-    expect(keepsJoined(true, party({ videoId: "other-video" }))).toBe(true);
+    expect(
+      nextJoined(true, { kind: "party", party: party({ videoId: "other" }) }),
+    ).toBe(true);
+  });
+
+  /**
+   * THE BUG THIS PINS: the person who pasted the link was shown the join card.
+   * Only the click armed the gate, so the one participant who had demonstrably
+   * just clicked something fell through `watchPartyView`'s `!joined` arm and
+   * was invited to click into the video they had themselves chosen.
+   *
+   * Delete the `loadedHere` arm and this goes red: `nextJoined` returns the
+   * flag it was handed, which is `false` for somebody starting a party.
+   */
+  it("counts starting a party as this person's gesture", () => {
+    expect(nextJoined(false, { kind: "loadedHere" })).toBe(true);
+    expect(
+      showsPlayer(
+        watchPartyView({
+          party: party(),
+          joined: nextJoined(false, { kind: "loadedHere" }),
+          failure: null,
+          composing: false,
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  /**
+   * The other half, and the one that keeps the gate a gate. `loadedHere` is
+   * the local form's submit; a video arriving in the shared state is not it.
+   * Everybody else in the channel sees the same `party` and has clicked
+   * nothing, and `watchPartyView` still has to hold them at the card.
+   */
+  it("still gates everybody who did not paste the link", () => {
+    const view = watchPartyView({
+      party: party(),
+      joined: nextJoined(false, { kind: "party", party: party() }),
+      failure: null,
+      composing: false,
+    });
+    expect(view.kind).toBe("join");
+    expect(showsPlayer(view)).toBe(false);
   });
 });
 

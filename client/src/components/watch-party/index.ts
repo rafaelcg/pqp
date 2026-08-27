@@ -12,7 +12,7 @@ export { WatchPartyJoin } from "./watch-party-join";
 export {
   SKIP_MS,
   failurePresentation,
-  keepsJoined,
+  nextJoined,
   showsComposer,
   showsPartyEditing,
   showsPlayer,
@@ -20,6 +20,7 @@ export {
   transportAvailability,
   watchPartyView,
   type FailurePresentation,
+  type JoinGesture,
   type PlaybackFailureReason,
   type TransportAvailability,
   type WatchPartyView,

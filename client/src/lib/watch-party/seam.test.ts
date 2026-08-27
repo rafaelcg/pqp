@@ -65,10 +65,25 @@ const roomState = (over: Partial<WatchPartyState> = {}): WatchPartyState => ({
 class FakeYouTubePlayer implements YouTubePlayerLike {
   calls: string[] = [];
   currentTimeSeconds = 0;
+  /**
+   * The state report a load owes back, wired up in `ready()`.
+   *
+   * A cue is asynchronous and the shell holds the rest of the batch until it
+   * reports CUED, because the real player swallows anything said to it in
+   * between. See `FakeYouTubePlayer.settle` in `player.test.ts` for the
+   * measurement. Without this the seam would look joined while a real load
+   * followed by a real play left one person staring at a still frame.
+   */
+  settle: ((code: number) => void) | null = null;
+
+  private lands(code: number): void {
+    queueMicrotask(() => this.settle?.(code));
+  }
 
   loadVideoById(videoId: string, startSeconds?: number): void {
     this.calls.push(`loadVideoById:${videoId}:${startSeconds ?? ""}`);
     this.currentTimeSeconds = startSeconds ?? 0;
+    this.lands(YOUTUBE_PLAYER_STATE.playing);
   }
   cueVideoById(videoId: string, startSeconds?: number): void {
     this.calls.push(`cueVideoById:${videoId}:${startSeconds ?? ""}`);
@@ -76,6 +91,7 @@ class FakeYouTubePlayer implements YouTubePlayerLike {
     // the poll loop a ten second discontinuity nothing in the app caused, and
     // every test below would then pass or fail for that reason instead.
     this.currentTimeSeconds = startSeconds ?? 0;
+    this.lands(YOUTUBE_PLAYER_STATE.cued);
   }
   playVideo(): void {
     this.calls.push("playVideo");
@@ -164,9 +180,12 @@ function wire(options: { pollMs?: number } = {}) {
       return hooks;
     },
     async ready(): Promise<void> {
+      handle.settle = (code) => hooks?.onStateChange(code);
       settle?.(handle);
       await flush();
     },
+    /** Let a cue reach CUED, which is what releases the commands behind it. */
+    cueLands: flush,
     /** A frame from the room, folded in and acted on exactly as the app does. */
     fromRoom(state: WatchPartyState | null): void {
       const result = applyRemoteState(session, state, clock.ms);
@@ -211,7 +230,11 @@ describe("the seam between state and player", () => {
     await w.ready();
     w.fromRoom(roomState({ status: "playing", positionMs: 10_000 }));
 
+    // The play is held until the cue reports CUED. It has to be: a `playVideo`
+    // in the same tick as the `cueVideoById` is dropped by the real player,
+    // and `load` then `play` is what every party start and every join emits.
     expect(w.handle.calls).toContain("cueVideoById:dQw4w9WgXcQ:10");
+    await w.cueLands();
     expect(w.handle.calls).toContain("playVideo");
   });
 

@@ -170,12 +170,53 @@ export function showsPartyEditing(view: WatchPartyView): boolean {
   return view.kind === "watching" || view.kind === "failed";
 }
 
-/** The party is torn down: forget the gesture, so rejoining asks again. */
-export function keepsJoined(
-  joined: boolean,
-  party: WatchPartyState | null,
-): boolean {
-  return party === null ? false : joined;
+/**
+ * Everything that arms the local gate, and the one thing that forgets it.
+ *
+ * WHAT THE GATE IS FOR, restated because it is what decides the arms below.
+ * `showsPlayer` mounts nobody's player until this person has produced a user
+ * activation in this document, because that is what browsers require before a
+ * video may start. So the question each arm answers is not "should they be
+ * allowed in". It is "has this person already made the gesture the browser
+ * wants".
+ *
+ * TWO GESTURES QUALIFY, NOT ONE, and only the click was ever wired up. Pressing
+ * "start" on the paste form is a click on a button in this document, made by
+ * the one participant whose intent to watch is not in any doubt: they chose the
+ * video. Sending them to a card asking them to click into the thing they just
+ * chose was the shape of the bug, and it is worth naming as a rule rather than
+ * a patch, because the next affordance that loads a video (a queue, a "watch
+ * this" from chat) has to decide the same question and the answer is the same.
+ *
+ * `loadedHere` IS THIS MACHINE'S OWN SUBMIT AND NEVER "A VIDEO APPEARED".
+ * Everybody in the channel watches a video land when somebody else pastes a
+ * link, and none of them has clicked anything. Arming the gate from the shared
+ * state instead of from the local form would open every peer's player with no
+ * gesture behind it at all, which is precisely the block the gate exists to
+ * respect rather than to defeat.
+ *
+ * ONE FUNCTION, because it is one rule with three inputs. Splitting the arming
+ * from the forgetting is how the arming came to be missing an arm.
+ */
+export type JoinGesture =
+  /** This person pressed "join the watch party". */
+  | { kind: "joinClicked" }
+  /** This person submitted the paste form, on this machine. */
+  | { kind: "loadedHere" }
+  /** The room's state changed under everybody. */
+  | { kind: "party"; party: WatchPartyState | null };
+
+export function nextJoined(joined: boolean, gesture: JoinGesture): boolean {
+  switch (gesture.kind) {
+    case "joinClicked":
+    case "loadedHere":
+      return true;
+    case "party":
+      // Torn down: forget the gesture, so rejoining asks again. A change of
+      // video is deliberately not a teardown; see the `joined` state in
+      // `watch-party-stage.tsx` for why a second gate would gate nothing.
+      return gesture.party === null ? false : joined;
+  }
 }
 
 export interface FailurePresentation {

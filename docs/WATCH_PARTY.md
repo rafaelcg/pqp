@@ -245,6 +245,71 @@ participant. The UI is built around an explicit "join watch party" click, one
 per person, and that click is the gesture. Nothing tries to defeat or detect
 the block, and nobody's player starts before their own click.
 
+**Two gestures qualify, not one.** Pressing "start" on the paste form is as
+much a click in this document as the join card's button is, and it is made by
+the one participant whose intent is not in any doubt: they chose the video.
+Wiring only the join card is what put the person who started the party in front
+of a card asking them to click into the thing they had just chosen. Both
+gestures now go through `nextJoined` in
+`client/src/components/watch-party/watch-party-view.ts`, which is the one place
+that decides what arms the local gate, and the arming is keyed to *this
+machine's* form submit and never to a video appearing in the shared state.
+Keying it to the state would open every peer's player with no gesture behind it
+at all, which is the block the gate exists to respect.
+
+## A cue is asynchronous, and it eats whatever follows it
+
+Measured on 2026-08-27 against the real player from a visible tab.
+`cueVideoById` followed in the same tick by `playVideo` runs unstarted,
+buffering, unstarted, CUED and the play is simply gone; the identical
+`playVideo` two seconds later plays immediately. The cue takes about **176ms**
+to report CUED, and cueing, waiting for that report and only then playing
+reaches PLAYING every time.
+
+`load` then `play` is the batch **every party start and every join emits**, so
+this was not an edge case. It also failed in the quietest way available: the
+room's state said playing, the peer's own status line said playing, and the
+person was looking at a still frame with a play button on it, with nothing on
+screen to say what had gone wrong.
+
+So `player.ts` holds every command that arrives while a cue is in flight and
+flushes them when the player reports `cued`, `playing` or `paused`, never on
+`unstarted` or `buffering`, both of which a cue passes through on its way.
+**This is not the player making a decision**, which is the rule that file
+exists to keep: `state` said play, the player still plays, and the only thing
+that changed is that it waits until the call means something. Dropping the
+command instead is not neutrality.
+
+A `load` is the one command never held, because last-writer-wins means a second
+video supersedes a first rather than queueing behind it.
+
+The fakes in `player.test.ts` and `seam.test.ts` report the cue landing, on a
+microtask, for the reason the last section of this file gives: a fake that took
+a cue silently and instantly would agree with the broken code and let both
+suites stay green over a feature nobody can watch.
+
+## A teardown may only remove what it created
+
+`createYouTubeIframePlayer` mounts into a wrapper of its own under the caller's
+host and removes **that wrapper** on teardown. It must never empty the host.
+
+The host is a React ref callback's node, and construction is asynchronous
+(`await loadIframeApi()`). React 19's StrictMode detaches and re-attaches that
+ref around the first commit, so the container builds a second player against
+the same host node while the first one's construction is still in flight, and
+both iframes end up inside it. When the abandoned first one finally reaches
+`onReady` it is released, and a `host.replaceChildren()` there does not remove
+one player's iframe: it removes every child of the shared host, including the
+live successor's. YouTube then logs "The YouTube player is not attached to the
+DOM", `onReady` never fires for the survivor, and fifteen seconds later the
+panel shows "the player gave up" over a video that was fine. Observed
+2026-08-27: two iframes added to one host, both removed 427ms later, leaving
+zero.
+
+The rule outlives the specific bug and the specific React version. A container
+may be shared with a player this one knows nothing about, so teardown reaches
+only for nodes it made itself.
+
 ## Failure paths ship with the feature
 
 Embedding disabled (101 and 150), video not found or private (100), error 153

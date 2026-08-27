@@ -9,7 +9,7 @@ import { WatchPartyJoin } from "@/components/watch-party/watch-party-join";
 import type { PlayerFailure } from "@/lib/watch-party/player";
 import type { ParsedYouTubeLink } from "@/lib/watch-party/state";
 import {
-  keepsJoined,
+  nextJoined,
   showsComposer,
   showsPartyEditing,
   showsPlayer,
@@ -110,13 +110,19 @@ export function WatchPartyStage({
    * between a group and the next thing they chose to watch together. It is
    * dropped when the party is torn down, which is a new party and a new
    * decision.
+   *
+   * EVERY TRANSITION GOES THROUGH `nextJoined`, which is the module that owns
+   * what counts as the gesture. Setting this flag from a handler directly is
+   * how the paste form came to arm nothing.
    */
   const [joined, setJoined] = useState(false);
 
   const partyOpen = party !== null;
   useEffect(() => {
     if (!partyOpen) {
-      setJoined((current) => keepsJoined(current, null));
+      setJoined((current) =>
+        nextJoined(current, { kind: "party", party: null }),
+      );
       setComposing(false);
     }
   }, [partyOpen]);
@@ -129,6 +135,20 @@ export function WatchPartyStage({
       setComposing(false);
     }
   }, [videoId]);
+
+  /**
+   * The paste form's submit, which is also this person's gesture.
+   *
+   * Both composers go through here, the "start one" card and the strip that
+   * swaps the video mid-party. The strip's caller is already watching, so
+   * arming the gate there changes nothing today; routing only the card through
+   * it would leave the rule stated in two places, one of which is a coincidence
+   * of which view happened to be on screen.
+   */
+  const loadVideoHere = (link: ParsedYouTubeLink) => {
+    onLoadVideo(link);
+    setJoined((current) => nextJoined(current, { kind: "loadedHere" }));
+  };
 
   const view = watchPartyView({
     party,
@@ -199,7 +219,9 @@ export function WatchPartyStage({
             // Synchronous, inside the activation. The player mounts on the
             // very next commit and needs the click to still count.
             onJoinPlayback?.();
-            setJoined(true);
+            setJoined((current) =>
+              nextJoined(current, { kind: "joinClicked" }),
+            );
           }}
         />
       ) : (
@@ -208,7 +230,7 @@ export function WatchPartyStage({
             variant="start"
             autoFocus
             parseVideoUrl={parseVideoUrl}
-            onLoadVideo={onLoadVideo}
+            onLoadVideo={loadVideoHere}
             onCancel={party === null ? () => setComposing(false) : undefined}
           />
         </div>
@@ -222,7 +244,7 @@ export function WatchPartyStage({
             variant="change"
             autoFocus
             parseVideoUrl={parseVideoUrl}
-            onLoadVideo={onLoadVideo}
+            onLoadVideo={loadVideoHere}
             onCancel={() => setComposing(false)}
           />
         </div>
