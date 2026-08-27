@@ -77,6 +77,16 @@ jobs:
           # Optional — public TestFlight join link. Empty is fine; the site then
           # points "Join the iOS beta" at /vs-discord#ios-beta instead.
           VITE_TESTFLIGHT_URL: ${{ secrets.VITE_TESTFLIGHT_URL }}
+          # The Android closed beta's two public links, through repository
+          # variables rather than secrets for the same reason as the Ads ids
+          # below: neither is a secret, both are readable in the page source,
+          # and a variable can be changed in the GitHub UI without a commit —
+          # which matters here because a closed track can be re-made. They are
+          # ONE gate: with either empty, /android drops both buttons and says
+          # the slots are not open, and the in-app prompt does not render.
+          # The opt-in one is https://play.google.com/apps/testing/gg.pqp.app.
+          VITE_ANDROID_BETA_GROUP_URL: ${{ vars.VITE_ANDROID_BETA_GROUP_URL }}
+          VITE_ANDROID_BETA_URL: ${{ vars.VITE_ANDROID_BETA_URL }}
           # Google Ads conversion tracking. Both empty until the conversion
           # action exists in the Ads account, and empty means the build emits no
           # Google tag whatsoever, so setting them is what turns this on. They

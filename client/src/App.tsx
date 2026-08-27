@@ -25,6 +25,7 @@ import type {
   User,
   VoiceRoomTransport,
 } from "@pqp/shared";
+import { AndroidBetaPrompt } from "@/components/downloads/android-beta-prompt";
 import { MessageComposer } from "@/components/chat/message-composer";
 import { MessageList, type MessageAuthorInfo } from "@/components/chat/message-list";
 import { ForwardDialog, type ForwardTarget } from "@/components/chat/forward-dialog";
@@ -3635,6 +3636,12 @@ function MainAppContent({
           }
         />
       )}
+
+      {/* The Android closed beta, announced once per session and never again.
+          At the root because it is about the account, not about whatever
+          channel happens to be open; it decides for itself whether there is
+          anything to announce and renders nothing the rest of the time. */}
+      <AndroidBetaPrompt />
 
       {/* Also at the root: a call rings you wherever you are in the app. */}
       <IncomingCallOverlay

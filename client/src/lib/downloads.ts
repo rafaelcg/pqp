@@ -248,6 +248,31 @@ export function isIOSDevice(): boolean {
   );
 }
 
+/**
+ * True on an Android phone or tablet.
+ *
+ * Takes its signals rather than reading `navigator` itself — unlike
+ * `isIOSDevice` above, which cannot be tested for that reason. The default
+ * argument keeps the call sites identical.
+ *
+ * Every Android browser puts the literal word `Android` in the UA string, and
+ * Chromium additionally answers `"Android"` for `userAgentData.platform`, which
+ * is the browser's own statement and beats sniffing. Nothing else needs
+ * ruling out here the way `detectPlatform` has to rule out Android before
+ * Linux: a device either says Android or it is not one. Windows Subsystem for
+ * Android and ChromeOS's Android runtime do not put it in a *browser* UA, so
+ * they are excluded, which is correct — neither installs from a Play tester
+ * link the way a phone does.
+ */
+export function isAndroidDevice(
+  signals: PlatformSignals = readPlatformSignals(),
+): boolean {
+  if (signals.userAgentData?.platform === "Android") {
+    return true;
+  }
+  return /Android/i.test(signals.userAgent ?? "");
+}
+
 // ------------------------------------------------------------- asset lookup
 
 interface ReleaseAsset {
