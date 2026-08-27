@@ -83,6 +83,7 @@ import {
   collectScreenTiles,
 } from "@/components/voice/screen-stage";
 import { VoiceAudioSinks } from "@/components/voice/voice-audio-sinks";
+import { WatchPartyStage } from "@/components/watch-party";
 import { VoicePanel } from "@/components/voice/voice-panel";
 import {
   formatBinding,
@@ -105,6 +106,7 @@ import {
   type ChatMessage,
 } from "@/hooks/use-chat";
 import { createVoiceController } from "@/hooks/use-voice";
+import { useWatchParty } from "@/hooks/use-watch-party";
 import {
   ApiError,
   blockUser,
@@ -615,6 +617,17 @@ function MainAppContent({
    * the button it changes.
    */
   const [shareSystemAudio, setShareSystemAudio] = useState(false);
+
+  // --- watch party ---
+  // The container for `lib/watch-party`. Keyed to the room this client is
+  // actually connected to and not to the channel it is looking at: a watch
+  // party is something a voice room is doing, so browsing another channel must
+  // not tear down a player, and standing outside a room must not join its party.
+  const watchParty = useWatchParty({
+    voice,
+    channelId: voiceState.voiceChannelId,
+    peerId: voiceState.peerId,
+  });
   // --- voice state ---
   // Mirror this client's mute/deafen onto the wire so the roster can badge it
   // for everyone else. Lives outside the voice controller: it is display
@@ -4002,6 +4015,36 @@ function MainAppContent({
                     onStopSharing={() => void voice.stopScreenShare()}
                   />
                 )}
+              {/* A sibling of `ScreenStage`, in the same slot and for the same
+                  reason: a watch party is a thing this voice room is doing, and
+                  the conversation about the video belongs underneath it rather
+                  than behind a dialog covering it. Only for the room this
+                  client is connected to, which is also what keeps somebody
+                  browsing the channel list from being offered a remote control
+                  for a party they are not in. */}
+              {voiceState.voiceChannelId === selectedChannel.id && (
+                <WatchPartyStage
+                  party={watchParty.party}
+                  player={watchParty.player}
+                  failure={watchParty.failure}
+                  actorName={
+                    watchParty.party
+                      ? (voiceState.occupancy[selectedChannel.id]?.find(
+                          (one) => one.peerId === watchParty.party?.actorId,
+                        )?.displayName ?? null)
+                      : null
+                  }
+                  actorIsSelf={
+                    watchParty.party?.actorId === voiceState.peerId
+                  }
+                  onLoadVideo={watchParty.onLoadVideo}
+                  onPlay={watchParty.onPlay}
+                  onPause={watchParty.onPause}
+                  onSkip={watchParty.onSkip}
+                  onEndParty={watchParty.onEndParty}
+                  onRetryPlayback={watchParty.onRetryPlayback}
+                />
+              )}
               {chatPane}
             </div>
           </div>

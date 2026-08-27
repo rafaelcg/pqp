@@ -2,6 +2,8 @@ import {
   MESH_VOICE_WARNING,
   SCREEN_SHARE_LIMIT,
   type ClientRelayMessage,
+  type SetWatchPartyMessage,
+  type WatchPartyMessage,
   type VoiceParticipant,
   type VoiceRoomTransport,
   type VoiceSessionInfo,
@@ -466,6 +468,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     callDeclinedUserIds: [],
   };
   let listener: ((state: VoiceState) => void) | null = null;
+  let watchPartyListener: ((message: WatchPartyMessage) => void) | null = null;
 
   function clearJoinTimeout() {
     if (joinTimeoutId) {
@@ -1395,12 +1398,55 @@ export function createVoiceController(transport: RealtimeTransport) {
           emit();
         }
         break;
+
+      // --- watch party ---
+      //
+      // FORWARDED RAW AND NOT FOLDED IN HERE. Every other arm above updates
+      // `state` because this controller owns the fact. A watch party's state is
+      // owned by the reducer in `lib/watch-party/state.ts`, which is the only
+      // thing able to decide whether an incoming frame outranks what this peer
+      // is already holding. A copy kept here would be a second answer to a
+      // question that must have exactly one, and this feature has already paid
+      // for two of those.
+      //
+      // So this leg is transport and nothing else: the frame arrives on the
+      // voice signaling path, like the roster and the ring, and is handed on
+      // whole. The channel check travels with it, because the reducer takes a
+      // channel id for exactly that.
+      case "watch-party":
+        watchPartyListener?.(message);
+        break;
     }
   }
 
   return {
     onStateChange(cb: (next: VoiceState) => void) {
       listener = cb;
+    },
+
+    /**
+     * Hear the room's watch-party frames. One listener, replaced rather than
+     * accumulated, exactly like `onStateChange` and `RealtimeTransport`'s own
+     * setters.
+     */
+    onWatchParty(cb: ((message: WatchPartyMessage) => void) | null) {
+      watchPartyListener = cb;
+    },
+
+    /**
+     * Say something about the watch party.
+     *
+     * DROPPED WHEN THIS PEER IS NOT IN A ROOM, deliberately and silently. The
+     * server answers `set-watch-party` only for a socket holding a voice peer,
+     * so a frame sent from outside a room is one the room would refuse anyway,
+     * and queueing it in the transport's offline buffer would only mean
+     * delivering it late to whichever room this client joined next.
+     */
+    sendWatchParty(message: SetWatchPartyMessage) {
+      if (!state.peerId) {
+        return;
+      }
+      transport.sendVoice(message);
     },
 
     getState() {
