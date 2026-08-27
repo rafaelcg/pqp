@@ -318,7 +318,7 @@ export function disclosureLabel(mode) {
     case "character":
       return {
         suffix: "",
-        bio: "Personagem da casa — perfil fictício mantido pela equipe do pqp.",
+        bio: "Personagem da casa. Perfil fictício mantido pela equipe do pqp.",
       };
     case "undisclosed":
       return { suffix: "", bio: null };

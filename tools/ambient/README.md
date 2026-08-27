@@ -107,7 +107,8 @@ Env: `PQP_API_URL` (the WS URL is derived from it), `AMBIENT_TOKENS_FILE`,
 
 `disclosure` is a per-persona string with three values — `character`, `bot`,
 `undisclosed` — validated at load, so a typo throws rather than silently
-defaulting. The launch cast ships `undisclosed` by owner decision. §04 of the
+defaulting. The launch cast ships `character`, so every persona carries
+"perfil fictício mantido pela equipe do pqp" on its profile. §04 of the
 design doc argues against that at length and the argument has not changed; the
 flag is one line so the decision stays one line.
 

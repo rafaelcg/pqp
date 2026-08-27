@@ -20,11 +20,21 @@ version: 1
 timezone: America/Sao_Paulo
 
 defaults:
-  # character | bot | undisclosed. See docs/research/ambient-agents.html §04 and
-  # the note on this line in tools/ambient/README.md — the launch cast ships
-  # `undisclosed` by owner decision, and this is the entire cost of changing
-  # that back. A typo throws at load rather than silently defaulting.
-  disclosure: undisclosed
+  # character | bot | undisclosed. See docs/research/ambient-agents.html §04
+  # and tools/ambient/README.md. A typo throws at load rather than silently
+  # defaulting.
+  #
+  # `character` puts "perfil fictício mantido pela equipe do pqp" on every
+  # persona's profile. It is the honest setting and it is cheap: the cast is
+  # the house's own seed content in the house's own launch communities, which
+  # is a defensible thing to be doing and an indefensible thing to hide.
+  #
+  # This file is PUBLIC (github.com/rafaelcg/pqp). Anyone evaluating the
+  # project reads it. "Solo dev seeds his own launch communities, and says so
+  # in the repo" survives that reading. `undisclosed` does not, and it would be
+  # found by exactly the technically literate, sceptical audience whose trust
+  # is the point of being open source at all.
+  disclosure: character
   locale: pt-BR
   maxMessagesPerHour: 6
 
