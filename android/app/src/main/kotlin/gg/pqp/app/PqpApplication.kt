@@ -1,9 +1,12 @@
 package gg.pqp.app
 
 import android.app.Application
+import android.os.Build
 import coil3.ImageLoader
 import coil3.PlatformContext
 import coil3.SingletonImageLoader
+import coil3.gif.AnimatedImageDecoder
+import coil3.gif.GifDecoder
 import coil3.network.okhttp.OkHttpNetworkFetcherFactory
 import com.clerk.api.Clerk
 import gg.pqp.app.core.AuthMode
@@ -64,9 +67,36 @@ class PqpApplication : Application(), SingletonImageLoader.Factory {
     /**
      * Avatars and attachments come from the same hosts as the API, so Coil
      * shares its connection pool rather than opening a second one.
+     *
+     * The decoder is the other half, and it used to be missing. Coil decodes
+     * still images with no help, so an app with no animated decoder registered
+     * does not fail on a GIF: it draws frame one and stops, which is how a
+     * first-class feature (the GIF picker, `GET /api/gifs/config`) arrived on
+     * Android as a frozen picture that nobody could tell from a bad GIF.
+     *
+     * `coil-gif` does publish a `ServiceLoader` entry, so on a debug build the
+     * artifact alone would have been enough. It is registered by hand anyway,
+     * because the release build is minified and shrunk and a decoder that only
+     * exists via `META-INF/services` is a decoder whose presence depends on
+     * R8 keeping a resource nobody references. This block is a reference.
+     *
+     * Two factories, not one: `AnimatedImageDecoder` is `@RequiresApi(28)`,
+     * because it is `android.graphics.ImageDecoder` underneath, and `minSdk`
+     * here is 26. This is the same split Coil's own service-loader entry
+     * makes. The API 28 path is the better one where it exists, because it
+     * animates WebP and (on 30+) HEIF as well as GIF and Tenor serves plenty
+     * of animated WebP, so 26 and 27 fall back to the `Movie`-based decoder
+     * and animate GIF only.
      */
     override fun newImageLoader(context: PlatformContext): ImageLoader =
         ImageLoader.Builder(context)
-            .components { add(OkHttpNetworkFetcherFactory(callFactory = { http })) }
+            .components {
+                add(OkHttpNetworkFetcherFactory(callFactory = { http }))
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    add(AnimatedImageDecoder.Factory())
+                } else {
+                    add(GifDecoder.Factory())
+                }
+            }
             .build()
 }

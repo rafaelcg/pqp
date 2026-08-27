@@ -124,6 +124,19 @@ class ApiClient(
     suspend fun joinInvite(code: String): JoinInviteResponse =
         post("/api/invites/$code/join", "{}")
 
+    /**
+     * A fresh read URL for one attachment.
+     *
+     * The URL baked into a message is presigned and expires, so a channel left
+     * open for longer than `ATTACHMENT_URL_TTL_SECONDS` is a channel whose
+     * videos will not play. The web client answers the first media error by
+     * re-minting exactly once (`fetchAttachmentUrl` in `attachment-grid.tsx`)
+     * and this is the same contract, bounded the same way: a second failure is
+     * a real failure and gets said out loud rather than retried forever.
+     */
+    suspend fun attachmentUrl(attachmentId: String): String =
+        get<AttachmentUrlResponse>("/api/attachments/$attachmentId/url").url
+
     suspend fun iceServers(): List<IceServer> =
         get<IceServersResponse>("/api/ice-servers").iceServers
 

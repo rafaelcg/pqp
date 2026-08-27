@@ -65,6 +65,16 @@
     <string name="chat_attachment_too_many">A message carries at most %1$d files.</string>
     <string name="chat_attachment_unreadable">That file could not be read.</string>
 
+    <!-- Attachments -->
+    <!-- Accessible name for an animated image. %1$s is its filename or, for a
+         GIF sent from the picker, its title. -->
+    <string name="attachment_animated_image">%1$s, animated</string>
+    <string name="attachment_gif">GIF</string>
+    <!-- The action a video attachment offers. %1$s is its filename. -->
+    <string name="attachment_play_video">Play %1$s</string>
+    <string name="attachment_video_failed">This video could not be played.</string>
+    <string name="attachment_video_close">Close</string>
+
     <!-- Connection -->
     <string name="connection_connecting">Connecting…</string>
     <string name="connection_offline">Offline. Trying to reconnect…</string>
