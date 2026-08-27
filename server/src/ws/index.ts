@@ -71,6 +71,10 @@ const VOICE_MESSAGE_TYPES = new Set([
   "set-camera",
   // --- voice state ---
   "set-voice-state",
+  // --- watch party ---
+  // A watch party lives inside a voice room, so its one client frame is routed
+  // to the voice handler like every other thing said inside one.
+  "set-watch-party",
 ]);
 
 /**
