@@ -231,6 +231,21 @@ object Sizes {
     val iconInline = 20.dp
     val iconAction = 22.dp
 
+    /**
+     * How tall a `LargeTopAppBar` stands before it is scrolled.
+     *
+     * Material's default is 152dp, which is a two-line hero for titles that are
+     * one short word here. 124 leaves the headline room to breathe and puts one
+     * more row on screen at rest.
+     *
+     * It is a token rather than a number at three call sites because the three
+     * home tabs cross-fade into each other: a bar that is 124dp on Servers and
+     * 152dp on Messages makes the title jump down 28dp when somebody changes
+     * tab, and reads as an empty band above two of the three screens. Any new
+     * large bar uses this.
+     */
+    val largeTopBarExpanded = 124.dp
+
     /** A hairline. Not `Dp.Hairline`, which is a physical pixel and vanishes. */
     val hairline = 1.dp
 }

@@ -431,6 +431,21 @@ settings screen, and it is almost entirely about three rows.
 A server's icon is a **squircle** and a person's is a **circle**. A server is a
 place and a person is a person, and that is the same distinction Material draws.
 
+### The large app bar
+
+`Sizes.largeTopBarExpanded` is **124dp**, against Material's 152dp default,
+and every `LargeTopAppBar` in the app uses it. 152 is a two-line hero for
+titles that are one short word here; 124 leaves the headline room to breathe
+and puts one more row on screen at rest. The collapse behaviour is untouched.
+Only the height it collapses from moves.
+
+It is a token and not a number at each call site because the **three home tabs
+cross-fade into one another**. Servers, Messages and Friends are the same bar
+seen three times, so one of them standing 28dp taller than the other two is not
+a difference in a screen, it is the title dropping under somebody's thumb when
+they change tab, and an empty band above two screens out of three. Any new
+large bar uses the token.
+
 ### The rail and the channel list as chrome
 
 The channel list is the web app's sidebar, brought to a phone. It is not a list
@@ -550,9 +565,18 @@ people who did the work rather than found later.
 ### Things that are genuinely unfinished
 
 - **The sign-in screen in Clerk mode.** `AuthView` is Clerk's own component,
-  used as shipped for the reason in `SignInScreen.kt`, and it does not read this
-  theme. It is a Material 3 form in the middle of a pqp app. Clerk's Android SDK
-  exposes some appearance hooks; nobody has tried them.
+  used as shipped for the reason in `SignInScreen.kt`. Three of its appearance
+  hooks have now been tried and all three are used: `logo` puts the pqp mark in
+  what was an empty top bar, `clerkTheme` sets the ground to `Ink` so the screen
+  is one colour rather than Clerk's `#131316` inside our window, and `modifier`
+  lifts the whole block off the status bar because Clerk top-aligns the form in
+  its own full-screen `Scaffold`. What is still Clerk's is everything inside the
+  form: the field, the buttons, the divider, the type. Those are reachable
+  through the rest of `ClerkColors` and through `ClerkTypography`, and nobody
+  has tried those. Note that Clerk's scaffold **does not scroll and applies no
+  IME inset**, so any height taken from outside is height the tallest step of
+  the flow loses; the lift gives itself up while the keyboard is open for
+  exactly that reason.
 - **The friends screen can show three lime objects at once**: the Add friend
   FAB, the accept button on a request, and the Pending badge. Each is correct on
   its own and together they break the one-lime-per-screen rule. Demoting the FAB
