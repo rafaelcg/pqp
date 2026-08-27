@@ -37,6 +37,12 @@ import {
   isLiveKitConfigured,
 } from "../voice/backends.js";
 import { forEachAuthenticatedSocket } from "./sockets.js";
+import {
+  applyWatchPartyWrite,
+  endWatchParty,
+  getWatchPartyState,
+  resetWatchPartyLimits,
+} from "./watch-party.js";
 
 interface VoicePeer {
   id: string;
@@ -169,6 +175,7 @@ const stateLimiter = createRateLimiter({ capacity: 15, refillPerSecond: 3 });
 export function resetVoiceRateLimits(): void {
   roomLimiter.reset();
   stateLimiter.reset();
+  resetWatchPartyLimits();
 }
 
 function getRoomPeers(voiceChannelId: string): VoicePeer[] {
@@ -378,6 +385,29 @@ function removePeer(peerId: string) {
   // removed or fixed. Nobody is mid-call, so nobody's audio moves.
   if (getRoomPeers(voiceChannelId).length === 0) {
     roomTransports.delete(voiceChannelId);
+    // The last participant leaving tears the watch party down, so nobody who
+    // walks into this channel tomorrow inherits a film half-watched by people
+    // who have gone home.
+    //
+    // WHO IS TOLD. The room is empty by construction, so the only socket left
+    // to tell is the one that just left, and it is told rather than assumed to
+    // know: a peer removed by an eviction or a channel deletion did not choose
+    // to leave, and `state: null` is what lets it dismantle its player instead
+    // of sitting on a party that no longer exists.
+    //
+    // NO GRACE PERIOD, unlike the ring below. A reconnecting lone watcher does
+    // empty their room for a moment and does lose the held state, and the
+    // contract already covers that: an unechoed local state is retried, which
+    // is the same machinery that recovers a mid-video join. A grace period
+    // would instead hand the next arrival a party nobody is in, which is the
+    // failure that has no client-side repair.
+    if (endWatchParty(voiceChannelId)) {
+      send(peer.socket, {
+        type: "watch-party",
+        channelId: voiceChannelId,
+        state: null,
+      });
+    }
     // A ring with nobody left in the room is a call that ended unanswered —
     // after a grace period, because this same path runs mid-rejoin.
     // See `// --- conversation calls ---` below.
@@ -723,6 +753,21 @@ export async function handleVoiceMessage(
       transport,
     });
 
+    // What the room is watching, to this socket alone and only if there is a
+    // party. A joiner cannot ask for it: there is no request frame in the
+    // contract and adding one would be a second way to learn the same fact.
+    // Sent after `welcome` so the client already knows which room it is in,
+    // and before the room hears about the joiner, so the state is in hand
+    // before anything else can arrive about it.
+    const party = getWatchPartyState(payload.voiceChannelId);
+    if (party) {
+      send(socket, {
+        type: "watch-party",
+        channelId: payload.voiceChannelId,
+        state: party,
+      });
+    }
+
     broadcastToRoom(
       payload.voiceChannelId,
       { type: "peer-joined", peer: self },
@@ -800,6 +845,53 @@ export async function handleVoiceMessage(
     peer.muted = payload.muted;
     peer.deafened = payload.deafened;
     await broadcastRoster(peer.voiceChannelId);
+    return;
+  }
+
+  // --- watch party ---
+  //
+  // The audience is the ROOM, not the channel's viewers. `set-voice-state`
+  // above fans out through `broadcastRoster`, which reaches everyone who can
+  // see the channel, because occupancy badges are drawn for people standing
+  // outside the call. A watch party is only ever meaningful to the people
+  // inside it, so this uses `broadcastToRoom`, the same audience `peer-joined`
+  // and `peer-left` use. That audience is a strict subset of the roster's:
+  // membership of the room was granted by the join above, which is where
+  // channel access, permissions, blocks and timeouts were all checked, and the
+  // eviction helpers drop a peer from the room the moment any of those change.
+  //
+  // The sender is deliberately NOT excluded. The echo is an acknowledgement:
+  // it is how a client learns its write was adopted rather than coalesced, and
+  // an unechoed write is what its resend logic waits on.
+  if (payload.type === "set-watch-party") {
+    if (!existingPeerId) {
+      return;
+    }
+    const peer = peers.get(existingPeerId);
+    if (!peer) {
+      return;
+    }
+    const write = applyWatchPartyWrite(
+      peer.voiceChannelId,
+      payload.state,
+      user.id,
+    );
+    if (write.kind === "coalesced") {
+      return;
+    }
+    if (write.kind === "stale") {
+      send(socket, {
+        type: "watch-party",
+        channelId: peer.voiceChannelId,
+        state: write.held,
+      });
+      return;
+    }
+    broadcastToRoom(peer.voiceChannelId, {
+      type: "watch-party",
+      channelId: peer.voiceChannelId,
+      state: write.state,
+    });
     return;
   }
 
