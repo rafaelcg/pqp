@@ -28,6 +28,7 @@ import {
 } from "@pqp/shared";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { Button } from "@/components/ui/button";
+import { Tooltip } from "@/components/ui/tooltip";
 import {
   ContextMenu,
   type ContextMenuItemDef,
@@ -1162,21 +1163,34 @@ export function MembersPanel({
                 {actions.length > 0 && (
                   <div className="flex shrink-0 items-center gap-0.5">
                     {actions.map((action) => (
-                      <Button
+                      // The one place the bubble and the accessible name are
+                      // meant to differ. Next to the pointer, on a row whose
+                      // name you are already looking at, "Kick" is the whole
+                      // answer; to a reader stepping through twelve identical
+                      // buttons, "Kick" is not, so `name` puts the member back
+                      // in. `action.title` is the second line where there is
+                      // one — it is the sentence that explains a dimmed
+                      // action, and it is the reason `dim` is aria-disabled
+                      // rather than disabled.
+                      <Tooltip
                         key={action.id}
-                        size="icon"
-                        variant={action.danger ? "danger" : "ghost"}
-                        // `dim` keeps the button tappable (aria-disabled, not
-                        // disabled) so a tap can explain why it does nothing.
-                        className={cn("h-8 w-8", action.dim && "opacity-50")}
-                        aria-label={`${action.label}: ${shown}`}
-                        aria-disabled={action.dim || undefined}
-                        title={action.title ?? action.label}
-                        disabled={busy}
-                        onClick={action.onSelect}
+                        label={action.label}
+                        detail={action.title}
+                        name={`${action.label}: ${shown}`}
                       >
-                        <action.icon className="h-4 w-4" />
-                      </Button>
+                        <Button
+                          size="icon"
+                          variant={action.danger ? "danger" : "ghost"}
+                          // `dim` keeps the button tappable (aria-disabled, not
+                          // disabled) so a tap can explain why it does nothing.
+                          className={cn("h-8 w-8", action.dim && "opacity-50")}
+                          aria-disabled={action.dim || undefined}
+                          disabled={busy}
+                          onClick={action.onSelect}
+                        >
+                          <action.icon className="h-4 w-4" />
+                        </Button>
+                      </Tooltip>
                     ))}
                   </div>
                 )}

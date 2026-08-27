@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2, Maximize2, Minimize2, ScreenShareOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Tooltip } from "@/components/ui/tooltip";
 import {
   detectFullscreenMode,
   type FullscreenMode,
@@ -327,24 +328,33 @@ export function ScreenShareView({
           {/* Always rendered: `expand` needs no platform support, so there is
               no browser left where this button would do nothing. */}
           {(
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-6 w-6"
-              aria-label={
+            /* `side="bottom"`: this row sits on the top edge of the stage, and
+               a bubble above it would be off the stage or, in fullscreen, off
+               the screen. The bubble follows the document into fullscreen
+               (see `TooltipProvider`), so it is still visible after the first
+               press, which is the press that matters here. */
+            <Tooltip
+              label={
                 isFullscreen
                   ? t("voice.share.exitFullscreen")
                   : t("voice.share.fullscreen")
               }
-              aria-pressed={isFullscreen}
-              onClick={toggleFullscreen}
+              side="bottom"
             >
-              {isFullscreen ? (
-                <Minimize2 className="h-3.5 w-3.5" />
-              ) : (
-                <Maximize2 className="h-3.5 w-3.5" />
-              )}
-            </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6"
+                aria-pressed={isFullscreen}
+                onClick={toggleFullscreen}
+              >
+                {isFullscreen ? (
+                  <Minimize2 className="h-3.5 w-3.5" />
+                ) : (
+                  <Maximize2 className="h-3.5 w-3.5" />
+                )}
+              </Button>
+            </Tooltip>
           )}
         </div>
       </div>

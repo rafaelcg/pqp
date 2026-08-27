@@ -33,6 +33,7 @@ import {
   type FullscreenMode,
 } from "@/components/voice/capabilities";
 import { attemptElementFullscreen } from "@/components/voice/element-fullscreen";
+import { Tooltip } from "@/components/ui/tooltip";
 import {
   NO_SCREEN_FULLSCREEN,
   reconcileScreenFullscreen,
@@ -1100,6 +1101,8 @@ function CallControls({
     voiceState.roomTransport,
   );
   const shareLimit = SCREEN_SHARE_LIMIT[voiceState.roomTransport ?? "mesh"];
+  // The cap only bites somebody who is not already one of the shares.
+  const shareCappedOut = shareAtCap && !voiceState.isSharingScreen;
   const size = collapsed ? "h-8 w-8" : "h-10 w-10";
   const iconSize = collapsed ? "h-3.5 w-3.5" : "h-4 w-4";
 
@@ -1110,56 +1113,60 @@ function CallControls({
         collapsed ? "gap-1" : "gap-2 rounded-full bg-ink-2/90 px-2.5 py-1.5 shadow-lg ring-1 ring-ink-4/60 backdrop-blur",
       )}
     >
-      <button
-        type="button"
-        title={voiceState.isMuted ? t("call.panel.unmute") : t("call.panel.mute")}
-        aria-label={
+      {/* Every control in this bar used to carry a `title` beside its
+          `aria-label`: two copies of one string, a one-second wait, and
+          nothing at all for a keyboard. The `Tooltip` is one copy, quicker,
+          and it opens on focus. */}
+      <Tooltip
+        label={
           voiceState.isMuted ? t("call.panel.unmute") : t("call.panel.mute")
         }
-        aria-pressed={voiceState.isMuted}
-        className={cn(
-          "flex items-center justify-center rounded-full",
-          size,
-          voiceState.isMuted
-            ? "bg-danger/20 text-danger"
-            : "bg-ink-3 text-paper hover:bg-ink-4",
-        )}
-        onClick={onToggleMute}
       >
-        {voiceState.isMuted ? (
-          <MicOff className={iconSize} />
-        ) : (
-          <Mic className={iconSize} />
-        )}
-      </button>
-      <button
-        type="button"
-        title={
+        <button
+          type="button"
+          aria-pressed={voiceState.isMuted}
+          className={cn(
+            "flex items-center justify-center rounded-full",
+            size,
+            voiceState.isMuted
+              ? "bg-danger/20 text-danger"
+              : "bg-ink-3 text-paper hover:bg-ink-4",
+          )}
+          onClick={onToggleMute}
+        >
+          {voiceState.isMuted ? (
+            <MicOff className={iconSize} />
+          ) : (
+            <Mic className={iconSize} />
+          )}
+        </button>
+      </Tooltip>
+      <Tooltip
+        label={
           voiceState.isCameraOn
             ? t("call.panel.cameraOn")
             : t("call.panel.cameraOff")
         }
-        aria-label={
-          voiceState.isCameraOn
-            ? t("call.panel.cameraOn")
-            : t("call.panel.cameraOff")
-        }
-        aria-pressed={voiceState.isCameraOn}
-        className={cn(
-          "flex items-center justify-center rounded-full",
-          size,
-          voiceState.isCameraOn
-            ? "bg-signal/20 text-signal"
-            : "bg-ink-3 text-paper hover:bg-ink-4",
-        )}
-        onClick={onToggleCamera}
       >
-        {voiceState.isCameraOn ? (
-          <Video className={iconSize} />
-        ) : (
-          <VideoOff className={iconSize} />
-        )}
-      </button>
+        <button
+          type="button"
+          aria-pressed={voiceState.isCameraOn}
+          className={cn(
+            "flex items-center justify-center rounded-full",
+            size,
+            voiceState.isCameraOn
+              ? "bg-signal/20 text-signal"
+              : "bg-ink-3 text-paper hover:bg-ink-4",
+          )}
+          onClick={onToggleCamera}
+        >
+          {voiceState.isCameraOn ? (
+            <Video className={iconSize} />
+          ) : (
+            <VideoOff className={iconSize} />
+          )}
+        </button>
+      </Tooltip>
       {/* Video, in whichever direction this call has any, immediately to the
           right of the camera. Absent on an audio-only call, so that bar is the
           bar it has always been. Sending shows the sizes; watching shows what
@@ -1192,118 +1199,139 @@ function CallControls({
         onStartScreenShare &&
         onShareSystemAudioChange &&
         !voiceState.isSharingScreen && (
-          <button
-            type="button"
-            title={t("voice.control.shareSound")}
-            aria-label={t("voice.control.shareSound")}
-            aria-pressed={shareSystemAudio}
-            className={cn(
-              "flex items-center justify-center rounded-full",
-              size,
-              shareSystemAudio
-                ? "bg-signal/20 text-signal"
-                : "bg-ink-3 text-paper hover:bg-ink-4",
-            )}
-            onClick={() => onShareSystemAudioChange(!shareSystemAudio)}
+          /* The second line is the same one the channel bar gives this
+             button, because it is the same button and the same consequence.
+             It is the one control on this bar that a person cannot work out
+             by looking at it. */
+          <Tooltip
+            label={t("voice.control.shareSound")}
+            detail={t("voice.control.shareSoundDetail")}
           >
-            <MonitorSpeaker className={iconSize} />
-          </button>
+            <button
+              type="button"
+              aria-pressed={shareSystemAudio}
+              className={cn(
+                "flex items-center justify-center rounded-full",
+                size,
+                shareSystemAudio
+                  ? "bg-signal/20 text-signal"
+                  : "bg-ink-3 text-paper hover:bg-ink-4",
+              )}
+              onClick={() => onShareSystemAudioChange(!shareSystemAudio)}
+            >
+              <MonitorSpeaker className={iconSize} />
+            </button>
+          </Tooltip>
         )}
       {!collapsed && canShare && (onStartScreenShare || onStopScreenShare) && (
-        <button
-          type="button"
-          title={
-            shareAtCap && !voiceState.isSharingScreen
-              ? t("voice.control.shareLimit", { limit: shareLimit })
-              : voiceState.isSharingScreen
-                ? t("voice.control.stopShare")
-                : t("voice.control.share")
-          }
-          aria-label={
+        <Tooltip
+          label={
             voiceState.isSharingScreen
               ? t("voice.control.stopShare")
               : t("voice.control.share")
           }
-          aria-pressed={voiceState.isSharingScreen}
-          disabled={shareAtCap && !voiceState.isSharingScreen}
-          className={cn(
-            "flex items-center justify-center rounded-full disabled:opacity-40",
-            size,
-            voiceState.isSharingScreen
-              ? "bg-signal/20 text-signal"
-              : "bg-ink-3 text-paper hover:bg-ink-4",
-          )}
-          onClick={
-            voiceState.isSharingScreen ? onStopScreenShare : onStartScreenShare
+          detail={
+            shareCappedOut
+              ? t("voice.control.shareLimit", { limit: shareLimit })
+              : undefined
           }
         >
-          {voiceState.isSharingScreen ? (
-            <ScreenShareOff className={iconSize} />
-          ) : (
-            <ScreenShare className={iconSize} />
-          )}
-        </button>
+          {/* `aria-disabled` rather than `disabled`, matching the channel
+              bar: the cap is the only thing worth saying about this button
+              while it is dim, and a disabled button gets no hover and no
+              focus, so it could never say it. The `title` that used to carry
+              the sentence was dead for the same reason. */}
+          <button
+            type="button"
+            aria-pressed={voiceState.isSharingScreen}
+            aria-disabled={shareCappedOut || undefined}
+            className={cn(
+              "flex items-center justify-center rounded-full",
+              size,
+              shareCappedOut && "opacity-40",
+              voiceState.isSharingScreen
+                ? "bg-signal/20 text-signal"
+                : "bg-ink-3 text-paper hover:bg-ink-4",
+            )}
+            onClick={() => {
+              if (shareCappedOut) {
+                return;
+              }
+              if (voiceState.isSharingScreen) {
+                onStopScreenShare?.();
+                return;
+              }
+              onStartScreenShare?.();
+            }}
+          >
+            {voiceState.isSharingScreen ? (
+              <ScreenShareOff className={iconSize} />
+            ) : (
+              <ScreenShare className={iconSize} />
+            )}
+          </button>
+        </Tooltip>
       )}
       {!collapsed && fullscreenAvailable && (
+        <Tooltip
+          label={
+            isFullscreen
+              ? t("voice.share.exitFullscreen")
+              : t("voice.share.fullscreen")
+          }
+        >
+          <button
+            type="button"
+            aria-pressed={isFullscreen}
+            className={cn(
+              "flex items-center justify-center rounded-full bg-ink-3 text-paper hover:bg-ink-4",
+              size,
+            )}
+            onClick={onToggleFullscreen}
+          >
+            {isFullscreen ? (
+              <Minimize2 className={iconSize} />
+            ) : (
+              <Maximize2 className={iconSize} />
+            )}
+          </button>
+        </Tooltip>
+      )}
+      <Tooltip
+        label={collapsed ? t("call.stage.expand") : t("call.stage.collapse")}
+      >
         <button
           type="button"
-          title={
-            isFullscreen
-              ? t("voice.share.exitFullscreen")
-              : t("voice.share.fullscreen")
-          }
-          aria-label={
-            isFullscreen
-              ? t("voice.share.exitFullscreen")
-              : t("voice.share.fullscreen")
-          }
-          aria-pressed={isFullscreen}
+          aria-expanded={!collapsed}
           className={cn(
             "flex items-center justify-center rounded-full bg-ink-3 text-paper hover:bg-ink-4",
             size,
           )}
-          onClick={onToggleFullscreen}
+          onClick={onToggleCollapsed}
         >
-          {isFullscreen ? (
-            <Minimize2 className={iconSize} />
+          {collapsed ? (
+            <ChevronDown className={iconSize} />
           ) : (
-            <Maximize2 className={iconSize} />
+            <ChevronUp className={iconSize} />
           )}
         </button>
-      )}
-      <button
-        type="button"
-        title={collapsed ? t("call.stage.expand") : t("call.stage.collapse")}
-        aria-label={collapsed ? t("call.stage.expand") : t("call.stage.collapse")}
-        aria-expanded={!collapsed}
-        className={cn(
-          "flex items-center justify-center rounded-full bg-ink-3 text-paper hover:bg-ink-4",
-          size,
-        )}
-        onClick={onToggleCollapsed}
-      >
-        {collapsed ? (
-          <ChevronDown className={iconSize} />
-        ) : (
-          <ChevronUp className={iconSize} />
-        )}
-      </button>
+      </Tooltip>
       <span
         aria-hidden="true"
         className={cn("mx-0.5 w-px self-stretch bg-ink-4/70", collapsed ? "my-1" : "my-1.5")}
       />
-      <button
-        type="button"
-        title={t("call.panel.leave")}
-        aria-label={t("call.panel.leave")}
-        className={cn(
-          "flex items-center justify-center rounded-full bg-danger/90 text-paper hover:bg-danger",
-          collapsed ? size : "h-10 w-14",
-        )}
-        onClick={onLeave}
-      >
-        <PhoneOff className={iconSize} />
-      </button>
+      <Tooltip label={t("call.panel.leave")}>
+        <button
+          type="button"
+          className={cn(
+            "flex items-center justify-center rounded-full bg-danger/90 text-paper hover:bg-danger",
+            collapsed ? size : "h-10 w-14",
+          )}
+          onClick={onLeave}
+        >
+          <PhoneOff className={iconSize} />
+        </button>
+      </Tooltip>
     </div>
   );
 }
@@ -1600,23 +1628,25 @@ function ScreenTileFrame({
           them. */}
       <div className="absolute left-2 top-2 flex max-w-[80%] items-center gap-1.5">
         {onToggleFullscreen && (
-          <button
-            type="button"
-            // The control bar carries a fullscreen button too, so the label
-            // alone cannot tell a test which one it pressed.
-            data-testid="share-fullscreen"
-            title={label}
-            aria-label={label}
-            aria-pressed={isFullscreen}
-            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink/70 text-paper hover:bg-ink-4"
-            onClick={onToggleFullscreen}
-          >
-            {isFullscreen ? (
-              <Minimize2 className="h-3.5 w-3.5" />
-            ) : (
-              <Maximize2 className="h-3.5 w-3.5" />
-            )}
-          </button>
+          /* `side="bottom"`: this sits on the top edge of the share, so a
+             bubble above it would be off the tile. */
+          <Tooltip label={label} side="bottom" align="start">
+            <button
+              type="button"
+              // The control bar carries a fullscreen button too, so the label
+              // alone cannot tell a test which one it pressed.
+              data-testid="share-fullscreen"
+              aria-pressed={isFullscreen}
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink/70 text-paper hover:bg-ink-4"
+              onClick={onToggleFullscreen}
+            >
+              {isFullscreen ? (
+                <Minimize2 className="h-3.5 w-3.5" />
+              ) : (
+                <Maximize2 className="h-3.5 w-3.5" />
+              )}
+            </button>
+          </Tooltip>
         )}
         {showName && (
           <span className="pointer-events-none truncate rounded bg-ink/70 px-1.5 py-0.5 text-[11px] text-paper-muted">

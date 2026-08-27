@@ -10,6 +10,7 @@ import {
   type ContextMenuItemDef,
 } from "@/components/ui/context-menu";
 import { ChannelListSkeleton } from "@/components/ui/skeleton";
+import { Tooltip } from "@/components/ui/tooltip";
 import { useProfilePopover } from "@/components/user/user-profile-popover";
 import { UserAvatar } from "@/components/user/user-avatar";
 import {
@@ -98,15 +99,15 @@ export function DmList({
       <div className="flex h-14 items-center justify-between gap-2 border-b border-ink-4/60 px-4">
         <p className="truncate font-display text-base font-bold">{t("dm.title")}</p>
         <div className="flex items-center gap-1">
-          <button
-            type="button"
-            className="rounded-md p-1.5 text-paper-muted hover:bg-ink-3 hover:text-paper"
-            title={t("dm.new")}
-            aria-label={t("dm.new")}
-            onClick={onStartConversation}
-          >
-            <Plus className="h-4 w-4" />
-          </button>
+          <Tooltip label={t("dm.new")}>
+            <button
+              type="button"
+              className="rounded-md p-1.5 text-paper-muted hover:bg-ink-3 hover:text-paper"
+              onClick={onStartConversation}
+            >
+              <Plus className="h-4 w-4" />
+            </button>
+          </Tooltip>
           {onMobileClose && (
             <button
               type="button"
@@ -372,23 +373,29 @@ function ConversationRow({
             blocked 1:1 — the server would refuse the join anyway, and showing
             a phone that cannot ring is worse than no phone. */}
         {onStartCall && !blocked && (
-          <button
-            type="button"
-            title={t(hasActiveCall ? "call.panel.join" : "call.startVoice")}
-            aria-label={
+          /* The row you are pointing at is named right next to the pointer,
+             so the bubble says only the verb; the reader, stepping down a
+             list of identical phones, gets the conversation in the name. */
+          <Tooltip
+            label={t(hasActiveCall ? "call.panel.join" : "call.startVoice")}
+            name={
               t(hasActiveCall ? "call.panel.join" : "call.startVoice") +
               `: ${title}`
             }
-            className={cn(
-              "shrink-0 rounded-md p-1.5",
-              hasActiveCall
-                ? "text-success"
-                : "text-paper-muted opacity-0 hover:bg-ink-3 hover:text-paper focus-visible:opacity-100 group-hover:opacity-100",
-            )}
-            onClick={onStartCall}
           >
-            <Phone className="h-3.5 w-3.5" />
-          </button>
+            <button
+              type="button"
+              className={cn(
+                "shrink-0 rounded-md p-1.5",
+                hasActiveCall
+                  ? "text-success"
+                  : "text-paper-muted opacity-0 hover:bg-ink-3 hover:text-paper focus-visible:opacity-100 group-hover:opacity-100",
+              )}
+              onClick={onStartCall}
+            >
+              <Phone className="h-3.5 w-3.5" />
+            </button>
+          </Tooltip>
         )}
       </div>
     </ContextMenu>

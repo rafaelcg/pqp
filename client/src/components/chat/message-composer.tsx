@@ -23,6 +23,7 @@ import { EmojiPickerPanel } from "@/components/chat/emoji-picker";
 import { GifPickerPanel } from "@/components/chat/gif-picker";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { Button } from "@/components/ui/button";
+import { Tooltip } from "@/components/ui/tooltip";
 import {
   AttachmentAbortError,
   createPreviewUrl,
@@ -916,58 +917,35 @@ export function MessageComposer({
                 event.target.value = "";
               }}
             />
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              disabled={disabled}
-              aria-label={t("composer.attach")}
-              onClick={() => fileInputRef.current?.click()}
-              onMouseDown={(event) => {
-                if (menuKind) {
-                  event.preventDefault();
-                }
-              }}
-              className="shrink-0 text-paper-muted hover:text-signal"
-            >
-              <Paperclip className="h-5 w-5" />
-            </Button>
+            <Tooltip label={t("composer.attach")}>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                disabled={disabled}
+                onClick={() => fileInputRef.current?.click()}
+                onMouseDown={(event) => {
+                  if (menuKind) {
+                    event.preventDefault();
+                  }
+                }}
+                className="shrink-0 text-paper-muted hover:text-signal"
+              >
+                <Paperclip className="h-5 w-5" />
+              </Button>
+            </Tooltip>
           </>
         )}
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          disabled={disabled}
-          aria-label={t("composer.addEmoji")}
-          aria-expanded={isPickerOpen}
-          onClick={() => {
-            setIsGifPickerOpen(false);
-            setIsPickerOpen((open) => !open);
-          }}
-          onMouseDown={(event) => {
-            if (menuKind) {
-              event.preventDefault();
-            }
-          }}
-          className="shrink-0 text-paper-muted hover:text-signal"
-        >
-          <Smile className="h-5 w-5" />
-        </Button>
-        {isGifSearchEnabled && (
+        <Tooltip label={t("composer.addEmoji")}>
           <Button
             type="button"
             variant="ghost"
             size="icon"
             disabled={disabled}
-            aria-label={t("composer.addGif")}
-            aria-expanded={isGifPickerOpen}
+            aria-expanded={isPickerOpen}
             onClick={() => {
-              setIsPickerOpen(false);
-              // The button always opens on trending. Without this it would
-              // reopen on whatever a previous `/gif <query>` had seeded.
-              setGifQuery("");
-              setIsGifPickerOpen((open) => !open);
+              setIsGifPickerOpen(false);
+              setIsPickerOpen((open) => !open);
             }}
             onMouseDown={(event) => {
               if (menuKind) {
@@ -976,8 +954,34 @@ export function MessageComposer({
             }}
             className="shrink-0 text-paper-muted hover:text-signal"
           >
-            <ImagePlay className="h-5 w-5" />
+            <Smile className="h-5 w-5" />
           </Button>
+        </Tooltip>
+        {isGifSearchEnabled && (
+          <Tooltip label={t("composer.addGif")}>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              disabled={disabled}
+              aria-expanded={isGifPickerOpen}
+              onClick={() => {
+                setIsPickerOpen(false);
+                // The button always opens on trending. Without this it would
+                // reopen on whatever a previous `/gif <query>` had seeded.
+                setGifQuery("");
+                setIsGifPickerOpen((open) => !open);
+              }}
+              onMouseDown={(event) => {
+                if (menuKind) {
+                  event.preventDefault();
+                }
+              }}
+              className="shrink-0 text-paper-muted hover:text-signal"
+            >
+              <ImagePlay className="h-5 w-5" />
+            </Button>
+          </Tooltip>
         )}
         <textarea
           ref={inputRef}

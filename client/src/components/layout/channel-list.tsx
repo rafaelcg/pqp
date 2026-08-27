@@ -22,6 +22,7 @@ import {
   type ContextMenuItemDef,
 } from "@/components/ui/context-menu";
 import { ChannelListSkeleton } from "@/components/ui/skeleton";
+import { Tooltip } from "@/components/ui/tooltip";
 import { VoiceAvatar } from "@/components/voice/voice-avatar";
 import {
   loadCollapsedCategories,
@@ -402,25 +403,25 @@ export function ChannelList({
             {server && (
               <>
                 {canManage && (
+                  <Tooltip label={t("chrome.communitySettings")}>
+                    <button
+                      type="button"
+                      className="rounded-md p-1.5 text-paper-muted hover:bg-ink-3 hover:text-paper"
+                      onClick={onOpenServerSettings}
+                    >
+                      <Settings className="h-4 w-4" />
+                    </button>
+                  </Tooltip>
+                )}
+                <Tooltip label={t("chrome.members")}>
                   <button
                     type="button"
                     className="rounded-md p-1.5 text-paper-muted hover:bg-ink-3 hover:text-paper"
-                    title={t("chrome.communitySettings")}
-                    aria-label={t("chrome.communitySettings")}
-                    onClick={onOpenServerSettings}
+                    onClick={onOpenMembers}
                   >
-                    <Settings className="h-4 w-4" />
+                    <Users className="h-4 w-4" />
                   </button>
-                )}
-                <button
-                  type="button"
-                  className="rounded-md p-1.5 text-paper-muted hover:bg-ink-3 hover:text-paper"
-                  title={t("chrome.members")}
-                  aria-label={t("chrome.members")}
-                  onClick={onOpenMembers}
-                >
-                  <Users className="h-4 w-4" />
-                </button>
+                </Tooltip>
                 {/* An icon, not the word.
                     The column is a fixed 256px and this row also carries a
                     36px server icon, two icon buttons and the name. Spelled
@@ -431,15 +432,15 @@ export function ChannelList({
                     in this header's context menu and in the rail's, both of
                     them spelled out, and the signal colour keeps it reading as
                     the action of the row rather than a third grey icon. */}
-                <button
-                  type="button"
-                  className="rounded-md p-1.5 text-signal hover:bg-ink-3"
-                  title={t("chrome.invitePeople")}
-                  aria-label={t("chrome.invitePeople")}
-                  onClick={onInvite}
-                >
-                  <UserPlus className="h-4 w-4" />
-                </button>
+                <Tooltip label={t("chrome.invitePeople")}>
+                  <button
+                    type="button"
+                    className="rounded-md p-1.5 text-signal hover:bg-ink-3"
+                    onClick={onInvite}
+                  >
+                    <UserPlus className="h-4 w-4" />
+                  </button>
+                </Tooltip>
               </>
             )}
             {onMobileClose && (
@@ -511,14 +512,18 @@ export function ChannelList({
                     {t("chrome.categories")}
                   </span>
                   {canManage && (
-                    <button
-                      type="button"
-                      title={t("chrome.newCategory")}
-                      className="rounded p-0.5 text-paper-muted hover:bg-ink-3 hover:text-paper"
-                      onClick={() => onCreateChannel("category", false)}
-                    >
-                      <FolderPlus className="h-3.5 w-3.5" />
-                    </button>
+                    /* Also gains an accessible name it never had: the old
+                       `title` is not one, so this button was unnamed to a
+                       screen reader. */
+                    <Tooltip label={t("chrome.newCategory")}>
+                      <button
+                        type="button"
+                        className="rounded p-0.5 text-paper-muted hover:bg-ink-3 hover:text-paper"
+                        onClick={() => onCreateChannel("category", false)}
+                      >
+                        <FolderPlus className="h-3.5 w-3.5" />
+                      </button>
+                    </Tooltip>
                   )}
                 </div>
                 {categories.map((category) => {

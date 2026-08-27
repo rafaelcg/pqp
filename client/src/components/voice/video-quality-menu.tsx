@@ -1,5 +1,6 @@
 import { Check, SlidersHorizontal } from "lucide-react";
 import { useEffect, useRef } from "react";
+import { Tooltip } from "@/components/ui/tooltip";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { InboundVideoReadout } from "@/components/voice/inbound-video-readout";
 import { OutboundVideoReadout } from "@/components/voice/outbound-video-readout";
@@ -172,10 +173,12 @@ export function VideoQualityMenu({
           </div>
         </div>
       )}
+      {/* The tooltip carries the same sentence the old `title` did, minus the
+          one-second wait and plus keyboard focus. It closes on the press that
+          opens the menu, so the two never stack on top of each other. */}
+      <Tooltip label={label}>
       <button
         type="button"
-        title={label}
-        aria-label={label}
         aria-haspopup="menu"
         aria-expanded={open}
         className={cn(
@@ -194,6 +197,7 @@ export function VideoQualityMenu({
       >
         <SlidersHorizontal className={iconClassName} />
       </button>
+      </Tooltip>
     </div>
   );
 }

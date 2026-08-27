@@ -24,6 +24,7 @@ import {
 import type { VoiceInputMode } from "@/hooks/use-voice";
 import type { RemotePeer } from "@/lib/peer-connection-manager";
 import { Button } from "@/components/ui/button";
+import { Tooltip } from "@/components/ui/tooltip";
 import { isScreenShareAtCap } from "@/lib/screen-share-roster";
 import {
   screenShareUnavailableMessage,
@@ -330,24 +331,27 @@ function ParticipantTile({
         >
           <div className="overflow-hidden">
             <div className="flex items-center gap-1 pt-1">
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-6 w-6 shrink-0"
-                aria-label={
+              <Tooltip
+                label={
                   silenced
                     ? t("voice.tile.unmutePeer", { name })
                     : t("voice.tile.mutePeer", { name })
                 }
-                aria-pressed={silenced}
-                onClick={() => onSetVolume(silenced ? restoreRef.current : 0)}
               >
-                {silenced ? (
-                  <VolumeX className="h-3.5 w-3.5 text-danger" />
-                ) : (
-                  <Volume2 className="h-3.5 w-3.5" />
-                )}
-              </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-6 w-6 shrink-0"
+                  aria-pressed={silenced}
+                  onClick={() => onSetVolume(silenced ? restoreRef.current : 0)}
+                >
+                  {silenced ? (
+                    <VolumeX className="h-3.5 w-3.5 text-danger" />
+                  ) : (
+                    <Volume2 className="h-3.5 w-3.5" />
+                  )}
+                </Button>
+              </Tooltip>
               <input
                 type="range"
                 min={0}
@@ -495,6 +499,8 @@ export function VoicePanel({
     roomTransport,
   );
   const shareLimit = SCREEN_SHARE_LIMIT[roomTransport ?? "mesh"];
+  // The cap only bites somebody who is not already one of the shares.
+  const cappedOut = shareAtCap && !isSharingScreen;
   const speaking = new Set(speakingPeerIds);
   // Roster state by peer id — mute/deafen badges for the *other* tiles. Self
   // renders from local state instead, which is ahead of the roster echo.
@@ -799,59 +805,68 @@ export function VoicePanel({
               </div>
             )}
             <div className="flex items-center justify-center gap-2">
-              <Button
-                variant="secondary"
-                size="icon"
-                aria-label={
+              <Tooltip
+                label={
                   isMuted ? t("voice.control.unmute") : t("voice.control.mute")
                 }
-                aria-pressed={isMuted}
-                onClick={onToggleMute}
               >
-                {isMuted ? (
-                  <MicOff className="h-4 w-4 text-danger" />
-                ) : (
-                  <Mic className="h-4 w-4" />
-                )}
-              </Button>
-              <Button
-                variant="secondary"
-                size="icon"
-                aria-label={
+                <Button
+                  variant="secondary"
+                  size="icon"
+                  aria-pressed={isMuted}
+                  onClick={onToggleMute}
+                >
+                  {isMuted ? (
+                    <MicOff className="h-4 w-4 text-danger" />
+                  ) : (
+                    <Mic className="h-4 w-4" />
+                  )}
+                </Button>
+              </Tooltip>
+              <Tooltip
+                label={
                   isDeafened
                     ? t("voice.control.undeafen")
                     : t("voice.control.deafen")
                 }
-                aria-pressed={isDeafened}
-                onClick={onToggleDeafen}
               >
-                {isDeafened ? (
-                  <HeadphoneOff className="h-4 w-4 text-danger" />
-                ) : (
-                  <Headphones className="h-4 w-4" />
-                )}
-              </Button>
+                <Button
+                  variant="secondary"
+                  size="icon"
+                  aria-pressed={isDeafened}
+                  onClick={onToggleDeafen}
+                >
+                  {isDeafened ? (
+                    <HeadphoneOff className="h-4 w-4 text-danger" />
+                  ) : (
+                    <Headphones className="h-4 w-4" />
+                  )}
+                </Button>
+              </Tooltip>
               {/* Camera. Off by default and independent of the share, so a
                   channel can carry a face and a game at the same time the way
                   every other product does. */}
               {onToggleCamera && (
-                <Button
-                  variant="secondary"
-                  size="icon"
-                  aria-label={
+                <Tooltip
+                  label={
                     isCameraOn
                       ? t("voice.control.cameraOff")
                       : t("voice.control.cameraOn")
                   }
-                  aria-pressed={isCameraOn}
-                  onClick={onToggleCamera}
                 >
-                  {isCameraOn ? (
-                    <Video className="h-4 w-4 text-signal" />
-                  ) : (
-                    <VideoOff className="h-4 w-4" />
-                  )}
-                </Button>
+                  <Button
+                    variant="secondary"
+                    size="icon"
+                    aria-pressed={isCameraOn}
+                    onClick={onToggleCamera}
+                  >
+                    {isCameraOn ? (
+                      <Video className="h-4 w-4 text-signal" />
+                    ) : (
+                      <VideoOff className="h-4 w-4" />
+                    )}
+                  </Button>
+                </Tooltip>
               )}
               {/* The quality control, immediately to the right of the camera
                   and on the same rule as the conversation call's: present
@@ -886,95 +901,133 @@ export function VoicePanel({
                 onShareSystemAudioChange &&
                 !screenShareBlocked &&
                 !isSharingScreen && (
-                  <Button
-                    variant="secondary"
-                    size="icon"
-                    aria-label={t("voice.control.shareSound")}
-                    aria-pressed={shareSystemAudio}
-                    onClick={() => {
-                      const next = !shareSystemAudio;
-                      onShareSystemAudioChange(next);
-                      setHint(
-                        t(
-                          next
-                            ? "voice.share.systemAudioOn"
-                            : "voice.share.systemAudioOff",
-                        ),
-                      );
-                    }}
+                  /* One of the three controls in the app that earns a second
+                     tooltip line. The icon cannot carry "off by default, and
+                     turning it on puts the call's own voices into what you
+                     send"; the label alone cannot either; and the consequence
+                     is the entire reason the toggle exists. It says the same
+                     thing as `voice.share.systemAudioOn`, which is what the
+                     press itself prints, so hovering first and pressing first
+                     teach the same fact. */
+                  <Tooltip
+                    label={t("voice.control.shareSound")}
+                    detail={t("voice.control.shareSoundDetail")}
                   >
-                    {/* A screen with a speaker, not a bare volume icon: the
-                        row already carries a mic and a headphone, and a third
-                        loudspeaker in it would read as "output volume". Tinted
-                        when armed, on the same rule as the camera button. */}
-                    <MonitorSpeaker
-                      className={cn(
-                        "h-4 w-4",
-                        shareSystemAudio && "text-signal",
-                      )}
-                    />
-                  </Button>
+                    <Button
+                      variant="secondary"
+                      size="icon"
+                      aria-pressed={shareSystemAudio}
+                      onClick={() => {
+                        const next = !shareSystemAudio;
+                        onShareSystemAudioChange(next);
+                        setHint(
+                          t(
+                            next
+                              ? "voice.share.systemAudioOn"
+                              : "voice.share.systemAudioOff",
+                          ),
+                        );
+                      }}
+                    >
+                      {/* A screen with a speaker, not a bare volume icon: the
+                          row already carries a mic and a headphone, and a third
+                          loudspeaker in it would read as "output volume".
+                          Tinted when armed, on the same rule as the camera
+                          button. */}
+                      <MonitorSpeaker
+                        className={cn(
+                          "h-4 w-4",
+                          shareSystemAudio && "text-signal",
+                        )}
+                      />
+                    </Button>
+                  </Tooltip>
                 )}
               {(onStartScreenShare || onStopScreenShare) &&
                 (screenShareBlocked ? (
                   /* Not `disabled`: a disabled button cannot be tapped, and on
                      a phone a tap is the only way to ask why. Kept quiet — the
                      explanation is muted helper text, never an alert. */
-                  <Button
-                    variant="secondary"
-                    size="icon"
-                    className="opacity-50"
-                    aria-disabled
-                    aria-label={t("voice.control.shareUnavailable")}
-                    title={screenShareUnavailableMessage(screenShareBlocked)}
-                    onClick={() =>
-                      setHint(screenShareUnavailableMessage(screenShareBlocked))
-                    }
+                  <Tooltip
+                    label={t("voice.control.shareUnavailable")}
+                    detail={screenShareUnavailableMessage(screenShareBlocked)}
                   >
-                    <ScreenShare className="h-4 w-4" />
-                  </Button>
+                    <Button
+                      variant="secondary"
+                      size="icon"
+                      className="opacity-50"
+                      aria-disabled
+                      onClick={() =>
+                        setHint(
+                          screenShareUnavailableMessage(screenShareBlocked),
+                        )
+                      }
+                    >
+                      <ScreenShare className="h-4 w-4" />
+                    </Button>
+                  </Tooltip>
                 ) : (
-                  <Button
-                    variant="secondary"
-                    size="icon"
-                    aria-label={
+                  <Tooltip
+                    label={
                       isSharingScreen
                         ? t("voice.control.stopShare")
                         : t("voice.control.share")
                     }
-                    aria-pressed={isSharingScreen}
-                    disabled={shareAtCap && !isSharingScreen}
-                    title={
-                      shareAtCap
+                    detail={
+                      cappedOut
                         ? t("voice.control.shareLimit", { limit: shareLimit })
                         : undefined
                     }
-                    onClick={() => {
-                      if (isSharingScreen) {
-                        onStopScreenShare?.();
-                        return;
-                      }
-                      // The tick box lives in the browser's own picker, which
-                      // is about to cover this panel, and nothing in that
-                      // dialog explains what it is for. Saying it here, on the
-                      // press that opens it, is the only moment the sentence
-                      // can still change what the user does.
-                      setHint(
-                        t(
-                          shareSystemAudio
-                            ? "voice.share.systemAudioOn"
-                            : "voice.share.tickAudio",
-                        ),
-                      );
-                      onStartScreenShare?.();
-                    }}
                   >
-                    {isSharingScreen ? (
-                      <ScreenShareOff className="h-4 w-4 text-signal" />
-                    ) : (
-                      <ScreenShare className="h-4 w-4" />
-                    )}
-                  </Button>
+                    {/* `aria-disabled` rather than `disabled`, on the same rule
+                        as the unsupported branch above: the cap is the one
+                        thing worth saying about this button while it is dim,
+                        and a `disabled` button gets no hover, no focus and no
+                        tap, so it cannot say it on any device. It used to carry
+                        a `title` for exactly this, which never appeared at all,
+                        because `Button` sets `disabled:pointer-events-none` and
+                        the native tooltip had nothing left to fire on. */}
+                    <Button
+                      variant="secondary"
+                      size="icon"
+                      className={cn(cappedOut && "opacity-50")}
+                      aria-pressed={isSharingScreen}
+                      aria-disabled={cappedOut || undefined}
+                      onClick={() => {
+                        if (cappedOut) {
+                          setHint(
+                            t("voice.control.shareLimit", {
+                              limit: shareLimit,
+                            }),
+                          );
+                          return;
+                        }
+                        if (isSharingScreen) {
+                          onStopScreenShare?.();
+                          return;
+                        }
+                        // The tick box lives in the browser's own picker, which
+                        // is about to cover this panel, and nothing in that
+                        // dialog explains what it is for. Saying it here, on
+                        // the press that opens it, is the only moment the
+                        // sentence can still change what the user does.
+                        setHint(
+                          t(
+                            shareSystemAudio
+                              ? "voice.share.systemAudioOn"
+                              : "voice.share.tickAudio",
+                          ),
+                        );
+                        onStartScreenShare?.();
+                      }}
+                    >
+                      {isSharingScreen ? (
+                        <ScreenShareOff className="h-4 w-4 text-signal" />
+                      ) : (
+                        <ScreenShare className="h-4 w-4" />
+                      )}
+                    </Button>
+                  </Tooltip>
                 ))}
               <Button variant="danger" size="sm" onClick={onLeave}>
                 <PhoneOff className="h-4 w-4" aria-hidden="true" />

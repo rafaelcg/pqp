@@ -618,6 +618,7 @@
   "voice.control.shareUnavailable": "Share your screen (unavailable on this device)",
   "voice.control.shareLimit": "This call already has {limit} screen shares",
   "voice.control.shareSound": "Send this computer's sound with the share",
+  "voice.control.shareSoundDetail": "Off by default. Turned on, everything this machine plays goes out, the call's own voices included, so people hear themselves back.",
   "voice.control.cameraOn": "Turn camera on",
   "voice.control.cameraOff": "Turn camera off",
   "voice.control.leave": "Leave",
