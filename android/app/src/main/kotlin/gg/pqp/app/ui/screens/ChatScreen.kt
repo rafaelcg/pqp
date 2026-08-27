@@ -32,7 +32,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -89,7 +88,7 @@ import gg.pqp.app.attachments.MAX_ATTACHMENTS_PER_MESSAGE
 import gg.pqp.app.attachments.PendingAttachment
 import gg.pqp.app.attachments.composerReadiness
 import gg.pqp.app.attachments.formatAttachmentSize
-import gg.pqp.app.core.Backend
+import gg.pqp.app.core.ApiClient
 import gg.pqp.app.core.Message
 import gg.pqp.app.core.Reaction
 import gg.pqp.app.core.RealtimeState
@@ -102,6 +101,9 @@ import gg.pqp.app.ui.components.Avatar
 import gg.pqp.app.ui.components.ChromeDivider
 import gg.pqp.app.ui.components.EmptyState
 import gg.pqp.app.ui.components.pqpTopBarColors
+import gg.pqp.app.ui.media.GifLinks
+import gg.pqp.app.ui.media.InlineGif
+import gg.pqp.app.ui.media.MessageAttachment
 import gg.pqp.app.ui.theme.Motion
 import gg.pqp.app.ui.theme.PqpIcons
 import gg.pqp.app.ui.theme.Sizes
@@ -310,6 +312,11 @@ fun ChatScreen(
                                 onToggleReaction = { emoji ->
                                     model.toggleReaction(message.id, emoji, me)
                                 },
+                                // Only reached when a video attachment's
+                                // presigned URL has expired, which is why it is
+                                // the client and not a callback: nothing here
+                                // knows the id to re-mint until a player fails.
+                                api = session.api,
                             )
                         }
 
@@ -475,6 +482,7 @@ private fun MessageRow(
     grouped: Boolean,
     onOpenActions: () -> Unit,
     onToggleReaction: (String) -> Unit,
+    api: ApiClient,
 ) {
     if (message.blocked) return
 
@@ -565,7 +573,17 @@ private fun MessageRow(
                 }
             }
 
-            if (message.body.isNotEmpty()) {
+            // A body that is nothing but a GIF link is the picture, not the
+            // link. Both other clients do this (`gifMessageMedia` on the web),
+            // and without it a pasted Tenor URL reads on Android as a hundred
+            // characters of text where everyone else sees a GIF move. See
+            // `GifLinks` for the allowlist and why there is one.
+            val gifBody = remember(message.body) { GifLinks.mediaBody(message.body) }
+
+            if (gifBody != null) {
+                Spacer(Modifier.height(Spacing.xs))
+                InlineGif(gifBody)
+            } else if (message.body.isNotEmpty()) {
                 Text(
                     text = bodyWithEditMark(message),
                     style = MaterialTheme.typography.bodyLarge,
@@ -574,55 +592,7 @@ private fun MessageRow(
 
             message.attachments.forEach { attachment ->
                 Spacer(Modifier.height(Spacing.sm))
-                if (attachment.isImage) {
-                    AsyncImage(
-                        model = Backend.absolute(attachment.url),
-                        contentDescription = attachment.filename,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier
-                            .fillMaxWidth(0.8f)
-                            // A frame with a floor and a ceiling rather than one
-                            // fixed height: the floor is what the picture loads
-                            // into, so the transcript does not jump when it
-                            // arrives, and the ceiling is what stops a tall
-                            // screenshot owning the whole screen.
-                            .heightIn(min = 120.dp, max = 260.dp)
-                            .clip(MaterialTheme.shapes.medium)
-                            .background(MaterialTheme.colorScheme.surfaceContainer)
-                            .border(
-                                width = Sizes.hairline,
-                                color = MaterialTheme.colorScheme.outline,
-                                shape = MaterialTheme.shapes.medium,
-                            ),
-                    )
-                } else {
-                    // A chip, and deliberately not lime. Lime means "act on
-                    // this"; a file somebody attached is a thing, not an action,
-                    // and colouring it like a link is what made the old row look
-                    // like the only tappable object on the screen.
-                    Row(
-                        modifier = Modifier
-                            .clip(MaterialTheme.shapes.small)
-                            .background(MaterialTheme.colorScheme.surfaceContainer)
-                            .padding(horizontal = Spacing.md, vertical = Spacing.sm),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(
-                            imageVector = PqpIcons.Attach,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(Sizes.iconInline),
-                        )
-                        Spacer(Modifier.width(Spacing.sm))
-                        Text(
-                            text = attachment.filename,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                }
+                MessageAttachment(attachment = attachment, api = api)
             }
 
             ReactionRow(message.reactions, onToggleReaction)
