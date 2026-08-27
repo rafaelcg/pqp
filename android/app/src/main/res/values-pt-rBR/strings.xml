@@ -51,6 +51,7 @@
     <string name="chat_typing_one">%1$s está digitando…</string>
     <string name="chat_typing_many">Várias pessoas estão digitando…</string>
     <string name="chat_back">Voltar</string>
+    <string name="chat_message_actions">Ações da mensagem</string>
     <string name="chat_attach">Anexar um arquivo</string>
     <string name="chat_attachment_remove">Remover %1$s</string>
     <string name="chat_attachment_retry">Tentar %1$s de novo</string>

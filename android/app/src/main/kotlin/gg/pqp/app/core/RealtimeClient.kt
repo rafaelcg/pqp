@@ -284,6 +284,21 @@ class RealtimeClient(
             },
         )
 
+    /**
+     * Add or remove one of our own reactions. The server works out which: it
+     * holds the row and flips it, and answers with a `reaction-broadcast`
+     * carrying `added`.
+     */
+    fun toggleReaction(channelId: String, messageId: String, emoji: String): Boolean =
+        send(
+            buildJsonObject {
+                put("type", "reaction-toggle")
+                put("channelId", channelId)
+                put("messageId", messageId)
+                put("emoji", emoji)
+            },
+        )
+
     fun sendTyping(channelId: String) {
         send(
             buildJsonObject {
