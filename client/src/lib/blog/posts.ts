@@ -61,6 +61,20 @@ export interface BlogPost {
  */
 export const POSTS: readonly BlogPost[] = [
   {
+    slug: "fim-do-eco",
+    date: "2026-08-27",
+    title: {
+      "pt-BR": "O eco na tela compartilhada acabou",
+      en: "The screen share echo is gone",
+    },
+    summary: {
+      "pt-BR":
+        "A tela inteira mandava o som do PC todo, com a call junto, e todo mundo se ouvia de volta. Agora vem desligado. E todo botão de ícone diz o que faz.",
+      en: "A whole-screen share sent the machine's entire audio, call included, so everyone heard themselves back. It is now off by default. And every icon button says what it does.",
+    },
+  },
+
+  {
     slug: "qualidade-de-video",
     date: "2026-08-24",
     title: {
