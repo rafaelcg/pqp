@@ -46,6 +46,16 @@ pnpm electron:dev
 
 **Dev auth bypass** (no Clerk): set `DEV_AUTH_BYPASS=true` in root `.env` and `VITE_DEV_AUTH_BYPASS=true` in `client/.env`, then restart server.
 
+**A second local user** (voice, watch party, DMs, friends, reactions — anything that needs two people). The bypass signs *every* browser in as one shared "Dev User", so two windows are the same account and a two-person feature looks broken rather than untested. To get a genuinely separate account, set a suffix in the second window's console **before** loading `/app`:
+
+```js
+localStorage.setItem("pqp:dev-user-suffix", "bob")  // then reload
+```
+
+That window becomes `dev_user_bob`, a real row in the database with its own onboarding, presence and seat in a voice room. The first window is untouched. Any `[a-z0-9_-]{1,32}` suffix works, so `alice` / `bob` / `carol` give you three. The server half is `devBypassIdentity` in `server/src/auth/clerk.ts`; the client half is `devAuthToken` in `client/src/lib/dev-auth.ts`.
+
+Same-machine testing needs no second browser profile and no private window, because the suffix lives in `localStorage`, which is per-origin *and* per-profile — but two normal tabs on the same profile share it, so set the suffix in one and **only** one.
+
 ## Env vars (names only — never commit `.env`)
 
 See `.env.example`. Important names:
