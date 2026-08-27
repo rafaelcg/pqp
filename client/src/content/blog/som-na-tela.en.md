@@ -17,6 +17,8 @@ Where it works today:
 
 Without the box, anywhere, it stays video only. That is not a fault, it is a browser limit, and pqp says so on screen rather than letting you find out from the silence on the other side.
 
+If you landed here looking for a way to share a screen right now, there is a page about exactly that: [sharing a screen in the browser](/tela), with the options that work today, including the ones that are not ours.
+
 ## The picture
 
 This was the annoying one, and the cause was embarrassing: we had never told the browser what we were sending. With no hint, the encoder assumes a shared screen is a spreadsheet, and spreadsheets are optimised for sharpness: it holds resolution and spends the motion. Perfect for still text, terrible for anything that moves.
