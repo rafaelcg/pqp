@@ -152,6 +152,11 @@ export function renderBlogHead(
     `<meta name="twitter:description" content="${e(description)}" />`,
     `<meta name="twitter:image" content="${e(image)}" />`,
     `<meta name="robots" content="index, follow" />`,
+    // The locale this document was negotiated in, for the client bundle to
+    // read back. `detectLocale()` prefers it over `navigator.languages`,
+    // which is what stops a crawler's English renderer overwriting this
+    // head with the English one. See `lib/locale.ts`.
+    `<meta name="pqp:locale" content="${locale}" />`,
     `<script type="application/ld+json">${
       isPost ? jsonLdForPost(target.post, locale) : jsonLdForIndex(locale)
     }</script>`,
@@ -165,7 +170,7 @@ export function renderBlogHead(
  * only ever one of them runs on a given request.
  */
 const MANAGED_TAGS =
-  /[ \t]*(?:<title>[\s\S]*?<\/title>|<meta\s+(?:name|property)="(?:description|robots|og:[a-zA-Z:]+|twitter:[a-zA-Z:]+|article:[a-zA-Z:_]+)"[\s\S]*?\/>|<link\s+rel="canonical"[^>]*\/>|<link\s+rel="alternate"[^>]*\/>|<script type="application\/ld\+json">[\s\S]*?<\/script>)\n?/g;
+  /[ \t]*(?:<title>[\s\S]*?<\/title>|<meta\s+(?:name|property)="(?:description|robots|pqp:locale|og:[a-zA-Z:]+|twitter:[a-zA-Z:]+|article:[a-zA-Z:_]+)"[\s\S]*?\/>|<link\s+rel="canonical"[^>]*\/>|<link\s+rel="alternate"[^>]*\/>|<script type="application\/ld\+json">[\s\S]*?<\/script>)\n?/g;
 
 /**
  * Rewrite a document's head for the blog index or one post.

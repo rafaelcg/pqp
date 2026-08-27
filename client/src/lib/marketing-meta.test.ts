@@ -292,6 +292,24 @@ describe("injectMarketingHead", () => {
     );
   });
 
+  it("stamps the negotiated locale for the client bundle to read back", () => {
+    // Without this the app boots from `navigator.languages` and `Seo`
+    // overwrites the Portuguese head with the English one — which is what a
+    // crawler's renderer indexes. See `lib/locale.ts`.
+    expect(injectMarketingHead(INDEX_HTML, "/tela", "pt-BR")).toContain(
+      '<meta name="pqp:locale" content="pt-BR" />',
+    );
+    expect(injectMarketingHead(INDEX_HTML, "/tela", "en")).toContain(
+      '<meta name="pqp:locale" content="en" />',
+    );
+  });
+
+  it("leaves exactly one locale stamp when the rewrite runs twice", () => {
+    const once = injectMarketingHead(INDEX_HTML, "/", "pt-BR");
+    const twice = injectMarketingHead(once, "/", "pt-BR");
+    expect(twice.match(/name="pqp:locale"/g)).toHaveLength(1);
+  });
+
   it("returns a document with no <head> unchanged", () => {
     // Cannot happen with our own index.html, and serving the page unmodified
     // is the bar every failure path in this feature is held to.
