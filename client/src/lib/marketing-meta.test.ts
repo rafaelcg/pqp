@@ -34,6 +34,7 @@ describe("marketingPageFromMetaPath", () => {
       "/vs-discord",
       "/tela",
       "/beta",
+      "/android",
       "/download",
       "/garanta",
       "/claim",
@@ -92,6 +93,7 @@ describe("the duplicated copy is pinned to the JSON catalogues", () => {
     { path: "/vs-discord", prefix: "vsDiscord" },
     { path: "/tela", prefix: "tela" },
     { path: "/beta", prefix: "betaPage" },
+    { path: "/android", prefix: "androidPage" },
     { path: "/download", prefix: "downloadPage" },
     { path: "/claim", prefix: "claim" },
   ];
@@ -290,6 +292,24 @@ describe("injectMarketingHead", () => {
     expect(injectMarketingHead(INDEX_HTML, "/", "en")).toContain(
       '<html lang="en">',
     );
+  });
+
+  it("stamps the negotiated locale for the client bundle to read back", () => {
+    // Without this the app boots from `navigator.languages` and `Seo`
+    // overwrites the Portuguese head with the English one — which is what a
+    // crawler's renderer indexes. See `lib/locale.ts`.
+    expect(injectMarketingHead(INDEX_HTML, "/tela", "pt-BR")).toContain(
+      '<meta name="pqp:locale" content="pt-BR" />',
+    );
+    expect(injectMarketingHead(INDEX_HTML, "/tela", "en")).toContain(
+      '<meta name="pqp:locale" content="en" />',
+    );
+  });
+
+  it("leaves exactly one locale stamp when the rewrite runs twice", () => {
+    const once = injectMarketingHead(INDEX_HTML, "/", "pt-BR");
+    const twice = injectMarketingHead(once, "/", "pt-BR");
+    expect(twice.match(/name="pqp:locale"/g)).toHaveLength(1);
   });
 
   it("returns a document with no <head> unchanged", () => {

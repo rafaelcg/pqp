@@ -40,6 +40,10 @@
   </url>
   <url>
     <loc>https://pqp.gg/download</loc>
+  </url>
+  <url>
+    <loc>https://pqp.gg/android</loc>
+    <lastmod>2026-08-27</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.8</priority>
   </url>
@@ -72,6 +76,12 @@
     <loc>https://pqp.gg/blog</loc>
     <changefreq>weekly</changefreq>
     <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://pqp.gg/blog/fim-do-eco</loc>
+    <lastmod>2026-08-27</lastmod>
+    <changefreq>yearly</changefreq>
+    <priority>0.6</priority>
   </url>
   <url>
     <loc>https://pqp.gg/blog/qualidade-de-video</loc>

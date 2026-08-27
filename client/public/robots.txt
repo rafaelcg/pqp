@@ -25,8 +25,25 @@ Allow: /vs-discord
 # Brazil actually type. Same explicit line, same reason.
 Allow: /tela
 
-# The app itself has nothing an index can use: every URL under it is per-account
-# and behind a login, and a crawler following one gets a sign-in screen.
+# Invite links, and the one exception under /app. This is not permission to
+# index them — the edge middleware writes `noindex, nofollow` into every one of
+# these pages (see client/src/lib/invite-meta.ts). It is permission to FETCH
+# them, which is a different thing and the one that matters: an unfurler has to
+# read the bytes to draw a card, and the bots that respect this file (Twitter's
+# among them) were refusing to, so a pasted invite showed no preview at all on
+# those platforms. Allowing the fetch is also what lets Google see the
+# `noindex` and drop the URL outright, which a blanket Disallow cannot do — a
+# disallowed URL can still be listed from links alone.
+#
+# It costs nothing to allow: the page is the SPA shell behind a login, joining
+# is an authenticated POST, and no crawler can consume an invite by loading it.
+# The Allow comes first so that both longest-match parsers and naive
+# first-match ones agree.
+Allow: /app/invite/
+
+# The rest of the app has nothing an index can use: every URL under it is
+# per-account and behind a login, and a crawler following one gets a sign-in
+# screen.
 Disallow: /app
 
 Sitemap: https://pqp.gg/sitemap.xml

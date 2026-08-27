@@ -29,7 +29,7 @@
  * bundles this outside the pnpm workspace, so it cannot import the i18n
  * JSON. The strings below are duplicates of `landing.seo.*`,
  * `vsDiscord.seo.*`, `tela.seo.*`, `claim.seo.*`, `betaPage.seo.*`,
- * `downloadPage.seo.*`, `vsDiscord.faq.*` and
+ * `androidPage.seo.*`, `downloadPage.seo.*`, `vsDiscord.faq.*` and
  * `tela.faq.*`, and
  * `marketing-meta.test.ts` pins each pair against the JSON catalogues — the
  * duplication cannot drift without failing the suite.
@@ -43,6 +43,7 @@ export type MarketingPage =
   | "/vs-discord"
   | "/tela"
   | "/beta"
+  | "/android"
   | "/download"
   | "/garanta"
   | "/claim"
@@ -58,6 +59,7 @@ const MARKETING_PATHS: ReadonlySet<string> = new Set([
   "/vs-discord",
   "/tela",
   "/beta",
+  "/android",
   "/download",
   "/garanta",
   "/claim",
@@ -105,38 +107,37 @@ const PAGE_COPY: Record<MarketingPage, PageCopy> = {
   "/": {
     canonicalPath: "/",
     title: {
-      "pt-BR": "pqp: o chat em grupo é seu",
-      en: "pqp: group chat you own",
+      "pt-BR": "pqp: chat em grupo com voz e tela compartilhada",
+      en: "pqp: group chat with voice and screen sharing",
     },
     description: {
       "pt-BR":
-        "Chat em grupo com comunidades, canais e voz que simplesmente funciona. Código aberto, hospede você mesmo ou use o pqp.gg.",
-      en: "Chaotic group chat with communities, channels, and voice that just works. Open source, self-host or use pqp.gg.",
+        "Voz, texto e tela compartilhada pra sua galera, direto no navegador. Crie uma comunidade e mande o link. Código aberto, de graça, e o servidor pode ser seu.",
+      en: "Voice, text, and screen sharing for your people, straight from the browser. Make a community, send the link. Open source, free, and the server can be yours.",
     },
   },
   "/vs-discord": {
     canonicalPath: "/vs-discord",
     title: {
-      "pt-BR": "pqp vs Discord (2026): comparação honesta",
-      en: "pqp vs Discord (2026): an honest comparison",
+      "pt-BR": "Alternativa ao Discord em 2026: comparação honesta | pqp",
+      en: "A Discord alternative in 2026: an honest comparison | pqp",
     },
     description: {
       "pt-BR":
-        "Tela compartilhada e câmera nas chamadas funcionam no pqp. No Brasil, tela, vídeo e Go Live do Discord estão suspensos desde 17 ago 2026 (carta da Discord; sem data de volta). Grátis, código aberto, beta aberto.",
-      en: "Screen share and camera in calls work on pqp. In Brazil, Discord’s screen share, video, and Go Live have been suspended since 17 Aug 2026 (Discord’s letter; no return date). Free, open source, open beta.",
+        "Voz, texto e tela compartilhada funcionam no pqp, no navegador. A Discord suspendeu tela e vídeo no Brasil em 17/08/2026. Comparação linha a linha, de graça.",
+      en: "Voice, text, and screen sharing work on pqp, in the browser. Discord suspended screen share and video in Brazil on 17 Aug 2026. A line-by-line comparison, free.",
     },
   },
   "/tela": {
     canonicalPath: "/tela",
     title: {
-      "pt-BR":
-        "Compartilhar tela no navegador: o que usar hoje | pqp",
-      en: "Sharing your screen in the browser: what works today | pqp",
+      "pt-BR": "Alternativa ao Discord para compartilhar tela | pqp",
+      en: "A Discord alternative for sharing your screen | pqp",
     },
     description: {
       "pt-BR":
-        "Tela do Discord suspensa no Brasil desde 17/08? Veja o que funciona hoje pra compartilhar tela com os amigos no navegador, sem baixar nada. Comparação honesta, com o pqp e outras opções.",
-      en: "Discord screen share suspended in Brazil since 17 Aug? Here is what works today to share your screen with friends in the browser, nothing to download. An honest comparison, with pqp and other options.",
+        "Compartilhe a tela com os amigos sem Discord, direto do navegador e com som. Comparação honesta do que funciona hoje no Brasil. Grátis e de código aberto.",
+      en: "Share your screen with friends without Discord, straight from the browser, with audio. An honest comparison of what works today in Brazil. Free and open source.",
     },
   },
   "/beta": {
@@ -149,6 +150,18 @@ const PAGE_COPY: Record<MarketingPage, PageCopy> = {
       "pt-BR":
         "Acesso antecipado ao pqp no iPhone. Voz, texto e as telas que o pessoal compartilha, direto do bolso. Vagas pelo TestFlight, de graça e em beta aberto.",
       en: "Early access to pqp on iPhone. Voice, text, and the screens other people are sharing, from your pocket. Spots via TestFlight, free and in open beta.",
+    },
+  },
+  "/android": {
+    canonicalPath: "/android",
+    title: {
+      "pt-BR": "Beta fechado do Android \u00b7 pqp no Android",
+      en: "Android closed beta \u00b7 pqp on Android",
+    },
+    description: {
+      "pt-BR":
+        "O app nativo do pqp pro Android, em teste fechado na Google Play. Voz que continua quando voc\u00ea sai do app, a tela do celular compartilhada na sala e um n\u00famero contado de vagas pra testar.",
+      en: "The native pqp app for Android, in closed testing on Google Play. Voice that keeps running when you leave the app, your phone screen shared into the room, and a counted number of tester slots.",
     },
   },
   "/download": {
@@ -470,6 +483,11 @@ export function renderMarketingHead(
     `<meta name="twitter:description" content="${e(description)}" />`,
     `<meta name="twitter:image" content="${e(image)}" />`,
     `<meta name="robots" content="index, follow" />`,
+    // The locale this document was negotiated in, for the client bundle to
+    // read back. `detectLocale()` prefers it over `navigator.languages`,
+    // which is what stops a crawler's English renderer overwriting this
+    // head with the English one. See `lib/locale.ts`.
+    `<meta name="pqp:locale" content="${locale}" />`,
     `<script type="application/ld+json">${jsonLdFor(page, locale)}</script>`,
   ].join("\n    ");
 }
@@ -484,7 +502,7 @@ export function renderMarketingHead(
  * pre-paint theme script and the font preconnects all survive untouched.
  */
 const MANAGED_TAGS =
-  /[ \t]*(?:<title>[\s\S]*?<\/title>|<meta\s+(?:name|property)="(?:description|robots|og:[a-zA-Z:]+|twitter:[a-zA-Z:]+|profile:[a-zA-Z:]+)"[\s\S]*?\/>|<link\s+rel="canonical"[^>]*\/>|<link\s+rel="alternate"[^>]*\/>|<script type="application\/ld\+json">[\s\S]*?<\/script>)\n?/g;
+  /[ \t]*(?:<title>[\s\S]*?<\/title>|<meta\s+(?:name|property)="(?:description|robots|pqp:locale|og:[a-zA-Z:]+|twitter:[a-zA-Z:]+|profile:[a-zA-Z:]+)"[\s\S]*?\/>|<link\s+rel="canonical"[^>]*\/>|<link\s+rel="alternate"[^>]*\/>|<script type="application\/ld\+json">[\s\S]*?<\/script>)\n?/g;
 
 /**
  * Rewrite a document's head for one marketing page.

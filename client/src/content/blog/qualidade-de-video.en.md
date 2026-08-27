@@ -53,3 +53,5 @@ Fullscreening a shared video in Safari on iPhone went black. It was queued in th
 - Sending your iPhone screen. You can watch, you cannot broadcast.
 - Sound when sharing a whole screen on macOS. Browser limit, not ours.
 - 1080p is not a guarantee. It is a request. A webcam that cannot do 1080p gives what it has, and a bad connection drops the resolution even with the option pinned. The number next to the selector exists precisely so that stays visible.
+
+Just want to share a screen with friends and see what works today? There is an honest comparison at [sharing a screen in the browser](/tela).

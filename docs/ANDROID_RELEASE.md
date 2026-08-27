@@ -351,6 +351,35 @@ In order, in the Play Console:
 5. Google will refuse to activate the release until the declarations in §5-§7
    are complete. Do them, then activate. **The 14 days start here.**
 
+### 4b. Turn on the web funnel (`/android`)
+
+`pqp.gg/android` is the page that recruits those 12 testers, and the in-app
+prompt in `/app` is what tells existing users it exists. Both read **two**
+build-time variables and treat them as one gate:
+
+| Variable | Step | Value |
+|---|---|---|
+| `VITE_ANDROID_BETA_GROUP_URL` | 1 | The **public Google Group** that is the tester list. Joining it with the Google account the phone's Play Store uses is what makes step 2 do anything. |
+| `VITE_ANDROID_BETA_URL` | 2 | `https://play.google.com/apps/testing/gg.pqp.app` |
+
+Neither is a secret, so both go in **repository variables**, not secrets:
+`gh variable set VITE_ANDROID_BETA_GROUP_URL`, same for the other. Then re-run
+Deploy Web.
+
+**Until both are set** the page renders an honest "the tester group is not open
+yet", offers the browser instead, and the in-app prompt does not render at all,
+so this can ship well before the track exists. That is the point of the gate.
+
+Two things not to do: do not link
+`play.google.com/store/apps/details?id=gg.pqp.app` anywhere (it **404s** while
+the track is closed, which is correct), and do not describe the flow as a
+one-tap install. It is two steps in a fixed order, and somebody who does step 2
+first gets a Google page that silently does nothing.
+
+If the track is ever swapped for an **open** test, the two-step copy stops being
+true: the strings to rewrite are `androidPage.cta.group`, `androidPage.cta.sub`,
+`androidPage.how.1` and `androidPage.how.2` in both catalogues.
+
 ---
 
 ## 5. Foreground service declaration

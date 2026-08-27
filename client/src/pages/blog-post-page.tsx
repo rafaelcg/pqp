@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { type Components } from "react-markdown";
 import { Link, useParams } from "react-router-dom";
 import remarkGfm from "remark-gfm";
 import { MarketingFooter } from "@/components/marketing/marketing-footer";
@@ -25,6 +25,25 @@ import { useTranslation } from "@/lib/i18n";
  * paragraph of prose it means the author wrapped the file.
  */
 const MARKDOWN_PLUGINS = [remarkGfm];
+
+/**
+ * A markdown link to one of our own pages should not cost a full document
+ * load. Posts now link into `/tela`, and without this the reader leaves the
+ * SPA and comes back through a cold boot. Everything else (http, mailto, an
+ * in-page `#anchor`) is left exactly as authored.
+ */
+const MARKDOWN_COMPONENTS: Components = {
+  a: ({ href, children, ...rest }) =>
+    href?.startsWith("/") ? (
+      <Link to={href} {...rest}>
+        {children}
+      </Link>
+    ) : (
+      <a href={href} {...rest}>
+        {children}
+      </a>
+    ),
+};
 
 export function BlogPostPage() {
   const { slug } = useParams<{ slug: string }>();
@@ -121,7 +140,10 @@ export function BlogPostPage() {
                 <div className="h-4 w-4/6 rounded bg-paper/10" />
               </div>
             ) : (
-              <ReactMarkdown remarkPlugins={MARKDOWN_PLUGINS}>
+              <ReactMarkdown
+                remarkPlugins={MARKDOWN_PLUGINS}
+                components={MARKDOWN_COMPONENTS}
+              >
                 {body}
               </ReactMarkdown>
             )}

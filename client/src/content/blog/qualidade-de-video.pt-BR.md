@@ -53,3 +53,5 @@ O vídeo compartilhado em tela cheia no Safari do iPhone ficava preto. Estava na
 - Passar a tela do iPhone. Dá pra assistir, não dá pra transmitir.
 - Som quando você compartilha a tela inteira no macOS. Limite do navegador, não nosso.
 - 1080p não é garantia. É um pedido. Webcam que não faz 1080p entrega o que ela tem, e conexão ruim derruba a resolução mesmo com a opção travada. O número do lado do seletor existe justamente pra isso ficar visível.
+
+Quer só passar a tela pros amigos e ver o que funciona hoje? Tem uma comparação honesta em [compartilhar tela no navegador](/tela).

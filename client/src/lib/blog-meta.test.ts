@@ -135,6 +135,15 @@ describe("injectBlogHead", () => {
     );
   });
 
+  it("stamps the negotiated locale for the client bundle to read back", () => {
+    expect(injectBlogHead(INDEX_HTML, { kind: "index" }, "pt-BR")).toContain(
+      '<meta name="pqp:locale" content="pt-BR" />',
+    );
+    expect(injectBlogHead(INDEX_HTML, { kind: "index" }, "en")).toContain(
+      '<meta name="pqp:locale" content="en" />',
+    );
+  });
+
   it("returns the document untouched when it has no head", () => {
     // Every failure path in this feature serves a working page.
     const html = "<p>no head here</p>";

@@ -6,6 +6,7 @@ import {
   detectMacArch,
   detectPlatform,
   fetchLatestAssets,
+  isAndroidDevice,
   type NavigatorUAData,
 } from "./downloads";
 
@@ -209,6 +210,39 @@ describe("detectDownloadPlan", () => {
       platform: "mobile",
       macArch: null,
     });
+  });
+});
+
+describe("isAndroidDevice", () => {
+  it("reads an Android phone", () => {
+    expect(isAndroidDevice({ userAgent: UA.android })).toBe(true);
+  });
+
+  it("believes the browser's own answer over the UA string", () => {
+    expect(
+      isAndroidDevice({ userAgent: "", userAgentData: uaData({ platform: "Android" }) }),
+    ).toBe(true);
+  });
+
+  // The three that matter, because each of them would be offered a Play tester
+  // link they cannot use: the other phone, the desktop, and the Chromebook
+  // whose Android runtime does not put the word in a browser UA.
+  it("is false on iOS, on the desktop and on ChromeOS", () => {
+    expect(isAndroidDevice({ userAgent: UA.iphone })).toBe(false);
+    expect(isAndroidDevice({ userAgent: UA.windows })).toBe(false);
+    expect(isAndroidDevice({ userAgent: UA.macSafari })).toBe(false);
+    expect(isAndroidDevice({ userAgent: UA.chromeOS })).toBe(false);
+  });
+
+  // Android's UA also says "Linux", which is what `detectPlatform` has to order
+  // around. The reverse must not happen: desktop Linux is not Android.
+  it("does not read desktop Linux as Android", () => {
+    expect(isAndroidDevice({ userAgent: UA.linux })).toBe(false);
+    expect(isAndroidDevice({ userAgent: UA.linuxFirefox })).toBe(false);
+  });
+
+  it("is false with no signals at all", () => {
+    expect(isAndroidDevice({})).toBe(false);
   });
 });
 

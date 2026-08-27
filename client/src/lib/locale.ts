@@ -30,15 +30,49 @@ function normalize(value: string | null | undefined): Locale | null {
 }
 
 /**
+ * The locale the edge already picked for THIS document, if it wrote one.
+ *
+ * `client/functions/_middleware.ts` negotiates a locale per request and stamps
+ * it into the head it injects, so this is the server's answer to the same
+ * question, for the same page load. It is deliberately consulted before
+ * `navigator.languages`, and the reason is a bug that cost real traffic.
+ *
+ * A crawler's fetch and a crawler's renderer are two different clients. Google
+ * fetches the HTML with no `Accept-Language`, so the edge correctly serves the
+ * Portuguese head; Google then renders that document in a headless Chrome that
+ * reports `navigator.languages === ["en-US"]`. Without this step the app boots
+ * in English and `Seo` overwrites the Portuguese title, description and
+ * `<html lang>` with the English ones — and the rendered DOM is what gets
+ * indexed. Verified live on 2026-08-27: pqp.gg served
+ * `<title>pqp: o chat em grupo é seu</title>` and rendered
+ * `pqp: group chat you own`. The body is JS-only, so English was the ONLY copy
+ * an index could have held for a Portuguese-first site.
+ *
+ * For a real browser this changes nothing: `Accept-Language` and
+ * `navigator.languages` come from the same setting, so the edge and the client
+ * already agree. It only bites where they disagree, which is exactly the
+ * automated clients this is for.
+ */
+function fromServedDocument(): Locale | null {
+  try {
+    const el = document.querySelector('meta[name="pqp:locale"]');
+    return normalize(el?.getAttribute("content"));
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Resolution order, most explicit first:
  *
  * 1. `?lang=` — survives a paste into a chat, which is what makes it the thing
  *    to reach for when somebody reports "it's in the wrong language".
  * 2. A saved preference, once there is UI to set one.
- * 3. What the browser asks for. `languages` rather than `language`, so a
+ * 3. The locale the edge wrote into this document — see `fromServedDocument`.
+ * 4. What the browser asks for. `languages` rather than `language`, so a
  *    Brazilian user whose OS is English but who lists pt-BR second still gets
  *    Portuguese ahead of the default.
- * 4. English.
+ * 5. English.
  *
  * Every step is wrapped because this runs before first paint: a browser with
  * storage disabled must fall through to the next source, not fail to boot.
@@ -62,6 +96,11 @@ export function detectLocale(): Locale {
     }
   } catch {
     // Storage blocked (private mode, embedded webview) — keep looking.
+  }
+
+  const served = fromServedDocument();
+  if (served) {
+    return served;
   }
 
   try {

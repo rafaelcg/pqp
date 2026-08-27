@@ -395,6 +395,21 @@ export function LandingPage() {
               </li>
             ))}
           </ul>
+          {/* The one in-content link to /tela. The footer already carries the
+              same destination, but a link sitting under the screen-share
+              feature is about the feature; a footer link is boilerplate, and
+              search engines treat the two very differently. It is also the
+              honest next step for the visitor this page gets most of: someone
+              who arrived because Discord stopped sharing screens. */}
+          <p className="mt-12 text-center text-sm text-paper-muted">
+            {t("landing.features.tela.lead")}{" "}
+            <Link
+              to="/tela"
+              className="underline decoration-paper-muted/40 underline-offset-4 transition-colors duration-150 hover:text-paper hover:decoration-paper/60"
+            >
+              {t("landing.features.tela.link")}
+            </Link>
+          </p>
         </div>
       </section>
 
