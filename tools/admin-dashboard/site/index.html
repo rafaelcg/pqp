@@ -450,6 +450,18 @@
   .bug .b-title { font-weight: 600; }
   .bug .b-meta { font-size: 11.5px; color: var(--faint); }
 
+  /* ---------- capacity (live sockets + pg pool) ----------
+     One block per connection the pool is allowed to hold, so "8 of 10" is a
+     shape rather than a fraction to read. The queue is deliberately NOT drawn
+     as more blocks: it is unbounded, and 170 people waiting must not render as
+     a wider bar that looks like more capacity. */
+  .slots { display: flex; gap: 4px; margin: 2px 0 12px; }
+  .slots > i { flex: 1 1 0; height: 14px; border-radius: 4px; background: var(--surface-3); }
+  .slots > i.on { background: var(--accent-line); }
+  .slots.tight > i.on { background: var(--warning); }
+  .slots.saturated > i.on { background: var(--danger); }
+  .slots.unknown > i { background: var(--surface-3); opacity: 0.5; }
+
   /* ---------- infra / deploy ---------- */
   .kv-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 10px; }
   .kv {
@@ -1437,6 +1449,63 @@
 
   <div class="pane" id="pane-infra" role="tabpanel" aria-labelledby="tab-infra" hidden>
 
+  <!-- ============ CAPACIDADE AGORA ============
+       The only block on this page read at the instant of the request: every
+       other number here comes from the API's 30-second cache. A cached queue
+       length would read as calm during the one event it exists to report. -->
+  <section id="secRuntime" aria-label="capacidade em tempo real">
+    <div class="sec-head">
+      <h2>capacidade agora</h2>
+      <span class="rule"></span>
+      <span class="note" id="rtNote">leitura ao vivo, fora do cache</span>
+    </div>
+    <div class="grid g-2">
+      <div class="card pad">
+        <p class="subtle-title">websockets abertos</p>
+        <div class="stat-row" style="margin-bottom:10px">
+          <div class="stat-mini" id="rtSocketsTile">
+            <span class="k">agora</span>
+            <span class="v num" id="rtSockets">—</span>
+            <span class="k" style="color:var(--faint)">uma por cliente conectado</span>
+          </div>
+          <div class="stat-mini" id="rtPeakSocketsTile">
+            <span class="k">pico</span>
+            <span class="v num" id="rtPeakSockets">—</span>
+            <span class="k" style="color:var(--faint)" id="rtPeakSocketsNote">—</span>
+          </div>
+        </div>
+        <p class="m-note" style="font-size:11.5px;color:var(--muted);margin:0">
+          cada cliente logado segura uma conexão pela sessão inteira, então isto é o mais perto de "gente conectada" que o processo sabe. o pico é exato, não amostrado: ele é medido toda vez que uma conexão abre.
+        </p>
+      </div>
+
+      <div class="card pad">
+        <p class="subtle-title">pool do postgres</p>
+        <div class="slots unknown" id="rtSlots" aria-hidden="true"><!-- injected --></div>
+        <div class="stat-row" style="margin-bottom:10px">
+          <div class="stat-mini" id="rtBusyTile">
+            <span class="k">em uso</span>
+            <span class="v num" id="rtBusy">—</span>
+            <span class="k" style="color:var(--faint)" id="rtBusyNote">—</span>
+          </div>
+          <div class="stat-mini" id="rtWaitingTile">
+            <span class="k">na fila</span>
+            <span class="v num" id="rtWaiting">—</span>
+            <span class="k" style="color:var(--faint)">pedidos esperando conexão</span>
+          </div>
+          <div class="stat-mini" id="rtPeakWaitingTile">
+            <span class="k">pico na fila</span>
+            <span class="v num" id="rtPeakWaiting">—</span>
+            <span class="k" style="color:var(--faint)" id="rtPeakWaitingNote">—</span>
+          </div>
+        </div>
+        <p class="m-note" style="font-size:11.5px;color:var(--muted);margin:0">
+          <b>fila acima de zero é o aviso mais cedo que este sistema consegue dar</b>: nada quebra, nada fica lento o suficiente para reclamar, e mesmo assim já tem pedido esperando conexão. mas fila sozinha não quer dizer pool esgotado — o pg enfileira sempre que não consegue entregar uma conexão no mesmo tick, inclusive enquanto ainda está abrindo as primeiras. <b>o teto de verdade é fila com o pool cheio</b>, e depois do fato quem conta isso é o pico em uso ter chegado no máximo. o pico da fila é observado na hora em que uma conexão é entregue: ele nunca exagera e pode ficar um pouco abaixo do real.
+        </p>
+      </div>
+    </div>
+  </section>
+
   <!-- ============ INFRA & DEPLOYS ============ -->
   <section aria-label="infraestrutura e deploys">
     <div class="sec-head">
@@ -2258,7 +2327,13 @@
       : names.length ? ' · fora: ' + esc(names.join(", "))
       : ' · nenhuma conta excluída') + '</span>');
     var ttl = d && Number(d.cacheTtlSeconds);
-    if (isFinite(ttl) && ttl > 0) parts.push('<span>cache do servidor: ' + fmt(ttl) + ' s</span>');
+    // The TTL covers the counts and not the capacity card, and saying so here
+    // is the difference between "this queue is empty" and "this queue was
+    // empty at some point in the last half minute".
+    if (isFinite(ttl) && ttl > 0) {
+      parts.push('<span>cache do servidor: ' + fmt(ttl) + ' s' +
+        (d && d.runtime ? ' (capacidade fora do cache)' : '') + '</span>');
+    }
     parts.push('<span>página relê a cada 60 s</span>');
     box.innerHTML = parts.join('<span aria-hidden="true">·</span>');
   }
@@ -2266,12 +2341,16 @@
   /* ---------------- render: signals strip ----------------
      One pill per thing that can need attention. The colour is the message; the
      number is the detail behind it. Anything with no live reading stays out. */
-  var sigState = { health: null, messages: null, ratings: null, voice: null, automated: null };
+  var sigState = {
+    health: null, capacity: null, messages: null, ratings: null, voice: null, automated: null
+  };
 
   function paintSignals() {
     var box = $("signals");
     if (!box) return;
-    var order = ["health", "messages", "ratings", "voice", "automated"];
+    // Capacity sits second, right after health: it is the only pill that can
+    // go red for something nobody has complained about yet.
+    var order = ["health", "capacity", "messages", "ratings", "voice", "automated"];
     var html = "";
     order.forEach(function (key) {
       var sig = sigState[key];
@@ -2725,6 +2804,86 @@
     });
   }
 
+  /* ---------------- render: capacity (live) ----------------
+     The `runtime` block, and the only part of /metrics that is not from the
+     API's 30-second cache — the API samples it per request precisely so this
+     card can be trusted during the ten seconds a spike is happening.
+
+     Two numbers matter and they are not the same kind of thing. Sockets are a
+     size: one per connected client, and the process holds all of them in
+     memory. The pool queue is a threshold: it is zero, or it is a problem.
+     So the pool gets the meter and the queue gets the colour. */
+  function renderRuntime(d) {
+    if (!d.runtime) return sectionUnavailable("secRuntime", "a capacidade em tempo real");
+    sectionRestore("secRuntime");
+    var rt = d.runtime, pool = rt.pool || {};
+    var max = Number(pool.max) || 0;
+    var busy = Number(pool.busy) || 0;
+    var waiting = Number(pool.waiting) || 0;
+    var sockets = Number(rt.sockets) || 0;
+    var peakWaiting = Number(rt.peakPoolWaiting) || 0;
+    var pressure = pool.pressure === "saturated" || pool.pressure === "tight"
+      ? pool.pressure : "ok";
+    var since = rt.peakTrackedSince ? fmtTime(rt.peakTrackedSince) : "";
+    var sampled = rt.sampledAt ? fmtTime(rt.sampledAt) : "";
+
+    setText("rtSockets", fmt(sockets));
+    setText("rtPeakSockets", fmt(Number(rt.peakSockets) || 0));
+    setText("rtPeakSocketsNote", since ? "contado desde " + since : "zera no deploy");
+
+    var peakBusy = Number(rt.peakPoolBusy) || 0;
+    var hitCeiling = max > 0 && peakBusy >= max;
+
+    setText("rtBusy", fmt(busy) + (max ? " / " + fmt(max) : ""));
+    setText("rtBusyNote", max
+      ? "pico " + fmt(peakBusy) + (hitCeiling ? " · encostou no teto" : " · teto PG_POOL_MAX")
+      : "nenhum pool aberto");
+    setText("rtWaiting", fmt(waiting));
+    setText("rtPeakWaiting", fmt(peakWaiting));
+    setText("rtPeakWaitingNote", since ? "contado desde " + since : "zera no deploy");
+
+    // Red is reserved for the wall — a queue against a pool with nothing left
+    // to open. A queue below the ceiling is amber: pg queues whenever it cannot
+    // hand over a connection in the same tick, which happens on every cold
+    // start, and a red that shows up on every deploy stops being read.
+    tone("rtBusyTile", pressure === "saturated" ? "bad" : pressure === "tight" ? "attn" : "good");
+    tone("rtWaitingTile", pressure === "saturated" ? "bad" : waiting ? "attn" : "good");
+    tone("rtPeakWaitingTile", peakWaiting && hitCeiling ? "bad" : peakWaiting ? "attn" : "good");
+
+    var slots = $("rtSlots");
+    if (slots) {
+      // One block per connection the pool may hold. With no pool reported the
+      // blocks are drawn dimmed and empty rather than as ten free slots, which
+      // would be a made-up capacity.
+      slots.className = "slots" + (max ? (pressure === "ok" ? "" : " " + pressure) : " unknown");
+      var html = "";
+      var drawn = max || 10;
+      for (var i = 0; i < drawn; i++) {
+        html += '<i' + (max && i < busy ? ' class="on"' : '') + '></i>';
+      }
+      slots.innerHTML = html;
+    }
+
+    setText("rtNote", sampled
+      ? "lido às " + sampled + ", fora do cache de 30 s"
+      : "leitura ao vivo, fora do cache");
+
+    sigState.capacity = {
+      state: pressure === "saturated" ? "bad"
+        : (pressure === "tight" || hitCeiling) ? "warn" : "ok",
+      label: "capacidade",
+      value: fmt(sockets) + (sockets === 1 ? " conexão" : " conexões"),
+      note: pressure === "saturated"
+        ? "pool cheio com " + fmt(waiting) + " na fila"
+        : waiting
+          ? fmt(waiting) + (waiting === 1 ? " pedido na fila" : " pedidos na fila") + ", pool com folga"
+          : hitCeiling
+            ? "pool encostou no teto (" + fmt(max) + ")" + (since ? " desde " + since : "")
+            : fmt(busy) + " de " + fmt(max || 0) + " conexões do pool em uso"
+    };
+    paintSignals();
+  }
+
   /* ---------------- tabs ----------------
      One payload, seven panes. Switching never touches the network, so the
      hash is the only state: it survives a reload and can be pasted to
@@ -2833,6 +2992,9 @@
     ["ratingDist", "connDist", "adoptionDist", "commCatDist", "uptimeDist", "ratingTransport"].forEach(function (id) {
       fillSkel(id, skel("skel-bar") + skel("skel-bar") + skel("skel-bar"));
     });
+    // One bar, not ten blocks: an empty pool meter before the first read would
+    // draw as ten free connections, which is a capacity claim and not a shape.
+    fillSkel("rtSlots", skel("skel-line", "width:100%;height:14px"));
     fillSkel("signals", skel("skel-bar", "width:180px;display:inline-block") +
       skel("skel-bar", "width:150px;display:inline-block;margin-left:8px") +
       skel("skel-bar", "width:170px;display:inline-block;margin-left:8px"));
@@ -3002,6 +3164,7 @@
     renderChannelDetail(d);
     renderCommunities(d);
     renderModeration(d);
+    renderRuntime(d);
 
     // Infra: the deployed commit, when the machine was stamped with one.
     // A git sha is shown short, the way `git log --oneline` would; anything else as-is.

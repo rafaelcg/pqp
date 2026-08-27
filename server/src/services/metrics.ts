@@ -1,5 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
 import { getPool } from "../db.js";
+import { runtimeSnapshot, type RuntimeMetrics } from "../lib/runtime.js";
 import { getVoiceActivitySnapshot } from "../ws/voice.js";
 import { acquisitionReport, type AcquisitionReport } from "./acquisition.js";
 import { callRatingSummary } from "./call-ratings.js";
@@ -30,9 +31,11 @@ import type { CallRatingSummary } from "@pqp/shared";
  *    presenting `Authorization: Bearer <ADMIN_METRICS_TOKEN>`, compared in
  *    constant time. With the variable unset that path does not exist.
  *
- * The payload is cached in memory for 30 seconds: the dashboard polls, and the
+ * The counts are cached in memory for 30 seconds: the dashboard polls, and the
  * API is one machine in gru. Counts that lag by half a minute are still
  * counts; a scan of `messages` per page refresh is a self-inflicted incident.
+ * The `runtime` block is the exception and is sampled per request — it costs
+ * nothing and a stale one would be actively misleading. See `getAdminMetrics`.
  */
 
 export const ADMIN_METRICS_PATH = "/api/admin/metrics";
@@ -47,11 +50,24 @@ const EXCLUDED_ACCOUNTS = ["webhook", "character"] as const;
 
 export interface AdminMetrics {
   generatedAt: string;
-  /** Seconds the server will keep answering with this same payload. */
+  /**
+   * Seconds the server will keep answering with these same *counts*.
+   *
+   * Not the whole payload: `runtime` is sampled per request and ignores this.
+   */
   cacheTtlSeconds: number;
   /** The deployed commit (`APP_VERSION`), null when the process was not stamped. */
   version: string | null;
   excludedAccounts: readonly string[];
+  /**
+   * Live process pressure: open WebSockets and the connection pool.
+   *
+   * THE ONE BLOCK IN THIS PAYLOAD THAT IS NOT CACHED, and the one that costs
+   * nothing — see `getAdminMetrics` for why those two facts are the same
+   * decision. Everything in it is a property read (`wss.clients.size`, the
+   * pool's own counters); there is no query behind it. See lib/runtime.ts.
+   */
+  runtime: RuntimeMetrics;
   users: {
     total: number;
     last24h: number;
@@ -258,7 +274,15 @@ function hoursAgo(column: string): string {
   return `(EXTRACT(EPOCH FROM date_trunc('hour', now()) - date_trunc('hour', ${column})) / 3600)::int`;
 }
 
-async function computeAdminMetrics(): Promise<AdminMetrics> {
+/**
+ * Everything the 30-second cache holds — which is everything except `runtime`.
+ *
+ * Expressed as a type rather than as a convention on purpose: it makes it
+ * impossible to accidentally compute the live block inside the cached one.
+ */
+type CachedMetrics = Omit<AdminMetrics, "runtime">;
+
+async function computeAdminMetrics(): Promise<CachedMetrics> {
   const pool = getPool();
   const [
     users,
@@ -717,15 +741,15 @@ async function computeAdminMetrics(): Promise<AdminMetrics> {
 
 // ------------------------------------------------------------------- cache
 
-let cached: { at: number; payload: AdminMetrics } | null = null;
-let inFlight: Promise<AdminMetrics> | null = null;
+let cached: { at: number; payload: CachedMetrics } | null = null;
+let inFlight: Promise<CachedMetrics> | null = null;
 
 /**
- * The cached payload when it is younger than the TTL, otherwise a fresh one.
+ * The cached counts when they are younger than the TTL, otherwise a fresh set.
  * Concurrent callers during a refresh share the same computation rather than
  * each running the queries.
  */
-export async function getAdminMetrics(): Promise<AdminMetrics> {
+async function getCachedMetrics(): Promise<CachedMetrics> {
   if (cached && Date.now() - cached.at < CACHE_TTL_MS) {
     return cached.payload;
   }
@@ -740,6 +764,32 @@ export async function getAdminMetrics(): Promise<AdminMetrics> {
       });
   }
   return inFlight;
+}
+
+/**
+ * The payload: ~32 queries' worth of counts from the 30-second cache, plus a
+ * `runtime` block taken **now**, on every single request.
+ *
+ * WHY THE SPLIT. The cache exists because the counts are expensive — a scan of
+ * `messages` per dashboard refresh is a self-inflicted incident, and a signup
+ * total that lags by half a minute is still a signup total. Neither half of
+ * that reasoning applies to `runtime`. It costs nothing, so caching it saves
+ * nothing; and a *stale* saturation reading is worse than no reading at all,
+ * because the entire value of `waitingCount` is that it moves during the ten
+ * seconds a stampede is actually happening. A dashboard that showed a queue of
+ * zero because the queue formed and drained inside the cache window would be
+ * confidently wrong at the exact moment it was being consulted.
+ *
+ * The high-water marks in the block cover the other half of the same problem:
+ * a 30-second poll misses a spike even when the reading is live. See
+ * lib/runtime.ts.
+ *
+ * The spread never mutates the cached object, so the cache cannot pick up a
+ * `runtime` block and start serving a stale one.
+ */
+export async function getAdminMetrics(): Promise<AdminMetrics> {
+  const payload = await getCachedMetrics();
+  return { ...payload, runtime: runtimeSnapshot() };
 }
 
 /** Test hook: forget the cached payload. */

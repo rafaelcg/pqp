@@ -68,6 +68,92 @@ An alert that fires spuriously gets muted, and then the real one is missed. So:
 > minutes, but scheduled runs on public repos are queued at low priority and are
 > routinely late. Shortening the interval does not help.
 
+### `GET /up` — the endpoint for an external monitor
+
+**Point UptimeRobot (or any status-code monitor) at `https://api.pqp.gg/up`.**
+
+It exists because the 10–30 minute detection time above is the honest number,
+and because neither endpoint that already reports health can be handed to a
+third-party monitor:
+
+| Endpoint | Why not |
+|---|---|
+| `/health` | **Fly's own health check** (`fly.toml`, 30s/5s), and it gates every release. Its semantics belong to the deploy, not to us. It also returns `version` — the deployed commit — which is fine for the platform and is not something to hand an anonymous poller forever. |
+| `/status.json` | **Returns 200 while reporting components as down.** The state is in the JSON body, so a status-code monitor never fires. Our own GitHub check reads the body (`status-components` above), which is exactly why nobody noticed. |
+
+So `/up` is a third path whose entire contract is the status code.
+
+| | |
+|---|---|
+| **200** | The process is serving and reached its database. Body: `{"ok":true}`. |
+| **503** | The database probe has failed **continuously for at least 45 seconds**. Body: `{"ok":false}`. |
+| **anything else** | Not from this endpoint. A connection refused / timeout / 502 is fly-proxy or the network, which is also an outage worth alerting on. |
+
+**It is deliberately slow to complain.** One failed `SELECT 1` is a failover, a
+GC pause or a dropped packet; two consecutive failed checks a minute apart is an
+outage. At a 60-second interval this trips on the **second** failed poll, so
+expect roughly 2 minutes to red, plus whatever confirmation the monitor adds.
+That is the no-crying-wolf rule from the top of this document applied to
+somebody else's cron.
+
+Things that are **deliberately still 200**:
+
+- **A saturated connection pool.** It is the normal shape of a deploy stampede,
+  it self-heals in seconds, and paging on it would train you to ignore the page.
+  It is on the operator dashboard instead (`runtime`, see
+  `tools/admin-dashboard/README.md`). Note the probe queues for a connection
+  like everything else, so a pool jammed for longer than 45 seconds *does* go
+  red — which is honest: if nothing can get a connection for a minute, the app
+  is not serving.
+- **A draining machine (SIGTERM).** Failing readiness while draining is the
+  usual practice so a load balancer sheds traffic, but there is exactly one
+  machine and nowhere to shed to. All it would produce is an alert on every
+  deploy.
+- **A degraded optional component** — object storage, GIF search, the SFU.
+  Those are on `/status.json` and in the `status-components` check.
+
+**It leaks nothing.** No version, no counts, no hostnames, no timings, no error
+text. An unauthenticated endpoint that says *which* dependency is unhappy is
+telling a stranger where to lean. All a caller can learn is that the process
+accepted a connection and can or cannot reach a database, which is already
+implied by the app working or not.
+
+**It is free to poll.** The probe result is cached for 10 seconds and concurrent
+callers share one in-flight probe, so the endpoint costs at most one `SELECT 1`
+per 10 seconds no matter how hard it is hit — a monitor at 60s costs one query a
+minute, the same as the status sampler that already runs. That is also why the
+route has no rate limiter: a flood cannot reach the database, and what is left
+is a constant one-line response.
+
+Server side: `server/src/services/readiness.ts` (the whole decision, tested in
+`readiness.test.ts`), wired in `server/src/index.ts`.
+
+#### Recommended UptimeRobot settings
+
+| Setting | Value | Why |
+|---|---|---|
+| Monitor type | **HTTP(s)** | The status code is the signal. Keyword monitoring would work on the body too, but it is redundant and one more thing to get wrong. |
+| URL | `https://api.pqp.gg/up` | |
+| Interval | **60 seconds** (5 minutes on the free plan is fine too) | The grace window is 45s, so any interval at or above 60s trips on the second failed check. |
+| Method | `GET` (or `HEAD`; both are answered) | |
+| Timeout | 10–30 seconds | The endpoint answers in milliseconds; a long timeout only avoids false alarms from the monitor's own network. |
+| Alert threshold | Alert after **2** failures if the plan offers it | Belt and braces on top of the server-side grace window. |
+| Alert contacts | An email you actually read, **not** `contato@pqp.gg` | That address currently bounces — see the table at the top of this document. |
+| SSL expiry alerts | On | Free second opinion on `tls-expiry`. |
+
+Do **not** point UptimeRobot at `/health` (it is Fly's, and it exposes the
+commit) or at `/status.json` (it answers 200 during an outage). And do not add
+a keyword check for `"ok":true`: that duplicates the status code and would fire
+on a body change.
+
+> **This does not replace the GitHub checks and is not replaced by them.**
+> UptimeRobot polls every minute from outside our two providers, which is faster
+> and a genuinely separate failure domain; it can only ever say "the API stopped
+> answering". Everything about *why* — the WebSocket, the error rate, the
+> machine count, the quotas — is still the workflows above. Note in particular
+> that `/up` says nothing about WebSockets, and CLAUDE.md pitfall #9 is a
+> WebSocket outage behind a perfectly healthy HTTP endpoint.
+
 ### Error heartbeat — every 15 minutes
 
 `.github/workflows/monitor-errors.yml` → `node scripts/monitor/run.mjs errors`
@@ -361,3 +447,5 @@ currently bounces.
 | `scripts/monitor/limits.mjs` | The daily checks, plus the not-automated list |
 | `scripts/monitor/alert.mjs` | GitHub Issue open / comment / close reconciliation |
 | `server/src/services/status.ts` | The app's own per-minute component probes, which `status-components` and `uptime-24h` read |
+| `server/src/services/readiness.ts` | `GET /up`: the status-code endpoint an external monitor points at, and the whole 200-vs-503 decision |
+| `server/src/services/readiness.test.ts` | The grace window, the recovery reset, the flapping case and the probe coalescing |

@@ -88,6 +88,22 @@ interface MetricsBody {
     automated24h: number;
     byHour: number[];
   };
+  runtime: {
+    sampledAt: string;
+    sockets: number;
+    peakSockets: number;
+    pool: {
+      max: number;
+      total: number;
+      idle: number;
+      waiting: number;
+      busy: number;
+      pressure: string;
+    };
+    peakPoolWaiting: number;
+    peakPoolBusy: number;
+    peakTrackedSince: string;
+  };
   distinctSenders24h: number;
   activeTextChannels24h: number;
   channels: { text: number; voice: number; category: number; thread: number };
@@ -332,7 +348,7 @@ describeDb("GET /api/admin/metrics", () => {
     }
   });
 
-  it("serves the cached payload for 30 seconds", async () => {
+  it("serves the cached counts for 30 seconds", async () => {
     const first = await call<MetricsBody>(operator, "/api/admin/metrics");
     expect(first.body.messages.last24h).toBe(2);
 
@@ -347,5 +363,27 @@ describeDb("GET /api/admin/metrics", () => {
     resetAdminMetricsCache();
     const third = await call<MetricsBody>(operator, "/api/admin/metrics");
     expect(third.body.messages.last24h).toBe(3);
+  });
+
+  it("carries a runtime block, and never a cached one", async () => {
+    const first = await call<MetricsBody>(operator, "/api/admin/metrics");
+    const runtime = first.body.runtime;
+
+    // The pool this very request ran on. No socket server in this suite, so the
+    // socket count is legitimately zero.
+    expect(runtime.pool.max).toBeGreaterThan(0);
+    expect(runtime.pool.busy).toBe(runtime.pool.total - runtime.pool.idle);
+    expect(["ok", "tight", "saturated"]).toContain(runtime.pool.pressure);
+    expect(runtime.sockets).toBe(0);
+    expect(Date.parse(runtime.sampledAt)).not.toBeNaN();
+    expect(Date.parse(runtime.peakTrackedSince)).not.toBeNaN();
+
+    // The counts come from the cache; the runtime block does not. A stale
+    // `waiting` would be worse than none, because it reads as calm during the
+    // one event it exists to report.
+    await new Promise((done) => setTimeout(done, 5));
+    const second = await call<MetricsBody>(operator, "/api/admin/metrics");
+    expect(second.body.generatedAt).toBe(first.body.generatedAt);
+    expect(second.body.runtime.sampledAt).not.toBe(runtime.sampledAt);
   });
 });
