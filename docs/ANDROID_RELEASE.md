@@ -109,7 +109,7 @@ the first upload rather than after.
    *upload* key. Losing the upload key is recoverable through Google support;
    losing an app signing key would not have been. Opt in.
 
-Also note the version. `versionCode = 1` / `versionName = "0.1.0"` in
+Also note the version. `versionCode = 2` / `versionName = "0.1.1"` in
 `android/app/build.gradle.kts`. **A `versionCode` can never be reused**, even by
 a build that was rejected, so bump it for every single upload.
 
