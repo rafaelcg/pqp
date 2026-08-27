@@ -245,6 +245,58 @@ unzip -l "$(find ~/.gradle/caches -path '*webrtc*' -name classes.jar | head -1)"
   | awk '{print $4}' | grep '\.class$' | sed 's|/[^/]*$||' | sort -u
 ```
 
+### Native debug symbols, and why the Play warning may not go away
+
+Play warns on every bundle that carries native code with no symbol file, because
+without one a crash inside libwebrtc arrives as a column of raw addresses. The
+build now asks for the symbols:
+
+```kotlin
+release {
+    ndk { debugSymbolLevel = "SYMBOL_TABLE" }
+}
+```
+
+AGP writes what it extracts into the bundle itself, under
+`BUNDLE-METADATA/com.android.tools.build.debugsymbols/`, so Play reads it off
+the upload. There is no separate file to send and nothing to click.
+
+**It needs the NDK installed, and this machine does not have one.** Without it
+AGP has no `objcopy`, the `extractReleaseNativeSymbolTables` task runs, produces
+an empty directory, and the build prints BUILD SUCCESSFUL with the bundle
+carrying no symbols at all. The only trace is a `--info`-level line:
+
+```
+Unable to strip library '.../libjingle_peerconnection_so.so' due to missing
+strip tool for ABI 'arm64-v8a'. Packaging it as is.
+```
+
+Install it from Android Studio's SDK Manager (SDK Tools, "NDK (Side by side)"),
+or with `sdkmanager "ndk;28.2.13676358"` once `cmdline-tools` is installed, which
+it is not here either. 28.2.13676358 is the version AGP resolves to; the log
+line above names whatever it wants on the day.
+
+**And even then, expect less than the warning implies.** Every native library in
+this bundle arrives pre-stripped from its own publisher:
+
+| Library | `.symtab` | `.debug_*` |
+|---|---|---|
+| `libjingle_peerconnection_so.so` (12 MB, WebRTC) | no | no |
+| `libandroidx.graphics.path.so` | no | no |
+| `libdatastore_shared_counter.so` (10 KB) | yes | no |
+
+So the library that is 99% of the native code, and the one most likely to crash
+on a device nobody here owns, has nothing but its ~450 exported symbols to
+offer. `SYMBOL_TABLE` will hand Play those, which resolves a frame to the
+nearest exported function rather than to a hex address. `FULL` would ask for
+DWARF that is not in the file, which is why it is not set. A genuine C++ stack
+trace would need an unstripped build of `io.github.webrtc-sdk:android`, which is
+an upstream question and not a build-config one.
+
+The config is still worth having: it is correct, it costs nothing, and it means
+the symbols appear the day an NDK is present rather than being remembered about
+after the first tester's crash report.
+
 ### Optional: the same four values as GitHub secrets
 
 Only needed if you later want CI to produce a signed bundle. The workflow does
