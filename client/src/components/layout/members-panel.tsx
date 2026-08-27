@@ -1231,7 +1231,7 @@ export function MembersPanel({
 
         {!loading && members.length > 0 && visibleMembers.length === 0 && (
           <p className="px-2 py-6 text-sm text-paper-muted">
-            {t("memberList.noMatches", { query: needle })}
+            {t("memberList.noMatches", { query: query.trim() })}
           </p>
         )}
 
