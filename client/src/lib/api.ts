@@ -954,6 +954,33 @@ export function memberDisplayName(member: {
   return member.nickname?.trim() || member.displayName;
 }
 
+/**
+ * Whether a roster row matches the directory filter. The row paints
+ * `memberDisplayName` (nickname, else display name). Search also matches the
+ * underlying display name, username, and tag, so a nickname does not hide
+ * the account from a query typed from the name the rest of the app uses.
+ */
+export function memberMatchesQuery(
+  member: {
+    nickname?: string | null;
+    displayName: string;
+    username?: string | null;
+    tag?: string | null;
+  },
+  query: string,
+): boolean {
+  const needle = query.trim().toLowerCase();
+  if (!needle) {
+    return true;
+  }
+  return [
+    memberDisplayName(member),
+    member.displayName,
+    member.username ?? "",
+    member.tag ?? "",
+  ].some((haystack) => haystack.toLowerCase().includes(needle));
+}
+
 export const fetchMembers = (serverId: string) =>
   apiFetch<{ members: ServerMember[] }>(`/api/servers/${serverId}/members`);
 

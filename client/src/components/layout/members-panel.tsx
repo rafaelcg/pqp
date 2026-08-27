@@ -36,6 +36,7 @@ import {
   listBans,
   listTimeouts,
   memberDisplayName,
+  memberMatchesQuery,
   moveMemberVoice,
   setMemberVoiceMuted,
   timeoutMember,
@@ -465,19 +466,12 @@ export function MembersPanel({
     }
   }
 
-  // The directory filter: case-insensitive, against everything the row could
-  // have shown about this person — the name as displayed, the username and
-  // the full tag.
-  const needle = query.trim().toLowerCase();
-  const visibleMembers = needle
-    ? members.filter((member) =>
-        [
-          memberDisplayName(member),
-          member.username ?? "",
-          member.tag ?? "",
-        ].some((haystack) => haystack.toLowerCase().includes(needle)),
-      )
-    : members;
+  // Same identifiers the row paints, plus the account display name so a
+  // nickname cannot hide someone from a query typed from the name the rest
+  // of the app uses. Username and tag stay in the haystack for @mentions.
+  const visibleMembers = members.filter((member) =>
+    memberMatchesQuery(member, query),
+  );
 
   useEffect(() => {
     if (!open || !serverId) {
