@@ -76,6 +76,12 @@ export function RoleColorField({
   const hueHex = hsvToHex({ h: hsv.h, s: 1, v: 1 });
   const thumbHex = hsvToHex(hsv);
 
+  function applyColor(next: string | null) {
+    setHex(next ?? "");
+    setHsv((current) => hsvFor(next, current));
+    onChange(next);
+  }
+
   function commitHsv(next: Hsv) {
     setHsv(next);
     const value = hsvToHex(next);
@@ -136,10 +142,7 @@ export function RoleColorField({
               type="button"
               disabled={atDefault}
               className="text-sm text-signal hover:underline disabled:cursor-default disabled:text-paper-muted disabled:no-underline disabled:opacity-60"
-              onClick={() => {
-                setHex(defaultColor);
-                onChange(defaultColor);
-              }}
+              onClick={() => applyColor(defaultColor)}
             >
               {t("roles.colorReset")}
             </button>
@@ -148,10 +151,7 @@ export function RoleColorField({
             <button
               type="button"
               className="text-sm text-paper-muted hover:text-paper hover:underline"
-              onClick={() => {
-                setHex("");
-                onChange(null);
-              }}
+              onClick={() => applyColor(null)}
             >
               {t("roles.colorClear")}
             </button>
@@ -229,10 +229,7 @@ export function RoleColorField({
               type="button"
               aria-label={`${t("roles.color")} ${preset}`}
               aria-pressed={selected}
-              onClick={() => {
-                setHex(preset);
-                onChange(preset);
-              }}
+              onClick={() => applyColor(preset)}
               className={cn(
                 "h-7 w-7 shrink-0 appearance-none rounded-full border-0 p-0 ring-1 ring-ink-4",
                 selected && "ring-2 ring-paper",

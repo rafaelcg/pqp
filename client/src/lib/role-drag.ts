@@ -16,8 +16,9 @@ export function moveItem<T>(list: T[], from: number, to: number): T[] {
 }
 
 /**
- * Which slot the pointer is over. `mids` are the vertical centres of the
- * current movable rows, top to bottom. Returns a clamped index.
+ * Which row the pointer is hovering. `mids` are the vertical centres of the
+ * current movable rows, top to bottom. This is a list index, not an insertion
+ * slot after the last row: `moveItem` rejects `to === list.length`.
  */
 export function dropIndexFromPointer(pointerY: number, mids: number[]): number {
   if (mids.length === 0) {

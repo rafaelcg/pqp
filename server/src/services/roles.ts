@@ -311,7 +311,7 @@ export async function refreshMemberRank(
             WHEN EXISTS (
               SELECT 1
                 FROM member_roles mr
-                JOIN roles r ON r.id = mr.role_id
+                JOIN roles r ON r.id = mr.role_id AND r.server_id = mr.server_id
                WHERE mr.server_id = $1 AND mr.user_id = $2
                  AND (
                    r.system_key IN ('admin', 'manager')
