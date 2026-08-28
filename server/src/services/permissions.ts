@@ -6,8 +6,12 @@ import {
   parsePermissions,
   PERMISSION_ALL,
   PERMISSION_DEFAULT_EVERYONE,
+  PERMISSION_DEFAULT_MANAGER,
+  PERMISSION_DEFAULT_MODERATOR,
   Permission,
   serializePermissions,
+  STAFF_ROLE_COLORS,
+  STAFF_ROLE_NAMES,
   type PermissionOverwrite,
 } from "@pqp/shared";
 import type { PoolClient } from "pg";
@@ -45,10 +49,48 @@ export async function seedDefaultRoles(
     [serverId, serializePermissions(PERMISSION_DEFAULT_EVERYONE)],
   );
   await db.query(
-    `INSERT INTO roles (server_id, name, permissions, position, is_everyone, system_key, mentionable, hoist)
-     VALUES ($1, 'Admin', $2, 1, FALSE, 'admin', FALSE, TRUE)
+    `INSERT INTO roles (server_id, name, permissions, position, is_everyone, system_key, mentionable, hoist, show_badge, color)
+     VALUES ($1, $2, $3, 1, FALSE, 'moderator', FALSE, TRUE, TRUE, $4)
      ON CONFLICT DO NOTHING`,
-    [serverId, serializePermissions(PERMISSION_ALL)],
+    [
+      serverId,
+      STAFF_ROLE_NAMES.moderator,
+      serializePermissions(PERMISSION_DEFAULT_MODERATOR),
+      STAFF_ROLE_COLORS.moderator,
+    ],
+  );
+  await db.query(
+    `INSERT INTO roles (server_id, name, permissions, position, is_everyone, system_key, mentionable, hoist, show_badge, color)
+     VALUES ($1, $2, $3, 2, FALSE, 'manager', FALSE, TRUE, TRUE, $4)
+     ON CONFLICT DO NOTHING`,
+    [
+      serverId,
+      STAFF_ROLE_NAMES.manager,
+      serializePermissions(PERMISSION_DEFAULT_MANAGER),
+      STAFF_ROLE_COLORS.manager,
+    ],
+  );
+  await db.query(
+    `INSERT INTO roles (server_id, name, permissions, position, is_everyone, system_key, mentionable, hoist, show_badge, color)
+     VALUES ($1, $2, $3, 3, FALSE, 'admin', FALSE, TRUE, TRUE, $4)
+     ON CONFLICT DO NOTHING`,
+    [
+      serverId,
+      STAFF_ROLE_NAMES.admin,
+      serializePermissions(PERMISSION_ALL),
+      STAFF_ROLE_COLORS.admin,
+    ],
+  );
+  await db.query(
+    `INSERT INTO roles (server_id, name, permissions, position, is_everyone, system_key, mentionable, hoist, show_badge, color)
+     VALUES ($1, $2, $3, 4, FALSE, 'owner', FALSE, TRUE, TRUE, $4)
+     ON CONFLICT DO NOTHING`,
+    [
+      serverId,
+      STAFF_ROLE_NAMES.owner,
+      serializePermissions(0n),
+      STAFF_ROLE_COLORS.owner,
+    ],
   );
 }
 

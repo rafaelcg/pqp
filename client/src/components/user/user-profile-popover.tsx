@@ -31,7 +31,8 @@ import { Button } from "@/components/ui/button";
 import { StatusDot } from "@/components/user/status-dot";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { RankMarks } from "@/components/user/rank-marks";
-import { identityMarks } from "@/lib/author-display";
+import { identityMarks, rankBadges } from "@/lib/author-display";
+import { CheckRow } from "@/components/ui/check-row";
 import { useFriends } from "@/components/friends/use-friends";
 import { DepoimentoComposer } from "@/components/depoimentos/depoimento-composer";
 import {
@@ -47,6 +48,7 @@ import { ConnectionBadges } from "@/components/connections/connection-badges";
 import { Achievements } from "@/components/profile/achievements";
 import {
   ApiError,
+  assignMemberRole,
   banMember,
   createConversation,
   fetchUserConnections,
@@ -54,9 +56,14 @@ import {
   kickMember,
   liftTimeout,
   timeoutMember,
+  unassignMemberRole,
   updateMemberNickname,
-  updateMemberRole,
 } from "@/lib/api";
+import { displayRoleName } from "@/lib/role-labels";
+import {
+  assignableRoleIds,
+  canActOnMemberClient,
+} from "@/lib/role-hierarchy";
 import { useTranslation, type MessageKey, type Translator } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import {
@@ -76,7 +83,6 @@ import {
   offersDecline,
   resolveFriendshipState,
   resolvePresence,
-  roleChangeFor,
   profileAboutTabs,
   activeProfileAboutTab,
   type Placement,
@@ -84,7 +90,6 @@ import {
   type ProfileModerationAction,
   type ProfileModerationContext,
   type ProfilePrimaryAction,
-  type ProfileRoleChange,
   type ProfileRoleChip,
   type ProfileSubject,
 } from "./profile-relations";
@@ -355,9 +360,14 @@ function UserProfileCard({
   const { data, loading, send, accept, remove, removeDepoimento } = useFriends();
   const cardRef = useRef<HTMLDivElement>(null);
   const mentionUsername = subject.username?.trim() || null;
+  const [heldIds, setHeldIds] = useState<string[]>(() => subject.roleIds ?? []);
+  const roleIdsKey = (subject.roleIds ?? []).join(",");
+  useEffect(() => {
+    setHeldIds(subject.roleIds ?? []);
+  }, [subject.id, roleIdsKey, subject.roleIds]);
   const paintedRoles = useMemo(
-    () => cardRoleChips(roles, subject.roleIds),
-    [roles, subject.roleIds],
+    () => cardRoleChips(roles, heldIds),
+    [roles, heldIds],
   );
   const [placement, setPlacement] = useState<Placement | null>(null);
   const [busy, setBusy] = useState(false);
@@ -417,10 +427,6 @@ function UserProfileCard({
     state === "self"
       ? []
       : moderationActions(subject.id, currentUserId, moderation);
-  // The owner-only rank change, derived apart from the ladder on purpose (see
-  // `roleChangeFor`). It needs no `state === "self"` guard of its own: the
-  // function already answers null for yourself.
-  const roleChange = roleChangeFor(subject.id, currentUserId, moderation);
   const presence = resolvePresence(subject.id, state, data, subject.status);
   const since = friendsSince(subject.id, data);
   const aboutTabs = useMemo(
@@ -742,32 +748,77 @@ function UserProfileCard({
     });
   }
 
-  /**
-   * Promote or demote. Unconfirmed, the way the panel's version is: the change
-   * is reversible in one tap and the `permissions-update` frame that follows
-   * it refreshes the roster every surface reads from.
-   */
-  function runRoleChange(which: ProfileRoleChange) {
+  function toggleCargo(roleId: string, next: boolean) {
     if (!moderation) {
       return;
     }
     const { serverId } = moderation;
+    const previous = heldIds;
+    setHeldIds(
+      next
+        ? previous.includes(roleId)
+          ? previous
+          : [...previous, roleId]
+        : previous.filter((id) => id !== roleId),
+    );
     setNotice(null);
     void run(async () => {
-      await updateMemberRole(
-        serverId,
-        subject.id,
-        which === "promote" ? "admin" : "member",
-      );
-      moderation.onModerated();
-      setNotice(
-        t(
-          which === "promote" ? "profile.mod.promoted" : "profile.mod.demoted",
-          { name: subject.displayName },
-        ),
-      );
+      try {
+        if (next) {
+          await assignMemberRole(serverId, subject.id, roleId);
+        } else {
+          await unassignMemberRole(serverId, subject.id, roleId);
+        }
+        moderation.onRolesChanged?.();
+      } catch (err) {
+        setHeldIds(previous);
+        throw err;
+      }
     });
   }
+
+  const assignableCargos = useMemo(() => {
+    if (!moderation?.bits?.manageRoles || !roles?.length) {
+      return [];
+    }
+    const targetRole = moderation.memberRoles.get(subject.id);
+    if (!targetRole) {
+      return [];
+    }
+    const hierarchy = roles.map((role) => ({
+      id: role.id,
+      position: role.position,
+      permissions: role.permissions ?? "0",
+      systemKey: role.systemKey,
+      isEveryone: role.isEveryone,
+    }));
+    if (
+      !canActOnMemberClient(
+        {
+          role: moderation.actorRole,
+          roleIds: moderation.actorRoleIds,
+        },
+        { role: targetRole, roleIds: heldIds },
+        hierarchy,
+        currentUserId,
+        subject.id,
+      )
+    ) {
+      return [];
+    }
+    const allowed = new Set(
+      assignableRoleIds(
+        {
+          role: moderation.actorRole,
+          roleIds: moderation.actorRoleIds,
+        },
+        hierarchy,
+      ),
+    );
+    return [...roles]
+      .filter((role) => allowed.has(role.id))
+      .sort((a, b) => b.position - a.position);
+  }, [moderation, roles, heldIds, currentUserId, subject.id]);
 
   const modLabel: Record<ProfileModerationAction, string> = {
     timeout: t("profile.mod.timeout"),
@@ -853,27 +904,14 @@ function UserProfileCard({
     moderation?: ProfileModerationAction;
     onSelect: () => void;
   }[] = [
-    ...(moderation
+    ...(moderation &&
+    (moderation.bits ? moderation.bits.nicknames : true)
       ? [
           {
             id: "nickname",
             label: t("member.nickname"),
             onSelect: () => {
               changeNickname();
-            },
-          },
-        ]
-      : []),
-    ...(roleChange
-      ? [
-          {
-            id: `role-${roleChange}`,
-            label:
-              roleChange === "promote"
-                ? t("member.promote")
-                : t("member.demote"),
-            onSelect: () => {
-              runRoleChange(roleChange);
             },
           },
         ]
@@ -1019,6 +1057,28 @@ function UserProfileCard({
       </div>
     ) : null;
 
+  const cargosSection =
+    assignableCargos.length > 0 ? (
+      <div className="mt-3 overflow-hidden rounded-xl bg-ink-3/60">
+        <p className="px-3 pb-1 pt-2.5 text-[11px] font-semibold uppercase tracking-wide text-paper-muted">
+          {t("profile.cargos")}
+        </p>
+        <div className="px-1 pb-1">
+          {assignableCargos.map((role) => (
+            <div key={role.id} data-profile-cargo={role.id}>
+              <CheckRow
+                checked={heldIds.includes(role.id)}
+                disabled={busy}
+                label={displayRoleName(role, t, roles ?? [])}
+                swatch={role.color}
+                onCheckedChange={(checked) => toggleCargo(role.id, checked)}
+              />
+            </div>
+          ))}
+        </div>
+      </div>
+    ) : null;
+
   return createPortal(
     <div
       ref={cardRef}
@@ -1096,6 +1156,7 @@ function UserProfileCard({
             size="card"
             marks={identityMarks({
               rank: subject.rank,
+              ...rankBadges(heldIds, roles ?? []),
             })}
           />
         </p>
@@ -1121,7 +1182,7 @@ function UserProfileCard({
                   }}
                   aria-hidden
                 />
-                {role.name}
+                {displayRoleName(role, t, roles ?? [])}
               </li>
             ))}
           </ul>
@@ -1161,6 +1222,7 @@ function UserProfileCard({
               {t("profile.isYou")}
             </p>
             {actionStrip}
+            {cargosSection}
             {manageSection}
           </>
         ) : loading ? (
@@ -1216,6 +1278,7 @@ function UserProfileCard({
               )}
             </div>
             {actionStrip}
+            {cargosSection}
             {manageSection}
           </>
         )}

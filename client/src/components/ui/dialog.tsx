@@ -198,6 +198,12 @@ export function Dialog({
 
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
+        if (
+          event.target instanceof Element &&
+          event.target.closest('[role="menu"]')
+        ) {
+          return;
+        }
         event.stopPropagation();
         if (dismissibleRef.current) {
           onCloseRef.current();

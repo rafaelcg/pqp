@@ -4,6 +4,7 @@ import {
   type MemberRole,
   type UserStatus,
 } from "@pqp/shared";
+import { canActOnMemberClient } from "@/lib/role-hierarchy";
 
 /**
  * The profile card's logic, out of the component so the state machine is
@@ -37,7 +38,7 @@ export interface ProfileSubject {
   username?: string | null;
   /** Painted roles this person holds in the current server, if known. */
   roleIds?: string[];
-  /** Rank column: owner / admin chip, not a painted role. */
+  /** Rank column: owner / admin / member. Compatibility only. */
   rank?: MemberRole | null;
   /**
    * The server nickname, when the opener knows it (the members panel does).
@@ -54,13 +55,14 @@ export interface ProfileRoleChip {
   color: string | null;
   position: number;
   isEveryone: boolean;
-  /** Seeded Admin is rank, not a cargo chip. */
-  systemKey?: "everyone" | "admin" | null;
+  systemKey?: "everyone" | "owner" | "admin" | "manager" | "moderator" | null;
+  permissions?: string;
+  showBadge?: boolean;
 }
 
 /**
- * Custom cargos to list under the name. Seeded Admin is the shield next to
- * the name, not a pill on its own row.
+ * Cargos to list under the name. `@everyone` and Owner (the crown) stay off
+ * the pill row.
  */
 export function cardRoleChips(
   roles: readonly ProfileRoleChip[] | undefined,
@@ -73,7 +75,10 @@ export function cardRoleChips(
   return roles
     .filter(
       (role) =>
-        held.has(role.id) && !role.isEveryone && role.systemKey !== "admin",
+        held.has(role.id) &&
+        !role.isEveryone &&
+        role.systemKey !== "everyone" &&
+        role.systemKey !== "owner",
     )
     .slice()
     .sort((a, b) => b.position - a.position);
@@ -300,10 +305,20 @@ export function friendsSince(
  * a punitive button the size of "Add friend" makes a profile read as a charge
  * sheet.
  */
+export interface ProfileModerationBits {
+  kick: boolean;
+  ban: boolean;
+  timeout: boolean;
+  mute: boolean;
+  nicknames: boolean;
+  manageRoles: boolean;
+}
+
 export interface ProfileModerationContext {
   serverId: string;
-  /** The viewer's role in THIS server. */
+  /** The viewer's compatibility rank in THIS server. */
   actorRole: MemberRole;
+  actorRoleIds?: readonly string[];
   /**
    * Roles of this server's members, by id. Handed in from the roster the app
    * already fetches for mention autocomplete, so the card costs no request.
@@ -312,6 +327,9 @@ export interface ProfileModerationContext {
    * treated as "offer nothing" rather than as "not a member" — see below.
    */
   memberRoles: ReadonlyMap<string, MemberRole>;
+  memberRoleIds?: ReadonlyMap<string, readonly string[]>;
+  roles?: readonly ProfileRoleChip[];
+  bits?: ProfileModerationBits;
   /**
    * Who currently has a live timeout in this server — ids only.
    *
@@ -324,6 +342,8 @@ export interface ProfileModerationContext {
   timedOutUserIds: ReadonlySet<string>;
   /** Something was issued or lifted; the app re-reads the list. */
   onModerated: () => void;
+  /** Cargos ticked or unticked; the app re-reads the roster. */
+  onRolesChanged?: () => void;
 }
 
 /** The three rungs the card offers, in ladder order. */
@@ -354,21 +374,51 @@ export function moderationActions(
   if (!targetRole) {
     return [];
   }
-  const allowed = canModerateMember("timeout", {
-    actorRole: context.actorRole,
-    actorId: currentUserId,
-    targetRole,
-    targetId: subjectId,
-  });
-  if (!allowed) {
+  const bits = context.bits;
+  const outranks = bits
+    ? canActOnMemberClient(
+        {
+          role: context.actorRole,
+          roleIds: context.actorRoleIds,
+        },
+        {
+          role: targetRole,
+          roleIds: context.memberRoleIds?.get(subjectId),
+        },
+        (context.roles ?? []).map((role) => ({
+          id: role.id,
+          position: role.position,
+          permissions: role.permissions ?? "0",
+          systemKey: role.systemKey,
+        })),
+        currentUserId,
+        subjectId,
+      )
+    : canModerateMember("timeout", {
+        actorRole: context.actorRole,
+        actorId: currentUserId,
+        targetRole,
+        targetId: subjectId,
+      });
+  if (!outranks) {
     return [];
   }
-  // A live timeout replaces the offer to issue one: two rows that both say
-  // "timeout" is how a moderator double-sanctions somebody by accident. Lifting
-  // is not destructive, so it needs no confirmation and sits first.
-  return context.timedOutUserIds.has(subjectId)
-    ? ["endTimeout", "kick", "ban"]
-    : ["timeout", "kick", "ban"];
+  const kick = bits ? bits.kick : true;
+  const ban = bits ? bits.ban : true;
+  const timeout = bits ? bits.timeout : true;
+  const actions: ProfileModerationAction[] = [];
+  if (timeout) {
+    actions.push(
+      context.timedOutUserIds.has(subjectId) ? "endTimeout" : "timeout",
+    );
+  }
+  if (kick) {
+    actions.push("kick");
+  }
+  if (ban) {
+    actions.push("ban");
+  }
+  return actions;
 }
 
 /**
@@ -386,42 +436,18 @@ export function moderationNeedsConfirmation(
   return action === "kick" || action === "ban";
 }
 
-/** The owner-only rank change a card may offer: promote a member, demote an admin. */
+/** @deprecated Promote/Demote is gone; cargos are ticked on the card. */
 export type ProfileRoleChange = "promote" | "demote";
 
 /**
- * The one rank change the card may offer for this person, or null.
- *
- * Owner-only and never yourself — the rule the members panel's `actionsFor`
- * applies, and the one the server enforces with `requireOwner` on
- * `PATCH /api/servers/:id/members/:userId`. An unknown rank offers nothing,
- * the rule `moderationActions` already argues: a card that guesses offers an
- * action that 404s.
- *
- * NOT PART OF `moderationActions` on purpose. That list is the enforcement
- * ladder, ordered reversible-first so the menu teaches it; a role change
- * sanctions nobody and is not a rung. Deriving it separately is what lets the
- * ladder's tests stay exactly as they are.
+ * Always null. Kept so existing call sites compile until they switch to the
+ * cargos checklist. Web no longer offers a rank toggle.
  */
 export function roleChangeFor(
-  subjectId: string,
-  currentUserId: string | null,
-  context: ProfileModerationContext | null,
+  _subjectId: string,
+  _currentUserId: string | null,
+  _context: ProfileModerationContext | null,
 ): ProfileRoleChange | null {
-  if (
-    !context ||
-    context.actorRole !== "owner" ||
-    subjectId === currentUserId
-  ) {
-    return null;
-  }
-  const targetRole = context.memberRoles.get(subjectId);
-  if (targetRole === "member") {
-    return "promote";
-  }
-  if (targetRole === "admin") {
-    return "demote";
-  }
   return null;
 }
 

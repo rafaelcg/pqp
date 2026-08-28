@@ -2,10 +2,12 @@ import {
   clampEveryonePermissions,
   grantablePermissions,
   hasPermission,
+  isRoleOrderLocked,
   parsePermissions,
   Permission,
   roleNameSchema,
   serializePermissions,
+  type RoleSystemKey,
 } from "@pqp/shared";
 import { getPool } from "../db.js";
 import { HttpError } from "../lib/http.js";
@@ -27,6 +29,22 @@ export interface RoleRow {
   position: number;
   is_everyone: boolean;
   system_key: string | null;
+  show_badge: boolean;
+}
+
+const SYSTEM_KEYS = new Set<RoleSystemKey>([
+  "everyone",
+  "owner",
+  "admin",
+  "manager",
+  "moderator",
+]);
+
+function asSystemKey(value: string | null): RoleSystemKey | null {
+  if (value && SYSTEM_KEYS.has(value as RoleSystemKey)) {
+    return value as RoleSystemKey;
+  }
+  return null;
 }
 
 export function mapRole(row: RoleRow) {
@@ -40,11 +58,12 @@ export function mapRole(row: RoleRow) {
     permissions: row.permissions,
     position: row.position,
     isEveryone: row.is_everyone,
-    systemKey: (row.system_key as "everyone" | "admin" | null) ?? null,
+    systemKey: asSystemKey(row.system_key),
+    showBadge: row.show_badge,
   };
 }
 
-const ROLE_COLUMNS = `id, server_id, name, color, hoist, mentionable, permissions::text AS permissions, position, is_everyone, system_key`;
+const ROLE_COLUMNS = `id, server_id, name, color, hoist, mentionable, permissions::text AS permissions, position, is_everyone, system_key, show_badge`;
 
 export async function listRoles(serverId: string): Promise<RoleRow[]> {
   const result = await getPool().query<RoleRow>(
@@ -115,6 +134,7 @@ export async function updateRole(
     color?: string | null;
     mentionable?: boolean;
     hoist?: boolean;
+    showBadge?: boolean;
     permissions?: bigint;
   },
 ): Promise<RoleRow> {
@@ -125,7 +145,8 @@ export async function updateRole(
          color = CASE WHEN $3::boolean THEN $4 ELSE color END,
          mentionable = COALESCE($5, mentionable),
          hoist = COALESCE($6, hoist),
-         permissions = COALESCE($7, permissions)
+         show_badge = COALESCE($7, show_badge),
+         permissions = COALESCE($8, permissions)
        WHERE id = $1
        RETURNING ${ROLE_COLUMNS}`,
       [
@@ -135,6 +156,7 @@ export async function updateRole(
         input.color ?? null,
         input.mentionable ?? null,
         input.hoist ?? null,
+        input.showBadge ?? null,
         input.permissions !== undefined
           ? serializePermissions(
               role.is_everyone
@@ -175,16 +197,23 @@ export async function reorderRoles(
 ): Promise<void> {
   const existing = await listRoles(serverId);
   const everyone = existing.find((role) => role.is_everyone);
-  const movable = existing.filter((role) => !role.is_everyone);
-  const canMoveAny = actor.isOwner || actor.hasAdministrator;
+  const ownerRole = existing.find((role) => role.system_key === "owner");
+  const movable = existing.filter(
+    (role) => !isRoleOrderLocked({
+      isEveryone: role.is_everyone,
+      systemKey: role.system_key,
+    }),
+  );
+  const canMoveAny = actor.isOwner;
   const editable = canMoveAny
     ? movable
     : movable.filter((role) => role.position < actor.position);
-  if (roleIds.length !== editable.length) {
+  const requested = roleIds.filter((id) => id !== ownerRole?.id);
+  if (requested.length !== editable.length) {
     throw new HttpError(400, "Role order must include every role you can move");
   }
   const known = new Set(editable.map((role) => role.id));
-  for (const id of roleIds) {
+  for (const id of requested) {
     if (!known.has(id)) {
       throw new HttpError(400, "Unknown role in order");
     }
@@ -200,11 +229,17 @@ export async function reorderRoles(
         everyone.id,
       ]);
     }
-    for (let index = 0; index < roleIds.length; index += 1) {
+    for (let index = 0; index < requested.length; index += 1) {
       const position = canMoveAny ? index + 1 : slots[index]!;
       await client.query(`UPDATE roles SET position = $2 WHERE id = $1`, [
-        roleIds[index],
+        requested[index],
         position,
+      ]);
+    }
+    if (ownerRole && canMoveAny) {
+      await client.query(`UPDATE roles SET position = $2 WHERE id = $1`, [
+        ownerRole.id,
+        requested.length + 1,
       ]);
     }
     await client.query("COMMIT");
@@ -222,12 +257,20 @@ export async function assignRole(
   userId: string,
   roleId: string,
 ): Promise<void> {
+  const role = await getRole(roleId);
+  if (!role || role.server_id !== serverId) {
+    throw new HttpError(404, "Role not found");
+  }
+  if (role.is_everyone || role.system_key === "everyone" || role.system_key === "owner") {
+    throw new HttpError(400, "That role cannot be assigned");
+  }
   await getPool().query(
     `INSERT INTO member_roles (server_id, user_id, role_id)
      VALUES ($1, $2, $3)
      ON CONFLICT DO NOTHING`,
     [serverId, userId, roleId],
   );
+  await refreshMemberRank(serverId, userId);
   await bumpPermissionsVersion(serverId);
   invalidateServerAudience(serverId);
 }
@@ -242,8 +285,51 @@ export async function unassignRole(
       WHERE server_id = $1 AND user_id = $2 AND role_id = $3`,
     [serverId, userId, roleId],
   );
+  await refreshMemberRank(serverId, userId);
   await bumpPermissionsVersion(serverId);
   invalidateServerAudience(serverId);
+}
+
+/**
+ * Compatibility rank: owner if they own the server; admin if they hold Admin,
+ * Manager, or any cargo with Administrator; member otherwise (including
+ * Moderators). Skips the rank→Admin-cargo trigger so Manager does not mint
+ * an Admin row.
+ */
+export async function refreshMemberRank(
+  serverId: string,
+  userId: string,
+): Promise<void> {
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("SELECT set_config('pqp.skip_rank_sync', 'on', true)");
+    await client.query(
+      `UPDATE server_members sm
+          SET role = CASE
+            WHEN (SELECT owner_id FROM servers WHERE id = $1) = sm.user_id THEN 'owner'
+            WHEN EXISTS (
+              SELECT 1
+                FROM member_roles mr
+                JOIN roles r ON r.id = mr.role_id
+               WHERE mr.server_id = $1 AND mr.user_id = $2
+                 AND (
+                   r.system_key IN ('admin', 'manager')
+                   OR (r.permissions & $3::bigint) <> 0
+                 )
+            ) THEN 'admin'
+            ELSE 'member'
+          END
+        WHERE sm.server_id = $1 AND sm.user_id = $2`,
+      [serverId, userId, serializePermissions(Permission.ADMINISTRATOR)],
+    );
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function upsertChannelOverwrite(
@@ -317,7 +403,7 @@ export async function assertCanEditRole(
   if (!hasPermission(actorPerms, Permission.MANAGE_ROLES)) {
     throw new HttpError(403, "You cannot manage roles");
   }
-  if (!ctx.isOwner && !ctx.hasAdministrator && role.position >= ctx.topPosition) {
+  if (!ctx.isOwner && role.position >= ctx.topPosition) {
     throw new HttpError(403, "You can only edit roles below yours");
   }
   return { actorPerms };

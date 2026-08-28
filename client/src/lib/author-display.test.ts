@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   highestRoleColor,
   identityMarks,
+  rankBadges,
   usernameFromTag,
 } from "./author-display";
 
@@ -51,6 +52,41 @@ describe("identityMarks", () => {
     expect(
       identityMarks({ rank: "owner", isCharacter: true, isWebhook: true }),
     ).toEqual([]);
+  });
+
+  it("hides the crown when the Owner cargo has the badge off", () => {
+    expect(
+      identityMarks({ rank: "owner", ownerBadge: false, adminBadge: false }),
+    ).toEqual([]);
+  });
+
+  it("shows the Admin shield from the Admin cargo, not from rank", () => {
+    expect(
+      identityMarks({ rank: "admin", ownerBadge: false, adminBadge: true }),
+    ).toEqual(["admin"]);
+    expect(
+      identityMarks({ rank: "admin", ownerBadge: false, adminBadge: false }),
+    ).toEqual([]);
+  });
+});
+
+describe("rankBadges", () => {
+  const roles = [
+    { id: "owner", systemKey: "owner", showBadge: true },
+    { id: "admin", systemKey: "admin", showBadge: true },
+  ];
+
+  it("reads the Owner and Admin cargos from held ids", () => {
+    expect(rankBadges(["owner", "admin"], roles)).toEqual({
+      ownerBadge: true,
+      adminBadge: true,
+    });
+  });
+
+  it("hides the crown when showBadge is off", () => {
+    expect(
+      rankBadges(["owner"], [{ id: "owner", systemKey: "owner", showBadge: false }]),
+    ).toEqual({ ownerBadge: false, adminBadge: false });
   });
 });
 

@@ -16,8 +16,9 @@ import { RankMarks } from "@/components/user/rank-marks";
 import { useProfilePopover } from "@/components/user/user-profile-popover";
 import type { ProfileSubject } from "@/components/user/profile-relations";
 import { ApiError, fetchMembers, memberDisplayName, updateMemberNickname, type ServerMember, type ServerRole } from "@/lib/api";
-import { highestRoleColor, identityMarks } from "@/lib/author-display";
+import { highestRoleColor, identityMarks, rankBadges } from "@/lib/author-display";
 import { useTranslation } from "@/lib/i18n";
+import { displayRoleName } from "@/lib/role-labels";
 import {
   MEMBER_PAGE_SIZE,
   NO_COLLAPSE,
@@ -126,6 +127,8 @@ interface MemberSidebarProps {
   voiceChannels?: ReadonlyArray<{ id: string; name: string }>;
   /** Server roles, for hoist sections and name colour. */
   roles?: readonly ServerRole[];
+  canManageNicknames?: boolean;
+  showManageRoster?: boolean;
 }
 
 /** A row, as the profile card wants it. */
@@ -166,7 +169,6 @@ export function MemberSidebar({
   participants,
   self,
   currentUserId,
-  role,
   blockedUserIds,
   refreshNudge = 0,
   profileUpdate = null,
@@ -178,6 +180,8 @@ export function MemberSidebar({
   voiceOccupancy = {},
   voiceChannels = [],
   roles = [],
+  canManageNicknames = false,
+  showManageRoster = false,
 }: MemberSidebarProps) {
   const { t } = useTranslation();
   const openProfile = useProfilePopover();
@@ -360,24 +364,34 @@ export function MemberSidebar({
     () => roles.find((role) => role.systemKey === "admin")?.id ?? null,
     [roles],
   );
+  const ownerRoleId = useMemo(
+    () => roles.find((role) => role.systemKey === "owner")?.id ?? null,
+    [roles],
+  );
   const hoistedRoles = useMemo(
     () =>
       [...roles]
         .filter((role) => role.hoist && !role.isEveryone)
         .sort((a, b) => b.position - a.position)
-        .map((role) => ({ id: role.id, name: role.name })),
-    [roles],
+        .map((role) => ({
+          id: role.systemKey === "owner" ? "owner" : role.id,
+          name: displayRoleName(role, t, roles),
+        })),
+    [roles, t],
   );
 
   const rows = useMemo(
     () =>
       participants
         ? [...participants, ...(self ? [self] : [])].map(asRosterRow)
-        : members.map((member) => ({
-            ...member,
-            roleIds: effectiveRoleIds(member, adminRoleId),
-          })),
-    [participants, self, members, adminRoleId],
+        : members.map((member) => {
+            const ids = effectiveRoleIds(member, adminRoleId, ownerRoleId);
+            if (member.role === "owner" && !ids.includes("owner")) {
+              ids.push("owner");
+            }
+            return { ...member, roleIds: ids };
+          }),
+    [participants, self, members, adminRoleId, ownerRoleId],
   );
 
   const sections = useMemo(
@@ -411,9 +425,7 @@ export function MemberSidebar({
   function headingFor(section: MemberSection<ServerMember>): string {
     const label =
       section.kind === "role"
-        ? section.role === "owner"
-          ? t("memberList.owner")
-          : (section.label ?? t("memberList.admins"))
+        ? (section.label ?? t("memberList.admins"))
         : section.kind === "offline"
           ? t("memberList.offline")
           : section.kind === "all"
@@ -467,7 +479,7 @@ export function MemberSidebar({
     if (
       serverId &&
       !participants &&
-      (member.id === currentUserId || role === "owner" || role === "admin")
+      (member.id === currentUserId || canManageNicknames)
     ) {
       items.push({
         id: "nickname",
@@ -501,7 +513,7 @@ export function MemberSidebar({
     }
     // The door to the enforcement ladder rather than a second copy of it — see
     // the note at the top of this file.
-    if (onOpenMembersPanel && (role === "owner" || role === "admin")) {
+    if (onOpenMembersPanel && showManageRoster) {
       items.push({ id: "sep", label: "", separator: true });
       items.push({
         id: "manage",
@@ -543,6 +555,7 @@ export function MemberSidebar({
             voiceChannelName={voiceByUser.get(member.id) ?? null}
             items={menuFor(member)}
             nameColor={highestRoleColor(member.roleIds, roles)}
+            roles={roles}
             onOpenProfile={(anchor) => openProfile(subjectOf(member), anchor)}
           />
         ))}
@@ -644,6 +657,7 @@ interface MemberRowProps {
   voiceChannelName: string | null;
   items: ContextMenuItemDef[];
   nameColor: string | null;
+  roles: readonly ServerRole[];
   onOpenProfile: (anchor: HTMLElement) => void;
 }
 
@@ -670,6 +684,7 @@ function MemberRow({
   voiceChannelName,
   items,
   nameColor,
+  roles,
   onOpenProfile,
 }: MemberRowProps) {
   const { t } = useTranslation();
@@ -727,6 +742,7 @@ function MemberRow({
               <RankMarks
                 marks={identityMarks({
                   rank: member.role,
+                  ...rankBadges(member.roleIds, roles),
                 })}
               />
             </span>
