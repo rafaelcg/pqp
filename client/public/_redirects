@@ -23,6 +23,5 @@
 # The Android closed beta. Points at the page, not at Play: a closed test
 # admits nobody who has not joined the tester group first, so a link straight
 # to the opt-in URL sends people to a Google page that does nothing for them.
-/r/android    /android?ref=android-beta   302
 
 /*    /index.html   200

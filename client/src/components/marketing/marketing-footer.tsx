@@ -60,13 +60,6 @@ export function MarketingFooter() {
             <Link to="/beta" className={FOOTER_LINK}>
               {t("footer.iosBeta")}
             </Link>
-            {/* Unconditional, unlike the CTAs on `/android` itself. A footer is
-                a site map, and the page is worth reading even in the window
-                where the tester group has no link yet: it is where somebody
-                finds out an Android app exists at all. */}
-            <Link to="/android" className={FOOTER_LINK}>
-              {t("footer.androidBeta")}
-            </Link>
             <Link to="/blog" className={FOOTER_LINK}>
               {t("nav.blog")}
             </Link>
