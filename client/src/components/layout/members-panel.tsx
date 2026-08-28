@@ -1,24 +1,11 @@
 import {
   ArrowRightLeft,
-  AtSign,
-  Ban,
   ChevronDown,
   ChevronRight,
-  Clock,
-  Flag,
-  MicOff,
-  Pencil,
-  PhoneOff,
-  RotateCcw,
-  ShieldMinus,
-  ShieldPlus,
-  TimerReset,
-  UserCheck,
-  UserMinus,
-  UserX,
-  type LucideIcon,
+  MoreHorizontal,
+  Search,
 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   TIMEOUT_PRESET_MINUTES,
   TIMEOUT_REASON_MAX_LENGTH,
@@ -35,8 +22,10 @@ import {
 } from "@/components/ui/context-menu";
 import { Dialog } from "@/components/ui/dialog";
 import { StatusDot } from "@/components/user/status-dot";
+import { RankMarks } from "@/components/user/rank-marks";
 import { useProfilePopover } from "@/components/user/user-profile-popover";
 import type { ProfileSubject } from "@/components/user/profile-relations";
+import { identityMarks } from "@/lib/author-display";
 import { translateMessage, useTranslation } from "@/lib/i18n";
 import {
   ApiError,
@@ -48,6 +37,7 @@ import {
   listBans,
   listTimeouts,
   memberDisplayName,
+  memberMatchesQuery,
   moveMemberVoice,
   setMemberVoiceMuted,
   timeoutMember,
@@ -94,20 +84,137 @@ function formatMoment(iso: string): string {
   return formatFullTimestamp(iso);
 }
 
+/**
+ * One entry in the row's context menu. The row itself draws no action chrome:
+ * these surface on right-click (or long-press), and the same set lives on the
+ * profile card for anybody without a right-click.
+ */
 interface RowAction {
   id: string;
   label: string;
-  icon: LucideIcon;
   onSelect: () => void;
   danger?: boolean;
-  /**
-   * Rendered dimmed-but-tappable (the screen-share-button pattern): a tap is
-   * how a mouseless user asks *why* something is unavailable, so `onSelect`
-   * still fires and should explain rather than act.
-   */
-  dim?: boolean;
-  /** Tooltip when it should say more than the label; defaults to the label. */
-  title?: string;
+}
+
+function menuFromActions(
+  actions: RowAction[],
+  busy: boolean,
+): ContextMenuItemDef[] {
+  const items: ContextMenuItemDef[] = [];
+  let separated = false;
+  for (const action of actions) {
+    if (action.danger && !separated && items.length > 0) {
+      separated = true;
+      items.push({ id: "sep", label: "", separator: true });
+    }
+    items.push({
+      id: action.id,
+      label: action.label,
+      onSelect: action.onSelect,
+      danger: action.danger,
+      disabled: busy,
+    });
+  }
+  return items;
+}
+
+/**
+ * Clickable ⋯ for the actions that used to be a row of unlabeled icons.
+ * Right-click still opens the same set via ContextMenu; this is the affordance
+ * a trackpad user can actually find. The well is a square so it can sit on
+ * the same centerline as the name, instead of hanging off a stretched cell.
+ */
+function RowMenu({
+  items,
+  label,
+}: {
+  items: ContextMenuItemDef[];
+  label: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    function onPointer(event: PointerEvent) {
+      if (
+        event.target instanceof Node &&
+        rootRef.current?.contains(event.target)
+      ) {
+        return;
+      }
+      setOpen(false);
+    }
+    document.addEventListener("pointerdown", onPointer);
+    return () => document.removeEventListener("pointerdown", onPointer);
+  }, [open]);
+
+  if (items.length === 0) {
+    return null;
+  }
+
+  return (
+    <div
+      ref={rootRef}
+      className="relative mr-2 flex shrink-0 items-center"
+      onClick={(event) => event.stopPropagation()}
+      onPointerDown={(event) => event.stopPropagation()}
+    >
+      <Tooltip label={label}>
+        <button
+          type="button"
+          aria-haspopup="menu"
+          aria-expanded={open}
+          className="flex h-8 w-8 items-center justify-center rounded-full text-paper-muted hover:bg-ink-3 hover:text-paper focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
+          onClick={(event) => {
+            event.stopPropagation();
+            setOpen((was) => !was);
+          }}
+        >
+          <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
+        </button>
+      </Tooltip>
+      {open && (
+        <div
+          role="menu"
+          aria-label={label}
+          className="absolute right-0 top-full z-20 mt-1 w-52 rounded-lg border border-ink-4 bg-ink-2 p-1 shadow-[var(--shadow-popover)]"
+          onClick={(event) => event.stopPropagation()}
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          {items.map((item) =>
+            item.separator ? (
+              <div
+                key={item.id}
+                role="separator"
+                className="my-1 h-px bg-ink-4"
+              />
+            ) : (
+              <button
+                key={item.id}
+                type="button"
+                role="menuitem"
+                disabled={item.disabled}
+                className={cn(
+                  "flex w-full items-center rounded-md px-2.5 py-1.5 text-left text-sm outline-none hover:bg-ink-3 focus-visible:bg-ink-3 disabled:opacity-50",
+                  item.danger ? "text-danger" : "text-paper",
+                )}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setOpen(false);
+                  item.onSelect?.();
+                }}
+              >
+                {item.label}
+              </button>
+            ),
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 // --- voice moderation ---
@@ -120,6 +227,94 @@ interface MemberVoicePresence {
   transport: VoiceRoomTransport | undefined;
   muted: boolean;
   deafened: boolean;
+}
+
+function MemberRow({
+  member,
+  items,
+  timeoutLine,
+  voice,
+  actionsLabel,
+  onOpen,
+}: {
+  member: ServerMember;
+  items: ContextMenuItemDef[];
+  timeoutLine: string | null;
+  voice: MemberVoicePresence | undefined;
+  actionsLabel: string;
+  onOpen: (anchor: HTMLElement) => void;
+}) {
+  const { t } = useTranslation();
+  const shown = memberDisplayName(member);
+  return (
+    <ContextMenu items={items}>
+      <div className="flex items-center hover:bg-ink-3">
+        <button
+          type="button"
+          title={t("profile.open", { name: shown })}
+          data-member-trigger={member.id}
+          className="flex min-w-0 flex-1 items-center gap-3 py-2.5 pl-4 pr-2 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
+          onClick={(event) => onOpen(event.currentTarget)}
+        >
+          <span className="relative shrink-0">
+            <UserAvatar
+              name={shown}
+              avatarUrl={member.avatarUrl}
+              className="h-10 w-10"
+              rounded="full"
+              fallbackClassName="bg-ink-3 text-sm"
+            />
+            <StatusDot
+              status={member.status ?? "offline"}
+              className="absolute -bottom-0.5 -right-0.5"
+              ringClassName="rounded-full bg-ink-2 ring-2 ring-ink-2"
+            />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="flex min-w-0 items-center gap-1.5">
+              <span className="truncate text-sm font-medium text-paper">
+                {shown}
+              </span>
+              <RankMarks
+                marks={identityMarks({
+                  rank: member.role,
+                })}
+              />
+            </span>
+            {timeoutLine && (
+              <span
+                className="block truncate text-[11px] text-warning"
+                title={timeoutLine}
+              >
+                {timeoutLine}
+              </span>
+            )}
+            {voice && (
+              <span className="block truncate text-[11px] text-signal">
+                {t("memberList.inVoice", {
+                  channel: voice.channelName,
+                })}
+                {voice.deafened ? (
+                  <span className="text-danger">
+                    {" "}
+                    {t("timeout.deafened")}
+                  </span>
+                ) : (
+                  voice.muted && (
+                    <span className="text-danger">
+                      {" "}
+                      {t("timeout.muted")}
+                    </span>
+                  )
+                )}
+              </span>
+            )}
+          </span>
+        </button>
+        <RowMenu items={items} label={actionsLabel} />
+      </div>
+    </ContextMenu>
+  );
 }
 
 /** The member a move is being composed for. */
@@ -207,6 +402,9 @@ function subjectOf(member: ServerMember): ProfileSubject {
     username: member.username ?? null,
     roleIds: member.roleIds,
     rank: member.role,
+    // The raw nickname too, so the card's Change-nickname prompt can prefill
+    // it instead of starting from blank.
+    nickname: member.nickname ?? null,
   };
 }
 
@@ -253,6 +451,8 @@ export function MembersPanel({
   const [pendingMove, setPendingMove] = useState<PendingMove | null>(null);
   /** A quiet explanation line ("that needs the SFU"), never an error banner. */
   const [voiceHint, setVoiceHint] = useState<string | null>(null);
+  /** The directory filter. Matches name, username and tag. */
+  const [query, setQuery] = useState("");
 
   const canManage = role === "owner" || role === "admin";
   const timeoutByUser = new Map(timeouts.map((one) => [one.userId, one]));
@@ -274,6 +474,13 @@ export function MembersPanel({
     }
   }
 
+  // Same identifiers the row paints, plus the account display name so a
+  // nickname cannot hide someone from a query typed from the name the rest
+  // of the app uses. Username and tag stay in the haystack for @mentions.
+  const visibleMembers = members.filter((member) =>
+    memberMatchesQuery(member, query),
+  );
+
   useEffect(() => {
     if (!open || !serverId) {
       return;
@@ -283,6 +490,7 @@ export function MembersPanel({
     setPendingTimeout(null);
     setPendingMove(null);
     setVoiceHint(null);
+    setQuery("");
     setBansOpen(false);
     setBans([]);
     setBansError(null);
@@ -611,7 +819,6 @@ export function MembersPanel({
       actions.push({
         id: "mention",
         label: t("member.mention"),
-        icon: AtSign,
         onSelect: () => onMention(username),
       });
     }
@@ -622,7 +829,6 @@ export function MembersPanel({
       actions.push({
         id: "nickname",
         label: t("member.nickname"),
-        icon: Pencil,
         onSelect: () => void changeNickname(member),
       });
     }
@@ -632,13 +838,11 @@ export function MembersPanel({
           ? {
               id: "promote",
               label: t("member.promote"),
-              icon: ShieldPlus,
               onSelect: () => void setRole(member.id, "admin"),
             }
           : {
               id: "demote",
               label: t("member.demote"),
-              icon: ShieldMinus,
               onSelect: () => void setRole(member.id, "member"),
             },
       );
@@ -653,13 +857,11 @@ export function MembersPanel({
           ? {
               id: "unblock",
               label: t("member.unblock"),
-              icon: UserCheck,
               onSelect: () => onUnblockUser(member.id),
             }
           : {
               id: "block",
               label: t("member.block"),
-              icon: UserX,
               onSelect: () => onBlockUser(member.id),
               danger: true,
             },
@@ -673,7 +875,6 @@ export function MembersPanel({
       actions.push({
         id: "report",
         label: t("member.report"),
-        icon: Flag,
         onSelect: () => onReportUser(member),
         danger: true,
       });
@@ -691,13 +892,11 @@ export function MembersPanel({
               label: t("timeout.end", {
                 remaining: timeRemaining(active.expiresAt),
               }),
-              icon: TimerReset,
               onSelect: () => void endTimeout(member.id),
             }
           : {
               id: "timeout",
               label: t("timeout.action"),
-              icon: Clock,
               onSelect: () =>
                 setPendingTimeout({
                   member,
@@ -717,24 +916,18 @@ export function MembersPanel({
           actions.push({
             id: "voice-move",
             label: t("member.moveVoice"),
-            icon: ArrowRightLeft,
             onSelect: () =>
               setPendingMove({ member, fromChannelId: voice.channelId }),
           });
         }
         // SFU rooms get the real server-side mute; mesh rooms get the honest
-        // refusal — dimmed but tappable, so a tap explains instead of acting
-        // (the screen-share-unavailable pattern). An older server that omits
-        // the transport is treated as SFU-capable and the API stays the judge.
+        // refusal — tappable, so a tap explains instead of acting. An older
+        // server that omits the transport is treated as SFU-capable and the
+        // API stays the judge.
         const meshRoom = voice.transport === "mesh";
         actions.push({
           id: "voice-mute",
           label: t("member.serverMute"),
-          icon: MicOff,
-          title: meshRoom
-            ? meshMuteUnavailable()
-            : t("timeout.sfuMute", { name: member.displayName }),
-          dim: meshRoom,
           onSelect: () => {
             if (meshRoom) {
               setVoiceHint(meshMuteUnavailable());
@@ -746,7 +939,6 @@ export function MembersPanel({
         actions.push({
           id: "voice-disconnect",
           label: t("member.disconnectVoice", { channel: voice.channelName }),
-          icon: PhoneOff,
           onSelect: () => void disconnectVoice(member),
           danger: true,
         });
@@ -755,14 +947,12 @@ export function MembersPanel({
         {
           id: "kick",
           label: t("member.remove"),
-          icon: UserMinus,
           onSelect: () => setPending({ member, ban: false }),
           danger: true,
         },
         {
           id: "ban",
           label: t("member.ban"),
-          icon: Ban,
           onSelect: () => setPending({ member, ban: true }),
           danger: true,
         },
@@ -995,7 +1185,9 @@ export function MembersPanel({
       size="lg"
       onClose={onClose}
     >
-      <div className="p-3">
+      {/* Directory: inset grouped list. The name opens the card; ⋯ is the
+          same action set as a right-click, centred on the row. */}
+      <div className="min-h-full bg-ink p-4">
         {error && (
           <p role="alert" className="mb-3 px-2 text-sm text-danger">
             {error}
@@ -1014,6 +1206,23 @@ export function MembersPanel({
           </p>
         )}
 
+        {!loading && members.length > 0 && (
+          <div className="relative mb-3">
+            <Search
+              aria-hidden="true"
+              className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-paper-muted"
+            />
+            <input
+              type="search"
+              value={query}
+              aria-label={t("memberList.search")}
+              placeholder={t("memberList.search")}
+              className="h-9 w-full rounded-xl bg-ink-2 pl-9 pr-3 text-sm text-paper placeholder:text-paper-muted focus:outline-none focus:ring-2 focus:ring-signal/60"
+              onChange={(event) => setQuery(event.target.value)}
+            />
+          </div>
+        )}
+
         {timeoutsError && (
           <p role="alert" className="mb-3 px-2 text-sm text-danger">
             {timeoutsError}
@@ -1028,183 +1237,51 @@ export function MembersPanel({
           </p>
         )}
 
-        {members.map((member) => {
-          const shown = memberDisplayName(member);
-          const actions = actionsFor(member);
-          const busy = busyId === member.id;
-          const timeout = timeoutByUser.get(member.id);
-          const voice = voiceByUser.get(member.id);
-          const items: ContextMenuItemDef[] = [];
-          let separated = false;
-          for (const action of actions) {
-            if (action.danger && !separated && items.length > 0) {
-              separated = true;
-              items.push({ id: "sep", label: "", separator: true });
-            }
-            items.push({
-              id: action.id,
-              label: action.label,
-              onSelect: action.onSelect,
-              danger: action.danger,
-              disabled: busy,
-            });
-          }
+        {!loading && members.length > 0 && visibleMembers.length === 0 && (
+          <p className="px-2 py-6 text-sm text-paper-muted">
+            {t("memberList.noMatches", { query: query.trim() })}
+          </p>
+        )}
 
-          return (
-            <ContextMenu key={member.id} items={items}>
-              <div className="mb-1 flex items-center gap-3 rounded-md px-2 py-2 hover:bg-ink-3">
-                {/* The pip rides the avatar's corner rather than sitting in its
-                    own column: the row already carries a role badge and up to
-                    five action buttons, and one more column would push the
-                    name out of a narrow panel. `ring-ink` punches it out of
-                    whatever is behind it, including the hover surface. */}
-                <div className="relative shrink-0">
-                  {/* Left-click opens the profile card — the same one a
-                      message author opens, so "add friend" is one click from
-                      the roster as well as from the transcript. */}
-                  <button
-                    type="button"
-                    title={t("profile.open", { name: shown })}
-                    data-member-trigger={member.id}
-                    className="h-9 w-9 shrink-0 overflow-hidden rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
-                    onClick={(event) =>
-                      openProfile(subjectOf(member), event.currentTarget)
-                    }
-                  >
-                    <UserAvatar
-                      name={shown}
-                      avatarUrl={member.avatarUrl}
-                      className="h-9 w-9"
-                      fallbackClassName="bg-ink-3 text-sm"
-                    />
-                  </button>
-                  <StatusDot
-                    // Absent means an API that predates status. Read as
-                    // offline, never as online: showing nobody as present is a
-                    // missing feature, showing everybody as present is a lie.
-                    status={member.status ?? "offline"}
-                    className="absolute -bottom-0.5 -right-0.5"
-                    ringClassName="rounded-full bg-ink ring-2 ring-ink"
-                  />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <button
-                    type="button"
-                    title={t("profile.open", { name: shown })}
-                    className="block max-w-full truncate rounded text-left text-sm font-semibold hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
-                    onClick={(event) =>
-                      openProfile(subjectOf(member), event.currentTarget)
-                    }
-                  >
-                    {shown}
-                  </button>
-                  {member.tag && (
-                    <p className="truncate font-mono text-[11px] text-paper-muted">
-                      {member.tag}
-                    </p>
+        {visibleMembers.length > 0 && (
+          <div className="divide-y divide-ink-4/60 overflow-hidden rounded-2xl bg-ink-2">
+            {visibleMembers.map((member) => {
+              const shown = memberDisplayName(member);
+              const timeout = timeoutByUser.get(member.id);
+              const timeoutLine = timeout
+                ? t("timeout.until", {
+                    expires: formatMoment(timeout.expiresAt),
+                    remaining: timeRemaining(timeout.expiresAt),
+                    issuer: timeout.issuedByName ?? t("timeout.formerMod"),
+                    created: formatMoment(timeout.createdAt),
+                  }) + (timeout.reason ? ` · ${timeout.reason}` : "")
+                : null;
+              return (
+                <MemberRow
+                  key={member.id}
+                  member={member}
+                  items={menuFromActions(
+                    actionsFor(member),
+                    busyId === member.id,
                   )}
-                  {/* Who did it, when, why, and when it ends — on the row, not
-                      three clicks away in the audit log. This is the whole
-                      reason `listTimeouts` returns more than a boolean. */}
-                  {timeout && (
-                    <p className="truncate text-[11px] text-warning">
-                    {t("timeout.until", {
-                      expires: formatMoment(timeout.expiresAt),
-                      remaining: timeRemaining(timeout.expiresAt),
-                      issuer: timeout.issuedByName ?? t("timeout.formerMod"),
-                      created: formatMoment(timeout.createdAt),
-                    })}
-                    {timeout.reason ? ` — ${timeout.reason}` : ""}
-                    </p>
-                  )}
-                  {/* Same visibility as the channel list's occupant rows —
-                      this line only restates the roster everyone already
-                      receives, so it is not gated on moderator rank. */}
-                  {voice && (
-                    <p className="flex items-center gap-1 truncate text-[11px] text-signal">
-                    {t("memberList.inVoice", { channel: voice.channelName })}
-                      {voice.deafened ? (
-                        <span className="text-danger">{t("timeout.deafened")}</span>
-                      ) : (
-                        voice.muted && (
-                          <span className="text-danger">{t("timeout.muted")}</span>
-                        )
-                      )}
-                    </p>
-                  )}
-                </div>
-                {timeout && (
-                  <span
-                    className="flex shrink-0 items-center gap-1 rounded bg-warning/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-warning"
-                    title={t("member.timeoutUntil", {
-                      expires: formatMoment(timeout.expiresAt),
-                    })}
-                  >
-                    <Clock className="h-3 w-3" />
-                    {timeRemaining(timeout.expiresAt)}
-                  </span>
-                )}
-                <span
-                  className={cn(
-                    "rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider",
-                    member.role === "owner"
-                      ? "bg-signal/15 text-signal"
-                      : member.role === "admin"
-                        ? "bg-warning/15 text-warning"
-                        : "bg-ink-4 text-paper-muted",
-                  )}
-                >
-                  {member.role === "owner"
-                    ? t("member.role.owner")
-                    : member.role === "admin"
-                      ? t("member.role.admin")
-                      : t("member.role.member")}
-                </span>
-                {actions.length > 0 && (
-                  <div className="flex shrink-0 items-center gap-0.5">
-                    {actions.map((action) => (
-                      // The one place the bubble and the accessible name are
-                      // meant to differ. Next to the pointer, on a row whose
-                      // name you are already looking at, "Kick" is the whole
-                      // answer; to a reader stepping through twelve identical
-                      // buttons, "Kick" is not, so `name` puts the member back
-                      // in. `action.title` is the second line where there is
-                      // one — it is the sentence that explains a dimmed
-                      // action, and it is the reason `dim` is aria-disabled
-                      // rather than disabled.
-                      <Tooltip
-                        key={action.id}
-                        label={action.label}
-                        detail={action.title}
-                        name={`${action.label}: ${shown}`}
-                      >
-                        <Button
-                          size="icon"
-                          variant={action.danger ? "danger" : "ghost"}
-                          // `dim` keeps the button tappable (aria-disabled, not
-                          // disabled) so a tap can explain why it does nothing.
-                          className={cn("h-8 w-8", action.dim && "opacity-50")}
-                          aria-disabled={action.dim || undefined}
-                          disabled={busy}
-                          onClick={action.onSelect}
-                        >
-                          <action.icon className="h-4 w-4" />
-                        </Button>
-                      </Tooltip>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </ContextMenu>
-          );
-        })}
+                  timeoutLine={timeoutLine}
+                  voice={voiceByUser.get(member.id)}
+                  actionsLabel={t("memberList.actions", { name: shown })}
+                  onOpen={(anchor) =>
+                    openProfile(subjectOf(member), anchor)
+                  }
+                />
+              );
+            })}
+          </div>
+        )}
 
         {canManage && (
-          <div className="mt-3 border-t border-ink-4 pt-3">
+          <div className="mt-4">
             <button
               type="button"
               aria-expanded={bansOpen}
-              className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-xs font-semibold uppercase tracking-wider text-paper-muted hover:bg-ink-3 hover:text-paper"
+              className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-xs font-semibold uppercase tracking-wider text-paper-muted transition-colors hover:text-paper"
               onClick={() => setBansOpen((prev) => !prev)}
             >
               {bansOpen ? (
@@ -1236,43 +1313,48 @@ export function MembersPanel({
                     {t("member.bansEmpty")}
                   </p>
                 )}
-                {bans.map((banned) => (
-                  <div
-                    key={banned.userId}
-                    className="mb-1 flex items-center gap-3 rounded-md px-2 py-2 hover:bg-ink-3"
-                  >
-                    <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-md bg-ink-3 text-sm font-semibold">
-                      {banned.displayName.slice(0, 1).toUpperCase()}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-semibold">
-                        {banned.displayName}
-                      </p>
-                      {banned.tag && (
-                        <p className="truncate font-mono text-[11px] text-paper-muted">
-                          {banned.tag}
-                        </p>
-                      )}
-                      {banned.reason && (
-                        <p className="truncate text-[11px] text-paper-muted">
-                          {banned.reason}
-                        </p>
-                      )}
-                    </div>
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      className="gap-1.5"
-                      disabled={busyId === banned.userId}
-                      onClick={() => void unban(banned.userId)}
-                    >
-                      <RotateCcw className="h-3.5 w-3.5" />
-                      {busyId === banned.userId
-                        ? t("common.working")
-                        : t("member.unban")}
-                    </Button>
+                {/* Banned people have no card to open from here, so these rows
+                    are not buttons; Unban is a text button, the one action the
+                    row still owns. */}
+                {bans.length > 0 && (
+                  <div className="divide-y divide-ink-4/60 overflow-hidden rounded-2xl bg-ink-2">
+                    {bans.map((banned) => (
+                      <div
+                        key={banned.userId}
+                        className="flex items-center gap-3 px-4 py-2.5"
+                      >
+                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-ink-3 text-sm font-semibold text-paper">
+                          {banned.displayName.slice(0, 1).toUpperCase()}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-medium text-paper">
+                            {banned.displayName}
+                          </p>
+                          {banned.tag && (
+                            <p className="truncate font-mono text-[11px] text-paper-muted">
+                              {banned.tag}
+                            </p>
+                          )}
+                          {banned.reason && (
+                            <p className="truncate text-[11px] text-paper-muted">
+                              {banned.reason}
+                            </p>
+                          )}
+                        </div>
+                        <button
+                          type="button"
+                          disabled={busyId === banned.userId}
+                          className="shrink-0 rounded-md px-2 py-1 text-sm font-medium text-signal transition-colors hover:bg-signal/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60 disabled:opacity-50"
+                          onClick={() => void unban(banned.userId)}
+                        >
+                          {busyId === banned.userId
+                            ? t("common.working")
+                            : t("member.unban")}
+                        </button>
+                      </div>
+                    ))}
                   </div>
-                ))}
+                )}
               </div>
             )}
           </div>

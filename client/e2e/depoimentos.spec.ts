@@ -323,6 +323,10 @@ test("A writes a depoimento, B's door lights up, B publishes it, and it lands on
 
     // --- and it is on B's profile, for A --------------------------------
     const reopened = await reopenCardForB(page, shared, channelPath);
+    const depoimentosTab = reopened.locator("[data-profile-about=depoimentos]");
+    if ((await depoimentosTab.count()) > 0) {
+      await depoimentosTab.click();
+    }
     const profile = reopened.locator("[data-depoimentos]");
     await expect(profile).toBeVisible();
     await expect(profile.getByText(words)).toBeVisible();
@@ -416,6 +420,10 @@ test("a community chip appears on a profile and the opt-out hides it", async ({
     });
 
     const card = await openCardForB(page, shared);
+    const communitiesTab = card.locator("[data-profile-about=communities]");
+    if ((await communitiesTab.count()) > 0) {
+      await communitiesTab.click();
+    }
     const chips = card.locator("[data-profile-communities]");
     await expect(chips).toBeVisible();
     await expect(chips.getByText(name)).toBeVisible();
