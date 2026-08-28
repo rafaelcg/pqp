@@ -156,7 +156,12 @@ function RowMenu({
   }
 
   return (
-    <div ref={rootRef} className="relative mr-2 flex shrink-0 items-center">
+    <div
+      ref={rootRef}
+      className="relative mr-2 flex shrink-0 items-center"
+      onClick={(event) => event.stopPropagation()}
+      onPointerDown={(event) => event.stopPropagation()}
+    >
       <Tooltip label={label}>
         <button
           type="button"
