@@ -19,9 +19,9 @@ interface PollComposerProps {
   onClose: () => void;
 }
 
-/** Matches the composer textarea: h-10, ink field, signal focus ring. */
+/** Filled field, no hard border: recessed ink well with a signal focus ring. */
 const FIELD_CLASS =
-  "h-10 w-full rounded-md border border-ink-4 bg-ink-3 px-3 text-sm text-paper placeholder:text-paper-muted focus-visible:border-signal/60 focus-visible:outline-none";
+  "h-10 w-full rounded-lg bg-ink-2 px-3 text-sm text-paper placeholder:text-paper-muted/70 shadow-[inset_0_1px_2px_rgb(0_0_0/0.12)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/50";
 
 const DURATION_KEYS: Record<number, MessageKey> = {
   3600: "poll.composer.duration.3600",
@@ -49,12 +49,12 @@ export function PollComposer({ onSubmit, onClose }: PollComposerProps) {
   });
 
   return (
-    <div className="mb-2 rounded-lg border border-border bg-surface-2 p-3 shadow-[var(--shadow-popover)]">
-      <div className="flex items-center gap-2">
-        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-signal/10 text-signal">
+    <div className="mb-2 rounded-2xl bg-[linear-gradient(165deg,color-mix(in_oklab,var(--color-signal)_6%,var(--color-surface-2)),var(--color-surface-2)_72%)] p-4 shadow-[inset_0_1px_0_rgb(255_255_255/0.05),var(--shadow-popover)]">
+      <div className="flex items-center gap-2.5">
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-signal/15 text-signal">
           <BarChart3 className="h-4 w-4" aria-hidden />
         </span>
-        <p className="min-w-0 flex-1 truncate text-sm font-semibold text-paper">
+        <p className="min-w-0 flex-1 truncate font-display text-base font-semibold text-paper">
           {t("poll.composer.title")}
         </p>
         <button
@@ -138,10 +138,10 @@ export function PollComposer({ onSubmit, onClose }: PollComposerProps) {
                 aria-checked={active}
                 onClick={() => setDurationSeconds(seconds)}
                 className={cn(
-                  "h-8 rounded-md border px-2.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60",
+                  "h-8 rounded-full px-3 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60",
                   active
-                    ? "border-signal/70 bg-signal/15 text-paper"
-                    : "border-ink-4 bg-ink-3 text-paper-muted hover:text-paper",
+                    ? "bg-[color-mix(in_oklab,var(--color-signal)_26%,var(--color-surface-1))] font-semibold text-paper"
+                    : "bg-[color-mix(in_oklab,var(--color-paper)_5%,var(--color-surface-1))] font-medium text-paper-muted hover:text-paper",
                 )}
               >
                 {t(DURATION_KEYS[seconds] ?? "poll.composer.duration.604800")}
@@ -161,23 +161,21 @@ export function PollComposer({ onSubmit, onClose }: PollComposerProps) {
         <span
           aria-hidden
           className={cn(
-            "relative h-5 w-9 shrink-0 rounded-full border transition-colors",
-            allowMultiselect
-              ? "border-signal/70 bg-signal/40"
-              : "border-ink-4 bg-ink-3",
+            "relative h-5 w-9 shrink-0 rounded-full shadow-[inset_0_1px_2px_rgb(0_0_0/0.2)] transition-colors",
+            allowMultiselect ? "bg-signal" : "bg-ink-2",
           )}
         >
           <span
             className={cn(
-              "absolute left-0.5 top-0.5 h-3.5 w-3.5 rounded-full bg-paper transition-transform",
-              allowMultiselect && "translate-x-4",
+              "absolute left-0.5 top-0.5 h-4 w-4 rounded-full shadow-[0_1px_2px_rgb(0_0_0/0.3)] transition-transform",
+              allowMultiselect ? "translate-x-4 bg-ink" : "bg-paper",
             )}
           />
         </span>
         {t("poll.composer.multiple")}
       </button>
 
-      <div className="mt-3 flex items-center justify-end gap-2 border-t border-border/60 pt-3">
+      <div className="mt-4 flex items-center justify-end gap-2">
         <Button type="button" variant="ghost" className="h-10" onClick={onClose}>
           {t("poll.composer.cancel")}
         </Button>

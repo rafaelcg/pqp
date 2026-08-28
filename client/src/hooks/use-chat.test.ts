@@ -929,8 +929,8 @@ describe("chance and polls", () => {
           totalVotes: 0,
           canClose: true,
           options: [
-            { id: optionA, label: "Yes", votes: 0, voted: false },
-            { id: optionB, label: "No", votes: 0, voted: false },
+            { id: optionA, label: "Yes", votes: 0, voted: false, voters: [] },
+            { id: optionB, label: "No", votes: 0, voted: false, voters: [] },
           ],
         },
       }),
@@ -950,14 +950,23 @@ describe("chance and polls", () => {
         totalVotes: 1,
         canClose: false,
         options: [
-          { id: optionA, label: "Yes", votes: 1, voted: false },
-          { id: optionB, label: "No", votes: 0, voted: false },
+          {
+            id: optionA,
+            label: "Yes",
+            votes: 1,
+            voted: false,
+            voters: [{ userId: ME.id, displayName: "Me", avatarUrl: null }],
+          },
+          { id: optionB, label: "No", votes: 0, voted: false, voters: [] },
         ],
       },
     } as never);
     const poll = chat.getMessages()[0]!.poll;
     expect(poll?.options[0]?.votes).toBe(1);
     expect(poll?.options[0]?.voted).toBe(true);
+    expect(poll?.options[0]?.voters).toEqual([
+      { userId: ME.id, displayName: "Me", avatarUrl: null },
+    ]);
     expect(poll?.canClose).toBe(true);
   });
 
@@ -975,8 +984,8 @@ describe("chance and polls", () => {
           totalVotes: 0,
           canClose: true,
           options: [
-            { id: optionA, label: "Yes", votes: 0, voted: false },
-            { id: optionB, label: "No", votes: 0, voted: false },
+            { id: optionA, label: "Yes", votes: 0, voted: false, voters: [] },
+            { id: optionB, label: "No", votes: 0, voted: false, voters: [] },
           ],
         },
       }),
@@ -988,5 +997,8 @@ describe("chance and polls", () => {
     expect(votes).toHaveLength(1);
     expect(chat.getMessages()[0]!.poll?.options[0]?.votes).toBe(1);
     expect(chat.getMessages()[0]!.poll?.options[1]?.votes).toBe(0);
+    expect(chat.getMessages()[0]!.poll?.options[0]?.voters).toEqual([
+      { userId: ME.id, displayName: "Me", avatarUrl: null },
+    ]);
   });
 });

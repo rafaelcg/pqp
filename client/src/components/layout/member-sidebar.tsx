@@ -182,6 +182,8 @@ export function MemberSidebar({
   const { t } = useTranslation();
   const openProfile = useProfilePopover();
   const [members, setMembers] = useState<ServerMember[]>([]);
+  const membersRef = useRef(members);
+  membersRef.current = members;
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [collapsed, setCollapsed] =
@@ -217,12 +219,8 @@ export function MemberSidebar({
         // A failed *refresh* leaves the last known roster on screen: it is stale,
         // not wrong, and an error banner over a working list would teach people
         // to ignore the banner. Only a failed first read has nothing to show.
-        if (showSpinner) {
-          setError(
-            err instanceof ApiError
-              ? err.message
-              : t("memberList.loadFailed"),
-          );
+        if (showSpinner && membersRef.current.length === 0) {
+          setError(t("memberList.loadFailed"));
         }
       } finally {
         if (!signal.cancelled && showSpinner) {
@@ -233,15 +231,24 @@ export function MemberSidebar({
     [serverId, t],
   );
 
-  // First read, and a fresh one whenever the server changes.
+  // Wipe only when the server changes. `load` also changes when the catalogue
+  // hydrates (`t`), and resetting the roster then flashes an empty list and
+  // can pin a transient 404 as "Server not found".
+  useEffect(() => {
+    if (!active) {
+      return;
+    }
+    setMembers([]);
+    setError(null);
+    setShown({});
+    setCollapsed(NO_COLLAPSE);
+  }, [active, serverId]);
+
   useEffect(() => {
     if (!active) {
       return;
     }
     const signal = { cancelled: false };
-    setMembers([]);
-    setShown({});
-    setCollapsed(NO_COLLAPSE);
     void load(signal, true);
     return () => {
       signal.cancelled = true;

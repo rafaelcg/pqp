@@ -4,6 +4,7 @@ import {
   conversationRoutePath,
   messageRoutePath,
   parseAppRoute,
+  pickOpenableServer,
   signedOutRedirectPath,
 } from "./app-route";
 
@@ -230,5 +231,25 @@ describe("signedOutRedirectPath", () => {
     for (const input of hostile) {
       expect(signedOutRedirectPath(input).startsWith("/app")).toBe(true);
     }
+  });
+});
+
+describe("pickOpenableServer", () => {
+  it("keeps a server the viewer is already in", () => {
+    expect(pickOpenableServer("lobby", ["lobby", "other"])).toEqual({
+      serverId: "lobby",
+      usedFallback: false,
+    });
+  });
+
+  it("falls back when the URL names a server they cannot open", () => {
+    expect(pickOpenableServer("gone", ["lobby"])).toEqual({
+      serverId: "lobby",
+      usedFallback: true,
+    });
+  });
+
+  it("returns null when they have no server at all", () => {
+    expect(pickOpenableServer("gone", [])).toBeNull();
   });
 });

@@ -93,6 +93,26 @@ export function parseAppRoute(pathname: string): AppRouteTarget | null {
   return null;
 }
 
+/**
+ * A `/app/server/<id>` URL is not proof of membership. After a local DB wipe,
+ * or a shared link to a community the viewer is not in, that id 404s as
+ * "Server not found". Opening it anyway left the selection on the dead id
+ * while the previous server's channels stayed on screen.
+ */
+export function pickOpenableServer(
+  requestedId: string,
+  knownIds: readonly string[],
+): { serverId: string; usedFallback: boolean } | null {
+  if (knownIds.includes(requestedId)) {
+    return { serverId: requestedId, usedFallback: false };
+  }
+  const first = knownIds[0];
+  if (!first) {
+    return null;
+  }
+  return { serverId: first, usedFallback: true };
+}
+
 /** Inverse of {@link parseAppRoute} for the channel case. */
 export function channelRoutePath(
   serverId: string,

@@ -75,9 +75,12 @@ import {
 } from "@/lib/mention-autocomplete";
 import {
   executeSlashCommand,
+  filterRollPresets,
   filterSlashCommands,
   getSlashQuery,
+  isRollPresetMenu,
   isSlashMenuOpen,
+  parseSlashInput,
   type SlashCommandMeta,
   type SlashFeedback,
 } from "@/lib/slash-commands";
@@ -170,6 +173,50 @@ const FEEDBACK_ICONS = {
   info: Info,
 } as const;
 
+/** Pip cells for a 6 on a 3×3 face. Same layout the roll card uses. */
+const D6_PREVIEW_PIPS = [0, 2, 3, 5, 6, 8];
+
+function parseRollPresetShape(notation: string): { count: number; sides: number } {
+  const match = /^(\d+)d(\d+)$/i.exec(notation);
+  return {
+    count: match ? Number(match[1]) : 1,
+    sides: match ? Number(match[2]) : 20,
+  };
+}
+
+/** What the preset will roll: a cube with pips for d6, the face count otherwise. */
+function RollDiePreview({ notation }: { notation: string }) {
+  const { count, sides } = parseRollPresetShape(notation);
+  return (
+    <span className="flex shrink-0 items-center gap-0.5" aria-hidden>
+      {Array.from({ length: Math.min(count, 2) }, (_, index) => (
+        <span
+          key={index}
+          className="flex h-8 w-8 items-center justify-center rounded-[7px] bg-ink-2 ring-1 ring-ink-4 shadow-[0_2px_0_0_var(--color-ink-4)]"
+        >
+          {sides === 6 ? (
+            <span className="grid h-5 w-5 grid-cols-3 grid-rows-3 place-items-center">
+              {Array.from({ length: 9 }, (_, cell) => (
+                <span
+                  key={cell}
+                  className={cn(
+                    "h-1 w-1 rounded-full",
+                    D6_PREVIEW_PIPS.includes(cell) ? "bg-paper" : "bg-transparent",
+                  )}
+                />
+              ))}
+            </span>
+          ) : (
+            <span className="font-display text-[11px] font-bold leading-none tabular-nums text-paper">
+              {sides}
+            </span>
+          )}
+        </span>
+      ))}
+    </span>
+  );
+}
+
 /** One chip in the tray above the textarea, from pick to send. */
 interface PendingAttachment {
   /** Client-side only: a chip exists before the server has minted an id. */
@@ -238,11 +285,30 @@ export function MessageComposer({
   pendingRef.current = pending;
   const uploadsRef = useRef(new Map<string, AbortController>());
 
+  const rollPresets = useMemo(() => {
+    if (!isRollPresetMenu(body)) {
+      return [];
+    }
+    return filterRollPresets(parseSlashInput(body)?.args ?? "");
+  }, [body]);
+  const rollArg = isRollPresetMenu(body)
+    ? (parseSlashInput(body)?.args ?? "").trim()
+    : "";
+  const rollPresetOpen =
+    Boolean(slashContext) &&
+    !menuDismissed &&
+    isRollPresetMenu(body) &&
+    (rollArg === "" || rollPresets.length > 0);
   const slashOpen =
-    Boolean(slashContext) && isSlashMenuOpen(body) && !menuDismissed;
+    Boolean(slashContext) &&
+    !menuDismissed &&
+    (rollPresetOpen || (isSlashMenuOpen(body) && !isRollPresetMenu(body)));
   const slashMatches = useMemo(
-    () => (slashOpen ? filterSlashCommands(getSlashQuery(body)) : []),
-    [body, slashOpen],
+    () =>
+      slashOpen && !rollPresetOpen
+        ? filterSlashCommands(getSlashQuery(body))
+        : [],
+    [body, rollPresetOpen, slashOpen],
   );
 
   // Slash wins when both could apply: a command can only start at position 0,
@@ -284,7 +350,9 @@ export function MessageComposer({
         : null;
   const menuCount =
     menuKind === "slash"
-      ? slashMatches.length
+      ? rollPresetOpen
+        ? rollPresets.length
+        : slashMatches.length
       : menuKind === "mention"
         ? mentionMatches.length
         : emojiMatches.length;
@@ -292,6 +360,20 @@ export function MessageComposer({
   const FeedbackIcon = feedback ? FEEDBACK_ICONS[feedback.tone] : null;
 
   const options: AutocompleteOption[] = useMemo(() => {
+    if (menuKind === "slash" && rollPresetOpen) {
+      return rollPresets.map((preset) => {
+        const hint =
+          "hintKey" in preset && preset.hintKey ? t(preset.hintKey) : null;
+        return {
+          id: preset.notation,
+          leading: <RollDiePreview notation={preset.notation} />,
+          primary: t(preset.labelKey),
+          secondary: hint
+            ? `${preset.notation} · ${hint}`
+            : preset.notation,
+        };
+      });
+    }
     if (menuKind === "slash") {
       return slashMatches.map((command) => {
         const Icon = SLASH_COMMAND_ICONS[command.name] ?? Terminal;
@@ -343,7 +425,7 @@ export function MessageComposer({
       }));
     }
     return [];
-  }, [emojiMatches, menuKind, mentionMatches, slashMatches]);
+  }, [emojiMatches, menuKind, mentionMatches, rollPresetOpen, rollPresets, slashMatches, t]);
 
   useEffect(() => {
     setSelectedIndex(0);
@@ -684,6 +766,14 @@ export function MessageComposer({
       applyEmojiSelection(index);
       return;
     }
+    if (rollPresetOpen) {
+      const preset = rollPresets[index];
+      if (!preset) {
+        return;
+      }
+      void runSlash(`/roll ${preset.notation}`);
+      return;
+    }
     const command = slashMatches[index];
     if (!command) {
       return;
@@ -869,6 +959,11 @@ export function MessageComposer({
         applySelection(selectedIndex);
         return;
       }
+      if (rollPresetOpen) {
+        event.preventDefault();
+        applySelection(selectedIndex);
+        return;
+      }
       const selected = slashMatches[selectedIndex];
       if (!selected) {
         return;
@@ -911,14 +1006,18 @@ export function MessageComposer({
               ? t("composer.members")
               : menuKind === "emoji"
                 ? t("composer.emoji")
-                : t("composer.slashCommands")
+                : rollPresetOpen
+                  ? t("composer.dice")
+                  : t("composer.slashCommands")
           }
           heading={
             menuKind === "mention"
               ? t("composer.members")
               : menuKind === "emoji"
                 ? t("composer.emoji")
-                : t("composer.commands")
+                : rollPresetOpen
+                  ? t("composer.dice")
+                  : t("composer.commands")
           }
           emptyLabel={
             menuKind === "emoji" ? t("composer.noEmoji") : t("composer.noCommands")
@@ -943,16 +1042,22 @@ export function MessageComposer({
           onClose={() => setIsGifPickerOpen(false)}
         />
       )}
+      {/*
+        Out of flow on purpose. An in-flow strip (the old "Coin flipped"
+        banner) shoved the composer down for five seconds, then jumped it
+        back. Errors and /help still need a place to land; they overlay the
+        last messages instead of moving the input.
+      */}
       {feedback && FeedbackIcon && (
         <div
           className={cn(
-            "mb-2 flex items-start gap-2 rounded-md border px-2.5 py-1.5 text-xs",
+            "absolute bottom-full left-3 right-3 z-20 mb-2 flex items-start gap-2 rounded-md border px-2.5 py-1.5 text-xs shadow-[var(--shadow-popover)] sm:left-4 sm:right-4",
             feedback.tone === "error" &&
-              "border-danger/40 bg-danger/10 text-danger",
+              "border-danger/40 bg-ink-2 text-danger",
             feedback.tone === "success" &&
-              "border-signal/40 bg-signal/10 text-signal",
+              "border-signal/40 bg-ink-2 text-signal",
             feedback.tone === "info" &&
-              "border-ink-4 bg-ink-3 text-paper-muted",
+              "border-ink-4 bg-ink-2 text-paper-muted",
           )}
           role="status"
         >
@@ -983,10 +1088,6 @@ export function MessageComposer({
           onSubmit={(request) => {
             slashContext.sendPoll(request);
             setIsPollComposerOpen(false);
-            setFeedback({
-              message: t("slash.poll.ok"),
-              tone: "success",
-            });
           }}
           onClose={() => setIsPollComposerOpen(false)}
         />

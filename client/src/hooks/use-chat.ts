@@ -906,7 +906,20 @@ export function createChatController(
       if (target?.poll) {
         messages = messages.map((entry) =>
           entry.id === messageId && entry.poll
-            ? { ...entry, poll: optimisticVote(entry.poll, optionId) }
+            ? {
+                ...entry,
+                poll: optimisticVote(
+                  entry.poll,
+                  optionId,
+                  currentUserId && currentUser
+                    ? {
+                        userId: currentUserId,
+                        displayName: currentUser.displayName,
+                        avatarUrl: currentUser.avatarUrl,
+                      }
+                    : null,
+                ),
+              }
             : entry,
         );
         emit();
@@ -1124,18 +1137,32 @@ export function createChatController(
 
 export type ChatController = ReturnType<typeof createChatController>;
 
-function optimisticVote(poll: Poll, optionId: string): Poll {
+function optimisticVote(
+  poll: Poll,
+  optionId: string,
+  viewer: { userId: string; displayName: string; avatarUrl: string | null } | null,
+): Poll {
   const already = poll.options.find((option) => option.id === optionId)?.voted;
   const options = poll.options.map((option) => {
+    const voters = option.voters ?? [];
+    const withoutMe = viewer
+      ? voters.filter((row) => row.userId !== viewer.userId)
+      : voters;
     if (option.id === optionId) {
       return {
         ...option,
         voted: !already,
         votes: option.votes + (already ? -1 : 1),
+        voters: already || !viewer ? withoutMe : [...withoutMe, viewer],
       };
     }
     if (!poll.allowMultiselect && option.voted) {
-      return { ...option, voted: false, votes: Math.max(0, option.votes - 1) };
+      return {
+        ...option,
+        voted: false,
+        votes: Math.max(0, option.votes - 1),
+        voters: withoutMe,
+      };
     }
     return option;
   });

@@ -44,6 +44,7 @@ import { WebhooksPanel } from "@/components/layout/webhooks-panel";
 import { ChannelMetaDialog } from "@/components/layout/channel-meta-dialog";
 import { DmCallStage } from "@/components/dm/dm-call-stage";
 import { IncomingCallOverlay } from "@/components/dm/incoming-call-overlay";
+import { WhatsNewPrompt } from "@/components/layout/whats-new-prompt";
 import { DmList } from "@/components/layout/dm-list";
 import { FriendsView } from "@/components/friends/friends-view";
 import { CommunitiesView } from "@/components/communities/communities-view";
@@ -142,7 +143,12 @@ import {
   type ServerMember,
   type ServerRole,
 } from "@/lib/api";
-import { parseAppRoute, signedOutRedirectPath, messageRoutePath } from "@/lib/app-route";
+import {
+  parseAppRoute,
+  pickOpenableServer,
+  signedOutRedirectPath,
+  messageRoutePath,
+} from "@/lib/app-route";
 import {
   hasStashedConnectionCallback,
   stashConnectionCallbackFromWindow,
@@ -694,6 +700,8 @@ function MainAppContent({
   const selectedServerId = selectionServerId(selection);
   const selectedServerIdRef = useRef<string | null>(null);
   selectedServerIdRef.current = selectedServerId;
+  const serversRef = useRef(servers);
+  serversRef.current = servers;
   const perms = usePermissions(selectedServerId);
   const permsRef = useRef(perms);
   permsRef.current = perms;
@@ -1987,6 +1995,7 @@ function MainAppContent({
       setChannelsLoading(true);
       try {
         const { channels: list } = await fetchChannels(serverId);
+        setAppError(null);
         setChannels(list);
         void loadUnread(serverId);
         const general =
@@ -2001,7 +2010,11 @@ function MainAppContent({
         }
       } catch (error) {
         setAppError(
-          error instanceof Error ? error.message : "Failed to load channels",
+          error instanceof ApiError && error.status === 404
+            ? translateMessage("chrome.serverUnavailable")
+            : error instanceof Error
+              ? error.message
+              : "Failed to load channels",
         );
       } finally {
         setChannelsLoading(false);
@@ -2392,16 +2405,24 @@ function MainAppContent({
       channelId: string | null,
       messageId: string | null = null,
     ) => {
-      setSelection({ kind: "server", serverId });
+      const known = serversRef.current.map((server) => server.id);
+      const openable = pickOpenableServer(serverId, known);
+      const targetServerId = openable?.serverId ?? serverId;
+      const usedFallback = openable?.usedFallback === true;
+      const targetChannelId = usedFallback ? null : channelId;
+      const targetMessageId = usedFallback ? null : messageId;
+
       setChannelsLoading(true);
       try {
-        const { channels: list } = await fetchChannels(serverId);
+        const { channels: list } = await fetchChannels(targetServerId);
+        setSelection({ kind: "server", serverId: targetServerId });
+        setAppError(null);
         setChannels(list);
-        void loadUnread(serverId);
-        const requested = channelId
-          ? list.find((c) => c.id === channelId)
+        void loadUnread(targetServerId);
+        const requested = targetChannelId
+          ? list.find((c) => c.id === targetChannelId)
           : undefined;
-        if (channelId && !requested) {
+        if (targetChannelId && !requested) {
           setAppError("That channel no longer exists or is private.");
         }
         const target =
@@ -2409,11 +2430,9 @@ function MainAppContent({
           list.find((c) => c.type === "text") ??
           list.find((c) => c.type !== "category");
         if (target) {
-          await selectChannel(target.id, serverId);
-          // Only after the newest page is in hand: the list flashes the row if
-          // it is there and pulls history around it if it is not.
-          if (messageId && target.id === channelId) {
-            setHighlightMessageId(messageId);
+          await selectChannel(target.id, targetServerId);
+          if (targetMessageId && target.id === targetChannelId) {
+            setHighlightMessageId(targetMessageId);
           }
         } else {
           setSelectedChannelId(null);
@@ -2421,9 +2440,11 @@ function MainAppContent({
         }
       } catch (error) {
         setAppError(
-          error instanceof Error
-            ? error.message
-            : "That link points to a server you cannot open.",
+          error instanceof ApiError && error.status === 404
+            ? translateMessage("chrome.serverUnavailable")
+            : error instanceof Error
+              ? error.message
+              : translateMessage("chrome.serverUnavailable"),
         );
       } finally {
         setChannelsLoading(false);
@@ -3656,6 +3677,11 @@ function MainAppContent({
         />
       )}
 
+
+      {/* One corner card per ship. Same shape as the old Android beta prompt:
+          no backdrop, does not steal the composer. Decides for itself whether
+          this pack has already been seen. */}
+      <WhatsNewPrompt />
 
       {/* Also at the root: a call rings you wherever you are in the app. */}
       <IncomingCallOverlay
