@@ -3,15 +3,19 @@ import { rgbToHex, type Rgb } from "@/lib/oklch";
 
 export const HEX_COLOR = /^#[0-9A-Fa-f]{6}$/;
 
+function rgbBytes(r: number, g: number, b: number): string {
+  return rgbToHex({ r: r / 255, g: g / 255, b: b / 255 });
+}
+
 export const ROLE_COLOR_PRESETS = [
   STAFF_ROLE_COLORS.owner,
   STAFF_ROLE_COLORS.admin,
   STAFF_ROLE_COLORS.manager,
   STAFF_ROLE_COLORS.moderator,
-  "#C9864A",
-  "#8B7ED4",
-  "#E39B8A",
-  "#6F8FA0",
+  rgbBytes(201, 134, 74),
+  rgbBytes(139, 126, 212),
+  rgbBytes(227, 155, 138),
+  rgbBytes(111, 143, 160),
 ] as const;
 
 /** Starting HSV when the cargo is unpainted, so the plane is usable. */

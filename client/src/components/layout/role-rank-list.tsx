@@ -284,7 +284,7 @@ export function RoleRankList({
       {drag && dragging
         ? createPortal(
             <div
-              className="pointer-events-none fixed z-[80] overflow-hidden rounded-xl bg-ink-2 shadow-[0_18px_40px_rgba(0,0,0,0.45)] ring-1 ring-ink-4"
+              className="pointer-events-none fixed z-[80] overflow-hidden rounded-xl bg-ink-2 shadow-[var(--shadow-popover)] ring-1 ring-ink-4"
               style={{
                 width: drag.width,
                 height: drag.height,
