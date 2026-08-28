@@ -29,7 +29,7 @@
  * bundles this outside the pnpm workspace, so it cannot import the i18n
  * JSON. The strings below are duplicates of `landing.seo.*`,
  * `vsDiscord.seo.*`, `tela.seo.*`, `claim.seo.*`, `betaPage.seo.*`,
- * `androidPage.seo.*`, `downloadPage.seo.*`, `vsDiscord.faq.*` and
+ * `downloadPage.seo.*`, `vsDiscord.faq.*` and
  * `tela.faq.*`, and
  * `marketing-meta.test.ts` pins each pair against the JSON catalogues — the
  * duplication cannot drift without failing the suite.
@@ -43,7 +43,6 @@ export type MarketingPage =
   | "/vs-discord"
   | "/tela"
   | "/beta"
-  | "/android"
   | "/download"
   | "/garanta"
   | "/claim"
@@ -59,7 +58,6 @@ const MARKETING_PATHS: ReadonlySet<string> = new Set([
   "/vs-discord",
   "/tela",
   "/beta",
-  "/android",
   "/download",
   "/garanta",
   "/claim",
@@ -150,18 +148,6 @@ const PAGE_COPY: Record<MarketingPage, PageCopy> = {
       "pt-BR":
         "Acesso antecipado ao pqp no iPhone. Voz, texto e as telas que o pessoal compartilha, direto do bolso. Vagas pelo TestFlight, de graça e em beta aberto.",
       en: "Early access to pqp on iPhone. Voice, text, and the screens other people are sharing, from your pocket. Spots via TestFlight, free and in open beta.",
-    },
-  },
-  "/android": {
-    canonicalPath: "/android",
-    title: {
-      "pt-BR": "Beta fechado do Android \u00b7 pqp no Android",
-      en: "Android closed beta \u00b7 pqp on Android",
-    },
-    description: {
-      "pt-BR":
-        "O app nativo do pqp pro Android, em teste fechado na Google Play. Voz que continua quando voc\u00ea sai do app, a tela do celular compartilhada na sala e um n\u00famero contado de vagas pra testar.",
-      en: "The native pqp app for Android, in closed testing on Google Play. Voice that keeps running when you leave the app, your phone screen shared into the room, and a counted number of tester slots.",
     },
   },
   "/download": {

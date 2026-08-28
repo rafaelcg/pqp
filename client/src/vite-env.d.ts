@@ -15,14 +15,6 @@ interface ImportMetaEnv {
   readonly VITE_VOICE_BACKEND?: "mesh" | "cloudflare-sfu" | "livekit";
   readonly VITE_DEV_AUTH_BYPASS?: string;
   /**
-   * The two public links of the Android closed beta: the Google Group that is
-   * the tester list, and the Play opt-in URL. Optional, and treated as a single
-   * gate — with either one missing the `/android` CTA degrades and the in-app
-   * prompt does not render at all. See `lib/android-beta.ts`.
-   */
-  readonly VITE_ANDROID_BETA_GROUP_URL?: string;
-  readonly VITE_ANDROID_BETA_URL?: string;
-  /**
    * The Google Ads advertiser id (`AW-…`) and the label of the sign-up
    * conversion action. Optional, and absent on every self-hosted build: without
    * them no Google tag is injected and nothing is ever reported. See
