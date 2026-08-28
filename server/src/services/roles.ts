@@ -201,7 +201,7 @@ export async function reorderRoles(
   const movable = existing.filter(
     (role) => !isRoleOrderLocked({
       isEveryone: role.is_everyone,
-      systemKey: role.system_key,
+      systemKey: asSystemKey(role.system_key),
     }),
   );
   const canMoveAny = actor.isOwner;
