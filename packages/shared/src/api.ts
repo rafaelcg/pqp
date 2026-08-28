@@ -7,6 +7,8 @@ import { manualStatusSchema } from "./status.js";
 // --- threads ---
 import { threadSummarySchema } from "./threads.js";
 import { webhookEmbedSchema } from "./webhooks.js";
+import { chanceResultSchema } from "./chance.js";
+import { pollSchema } from "./polls.js";
 
 export const channelTypeSchema = z.enum(["text", "voice", "category"]);
 export type ChannelType = z.infer<typeof channelTypeSchema>;
@@ -618,6 +620,18 @@ export const messageSchema = z.object({
    * built against this schema still parses a response from an API that
    * predates threads. */
   thread: threadSummarySchema.nullable().default(null),
+  /**
+   * A server-authored randomizer. Defaulted null so a client built against
+   * this schema still parses history from an API that predates chance cards.
+   * The plaintext `body` is the fallback those clients (and search) read.
+   */
+  chance: chanceResultSchema.nullable().default(null),
+  /**
+   * A native poll on this message. Same defaulting as `chance`. `voted` on
+   * each option is *this viewer's* vote; a live `poll-update` may send
+   * counts only and the client merges.
+   */
+  poll: pollSchema.nullable().default(null),
 });
 
 export const MESSAGE_MAX_LENGTH = 4000;

@@ -25,6 +25,8 @@ import {
   threadUpdateBroadcastSchema,
 } from "./threads.js";
 import { webhookEmbedSchema } from "./webhooks.js";
+import { chanceRequestSchema, chanceResultSchema } from "./chance.js";
+import { pollRequestSchema, pollSchema } from "./polls.js";
 
 export const joinChannelMessageSchema = z.object({
   type: z.literal("join-channel"),
@@ -64,6 +66,17 @@ const messageCreateFrameSchema = z.object({
     .array(z.string().uuid())
     .max(MAX_ATTACHMENTS_PER_MESSAGE)
     .optional(),
+  /**
+   * A randomizer request. The server rolls and writes `chance` plus a
+   * fallback `body`. A client that already filled `body` with a total is
+   * ignored: the number on the card is never the sender's.
+   */
+  chance: chanceRequestSchema.optional(),
+  /**
+   * A poll request. The server writes the question into `body` and the
+   * options into `polls` / `poll_options`.
+   */
+  poll: pollRequestSchema.optional(),
 });
 
 /**
@@ -75,10 +88,28 @@ const messageCreateFrameSchema = z.object({
  * message out, which is a delete wearing an edit's clothes.
  */
 function requireBodyOrAttachment(
-  frame: { body: string; attachmentIds?: string[] },
+  frame: {
+    body: string;
+    attachmentIds?: string[];
+    chance?: unknown;
+    poll?: unknown;
+  },
   ctx: z.RefinementCtx,
 ): void {
-  if (frame.body.length === 0 && !frame.attachmentIds?.length) {
+  if (frame.chance && frame.poll) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["chance"],
+      message: "A message cannot be both a chance result and a poll",
+    });
+    return;
+  }
+  if (
+    frame.body.length === 0 &&
+    !frame.attachmentIds?.length &&
+    !frame.chance &&
+    !frame.poll
+  ) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ["body"],
@@ -131,6 +162,35 @@ const broadcastMessageSchema = z.object({
   webhookEmbeds: z.array(webhookEmbedSchema).default([]),
   // --- threads ---
   thread: threadSummarySchema.nullable().default(null),
+  chance: chanceResultSchema.nullable().default(null),
+  poll: pollSchema.nullable().default(null),
+});
+
+export const pollVoteMessageSchema = z.object({
+  type: z.literal("poll-vote"),
+  channelId: z.string().uuid(),
+  messageId: z.string().uuid(),
+  optionId: z.string().uuid(),
+});
+
+export const pollCloseMessageSchema = z.object({
+  type: z.literal("poll-close"),
+  channelId: z.string().uuid(),
+  messageId: z.string().uuid(),
+});
+
+/**
+ * Live vote / close refresh. Counts replace; the client keeps its own
+ * `voted` flags unless `voterId` is the current user.
+ */
+export const pollUpdateBroadcastSchema = z.object({
+  type: z.literal("poll-update"),
+  channelId: z.string().uuid(),
+  messageId: z.string().uuid(),
+  poll: pollSchema,
+  voterId: z.string().uuid().optional(),
+  optionId: z.string().uuid().optional(),
+  added: z.boolean().optional(),
 });
 
 export const messageBroadcastSchema = z.object({
@@ -266,6 +326,7 @@ export const chatServerMessageSchema = z.discriminatedUnion("type", [
   // hand a server-wide version bump to whoever happened to be looking at a
   // channel the frame named.
   permissionsUpdateSchema,
+  pollUpdateBroadcastSchema,
 ]);
 
 /**
@@ -291,6 +352,8 @@ export const chatClientMessageSchema = z
     // from outside it, which is an identifier this design does not otherwise
     // need to invent.
     setIdleMessageSchema,
+    pollVoteMessageSchema,
+    pollCloseMessageSchema,
   ])
   .superRefine((message, ctx) => {
     if (message.type === "message-create") {
@@ -349,6 +412,7 @@ export const CHAT_SERVER_MESSAGE_TYPES = [
   // --- threads --- the chip refresh for parent-channel viewers; content-free,
   // so fanning it out to everyone in the parent channel is correct.
   "thread-update",
+  "poll-update",
 ] as const;
 
 export function isChatServerMessage(message: {
@@ -373,5 +437,8 @@ export type PresenceUpdate = z.infer<typeof presenceUpdateSchema>;
 export type TypingBroadcast = z.infer<typeof typingBroadcastSchema>;
 export type ChannelActivity = z.infer<typeof channelActivitySchema>;
 export type ProfileUpdate = z.infer<typeof profileUpdateSchema>;
+export type PollVoteMessage = z.infer<typeof pollVoteMessageSchema>;
+export type PollCloseMessage = z.infer<typeof pollCloseMessageSchema>;
+export type PollUpdateBroadcast = z.infer<typeof pollUpdateBroadcastSchema>;
 export type ChatClientMessage = z.infer<typeof chatClientMessageSchema>;
 export type ChatServerMessage = z.infer<typeof chatServerMessageSchema>;
