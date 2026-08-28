@@ -921,6 +921,54 @@ describe("lobby presence sounds", () => {
     expect(getUserMedia).toHaveBeenCalled();
   });
 
+  it("falls back to the default mic when the saved device is gone, and stops asking for it", async () => {
+    // The real failure: a saved `inputDeviceId` outlives the device. Unplug a
+    // USB headset and the browser rejects `deviceId: { exact }` with
+    // NotFoundError. Joining must still work on the default microphone.
+    const notFound = Object.assign(new Error("Requested device not found"), {
+      name: "NotFoundError",
+    });
+    const getUserMedia = vi.fn(async (constraints: MediaStreamConstraints) => {
+      const audio = constraints.audio as MediaTrackConstraints;
+      if (audio && audio.deviceId) {
+        throw notFound;
+      }
+      return fakeStream("mic");
+    });
+    Object.defineProperty(globalThis.navigator, "mediaDevices", {
+      configurable: true,
+      value: {
+        getUserMedia,
+        getSupportedConstraints: () => ({ restrictOwnAudio: true }),
+        getDisplayMedia: async () => fakeCapture("screen", false),
+      },
+    });
+
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    await voice.join(CHANNEL, { inputDeviceId: "dead-device-id" });
+
+    // Asked for the dead device, then retried on the default and succeeded.
+    expect(getUserMedia).toHaveBeenCalledTimes(2);
+    expect(
+      (getUserMedia.mock.calls[0][0].audio as MediaTrackConstraints).deviceId,
+    ).toEqual({ exact: "dead-device-id" });
+    expect(
+      (getUserMedia.mock.calls[1][0].audio as MediaTrackConstraints).deviceId,
+    ).toBeUndefined();
+    expect(voice.getState().status).not.toBe("idle");
+    expect(voice.getState().error).toBeFalsy();
+
+    // And the dead id is forgotten, so the next capture does not probe it again.
+    getUserMedia.mockClear();
+    await voice.leave();
+    await voice.join(CHANNEL);
+    expect(getUserMedia).toHaveBeenCalledTimes(1);
+    expect(
+      (getUserMedia.mock.calls[0][0].audio as MediaTrackConstraints).deviceId,
+    ).toBeUndefined();
+  });
+
   it("plays join when someone else enters the lobby, leave when they go", async () => {
     const { transport } = createTransport();
     const voice = createVoiceController(transport);
