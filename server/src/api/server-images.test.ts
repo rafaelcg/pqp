@@ -20,9 +20,9 @@ import {
  * What has to hold:
  *
  *  - every route needs a session, the config read included (CLAUDE.md #8);
- *  - **only the owner** may mint, claim or clear — the one structural
- *    difference from an avatar, whose key authorises itself. An admin is not
- *    enough and a plain member is certainly not;
+ *  - **Manage Server** may mint, claim or clear — name, icon and banner sit
+ *    on that bit. An owner always has it. A plain member does not.
+ *    Transfer, retention, SSO and delete stay owner-only.
  *  - the mint enforces the type allowlist and the *per-kind* byte cap before
  *    signing, so a banner's eight megabytes is not an icon's ceiling;
  *  - the claim HEADs the object and refuses anything it cannot vouch for —
@@ -274,14 +274,14 @@ describeDb("server images", () => {
     });
 
     for (const kind of ["icon", "banner"] as const) {
-      it(`refuses an admin minting a ${kind} — owner only`, async () => {
+      it(`lets an admin mint a ${kind} (Manage Server)`, async () => {
         const result = await call(
           admin,
           "POST",
           `/api/servers/${serverId}/${kind}`,
           { contentType: "image/jpeg", byteSize: 1000 },
         );
-        expect(result.status).toBe(403);
+        expect(result.status).toBe(201);
       });
 
       it(`refuses a plain member clearing the ${kind}`, async () => {

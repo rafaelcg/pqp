@@ -11,6 +11,14 @@ import {
   parsePermissions,
   PERMISSION_ALL,
   PERMISSION_DEFAULT_EVERYONE,
+  PERMISSION_DEFAULT_MANAGER,
+  PERMISSION_DEFAULT_MODERATOR,
+  STAFF_ROLE_COLORS,
+  STAFF_ROLE_NAMES,
+  defaultRoleColor,
+  defaultRoleName,
+  defaultRolePermissions,
+  isRoleOrderLocked,
   clampEveryonePermissions,
   Permission,
   permissionsUpdateSchema,
@@ -55,6 +63,60 @@ describe("permission bitfields", () => {
     expect(hasPermission(cleaned, Permission.MODERATE_MEMBERS)).toBe(false);
     expect(hasPermission(cleaned, ADMIN)).toBe(false);
     expect(hasPermission(cleaned, Permission.SEND_MESSAGES)).toBe(true);
+  });
+
+  it("seeds Manager without Administrator and Moderator as extras only", () => {
+    expect(hasPermission(PERMISSION_DEFAULT_MANAGER, ADMIN)).toBe(false);
+    expect(
+      hasPermission(PERMISSION_DEFAULT_MANAGER, Permission.MANAGE_SERVER),
+    ).toBe(true);
+    expect(
+      hasPermission(PERMISSION_DEFAULT_MANAGER, Permission.BAN_MEMBERS),
+    ).toBe(true);
+    expect(
+      hasPermission(PERMISSION_DEFAULT_MODERATOR, Permission.KICK_MEMBERS),
+    ).toBe(true);
+    expect(
+      hasPermission(PERMISSION_DEFAULT_MODERATOR, Permission.BAN_MEMBERS),
+    ).toBe(false);
+    expect(
+      hasPermission(PERMISSION_DEFAULT_MODERATOR, Permission.VIEW_CHANNEL),
+    ).toBe(false);
+    expect(
+      hasPermission(PERMISSION_DEFAULT_MODERATOR, Permission.SEND_MESSAGES),
+    ).toBe(false);
+  });
+
+  it("paints seeded staff cargos with the dark-first palette", () => {
+    expect(STAFF_ROLE_COLORS.owner).toBe("#E0B84C");
+    expect(STAFF_ROLE_COLORS.admin).toBe("#D46A8A");
+    expect(STAFF_ROLE_COLORS.manager).toBe("#6BA3E8");
+    expect(STAFF_ROLE_COLORS.moderator).toBe("#4EC4B0");
+    expect(defaultRoleColor("owner")).toBe(STAFF_ROLE_COLORS.owner);
+    expect(defaultRoleColor("everyone")).toBeNull();
+    expect(defaultRoleColor(null)).toBeNull();
+  });
+
+  it("knows the English seed names and factory permission masks", () => {
+    expect(STAFF_ROLE_NAMES.owner).toBe("Owner");
+    expect(defaultRoleName("owner")).toBe("Owner");
+    expect(defaultRoleName("everyone")).toBe("everyone");
+    expect(defaultRoleName(null)).toBeNull();
+    expect(defaultRolePermissions("everyone")).toBe(PERMISSION_DEFAULT_EVERYONE);
+    expect(defaultRolePermissions("admin")).toBe(PERMISSION_ALL);
+    expect(defaultRolePermissions("manager")).toBe(PERMISSION_DEFAULT_MANAGER);
+    expect(defaultRolePermissions("moderator")).toBe(
+      PERMISSION_DEFAULT_MODERATOR,
+    );
+    expect(defaultRolePermissions("owner")).toBe(0n);
+    expect(defaultRolePermissions(null)).toBe(0n);
+  });
+
+  it("pins Owner at the top and @everyone at the bottom", () => {
+    expect(isRoleOrderLocked({ systemKey: "owner" })).toBe(true);
+    expect(isRoleOrderLocked({ isEveryone: true })).toBe(true);
+    expect(isRoleOrderLocked({ systemKey: "admin" })).toBe(false);
+    expect(isRoleOrderLocked({ systemKey: null })).toBe(false);
   });
 });
 

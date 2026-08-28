@@ -408,8 +408,9 @@ describeDb("channel audience cache", () => {
 
     // Every movable role, not just the two made here: `createServer`
     // bootstraps system roles too, and a reorder must name all of them.
+    // Owner is pinned at the top and may be omitted; leftover ids are ignored.
     const movable = (await listRoles(serverId))
-      .filter((role) => !role.is_everyone)
+      .filter((role) => !role.is_everyone && role.system_key !== "owner")
       .map((role) => role.id);
     await reorderRoles(serverId, [...movable].reverse(), {
       isOwner: true,

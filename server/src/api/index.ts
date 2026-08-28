@@ -661,15 +661,18 @@ async function requirePermission(
   }
 }
 
-async function requireManager(serverId: string, userId: string) {
-  const role = await requireServerMember(serverId, userId);
-  if (role === "owner" || role === "admin") {
-    return role;
+async function requireAnyPermission(
+  serverId: string,
+  userId: string,
+  bits: bigint[],
+): Promise<void> {
+  await requireServerMember(serverId, userId);
+  for (const bit of bits) {
+    if (await memberHasPermission(serverId, userId, bit)) {
+      return;
+    }
   }
-  if (await memberHasPermission(serverId, userId, Permission.ADMINISTRATOR)) {
-    return role;
-  }
-  throw new Forbidden("Only owners and admins can do that");
+  throw new Forbidden("You do not have permission to do that");
 }
 
 async function requireOwner(serverId: string, userId: string) {
@@ -708,9 +711,6 @@ async function requireOutranked(
     : null;
   if (target && actor && !canActOnMember(actor, target)) {
     throw new Forbidden(`You cannot ${action} that member`);
-  }
-  if (targetRole === "admin" && actor && !actor.isOwner) {
-    throw new Forbidden(`Only the owner can ${action} an admin`);
   }
   return targetRole;
 }
@@ -1894,8 +1894,18 @@ router.post("/api/servers", async ({ req, user }) => {
 });
 
 router.patch("/api/servers/:serverId", async ({ req, user }, { serverId }) => {
-  await requireOwner(serverId!, user.id);
   const body = updateServerSchema.parse(await readJsonBody(req));
+  const ownerFields =
+    (body.ownerId !== undefined && body.ownerId !== user.id) ||
+    body.messageRetentionDays !== undefined ||
+    body.ssoEmailDomain !== undefined;
+  if (ownerFields) {
+    await requireOwner(serverId!, user.id);
+  } else if (body.name) {
+    await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+  } else {
+    await requireServerMember(serverId!, user.id);
+  }
 
   if (body.ownerId && body.ownerId !== user.id) {
     try {
@@ -2072,7 +2082,7 @@ async function mintServerImage(
   if (!isServerImageUploadConfigured()) {
     throw new HttpError(503, "Image uploads are not configured on this server");
   }
-  await requireOwner(serverId, ctx.user.id);
+  await requirePermission(serverId, ctx.user.id, Permission.MANAGE_SERVER);
 
   const key = `user:${ctx.user.id}`;
   if (!uploadLimiter.take(key)) {
@@ -2113,7 +2123,7 @@ async function claimServerImage(
   if (!isServerImageUploadConfigured()) {
     throw new HttpError(503, "Image uploads are not configured on this server");
   }
-  await requireOwner(serverId, ctx.user.id);
+  await requirePermission(serverId, ctx.user.id, Permission.MANAGE_SERVER);
 
   const body = claimServerImageSchema.parse(await readJsonBody(ctx.req));
   const byteSize = await verifyServerImageObject(kind, serverId, body.key);
@@ -2157,7 +2167,7 @@ async function clearServerImage(
   userId: string,
   serverId: string,
 ) {
-  await requireOwner(serverId, userId);
+  await requirePermission(serverId, userId, Permission.MANAGE_SERVER);
   const updated = await setServerImage(kind, serverId, null, SERVER_COLUMNS);
   if (!updated) {
     throw new NotFound("Server not found");
@@ -2874,7 +2884,7 @@ router.get(
   "/api/channels/:channelId/webhooks",
   async ({ user }, { channelId }) => {
     const channel = await requireServerChannel(channelId!);
-    await requireManager(channel.server_id, user.id);
+    await requirePermission(channel.server_id, user.id, Permission.MANAGE_CHANNELS);
     return {
       webhooks: (await listWebhooksForChannel(channelId!)).map(mapWebhook),
     };
@@ -2885,7 +2895,7 @@ router.post(
   "/api/channels/:channelId/webhooks",
   async ({ req, user }, { channelId }) => {
     const channel = await requireServerChannel(channelId!);
-    await requireManager(channel.server_id, user.id);
+    await requirePermission(channel.server_id, user.id, Permission.MANAGE_CHANNELS);
     const body = createWebhookSchema.parse(await readJsonBody(req));
     const webhook = await createWebhook(
       channelId!,
@@ -2911,7 +2921,7 @@ router.delete("/api/webhooks/:webhookId", async ({ user }, { webhookId }) => {
   if (!webhook) {
     throw new NotFound("Webhook not found");
   }
-  await requireManager(webhook.server_id, user.id);
+  await requirePermission(webhook.server_id, user.id, Permission.MANAGE_CHANNELS);
   await deleteWebhook(webhookId!);
   await logAudit({
     serverId: webhook.server_id,
@@ -3371,6 +3381,9 @@ router.patch("/api/roles/:roleId", async ({ req, user }, { roleId }) => {
   if (role.is_everyone && body.name) {
     throw new HttpError(400, "The @everyone role cannot be renamed");
   }
+  if (role.system_key === "owner" && body.permissions !== undefined) {
+    throw new HttpError(400, "The Owner role cannot carry permissions");
+  }
   const nextPermissions =
     body.permissions !== undefined
       ? clampRolePermissions(
@@ -3384,6 +3397,7 @@ router.patch("/api/roles/:roleId", async ({ req, user }, { roleId }) => {
     color: body.color,
     mentionable: body.mentionable,
     hoist: body.hoist,
+    showBadge: body.showBadge,
     permissions: nextPermissions,
   });
   await logAudit({
@@ -3456,6 +3470,13 @@ router.delete(
     }
     await requireOutranked(serverId!, user.id, userId!, "kick");
     await unassignRole(serverId!, userId!, roleId!);
+    const revoked = new Set(
+      await listRevokedPrivateChannelIds(serverId!, userId!),
+    );
+    if (revoked.size > 0) {
+      evictUserFromChannels(userId!, revoked);
+      evictVoiceUser(userId!, revoked);
+    }
     await logAudit({
       serverId: serverId!,
       actorId: user.id,
@@ -3684,7 +3705,7 @@ router.patch(
 
 // ------------------------------------------------------------- timeouts
 //
-// The middle of the enforcement ladder. `requireManager` to see and act, and
+// The middle of the enforcement ladder. MODERATE_MEMBERS to see and act, and
 // `requireOutranked` for who may be acted on — the same rank rule as kick and
 // ban, argued there.
 //
@@ -3695,7 +3716,7 @@ router.patch(
 router.get(
   "/api/servers/:serverId/timeouts",
   async ({ user }, { serverId }) => {
-    await requireManager(serverId!, user.id);
+    await requirePermission(serverId!, user.id, Permission.MODERATE_MEMBERS);
     return { timeouts: await listActiveTimeouts(serverId!) };
   },
 );
@@ -3766,7 +3787,7 @@ router.post(
 router.delete(
   "/api/servers/:serverId/timeouts/:userId",
   async ({ user }, { serverId, userId }) => {
-    await requireManager(serverId!, user.id);
+    await requirePermission(serverId!, user.id, Permission.MODERATE_MEMBERS);
     // No rank check on the way *out*. Lifting a sanction only ever gives
     // something back, and an admin who can see the list should be able to undo
     // a mistake without waiting for the owner.
@@ -3803,6 +3824,7 @@ router.delete(
     }
 
     if (body.ban) {
+      await requirePermission(serverId!, user.id, Permission.BAN_MEMBERS);
       await banMember(serverId!, userId!, user.id, null);
     } else {
       await kickMember(serverId!, userId!);
@@ -4026,7 +4048,7 @@ router.post(
 // ----------------------------------------------------- end voice moderation
 
 router.get("/api/servers/:serverId/bans", async ({ user }, { serverId }) => {
-  await requireManager(serverId!, user.id);
+  await requirePermission(serverId!, user.id, Permission.BAN_MEMBERS);
   return { bans: await listBans(serverId!) };
 });
 
@@ -4065,7 +4087,7 @@ router.post(
 router.delete(
   "/api/servers/:serverId/bans/:userId",
   async ({ user }, { serverId, userId }) => {
-    await requireManager(serverId!, user.id);
+    await requirePermission(serverId!, user.id, Permission.BAN_MEMBERS);
     await unbanMember(serverId!, userId!);
     await logAudit({
       serverId: serverId!,
@@ -4088,7 +4110,7 @@ router.delete(
 router.get(
   "/api/servers/:serverId/audit-log",
   async ({ url, user }, { serverId }) => {
-    await requireManager(serverId!, user.id);
+    await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
     const before = url.searchParams.get("before") ?? undefined;
     const limit = clampLimit(
       url.searchParams.get("limit"),
@@ -4278,7 +4300,11 @@ router.get("/api/reports/instance", async ({ url, user }) => {
 router.get(
   "/api/servers/:serverId/reports",
   async ({ url, user }, { serverId }) => {
-    await requireManager(serverId!, user.id);
+    await requireAnyPermission(serverId!, user.id, [
+      Permission.KICK_MEMBERS,
+      Permission.BAN_MEMBERS,
+      Permission.MODERATE_MEMBERS,
+    ]);
     return listServerReports(serverId!, reportListOptions(url));
   },
 );
@@ -4297,9 +4323,14 @@ router.patch("/api/reports/:report", async ({ req, user }, { report }) => {
   if (!scope) {
     throw new NotFound("Report not found");
   }
-  let actorRole: MemberRole | null = null;
+  let canActOnServer = false;
   if (scope.serverId) {
-    actorRole = await requireManager(scope.serverId, user.id);
+    await requireAnyPermission(scope.serverId, user.id, [
+      Permission.KICK_MEMBERS,
+      Permission.BAN_MEMBERS,
+      Permission.MODERATE_MEMBERS,
+    ]);
+    canActOnServer = true;
   } else if (!isInstanceModerator(user)) {
     throw new NotFound("Report not found");
   }
@@ -4315,7 +4346,7 @@ router.patch("/api/reports/:report", async ({ req, user }, { report }) => {
   // that is what happened. Either both happen or neither does.
   let timeoutTarget: string | null = null;
   if (body.timeoutMinutes != null) {
-    if (!scope.serverId || !actorRole) {
+    if (!scope.serverId || !canActOnServer) {
       // An instance-queue report is about a conversation, which has no server
       // and therefore no place to be timed out *in*. Silencing somebody's DMs
       // is not a sanction this product has, and inventing one here would hand
@@ -4325,6 +4356,11 @@ router.patch("/api/reports/:report", async ({ req, user }, { report }) => {
         "A report with no server behind it cannot carry a timeout",
       );
     }
+    await requirePermission(
+      scope.serverId,
+      user.id,
+      Permission.MODERATE_MEMBERS,
+    );
     if (body.status !== "actioned") {
       throw new HttpError(400, "Only an actioned report can carry a timeout");
     }
@@ -4513,7 +4549,7 @@ router.patch("/api/feedback/:item", async ({ req, user }, { item }) => {
 // ---------------------------------------------------------------- invites
 
 router.get("/api/servers/:serverId/invites", async ({ user }, { serverId }) => {
-  await requireManager(serverId!, user.id);
+  await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
   return { invites: (await listInvites(serverId!)).map(mapInvite) };
 });
 
@@ -4541,7 +4577,7 @@ router.post(
 router.delete(
   "/api/servers/:serverId/invites/:inviteId",
   async ({ user }, { serverId, inviteId }) => {
-    await requireManager(serverId!, user.id);
+    await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
     await deleteInvite(serverId!, inviteId!);
     await logAudit({
       serverId: serverId!,

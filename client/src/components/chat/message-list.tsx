@@ -55,7 +55,7 @@ import { messageRoutePath } from "@/lib/app-route";
 import { QUICK_REACTIONS } from "@/lib/emoji-shortcodes";
 import { messageMentionsYou } from "@/lib/message-mentions-you";
 import { findFirstUnreadMessageId } from "@/lib/unread-divider";
-import { highestRoleColor, identityMarks, usernameFromTag } from "@/lib/author-display";
+import { highestRoleColor, identityMarks, rankBadges, usernameFromTag } from "@/lib/author-display";
 import { gifMessageMedia, type GifMedia } from "@/lib/gif-media";
 import {
   ANCHORED_PANEL_PAD,
@@ -119,6 +119,8 @@ export interface MessageRoleColor {
   id: string;
   color: string | null;
   position: number;
+  systemKey?: string | null;
+  showBadge?: boolean;
 }
 
 /** Shared identity, so the default prop does not remount every row each render. */
@@ -1830,6 +1832,7 @@ const MessageRow = memo(function MessageRow({
                     marks={identityMarks({
                       rank: authorInfo?.rank,
                       isWebhook: message.isWebhook,
+                      ...rankBadges(authorInfo?.roleIds, roles),
                     })}
                   />
                 </span>
