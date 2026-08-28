@@ -1609,7 +1609,8 @@ function MainAppContent({
             message.type === "reaction-broadcast" ||
             message.type === "message-deleted" ||
             message.type === "presence-update" ||
-            message.type === "typing-broadcast"
+            message.type === "typing-broadcast" ||
+            message.type === "poll-update"
           ) {
             chat.handleServerMessage(message);
             // --- threads --- both controllers hear every chat frame and each
@@ -3402,6 +3403,8 @@ function MainAppContent({
         onToggleReaction={(messageId, emoji) =>
           chat.toggleReaction(messageId, emoji)
         }
+        onVotePoll={(messageId, optionId) => chat.votePoll(messageId, optionId)}
+        onClosePoll={(messageId) => chat.closePoll(messageId)}
         onLoadOlder={() => chat.loadOlder()}
         onLoadNewer={loadNewerHistory}
         onJumpToMessage={jumpToMessage}
@@ -3478,6 +3481,21 @@ function MainAppContent({
               clearUnread(openThread.thread.channelId);
             }
           }}
+          slashContext={{
+            updateDisplayName: async (name: string) => {
+              const updated = await updateMe({ displayName: name });
+              setUser(updated);
+              chat.setCurrentUser(updated);
+            },
+            openInvite: (mode: "create" | "join") => setInviteMode(mode),
+            joinByCode: async (code: string) => {
+              const result = await joinInvite(code);
+              await refreshAfterJoin(result.serverId);
+            },
+            setMuted: (muted: boolean) => voice.setMuted(muted),
+            isInVoice: voiceState.status === "connected",
+            isMuted: voiceState.isMuted,
+          }}
         />
       )}
       {/* Against the composer it explains, not floating in a corner: the frame
@@ -3535,6 +3553,8 @@ function MainAppContent({
           setMuted: (muted: boolean) => voice.setMuted(muted),
           isInVoice: voiceState.status === "connected",
           isMuted: voiceState.isMuted,
+          sendChance: (request) => chat.sendChance(request),
+          sendPoll: (request) => chat.sendPoll(request),
         }}
         disabled={!selectedChannelId || messagesLoading}
         placeholder={t("composer.placeholder", { name: selectedChannel.name })}

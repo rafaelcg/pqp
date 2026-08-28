@@ -4,7 +4,10 @@ import {
 } from "@pqp/shared";
 import { Archive, MessageSquareText, X } from "lucide-react";
 import { useState } from "react";
-import { MessageComposer } from "@/components/chat/message-composer";
+import {
+  MessageComposer,
+  type ComposerSlashContext,
+} from "@/components/chat/message-composer";
 import {
   MessageList,
   type MessageAuthorInfo,
@@ -57,6 +60,7 @@ interface ThreadPanelProps {
   onMarkUnread?: (message: ChatMessage) => void;
   onMarkRead?: () => void;
   onSent?: () => void;
+  slashContext?: Omit<ComposerSlashContext, "sendChance" | "sendPoll">;
 }
 
 export function ThreadPanel({
@@ -80,6 +84,7 @@ export function ThreadPanel({
   onMarkUnread,
   onMarkRead,
   onSent,
+  slashContext,
 }: ThreadPanelProps) {
   const { t } = useTranslation();
   const [replyTarget, setReplyTarget] = useState<ChatMessage | null>(null);
@@ -160,6 +165,10 @@ export function ThreadPanel({
         onToggleReaction={(messageId, emoji) =>
           controller.toggleReaction(messageId, emoji)
         }
+        onVotePoll={(messageId, optionId) =>
+          controller.votePoll(messageId, optionId)
+        }
+        onClosePoll={(messageId) => controller.closePoll(messageId)}
         onLoadOlder={() => controller.loadOlder()}
         onLoadNewer={() => controller.loadNewer()}
         onJumpToPresent={() => controller.resetToTail()}
@@ -210,6 +219,15 @@ export function ThreadPanel({
         }}
         disabled={isLoading}
         placeholder={t("thread.placeholder")}
+        slashContext={
+          slashContext
+            ? {
+                ...slashContext,
+                sendChance: (request) => controller.sendChance(request),
+                sendPoll: (request) => controller.sendPoll(request),
+              }
+            : undefined
+        }
       />
     </aside>
   );

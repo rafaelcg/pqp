@@ -87,6 +87,8 @@ function serverMessage(overrides: Partial<Message> = {}): Message {
     mentionEveryone: false,
     mentionHere: false,
     thread: null,
+    chance: null,
+    poll: null,
     ...overrides,
   };
 }
@@ -898,5 +900,64 @@ describe("open-channel sounds", () => {
       }),
     } as never);
     expect(notifyOpenChannelMessage).toHaveBeenCalledWith(CHANNEL, false);
+  });
+});
+
+describe("chance and polls", () => {
+  it("sends a roll request without inventing a total", () => {
+    const { chat, sent } = setup();
+    chat.sendChance({ type: "roll", notation: "2d6+3" });
+    expect(chat.getMessages()).toHaveLength(0);
+    expect(sent.at(-1)).toMatchObject({
+      type: "message-create",
+      body: "",
+      chance: { type: "roll", notation: "2d6+3" },
+    });
+  });
+
+  it("merges a poll-update count and this viewer's vote", () => {
+    const optionA = "a0000000-0000-4000-8000-000000000001";
+    const optionB = "b0000000-0000-4000-8000-000000000002";
+    const { chat } = setup();
+    chat.setMessages([
+      serverMessage({
+        poll: {
+          question: "Who is in?",
+          allowMultiselect: false,
+          closesAt: new Date(Date.now() + 86_400_000).toISOString(),
+          closedAt: null,
+          totalVotes: 0,
+          canClose: true,
+          options: [
+            { id: optionA, label: "Yes", votes: 0, voted: false },
+            { id: optionB, label: "No", votes: 0, voted: false },
+          ],
+        },
+      }),
+    ]);
+    chat.handleServerMessage({
+      type: "poll-update",
+      channelId: CHANNEL,
+      messageId: chat.getMessages()[0]!.id,
+      voterId: ME.id,
+      optionId: optionA,
+      added: true,
+      poll: {
+        question: "Who is in?",
+        allowMultiselect: false,
+        closesAt: new Date(Date.now() + 86_400_000).toISOString(),
+        closedAt: null,
+        totalVotes: 1,
+        canClose: false,
+        options: [
+          { id: optionA, label: "Yes", votes: 1, voted: false },
+          { id: optionB, label: "No", votes: 0, voted: false },
+        ],
+      },
+    } as never);
+    const poll = chat.getMessages()[0]!.poll;
+    expect(poll?.options[0]?.votes).toBe(1);
+    expect(poll?.options[0]?.voted).toBe(true);
+    expect(poll?.canClose).toBe(true);
   });
 });

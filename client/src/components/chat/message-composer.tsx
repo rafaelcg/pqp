@@ -4,16 +4,38 @@ import {
   isImageContentType,
   MESSAGE_MAX_LENGTH,
   type AttachmentContentType,
+  type ChanceRequest,
   type Gif,
+  type PollRequest,
 } from "@pqp/shared";
 import {
   AlertCircle,
+  Angry,
+  BarChart3,
+  CheckCircle2,
+  Coins,
   CornerUpLeft,
+  Dices,
+  Eraser,
+  HelpCircle,
   ImagePlay,
+  Info,
+  LogIn,
+  Meh,
+  Mic,
+  MicOff,
   Paperclip,
+  Pencil,
+  Shuffle,
   Smile,
+  Spade,
+  Terminal,
+  User,
+  UserPlus,
   X,
+  type LucideIcon,
 } from "lucide-react";
+import { PollComposer } from "@/components/chat/poll-composer";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AutocompleteMenu,
@@ -69,6 +91,8 @@ export interface ComposerSlashContext {
   setMuted: (muted: boolean) => void;
   isInVoice: boolean;
   isMuted: boolean;
+  sendChance: (request: ChanceRequest) => void;
+  sendPoll: (request: PollRequest) => void;
 }
 
 export interface ComposerReplyTarget {
@@ -117,6 +141,35 @@ const MAX_COMPOSER_HEIGHT_PX = 200;
 
 const MENU_ID = "composer-autocomplete";
 
+/**
+ * One glance-able mark per slash command in the autocomplete menu. Purely
+ * visual; the command list itself lives in `@/lib/slash-commands`.
+ */
+const SLASH_COMMAND_ICONS: Record<string, LucideIcon> = {
+  help: HelpCircle,
+  shrug: Meh,
+  tableflip: Angry,
+  me: User,
+  nick: Pencil,
+  invite: UserPlus,
+  join: LogIn,
+  mute: MicOff,
+  unmute: Mic,
+  gif: ImagePlay,
+  roll: Dices,
+  flip: Coins,
+  choose: Shuffle,
+  draw: Spade,
+  poll: BarChart3,
+  clear: Eraser,
+};
+
+const FEEDBACK_ICONS = {
+  error: AlertCircle,
+  success: CheckCircle2,
+  info: Info,
+} as const;
+
 /** One chip in the tray above the textarea, from pick to send. */
 interface PendingAttachment {
   /** Client-side only: a chip exists before the server has minted an id. */
@@ -163,6 +216,7 @@ export function MessageComposer({
   const [caret, setCaret] = useState(0);
   const [isPickerOpen, setIsPickerOpen] = useState(false);
   const [isGifPickerOpen, setIsGifPickerOpen] = useState(false);
+  const [isPollComposerOpen, setIsPollComposerOpen] = useState(false);
   const [gifQuery, setGifQuery] = useState("");
   const [isGifSearchEnabled, setIsGifSearchEnabled] = useState(false);
   const [attachmentLimits, setAttachmentLimits] = useState<{
@@ -235,13 +289,35 @@ export function MessageComposer({
         ? mentionMatches.length
         : emojiMatches.length;
 
+  const FeedbackIcon = feedback ? FEEDBACK_ICONS[feedback.tone] : null;
+
   const options: AutocompleteOption[] = useMemo(() => {
     if (menuKind === "slash") {
-      return slashMatches.map((command) => ({
-        id: command.name,
-        primary: <span className="font-mono">/{command.name}</span>,
-        secondary: command.description,
-      }));
+      return slashMatches.map((command) => {
+        const Icon = SLASH_COMMAND_ICONS[command.name] ?? Terminal;
+        // "/roll [2d6+3]" → "[2d6+3]": the name is already the primary label,
+        // so only the argument shape is worth repeating.
+        const argsHint = command.usage.replace(`/${command.name}`, "").trim();
+        return {
+          id: command.name,
+          leading: (
+            <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-surface-3 text-text-muted">
+              <Icon className="h-3.5 w-3.5" aria-hidden />
+            </span>
+          ),
+          primary: (
+            <span className="font-mono">
+              /{command.name}
+              {argsHint && (
+                <span className="ml-1.5 font-normal text-text-muted">
+                  {argsHint}
+                </span>
+              )}
+            </span>
+          ),
+          secondary: command.description,
+        };
+      });
     }
     if (menuKind === "mention") {
       return mentionMatches.map((member) => ({
@@ -634,6 +710,11 @@ export function MessageComposer({
           setIsGifPickerOpen(true);
         },
         isGifSearchEnabled,
+        openPollComposer: () => {
+          setIsPickerOpen(false);
+          setIsGifPickerOpen(false);
+          setIsPollComposerOpen(true);
+        },
         ...slashContext,
       });
       if (result.feedback) {
@@ -862,10 +943,10 @@ export function MessageComposer({
           onClose={() => setIsGifPickerOpen(false)}
         />
       )}
-      {feedback && (
-        <p
+      {feedback && FeedbackIcon && (
+        <div
           className={cn(
-            "mb-2 whitespace-pre-wrap rounded-md border px-2.5 py-1.5 text-xs",
+            "mb-2 flex items-start gap-2 rounded-md border px-2.5 py-1.5 text-xs",
             feedback.tone === "error" &&
               "border-danger/40 bg-danger/10 text-danger",
             feedback.tone === "success" &&
@@ -875,8 +956,11 @@ export function MessageComposer({
           )}
           role="status"
         >
-          {feedback.message}
-        </p>
+          <FeedbackIcon className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden />
+          <span className="min-w-0 flex-1 whitespace-pre-wrap">
+            {feedback.message}
+          </span>
+        </div>
       )}
       {replyTarget && (
         <div className="mb-2 flex items-center gap-2 rounded-md border border-border bg-surface-2 px-2.5 py-1.5 text-xs text-text-muted">
@@ -893,6 +977,19 @@ export function MessageComposer({
             <X className="h-3.5 w-3.5" />
           </button>
         </div>
+      )}
+      {isPollComposerOpen && slashContext && (
+        <PollComposer
+          onSubmit={(request) => {
+            slashContext.sendPoll(request);
+            setIsPollComposerOpen(false);
+            setFeedback({
+              message: t("slash.poll.ok"),
+              tone: "success",
+            });
+          }}
+          onClose={() => setIsPollComposerOpen(false)}
+        />
       )}
       {pending.length > 0 && (
         <ul
@@ -968,6 +1065,30 @@ export function MessageComposer({
             <Smile className="h-5 w-5" />
           </Button>
         </Tooltip>
+        {slashContext && (
+          <Tooltip label={t("composer.addPoll")}>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              disabled={disabled}
+              aria-expanded={isPollComposerOpen}
+              onClick={() => {
+                setIsPickerOpen(false);
+                setIsGifPickerOpen(false);
+                setIsPollComposerOpen((open) => !open);
+              }}
+              onMouseDown={(event) => {
+                if (menuKind) {
+                  event.preventDefault();
+                }
+              }}
+              className={COMPOSER_ICON_BUTTON}
+            >
+              <BarChart3 className="h-5 w-5" />
+            </Button>
+          </Tooltip>
+        )}
         {isGifSearchEnabled && (
           <Tooltip label={t("composer.addGif")}>
             <Button

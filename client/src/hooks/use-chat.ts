@@ -1,10 +1,13 @@
 import type {
   Attachment,
+  ChanceRequest,
   ChatClientMessage,
   ChatServerMessage,
   Message,
   MessageBroadcast,
   MessageReaction,
+  Poll,
+  PollRequest,
   PresenceUpdate,
   ReactionBroadcast,
   ThreadSummary,
@@ -93,6 +96,8 @@ function toStoredMessage(message: Message): ChatMessage {
     reactions: message.reactions ?? [],
     replyTo: message.replyTo ?? null,
     attachments: message.attachments ?? [],
+    chance: message.chance ?? null,
+    poll: message.poll ?? null,
   };
 }
 
@@ -202,6 +207,8 @@ function toChatMessage(message: MessageBroadcast["message"]): ChatMessage {
     attachments: message.attachments ?? [],
     mentionEveryone: message.mentionEveryone ?? false,
     mentionHere: message.mentionHere ?? false,
+    chance: message.chance ?? null,
+    poll: message.poll ?? null,
   };
 }
 
@@ -294,6 +301,7 @@ export function createChatController(
     targetChannelId: string,
     replyToId?: string,
     attachmentIds: string[] = [],
+    interactive?: { chance?: ChanceRequest; poll?: PollRequest },
   ) {
     clearSendTimer(nonce);
     // Only start the failure clock once the message is actually on the wire.
@@ -312,6 +320,8 @@ export function createChatController(
       nonce,
       ...(replyToId ? { replyToId } : {}),
       ...(attachmentIds.length > 0 ? { attachmentIds } : {}),
+      ...(interactive?.chance ? { chance: interactive.chance } : {}),
+      ...(interactive?.poll ? { poll: interactive.poll } : {}),
     });
   }
 
@@ -666,6 +676,8 @@ export function createChatController(
         mentionHere: false,
         // A message is never born with a thread either.
         thread: null,
+        chance: null,
+        poll: null,
         // Built with the same helper the server uses, so the bubble does not
         // visibly rewrite itself when the broadcast comes back.
         replyTo: replyTo
@@ -862,6 +874,54 @@ export function createChatController(
       transport.sendChat({ type: "typing", channelId });
     },
 
+    sendChance(request: ChanceRequest) {
+      if (!channelId || !currentUserId) {
+        return;
+      }
+      const nonce = createNonce();
+      transmit(nonce, "", channelId, undefined, [], { chance: request });
+    },
+
+    sendPoll(request: PollRequest) {
+      if (!channelId || !currentUserId) {
+        return;
+      }
+      const nonce = createNonce();
+      transmit(nonce, "", channelId, undefined, [], { poll: request });
+    },
+
+    votePoll(messageId: string, optionId: string) {
+      if (!channelId || messageId.startsWith("pending:")) {
+        return;
+      }
+      const target = messages.find((entry) => entry.id === messageId);
+      if (target?.poll) {
+        messages = messages.map((entry) =>
+          entry.id === messageId && entry.poll
+            ? { ...entry, poll: optimisticVote(entry.poll, optionId) }
+            : entry,
+        );
+        emit();
+      }
+      transport.sendChat({
+        type: "poll-vote",
+        channelId,
+        messageId,
+        optionId,
+      });
+    },
+
+    closePoll(messageId: string) {
+      if (!channelId || messageId.startsWith("pending:")) {
+        return;
+      }
+      transport.sendChat({
+        type: "poll-close",
+        channelId,
+        messageId,
+      });
+    },
+
     toggleReaction(messageId: string, emoji: string) {
       if (!channelId || messageId.startsWith("pending:")) {
         return;
@@ -1014,6 +1074,28 @@ export function createChatController(
           return;
         }
 
+        case "poll-update": {
+          if (message.channelId !== channelId) {
+            return;
+          }
+          messages = messages.map((entry) => {
+            if (entry.id !== message.messageId || !entry.poll) {
+              return entry;
+            }
+            return {
+              ...entry,
+              poll: mergePollUpdate(
+                entry.poll,
+                message.poll,
+                message.voterId === currentUserId ? message.optionId : undefined,
+                message.added,
+              ),
+            };
+          });
+          emit();
+          return;
+        }
+
         // Unread badges are owned by the app shell, not the channel view.
         case "channel-activity":
           return;
@@ -1032,3 +1114,54 @@ export function createChatController(
 }
 
 export type ChatController = ReturnType<typeof createChatController>;
+
+function optimisticVote(poll: Poll, optionId: string): Poll {
+  const already = poll.options.find((option) => option.id === optionId)?.voted;
+  const options = poll.options.map((option) => {
+    if (option.id === optionId) {
+      return {
+        ...option,
+        voted: !already,
+        votes: option.votes + (already ? -1 : 1),
+      };
+    }
+    if (!poll.allowMultiselect && option.voted) {
+      return { ...option, voted: false, votes: Math.max(0, option.votes - 1) };
+    }
+    return option;
+  });
+  return {
+    ...poll,
+    options,
+    totalVotes: options.reduce((sum, option) => sum + option.votes, 0),
+  };
+}
+
+function mergePollUpdate(
+  current: Poll,
+  incoming: Poll,
+  votedOptionId?: string,
+  added?: boolean,
+): Poll {
+  const options = incoming.options.map((option) => {
+    const prior = current.options.find((row) => row.id === option.id);
+    let voted = prior?.voted ?? option.voted;
+    if (votedOptionId) {
+      if (option.id === votedOptionId) {
+        voted = added ?? !voted;
+      } else if (!incoming.allowMultiselect) {
+        voted = false;
+      }
+    }
+    return { ...option, voted };
+  });
+  return {
+    ...incoming,
+    options,
+    canClose: current.canClose && !incoming.closedAt && !isClosed(incoming),
+  };
+}
+
+function isClosed(poll: Poll): boolean {
+  return Boolean(poll.closedAt) || Date.parse(poll.closesAt) <= Date.now();
+}

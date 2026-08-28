@@ -1,3 +1,15 @@
+import {
+  MAX_DICE_COUNT,
+  MAX_DRAW_COUNT,
+  MAX_CHOOSE_OPTIONS,
+  parseChooseOptions,
+  parseDrawCount,
+  parsePollSlashArgs,
+  parseRollNotation,
+  type ChanceParseError,
+  type ChanceRequest,
+  type PollRequest,
+} from "@pqp/shared";
 import { translateMessage, type MessageKey } from "@/lib/i18n";
 
 export interface SlashCommandMeta {
@@ -27,6 +39,9 @@ export interface SlashCommandContext {
   /** Opens the GIF picker, seeded with a query when one was typed. */
   openGifPicker: (query: string) => void;
   isGifSearchEnabled: boolean;
+  sendChance: (request: ChanceRequest) => void;
+  sendPoll: (request: PollRequest) => void;
+  openPollComposer: () => void;
 }
 
 export type SlashExecuteResult =
@@ -222,6 +237,93 @@ const commands: SlashCommand[] = [
     },
   },
   {
+    name: "roll",
+    descriptionKey: "slash.roll.description",
+    usage: "/roll [2d6+3]",
+    takesArgs: true,
+    execute({ args, sendChance }) {
+      const parsed = parseRollNotation(args);
+      if (!parsed.ok) {
+        return chanceErr(parsed.error);
+      }
+      sendChance({ type: "roll", notation: parsed.value.notation });
+      return ok({
+        message: translateMessage("slash.roll.ok", {
+          notation: parsed.value.notation,
+        }),
+        tone: "success",
+      });
+    },
+  },
+  {
+    name: "flip",
+    descriptionKey: "slash.flip.description",
+    usage: "/flip",
+    takesArgs: false,
+    execute({ sendChance }) {
+      sendChance({ type: "flip" });
+      return ok({
+        message: translateMessage("slash.flip.ok"),
+        tone: "success",
+      });
+    },
+  },
+  {
+    name: "choose",
+    descriptionKey: "slash.choose.description",
+    usage: "/choose pizza burguer sushi",
+    takesArgs: true,
+    execute({ args, sendChance }) {
+      const parsed = parseChooseOptions(args);
+      if (!parsed.ok) {
+        return chanceErr(parsed.error);
+      }
+      sendChance({ type: "choose", options: parsed.value });
+      return ok({
+        message: translateMessage("slash.choose.ok"),
+        tone: "success",
+      });
+    },
+  },
+  {
+    name: "draw",
+    descriptionKey: "slash.draw.description",
+    usage: "/draw [count]",
+    takesArgs: true,
+    execute({ args, sendChance }) {
+      const parsed = parseDrawCount(args);
+      if (!parsed.ok) {
+        return chanceErr(parsed.error);
+      }
+      sendChance({ type: "draw", count: parsed.value });
+      return ok({
+        message: translateMessage("slash.draw.ok"),
+        tone: "success",
+      });
+    },
+  },
+  {
+    name: "poll",
+    descriptionKey: "slash.poll.description",
+    usage: "/poll question | option | option",
+    takesArgs: true,
+    execute({ args, sendPoll, openPollComposer }) {
+      if (!args.trim()) {
+        openPollComposer();
+        return ok();
+      }
+      const request = parsePollSlashArgs(args);
+      if (!request) {
+        return errKey("slash.poll.needOptions");
+      }
+      sendPoll(request);
+      return ok({
+        message: translateMessage("slash.poll.ok"),
+        tone: "success",
+      });
+    },
+  },
+  {
     name: "clear",
     descriptionKey: "slash.clear.description",
     usage: "/clear",
@@ -297,4 +399,24 @@ export async function executeSlashCommand(
   }
 
   return command.execute({ ...ctx, args: parsed.args });
+}
+
+function chanceErr(error: ChanceParseError): SlashExecuteResult {
+  switch (error) {
+    case "invalid-notation":
+      return errKey("slash.roll.invalid");
+    case "bad-face":
+      return errKey("slash.roll.badFace");
+    case "too-many-dice":
+      return errKey("slash.roll.tooMany", { count: MAX_DICE_COUNT });
+    case "too-few-options":
+      return errKey("slash.choose.tooFew");
+    case "too-many-options":
+      return errKey("slash.choose.tooMany", { count: MAX_CHOOSE_OPTIONS });
+    case "empty-option":
+    case "option-too-long":
+      return errKey("slash.choose.tooLong");
+    case "bad-draw-count":
+      return errKey("slash.draw.badCount", { count: MAX_DRAW_COUNT });
+  }
 }
