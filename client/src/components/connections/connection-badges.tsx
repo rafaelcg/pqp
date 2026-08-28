@@ -1,3 +1,4 @@
+import { ArrowUpRight } from "lucide-react";
 import type { ConnectionProvider, VisibleConnection } from "@pqp/shared";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -74,14 +75,89 @@ export function ConnectionGlyph({
   );
 }
 
+/**
+ * Linked accounts.
+ *
+ * Two renderings of the same list. The default is the public profile page's
+ * wrap of chips, which has a whole page of room. `variant="card"` is the
+ * 320px profile card's version: a grouped inset well of tappable rows, the
+ * same object as the card's other sections, with the provider named on the
+ * right the way iOS Settings names a row's value. An external `profileUrl`
+ * still opens in a new tab; a row without one is a plain fact.
+ */
 export function ConnectionBadges({
   connections,
+  variant = "chips",
+  chrome = "well",
 }: {
   connections: VisibleConnection[];
+  variant?: "chips" | "card";
+  /**
+   * `plain` drops the well and the heading: the card's segmented control
+   * already named this list.
+   */
+  chrome?: "well" | "plain";
 }) {
   const { t } = useTranslation();
   if (connections.length === 0) {
     return null;
+  }
+  if (variant === "card") {
+    const plain = chrome === "plain";
+    return (
+      <section
+        aria-label={t("connections.listLabel")}
+        className={
+          plain ? undefined : "mt-3 overflow-hidden rounded-xl bg-ink-3/60"
+        }
+      >
+        {!plain && (
+          <h3 className="px-3 pb-1 pt-2.5 text-[11px] font-semibold uppercase tracking-wide text-paper-muted">
+            {t("connections.listLabel")}
+          </h3>
+        )}
+        <ul className="divide-y divide-ink-4/50">
+          {connections.map((connection) => {
+            const row = (
+              <>
+                <ConnectionGlyph
+                  provider={connection.provider}
+                  className="h-6 w-6 rounded-md p-1"
+                />
+                <span className="min-w-0 flex-1 truncate text-[13px] text-paper">
+                  {connection.displayName}
+                </span>
+                <span className="shrink-0 text-[11px] text-paper-muted">
+                  {t(PROVIDER_LABEL[connection.provider])}
+                </span>
+              </>
+            );
+            return (
+              <li key={connection.provider}>
+                {connection.profileUrl ? (
+                  <a
+                    href={connection.profileUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-2.5 px-3 py-2 transition-colors hover:bg-ink-3 focus-visible:bg-ink-3 focus-visible:outline-none"
+                  >
+                    {row}
+                    <ArrowUpRight
+                      aria-hidden
+                      className="h-3.5 w-3.5 shrink-0 text-paper-muted"
+                    />
+                  </a>
+                ) : (
+                  <div className="flex items-center gap-2.5 px-3 py-2">
+                    {row}
+                  </div>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      </section>
+    );
   }
   return (
     <ul

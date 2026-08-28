@@ -12,10 +12,11 @@ import { ContextMenu, type ContextMenuItemDef } from "@/components/ui/context-me
 import { Tooltip } from "@/components/ui/tooltip";
 import { StatusDot } from "@/components/user/status-dot";
 import { UserAvatar } from "@/components/user/user-avatar";
+import { RankMarks } from "@/components/user/rank-marks";
 import { useProfilePopover } from "@/components/user/user-profile-popover";
 import type { ProfileSubject } from "@/components/user/profile-relations";
 import { ApiError, fetchMembers, memberDisplayName, updateMemberNickname, type ServerMember, type ServerRole } from "@/lib/api";
-import { highestRoleColor } from "@/lib/author-display";
+import { highestRoleColor, identityMarks } from "@/lib/author-display";
 import { useTranslation } from "@/lib/i18n";
 import {
   MEMBER_PAGE_SIZE,
@@ -713,14 +714,21 @@ function MemberRow({
             {/* `text-paper` explicitly: role colours are the next thing to land
                 here, and a name that inherits its colour has nowhere to put
                 one. */}
-            <span
-              className={cn(
-                "block truncate text-sm font-medium",
-                !nameColor && "text-paper",
-              )}
-              style={nameColor ? { color: nameColor } : undefined}
-            >
-              {shown}
+            <span className="flex min-w-0 items-center gap-1">
+              <span
+                className={cn(
+                  "truncate text-sm font-medium",
+                  !nameColor && "text-paper",
+                )}
+                style={nameColor ? { color: nameColor } : undefined}
+              >
+                {shown}
+              </span>
+              <RankMarks
+                marks={identityMarks({
+                  rank: member.role,
+                })}
+              />
             </span>
             {voiceChannelName && (
               <span className="block truncate text-[11px] text-signal">

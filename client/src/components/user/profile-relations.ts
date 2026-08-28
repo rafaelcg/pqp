@@ -39,6 +39,12 @@ export interface ProfileSubject {
   roleIds?: string[];
   /** Rank column: owner / admin chip, not a painted role. */
   rank?: MemberRole | null;
+  /**
+   * The server nickname, when the opener knows it (the members panel does).
+   * Prefills the card's Change-nickname prompt; absent means "unknown", not
+   * "none", so the prompt starts blank rather than wrong.
+   */
+  nickname?: string | null;
 }
 
 /** Painted roles the card can list. `@everyone` is filtered out at render. */
@@ -48,6 +54,29 @@ export interface ProfileRoleChip {
   color: string | null;
   position: number;
   isEveryone: boolean;
+  /** Seeded Admin is rank, not a cargo chip. */
+  systemKey?: "everyone" | "admin" | null;
+}
+
+/**
+ * Custom cargos to list under the name. Seeded Admin is the shield next to
+ * the name, not a pill on its own row.
+ */
+export function cardRoleChips(
+  roles: readonly ProfileRoleChip[] | undefined,
+  roleIds: readonly string[] | undefined,
+): ProfileRoleChip[] {
+  if (!roles?.length || !roleIds?.length) {
+    return [];
+  }
+  const held = new Set(roleIds);
+  return roles
+    .filter(
+      (role) =>
+        held.has(role.id) && !role.isEveryone && role.systemKey !== "admin",
+    )
+    .slice()
+    .sort((a, b) => b.position - a.position);
 }
 
 /**
@@ -355,6 +384,93 @@ export function moderationNeedsConfirmation(
   action: ProfileModerationAction,
 ): boolean {
   return action === "kick" || action === "ban";
+}
+
+/** The owner-only rank change a card may offer: promote a member, demote an admin. */
+export type ProfileRoleChange = "promote" | "demote";
+
+/**
+ * The one rank change the card may offer for this person, or null.
+ *
+ * Owner-only and never yourself — the rule the members panel's `actionsFor`
+ * applies, and the one the server enforces with `requireOwner` on
+ * `PATCH /api/servers/:id/members/:userId`. An unknown rank offers nothing,
+ * the rule `moderationActions` already argues: a card that guesses offers an
+ * action that 404s.
+ *
+ * NOT PART OF `moderationActions` on purpose. That list is the enforcement
+ * ladder, ordered reversible-first so the menu teaches it; a role change
+ * sanctions nobody and is not a rung. Deriving it separately is what lets the
+ * ladder's tests stay exactly as they are.
+ */
+export function roleChangeFor(
+  subjectId: string,
+  currentUserId: string | null,
+  context: ProfileModerationContext | null,
+): ProfileRoleChange | null {
+  if (
+    !context ||
+    context.actorRole !== "owner" ||
+    subjectId === currentUserId
+  ) {
+    return null;
+  }
+  const targetRole = context.memberRoles.get(subjectId);
+  if (targetRole === "member") {
+    return "promote";
+  }
+  if (targetRole === "admin") {
+    return "demote";
+  }
+  return null;
+}
+
+// ---------------------------------------------------------- profile about
+
+/**
+ * The three optional blocks below the medals. A card that has more than one
+ * shows them as an iOS segmented control rather than a stack: stacking is
+ * what pushed Comunidades off a short window, and three accordions would
+ * spend the same space on chevrons. One pane at a time, leftover height.
+ */
+export type ProfileAboutTab = "depoimentos" | "connections" | "communities";
+
+export function profileAboutTabs(input: {
+  depoimentoCount: number;
+  connectionCount: number;
+  communityCount: number;
+}): ProfileAboutTab[] {
+  const tabs: ProfileAboutTab[] = [];
+  if (input.depoimentoCount > 0) {
+    tabs.push("depoimentos");
+  }
+  if (input.connectionCount > 0) {
+    tabs.push("connections");
+  }
+  if (input.communityCount > 0) {
+    tabs.push("communities");
+  }
+  return tabs;
+}
+
+export function activeProfileAboutTab(
+  tabs: readonly ProfileAboutTab[],
+  picked: ProfileAboutTab | null,
+): ProfileAboutTab | null {
+  if (tabs.length === 0) {
+    return null;
+  }
+  if (picked && tabs.includes(picked)) {
+    return picked;
+  }
+  // Contas is the default open pane when this person has any. The segment
+  // order stays Depoimentos / Contas / Comunidades; only the initial pick
+  // moves, so a card with quotes and rooms but no accounts still opens on
+  // depoimentos.
+  if (tabs.includes("connections")) {
+    return "connections";
+  }
+  return tabs[0]!;
 }
 
 // ---------------------------------------------------------------- placement

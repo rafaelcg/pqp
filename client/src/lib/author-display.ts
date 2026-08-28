@@ -3,6 +3,35 @@
  * the username half of a `name#1234` tag when the roster did not send one.
  */
 
+/** Quiet glyphs next to a name: rank, then a bot mark for character accounts. */
+export type IdentityMark = "owner" | "admin" | "bot";
+
+/**
+ * Which marks belong next to a name. A webhook is a posting mechanism, not a
+ * member, so it keeps the separate chip and gets none of these. Owner and
+ * admin are mutually exclusive ranks; a character can still hold one, and then
+ * both marks show.
+ */
+export function identityMarks(input: {
+  rank?: "owner" | "admin" | "member" | null;
+  isCharacter?: boolean;
+  isWebhook?: boolean;
+}): IdentityMark[] {
+  if (input.isWebhook) {
+    return [];
+  }
+  const marks: IdentityMark[] = [];
+  if (input.rank === "owner") {
+    marks.push("owner");
+  } else if (input.rank === "admin") {
+    marks.push("admin");
+  }
+  if (input.isCharacter) {
+    marks.push("bot");
+  }
+  return marks;
+}
+
 export function highestRoleColor(
   roleIds: readonly string[] | undefined,
   roles: readonly {

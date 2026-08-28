@@ -103,6 +103,15 @@ interface MessageComposerProps {
   onEditLastOwn?: () => boolean;
 }
 
+/**
+ * Resting height of the field, the send pill, and the icon buttons.
+ * They have to be the same number: a 36px icon next to a 42px field is
+ * the "a bit shorter" the composer used to show. `h-10` is 40px.
+ */
+const COMPOSER_CONTROL_PX = 40;
+const COMPOSER_ICON_BUTTON =
+  "h-10 w-10 shrink-0 text-paper-muted hover:text-signal";
+
 /** Grow with the content, but never take over the whole pane. */
 const MAX_COMPOSER_HEIGHT_PX = 200;
 
@@ -314,8 +323,10 @@ export function MessageComposer({
     if (!node) {
       return;
     }
-    node.style.height = "auto";
-    node.style.height = `${Math.min(node.scrollHeight, MAX_COMPOSER_HEIGHT_PX)}px`;
+    node.style.height = `${COMPOSER_CONTROL_PX}px`;
+    if (node.scrollHeight > COMPOSER_CONTROL_PX) {
+      node.style.height = `${Math.min(node.scrollHeight, MAX_COMPOSER_HEIGHT_PX)}px`;
+    }
   }, [body]);
 
   useEffect(() => {
@@ -897,7 +908,7 @@ export function MessageComposer({
           ))}
         </ul>
       )}
-      <div className="flex gap-2">
+      <div className="flex items-end gap-2">
         {isAttachmentsEnabled && (
           <>
             <input
@@ -929,7 +940,7 @@ export function MessageComposer({
                     event.preventDefault();
                   }
                 }}
-                className="shrink-0 text-paper-muted hover:text-signal"
+                className={COMPOSER_ICON_BUTTON}
               >
                 <Paperclip className="h-5 w-5" />
               </Button>
@@ -952,7 +963,7 @@ export function MessageComposer({
                 event.preventDefault();
               }
             }}
-            className="shrink-0 text-paper-muted hover:text-signal"
+            className={COMPOSER_ICON_BUTTON}
           >
             <Smile className="h-5 w-5" />
           </Button>
@@ -977,7 +988,7 @@ export function MessageComposer({
                   event.preventDefault();
                 }
               }}
-              className="shrink-0 text-paper-muted hover:text-signal"
+              className={COMPOSER_ICON_BUTTON}
             >
               <ImagePlay className="h-5 w-5" />
             </Button>
@@ -1011,7 +1022,7 @@ export function MessageComposer({
           placeholder={inputPlaceholder}
           disabled={disabled || isRunningSlash}
           maxLength={MESSAGE_MAX_LENGTH}
-          className="flex-1 resize-none self-center rounded-md border border-ink-4 bg-ink-3 px-3 py-2 text-sm leading-6 text-paper placeholder:text-paper-muted focus-visible:border-signal/60 focus-visible:outline-none disabled:opacity-50"
+          className="h-10 min-h-10 flex-1 resize-none rounded-md border border-ink-4 bg-ink-3 px-3 py-2 text-sm leading-5 text-paper placeholder:text-paper-muted focus-visible:border-signal/60 focus-visible:outline-none disabled:opacity-50"
           role="combobox"
           aria-expanded={Boolean(menuKind)}
           aria-controls={menuKind ? MENU_ID : undefined}
@@ -1021,7 +1032,7 @@ export function MessageComposer({
         />
         <Button
           type="submit"
-          className="self-end"
+          className="h-10"
           // An attachment is a message on its own, so an empty body is only a
           // reason to stay disabled when nothing is attached either.
           disabled={

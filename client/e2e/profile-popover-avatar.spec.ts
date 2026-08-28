@@ -43,8 +43,8 @@ const AVATAR_PNG = Buffer.from(
   "base64",
 );
 
-/** The circle the card draws the picture inside: `h-16 w-16`. */
-const CIRCLE = 64;
+/** The circle the card draws the picture inside: `h-20 w-20`. */
+const CIRCLE = 80;
 
 test.setTimeout(120_000);
 
