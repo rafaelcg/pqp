@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   CARGOS_HINT_STORAGE_KEY,
+  isAutomatedBrowser,
   isCargosHintSeen,
   rememberCargosHint,
   shouldPersistCargosHint,
@@ -87,5 +88,16 @@ describe("rememberCargosHint", () => {
   it("does not throw when the store refuses the write", () => {
     expect(() => rememberCargosHint(hostileStorage(), true)).not.toThrow();
     expect(() => rememberCargosHint(null, true)).not.toThrow();
+  });
+});
+
+describe("isAutomatedBrowser", () => {
+  it("treats Playwright as automated", () => {
+    expect(isAutomatedBrowser({ webdriver: true })).toBe(true);
+  });
+
+  it("leaves a normal browser alone", () => {
+    expect(isAutomatedBrowser({ webdriver: false })).toBe(false);
+    expect(isAutomatedBrowser({})).toBe(false);
   });
 });

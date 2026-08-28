@@ -2,7 +2,7 @@ import { Check, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { STAFF_ROLE_COLORS } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
-import { isCargosHintSeen, rememberCargosHint } from "@/lib/cargos-hint";
+import { isAutomatedBrowser, isCargosHintSeen, rememberCargosHint } from "@/lib/cargos-hint";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
@@ -28,7 +28,7 @@ export function CargosHint({
   onOpenRoles: () => void;
 }) {
   const { t } = useTranslation();
-  const [eligible] = useState(() => !isCargosHintSeen());
+  const [eligible] = useState(() => !isAutomatedBrowser() && !isCargosHintSeen());
   const [open, setOpen] = useState(true);
 
   useEffect(() => {

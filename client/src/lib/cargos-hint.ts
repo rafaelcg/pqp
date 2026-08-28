@@ -16,6 +16,19 @@ export function shouldPersistCargosHint(
 }
 
 /**
+ * Playwright sets `navigator.webdriver`. The card is pinned over the
+ * composer and the settings button, and localhost never records the
+ * impression, so every e2e run would otherwise time out on those clicks.
+ */
+export function isAutomatedBrowser(
+  nav: { webdriver?: boolean } | undefined = typeof navigator === "undefined"
+    ? undefined
+    : navigator,
+): boolean {
+  return Boolean(nav?.webdriver);
+}
+
+/**
  * Has this device already been shown the card?
  *
  * Missing or hostile storage answers `true` — an unsolicited card that
