@@ -29,6 +29,7 @@ import type {
   DmListResponse,
   DmPrivacy,
   DmSummary,
+  DiscordImportPlan,
   Gif,
   Invite,
   MemberTimeout,
@@ -605,6 +606,17 @@ export const fetchServers = () =>
 
 export const createServer = (name: string) =>
   post<{ server: Server; channels: Channel[] }>("/api/servers", { name });
+
+export const previewDiscordImport = (source: string) =>
+  post<DiscordImportPlan>("/api/import/discord/preview", { source });
+
+export const applyDiscordImport = (source: string) =>
+  post<{
+    server: Server;
+    channels: Channel[];
+    roles: ServerRole[];
+    invite: Invite;
+  }>("/api/import/discord/apply", { source });
 
 export const updateServer = (
   serverId: string,

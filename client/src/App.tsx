@@ -65,6 +65,7 @@ import { AgeGateDialog } from "@/components/user/age-gate-dialog";
 import { OnboardingFlow } from "@/components/onboarding/onboarding-flow";
 import { NewDmDialog } from "@/components/user/new-dm-dialog";
 import { ServerSettingsDialog } from "@/components/layout/server-settings-dialog";
+import { CreateServerDialog } from "@/components/layout/create-server-dialog";
 import {
   applyRemotePreferences,
   defaultLocalSettings,
@@ -96,7 +97,6 @@ import { useCallRating } from "@/hooks/use-call-rating";
 import { usePermissions } from "@/hooks/use-permissions";
 import { ShareHandleButton } from "@/components/handle/share-handle-button";
 import { BetaTag } from "@/components/ui/beta-tag";
-import { Dialog } from "@/components/ui/dialog";
 import { PromptDialog } from "@/components/ui/prompt-dialog";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Seo } from "@/components/marketing/seo";
@@ -110,7 +110,6 @@ import {
   ApiError,
   blockUser,
   createChannel,
-  createServer,
   createThread,
   createVoiceSession,
   deleteChannel,
@@ -208,7 +207,6 @@ import { isMeshForced } from "@/lib/voice-backend";
 import type { VideoQuality } from "@/lib/video-quality";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 
 export type TokenResolver = (options?: {
   forceRefresh?: boolean;
@@ -396,8 +394,6 @@ function MainAppContent({
   const [blockedUsers, setBlockedUsers] = useState<BlockedUser[]>([]);
   const [newDmOpen, setNewDmOpen] = useState(false);
   const [showCreateServer, setShowCreateServer] = useState(false);
-  const [newServerName, setNewServerName] = useState("");
-  const [creatingServer, setCreatingServer] = useState(false);
   const [appError, setAppError] = useState<string | null>(null);
   /**
    * The good-news counterpart of `appError`, in the same slot.
@@ -2008,33 +2004,6 @@ function MainAppContent({
     },
     [loadUnread, selectChannel, syncRoute],
   );
-
-  async function handleCreateServer() {
-    const name = newServerName.trim();
-    if (!name || creatingServer) {
-      return;
-    }
-    setCreatingServer(true);
-    try {
-      const { server, channels: newChannels } = await createServer(name);
-      setServers((prev) => [...prev, server]);
-      setSelection({ kind: "server", serverId: server.id });
-      setChannels(newChannels);
-      setNewServerName("");
-      setShowCreateServer(false);
-      setAppError(null);
-      const general = newChannels.find((c) => c.type === "text");
-      if (general) {
-        await selectChannel(general.id, server.id);
-      }
-    } catch (error) {
-      setAppError(
-        error instanceof Error ? error.message : "Failed to create server",
-      );
-    } finally {
-      setCreatingServer(false);
-    }
-  }
 
   async function handleChannelPromptConfirm(name: string, isPrivate?: boolean) {
     if (!channelPrompt) {
@@ -4117,57 +4086,20 @@ function MainAppContent({
         }}
       />
 
-      {/* A dialog rather than the old inline strip at the top of `<main>`:
-          that strip sat above the Friends header, outside the scroll region
-          that holds the first-run checklist, so "Make a community" looked like
-          a dead button from the place people actually click it. */}
-      <Dialog
+      <CreateServerDialog
         open={showCreateServer}
-        title={t("communities.create.title")}
-        description={t("communities.create.body")}
-        size="sm"
-        onClose={() => {
-          setShowCreateServer(false);
-          setNewServerName("");
+        onClose={() => setShowCreateServer(false)}
+        onCreated={async ({ server, channels: newChannels }) => {
+          setServers((prev) => [...prev, server]);
+          setSelection({ kind: "server", serverId: server.id });
+          setChannels(newChannels);
+          setAppError(null);
+          const general = newChannels.find((c) => c.type === "text");
+          if (general) {
+            await selectChannel(general.id, server.id);
+          }
         }}
-        footer={
-          <>
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={() => {
-                setShowCreateServer(false);
-                setNewServerName("");
-              }}
-              disabled={creatingServer}
-            >
-              {t("invite.join.cancel")}
-            </Button>
-            <Button
-              type="button"
-              onClick={() => void handleCreateServer()}
-              disabled={!newServerName.trim() || creatingServer}
-            >
-              {creatingServer ? t("chrome.creating") : t("chrome.create")}
-            </Button>
-          </>
-        }
-      >
-        <div className="px-5 py-4">
-          <Input
-            value={newServerName}
-            onChange={(e) => setNewServerName(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                void handleCreateServer();
-              }
-            }}
-            placeholder={t("communities.create.placeholder")}
-            autoFocus
-            disabled={creatingServer}
-          />
-        </div>
-      </Dialog>
+      />
 
       <InvitePanel
         open={inviteMode !== null}

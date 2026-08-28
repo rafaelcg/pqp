@@ -178,3 +178,21 @@ See [`THEMING.md`](./THEMING.md).
 - Storage key `pqp-accent-hue`. Values are `default` or an integer 0–360.
 - Attribute `data-accent="custom"` plus `--accent-hue` only when a hue is set.
 - Slider writes are debounced. Reset to the look syncs immediately.
+
+## Copy Discord layout: Guild Templates, not a Discord account (2026-08-25)
+
+Paste a `discord.new` template link. pqp copies the sidebar (channels, categories,
+cosmetic roles, inferred privacy). It does not copy members, messages, or Discord
+permission bits, and it does not install a bot.
+
+**Why not OAuth or a bot.** A Guild Template is a first-party snapshot the Discord
+admin already created. Reading it needs no token and no presence in their server.
+A Discord connection (Steam-style badge) is a separate product and is not this
+feature.
+
+**Implications.**
+- No `DISCORD_*` env. Fetch only `https://discord.com/api/v10/guilds/templates/{code}`
+  after parsing a code with `^[A-Za-z0-9]{4,32}$`.
+- Privacy is `channel_overwrites` (`channel_viewable`), not `channel_members`.
+- Honest naming in the UI: Copy Discord layout / Copiar estrutura do Discord.
+- See [`DISCORD_IMPORT.md`](./DISCORD_IMPORT.md).

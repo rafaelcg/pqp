@@ -1,6 +1,9 @@
 import { randomBytes } from "node:crypto";
+import type { PoolClient } from "pg";
 import { getPool, type DbInvite } from "../db.js";
 import { invalidateServerAudience } from "./servers.js";
+
+type Queryable = Pick<PoolClient, "query">;
 
 function generateInviteCode(): string {
   return randomBytes(5).toString("base64url").slice(0, 8);
@@ -17,7 +20,8 @@ export async function deleteInvite(
   return (result.rowCount ?? 0) > 0;
 }
 
-export async function createInvite(
+export async function createInviteWith(
+  db: Queryable,
   serverId: string,
   createdBy: string,
   options: { maxUses?: number | null; expiresInHours?: number | null } = {},
@@ -28,13 +32,21 @@ export async function createInvite(
       ? new Date(Date.now() + options.expiresInHours * 60 * 60 * 1000)
       : null;
 
-  const result = await getPool().query<DbInvite>(
+  const result = await db.query<DbInvite>(
     `INSERT INTO server_invites (server_id, code, created_by, max_uses, expires_at)
      VALUES ($1, $2, $3, $4, $5)
      RETURNING id, server_id, code, created_by, max_uses, uses, expires_at, created_at`,
     [serverId, code, createdBy, options.maxUses ?? null, expiresAt],
   );
   return result.rows[0]!;
+}
+
+export async function createInvite(
+  serverId: string,
+  createdBy: string,
+  options: { maxUses?: number | null; expiresInHours?: number | null } = {},
+): Promise<DbInvite> {
+  return createInviteWith(getPool(), serverId, createdBy, options);
 }
 
 export async function listInvites(serverId: string): Promise<DbInvite[]> {

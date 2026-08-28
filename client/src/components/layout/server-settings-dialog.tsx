@@ -64,6 +64,8 @@ const AUDIT_ACTION_KEYS: Record<string, MessageKey> = {
   "server.ownership_transfer":
     "serverSettings.audit.action.server.ownership_transfer",
   "server.data_export": "serverSettings.audit.action.server.data_export",
+  "server.discord_import":
+    "serverSettings.audit.action.server.discord_import",
   "invite.create": "serverSettings.audit.action.invite.create",
   "invite.delete": "serverSettings.audit.action.invite.delete",
   "server.sso_domain_update":
