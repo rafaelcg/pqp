@@ -179,15 +179,11 @@ export function RoleRankList({
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
     window.addEventListener("pointercancel", onUp);
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
     window.addEventListener("keydown", onKey);
     return () => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
       window.removeEventListener("pointercancel", onUp);
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
       window.removeEventListener("keydown", onKey);
       clearCursor();
     };
