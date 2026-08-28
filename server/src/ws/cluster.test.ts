@@ -85,6 +85,15 @@ vi.mock("../services/reactions.js", () => ({
   ) => fallback,
 }));
 
+vi.mock("../services/polls.js", () => ({
+  votePoll: async () => null,
+  closePoll: async () => null,
+}));
+
+vi.mock("../services/threads.js", () => ({
+  getThreadInfo: async () => null,
+}));
+
 type ChatModule = typeof import("./chat.js");
 type BusModule = typeof import("../lib/bus.js");
 type StatusModule = typeof import("./status.js");

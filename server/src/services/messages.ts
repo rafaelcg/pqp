@@ -1,16 +1,24 @@
 import {
   buildReplyExcerpt,
+  chanceResultSchema,
   extractMentions,
+  formatChanceBody,
   formatUserTag,
   MAX_PINS_PER_CHANNEL,
+  resolveChanceRequest,
   type Attachment,
+  type ChanceRequest,
+  type ChanceResult,
   type Embed,
   type MessagePinnedBy,
   type MessageReaction,
   type MessageReplyRef,
+  type Poll,
+  type PollRequest,
   type ThreadSummary,
   type WebhookEmbed,
 } from "@pqp/shared";
+import { randomInt } from "node:crypto";
 import type { PoolClient } from "pg";
 import { getPool, type DbMessage, type DbUser } from "../db.js";
 import { deleteObject } from "../lib/s3.js";
@@ -25,6 +33,17 @@ import { listEmbedsForMessages } from "./embeds.js";
 import { listReactionsForMessages } from "./reactions.js";
 // --- threads ---
 import { listThreadsForMessages } from "./threads.js";
+import { insertPoll, listPollsForMessages } from "./polls.js";
+
+/** Inclusive on both ends. Node's `randomInt` is exclusive of `max`. */
+export function nodeRandomInt(min: number, max: number): number {
+  return randomInt(min, max + 1);
+}
+
+export interface MessageInteractive {
+  chance?: ChanceRequest;
+  poll?: PollRequest;
+}
 
 /**
  * The pool, or one connection checked out of it. Mention rows carry an FK to
@@ -35,7 +54,7 @@ import { listThreadsForMessages } from "./threads.js";
 type Queryable = Pick<PoolClient, "query">;
 
 /** What every read path hands back: a row plus its batched relations. */
-export type HydratedMessage = DbMessage & {
+export type HydratedMessage = Omit<DbMessage, "chance"> & {
   reactions: MessageReaction[];
   attachments: Attachment[];
   embeds: Embed[];
@@ -53,6 +72,8 @@ export type HydratedMessage = DbMessage & {
    * way reactions are. Absent (not null) on paths that never carry a chip —
    * a freshly created message cannot have a thread yet. */
   thread?: ThreadSummary | null;
+  chance?: ChanceResult | null;
+  poll?: Poll | null;
 };
 
 /** Parent columns every read path needs to build a quote header. */
@@ -80,6 +101,7 @@ const MESSAGE_SELECT = `SELECT m.id, m.channel_id, m.author_id, m.body, m.create
             u.is_webhook as author_is_webhook,
             m.webhook_embeds, m.webhook_username, m.webhook_avatar_url,
             m.mention_everyone, m.mention_here,
+            m.chance,
             ${REPLY_COLUMNS},
             ${PIN_COLUMNS}
      FROM messages m
@@ -208,6 +230,7 @@ async function hydrate(
     blockedAuthors,
     // --- threads --- one grouped query per page, same shape as reactions.
     threadsByMessage,
+    pollsByMessage,
   ] =
     await Promise.all([
       listReactionsForMessages(messageIds, viewerId),
@@ -225,6 +248,7 @@ async function hydrate(
           ])
         : Promise.resolve(new Set<string>()),
       listThreadsForMessages(messageIds),
+      listPollsForMessages(messageIds, viewerId),
     ]);
   return {
     hasMore,
@@ -236,6 +260,8 @@ async function hydrate(
       embeds: embedsByMessage.get(row.id) ?? [],
       blocked: blockedAuthors.has(row.author_id),
       thread: threadsByMessage.get(row.id) ?? null,
+      chance: parseStoredChance(row.chance),
+      poll: pollsByMessage.get(row.id) ?? null,
     })),
   };
 }
@@ -516,7 +542,25 @@ export async function createMessage(
   replyToId?: string | null,
   attachmentIds?: string[],
   mentions?: MentionWrite,
+  interactive?: MessageInteractive,
 ): Promise<HydratedMessage | null> {
+  if (interactive?.chance && interactive.poll) {
+    return null;
+  }
+  let storedBody = body;
+  let chance: ChanceResult | null = null;
+  if (interactive?.chance) {
+    const resolved = resolveChanceRequest(interactive.chance, nodeRandomInt);
+    if (!resolved.ok) {
+      return null;
+    }
+    chance = resolved.value;
+    storedBody = formatChanceBody(chance);
+  }
+  if (interactive?.poll) {
+    storedBody = interactive.poll.question;
+  }
+
   const verified = attachmentIds?.length
     ? await verifyPendingAttachments(channelId, author.id, attachmentIds)
     : [];
@@ -539,13 +583,13 @@ export async function createMessage(
     // parent lookup hangs off.
     const result = await client.query<DbMessage>(
       `WITH inserted AS (
-         INSERT INTO messages (channel_id, author_id, body, reply_to_id, mention_everyone, mention_here)
-         VALUES ($1, $2, $3, $4, $5, $6)
+         INSERT INTO messages (channel_id, author_id, body, reply_to_id, mention_everyone, mention_here, chance)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
          RETURNING id, channel_id, author_id, body, created_at, edited_at, reply_to_id,
-                   mention_everyone, mention_here
+                   mention_everyone, mention_here, chance
        )
        SELECT m.id, m.channel_id, m.author_id, m.body, m.created_at, m.edited_at,
-              m.mention_everyone, m.mention_here,
+              m.mention_everyone, m.mention_here, m.chance,
               ${REPLY_COLUMNS}
        FROM inserted m
        JOIN channels msg_ch ON msg_ch.id = m.channel_id
@@ -553,10 +597,11 @@ export async function createMessage(
       [
         channelId,
         author.id,
-        body,
+        storedBody,
         replyToId ?? null,
         mentions?.mentionEveryone === true,
         mentions?.mentionHere === true,
+        chance ? JSON.stringify(chance) : null,
       ],
     );
     // A message is never born pinned, so the columns above are left out rather
@@ -565,9 +610,13 @@ export async function createMessage(
 
     const claimed = await claimAttachments(client, message.id, verified);
 
-    if (body.length === 0 && claimed.length === 0) {
+    if (storedBody.length === 0 && claimed.length === 0) {
       await client.query("ROLLBACK");
       return null;
+    }
+
+    if (interactive?.poll) {
+      await insertPoll(client, message.id, interactive.poll);
     }
 
     await recordMentions(
@@ -575,12 +624,16 @@ export async function createMessage(
       message.id,
       channelId,
       author.id,
-      body,
+      storedBody,
       replyToId ? { parentId: replyToId, authorId: author.id } : undefined,
       mentions,
     );
 
     await client.query("COMMIT");
+
+    const polls = interactive?.poll
+      ? await listPollsForMessages([message.id], author.id)
+      : new Map<string, Poll>();
 
     return {
       ...message,
@@ -594,6 +647,8 @@ export async function createMessage(
       // unfurlable link is resolved after the fact by the caller, same as the
       // background fetch that follows a fresh create over the WS.
       embeds: [],
+      chance,
+      poll: polls.get(message.id) ?? null,
     };
   } catch (error) {
     await client.query("ROLLBACK");
@@ -612,13 +667,14 @@ export async function updateMessageBody(
        UPDATE messages SET body = $2, edited_at = NOW()
        WHERE id = $1
        RETURNING id, channel_id, author_id, body, created_at, edited_at, reply_to_id,
-                 pinned_at, pinned_by
+                 pinned_at, pinned_by, chance
      )
      SELECT m.id, m.channel_id, m.author_id, m.body, m.created_at, m.edited_at,
             COALESCE(NULLIF(author_sm.nickname, ''), u.display_name) as author_name,
             u.username as author_username,
             u.discriminator as author_discriminator,
             u.avatar_url as author_avatar_url,
+            m.chance,
             ${REPLY_COLUMNS},
             ${PIN_COLUMNS}
      FROM updated m
@@ -658,11 +714,12 @@ export async function updateMessageBody(
   // decision, not this function's. The thread chip rides along for the same
   // reason the attachments do: the broadcast is a whole message, and a chip
   // that vanished on every edit would read as the thread being deleted.
-  const [reactions, attachments, embeds, threads] = await Promise.all([
+  const [reactions, attachments, embeds, threads, polls] = await Promise.all([
     listReactionsForMessages([messageId]),
     listAttachmentsForMessages([messageId]),
     listEmbedsForMessages([message]),
     listThreadsForMessages([messageId]),
+    listPollsForMessages([messageId]),
   ]);
   return {
     ...message,
@@ -670,6 +727,8 @@ export async function updateMessageBody(
     attachments: attachments.get(messageId) ?? [],
     embeds: embeds.get(messageId) ?? [],
     thread: threads.get(messageId) ?? null,
+    chance: parseStoredChance(message.chance),
+    poll: polls.get(messageId) ?? null,
   };
 }
 
@@ -759,6 +818,7 @@ export function mapMessage(
     embeds?: Embed[];
     blocked?: boolean;
     thread?: ThreadSummary | null;
+    poll?: Poll | null;
   },
 ) {
   return {
@@ -792,7 +852,17 @@ export function mapMessage(
     webhookEmbeds: (m.webhook_embeds as WebhookEmbed[] | null) ?? [],
     // --- threads ---
     thread: m.thread ?? null,
+    chance: parseStoredChance(m.chance),
+    poll: m.poll ?? null,
   };
+}
+
+function parseStoredChance(value: unknown): ChanceResult | null {
+  if (value == null) {
+    return null;
+  }
+  const parsed = chanceResultSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
 }
 
 export class ChannelPinLimitError extends Error {
@@ -804,13 +874,15 @@ export class ChannelPinLimitError extends Error {
 
 async function hydrateOne(
   message: DbMessage,
+  viewerId?: string,
 ): Promise<HydratedMessage> {
-  const [reactions, attachments, embeds, threads] = await Promise.all([
-    listReactionsForMessages([message.id]),
+  const [reactions, attachments, embeds, threads, polls] = await Promise.all([
+    listReactionsForMessages([message.id], viewerId),
     listAttachmentsForMessages([message.id]),
     listEmbedsForMessages([message]),
     // --- threads --- pin/unpin broadcasts are whole messages too.
     listThreadsForMessages([message.id]),
+    listPollsForMessages([message.id], viewerId),
   ]);
   return {
     ...message,
@@ -818,6 +890,8 @@ async function hydrateOne(
     attachments: attachments.get(message.id) ?? [],
     embeds: embeds.get(message.id) ?? [],
     thread: threads.get(message.id) ?? null,
+    chance: parseStoredChance(message.chance),
+    poll: polls.get(message.id) ?? null,
   };
 }
 
@@ -867,13 +941,14 @@ export async function pinMessage(
            pinned_by = COALESCE(pinned_by, $2)
        WHERE id = $1
        RETURNING id, channel_id, author_id, body, created_at, edited_at, reply_to_id,
-                 pinned_at, pinned_by
+                 pinned_at, pinned_by, chance
      )
      SELECT m.id, m.channel_id, m.author_id, m.body, m.created_at, m.edited_at,
             COALESCE(NULLIF(author_sm.nickname, ''), u.display_name) as author_name,
             u.username as author_username,
             u.discriminator as author_discriminator,
             u.avatar_url as author_avatar_url,
+            m.chance,
             ${REPLY_COLUMNS},
             ${PIN_COLUMNS}
      FROM updated m
@@ -899,13 +974,14 @@ export async function unpinMessage(
        UPDATE messages SET pinned_at = NULL, pinned_by = NULL
        WHERE id = $1
        RETURNING id, channel_id, author_id, body, created_at, edited_at, reply_to_id,
-                 pinned_at, pinned_by
+                 pinned_at, pinned_by, chance
      )
      SELECT m.id, m.channel_id, m.author_id, m.body, m.created_at, m.edited_at,
             COALESCE(NULLIF(author_sm.nickname, ''), u.display_name) as author_name,
             u.username as author_username,
             u.discriminator as author_discriminator,
             u.avatar_url as author_avatar_url,
+            m.chance,
             ${REPLY_COLUMNS},
             ${PIN_COLUMNS}
      FROM updated m
@@ -935,15 +1011,19 @@ export async function listPinnedMessages(
     [channelId],
   );
   const messageIds = result.rows.map((row) => row.id);
-  const [reactionsByMessage, attachmentsByMessage, embedsByMessage] = await Promise.all([
-    listReactionsForMessages(messageIds),
-    listAttachmentsForMessages(messageIds),
-    listEmbedsForMessages(result.rows),
-  ]);
+  const [reactionsByMessage, attachmentsByMessage, embedsByMessage, pollsByMessage] =
+    await Promise.all([
+      listReactionsForMessages(messageIds),
+      listAttachmentsForMessages(messageIds),
+      listEmbedsForMessages(result.rows),
+      listPollsForMessages(messageIds),
+    ]);
   return result.rows.map((row) => ({
     ...row,
     reactions: reactionsByMessage.get(row.id) ?? [],
     attachments: attachmentsByMessage.get(row.id) ?? [],
     embeds: embedsByMessage.get(row.id) ?? [],
+    chance: parseStoredChance(row.chance),
+    poll: pollsByMessage.get(row.id) ?? null,
   }));
 }
