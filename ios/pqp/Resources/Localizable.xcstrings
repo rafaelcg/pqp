@@ -82,6 +82,16 @@
         }
       }
     },
+    "%lld left": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld no baralho"
+          }
+        }
+      }
+    },
     "%lld other members": {
       "localizations": {
         "pt-BR": {
@@ -1792,6 +1802,16 @@
         }
       }
     },
+    "Heads": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cara"
+          }
+        }
+      }
+    },
     "Hide from my profile": {
       "localizations": {
         "pt-BR": {
@@ -2378,6 +2398,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Nova comunidade"
+          }
+        }
+      }
+    },
+    "New deck · %lld left": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Baralho novo · %lld no baralho"
           }
         }
       }
@@ -3632,6 +3662,16 @@
         }
       }
     },
+    "Shuffled · %lld left": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Embaralhou · %lld no baralho"
+          }
+        }
+      }
+    },
     "Sign out": {
       "localizations": {
         "pt-BR": {
@@ -3828,6 +3868,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Tag"
+          }
+        }
+      }
+    },
+    "Tails": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Coroa"
           }
         }
       }

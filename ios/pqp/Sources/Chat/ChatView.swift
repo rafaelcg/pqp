@@ -694,6 +694,8 @@ struct MessageRow: View {
                         .font(Typography.callout)
                         .italic()
                         .foregroundStyle(Palette.paperMuted)
+                } else if let chance = message.chance {
+                    ChanceCard(chance: chance)
                 } else if !message.body.isEmpty {
                     // Deliberately NOT `.textSelection(.enabled)`: selectable
                     // text eats the long press, and the long press is now how
@@ -950,4 +952,166 @@ private func reactionWhoLabel(_ reaction: MessageReaction) -> String {
         return "\(reaction.emoji), \(reaction.count)"
     }
     return "\(reaction.emoji), \(names.joined(separator: ", "))"
+}
+
+/// Structured slash randomizer. The English `body` stays on the wire for
+/// search; this is what a person actually reads.
+struct ChanceCard: View {
+    let chance: ChancePayload
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text(commandLabel)
+                    .font(Typography.label)
+                    .foregroundStyle(Palette.paperMuted)
+                if let notation = chance.notation, chance.type == "roll" {
+                    Text(notation)
+                        .font(Typography.mono)
+                        .foregroundStyle(Palette.paperMuted)
+                }
+                if let comment = chance.comment, !comment.isEmpty {
+                    Text(comment)
+                        .font(Typography.callout)
+                        .foregroundStyle(Palette.paper)
+                }
+            }
+            content
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .frame(maxWidth: 360, alignment: .leading)
+        .pqpSurface(cornerRadius: Metrics.cornerRadiusLarge)
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        switch chance.type {
+        case "roll":
+            HStack(alignment: .center, spacing: 10) {
+                HStack(spacing: 6) {
+                    ForEach(Array(dieFaces.enumerated()), id: \.offset) { _, face in
+                        dieView(value: face.value, sides: face.sides)
+                    }
+                }
+                Text("\(chance.total ?? 0)")
+                    .font(Typography.display(28))
+                    .foregroundStyle(totalColor)
+                    .monospacedDigit()
+            }
+        case "flip":
+            Text(chance.result == "heads"
+                 ? String(localized: "Heads")
+                 : String(localized: "Tails"))
+                .font(Typography.display(24))
+                .foregroundStyle(Palette.paper)
+        case "choose":
+            Text(chance.picked ?? "")
+                .font(Typography.display(22))
+                .foregroundStyle(Palette.paper)
+        case "draw":
+            VStack(alignment: .leading, spacing: 6) {
+                let cards = chance.cards ?? []
+                if cards.count <= 5 {
+                    HStack(spacing: -10) {
+                        ForEach(Array(cards.enumerated()), id: \.offset) { _, code in
+                            playingCard(code)
+                        }
+                    }
+                } else {
+                    LazyVGrid(
+                        columns: [GridItem(.adaptive(minimum: 36), spacing: 6)],
+                        alignment: .leading,
+                        spacing: 6
+                    ) {
+                        ForEach(Array(cards.enumerated()), id: \.offset) { _, code in
+                            playingCard(code)
+                        }
+                    }
+                }
+                if let left = chance.remaining {
+                    Text(chance.reshuffled == true
+                         ? String(localized: "New deck · \(left) left")
+                         : String(localized: "\(left) left"))
+                        .font(Typography.caption)
+                        .foregroundStyle(Palette.paperMuted)
+                }
+            }
+        case "shuffle":
+            Text(String(localized: "Shuffled · \(chance.remaining ?? 52) left"))
+                .font(Typography.display(20))
+                .foregroundStyle(Palette.paper)
+        default:
+            EmptyView()
+        }
+    }
+
+    private var commandLabel: String {
+        switch chance.type {
+        case "roll": return "/roll"
+        case "flip": return "/flip"
+        case "choose": return "/choose"
+        case "draw": return "/draw"
+        case "shuffle": return "/shuffle"
+        default: return "/\(chance.type)"
+        }
+    }
+
+    private var dieFaces: [(value: Int, sides: Int)] {
+        if let groups = chance.groups, !groups.isEmpty {
+            return groups.flatMap { group in group.faces.map { (value: $0, sides: group.sides) } }
+        }
+        let sides = dieSides(chance.notation ?? "1d20")
+        return (chance.faces ?? []).map { (value: $0, sides: sides) }
+    }
+
+    private var totalColor: Color {
+        let faces = chance.faces ?? []
+        let total = chance.total ?? 0
+        if (chance.notation ?? "").contains("d20"), faces.count == 1, (chance.modifier ?? 0) == 0 {
+            if total == 20 { return Palette.signal }
+            if total == 1 { return Palette.danger }
+        }
+        return Palette.paper
+    }
+
+    private func dieView(value: Int, sides: Int) -> some View {
+        let crit20 = sides == 20 && value == 20
+        let crit1 = sides == 20 && value == 1
+        Text("\(value)")
+            .font(Typography.title(16))
+            .monospacedDigit()
+            .foregroundStyle(crit20 ? Palette.signal : crit1 ? Palette.danger : Palette.ink)
+            .frame(width: 36, height: 36)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Palette.paper)
+            )
+    }
+
+    private func playingCard(_ code: String) -> some View {
+        let suit = code.suffix(1)
+        let rank = String(code.dropLast())
+        let red = suit == "H" || suit == "D"
+        let pip = ["S": "♠", "H": "♥", "D": "♦", "C": "♣"][String(suit)] ?? String(suit)
+        return VStack(spacing: 2) {
+            Text(rank)
+                .font(Typography.caption)
+            Text(pip)
+                .font(.system(size: 16))
+        }
+        .foregroundStyle(red ? Palette.danger : Palette.ink)
+        .frame(width: 36, height: 52)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(Palette.paper)
+        )
+    }
+
+    private func dieSides(_ notation: String) -> Int {
+        if let match = notation.range(of: #"d(\d+)"#, options: .regularExpression) {
+            return Int(notation[match].dropFirst()) ?? 20
+        }
+        return 20
+    }
 }

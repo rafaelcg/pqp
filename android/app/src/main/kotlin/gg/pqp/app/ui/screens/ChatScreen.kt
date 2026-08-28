@@ -97,6 +97,7 @@ import gg.pqp.app.core.SessionStore
 import gg.pqp.app.push.VisibleChannel
 import gg.pqp.app.reports.ReportTarget
 import gg.pqp.app.reports.ui.ReportSheet
+import gg.pqp.app.ui.chat.ChanceCard
 import gg.pqp.app.ui.components.Avatar
 import gg.pqp.app.ui.components.ChromeDivider
 import gg.pqp.app.ui.components.EmptyState
@@ -583,6 +584,9 @@ private fun MessageRow(
             if (gifBody != null) {
                 Spacer(Modifier.height(Spacing.xs))
                 InlineGif(gifBody)
+            } else if (message.chance != null) {
+                Spacer(Modifier.height(Spacing.xs))
+                ChanceCard(message.chance)
             } else if (message.body.isNotEmpty()) {
                 Text(
                     text = bodyWithEditMark(message),

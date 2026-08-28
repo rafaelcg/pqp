@@ -252,4 +252,10 @@
     <string name="report_sent_title">Denúncia enviada</string>
     <string name="report_sent_body">Quem modera vai olhar. Seu nome não é mostrado para quem você denunciou.</string>
     <string name="report_done">Pronto</string>
+
+    <string name="chance_heads">Cara</string>
+    <string name="chance_tails">Coroa</string>
+    <string name="chance_left">%d no baralho</string>
+    <string name="chance_new_deck">Baralho novo · %d no baralho</string>
+    <string name="chance_shuffled">Embaralhou · %d no baralho</string>
 </resources>
