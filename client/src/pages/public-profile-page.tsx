@@ -301,6 +301,15 @@ function ClaimedProfile({ profile }: { profile: PublicProfile }) {
             </div>
           </div>
 
+          {/* The founding medal sits WITH the identity — it is a fact about
+              who this person is, not an action — but below the name block so
+              it never competes with the headline. Centred on mobile like
+              everything else in the block. */}
+          <Achievements
+            achievements={profile.achievements}
+            className="mt-6 justify-center sm:justify-start"
+          />
+
           <div className="mt-6 flex flex-col gap-2 sm:flex-row sm:items-center">
             {bypass ? (
               <Button
@@ -351,8 +360,6 @@ function ClaimedProfile({ profile }: { profile: PublicProfile }) {
               {copied ? t("publicProfile.copied") : url}
             </button>
           </div>
-
-          <Achievements achievements={profile.achievements} />
 
           <ConnectionBadges connections={profile.connections} />
 
