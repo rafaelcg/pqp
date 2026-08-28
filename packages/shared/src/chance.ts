@@ -13,6 +13,7 @@ export type RollFace = (typeof ROLL_FACES)[number];
 
 export const MAX_DICE_COUNT = 100;
 export const MAX_ROLL_MODIFIER = 9999;
+export const MAX_ROLL_COMMENT = 80;
 export const MAX_CHOOSE_OPTIONS = 20;
 export const MIN_CHOOSE_OPTIONS = 2;
 export const MAX_CHOOSE_OPTION_LENGTH = 80;
@@ -44,14 +45,24 @@ export const STANDARD_DECK: PlayingCard[] = CARD_SUITS.flatMap((suit) =>
   CARD_RANKS.map((rank) => `${rank}${suit}` as PlayingCard),
 );
 
-const ROLL_NOTATION_RE = /^\s*(\d{1,3})?d(\d{1,3})([+-]\d{1,4})?\s*$/i;
+const rollCommentSchema = z.string().trim().min(1).max(MAX_ROLL_COMMENT);
+
+export const chanceRollGroupSchema = z.object({
+  sides: z.number().int().positive(),
+  faces: z.array(z.number().int().positive()).min(1).max(MAX_DICE_COUNT),
+  sign: z.union([z.literal(1), z.literal(-1)]).default(1),
+});
+
+export type ChanceRollGroup = z.infer<typeof chanceRollGroupSchema>;
 
 export const chanceRollResultSchema = z.object({
   type: z.literal("roll"),
-  notation: z.string().min(1).max(32),
+  notation: z.string().min(1).max(64),
   faces: z.array(z.number().int().positive()).min(1).max(MAX_DICE_COUNT),
+  groups: z.array(chanceRollGroupSchema).max(16).optional(),
   modifier: z.number().int(),
   total: z.number().int(),
+  comment: rollCommentSchema.optional(),
 });
 
 export const chanceFlipResultSchema = z.object({
@@ -70,6 +81,13 @@ export const chanceChooseResultSchema = z.object({
 export const chanceDrawResultSchema = z.object({
   type: z.literal("draw"),
   cards: z.array(z.string().min(2).max(3)).min(1).max(MAX_DRAW_COUNT),
+  remaining: z.number().int().nonnegative().optional(),
+  reshuffled: z.boolean().optional(),
+});
+
+export const chanceShuffleResultSchema = z.object({
+  type: z.literal("shuffle"),
+  remaining: z.number().int().nonnegative(),
 });
 
 export const chanceResultSchema = z.discriminatedUnion("type", [
@@ -77,13 +95,15 @@ export const chanceResultSchema = z.discriminatedUnion("type", [
   chanceFlipResultSchema,
   chanceChooseResultSchema,
   chanceDrawResultSchema,
+  chanceShuffleResultSchema,
 ]);
 
 export type ChanceResult = z.infer<typeof chanceResultSchema>;
 
 export const chanceRollRequestSchema = z.object({
   type: z.literal("roll"),
-  notation: z.string().min(0).max(32).optional(),
+  notation: z.string().min(0).max(64).optional(),
+  comment: rollCommentSchema.optional(),
 });
 
 export const chanceFlipRequestSchema = z.object({
@@ -102,11 +122,16 @@ export const chanceDrawRequestSchema = z.object({
   count: z.number().int().min(1).max(MAX_DRAW_COUNT).optional(),
 });
 
+export const chanceShuffleRequestSchema = z.object({
+  type: z.literal("shuffle"),
+});
+
 export const chanceRequestSchema = z.discriminatedUnion("type", [
   chanceRollRequestSchema,
   chanceFlipRequestSchema,
   chanceChooseRequestSchema,
   chanceDrawRequestSchema,
+  chanceShuffleRequestSchema,
 ]);
 
 export type ChanceRequest = z.infer<typeof chanceRequestSchema>;
@@ -115,6 +140,7 @@ export type ChanceParseError =
   | "invalid-notation"
   | "bad-face"
   | "too-many-dice"
+  | "comment-too-long"
   | "too-few-options"
   | "too-many-options"
   | "empty-option"
@@ -125,11 +151,20 @@ export type ParseOk<T> = { ok: true; value: T };
 export type ParseErr = { ok: false; error: ChanceParseError };
 export type ParseResult<T> = ParseOk<T> | ParseErr;
 
-export interface ParsedRoll {
+export interface RollTerm {
   count: number;
   sides: RollFace;
+  sign: 1 | -1;
+}
+
+export interface ParsedRoll {
+  terms: RollTerm[];
   modifier: number;
   notation: string;
+  comment?: string;
+  /** First term, for callers that still think in NdM. */
+  count: number;
+  sides: RollFace;
 }
 
 export function isRollFace(value: number): value is RollFace {
@@ -142,41 +177,124 @@ export function isRollFace(value: number): value is RollFace {
  */
 export type RandomInt = (min: number, max: number) => number;
 
-export function parseRollNotation(raw: string | undefined): ParseResult<ParsedRoll> {
-  const input = (raw ?? "").trim() || DEFAULT_ROLL_NOTATION;
-  const match = ROLL_NOTATION_RE.exec(input);
-  if (!match) {
-    return { ok: false, error: "invalid-notation" };
+/** Split `/roll 2d6+3 ! ataque` into notation and an optional comment. */
+export function splitRollComment(raw: string): ParseResult<{
+  notation: string;
+  comment?: string;
+}> {
+  const cut = raw.indexOf("!");
+  if (cut < 0) {
+    return { ok: true, value: { notation: raw.trim() } };
   }
-  const count = match[1] ? Number(match[1]) : 1;
-  const sides = Number(match[2]);
-  const modifier = match[3] ? Number(match[3]) : 0;
-  if (!isRollFace(sides)) {
-    return { ok: false, error: "bad-face" };
+  const notation = raw.slice(0, cut).trim();
+  const comment = raw.slice(cut + 1).replace(/\s+/g, " ").trim();
+  if (!comment) {
+    return { ok: true, value: { notation } };
   }
-  if (count < 1 || count > MAX_DICE_COUNT) {
-    return { ok: false, error: "too-many-dice" };
+  if (comment.length > MAX_ROLL_COMMENT) {
+    return { ok: false, error: "comment-too-long" };
   }
-  if (!Number.isInteger(modifier) || Math.abs(modifier) > MAX_ROLL_MODIFIER) {
-    return { ok: false, error: "invalid-notation" };
-  }
-  const notation = formatRollNotation(count, sides, modifier);
-  return { ok: true, value: { count, sides, modifier, notation } };
+  return { ok: true, value: { notation, comment } };
 }
 
-export function formatRollNotation(
-  count: number,
-  sides: number,
-  modifier: number,
-): string {
-  const base = `${count}d${sides}`;
+export function parseRollNotation(raw: string | undefined): ParseResult<ParsedRoll> {
+  const split = splitRollComment(raw ?? "");
+  if (!split.ok) {
+    return split;
+  }
+  const input = (split.value.notation || DEFAULT_ROLL_NOTATION).replace(/\s+/g, "");
+  const terms: RollTerm[] = [];
+  let modifier = 0;
+  let i = 0;
+  let sawTerm = false;
+
+  while (i < input.length) {
+    let sign: 1 | -1 = 1;
+    const leading = input[i];
+    if (leading === "+" || leading === "-") {
+      if (!sawTerm && leading === "-") {
+        return { ok: false, error: "invalid-notation" };
+      }
+      sign = leading === "-" ? -1 : 1;
+      i += 1;
+    } else if (sawTerm) {
+      return { ok: false, error: "invalid-notation" };
+    }
+
+    const rest = input.slice(i);
+    const dice = /^(\d{1,3})?d(\d{1,3})/i.exec(rest);
+    if (dice) {
+      const count = dice[1] ? Number(dice[1]) : 1;
+      const sides = Number(dice[2]);
+      if (!isRollFace(sides)) {
+        return { ok: false, error: "bad-face" };
+      }
+      if (count < 1) {
+        return { ok: false, error: "too-many-dice" };
+      }
+      terms.push({ count, sides, sign });
+      i += dice[0].length;
+      sawTerm = true;
+      continue;
+    }
+
+    const flat = /^(\d{1,4})/.exec(rest);
+    if (flat && sawTerm) {
+      const value = Number(flat[1]);
+      if (!Number.isInteger(value) || value > MAX_ROLL_MODIFIER) {
+        return { ok: false, error: "invalid-notation" };
+      }
+      modifier += sign * value;
+      i += flat[1].length;
+      continue;
+    }
+
+    return { ok: false, error: "invalid-notation" };
+  }
+
+  if (terms.length === 0) {
+    return { ok: false, error: "invalid-notation" };
+  }
+
+  const diceCount = terms.reduce((sum, term) => sum + term.count, 0);
+  if (diceCount < 1 || diceCount > MAX_DICE_COUNT) {
+    return { ok: false, error: "too-many-dice" };
+  }
+  if (Math.abs(modifier) > MAX_ROLL_MODIFIER) {
+    return { ok: false, error: "invalid-notation" };
+  }
+
+  const first = terms[0]!;
+  return {
+    ok: true,
+    value: {
+      terms,
+      modifier,
+      notation: formatRollNotation(terms, modifier),
+      comment: split.value.comment,
+      count: first.count,
+      sides: first.sides,
+    },
+  };
+}
+
+export function formatRollNotation(terms: RollTerm[], modifier: number): string {
+  const dice = terms
+    .map((term, index) => {
+      const body = `${term.count}d${term.sides}`;
+      if (index === 0) {
+        return term.sign === -1 ? `-${body}` : body;
+      }
+      return term.sign === -1 ? `-${body}` : `+${body}`;
+    })
+    .join("");
   if (modifier > 0) {
-    return `${base}+${modifier}`;
+    return `${dice}+${modifier}`;
   }
   if (modifier < 0) {
-    return `${base}${modifier}`;
+    return `${dice}${modifier}`;
   }
-  return base;
+  return dice;
 }
 
 export function parseChooseOptions(raw: string): ParseResult<string[]> {
@@ -185,7 +303,6 @@ export function parseChooseOptions(raw: string): ParseResult<string[]> {
     .flatMap((part) => part.trim().split(/\s{2,}/))
     .map((part) => part.trim())
     .filter(Boolean);
-  // A single line of space-separated words is the common `/choose a b c` form.
   const options =
     pieces.length >= MIN_CHOOSE_OPTIONS
       ? pieces
@@ -223,16 +340,26 @@ export function parseDrawCount(raw: string | undefined): ParseResult<number> {
 }
 
 export function executeRoll(parsed: ParsedRoll, randomInt: RandomInt): ChanceResult {
-  const faces = Array.from({ length: parsed.count }, () =>
-    randomInt(1, parsed.sides),
-  );
-  const total = faces.reduce((sum, face) => sum + face, 0) + parsed.modifier;
+  const groups: ChanceRollGroup[] = [];
+  const faces: number[] = [];
+  let total = parsed.modifier;
+  for (const term of parsed.terms) {
+    const termFaces = Array.from({ length: term.count }, () =>
+      randomInt(1, term.sides),
+    );
+    faces.push(...termFaces);
+    groups.push({ sides: term.sides, faces: termFaces, sign: term.sign });
+    const sum = termFaces.reduce((acc, face) => acc + face, 0);
+    total += term.sign * sum;
+  }
   return {
     type: "roll",
     notation: parsed.notation,
     faces,
+    groups,
     modifier: parsed.modifier,
     total,
+    ...(parsed.comment ? { comment: parsed.comment } : {}),
   };
 }
 
@@ -248,7 +375,7 @@ export function executeChoose(options: string[], randomInt: RandomInt): ChanceRe
   return { type: "choose", options, picked };
 }
 
-export function executeDraw(count: number, randomInt: RandomInt): ChanceResult {
+export function shuffleDeck(randomInt: RandomInt): PlayingCard[] {
   const deck = [...STANDARD_DECK];
   for (let i = deck.length - 1; i > 0; i -= 1) {
     const j = randomInt(0, i);
@@ -256,7 +383,21 @@ export function executeDraw(count: number, randomInt: RandomInt): ChanceResult {
     deck[i] = deck[j]!;
     deck[j] = swap;
   }
-  return { type: "draw", cards: deck.slice(0, count) };
+  return deck;
+}
+
+export function executeDraw(count: number, randomInt: RandomInt): ChanceResult {
+  const deck = shuffleDeck(randomInt);
+  return {
+    type: "draw",
+    cards: deck.slice(0, count),
+    remaining: STANDARD_DECK.length - count,
+    reshuffled: true,
+  };
+}
+
+export function executeShuffle(): ChanceResult {
+  return { type: "shuffle", remaining: STANDARD_DECK.length };
 }
 
 export function resolveChanceRequest(
@@ -265,7 +406,10 @@ export function resolveChanceRequest(
 ): ParseResult<ChanceResult> {
   switch (request.type) {
     case "roll": {
-      const parsed = parseRollNotation(request.notation);
+      const raw = request.comment
+        ? `${request.notation ?? ""} ! ${request.comment}`
+        : request.notation;
+      const parsed = parseRollNotation(raw);
       if (!parsed.ok) {
         return parsed;
       }
@@ -286,7 +430,21 @@ export function resolveChanceRequest(
       }
       return { ok: true, value: executeDraw(count, randomInt) };
     }
+    case "shuffle":
+      return { ok: true, value: executeShuffle() };
   }
+}
+
+/** Groups to render. Older stored rolls only have a flat `faces` list. */
+export function rollGroups(
+  result: Extract<ChanceResult, { type: "roll" }>,
+): ChanceRollGroup[] {
+  if (result.groups && result.groups.length > 0) {
+    return result.groups;
+  }
+  const match = /d(\d+)/i.exec(result.notation);
+  const sides = match ? Number(match[1]) : 20;
+  return [{ sides, faces: result.faces, sign: 1 }];
 }
 
 /**
@@ -298,26 +456,33 @@ export function formatChanceBody(result: ChanceResult): string {
   switch (result.type) {
     case "roll": {
       const faces = result.faces.join(", ");
+      let line: string;
       if (result.modifier > 0) {
-        return `${result.notation} → ${faces} + ${result.modifier} = ${result.total}`;
+        line = `${result.notation} → ${faces} + ${result.modifier} = ${result.total}`;
+      } else if (result.modifier < 0) {
+        line = `${result.notation} → ${faces} - ${Math.abs(result.modifier)} = ${result.total}`;
+      } else if (result.faces.length === 1) {
+        line = `${result.notation} → ${result.total}`;
+      } else {
+        line = `${result.notation} → ${faces} = ${result.total}`;
       }
-      if (result.modifier < 0) {
-        return `${result.notation} → ${faces} - ${Math.abs(result.modifier)} = ${result.total}`;
-      }
-      if (result.faces.length === 1) {
-        return `${result.notation} → ${result.total}`;
-      }
-      return `${result.notation} → ${faces} = ${result.total}`;
+      return result.comment ? `${line} ! ${result.comment}` : line;
     }
     case "flip":
       return `flip → ${result.result}`;
     case "choose":
       return `choose → ${result.picked}`;
-    case "draw":
-      return `draw → ${result.cards.join(" ")}`;
+    case "draw": {
+      const cards = `draw → ${result.cards.join(" ")}`;
+      return result.remaining === undefined ? cards : `${cards} (${result.remaining} left)`;
+    }
+    case "shuffle":
+      return `shuffle → ${result.remaining} left`;
   }
 }
 
-export function chanceCommandName(result: ChanceResult): "roll" | "flip" | "choose" | "draw" {
+export function chanceCommandName(
+  result: ChanceResult,
+): "roll" | "flip" | "choose" | "draw" | "shuffle" {
   return result.type;
 }

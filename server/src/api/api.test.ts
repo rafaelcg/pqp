@@ -4456,6 +4456,10 @@ describeDb("API authorization", () => {
       expect(voted?.poll?.options[0]?.voted).toBe(true);
       expect(voted?.poll?.options[0]?.votes).toBe(1);
       expect(voted?.poll?.totalVotes).toBe(1);
+      expect(voted?.poll?.options[0]?.voters).toEqual([
+        { userId: member.id, displayName: "Member", avatarUrl: null },
+      ]);
+      expect(voted?.poll?.options[1]?.voters).toEqual([]);
 
       const no = voted!.poll!.options[1]!;
       await handleChatMessage(

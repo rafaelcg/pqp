@@ -27,6 +27,13 @@ interface OptionRow {
   voted: boolean;
 }
 
+interface VoterRow {
+  option_id: string;
+  user_id: string;
+  display_name: string;
+  avatar_url: string | null;
+}
+
 export async function insertPoll(
   client: Queryable,
   messageId: string,
@@ -77,6 +84,27 @@ export async function listPollsForMessages(
       ORDER BY o.position ASC`,
     [messageIds, viewerId ?? "00000000-0000-4000-8000-000000000000"],
   );
+  const voters = await getPool().query<VoterRow>(
+    `SELECT v.option_id, v.user_id,
+            COALESCE(NULLIF(sm.nickname, ''), u.display_name) AS display_name,
+            u.avatar_url
+       FROM poll_votes v
+       JOIN poll_options o ON o.id = v.option_id
+       JOIN users u ON u.id = v.user_id
+       JOIN messages m ON m.id = o.message_id
+       JOIN channels c ON c.id = m.channel_id
+       LEFT JOIN server_members sm
+         ON sm.server_id = c.server_id AND sm.user_id = v.user_id
+      WHERE o.message_id = ANY($1::uuid[])
+      ORDER BY display_name ASC`,
+    [messageIds],
+  );
+  const votersByOption = new Map<string, VoterRow[]>();
+  for (const voter of voters.rows) {
+    const list = votersByOption.get(voter.option_id) ?? [];
+    list.push(voter);
+    votersByOption.set(voter.option_id, list);
+  }
   const optionsByMessage = new Map<string, OptionRow[]>();
   for (const option of options.rows) {
     const list = optionsByMessage.get(option.message_id) ?? [];
@@ -84,7 +112,12 @@ export async function listPollsForMessages(
     optionsByMessage.set(option.message_id, list);
   }
   for (const row of polls.rows) {
-    const mapped = mapPollRow(row, optionsByMessage.get(row.message_id) ?? [], viewerId);
+    const mapped = mapPollRow(
+      row,
+      optionsByMessage.get(row.message_id) ?? [],
+      votersByOption,
+      viewerId,
+    );
     out.set(row.message_id, mapped);
   }
   return out;
@@ -125,7 +158,7 @@ export async function votePoll(
       await client.query("ROLLBACK");
       return null;
     }
-    const preview = mapPollRow(row, [], userId);
+    const preview = mapPollRow(row, [], new Map(), userId);
     if (isPollClosed(preview)) {
       await client.query("ROLLBACK");
       return null;
@@ -211,12 +244,22 @@ export async function closePoll(
   return getPoll(messageId, userId);
 }
 
-function mapPollRow(row: PollRow, options: OptionRow[], viewerId?: string): Poll {
+function mapPollRow(
+  row: PollRow,
+  options: OptionRow[],
+  votersByOption: Map<string, VoterRow[]>,
+  viewerId?: string,
+): Poll {
   const mapped = options.map((option) => ({
     id: option.id,
     label: option.label,
     votes: Number(option.votes),
     voted: Boolean(option.voted),
+    voters: (votersByOption.get(option.id) ?? []).map((voter) => ({
+      userId: voter.user_id,
+      displayName: voter.display_name,
+      avatarUrl: voter.avatar_url,
+    })),
   }));
   const totalVotes = mapped.reduce((sum, option) => sum + option.votes, 0);
   const poll: Poll = {

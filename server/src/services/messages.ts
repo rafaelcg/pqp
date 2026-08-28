@@ -33,6 +33,7 @@ import { listEmbedsForMessages } from "./embeds.js";
 import { listReactionsForMessages } from "./reactions.js";
 // --- threads ---
 import { listThreadsForMessages } from "./threads.js";
+import { applyChannelDeck } from "./decks.js";
 import { insertPoll, listPollsForMessages } from "./polls.js";
 
 /** Inclusive on both ends. Node's `randomInt` is exclusive of `max`. */
@@ -549,7 +550,11 @@ export async function createMessage(
   }
   let storedBody = body;
   let chance: ChanceResult | null = null;
-  if (interactive?.chance) {
+  const deckAction =
+    interactive?.chance?.type === "draw" || interactive?.chance?.type === "shuffle"
+      ? interactive.chance
+      : null;
+  if (interactive?.chance && !deckAction) {
     const resolved = resolveChanceRequest(interactive.chance, nodeRandomInt);
     if (!resolved.ok) {
       return null;
@@ -578,6 +583,11 @@ export async function createMessage(
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");
+
+    if (deckAction) {
+      chance = await applyChannelDeck(client, channelId, deckAction, nodeRandomInt);
+      storedBody = formatChanceBody(chance);
+    }
 
     // One round trip: RETURNING cannot join, so the insert feeds a CTE that the
     // parent lookup hangs off.

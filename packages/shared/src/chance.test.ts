@@ -30,7 +30,7 @@ function sequence(values: number[]): (min: number, max: number) => number {
 describe("parseRollNotation", () => {
   it("defaults an empty string to 1d20", () => {
     const parsed = parseRollNotation("");
-    expect(parsed).toEqual({
+    expect(parsed).toMatchObject({
       ok: true,
       value: { count: 1, sides: 20, modifier: 0, notation: DEFAULT_ROLL_NOTATION },
     });
@@ -48,6 +48,28 @@ describe("parseRollNotation", () => {
     expect(parseRollNotation("2d6-1")).toMatchObject({
       ok: true,
       value: { count: 2, sides: 6, modifier: -1, notation: "2d6-1" },
+    });
+  });
+
+  it("accepts mixed dice and a comment after !", () => {
+    expect(parseRollNotation("2d6+1d8")).toMatchObject({
+      ok: true,
+      value: {
+        notation: "2d6+1d8",
+        modifier: 0,
+        terms: [
+          { count: 2, sides: 6, sign: 1 },
+          { count: 1, sides: 8, sign: 1 },
+        ],
+      },
+    });
+    expect(parseRollNotation("1d20+1d4-2")).toMatchObject({
+      ok: true,
+      value: { notation: "1d20+1d4-2", modifier: -2 },
+    });
+    expect(parseRollNotation("1d20 ! ataque")).toMatchObject({
+      ok: true,
+      value: { notation: "1d20", comment: "ataque" },
     });
   });
 
@@ -82,14 +104,35 @@ describe("executeRoll", () => {
       throw new Error("expected parse");
     }
     const result = executeRoll(parsed.value, sequence([4, 2]));
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       type: "roll",
       notation: "2d6+3",
       faces: [4, 2],
+      groups: [{ sides: 6, faces: [4, 2], sign: 1 }],
       modifier: 3,
       total: 9,
     });
     expect(formatChanceBody(result)).toBe("2d6+3 → 4, 2 + 3 = 9");
+  });
+
+  it("adds mixed faces and a comment", () => {
+    const parsed = parseRollNotation("2d6+1d8 ! fire");
+    if (!parsed.ok) {
+      throw new Error("expected parse");
+    }
+    const result = executeRoll(parsed.value, sequence([4, 2, 5]));
+    expect(result).toMatchObject({
+      type: "roll",
+      notation: "2d6+1d8",
+      faces: [4, 2, 5],
+      groups: [
+        { sides: 6, faces: [4, 2], sign: 1 },
+        { sides: 8, faces: [5], sign: 1 },
+      ],
+      total: 11,
+      comment: "fire",
+    });
+    expect(formatChanceBody(result)).toBe("2d6+1d8 → 4, 2, 5 = 11 ! fire");
   });
 });
 
@@ -132,6 +175,7 @@ describe("executeDraw", () => {
       return;
     }
     expect(result.cards).toHaveLength(5);
+    expect(result.remaining).toBe(STANDARD_DECK.length - 5);
     expect(new Set(result.cards).size).toBe(5);
     for (const card of result.cards) {
       expect(STANDARD_DECK).toContain(card);
@@ -162,7 +206,7 @@ describe("resolveChanceRequest", () => {
       { type: "roll", notation: "1d20" },
       () => 17,
     );
-    expect(resolved).toEqual({
+    expect(resolved).toMatchObject({
       ok: true,
       value: {
         type: "roll",

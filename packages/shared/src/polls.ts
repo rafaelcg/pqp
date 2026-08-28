@@ -9,8 +9,7 @@ const CONTROL_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
 /**
  * Native channel polls. Discord's shape on purpose: a question, two to ten
  * options, a duration, single or multi select, live counts, author-or-manager
- * close. Votes are stored per user (not anonymous) even if v1 only shows
- * counts.
+ * close. Votes are stored per user and listed on each option. Not anonymous.
  */
 
 export const POLL_MIN_OPTIONS = 2;
@@ -55,12 +54,22 @@ export const pollRequestSchema = z.object({
 
 export type PollRequest = z.infer<typeof pollRequestSchema>;
 
+export const pollVoterSchema = z.object({
+  userId: z.string().uuid(),
+  displayName: z.string().min(1),
+  avatarUrl: z.string().nullable(),
+});
+
+export type PollVoter = z.infer<typeof pollVoterSchema>;
+
 export const pollOptionSchema = z.object({
   id: z.string().uuid(),
   label: z.string().min(1).max(POLL_OPTION_MAX_LENGTH),
   votes: z.number().int().nonnegative(),
   /** Whether *this viewer* voted for the option. Per-read, not on the wire for everyone. */
   voted: z.boolean(),
+  /** Who picked this option. Defaulted so older history still parses. */
+  voters: z.array(pollVoterSchema).default([]),
 });
 
 export type PollOption = z.infer<typeof pollOptionSchema>;

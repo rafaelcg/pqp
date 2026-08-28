@@ -561,6 +561,13 @@ CREATE INDEX IF NOT EXISTS idx_poll_options_message
 CREATE INDEX IF NOT EXISTS idx_poll_votes_user
   ON poll_votes (user_id);
 
+-- One shuffled shoe per channel. /draw takes from the front; /shuffle replaces it.
+CREATE TABLE IF NOT EXISTS channel_decks (
+  channel_id UUID PRIMARY KEY REFERENCES channels(id) ON DELETE CASCADE,
+  remaining JSONB NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- ------------------------------------------------------------------ search
 --
 -- Full-text search. Everything the index and the query have to agree on lives
