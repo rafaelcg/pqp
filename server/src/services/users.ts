@@ -7,6 +7,7 @@ import {
 } from "@pqp/shared";
 import type { DbUser } from "../db.js";
 import { getPool } from "../db.js";
+import { logEvent } from "../lib/log.js";
 import type { AuthUser } from "../auth/clerk.js";
 import { HttpError } from "../lib/http.js";
 // One direction only: avatars.ts knows about storage and keys, this file knows
@@ -21,6 +22,7 @@ import { getPreferences } from "./preferences.js";
 // has to live beside the query it caches, and membership is written here.
 import { invalidateServerAudience } from "./servers.js";
 import { bumpPermissionsVersion } from "./permissions.js";
+import { stampTurma1000 } from "./badges.js";
 
 /** Every column of `DbUser`, single-sourced so the reads cannot drift apart. */
 const DB_USER_COLUMNS = `id, clerk_id, display_name, username, discriminator, avatar_url, avatar_key, email_domains, is_character, handle, handle_changed_at, banner_url, banner_key`;
@@ -491,6 +493,7 @@ async function insertNewUser(auth: AuthUser): Promise<DbUser> {
       );
       const inserted = result.rows[0];
       if (inserted) {
+        tryStampTurma1000();
         return inserted;
       }
 
@@ -502,6 +505,7 @@ async function insertNewUser(auth: AuthUser): Promise<DbUser> {
       );
       const row = winner.rows[0];
       if (row) {
+        tryStampTurma1000();
         return row.username && row.discriminator ? row : ensureUsername(row);
       }
       // The row was deleted again in between. Vanishingly unlikely; fall
@@ -539,6 +543,24 @@ async function ensureUsername(user: DbUser): Promise<DbUser> {
     }
   }
   throw new Error("Could not allocate a username after repeated collisions");
+}
+
+/**
+ * Fire-and-forget: the 1000th human should not fail to sign up because the
+ * stamp threw, and every later signup is a cheap no-op once rows exist.
+ */
+function tryStampTurma1000(): void {
+  // Vitest creates users as fixtures. Auto-stamping would fire the real
+  // 1,000-human path against a shared test database. Tests call
+  // `stampTurma1000` themselves.
+  if (process.env.VITEST) {
+    return;
+  }
+  void stampTurma1000().catch((error: unknown) => {
+    logEvent("turma1000.stampFailed", {
+      message: error instanceof Error ? error.message : String(error),
+    });
+  });
 }
 
 export async function getUserById(userId: string): Promise<DbUser | null> {

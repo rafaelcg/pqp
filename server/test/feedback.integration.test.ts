@@ -56,7 +56,7 @@ describe.skipIf(!hasDb)("feedback + caça-bugs badge (DB-backed)", () => {
     const confirmed = await feedback.resolveFeedback(bugA.id, "confirmed");
     expect(confirmed?.status).toBe("confirmed");
     expect(await feedback.listUserAchievements(hunter.id)).toEqual([
-      { badge: "caca-bugs", name: "Caça-bugs" },
+      { badge: "caca-bugs", name: "Caça-bugs", ordinal: null },
     ]);
 
     // A second confirmed catch changes nothing — the badge is idempotent.

@@ -17,6 +17,7 @@ import type {
   ConnectionVisibility,
   OwnConnection,
   VisibleConnection,
+  ProfileAchievement,
   UpdateCommunityRequest,
   CreateAttachmentRequest,
   CreateAvatarUploadRequest,
@@ -638,6 +639,11 @@ export const fetchMyConnections = () =>
 export const fetchUserConnections = (userId: string) =>
   apiFetch<{ connections: VisibleConnection[] }>(
     `/api/users/${encodeURIComponent(userId)}/connections`,
+  );
+
+export const fetchUserAchievements = (userId: string) =>
+  apiFetch<{ achievements: ProfileAchievement[] }>(
+    `/api/users/${encodeURIComponent(userId)}/achievements`,
   );
 
 export const startConnection = (provider: ConnectionProvider) =>

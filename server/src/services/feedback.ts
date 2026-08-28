@@ -1,5 +1,6 @@
 import {
   CACA_BUGS_BADGE,
+  TURMA_1000_BADGE,
   type FeedbackItem,
   type FeedbackKind,
   type FeedbackStatus,
@@ -141,17 +142,19 @@ export async function resolveFeedback(
 /** Display names for earned badges. The slug is storage; this is the label. */
 const ACHIEVEMENT_NAMES: Record<string, string> = {
   [CACA_BUGS_BADGE]: "Caça-bugs",
+  [TURMA_1000_BADGE]: "Turma dos 1000",
 };
 
 export async function listUserAchievements(
   userId: string,
 ): Promise<ProfileAchievement[]> {
-  const result = await getPool().query<{ badge: string }>(
-    `SELECT badge FROM user_badges WHERE user_id = $1 ORDER BY granted_at`,
+  const result = await getPool().query<{ badge: string; ordinal: number | null }>(
+    `SELECT badge, ordinal FROM user_badges WHERE user_id = $1 ORDER BY granted_at`,
     [userId],
   );
-  return result.rows.map(({ badge }) => ({
+  return result.rows.map(({ badge, ordinal }) => ({
     badge,
     name: ACHIEVEMENT_NAMES[badge] ?? badge,
+    ordinal: ordinal == null ? null : Number(ordinal),
   }));
 }
