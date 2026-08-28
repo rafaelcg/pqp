@@ -960,4 +960,33 @@ describe("chance and polls", () => {
     expect(poll?.options[0]?.voted).toBe(true);
     expect(poll?.canClose).toBe(true);
   });
+
+  it("ignores a second tap on the same poll until the server update lands", () => {
+    const optionA = "a0000000-0000-4000-8000-000000000001";
+    const optionB = "b0000000-0000-4000-8000-000000000002";
+    const { chat, sent } = setup();
+    chat.setMessages([
+      serverMessage({
+        poll: {
+          question: "Who is in?",
+          allowMultiselect: false,
+          closesAt: new Date(Date.now() + 86_400_000).toISOString(),
+          closedAt: null,
+          totalVotes: 0,
+          canClose: true,
+          options: [
+            { id: optionA, label: "Yes", votes: 0, voted: false },
+            { id: optionB, label: "No", votes: 0, voted: false },
+          ],
+        },
+      }),
+    ]);
+    const messageId = chat.getMessages()[0]!.id;
+    chat.votePoll(messageId, optionA);
+    chat.votePoll(messageId, optionB);
+    const votes = sent.filter((frame) => (frame as { type: string }).type === "poll-vote");
+    expect(votes).toHaveLength(1);
+    expect(chat.getMessages()[0]!.poll?.options[0]?.votes).toBe(1);
+    expect(chat.getMessages()[0]!.poll?.options[1]?.votes).toBe(0);
+  });
 });

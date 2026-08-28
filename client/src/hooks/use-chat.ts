@@ -247,6 +247,8 @@ export function createChatController(
 ) {
   let messages: ChatMessage[] = [];
   let presence: PresenceUpdate["users"] = [];
+  /** One in-flight vote per poll so a double-tap cannot stack optimistic counts. */
+  const pollVotesInFlight = new Set<string>();
   let channelId: string | null = null;
   let currentUserId: string | null = null;
   let currentUsername: string | null = null;
@@ -359,6 +361,7 @@ export function createChatController(
     }
     messages = [];
     presence = [];
+    pollVotesInFlight.clear();
     hasMore = false;
     hasNewer = false;
     newestLoadedId = null;
@@ -894,6 +897,11 @@ export function createChatController(
       if (!channelId || messageId.startsWith("pending:")) {
         return;
       }
+      if (pollVotesInFlight.has(messageId)) {
+        return;
+      }
+      pollVotesInFlight.add(messageId);
+      setTimeout(() => pollVotesInFlight.delete(messageId), 3_000);
       const target = messages.find((entry) => entry.id === messageId);
       if (target?.poll) {
         messages = messages.map((entry) =>
@@ -1078,6 +1086,7 @@ export function createChatController(
           if (message.channelId !== channelId) {
             return;
           }
+          pollVotesInFlight.delete(message.messageId);
           messages = messages.map((entry) => {
             if (entry.id !== message.messageId || !entry.poll) {
               return entry;
