@@ -176,6 +176,8 @@ function RowMenu({
           role="menu"
           aria-label={label}
           className="absolute right-0 top-full z-20 mt-1 w-52 rounded-lg border border-ink-4 bg-ink-2 p-1 shadow-[var(--shadow-popover)]"
+          onClick={(event) => event.stopPropagation()}
+          onPointerDown={(event) => event.stopPropagation()}
         >
           {items.map((item) =>
             item.separator ? (
@@ -194,7 +196,8 @@ function RowMenu({
                   "flex w-full items-center rounded-md px-2.5 py-1.5 text-left text-sm outline-none hover:bg-ink-3 focus-visible:bg-ink-3 disabled:opacity-50",
                   item.danger ? "text-danger" : "text-paper",
                 )}
-                onClick={() => {
+                onClick={(event) => {
+                  event.stopPropagation();
                   setOpen(false);
                   item.onSelect?.();
                 }}
