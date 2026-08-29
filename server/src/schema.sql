@@ -52,6 +52,14 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS is_webhook BOOLEAN NOT NULL DEFAULT F
 -- See services/characters.ts and `character_accounts` at the foot of this file.
 ALTER TABLE users ADD COLUMN IF NOT EXISTS is_character BOOLEAN NOT NULL DEFAULT FALSE;
 
+-- A labeled bot: a human-shaped account that is not a person for outgoing
+-- webhooks. Distinct from is_character (house cast) and is_webhook (incoming
+-- execute). Caio#2160 is this — a normal user row whose replies must not
+-- wake the same Grok routine that just answered. Set with
+-- `UPDATE users SET is_bot = TRUE`; outgoing hooks also take a per-hook
+-- skip_user_ids denylist for helpers that are not flagged yet.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS is_bot BOOLEAN NOT NULL DEFAULT FALSE;
+
 -- The two pseudo-identity flags are mutually exclusive. They are opposite
 -- answers to the same question — "is there a person behind this row" — and a
 -- row claiming both would be read one way by the client's webhook badge and
@@ -1144,6 +1152,10 @@ CREATE TABLE IF NOT EXISTS outgoing_webhooks (
   -- Text-channel allowlist. Empty is refused at write time; the CHECK is the
   -- last line of defence if a caller skips that.
   channel_ids UUID[] NOT NULL,
+  -- Authors whose messages must not fire this hook. For a helper that is a
+  -- normal user (no is_bot yet): put their id here. is_bot / is_character /
+  -- is_webhook are skipped for every hook without being listed.
+  skip_user_ids UUID[] NOT NULL DEFAULT '{}',
   signing_secret TEXT NOT NULL,
   signing_secret_previous TEXT,
   previous_secret_expires_at TIMESTAMPTZ,
@@ -1170,6 +1182,8 @@ CREATE TABLE IF NOT EXISTS outgoing_webhooks (
       OR auth_header_name IN ('Authorization', 'X-Webhook-Secret', 'X-Api-Key')
     )
 );
+ALTER TABLE outgoing_webhooks
+  ADD COLUMN IF NOT EXISTS skip_user_ids UUID[] NOT NULL DEFAULT '{}';
 CREATE INDEX IF NOT EXISTS idx_outgoing_webhooks_server
   ON outgoing_webhooks (server_id);
 

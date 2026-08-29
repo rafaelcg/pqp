@@ -17,8 +17,14 @@ webhooks (`webhooks` table, channel-row panel) are unchanged.
    `Bearer <sender key>`.
 5. Create. Copy the `whsec_…` signing secret. pqp shows it once.
 
-Disable, delete, or rotate the secret from the same panel. Rotation keeps the
-previous secret valid for about 24 hours and sends both signatures.
+Disable, delete, edit the URL and channels, or rotate the secret from the
+same panel. Rotation keeps the previous secret valid for about 24 hours and
+sends both signatures.
+
+Tick **Skip these members** for any helper that is a normal account (Caio
+`#2160` is one). Their messages do not fire the hook. Accounts with
+`users.is_bot`, `is_character`, or `is_webhook` are skipped on every hook
+without being listed.
 
 ## Headers
 
@@ -80,12 +86,24 @@ v1 sends only `message.created`. The body looks like:
 No row is enqueued when:
 
 - the channel is not a server text channel (no DMs, no voice)
-- the author is an incoming webhook or a character account
+- the author is an incoming webhook (`is_webhook`), a character account
+  (`is_character`), or a labeled bot (`is_bot`)
+- the author is on that hook's skip list (`skip_user_ids`)
 - the body is empty
 - no active hook lists that channel (a thread still fires if its parent
   channel is on the allowlist)
 
 Incoming `executeWebhook` does not enqueue.
+
+`author.isBot` is `users.is_bot`. Skipped authors are not delivered, so a
+receiver should not see `isBot: true` unless a future event type sends bots.
+
+## Secrets
+
+The HMAC signing secret and the optional auth header value (Grok sender key)
+are stored in Postgres in plaintext, the same trust boundary as incoming
+webhook tokens. List and get never return them. The HMAC secret is shown once
+on create and rotate.
 
 ## Retry and DLQ
 
@@ -108,6 +126,5 @@ in non-production only. The same checks run at create and at every delivery.
 ## Grok Bot
 
 On the desktop app, copy the POST URL and set `Authorization: Bearer <sender
-key>`. pqp still sends the HMAC headers above. Verify both if you want; the
-Bearer header is how Grok authenticates the sender, and the HMAC is how you
-know the body came from this pqp server.
+key>`. That header name is what Grok Bot's panel currently offers; it is
+unproven until the first live POST. pqp still sends the HMAC headers above.

@@ -42,6 +42,7 @@ export const createOutgoingWebhookSchema = z
     name: outgoingWebhookNameSchema,
     url: outgoingWebhookUrlSchema,
     channelIds: z.array(z.string().uuid()).min(1).max(100),
+    skipUserIds: z.array(z.string().uuid()).max(100).optional(),
     authHeaderName: outgoingWebhookAuthHeaderNameSchema.nullable().optional(),
     authHeaderValue: z.string().min(1).max(512).nullable().optional(),
   })
@@ -60,6 +61,7 @@ export const updateOutgoingWebhookSchema = z
     name: outgoingWebhookNameSchema.optional(),
     url: outgoingWebhookUrlSchema.optional(),
     channelIds: z.array(z.string().uuid()).min(1).max(100).optional(),
+    skipUserIds: z.array(z.string().uuid()).max(100).optional(),
     authHeaderName: outgoingWebhookAuthHeaderNameSchema.nullable().optional(),
     authHeaderValue: z.string().min(1).max(512).nullable().optional(),
     status: z.enum(["active", "disabled"]).optional(),
@@ -115,6 +117,15 @@ export type OutgoingMessageCreatedPayload = z.infer<
   typeof outgoingMessageCreatedPayloadSchema
 >;
 
+export const outgoingWebhookSkipUserSchema = z.object({
+  id: z.string().uuid(),
+  displayName: z.string(),
+  tag: z.string().nullable(),
+});
+export type OutgoingWebhookSkipUser = z.infer<
+  typeof outgoingWebhookSkipUserSchema
+>;
+
 /**
  * Public webhook row. `signingSecret` is present only on create/rotate.
  * List/get never include the HMAC secret or the auth header value.
@@ -125,6 +136,8 @@ export const outgoingWebhookSchema = z.object({
   name: z.string(),
   url: z.string(),
   channelIds: z.array(z.string().uuid()),
+  skipUserIds: z.array(z.string().uuid()),
+  skipUsers: z.array(outgoingWebhookSkipUserSchema),
   secretHint: z.string(),
   authHeaderName: outgoingWebhookAuthHeaderNameSchema.nullable(),
   authHeaderHint: z.string().nullable(),

@@ -299,7 +299,7 @@ describeDb("outgoing webhooks", () => {
     expect(await deliveryCount()).toBe(1);
   });
 
-  it("does not enqueue for character or incoming-webhook authors", async () => {
+  it("does not enqueue for character, incoming-webhook, or is_bot authors", async () => {
     expect(
       (await call(owner, "POST", `/api/servers/${serverId}/outgoing-webhooks`, createBody())).status,
     ).toBe(201);
@@ -317,6 +317,13 @@ describeDb("outgoing webhooks", () => {
     await say(member, channelId, "a webhook talking");
     expect(await deliveryCount()).toBe(0);
 
+    await getPool().query(
+      `UPDATE users SET is_webhook = FALSE, is_bot = TRUE WHERE id = $1`,
+      [member.id],
+    );
+    await say(member, channelId, "a labeled bot talking");
+    expect(await deliveryCount()).toBe(0);
+
     const incoming = await createWebhook(
       channelId,
       serverId,
@@ -326,6 +333,50 @@ describeDb("outgoing webhooks", () => {
     );
     await executeWebhook(incoming, { content: "build passed" });
     expect(await deliveryCount()).toBe(0);
+  });
+
+  it("does not enqueue when the author is on the hook skip list", async () => {
+    expect(
+      (
+        await call(
+          owner,
+          "POST",
+          `/api/servers/${serverId}/outgoing-webhooks`,
+          createBody({ skipUserIds: [member.id] }),
+        )
+      ).status,
+    ).toBe(201);
+
+    await say(member, channelId, "caio answering");
+    expect(await deliveryCount()).toBe(0);
+
+    await say(owner, channelId, "a human asking");
+    expect(await deliveryCount()).toBe(1);
+  });
+
+  it("lets a manager edit the URL and channels after create", async () => {
+    const created = await call<{ webhook: OutgoingWebhook }>(
+      owner,
+      "POST",
+      `/api/servers/${serverId}/outgoing-webhooks`,
+      createBody(),
+    );
+    expect(created.status).toBe(201);
+
+    const updated = await call<{ webhook: OutgoingWebhook }>(
+      manager,
+      "PATCH",
+      `/api/outgoing-webhooks/${created.body.webhook.id}`,
+      {
+        url: "http://127.0.0.1:9/hook-b",
+        channelIds: [otherChannelId],
+        skipUserIds: [member.id],
+      },
+    );
+    expect(updated.status).toBe(200);
+    expect(updated.body.webhook.url).toBe("http://127.0.0.1:9/hook-b");
+    expect(updated.body.webhook.channelIds).toEqual([otherChannelId]);
+    expect(updated.body.webhook.skipUserIds).toEqual([member.id]);
   });
 
   it("still broadcasts when the POST fails", async () => {
@@ -408,9 +459,14 @@ describeDb("outgoing webhooks", () => {
       true,
     );
 
-    const parsed = JSON.parse(body) as { type: string; body: string };
+    const parsed = JSON.parse(body) as {
+      type: string;
+      body: string;
+      author: { isBot: boolean };
+    };
     expect(parsed.type).toBe("message.created");
     expect(parsed.body).toBe("sign me");
+    expect(parsed.author.isBot).toBe(false);
   });
 
   it("does not enqueue when the body is empty", async () => {

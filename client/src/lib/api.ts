@@ -1261,6 +1261,7 @@ export const createOutgoingWebhook = (
     name: string;
     url: string;
     channelIds: string[];
+    skipUserIds?: string[];
     authHeaderName?: string | null;
     authHeaderValue?: string | null;
   },
@@ -1276,6 +1277,7 @@ export const updateOutgoingWebhook = (
     name?: string;
     url?: string;
     channelIds?: string[];
+    skipUserIds?: string[];
     authHeaderName?: string | null;
     authHeaderValue?: string | null;
     status?: "active" | "disabled";
