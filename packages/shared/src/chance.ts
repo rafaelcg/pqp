@@ -212,6 +212,9 @@ export function parseRollNotation(raw: string | undefined): ParseResult<ParsedRo
     let sign: 1 | -1 = 1;
     const leading = input[i];
     if (leading === "+" || leading === "-") {
+      // `2d6+3` lands here on the `+`, then the next token is a flat modifier.
+      // A leading `-2d6` is refused: the first term has to be dice, not a
+      // signed hole.
       if (!sawTerm && leading === "-") {
         return { ok: false, error: "invalid-notation" };
       }

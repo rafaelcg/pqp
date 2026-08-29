@@ -212,7 +212,7 @@ export function MemberSidebar({
           setMembers(res.members);
           setError(null);
         }
-      } catch (err) {
+      } catch {
         if (signal.cancelled) {
           return;
         }

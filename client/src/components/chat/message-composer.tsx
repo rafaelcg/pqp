@@ -289,7 +289,7 @@ export function MessageComposer({
     if (!isRollPresetMenu(body)) {
       return [];
     }
-    return filterRollPresets(parseSlashInput(body)?.args ?? "");
+    return filterRollPresets((parseSlashInput(body)?.args ?? "").trim());
   }, [body]);
   const rollArg = isRollPresetMenu(body)
     ? (parseSlashInput(body)?.args ?? "").trim()

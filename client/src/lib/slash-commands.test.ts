@@ -65,6 +65,10 @@ describe("chance slash commands", () => {
     expect(filterRollPresets("20").map((preset) => preset.notation)).toEqual([
       "1d20",
     ]);
+    expect(filterRollPresets(" d6").map((preset) => preset.notation)).toEqual([
+      "1d6",
+      "2d6",
+    ]);
   });
 
   it("refuses a d7", async () => {
