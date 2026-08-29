@@ -1,4 +1,5 @@
 import type { WebSocket } from "ws";
+import { CHAT_CLIENT_MESSAGE_TYPES } from "@pqp/shared";
 import { DEV_AUTH_TOKEN, isDevAuthBypassEnabled, resolveAuthUser } from "../auth/clerk.js";
 import { logEvent, nextConnectionId } from "../lib/log.js";
 import { createRateLimiter } from "../lib/rate-limit.js";
@@ -46,17 +47,15 @@ export {
 const AUTH_TIMEOUT_MS = 10_000;
 export const HEARTBEAT_INTERVAL_MS = 30_000;
 
-const CHAT_MESSAGE_TYPES = new Set([
-  "join-channel",
-  "leave-channel",
-  "message-create",
-  "reaction-toggle",
-  "typing",
-  // Not a chat action, but it is validated by `chatClientMessageSchema` and
-  // handled next to channel presence, which is the other thing in that file that
-  // describes where a connection is rather than what it said.
-  "set-idle",
-]);
+/**
+ * Derived from `chatClientMessageSchema`, never hand-written. A frame type this
+ * router does not know about is dropped silently, so a list maintained here
+ * separately from the protocol is a list that eventually loses a feature: it
+ * lost `thread-join` / `thread-leave`, and then `poll-vote` / `poll-close`,
+ * which is why a poll vote looked cast and was gone on the next history read.
+ * `set-idle` rides along because it is validated by the same schema.
+ */
+const CHAT_MESSAGE_TYPES = new Set<string>(CHAT_CLIENT_MESSAGE_TYPES);
 
 const VOICE_MESSAGE_TYPES = new Set([
   "join-voice-room",

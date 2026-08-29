@@ -4516,6 +4516,51 @@ describeDb("API authorization", () => {
       expect(closed?.poll?.totalVotes).toBe(1);
     });
 
+    it("keeps a vote cast in a DM after the history is read again", async () => {
+      await makeServer();
+      const opened = await call<{ conversation: { channelId: string } }>(
+        member,
+        "POST",
+        "/api/dms",
+        { userIds: [admin.id] },
+      );
+      expect(opened.status).toBe(201);
+      const dmId = opened.body.conversation.channelId;
+
+      await handleChatMessage(
+        { socket: fakeSocket(), user: await asDbUser(admin.id) },
+        {
+          type: "message-create",
+          channelId: dmId,
+          body: "",
+          poll: {
+            question: "Ta tudo bugado?",
+            options: ["Sim", "Com certeza"],
+            durationSeconds: 3_600,
+            allowMultiselect: false,
+          },
+        },
+      );
+      const [created] = await history(member, dmId);
+      expect(created?.poll?.question).toBe("Ta tudo bugado?");
+
+      const sim = created!.poll!.options[0]!;
+      await handleChatMessage(
+        { socket: fakeSocket(), user: await asDbUser(member.id) },
+        {
+          type: "poll-vote",
+          channelId: dmId,
+          messageId: created!.id,
+          optionId: sim.id,
+        },
+      );
+
+      const [voted] = await history(member, dmId);
+      expect(voted?.poll?.totalVotes).toBe(1);
+      expect(voted?.poll?.options[0]?.voted).toBe(true);
+      expect(voted?.poll?.options[0]?.votes).toBe(1);
+    });
+
     it("lets multi-select add a second option without dropping the first", async () => {
       const { textChannelId } = await makeServer();
       await handleChatMessage(

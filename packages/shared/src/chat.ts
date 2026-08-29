@@ -336,30 +336,47 @@ export const chatServerMessageSchema = z.discriminatedUnion("type", [
  * same function here is what keeps the two from drifting; dropping it would
  * leave the empty-message rule enforced only on a schema nothing parses with.
  */
-export const chatClientMessageSchema = z
-  .discriminatedUnion("type", [
-    joinChannelMessageSchema,
-    leaveChannelMessageSchema,
-    messageCreateFrameSchema,
-    reactionToggleMessageSchema,
-    typingMessageSchema,
-    // --- threads --- the secondary view slot beside the primary channel.
-    threadJoinMessageSchema,
-    threadLeaveMessageSchema,
-    // Not chat, but it rides the chat socket because the thing it describes IS
-    // the socket: "the person holding this connection stopped touching their
-    // keyboard". Sending it over HTTP would need a way to name one connection
-    // from outside it, which is an identifier this design does not otherwise
-    // need to invent.
-    setIdleMessageSchema,
-    pollVoteMessageSchema,
-    pollCloseMessageSchema,
-  ])
-  .superRefine((message, ctx) => {
+const chatClientFrameUnion = z.discriminatedUnion("type", [
+  joinChannelMessageSchema,
+  leaveChannelMessageSchema,
+  messageCreateFrameSchema,
+  reactionToggleMessageSchema,
+  typingMessageSchema,
+  // --- threads --- the secondary view slot beside the primary channel.
+  threadJoinMessageSchema,
+  threadLeaveMessageSchema,
+  // Not chat, but it rides the chat socket because the thing it describes IS
+  // the socket: "the person holding this connection stopped touching their
+  // keyboard". Sending it over HTTP would need a way to name one connection
+  // from outside it, which is an identifier this design does not otherwise
+  // need to invent.
+  setIdleMessageSchema,
+  pollVoteMessageSchema,
+  pollCloseMessageSchema,
+]);
+
+export const chatClientMessageSchema = chatClientFrameUnion.superRefine(
+  (message, ctx) => {
     if (message.type === "message-create") {
       requireBodyOrAttachment(message, ctx);
     }
-  });
+  },
+);
+
+/**
+ * Every frame type the chat socket accepts, read off the union above rather
+ * than written out again.
+ *
+ * The socket router in `server/src/ws/index.ts` dispatches on frame type before
+ * anything parses the frame, so it needs this list. It used to keep its own
+ * copy, and the copy fell behind the protocol twice: `thread-join` /
+ * `thread-leave` and then `poll-vote` / `poll-close` were all accepted by this
+ * schema and dropped on the floor by the router. Nothing caught it, because
+ * every handler test calls `handleChatMessage` directly and so never crosses
+ * the router at all. Deriving the list removes the copy that can drift.
+ */
+export const CHAT_CLIENT_MESSAGE_TYPES: readonly string[] =
+  chatClientFrameUnion.options.map((option) => option.shape.type.value);
 
 /**
  * The chat frames that may be **fanned out to a whole channel**.
