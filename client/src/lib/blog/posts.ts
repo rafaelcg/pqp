@@ -27,8 +27,10 @@
  *
  * ADDING A POST. Write the two markdown files under `content/blog/`, add the
  * entry at the TOP of `POSTS`, add both importers to `BODIES` in `bodies.ts`,
- * add the URL to `client/public/sitemap.xml`. Dates are the day the work
- * reached people, not the day it was merged.
+ * add the URL to `client/public/sitemap.xml`. Screenshots and short GIFs live
+ * in `client/public/blog/<slug>/` and are referenced as `/blog/<slug>/file.png`
+ * (the markdown is raw text, so a relative import next to the `.md` would 404).
+ * Dates are the day the work reached people, not the day it was merged.
  */
 
 /**
@@ -60,6 +62,20 @@ export interface BlogPost {
  * failing test rather than a post that silently moves.
  */
 export const POSTS: readonly BlogPost[] = [
+  {
+    slug: "dados-discord-e-cargos",
+    date: "2026-08-30",
+    title: {
+      "pt-BR": "Dados, Discord, e cargos de verdade",
+      en: "Dice, Discord layouts, and real cargos",
+    },
+    summary: {
+      "pt-BR":
+        "Saiu um monte: /roll e enquete no chat, copiar a barra do Discord, cargos e visual novo. Daqui pra frente o que muda no pqp a gente conta aqui.",
+      en: "A lot shipped: /roll and polls in chat, copy a Discord sidebar, cargos, and new looks. From now on, what changes in pqp gets written here.",
+    },
+  },
+
   {
     slug: "fim-do-eco",
     date: "2026-08-27",

@@ -1,4 +1,7 @@
 // The REAL shipped document, the same way `marketing-meta.test.ts` gets it.
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import INDEX_HTML from "../../index.html?raw";
 import { describe, expect, it } from "vitest";
 import {
@@ -241,6 +244,29 @@ describe("POSTS", () => {
         }),
       ),
     );
+  });
+
+  it("points every markdown image at a file that exists", async () => {
+    // Bodies are raw text. A mistyped `/blog/<slug>/shot.gif` 404s in
+    // production with no compile error, so the files have to be asserted here.
+    const publicDir = fileURLToPath(new URL("../../public", import.meta.url));
+    const hrefs = new Set<string>();
+    await Promise.all(
+      POSTS.flatMap((post) =>
+        (["pt-BR", "en"] as const).map(async (locale) => {
+          const body = await loadPostBody(post.slug, locale);
+          for (const match of body!.matchAll(
+            /]\((\/blog\/[^)\s]+)(?:\s+"[^"]*")?\)/g,
+          )) {
+            hrefs.add(match[1]!);
+          }
+        }),
+      ),
+    );
+    expect(hrefs.size).toBeGreaterThan(0);
+    for (const href of hrefs) {
+      expect(existsSync(join(publicDir, href.slice(1))), href).toBe(true);
+    }
   });
 
   it("answers null for an unknown slug instead of throwing", async () => {
