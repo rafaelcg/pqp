@@ -38,6 +38,7 @@ import {
 import { PollComposer } from "@/components/chat/poll-composer";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  AUTOCOMPLETE_GRID_COLUMNS,
   AutocompleteMenu,
   type AutocompleteOption,
 } from "@/components/chat/autocomplete-menu";
@@ -184,7 +185,12 @@ function parseRollPresetShape(notation: string): { count: number; sides: number 
   };
 }
 
-/** What the preset will roll: a cube with pips for d6, the face count otherwise. */
+/**
+ * What the preset will roll: a cube with pips for d6, the face count otherwise.
+ *
+ * 28px rather than 32: `2d6` draws two of these side by side, and four cells of
+ * that have to fit the composer's width on the narrowest phone still in use.
+ */
 function RollDiePreview({ notation }: { notation: string }) {
   const { count, sides } = parseRollPresetShape(notation);
   return (
@@ -192,10 +198,10 @@ function RollDiePreview({ notation }: { notation: string }) {
       {Array.from({ length: Math.min(count, 2) }, (_, index) => (
         <span
           key={index}
-          className="flex h-8 w-8 items-center justify-center rounded-[7px] bg-ink-2 ring-1 ring-ink-4 shadow-[0_2px_0_0_var(--color-ink-4)]"
+          className="flex h-7 w-7 items-center justify-center rounded-[7px] bg-ink-2 ring-1 ring-ink-4 shadow-[0_2px_0_0_var(--color-ink-4)]"
         >
           {sides === 6 ? (
-            <span className="grid h-5 w-5 grid-cols-3 grid-rows-3 place-items-center">
+            <span className="grid h-4 w-4 grid-cols-3 grid-rows-3 place-items-center">
               {Array.from({ length: 9 }, (_, cell) => (
                 <span
                   key={cell}
@@ -364,13 +370,16 @@ export function MessageComposer({
       return rollPresets.map((preset) => {
         const hint =
           "hintKey" in preset && preset.hintKey ? t(preset.hintKey) : null;
+        const name = t(preset.labelKey);
         return {
           id: preset.notation,
           leading: <RollDiePreview notation={preset.notation} />,
-          primary: t(preset.labelKey),
-          secondary: hint
-            ? `${preset.notation} · ${hint}`
-            : preset.notation,
+          // The die and its notation are the cell; "20-sided die" is the
+          // accessible name and the tooltip. Printing that sentence on eight
+          // full-width rows is what made this menu taller than the pane it
+          // opens in, and the drawing says the same thing faster.
+          primary: preset.notation,
+          label: hint ? `${name} · ${hint}` : name,
         };
       });
     }
@@ -757,6 +766,13 @@ export function MessageComposer({
     restoreCaret(next.caret);
   }
 
+  /** Wraps in both directions, whatever the step. */
+  function moveSelection(delta: number) {
+    setSelectedIndex(
+      (index) => (((index + delta) % menuCount) + menuCount) % menuCount,
+    );
+  }
+
   function applySelection(index: number) {
     if (menuKind === "mention") {
       applyMentionSelection(index);
@@ -935,15 +951,40 @@ export function MessageComposer({
       return;
     }
 
+    // A list has one option per row, so down is the next option. The dice grid
+    // has four, so down is the option below rather than the one beside — unless
+    // a filter has left fewer dice than that, when there is no second row and
+    // stepping by four would move nothing.
+    const verticalStep =
+      rollPresetOpen && menuCount > AUTOCOMPLETE_GRID_COLUMNS
+        ? AUTOCOMPLETE_GRID_COLUMNS
+        : 1;
+
     if (event.key === "ArrowDown") {
       event.preventDefault();
-      setSelectedIndex((index) => (index + 1) % menuCount);
+      moveSelection(verticalStep);
       return;
     }
 
     if (event.key === "ArrowUp") {
       event.preventDefault();
-      setSelectedIndex((index) => (index - 1 + menuCount) % menuCount);
+      moveSelection(-verticalStep);
+      return;
+    }
+
+    // Left and right belong to the caret, and only the grid has any use for
+    // them — then only once the caret has run out of text to walk through, so
+    // fixing a typo in `/roll 2d` still works. Escape closes the menu and gives
+    // the keys back unconditionally.
+    if (rollPresetOpen && (event.key === "ArrowRight" || event.key === "ArrowLeft")) {
+      const input = event.currentTarget;
+      const atEnd =
+        input.selectionStart === input.value.length &&
+        input.selectionEnd === input.value.length;
+      if (atEnd) {
+        event.preventDefault();
+        moveSelection(event.key === "ArrowRight" ? 1 : -1);
+      }
       return;
     }
 
@@ -1024,6 +1065,7 @@ export function MessageComposer({
           }
           options={options}
           selectedIndex={selectedIndex}
+          layout={rollPresetOpen ? "grid" : "list"}
           onSelect={applySelection}
           onHover={setSelectedIndex}
         />
