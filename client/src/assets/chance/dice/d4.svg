@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Ivory tetrahedron silhouette to sit with Firkin's d6 faces. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="face" x1="32" y1="8" x2="32" y2="58" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f7f7f7"/>
+      <stop offset="1" stop-color="#cfcfd2"/>
+    </linearGradient>
+    <linearGradient id="edge" x1="12" y1="20" x2="52" y2="52" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#9a9aa2"/>
+      <stop offset="1" stop-color="#4a4a52"/>
+    </linearGradient>
+  </defs>
+  <ellipse cx="32" cy="58" rx="18" ry="3.2" fill="#000" opacity=".18"/>
+  <path d="M32 7.5 56 54.5H8Z" fill="url(#face)" stroke="url(#edge)" stroke-width="1.4" stroke-linejoin="round"/>
+  <path d="M32 7.5 32 54.5" stroke="#6a6a72" stroke-width=".7" opacity=".55"/>
+  <path d="M32 7.5 20 54.5" stroke="#fff" stroke-width=".6" opacity=".35"/>
+</svg>

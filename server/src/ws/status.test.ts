@@ -57,6 +57,14 @@ vi.mock("../services/reactions.js", () => ({
     fallback: string,
   ) => fallback,
 }));
+vi.mock("../services/polls.js", () => ({
+  votePoll: async () => null,
+  closePoll: async () => null,
+}));
+
+vi.mock("../services/threads.js", () => ({
+  getThreadInfo: async () => null,
+}));
 
 import { handleChatMessage } from "./chat.js";
 import {

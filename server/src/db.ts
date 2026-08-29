@@ -217,6 +217,7 @@ export interface DbMessage {
   webhook_avatar_url?: string | null;
   mention_everyone?: boolean;
   mention_here?: boolean;
+  chance?: unknown;
 }
 
 export interface DbInvite {

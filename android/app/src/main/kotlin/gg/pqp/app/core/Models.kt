@@ -205,6 +205,31 @@ data class Message(
      * paging stays correct. Decoded defensively for the same reason iOS does.
      */
     val blocked: Boolean = false,
+    val chance: ChancePayload? = null,
+)
+
+@Serializable
+data class ChanceRollGroup(
+    val sides: Int,
+    val faces: List<Int> = emptyList(),
+    val sign: Int = 1,
+)
+
+@Serializable
+data class ChancePayload(
+    val type: String,
+    val notation: String? = null,
+    val faces: List<Int> = emptyList(),
+    val groups: List<ChanceRollGroup> = emptyList(),
+    val modifier: Int = 0,
+    val total: Int? = null,
+    val comment: String? = null,
+    val result: String? = null,
+    val options: List<String> = emptyList(),
+    val picked: String? = null,
+    val cards: List<String> = emptyList(),
+    val remaining: Int? = null,
+    val reshuffled: Boolean? = null,
 )
 
 @Serializable

@@ -16,8 +16,10 @@ jobs:
     name: Lint, typecheck, test, build
     runs-on: ubuntu-latest
     # E2E is serial (one worker, shared DB) and now includes voice-quality
-    # plus appearance specs. 20 minutes cancelled a green run on the last step.
-    timeout-minutes: 30
+    # plus appearance specs. 20 minutes cancelled a green run on the last
+    # step. 30 minutes cancelled mid-E2E when video-stage retries each ate
+    # their 2-minute budget.
+    timeout-minutes: 45
 
     # The authorization matrix is covered by integration tests that run against a
     # real database — a mocked one would not catch a wrong SQL predicate.

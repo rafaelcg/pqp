@@ -30,6 +30,7 @@ import {
   getReplyParent,
   mapMessage,
 } from "../services/messages.js";
+import { closePoll, votePoll } from "../services/polls.js";
 import {
   getMessageChannelId,
   resolveChannelMemberName,
@@ -823,6 +824,8 @@ export async function handleChatMessage(
   if (
     payload.type === "message-create" ||
     payload.type === "reaction-toggle" ||
+    payload.type === "poll-vote" ||
+    payload.type === "poll-close" ||
     payload.type === "typing"
   ) {
     const timeout = await findTimeoutForChannel(
@@ -1053,6 +1056,9 @@ export async function handleChatMessage(
         extraUserIds: hereUserIds,
         canMentionEveryone,
       },
+      payload.chance || payload.poll
+        ? { chance: payload.chance, poll: payload.poll }
+        : undefined,
     );
     // Nothing survived: an attachment-only message whose every upload failed
     // its verification. The frame said something when it was sent and says
@@ -1193,6 +1199,67 @@ export async function handleChatMessage(
       },
       conn.socket,
     );
+  }
+
+  if (payload.type === "poll-vote" || payload.type === "poll-close") {
+    if (!reactionLimiter.take(conn.user.id)) {
+      return;
+    }
+    if (!(await canAccessChannel(payload.channelId, conn.user.id))) {
+      return;
+    }
+    if (await isDmSendBlocked(payload.channelId, conn.user.id)) {
+      return;
+    }
+    const messageChannelId = await getMessageChannelId(payload.messageId);
+    if (!messageChannelId || messageChannelId !== payload.channelId) {
+      return;
+    }
+    if (!conn.channelId) {
+      joinChannel(conn, payload.channelId);
+    }
+
+    if (payload.type === "poll-vote") {
+      const voted = await votePoll(
+        payload.messageId,
+        conn.user.id,
+        payload.optionId,
+      );
+      if (!voted) {
+        return;
+      }
+      broadcastToChannel(payload.channelId, {
+        type: "poll-update",
+        channelId: payload.channelId,
+        messageId: payload.messageId,
+        poll: { ...voted.poll, canClose: false },
+        voterId: conn.user.id,
+        optionId: payload.optionId,
+        added: voted.added,
+      });
+      return;
+    }
+
+    const pollChannel = await getChannel(payload.channelId);
+    let canManage = false;
+    if (pollChannel?.kind === "server" && pollChannel.server_id) {
+      const perms = await computeMemberPermissions(
+        pollChannel.server_id,
+        conn.user.id,
+        payload.channelId,
+      );
+      canManage = hasPermission(perms, Permission.MANAGE_MESSAGES);
+    }
+    const closed = await closePoll(payload.messageId, conn.user.id, canManage);
+    if (!closed) {
+      return;
+    }
+    broadcastToChannel(payload.channelId, {
+      type: "poll-update",
+      channelId: payload.channelId,
+      messageId: payload.messageId,
+      poll: { ...closed, canClose: false },
+    });
   }
 }
 

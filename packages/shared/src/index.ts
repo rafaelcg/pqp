@@ -10,6 +10,8 @@ export * from "./depoimentos.js";
 export * from "./dm.js";
 export * from "./embeds.js";
 export * from "./call-rating.js";
+export * from "./chance.js";
+export * from "./polls.js";
 export * from "./feedback.js";
 export * from "./friends.js";
 export * from "./gifs.js";

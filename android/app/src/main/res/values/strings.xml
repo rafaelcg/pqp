@@ -254,4 +254,10 @@
     <string name="report_sent_title">Report sent</string>
     <string name="report_sent_body">The moderators will take a look. You will not be named to the person you reported.</string>
     <string name="report_done">Done</string>
+
+    <string name="chance_heads">Heads</string>
+    <string name="chance_tails">Tails</string>
+    <string name="chance_left">%d left</string>
+    <string name="chance_new_deck">New deck · %d left</string>
+    <string name="chance_shuffled">Shuffled · %d left</string>
 </resources>

@@ -4390,6 +4390,176 @@ describeDb("API authorization", () => {
     });
   });
 
+  describe("chance and polls", () => {
+    async function history(
+      as: { id: string; clerk_id: string },
+      channelId: string,
+    ) {
+      const res = await call<{
+        messages: Array<{
+          id: string;
+          body: string;
+          chance: { type: string; total?: number; notation?: string } | null;
+          poll: {
+            question: string;
+            options: Array<{
+              id: string;
+              label: string;
+              votes: number;
+              voted: boolean;
+              voters: Array<{ userId: string; displayName: string; avatarUrl: string | null }>;
+            }>;
+            totalVotes: number;
+            closedAt: string | null;
+            canClose: boolean;
+          } | null;
+        }>;
+      }>(as, "GET", `/api/channels/${channelId}/messages`);
+      expect(res.status).toBe(200);
+      return res.body.messages;
+    }
+
+    it("stores a server-authored roll, not the sender's number", async () => {
+      const { textChannelId } = await makeServer();
+      await handleChatMessage(
+        { socket: fakeSocket(), user: await asDbUser(owner.id) },
+        {
+          type: "message-create",
+          channelId: textChannelId,
+          body: "",
+          chance: { type: "roll", notation: "1d20" },
+        },
+      );
+      const [message] = await history(owner, textChannelId);
+      expect(message?.chance?.type).toBe("roll");
+      expect(message?.chance?.notation).toBe("1d20");
+      expect(message?.chance?.total).toBeGreaterThanOrEqual(1);
+      expect(message?.chance?.total).toBeLessThanOrEqual(20);
+      expect(message?.body).toMatch(/^1d20 → /);
+    });
+
+    it("creates a poll, toggles a single-select vote, and closes it", async () => {
+      const { textChannelId } = await makeServer();
+      await handleChatMessage(
+        { socket: fakeSocket(), user: await asDbUser(owner.id) },
+        {
+          type: "message-create",
+          channelId: textChannelId,
+          body: "",
+          poll: {
+            question: "Who is playing Saturday?",
+            options: ["Yes", "No"],
+            durationSeconds: 86_400,
+            allowMultiselect: false,
+          },
+        },
+      );
+      const [created] = await history(member, textChannelId);
+      expect(created?.poll?.question).toBe("Who is playing Saturday?");
+      expect(created?.poll?.options).toHaveLength(2);
+      expect(created?.poll?.canClose).toBe(false);
+
+      const yes = created!.poll!.options[0]!;
+      await handleChatMessage(
+        { socket: fakeSocket(), user: await asDbUser(member.id) },
+        {
+          type: "poll-vote",
+          channelId: textChannelId,
+          messageId: created!.id,
+          optionId: yes.id,
+        },
+      );
+      const [voted] = await history(member, textChannelId);
+      expect(voted?.poll?.options[0]?.voted).toBe(true);
+      expect(voted?.poll?.options[0]?.votes).toBe(1);
+      expect(voted?.poll?.totalVotes).toBe(1);
+      expect(voted?.poll?.options[0]?.voters).toEqual([
+        { userId: member.id, displayName: "Member", avatarUrl: null },
+      ]);
+      expect(voted?.poll?.options[1]?.voters).toEqual([]);
+
+      const no = voted!.poll!.options[1]!;
+      await handleChatMessage(
+        { socket: fakeSocket(), user: await asDbUser(member.id) },
+        {
+          type: "poll-vote",
+          channelId: textChannelId,
+          messageId: created!.id,
+          optionId: no.id,
+        },
+      );
+      const [switched] = await history(member, textChannelId);
+      expect(switched?.poll?.options[0]?.voted).toBe(false);
+      expect(switched?.poll?.options[1]?.voted).toBe(true);
+      expect(switched?.poll?.totalVotes).toBe(1);
+
+      await handleChatMessage(
+        { socket: fakeSocket(), user: await asDbUser(owner.id) },
+        {
+          type: "poll-close",
+          channelId: textChannelId,
+          messageId: created!.id,
+        },
+      );
+      await handleChatMessage(
+        { socket: fakeSocket(), user: await asDbUser(member.id) },
+        {
+          type: "poll-vote",
+          channelId: textChannelId,
+          messageId: created!.id,
+          optionId: yes.id,
+        },
+      );
+      const [closed] = await history(member, textChannelId);
+      expect(closed?.poll?.closedAt).toBeTruthy();
+      expect(closed?.poll?.options[1]?.voted).toBe(true);
+      expect(closed?.poll?.totalVotes).toBe(1);
+    });
+
+    it("lets multi-select add a second option without dropping the first", async () => {
+      const { textChannelId } = await makeServer();
+      await handleChatMessage(
+        { socket: fakeSocket(), user: await asDbUser(owner.id) },
+        {
+          type: "message-create",
+          channelId: textChannelId,
+          body: "",
+          poll: {
+            question: "What are you bringing?",
+            options: ["Snacks", "Drinks", "Dice"],
+            durationSeconds: 86_400,
+            allowMultiselect: true,
+          },
+        },
+      );
+      const [created] = await history(member, textChannelId);
+      const first = created!.poll!.options[0]!;
+      const second = created!.poll!.options[1]!;
+      await handleChatMessage(
+        { socket: fakeSocket(), user: await asDbUser(member.id) },
+        {
+          type: "poll-vote",
+          channelId: textChannelId,
+          messageId: created!.id,
+          optionId: first.id,
+        },
+      );
+      await handleChatMessage(
+        { socket: fakeSocket(), user: await asDbUser(member.id) },
+        {
+          type: "poll-vote",
+          channelId: textChannelId,
+          messageId: created!.id,
+          optionId: second.id,
+        },
+      );
+      const [voted] = await history(member, textChannelId);
+      expect(voted?.poll?.options[0]?.voted).toBe(true);
+      expect(voted?.poll?.options[1]?.voted).toBe(true);
+      expect(voted?.poll?.totalVotes).toBe(2);
+    });
+  });
+
   describe("request hygiene", () => {
     it("answers 404 for a malformed id rather than surfacing a database error", async () => {
       const res = await call(owner, "GET", "/api/servers/not-a-uuid/channels");

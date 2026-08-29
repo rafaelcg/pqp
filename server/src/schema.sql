@@ -525,6 +525,49 @@ ALTER TABLE messages ADD COLUMN IF NOT EXISTS reply_to_id UUID
 CREATE INDEX IF NOT EXISTS idx_messages_reply_to
   ON messages (reply_to_id) WHERE reply_to_id IS NOT NULL;
 
+-- ------------------------------------------------------------------ chance + polls
+--
+-- A slash randomizer stores its structured result on the message. The plaintext
+-- `body` is still written so search, notifications, and older clients have
+-- something to show. A poll is a sibling of the message (one-to-one) rather
+-- than a JSON blob: votes need a real unique constraint per option and user.
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS chance JSONB;
+
+CREATE TABLE IF NOT EXISTS polls (
+  message_id UUID PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+  question TEXT NOT NULL,
+  allow_multiselect BOOLEAN NOT NULL DEFAULT FALSE,
+  closes_at TIMESTAMPTZ NOT NULL,
+  closed_at TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS poll_options (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  message_id UUID NOT NULL REFERENCES polls(message_id) ON DELETE CASCADE,
+  position INT NOT NULL,
+  label TEXT NOT NULL,
+  UNIQUE (message_id, position)
+);
+
+CREATE TABLE IF NOT EXISTS poll_votes (
+  option_id UUID NOT NULL REFERENCES poll_options(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  PRIMARY KEY (option_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_poll_options_message
+  ON poll_options (message_id, position);
+
+CREATE INDEX IF NOT EXISTS idx_poll_votes_user
+  ON poll_votes (user_id);
+
+-- One shuffled shoe per channel. /draw takes from the front; /shuffle replaces it.
+CREATE TABLE IF NOT EXISTS channel_decks (
+  channel_id UUID PRIMARY KEY REFERENCES channels(id) ON DELETE CASCADE,
+  remaining JSONB NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- ------------------------------------------------------------------ search
 --
 -- Full-text search. Everything the index and the query have to agree on lives

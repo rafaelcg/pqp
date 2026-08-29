@@ -65,6 +65,11 @@ vi.mock("../services/reactions.js", () => ({
   ) => fallback,
 }));
 
+vi.mock("../services/polls.js", () => ({
+  votePoll: async () => null,
+  closePoll: async () => null,
+}));
+
 // --- threads --- "not a thread" keeps the chip-refresh tail of the message
 // path (and the thread-join validation) inert; the thread machinery itself is
 // proved against a real database in services/threads.test.ts and

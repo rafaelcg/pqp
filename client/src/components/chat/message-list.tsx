@@ -38,6 +38,8 @@ import { StatusDot } from "@/components/user/status-dot";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import { AttachmentGrid } from "@/components/chat/attachment-grid";
+import { ChanceCard } from "@/components/chat/chance-card";
+import { PollCard } from "@/components/chat/poll-card";
 import { EmojiPickerPanel } from "@/components/chat/emoji-picker";
 import { ThreadChip } from "@/components/chat/thread-chip";
 import {
@@ -153,6 +155,8 @@ interface MessageListProps {
   highlightMessageId?: string | null;
   onHighlightHandled?: () => void;
   onToggleReaction: (messageId: string, emoji: string) => void;
+  onVotePoll?: (messageId: string, optionId: string) => void;
+  onClosePoll?: (messageId: string) => void;
   onLoadOlder?: () => Promise<number>;
   onLoadNewer?: () => Promise<number>;
   /** Fetch history around a message that is not in the loaded window. */
@@ -295,6 +299,8 @@ export function MessageList({
   highlightMessageId = null,
   onHighlightHandled,
   onToggleReaction,
+  onVotePoll,
+  onClosePoll,
   onLoadOlder,
   onLoadNewer,
   onJumpToMessage,
@@ -1013,6 +1019,8 @@ export function MessageList({
                   : undefined
               }
               onToggleReaction={onToggleReaction}
+              onVotePoll={onVotePoll}
+              onClosePoll={onClosePoll}
               onRetry={() =>
                 row.message.nonce && onRetryMessage?.(row.message.nonce)
               }
@@ -1357,6 +1365,8 @@ interface MessageRowProps {
   onUnpin?: () => void;
   onReport?: () => void;
   onToggleReaction: (messageId: string, emoji: string) => void;
+  onVotePoll?: (messageId: string, optionId: string) => void;
+  onClosePoll?: (messageId: string) => void;
   onRetry: () => void;
   onDiscard: () => void;
   // --- threads ---
@@ -1418,6 +1428,8 @@ const MessageRow = memo(function MessageRow({
   onUnpin,
   onReport,
   onToggleReaction,
+  onVotePoll,
+  onClosePoll,
   onRetry,
   onDiscard,
   onStartThread,
@@ -1885,7 +1897,16 @@ const MessageRow = memo(function MessageRow({
               <>
                 {/* A message carrying attachments is allowed to say nothing, so
                     an empty body renders as nothing rather than an empty line. */}
-                {message.body && (
+                {message.chance ? (
+                  <ChanceCard result={message.chance} />
+                ) : message.poll ? (
+                  <PollCard
+                    poll={message.poll}
+                    canManage={canModerate}
+                    onVote={(optionId) => onVotePoll?.(message.id, optionId)}
+                    onClose={() => onClosePoll?.(message.id)}
+                  />
+                ) : message.body ? (
                   <div className="markdown-body text-[15px] leading-normal text-paper/90">
                     <MessageBody
                       body={message.body}
@@ -1895,7 +1916,7 @@ const MessageRow = memo(function MessageRow({
                       <EditedMarker editedAt={message.editedAt} />
                     )}
                   </div>
-                )}
+                ) : null}
                 {attachments.length > 0 && (
                   <div>
                     <AttachmentGrid attachments={attachments} />

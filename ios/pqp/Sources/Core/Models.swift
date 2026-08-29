@@ -284,6 +284,9 @@ struct Message: Codable, Identifiable, Hashable, Sendable {
     /// required: `message-broadcast` for a brand-new message omits it (nothing
     /// can have a thread yet) and an older server never sends it at all.
     var thread: ThreadSummary?
+    /// A slash randomizer. Lenient: a shape we cannot read costs the card, not
+    /// the message. Older history has no key at all.
+    var chance: ChancePayload?
 
     /// Client-only. A message sent optimistically has not been acknowledged by
     /// the server yet; the `nonce` echo on `message-broadcast` replaces it.
@@ -295,7 +298,7 @@ struct Message: Codable, Identifiable, Hashable, Sendable {
     enum CodingKeys: String, CodingKey {
         case id, channelId, authorId, authorName, authorTag, authorAvatarUrl
         case body, createdAt, editedAt, reactions, replyTo, attachments, embeds
-        case blocked, pinnedAt, isWebhook, webhookEmbeds, thread
+        case blocked, pinnedAt, isWebhook, webhookEmbeds, thread, chance
     }
 
     init(from decoder: Decoder) throws {
@@ -322,6 +325,7 @@ struct Message: Codable, Identifiable, Hashable, Sendable {
         // body is the payload; the chip is a nicety, and a strict decode here
         // would drop a whole message over a shape change on an accessory.
         thread = (try? c.decodeIfPresent(ThreadSummary.self, forKey: .thread)) ?? nil
+        chance = (try? c.decodeIfPresent(ChancePayload.self, forKey: .chance)) ?? nil
         isPending = false
         pendingNonce = nil
     }
@@ -346,9 +350,32 @@ struct Message: Codable, Identifiable, Hashable, Sendable {
         isWebhook = false
         webhookEmbeds = []
         thread = nil
+        chance = nil
         isPending = true
         pendingNonce = nil
     }
+}
+
+struct ChanceRollGroup: Codable, Hashable, Sendable {
+    var sides: Int
+    var faces: [Int]
+    var sign: Int?
+}
+
+struct ChancePayload: Codable, Hashable, Sendable {
+    var type: String
+    var notation: String?
+    var faces: [Int]?
+    var groups: [ChanceRollGroup]?
+    var modifier: Int?
+    var total: Int?
+    var comment: String?
+    var result: String?
+    var options: [String]?
+    var picked: String?
+    var cards: [String]?
+    var remaining: Int?
+    var reshuffled: Bool?
 }
 
 struct UnreadEntry: Codable, Hashable, Sendable {
