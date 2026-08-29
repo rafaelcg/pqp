@@ -3,6 +3,7 @@ import {
   QG_HINT_SLUG,
   QG_HINT_STORAGE_KEY,
   isQgHintSeen,
+  qgHintCanJoin,
   rememberQgHint,
   shouldPersistQgHint,
   shouldShowQgHint,
@@ -127,5 +128,15 @@ describe("shouldShowQgHint", () => {
 
   it("keeps the hosted slug pointing at the HQ", () => {
     expect(QG_HINT_SLUG).toBe("qg-do-pqp");
+  });
+});
+
+describe("qgHintCanJoin", () => {
+  it("joins when the listing handed over an id", () => {
+    expect(qgHintCanJoin("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")).toBe(true);
+  });
+
+  it("does not call join in the localhost preview", () => {
+    expect(qgHintCanJoin(null)).toBe(false);
   });
 });

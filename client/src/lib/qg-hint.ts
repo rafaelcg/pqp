@@ -72,3 +72,11 @@ export function shouldShowQgHint(input: {
   }
   return input.preview;
 }
+
+/**
+ * A missing id is localhost preview: the QG is not on this instance.
+ * Calling join would 404 and toast. The click just puts the card away.
+ */
+export function qgHintCanJoin(communityId: string | null): boolean {
+  return communityId !== null;
+}

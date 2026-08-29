@@ -125,11 +125,14 @@ export function QgHint({
     if (joining) {
       return;
     }
+    if (communityId === null) {
+      // Localhost preview: communities are off, there is no QG to join.
+      setOpen(false);
+      return;
+    }
     setJoining(true);
     try {
-      const id =
-        communityId ?? (await lookupCommunityBySlug(QG_HINT_SLUG)).community.id;
-      const result = await joinCommunity(id);
+      const result = await joinCommunity(communityId);
       setOpen(false);
       onJoined({
         serverId: result.serverId,
