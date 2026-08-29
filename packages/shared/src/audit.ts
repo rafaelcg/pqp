@@ -65,6 +65,13 @@ export const AUDIT_ACTIONS = [
   "member.community_join",
   "server.ownership_transfer",
   "server.data_export",
+  /**
+   * A community created by copying a Discord Guild Template's layout.
+   * Counts and the template code, never the snapshot body. Distinct from
+   * `server.create` (which is not logged) so an owner can see that this
+   * room started as a Discord copy.
+   */
+  "server.discord_import",
   "invite.create",
   "invite.delete",
   "webhook.create",

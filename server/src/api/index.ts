@@ -90,6 +90,10 @@ import {
   parseUserTag,
   voiceSessionRequestSchema,
   type Gif,
+  discordImportSourceSchema,
+  DiscordImportCapError,
+  DiscordImportParseError,
+  parseDiscordTemplateCode,
 } from "@pqp/shared";
 import { z } from "zod";
 import {
@@ -216,6 +220,14 @@ import {
   mapInvite,
   redeemInvite,
 } from "../services/invites.js";
+import {
+  createServerFromImport,
+  DiscordTemplateNotFoundError,
+  DiscordTemplateRateLimitedError,
+  DiscordTemplateTooLargeError,
+  DiscordTemplateUnavailableError,
+  fetchMappedDiscordTemplate,
+} from "../services/discord-import.js";
 import {
   ChannelPinLimitError,
   deleteMessage,
@@ -474,6 +486,23 @@ const userSearchLimiter = createRateLimiter({
  */
 const exportLimiter = createRateLimiter({ capacity: 3, refillPerSecond: 0.02 });
 /**
+ * Copying a Discord layout hits Discord's template API on the request path.
+ * A small burst covers preview then apply (and one retry); the slow refill
+ * is what stops a script from using this process as a Discord scraper.
+ */
+const discordImportLimiter = createRateLimiter({
+  capacity: 3,
+  refillPerSecond: 0.02,
+});
+/**
+ * Shared egress to discord.com. Preview and apply both fetch; a handful of
+ * people clicking at once is fine, a coordinated flood is how we get 429'd.
+ */
+const discordFetchLimiter = createRateLimiter({
+  capacity: 20,
+  refillPerSecond: 1,
+});
+/**
  * `GET /api/me/export` walks every message one account ever wrote, across every
  * server and conversation, and serialises it into one response — the same shape
  * of expense as the server export and the same reason to bound it. It is also a
@@ -568,6 +597,8 @@ export function resetApiRateLimits(): void {
   uploadLimiter.reset();
   userSearchLimiter.reset();
   exportLimiter.reset();
+  discordImportLimiter.reset();
+  discordFetchLimiter.reset();
   personalExportLimiter.reset();
   accountDeleteLimiter.reset();
   webhookExecuteLimiter.reset();
@@ -1891,6 +1922,96 @@ router.post("/api/servers", async ({ req, user }) => {
     server: { ...mapServer(server), role: "owner" as const },
     channels: channels.map(mapChannel),
   });
+});
+
+function throwDiscordImportHttp(
+  error: unknown,
+  res: { setHeader: (name: string, value: string) => void },
+): never {
+  if (error instanceof DiscordImportParseError) {
+    throw new HttpError(400, error.message);
+  }
+  if (error instanceof DiscordImportCapError) {
+    throw new HttpError(400, error.message);
+  }
+  if (error instanceof DiscordTemplateNotFoundError) {
+    throw new NotFound(error.message);
+  }
+  if (error instanceof DiscordTemplateRateLimitedError) {
+    if (error.retryAfterSeconds != null) {
+      res.setHeader("Retry-After", String(error.retryAfterSeconds));
+    }
+    throw new HttpError(429, error.message);
+  }
+  if (error instanceof DiscordTemplateTooLargeError) {
+    throw new HttpError(413, error.message);
+  }
+  if (error instanceof DiscordTemplateUnavailableError) {
+    throw new HttpError(502, error.message);
+  }
+  throw error;
+}
+
+function takeDiscordImportLimiters(
+  userId: string,
+  res: { setHeader: (name: string, value: string) => void },
+): void {
+  const userKey = `user:${userId}`;
+  if (!discordImportLimiter.take(userKey)) {
+    res.setHeader(
+      "Retry-After",
+      String(discordImportLimiter.retryAfter(userKey)),
+    );
+    throw new HttpError(429, "Slow down");
+  }
+  if (!discordFetchLimiter.take("discord")) {
+    res.setHeader(
+      "Retry-After",
+      String(discordFetchLimiter.retryAfter("discord")),
+    );
+    throw new HttpError(429, "Slow down");
+  }
+}
+
+router.post("/api/import/discord/preview", async ({ req, user, res }) => {
+  if (user.is_character) {
+    throw new Forbidden("Character accounts cannot create servers");
+  }
+  const body = discordImportSourceSchema.parse(await readJsonBody(req));
+  if (!parseDiscordTemplateCode(body.source)) {
+    throw new HttpError(
+      400,
+      "Paste a discord.new link or a Discord template code.",
+    );
+  }
+  takeDiscordImportLimiters(user.id, res);
+  try {
+    const { plan } = await fetchMappedDiscordTemplate(body.source);
+    return plan;
+  } catch (error) {
+    throwDiscordImportHttp(error, res);
+  }
+});
+
+router.post("/api/import/discord/apply", async ({ req, user, res }) => {
+  if (user.is_character) {
+    throw new Forbidden("Character accounts cannot create servers");
+  }
+  const body = discordImportSourceSchema.parse(await readJsonBody(req));
+  if (!parseDiscordTemplateCode(body.source)) {
+    throw new HttpError(
+      400,
+      "Paste a discord.new link or a Discord template code.",
+    );
+  }
+  takeDiscordImportLimiters(user.id, res);
+  try {
+    const { code, plan } = await fetchMappedDiscordTemplate(body.source);
+    const createdServer = await createServerFromImport(user.id, code, plan);
+    return created(createdServer);
+  } catch (error) {
+    throwDiscordImportHttp(error, res);
+  }
 });
 
 router.patch("/api/servers/:serverId", async ({ req, user }, { serverId }) => {
