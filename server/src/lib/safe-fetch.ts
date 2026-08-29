@@ -128,21 +128,33 @@ export function isBlockedAddress(ip: string): boolean {
  * range, or null if every address it has is blocked (or it has none). Real
  * DNS, not a cache — a URL is only unfurled once per TTL window, so the
  * extra round trip costs nothing that matters.
+ *
+ * `allowPrivate` is the local-dev hatch for outgoing webhooks: a receiver
+ * running on loopback is the whole point of a laptop test, and the same
+ * check that stops SSRF would also stop that. Production never passes it.
  */
-async function resolveSafeAddress(
+export async function resolveSafeAddress(
   hostname: string,
+  options: { allowPrivate?: boolean } = {},
 ): Promise<{ address: string; family: 4 | 6 } | null> {
   const literal = isIP(hostname);
   if (literal) {
-    return isBlockedAddress(hostname)
-      ? null
-      : { address: hostname, family: literal as 4 | 6 };
+    if (!options.allowPrivate && isBlockedAddress(hostname)) {
+      return null;
+    }
+    return { address: hostname, family: literal as 4 | 6 };
   }
   let records: Array<{ address: string; family: number }>;
   try {
     records = await dns.lookup(hostname, { all: true, verbatim: true });
   } catch {
     return null;
+  }
+  if (options.allowPrivate) {
+    const first = records[0];
+    return first
+      ? { address: first.address, family: first.family as 4 | 6 }
+      : null;
   }
   const safe = records.find((record) => !isBlockedAddress(record.address));
   return safe ? { address: safe.address, family: safe.family as 4 | 6 } : null;
@@ -182,7 +194,7 @@ export async function safeFetch(
   let current = targetUrl;
   for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects++) {
     const url = parseHttpUrl(current);
-    const resolved = await resolveSafeAddress(url.hostname);
+    const resolved = await resolveSafeAddress(url.hostname, {});
     if (!resolved) {
       throw new UnsafeUrlError(
         `${url.hostname} does not resolve to a public address`,
@@ -203,7 +215,7 @@ export async function safeFetch(
   throw new UnsafeUrlError("Too many redirects");
 }
 
-function parseHttpUrl(value: string): URL {
+export function parseHttpUrl(value: string): URL {
   let url: URL;
   try {
     url = new URL(value);
@@ -230,16 +242,31 @@ function parseHttpUrl(value: string): URL {
  * the SSRF check the tests are not exercising here; `safe-fetch.test.ts`
  * covers `isBlockedAddress` and the full `safeFetch` pipeline separately.
  */
+export interface FetchPinnedOptions {
+  accept?: string;
+  timeoutMs?: number;
+  method?: "GET" | "POST";
+  headers?: Record<string, string>;
+  body?: string | Buffer;
+}
+
 export function fetchPinnedAddress(
   url: URL,
   resolved: { address: string; family: 4 | 6 },
-  options: { accept: string; timeoutMs?: number },
+  options: FetchPinnedOptions,
 ): Promise<{
   statusCode: number;
   headers: http.IncomingHttpHeaders;
   body: Buffer;
 }> {
   const transport = url.protocol === "https:" ? https : http;
+  const method = options.method ?? "GET";
+  const body =
+    options.body === undefined
+      ? undefined
+      : typeof options.body === "string"
+        ? Buffer.from(options.body, "utf8")
+        : options.body;
   return new Promise((resolve, reject) => {
     const req = transport.request(
       {
@@ -247,7 +274,7 @@ export function fetchPinnedAddress(
         hostname: url.hostname,
         port: url.port || (url.protocol === "https:" ? 443 : 80),
         path: `${url.pathname}${url.search}`,
-        method: "GET",
+        method,
         // The one line that matters: never let this request resolve the
         // hostname again. Whatever Node asks to look up, hand back exactly
         // the address already checked, regardless of what it asked for.
@@ -274,7 +301,9 @@ export function fetchPinnedAddress(
         },
         headers: {
           "user-agent": "pqpBot/1.0 (+https://pqp.gg)",
-          accept: options.accept,
+          ...(options.accept ? { accept: options.accept } : {}),
+          ...(body ? { "content-length": String(body.length) } : {}),
+          ...options.headers,
         },
         timeout: options.timeoutMs ?? TIMEOUT_MS,
       },
@@ -312,6 +341,50 @@ export function fetchPinnedAddress(
     );
     req.on("timeout", () => req.destroy(new Error("Request timed out")));
     req.on("error", reject);
-    req.end();
+    if (body) {
+      req.end(body);
+    } else {
+      req.end();
+    }
   });
+}
+
+const OUTGOING_POST_TIMEOUT_MS = 15_000;
+
+/**
+ * POST a caller-supplied body to a user-chosen URL with the destination
+ * pinned the same way `safeFetch` pins GETs. Redirects are not followed:
+ * a 3xx is a failed delivery, not a hop. That is load-bearing for webhooks
+ * — a 302 to an internal host is the classic SSRF second step, and Standard
+ * Webhooks treats anything other than 2xx as failure anyway.
+ */
+export async function safePost(
+  targetUrl: string,
+  options: {
+    body: string | Buffer;
+    headers?: Record<string, string>;
+    timeoutMs?: number;
+    allowPrivate?: boolean;
+    requireHttps?: boolean;
+  },
+): Promise<SafeFetchResult> {
+  const url = parseHttpUrl(targetUrl);
+  if (options.requireHttps && url.protocol !== "https:") {
+    throw new UnsafeUrlError("Outgoing webhooks require HTTPS");
+  }
+  const resolved = await resolveSafeAddress(url.hostname, {
+    allowPrivate: options.allowPrivate === true,
+  });
+  if (!resolved) {
+    throw new UnsafeUrlError(
+      `${url.hostname} does not resolve to a public address`,
+    );
+  }
+  const result = await fetchPinnedAddress(url, resolved, {
+    method: "POST",
+    headers: options.headers,
+    body: options.body,
+    timeoutMs: options.timeoutMs ?? OUTGOING_POST_TIMEOUT_MS,
+  });
+  return { ...result, finalUrl: url.toString() };
 }

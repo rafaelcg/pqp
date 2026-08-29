@@ -47,6 +47,10 @@ import { pruneExpiredTimeouts } from "./services/sanctions.js";
 import { sweepMessageRetention } from "./services/retention.js";
 import { sweepExpiredConnectionStates } from "./services/connections.js";
 import { sweepChannelAudiences } from "./services/servers.js";
+import {
+  deliverDueOutgoingWebhooks,
+  pruneDeliveredOutgoingWebhooks,
+} from "./services/outgoing-webhooks.js";
 import { checkReadiness, READINESS_PATH } from "./services/readiness.js";
 import {
   getStatusSummary,
@@ -535,6 +539,28 @@ const communityHomeSweep = setInterval(() => {
 communityHomeSweep.unref?.();
 
 /**
+ * Outgoing webhook outbox. First attempt is also kicked from enqueue; this
+ * loop owns retries, reclaim of a `delivering` row whose process died, and
+ * pruning delivered receipts after 7 days. Unref'd: a quiet server must still
+ * be able to exit.
+ */
+const OUTGOING_WEBHOOK_TICK_MS = 2_000;
+
+const outgoingWebhookTick = setInterval(() => {
+  void deliverDueOutgoingWebhooks().catch((error) => {
+    console.error("[outgoing-webhooks] delivery tick failed:", error);
+  });
+}, OUTGOING_WEBHOOK_TICK_MS);
+outgoingWebhookTick.unref?.();
+
+const outgoingWebhookPrune = setInterval(() => {
+  void pruneDeliveredOutgoingWebhooks().catch((error) => {
+    console.error("[outgoing-webhooks] prune failed:", error);
+  });
+}, 60 * 60_000);
+outgoingWebhookPrune.unref?.();
+
+/**
  * Multi-instance chat, off by default.
  *
  * Unset (or `off`) leaves every fan-out purely in-process — exactly what this
@@ -626,6 +652,8 @@ async function shutdown(signal: string) {
   clearInterval(attachmentSweep);
   clearInterval(pendingDeletionSweep);
   clearInterval(communityHomeSweep);
+  clearInterval(outgoingWebhookTick);
+  clearInterval(outgoingWebhookPrune);
   stopPresenceRefresh?.();
   for (const socket of wss.clients) {
     socket.close(1001, "Server shutting down");

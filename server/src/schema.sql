@@ -1131,6 +1131,71 @@ ALTER TABLE messages ADD COLUMN IF NOT EXISTS webhook_embeds JSONB;
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS webhook_username TEXT;
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS webhook_avatar_url TEXT;
 
+-- Outgoing channel webhooks: pqp POSTs a signed event to a URL the owner
+-- pasted, after a human message commits. A different table from `webhooks`
+-- on purpose — incoming tokens and outgoing HMAC secrets are not the same
+-- credential, and merging them would make a rotate of one look like a rotate
+-- of the other.
+CREATE TABLE IF NOT EXISTS outgoing_webhooks (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  server_id UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  url TEXT NOT NULL,
+  -- Text-channel allowlist. Empty is refused at write time; the CHECK is the
+  -- last line of defence if a caller skips that.
+  channel_ids UUID[] NOT NULL,
+  signing_secret TEXT NOT NULL,
+  signing_secret_previous TEXT,
+  previous_secret_expires_at TIMESTAMPTZ,
+  auth_header_name TEXT,
+  auth_header_value TEXT,
+  status TEXT NOT NULL DEFAULT 'active'
+    CHECK (status IN ('active', 'disabled', 'failing')),
+  last_error TEXT,
+  last_delivered_at TIMESTAMPTZ,
+  disabled_reason TEXT,
+  created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT outgoing_webhooks_channel_ids_nonempty
+    CHECK (cardinality(channel_ids) >= 1),
+  CONSTRAINT outgoing_webhooks_auth_header_pair
+    CHECK (
+      (auth_header_name IS NULL AND auth_header_value IS NULL)
+      OR (auth_header_name IS NOT NULL AND auth_header_value IS NOT NULL)
+    ),
+  CONSTRAINT outgoing_webhooks_auth_header_name_ok
+    CHECK (
+      auth_header_name IS NULL
+      OR auth_header_name IN ('Authorization', 'X-Webhook-Secret', 'X-Api-Key')
+    )
+);
+CREATE INDEX IF NOT EXISTS idx_outgoing_webhooks_server
+  ON outgoing_webhooks (server_id);
+
+-- Outbox + DLQ. `id` is the Standard Webhooks `webhook-id` and stays stable
+-- across retries. UNIQUE (hook, message) so a double enqueue from a retrying
+-- worker cannot fire the same event twice.
+CREATE TABLE IF NOT EXISTS outgoing_webhook_deliveries (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  outgoing_webhook_id UUID NOT NULL REFERENCES outgoing_webhooks(id) ON DELETE CASCADE,
+  event_type TEXT NOT NULL DEFAULT 'message.created',
+  payload JSONB NOT NULL,
+  message_id UUID NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'delivering', 'delivered', 'dead')),
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_status_code INTEGER,
+  last_error TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (outgoing_webhook_id, message_id)
+);
+CREATE INDEX IF NOT EXISTS idx_outgoing_webhook_deliveries_pending
+  ON outgoing_webhook_deliveries (next_attempt_at)
+  WHERE status IN ('pending', 'delivering');
+
 -- SSO / enterprise domain join. Clerk performs the actual SAML/OIDC handshake,
 -- so nothing here speaks SAML — what the app needs is the piece Clerk cannot
 -- know: which pqp server a federated user should land in.
@@ -2542,7 +2607,7 @@ CREATE INDEX IF NOT EXISTS idx_connection_oauth_states_created
 -- (https://docs.discord.com/developers/topics/permissions), stored as BIGINT
 -- bitfields. Wire format is a decimal string; JS math is always bigint.
 --
--- Bits 0–19, matching packages/shared/src/permissions.ts:
+-- Bits 0–20, matching packages/shared/src/permissions.ts:
 --   0 CREATE_INVITE          1
 --   1 KICK_MEMBERS           2
 --   2 BAN_MEMBERS            4
@@ -2563,8 +2628,9 @@ CREATE INDEX IF NOT EXISTS idx_connection_oauth_states_created
 --  17 MANAGE_ROLES           131072
 --  18 MODERATE_MEMBERS       262144
 --  19 ADD_REACTIONS          524288
+--  20 MANAGE_WEBHOOKS        1048576
 --
--- ALL = 1048575. Default @everyone = 571073.
+-- ALL = 2097151. Default @everyone = 571073.
 --
 -- Seeded roles per server: `@everyone` (implicit, never a member_roles row),
 -- Moderator, Manager, Admin (ADMINISTRATOR), and Owner (display only;
@@ -2827,7 +2893,7 @@ $$;
 
 -- Moderator extras: KICK(2) | MANAGE_MESSAGES(256) | MUTE(16384) |
 -- MANAGE_NICKNAMES(65536) | MODERATE_MEMBERS(262144) = 344322.
--- Manager: ALL(1048575) minus ADMINISTRATOR(8) = 1048567.
+-- Manager: ALL(2097151) minus ADMINISTRATOR(8) = 2097143.
 -- VIP is a colour and a hoist with no extra bits (0).
 -- Insert colours match STAFF_ROLE_COLORS in packages/shared/src/permissions.ts.
 CREATE OR REPLACE FUNCTION pqp_ensure_staff_ladder(p_server_id UUID)
@@ -2886,7 +2952,7 @@ BEGIN
       mentionable, hoist, show_badge, color
     )
     VALUES (
-      p_server_id, pqp_unique_role_name(p_server_id, 'Manager'), 1048567, 2,
+      p_server_id, pqp_unique_role_name(p_server_id, 'Manager'), 2097143, 2,
       FALSE, 'manager', FALSE, TRUE, TRUE, '#6BA3E8'
     );
   END IF;
@@ -2993,6 +3059,35 @@ BEGIN
   END LOOP;
 
   INSERT INTO data_migrations (name) VALUES ('staff_vip_2026_08');
+END $$;
+
+-- MANAGE_WEBHOOKS (bit 20 = 1048576). Owner/Administrator already resolve to
+-- PERMISSION_ALL in application code, but stored system-role masks must carry
+-- the new bit so a manager who is not the owner person still passes
+-- requirePermission. The fingerprint is the same shape as the email-scrub
+-- and character-invariants repairs: changing the rule re-arms the pass.
+DO $$
+DECLARE
+  rule CONSTANT TEXT := 'OR MANAGE_WEBHOOKS(1048576) onto manager/admin/owner';
+  marker CONSTANT TEXT := 'pqp-manage-webhooks-bit ' || md5(rule);
+  col_attnum SMALLINT;
+BEGIN
+  SELECT a.attnum INTO col_attnum FROM pg_attribute a
+  WHERE a.attrelid = 'roles'::regclass AND a.attname = 'permissions'
+    AND NOT a.attisdropped;
+
+  IF col_description('roles'::regclass, col_attnum) IS NOT DISTINCT FROM marker THEN
+    RETURN;
+  END IF;
+
+  UPDATE roles
+     SET permissions = permissions | 1048576
+   WHERE system_key IN ('manager', 'admin', 'owner');
+
+  EXECUTE format(
+    'COMMENT ON COLUMN roles.permissions IS %L',
+    marker
+  );
 END $$;
 
 -- Who may VIEW this channel (the effective row: parent for a thread).
