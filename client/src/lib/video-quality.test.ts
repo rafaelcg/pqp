@@ -237,12 +237,42 @@ describe("screenScaleFactor", () => {
     expect(screenScaleFactor("360p", 360)).toBe(1);
   });
 
-  it("leaves auto to the connection", () => {
-    // Auto is the one rung that names no size, so it pins none: the encoder
-    // adapts up and down on its own, which is the whole meaning of the word.
-    for (const height of [1080, 1440, 720, null]) {
-      expect(screenScaleFactor("auto", height)).toBe(1);
-    }
+  it("starts auto at 720p instead of letting it free-fall", () => {
+    // THE REPORTED BUG. Auto used to pin no size at all, on the theory that a
+    // naked encoder would climb and fall with the link. Measured at the far end
+    // of a two-person mesh call it only falls: the share arrived at roughly
+    // 144 lines and 3-5 fps while the arithmetic said 3 Mbps and one peer, so
+    // nothing in our own numbers asked for that picture. Auto now asks for the
+    // same 720p the camera's auto asks for, and `maintain-framerate` still
+    // gives resolution back from there when the link genuinely cannot carry it.
+    expect(screenScaleFactor("auto", 1080)).toBeCloseTo(
+      screenScaleFactor("720p", 1080),
+      2,
+    );
+    expect(screenScaleFactor("auto", 1440)).toBeCloseTo(
+      screenScaleFactor("720p", 1440),
+      2,
+    );
+    expect(screenScaleFactor("auto", null)).toBeCloseTo(
+      screenScaleFactor("720p", null),
+      2,
+    );
+  });
+
+  it("never scales auto up to reach 720p", () => {
+    // A shared window that is already smaller than 720 lines is handed over
+    // untouched, exactly like every named rung: a divisor below 1 spends
+    // bitrate inventing pixels that carry no detail.
+    expect(screenScaleFactor("auto", 720)).toBe(1);
+    expect(screenScaleFactor("auto", 480)).toBe(1);
+  });
+
+  it("keeps auto's bitrate where it was", () => {
+    // Pinning the 720p *size* must not quietly demote auto onto the 720p
+    // bitrate rung. Auto still spends 3 Mbps, which is the point: a smaller
+    // picture with the same allowance is a sharper picture.
+    expect(screenBitrateFor("auto")).toBe(3_000_000);
+    expect(screenBitrateFor("auto")).not.toBe(screenBitrateFor("720p"));
   });
 
   it("assumes the capture ceiling when the track will not say", () => {

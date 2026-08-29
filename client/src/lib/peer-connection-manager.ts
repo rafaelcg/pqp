@@ -445,9 +445,9 @@ async function tuneScreenSender(
     for (const encoding of params.encodings) {
       encoding.maxBitrate = meshScreenBitrate(peerCount, quality);
       encoding.maxFramerate = SCREEN_MAX_FRAMERATE;
-      // Written on every rung including 1080p and auto, where it is 1: a
-      // divisor only ever set on the way down would make the menu a one-way
-      // trip, leaving a 3x scale in place after somebody chose 1080p again.
+      // Written on every rung including 1080p, where it is 1: a divisor only
+      // ever set on the way down would make the menu a one-way trip, leaving a
+      // 3x scale in place after somebody chose 1080p again.
       encoding.scaleResolutionDownBy = scale;
     }
     await sender.setParameters(params);

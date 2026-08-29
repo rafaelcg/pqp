@@ -184,18 +184,26 @@ export const SCREEN_CAPTURE_HEIGHT = 1080;
  * pixels that carry no detail. Somebody sharing a 720-line window and choosing
  * 1080p gets their window, unchanged, which is the honest reading of the label.
  *
- * AUTO PINS NOTHING, deliberately. It is the one rung that names no size, so it
- * leaves the encoder free to climb and fall with the link, which is the whole
- * meaning of the word and the behaviour every default should have.
+ * AUTO ASKS FOR 720p, and it used to ask for nothing. The old argument was that
+ * naming no size leaves the encoder free to climb and fall with the link, which
+ * is what the word means. Measured at the far end of a two-person mesh call it
+ * only falls: a 1080p30 capture with `contentHint: "motion"` and no size pin
+ * arrived at roughly 144 lines and 3-5 fps, while our own arithmetic asked for
+ * none of that (one peer, so the 5 Mbps mesh budget does not bind; a 3 Mbps
+ * ceiling; `maintain-framerate`). An unpinned encoder starting from a
+ * full-size, full-motion capture has every reason to give resolution away and
+ * nothing telling it where to stop. So auto now starts where the camera's auto
+ * already starts, at 720 lines, and `maintain-framerate` still hands resolution
+ * back from there if the link genuinely cannot carry it. The *bitrate* stays at
+ * `AUTO_SCREEN_BITRATE`: the smaller picture is not a demotion, it is the same
+ * allowance spent on fewer, sharper pixels.
  */
 export function screenScaleFactor(
   quality: VideoQuality,
   captureHeight?: number | null,
 ): number {
-  if (quality === "auto") {
-    return 1;
-  }
-  const target = SCREEN_HEIGHTS[quality];
+  const target =
+    quality === "auto" ? SCREEN_HEIGHTS["720p"] : SCREEN_HEIGHTS[quality];
   // A capture reports no size at all in its first moments. Assuming the size we
   // asked for beats assuming "no scaling", which would ship 1080p to somebody
   // who chose 360p until something happened to re-tune the sender.

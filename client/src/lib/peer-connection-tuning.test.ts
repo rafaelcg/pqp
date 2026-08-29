@@ -461,7 +461,12 @@ describe("the quality choice reaches the screen sender", () => {
 
     manager.setScreenQuality("auto");
     await Promise.resolve();
-    expect(lastParams(sender)?.encodings[0]?.scaleResolutionDownBy).toBe(1);
+    // Auto is not "no divisor": it asks for 720 lines out of a 1080-line
+    // capture, the same as the named rung, and spends its own 3 Mbps on them.
+    expect(lastParams(sender)?.encodings[0]?.scaleResolutionDownBy).toBeCloseTo(
+      1.5,
+      2,
+    );
   });
 
   it("leaves a working share when the encoder refuses the parameters", async () => {

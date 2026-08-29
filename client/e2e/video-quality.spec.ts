@@ -681,7 +681,10 @@ test("a DM call's screen encoder follows the quality menu", async ({
     expect(low.scaleResolutionDownBy, "360p: 1080 lines divided to 360").toBe(
       3,
     );
-    expect(auto.scaleResolutionDownBy, "auto: pins no size at all").toBe(1);
+    expect(
+      auto.scaleResolutionDownBy,
+      "auto: 1080 lines divided to 720",
+    ).toBeCloseTo(1.5, 2);
     await expectTargetBitrate(page, "screen", 600_000, "360p");
   } finally {
     await watcher.context.close();
