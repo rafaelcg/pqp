@@ -66,6 +66,11 @@ const PREVIEW_VOTERS = {
  * design; these are the live components and the live art.
  */
 export function WhatsNewPrompt() {
+  // Playwright sets this. A first-run card on every fresh context covers
+  // the call stage and the composer the suite came to measure.
+  if (typeof navigator !== "undefined" && navigator.webdriver) {
+    return null;
+  }
   const { t } = useTranslation();
   const [state] = useState(() => (isWhatsNewSeen() ? null : { pack: WHATS_NEW_PACK_ID }));
   const [open, setOpen] = useState(true);
