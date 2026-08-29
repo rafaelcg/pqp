@@ -4402,7 +4402,13 @@ describeDb("API authorization", () => {
           chance: { type: string; total?: number; notation?: string } | null;
           poll: {
             question: string;
-            options: Array<{ id: string; label: string; votes: number; voted: boolean }>;
+            options: Array<{
+              id: string;
+              label: string;
+              votes: number;
+              voted: boolean;
+              voters: Array<{ userId: string; displayName: string; avatarUrl: string | null }>;
+            }>;
             totalVotes: number;
             closedAt: string | null;
             canClose: boolean;
