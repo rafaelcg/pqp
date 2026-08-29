@@ -109,6 +109,7 @@ interface OutgoingWebhookRow {
   name: string;
   url: string;
   channel_ids: string[];
+  skip_user_ids: string[];
   signing_secret: string;
   signing_secret_previous: string | null;
   previous_secret_expires_at: Date | null;
@@ -122,21 +123,57 @@ interface OutgoingWebhookRow {
   updated_at: Date;
 }
 
-const HOOK_COLUMNS = `id, server_id, name, url, channel_ids, signing_secret,
+const HOOK_COLUMNS = `id, server_id, name, url, channel_ids, skip_user_ids, signing_secret,
   signing_secret_previous, previous_secret_expires_at, auth_header_name,
   auth_header_value, status, last_error, last_delivered_at, disabled_reason,
   created_at, updated_at`;
 
-export function mapOutgoingWebhook(
+async function skipUsersFor(ids: string[]): Promise<
+  OutgoingWebhook["skipUsers"]
+> {
+  const unique = [...new Set(ids)];
+  if (unique.length === 0) {
+    return [];
+  }
+  const result = await getPool().query<{
+    id: string;
+    display_name: string;
+    username: string | null;
+    discriminator: string | null;
+  }>(
+    `SELECT id, display_name, username, discriminator
+       FROM users WHERE id = ANY($1::uuid[])`,
+    [unique],
+  );
+  const byId = new Map(result.rows.map((row) => [row.id, row]));
+  return unique.flatMap((id) => {
+    const row = byId.get(id);
+    if (!row) {
+      return [];
+    }
+    return [
+      {
+        id: row.id,
+        displayName: row.display_name,
+        tag: formatUserTag(row.username, row.discriminator),
+      },
+    ];
+  });
+}
+
+export async function mapOutgoingWebhook(
   row: OutgoingWebhookRow,
   options: { includeSecret?: boolean } = {},
-): OutgoingWebhook {
+): Promise<OutgoingWebhook> {
+  const skipUserIds = row.skip_user_ids ?? [];
   const mapped: OutgoingWebhook = {
     id: row.id,
     serverId: row.server_id,
     name: row.name,
     url: row.url,
     channelIds: row.channel_ids,
+    skipUserIds,
+    skipUsers: await skipUsersFor(skipUserIds),
     secretHint: secretHint(row.signing_secret),
     authHeaderName: (row.auth_header_name as OutgoingWebhookAuthHeaderName | null)
       ?? null,
@@ -179,6 +216,28 @@ async function validateTextChannelIds(
   return unique;
 }
 
+async function validateSkipUserIds(
+  serverId: string,
+  userIds: string[] | undefined,
+): Promise<string[]> {
+  const unique = [...new Set(userIds ?? [])];
+  if (unique.length === 0) {
+    return [];
+  }
+  const result = await getPool().query<{ user_id: string }>(
+    `SELECT user_id FROM server_members
+      WHERE server_id = $1 AND user_id = ANY($2::uuid[])`,
+    [serverId, unique],
+  );
+  if (result.rows.length !== unique.length) {
+    throw new HttpError(
+      400,
+      "Every skipped user must be a member of this server",
+    );
+  }
+  return unique;
+}
+
 function normalizeAuth(
   name: string | null | undefined,
   value: string | null | undefined,
@@ -204,7 +263,7 @@ export async function listOutgoingWebhooks(
       ORDER BY created_at ASC`,
     [serverId],
   );
-  return result.rows.map((row) => mapOutgoingWebhook(row));
+  return Promise.all(result.rows.map((row) => mapOutgoingWebhook(row)));
 }
 
 export async function getOutgoingWebhookRow(
@@ -224,6 +283,7 @@ export async function createOutgoingWebhook(
 ): Promise<OutgoingWebhook> {
   await assertOutgoingWebhookUrl(body.url);
   const channelIds = await validateTextChannelIds(serverId, body.channelIds);
+  const skipUserIds = await validateSkipUserIds(serverId, body.skipUserIds);
   const auth = normalizeAuth(
     body.authHeaderName ?? null,
     body.authHeaderValue ?? null,
@@ -231,15 +291,16 @@ export async function createOutgoingWebhook(
   const signingSecret = generateSigningSecret();
   const result = await getPool().query<OutgoingWebhookRow>(
     `INSERT INTO outgoing_webhooks (
-       server_id, name, url, channel_ids, signing_secret,
+       server_id, name, url, channel_ids, skip_user_ids, signing_secret,
        auth_header_name, auth_header_value, created_by
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
      RETURNING ${HOOK_COLUMNS}`,
     [
       serverId,
       body.name.trim(),
       body.url.trim(),
       channelIds,
+      skipUserIds,
       signingSecret,
       auth.name,
       auth.value,
@@ -266,6 +327,10 @@ export async function updateOutgoingWebhook(
     body.channelIds !== undefined
       ? await validateTextChannelIds(existing.server_id, body.channelIds)
       : existing.channel_ids;
+  const skipUserIds =
+    body.skipUserIds !== undefined
+      ? await validateSkipUserIds(existing.server_id, body.skipUserIds)
+      : (existing.skip_user_ids ?? []);
 
   let authName = existing.auth_header_name;
   let authValue = existing.auth_header_value;
@@ -297,14 +362,25 @@ export async function updateOutgoingWebhook(
         SET name = $2,
             url = $3,
             channel_ids = $4,
-            auth_header_name = $5,
-            auth_header_value = $6,
-            status = $7,
-            disabled_reason = $8,
+            skip_user_ids = $5,
+            auth_header_name = $6,
+            auth_header_value = $7,
+            status = $8,
+            disabled_reason = $9,
             updated_at = NOW()
       WHERE id = $1
       RETURNING ${HOOK_COLUMNS}`,
-    [id, name, url, channelIds, authName, authValue, status, disabledReason],
+    [
+      id,
+      name,
+      url,
+      channelIds,
+      skipUserIds,
+      authName,
+      authValue,
+      status,
+      disabledReason,
+    ],
   );
   return result.rows[0] ? mapOutgoingWebhook(result.rows[0]) : null;
 }
@@ -377,9 +453,10 @@ function clipError(message: string): string {
 
 /**
  * After `createMessage` commits. Inserts outbox rows; never waits on HTTP.
- * Character and incoming-webhook authors are skipped so a bot cannot answer
- * itself. Looked up from `users` here because the WS `DbUser` often lacks
- * `is_webhook`.
+ * Incoming-webhook authors, character accounts, and users marked `is_bot`
+ * are skipped for every hook. A helper that is still a normal user (Caio)
+ * is listed on the hook's `skip_user_ids`. Looked up from `users` here
+ * because the WS `DbUser` often lacks `is_webhook`.
  */
 export async function enqueueOutgoingMessageCreated(input: {
   channelId: string;
@@ -418,8 +495,8 @@ export async function enqueueOutgoingMessageCreated(input: {
     matchIds.push(row.parent_id);
   }
 
-  const hooks = await getPool().query<{ id: string }>(
-    `SELECT id FROM outgoing_webhooks
+  const hooks = await getPool().query<{ id: string; skip_user_ids: string[] }>(
+    `SELECT id, skip_user_ids FROM outgoing_webhooks
       WHERE server_id = $1
         AND status = 'active'
         AND channel_ids && $2::uuid[]`,
@@ -436,8 +513,10 @@ export async function enqueueOutgoingMessageCreated(input: {
     discriminator: string | null;
     is_webhook: boolean | null;
     is_character: boolean | null;
+    is_bot: boolean | null;
   }>(
-    `SELECT id, display_name, username, discriminator, is_webhook, is_character
+    `SELECT id, display_name, username, discriminator,
+            is_webhook, is_character, is_bot
        FROM users WHERE id = $1`,
     [input.authorId],
   );
@@ -445,7 +524,7 @@ export async function enqueueOutgoingMessageCreated(input: {
   if (!user) {
     return 0;
   }
-  if (user.is_webhook || user.is_character) {
+  if (user.is_webhook || user.is_character || user.is_bot) {
     return 0;
   }
 
@@ -458,6 +537,9 @@ export async function enqueueOutgoingMessageCreated(input: {
 
   let inserted = 0;
   for (const hook of hooks.rows) {
+    if ((hook.skip_user_ids ?? []).includes(input.authorId)) {
+      continue;
+    }
     const deliveryId = randomUUID();
     const payload: OutgoingMessageCreatedPayload = {
       type: OUTGOING_WEBHOOK_EVENT_TYPE,
@@ -474,7 +556,7 @@ export async function enqueueOutgoingMessageCreated(input: {
         username: user.username,
         tag: formatUserTag(user.username, user.discriminator),
         displayName: user.display_name,
-        isBot: false,
+        isBot: Boolean(user.is_bot),
       },
       body: input.body,
       replyToId: input.replyToId,
