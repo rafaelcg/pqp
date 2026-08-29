@@ -665,6 +665,7 @@
   "voice.error.channelFull": "Este canal de voz está cheio (máximo {limit}).",
   "voice.error.micFailed": "Não foi possível acessar o microfone",
   "voice.error.micBlocked": "O acesso ao microfone foi bloqueado. Libera nas configurações do navegador e entra de novo.",
+  "voice.error.micMissing": "Nenhum microfone encontrado. Conecta um microfone ou fone e tenta de novo.",
   "voice.error.shareFailed": "Não foi possível compartilhar a tela",
   "voice.error.shareBlocked": "O compartilhamento de tela foi bloqueado ou cancelado.",
   "voice.error.shareAudioUnavailable": "Não deu pra pegar o áudio dessa tela, então nada foi compartilhado. Só aba do Chrome tem áudio pra dar: escolha \"Guia do Chrome\", marque \"Também compartilhar áudio da guia\" e tente de novo. Janela nunca tem som, e tela inteira só no Windows.",

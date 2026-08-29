@@ -253,15 +253,58 @@ function sameSpeaking(a: string[], b: string[]): boolean {
   return true;
 }
 
+/**
+ * A saved input device that no longer exists.
+ *
+ * `buildAudioConstraints` asks for a chosen device with `deviceId: { exact }`,
+ * which is right: a person who picked a microphone means that microphone, and
+ * silently using a different one is worse than failing. But the id is stored in
+ * `localStorage` and the device is not: unplug a USB headset, let a Bluetooth
+ * one drop, or reset site permissions and the browser rotates the ids, and the
+ * saved id now points at nothing.
+ *
+ * `exact` then rejects with `NotFoundError` ("Requested device not found") and
+ * the whole join fails, every time, until the person happens to open Settings
+ * and re-pick a microphone. They did not change anything; their headphones did.
+ *
+ * The output side already knew this: `applyAudioOutputDevice` swallows the same
+ * failure with "Device may have been unplugged; keep default output". The input
+ * side did not, which is the whole bug.
+ */
+function isMissingDeviceError(err: unknown): boolean {
+  return (
+    err instanceof Error &&
+    (err.name === "NotFoundError" || err.name === "OverconstrainedError")
+  );
+}
+
 async function createMicPipeline(
   deviceId: string | undefined,
   inputVolume: number,
   processing: MicProcessing,
+  onDeviceGone?: () => void,
 ): Promise<MicPipeline> {
-  const rawStream = await navigator.mediaDevices.getUserMedia({
-    audio: buildAudioConstraints(deviceId, processing),
-    video: false,
-  });
+  let rawStream: MediaStream;
+  try {
+    rawStream = await navigator.mediaDevices.getUserMedia({
+      audio: buildAudioConstraints(deviceId, processing),
+      video: false,
+    });
+  } catch (err) {
+    // Only retry when a specific device was asked for. With no `deviceId` there
+    // is nothing to fall back to, and a NotFoundError genuinely means the
+    // machine has no microphone at all, which is a real error worth showing.
+    if (!deviceId || !isMissingDeviceError(err)) {
+      throw err;
+    }
+    rawStream = await navigator.mediaDevices.getUserMedia({
+      audio: buildAudioConstraints(undefined, processing),
+      video: false,
+    });
+    // Forget the dead id so the next join does not repeat the round trip, and
+    // so Settings stops showing a selection that resolves to nothing.
+    onDeviceGone?.();
+  }
 
   const audioContext = new AudioContext();
   const source = audioContext.createMediaStreamSource(rawStream);
@@ -315,6 +358,12 @@ function micErrorMessage(err: unknown): string {
   }
   if (err.name === "NotAllowedError") {
     return translateMessage("voice.error.micBlocked", desktopContext());
+  }
+  // Reached only when NO device was requested, because a missing *chosen*
+  // device is retried on the default before it can get here. So this really
+  // does mean the machine has no working microphone at all.
+  if (err.name === "NotFoundError") {
+    return translateMessage("voice.error.micMissing");
   }
   // A browser's own message, in the browser's own language. Better than a
   // generic sentence that throws away what actually went wrong.
@@ -667,6 +716,23 @@ export function createVoiceController(transport: RealtimeTransport) {
    * unplugged, constraint unsatisfiable) leaves the working mic in place and
    * reports the error rather than dropping the user into silence.
    */
+  /**
+   * Drop a saved input device that the machine no longer has.
+   *
+   * Without this the dead id survives in `audioOptions`, so every later join
+   * and every processing toggle pays for a `getUserMedia` that is known to
+   * fail before falling back. Clearing it in memory also makes the fallback
+   * sticky for the rest of the session rather than a per-call accident.
+   *
+   * NOT persisted: the id also lives in the settings `localStorage` blob, and
+   * clearing that needs a callback the hook does not currently receive. The
+   * cost of leaving it is one failed probe on the next launch, after which
+   * this clears it again. Worth doing properly, not worth blocking this on.
+   */
+  function forgetInputDevice() {
+    audioOptions.inputDeviceId = "";
+  }
+
   async function swapPipeline(failureMessage: string) {
     if (!pipeline || state.status === "idle") {
       return;
@@ -676,6 +742,7 @@ export function createVoiceController(transport: RealtimeTransport) {
         audioOptions.inputDeviceId || undefined,
         audioOptions.inputVolume,
         audioOptions.processing,
+        forgetInputDevice,
       );
       stopMicPipeline(pipeline);
       pipeline = next;
@@ -1502,23 +1569,16 @@ export function createVoiceController(transport: RealtimeTransport) {
           return;
         }
         stopMicPipeline(pipeline);
-        let next: MicPipeline;
-        try {
-          next = await createMicPipeline(
-            audioOptions.inputDeviceId || undefined,
-            audioOptions.inputVolume,
-            audioOptions.processing,
-          );
-        } catch (deviceError) {
-          if (!audioOptions.inputDeviceId) {
-            throw deviceError;
-          }
-          next = await createMicPipeline(
-            undefined,
-            audioOptions.inputVolume,
-            audioOptions.processing,
-          );
-        }
+        // The missing-device fallback lives in `createMicPipeline` so that the
+        // join path and `swapPipeline` cannot drift apart. This used to be an
+        // ad-hoc catch here, which meant joining recovered from an unplugged
+        // headset and changing device mid-call did not.
+        const next: MicPipeline = await createMicPipeline(
+          audioOptions.inputDeviceId || undefined,
+          audioOptions.inputVolume,
+          audioOptions.processing,
+          forgetInputDevice,
+        );
 
         // Abandoned (left, timed out, or superseded) while the permission
         // prompt was open: never open a mic for a join nobody is waiting on.
