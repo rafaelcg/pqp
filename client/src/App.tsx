@@ -65,6 +65,7 @@ import { ServerRail } from "@/components/layout/server-rail";
 import { AgeGateDialog } from "@/components/user/age-gate-dialog";
 import { OnboardingFlow } from "@/components/onboarding/onboarding-flow";
 import { NewDmDialog } from "@/components/user/new-dm-dialog";
+import { CargosHint } from "@/components/layout/cargos-hint";
 import { ServerSettingsDialog } from "@/components/layout/server-settings-dialog";
 import {
   applyRemotePreferences,
@@ -471,6 +472,9 @@ function MainAppContent({
    */
   const [arrivalServerId, setArrivalServerId] = useState<string | null>(null);
   const [membersOpen, setMembersOpen] = useState(false);
+  const [serverSettingsSection, setServerSettingsSection] = useState<
+    "roles" | undefined
+  >(undefined);
   // The always-there roster down the right. Its own hook because the state is a
   // per-device preference plus a media query, and the button that flips it lives
   // in the channel header rather than in the panel.
@@ -1117,32 +1121,76 @@ function MainAppContent({
    */
   const manageableServer = useMemo(() => {
     const server = servers.find((one) => one.id === selectedServerId);
-    return server?.role === "owner" || server?.role === "admin"
-      ? { id: server.id, role: server.role }
-      : null;
+    return server ? { id: server.id, role: server.role } : null;
   }, [servers, selectedServerId]);
+
+  const moderationBits = useMemo(
+    () => ({
+      kick: perms.can(Permission.KICK_MEMBERS),
+      ban: perms.can(Permission.BAN_MEMBERS),
+      timeout: perms.can(Permission.MODERATE_MEMBERS),
+      mute: perms.can(Permission.MUTE_MEMBERS),
+      nicknames: perms.can(Permission.MANAGE_NICKNAMES),
+      manageRoles: perms.can(Permission.MANAGE_ROLES),
+    }),
+    [perms],
+  );
+  const canStaff =
+    moderationBits.kick ||
+    moderationBits.ban ||
+    moderationBits.timeout ||
+    moderationBits.mute ||
+    moderationBits.nicknames ||
+    moderationBits.manageRoles;
 
   /**
    * What the profile card may do to somebody, in the server it was opened in.
    *
-   * Null in a conversation — a DM has no moderators, the same rule the server's
-   * `requireServerChannel` enforces — and null for a plain member, which is why
-   * this account's role is checked here rather than inside the card: a member
-   * never even builds the object, so there is nothing for a bug in the card's
-   * own gating to leak past.
+   * Null in a conversation — a DM has no moderators — and null when this
+   * account holds none of the staff bits, which is why the bits are checked
+   * here rather than inside the card.
    */
   const cardModeration = useMemo<ProfileModerationContext | null>(
     () =>
-      manageableServer && selection.kind === "server"
+      canStaff && manageableServer && selection.kind === "server"
         ? {
             serverId: manageableServer.id,
-            actorRole: manageableServer.role,
+            actorRole: manageableServer.role ?? "member",
+            actorRoleIds: serverMembers.find((row) => row.id === user?.id)
+              ?.roleIds,
             memberRoles,
+            memberRoleIds: new Map(
+              serverMembers.map((row) => [row.id, row.roleIds ?? []]),
+            ),
+            roles: serverRoles,
+            bits: moderationBits,
             timedOutUserIds,
             onModerated: () => setTimeoutsEpoch((n) => n + 1),
+            onRolesChanged: () => {
+              if (!selectedServerId) {
+                return;
+              }
+              void fetchMembers(selectedServerId).then(({ members }) => {
+                setServerMembers(members);
+                setMemberRoles(
+                  new Map(members.map((member) => [member.id, member.role])),
+                );
+              });
+            },
           }
         : null,
-    [manageableServer, selection.kind, memberRoles, timedOutUserIds],
+    [
+      canStaff,
+      manageableServer,
+      selection.kind,
+      memberRoles,
+      timedOutUserIds,
+      moderationBits,
+      serverMembers,
+      serverRoles,
+      user?.id,
+      selectedServerId,
+    ],
   );
 
   /**
@@ -1152,12 +1200,12 @@ function MainAppContent({
    * menu it offers next matches what it just did.
    */
   useEffect(() => {
-    if (!manageableServer) {
+    if (!selectedServerId || !moderationBits.timeout) {
       setTimedOutUserIds(new Set());
       return;
     }
     let cancelled = false;
-    void listTimeouts(manageableServer.id)
+    void listTimeouts(selectedServerId)
       .then(({ timeouts }) => {
         if (!cancelled) {
           setTimedOutUserIds(new Set(timeouts.map((one) => one.userId)));
@@ -1171,7 +1219,7 @@ function MainAppContent({
     return () => {
       cancelled = true;
     };
-  }, [manageableServer, timeoutsEpoch]);
+  }, [selectedServerId, timeoutsEpoch, moderationBits.timeout]);
 
   /**
    * Open a channel by id, whatever kind it is.
@@ -3063,11 +3111,11 @@ function MainAppContent({
       ? channels.find((c) => c.id === selectedChannelId)
       : undefined;
   const selectedServer = servers.find((s) => s.id === selectedServerId);
-  const canManage =
-    selectedServer?.role === "owner" ||
-    selectedServer?.role === "admin" ||
-    perms.can(Permission.MANAGE_CHANNELS);
+  const canManageChannels = perms.can(Permission.MANAGE_CHANNELS);
   const canManageRoles = perms.can(Permission.MANAGE_ROLES);
+  const canManageServer = perms.can(Permission.MANAGE_SERVER);
+  const canManageMessages = perms.can(Permission.MANAGE_MESSAGES);
+  const canManageNicknames = perms.can(Permission.MANAGE_NICKNAMES);
 
   const voiceChannel =
     voiceState.voiceChannelId
@@ -3315,7 +3363,7 @@ function MainAppContent({
           >
             {t("chrome.pins")}
           </button>
-          {canManage && (
+          {canManageChannels && (
             <button
               type="button"
               className="rounded-md px-2 py-1 text-xs text-signal hover:bg-ink-3"
@@ -3324,7 +3372,7 @@ function MainAppContent({
               {t("chrome.topic")}
             </button>
           )}
-          {(canManageRoles || (canManage && selectedChannel.isPrivate)) &&
+          {(canManageRoles || (canManageChannels && selectedChannel.isPrivate)) &&
             selectedChannel.kind === "server" && (
             <button
               type="button"
@@ -3416,7 +3464,7 @@ function MainAppContent({
         isLoadingOlder={chat.isLoadingOlder()}
         isLoadingNewer={chat.isLoadingNewer()}
         typingUsers={chat.getTypingUsers()}
-        canModerate={!!canManage}
+        canModerate={canManageMessages}
         blockedAuthorIds={blockedUserIds}
         highlightMessageId={highlightMessageId}
         onHighlightHandled={clearHighlight}
@@ -3477,7 +3525,7 @@ function MainAppContent({
           controller={threadChat}
           currentUser={user}
           serverId={selectedServerId}
-          canModerate={!!canManage}
+          canModerate={canManageMessages}
           blockedAuthorIds={blockedUserIds}
           mentionCandidates={mentionCandidates}
           isLoading={threadLoading}
@@ -3775,7 +3823,7 @@ function MainAppContent({
           server={selectedServer ?? null}
           channels={channels}
           selectedChannelId={selectedChannelId}
-          canManage={!!canManage}
+          canManage={canManageChannels}
           canManageRoles={canManageRoles}
           isLoading={channelsLoading}
           voiceOccupancy={voiceState.occupancy}
@@ -4093,6 +4141,8 @@ function MainAppContent({
           }
           currentUserId={user?.id ?? null}
           role={selectedServer?.role ?? "member"}
+          canManageNicknames={canManageNicknames}
+          showManageRoster={canStaff}
           blockedUserIds={blockedUserIds}
           refreshNudge={memberRosterNudge}
           profileUpdate={lastProfileUpdate}
@@ -4148,7 +4198,18 @@ function MainAppContent({
         open={serverSettingsOpen}
         server={selectedServer ?? null}
         currentUserId={user?.id ?? null}
-        onClose={() => setServerSettingsOpen(false)}
+        canManageRoles={canManageRoles}
+        canManageServer={canManageServer}
+        canModerateQueue={
+          moderationBits.kick ||
+          moderationBits.ban ||
+          moderationBits.timeout
+        }
+        requestedSection={serverSettingsSection}
+        onClose={() => {
+          setServerSettingsOpen(false);
+          setServerSettingsSection(undefined);
+        }}
         onRenamed={(server) =>
           setServers((prev) =>
             prev.map((s) => (s.id === server.id ? { ...s, ...server } : s)),
@@ -4159,6 +4220,7 @@ function MainAppContent({
         }}
         onDeleted={(serverId) => {
           setServerSettingsOpen(false);
+          setServerSettingsSection(undefined);
           void dropServer(serverId);
         }}
       />
@@ -4220,11 +4282,9 @@ function MainAppContent({
         mode={inviteMode ?? "join"}
         serverId={selectedServerId}
         serverName={selectedServer?.name ?? null}
-        canManage={!!canManage}
+        canManage={canManageServer}
         canCreateInvite={
-          perms.can(Permission.CREATE_INVITE) ||
-          selectedServer?.role === "owner" ||
-          selectedServer?.role === "admin"
+          perms.can(Permission.CREATE_INVITE)
         }
         initialCode={inviteCodeFromUrl}
         initialError={inviteErrorFromUrl}
@@ -4252,6 +4312,8 @@ function MainAppContent({
         serverId={selectedServerId}
         serverName={selectedServer?.name ?? null}
         role={selectedServer?.role ?? "member"}
+        bits={moderationBits}
+        roles={serverRoles}
         currentUserId={user?.id ?? null}
         blockedUserIds={blockedUserIds}
         onClose={() => setMembersOpen(false)}
@@ -4310,7 +4372,7 @@ function MainAppContent({
         serverId={selectedServerId}
         roles={serverRoles}
         canManageRoles={canManageRoles}
-        canManageAccess={!!canManage}
+        canManageAccess={canManageChannels}
         onClose={() => setChannelMembersChannel(null)}
       />
 
@@ -4328,7 +4390,7 @@ function MainAppContent({
         // Mirrors MessageList's own gate: a server channel needs manage
         // permission, a conversation has no moderators so any participant may
         // unpin — the same split `requirePinAccess` enforces server-side.
-        canUnpin={selectedServerId ? !!canManage : true}
+        canUnpin={selectedServerId ? canManageMessages : true}
         onClose={() => setPinsOpen(false)}
         onJumpToMessage={(messageId) => void jumpToMessage(messageId)}
       />
@@ -4363,6 +4425,14 @@ function MainAppContent({
         onConfirm={(name, isPrivate) =>
           handleChannelPromptConfirm(name, isPrivate)
         }
+      />
+
+      <CargosHint
+        enabled={Boolean(canManageRoles && selectedServerId)}
+        onOpenRoles={() => {
+          setServerSettingsSection("roles");
+          setServerSettingsOpen(true);
+        }}
       />
 
       {ratableCall && (

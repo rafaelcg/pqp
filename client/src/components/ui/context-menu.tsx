@@ -48,6 +48,7 @@ interface ContextMenuProps {
   moreReactionsLabel?: string;
   children: ReactNode;
   disabled?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }
 
 /** Keeps the menu clear of the very edge of the window on every side. */
@@ -61,6 +62,7 @@ export function ContextMenu({
   moreReactionsLabel,
   children,
   disabled = false,
+  onOpenChange,
 }: ContextMenuProps) {
   // Radix anchors the menu to a zero-size rect at the pointer, which is right —
   // but it hardcodes `side="right" align="start"`, so floating-ui handles
@@ -93,10 +95,15 @@ export function ContextMenu({
     }
     const height = node.offsetHeight;
     const pointerY = pointerYRef.current;
-    const fitsBelow =
-      pointerY + height + COLLISION_PADDING <= window.innerHeight;
-    const fitsAbove = pointerY - height - COLLISION_PADDING >= 0;
-    setAlignOffset(!fitsBelow && fitsAbove ? -height : 0);
+    const spaceBelow = window.innerHeight - pointerY - COLLISION_PADDING;
+    const spaceAbove = pointerY - COLLISION_PADDING;
+    const fitsBelow = height <= spaceBelow;
+    const fitsAbove = height <= spaceAbove;
+    // Flip when it cannot sit below, or when both sides fit and there is
+    // more room above. That keeps a last-row menu on the click instead of
+    // hanging into empty space below a short sheet.
+    const openAbove = fitsAbove && (!fitsBelow || spaceAbove > spaceBelow);
+    setAlignOffset(openAbove ? -height : 0);
   }, []);
 
   const strip = reactions ?? [];
@@ -107,7 +114,7 @@ export function ContextMenu({
   }
 
   return (
-    <ContextMenuPrimitive.Root>
+    <ContextMenuPrimitive.Root onOpenChange={onOpenChange}>
       {/* Radix composes these with its own handlers, so the coordinates
           recorded here are exactly the ones it anchors to — for a right-click
           and for the touch long-press alike. */}

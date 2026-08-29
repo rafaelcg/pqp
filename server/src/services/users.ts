@@ -870,9 +870,19 @@ export async function listServerMembers(serverId: string) {
     `SELECT u.id, u.display_name, u.username, u.discriminator, u.avatar_url, sm.role,
             sm.nickname,
             COALESCE(
-              (SELECT array_agg(mr.role_id)
-                 FROM member_roles mr
-                WHERE mr.server_id = sm.server_id AND mr.user_id = sm.user_id),
+              (
+                SELECT array_agg(rid)
+                  FROM (
+                    SELECT mr.role_id AS rid
+                      FROM member_roles mr
+                     WHERE mr.server_id = sm.server_id AND mr.user_id = sm.user_id
+                    UNION ALL
+                    SELECT r.id
+                      FROM roles r
+                      JOIN servers s ON s.id = r.server_id AND s.owner_id = sm.user_id
+                     WHERE r.server_id = sm.server_id AND r.system_key = 'owner'
+                  ) held
+              ),
               ARRAY[]::uuid[]
             ) AS role_ids
      FROM server_members sm
@@ -901,6 +911,24 @@ export async function updateMemberRole(
   targetUserId: string,
   role: "admin" | "member",
 ): Promise<void> {
+  if (role === "admin") {
+    await getPool().query(
+      `INSERT INTO member_roles (server_id, user_id, role_id)
+       SELECT $1, $2, r.id FROM roles r
+        WHERE r.server_id = $1 AND r.system_key = 'admin'
+       ON CONFLICT DO NOTHING`,
+      [serverId, targetUserId],
+    );
+  } else {
+    await getPool().query(
+      `DELETE FROM member_roles mr
+        USING roles r
+        WHERE mr.role_id = r.id
+          AND mr.server_id = $1 AND mr.user_id = $2
+          AND r.system_key IN ('admin', 'manager', 'moderator')`,
+      [serverId, targetUserId],
+    );
+  }
   await getPool().query(
     `UPDATE server_members SET role = $3
      WHERE server_id = $1 AND user_id = $2 AND role <> 'owner'`,

@@ -16,6 +16,7 @@ import {
   type MemberRole,
 } from "./member-groups";
 
+const OWNER: HoistedRole = { id: "owner-role", name: "Owner" };
 const ADMIN: HoistedRole = { id: "admin-role", name: "Admin" };
 const HELPERS: HoistedRole = { id: "helpers", name: "Helpers" };
 
@@ -52,6 +53,18 @@ describe("effectiveRoleIds", () => {
       effectiveRoleIds({ role: "member", roleIds: ["helpers"] }, "admin-role"),
     ).toEqual(["helpers"]);
   });
+
+  it("adds the Owner cargo for the owner", () => {
+    expect(
+      effectiveRoleIds({ role: "owner", roleIds: [] }, "admin-role", "owner-role"),
+    ).toEqual(["owner-role"]);
+  });
+
+  it("does not invent Admin for a Manager", () => {
+    expect(
+      effectiveRoleIds({ role: "admin", roleIds: ["manager-role"] }, "admin-role"),
+    ).toEqual(["manager-role"]);
+  });
 });
 
 describe("groupMembers", () => {
@@ -60,16 +73,16 @@ describe("groupMembers", () => {
       [
         person("1", "Zed", "member", "online"),
         person("2", "Ana", "admin", "online", ["admin-role"]),
-        person("3", "Rafa", "owner", "online"),
+        person("3", "Rafa", "owner", "online", ["owner-role"]),
       ],
-      [ADMIN],
+      [OWNER, ADMIN],
     );
     expect(sections.map((s) => s.id)).toEqual([
-      "role:owner",
+      "role:owner-role",
       "role:admin-role",
       "online",
     ]);
-    expect(sections[0]!.role).toBe("owner");
+    expect(sections[0]!.label).toBe("Owner");
     expect(sections[1]!.label).toBe("Admin");
     expect(sections[2]!.members.map((m) => m.displayName)).toEqual(["Zed"]);
   });
@@ -149,10 +162,10 @@ describe("groupMembers", () => {
 
   it("keeps owner above any hoisted role they also hold", () => {
     const sections = groupMembers(
-      [person("1", "Boss", "owner", "online", ["admin-role"])],
-      [ADMIN],
+      [person("1", "Boss", "owner", "online", ["owner-role", "admin-role"])],
+      [OWNER, ADMIN],
     );
-    expect(sections.map((s) => s.id)).toEqual(["role:owner"]);
+    expect(sections.map((s) => s.id)).toEqual(["role:owner-role"]);
   });
 
   it("does not hoist @everyone when nobody holds that id", () => {

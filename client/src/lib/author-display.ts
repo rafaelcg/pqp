@@ -16,20 +16,43 @@ export function identityMarks(input: {
   rank?: "owner" | "admin" | "member" | null;
   isCharacter?: boolean;
   isWebhook?: boolean;
+  /** Crown from the Owner cargo when `show_badge` is on. */
+  ownerBadge?: boolean;
+  /** Shield from the Admin cargo, not from compatibility rank (Managers share that rank). */
+  adminBadge?: boolean;
 }): IdentityMark[] {
   if (input.isWebhook) {
     return [];
   }
   const marks: IdentityMark[] = [];
-  if (input.rank === "owner") {
+  const owner = input.ownerBadge ?? input.rank === "owner";
+  const admin = input.adminBadge ?? (!owner && input.rank === "admin");
+  if (owner) {
     marks.push("owner");
-  } else if (input.rank === "admin") {
+  } else if (admin) {
     marks.push("admin");
   }
   if (input.isCharacter) {
     marks.push("bot");
   }
   return marks;
+}
+
+export function rankBadges(
+  roleIds: readonly string[] | undefined,
+  roles: readonly {
+    id: string;
+    systemKey?: string | null;
+    showBadge?: boolean;
+  }[],
+): { ownerBadge: boolean; adminBadge: boolean } {
+  const held = new Set(roleIds ?? []);
+  const owner = roles.find((role) => role.systemKey === "owner");
+  const admin = roles.find((role) => role.systemKey === "admin");
+  return {
+    ownerBadge: !!owner && held.has(owner.id) && owner.showBadge !== false,
+    adminBadge: !!admin && held.has(admin.id),
+  };
 }
 
 export function highestRoleColor(

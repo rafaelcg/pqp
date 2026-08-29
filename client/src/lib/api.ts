@@ -1004,7 +1004,8 @@ export interface ServerRole {
   permissions: string;
   position: number;
   isEveryone: boolean;
-  systemKey: "everyone" | "admin" | null;
+  systemKey: "everyone" | "owner" | "admin" | "manager" | "moderator" | null;
+  showBadge: boolean;
 }
 
 export const fetchRoles = (serverId: string) =>
@@ -1022,6 +1023,7 @@ export const updateRole = (
     color?: string | null;
     mentionable?: boolean;
     hoist?: boolean;
+    showBadge?: boolean;
     permissions?: string;
   },
 ) => patch<{ role: ServerRole }>(`/api/roles/${roleId}`, body);

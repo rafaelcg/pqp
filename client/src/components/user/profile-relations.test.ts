@@ -398,47 +398,15 @@ describe("moderationNeedsConfirmation", () => {
  * `roleChangeFor`). This covers who may be offered it and who may not.
  */
 describe("roleChangeFor", () => {
-  const OTHER = "22222222-2222-4222-8222-222222222222";
-
-  function context(
-    overrides: Partial<ProfileModerationContext> = {},
-  ): ProfileModerationContext {
-    return {
-      serverId: "33333333-3333-4333-8333-333333333333",
-      actorRole: "owner",
-      memberRoles: new Map([
-        [ME, "owner"],
-        [THEM, "member"],
-        [OTHER, "admin"],
-      ]),
-      timedOutUserIds: new Set<string>(),
-      onModerated: () => {},
-      ...overrides,
-    };
-  }
-
-  it("offers promote for a member and demote for an admin, to the owner", () => {
-    expect(roleChangeFor(THEM, ME, context())).toBe("promote");
-    expect(roleChangeFor(OTHER, ME, context())).toBe("demote");
-  });
-
-  it("is owner-only: an admin is offered nothing, whatever the target", () => {
-    expect(roleChangeFor(THEM, OTHER, context({ actorRole: "admin" }))).toBeNull();
+  it("never offers promote or demote; cargos are ticked instead", () => {
     expect(
-      roleChangeFor(THEM, OTHER, context({ actorRole: "member" })),
-    ).toBeNull();
-  });
-
-  it("offers nothing against the owner or yourself", () => {
-    // ME is the owner in this map, so both cases ride the same fixture.
-    expect(roleChangeFor(ME, OTHER, context())).toBeNull();
-    expect(roleChangeFor(THEM, THEM, context())).toBeNull();
-  });
-
-  it("offers nothing without a server, or before the rank is known", () => {
-    expect(roleChangeFor(THEM, ME, null)).toBeNull();
-    expect(
-      roleChangeFor(THEM, ME, context({ memberRoles: new Map() })),
+      roleChangeFor("a", "b", {
+        serverId: "s",
+        actorRole: "owner",
+        memberRoles: new Map([["a", "member"]]),
+        timedOutUserIds: new Set(),
+        onModerated: () => {},
+      }),
     ).toBeNull();
   });
 });
@@ -477,17 +445,17 @@ describe("cardRoleChips", () => {
     systemKey: null,
   };
 
-  it("drops seeded Admin and @everyone, keeps custom cargos", () => {
+  it("drops @everyone and Owner, keeps Admin and custom cargos", () => {
     expect(
       cardRoleChips(
         [everyone, admin, vip, mods],
         ["everyone", "admin", "vip", "mods"],
       ).map((role) => role.id),
-    ).toEqual(["mods", "vip"]);
+    ).toEqual(["admin", "mods", "vip"]);
   });
 
-  it("is empty when the person only holds rank", () => {
-    expect(cardRoleChips([everyone, admin], ["admin"])).toEqual([]);
+  it("is empty when the person only holds @everyone", () => {
+    expect(cardRoleChips([everyone, admin], ["everyone"])).toEqual([]);
   });
 });
 

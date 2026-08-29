@@ -5,7 +5,7 @@ import {
   MoreHorizontal,
   Search,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   TIMEOUT_PRESET_MINUTES,
   TIMEOUT_REASON_MAX_LENGTH,
@@ -25,10 +25,11 @@ import { StatusDot } from "@/components/user/status-dot";
 import { RankMarks } from "@/components/user/rank-marks";
 import { useProfilePopover } from "@/components/user/user-profile-popover";
 import type { ProfileSubject } from "@/components/user/profile-relations";
-import { identityMarks } from "@/lib/author-display";
+import { highestRoleColor, identityMarks, rankBadges } from "@/lib/author-display";
 import { translateMessage, useTranslation } from "@/lib/i18n";
 import {
   ApiError,
+  assignMemberRole,
   banMember,
   disconnectMemberVoice,
   fetchMembers,
@@ -41,12 +42,25 @@ import {
   moveMemberVoice,
   setMemberVoiceMuted,
   timeoutMember,
+  unassignMemberRole,
   unbanMember,
   updateMemberNickname,
-  updateMemberRole,
   type ServerBan,
   type ServerMember,
+  type ServerRole,
 } from "@/lib/api";
+import { assignableRoleIds, canActOnMemberClient } from "@/lib/role-hierarchy";
+import { displayRoleName } from "@/lib/role-labels";
+import {
+  MEMBER_PAGE_SIZE,
+  NO_COLLAPSE,
+  effectiveRoleIds,
+  groupMembers,
+  sectionCollapsed,
+  toggleSectionCollapse,
+  type SectionCollapseState,
+} from "@/lib/member-groups";
+import type { ProfileModerationBits } from "@/components/user/profile-relations";
 import { cn, formatFullTimestamp } from "@/lib/utils";
 
 type MemberRole = "owner" | "admin" | "member";
@@ -119,45 +133,25 @@ function menuFromActions(
 }
 
 /**
- * Clickable ⋯ for the actions that used to be a row of unlabeled icons.
- * Right-click still opens the same set via ContextMenu; this is the affordance
- * a trackpad user can actually find. The well is a square so it can sit on
- * the same centerline as the name, instead of hanging off a stretched cell.
+ * Clickable ⋯ for the same set right-click already opens. It does not own a
+ * popup: it fires a synthetic `contextmenu` so the portaled Radix menu
+ * (which flips above the last row) is the only renderer.
  */
 function RowMenu({
   items,
   label,
+  open,
 }: {
   items: ContextMenuItemDef[];
   label: string;
+  open: boolean;
 }) {
-  const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-    function onPointer(event: PointerEvent) {
-      if (
-        event.target instanceof Node &&
-        rootRef.current?.contains(event.target)
-      ) {
-        return;
-      }
-      setOpen(false);
-    }
-    document.addEventListener("pointerdown", onPointer);
-    return () => document.removeEventListener("pointerdown", onPointer);
-  }, [open]);
-
   if (items.length === 0) {
     return null;
   }
 
   return (
     <div
-      ref={rootRef}
       className="relative mr-2 flex shrink-0 items-center"
       onClick={(event) => event.stopPropagation()}
       onPointerDown={(event) => event.stopPropagation()}
@@ -170,49 +164,20 @@ function RowMenu({
           className="flex h-8 w-8 items-center justify-center rounded-full text-paper-muted hover:bg-ink-3 hover:text-paper focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
           onClick={(event) => {
             event.stopPropagation();
-            setOpen((was) => !was);
+            const rect = event.currentTarget.getBoundingClientRect();
+            event.currentTarget.dispatchEvent(
+              new MouseEvent("contextmenu", {
+                bubbles: true,
+                cancelable: true,
+                clientX: rect.right,
+                clientY: rect.bottom,
+              }),
+            );
           }}
         >
           <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
         </button>
       </Tooltip>
-      {open && (
-        <div
-          role="menu"
-          aria-label={label}
-          className="absolute right-0 top-full z-20 mt-1 w-52 rounded-lg border border-ink-4 bg-ink-2 p-1 shadow-[var(--shadow-popover)]"
-          onClick={(event) => event.stopPropagation()}
-          onPointerDown={(event) => event.stopPropagation()}
-        >
-          {items.map((item) =>
-            item.separator ? (
-              <div
-                key={item.id}
-                role="separator"
-                className="my-1 h-px bg-ink-4"
-              />
-            ) : (
-              <button
-                key={item.id}
-                type="button"
-                role="menuitem"
-                disabled={item.disabled}
-                className={cn(
-                  "flex w-full items-center rounded-md px-2.5 py-1.5 text-left text-sm outline-none hover:bg-ink-3 focus-visible:bg-ink-3 disabled:opacity-50",
-                  item.danger ? "text-danger" : "text-paper",
-                )}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  setOpen(false);
-                  item.onSelect?.();
-                }}
-              >
-                {item.label}
-              </button>
-            ),
-          )}
-        </div>
-      )}
     </div>
   );
 }
@@ -235,20 +200,40 @@ function MemberRow({
   timeoutLine,
   voice,
   actionsLabel,
+  roles,
+  dim,
+  nameColor,
   onOpen,
+  onMenuOpenChange,
 }: {
   member: ServerMember;
   items: ContextMenuItemDef[];
   timeoutLine: string | null;
   voice: MemberVoicePresence | undefined;
   actionsLabel: string;
+  roles: readonly ServerRole[];
+  dim?: boolean;
+  nameColor?: string | null;
   onOpen: (anchor: HTMLElement) => void;
+  onMenuOpenChange?: (open: boolean) => void;
 }) {
   const { t } = useTranslation();
   const shown = memberDisplayName(member);
+  const [menuOpen, setMenuOpen] = useState(false);
   return (
-    <ContextMenu items={items}>
-      <div className="flex items-center hover:bg-ink-3">
+    <ContextMenu
+      items={items}
+      onOpenChange={(next) => {
+        setMenuOpen(next);
+        onMenuOpenChange?.(next);
+      }}
+    >
+      <div
+        className={cn(
+          "flex items-center hover:bg-ink-3",
+          dim && "opacity-60 hover:opacity-100",
+        )}
+      >
         <button
           type="button"
           title={t("profile.open", { name: shown })}
@@ -272,12 +257,19 @@ function MemberRow({
           </span>
           <span className="min-w-0 flex-1">
             <span className="flex min-w-0 items-center gap-1.5">
-              <span className="truncate text-sm font-medium text-paper">
+              <span
+                className={cn(
+                  "truncate text-sm font-medium",
+                  !nameColor && "text-paper",
+                )}
+                style={nameColor ? { color: nameColor } : undefined}
+              >
                 {shown}
               </span>
               <RankMarks
                 marks={identityMarks({
                   rank: member.role,
+                  ...rankBadges(member.roleIds, roles),
                 })}
               />
             </span>
@@ -311,7 +303,7 @@ function MemberRow({
             )}
           </span>
         </button>
-        <RowMenu items={items} label={actionsLabel} />
+        <RowMenu items={items} label={actionsLabel} open={menuOpen} />
       </div>
     </ContextMenu>
   );
@@ -368,6 +360,8 @@ interface MembersPanelProps {
   serverId: string | null;
   serverName: string | null;
   role: MemberRole;
+  bits?: ProfileModerationBits;
+  roles?: readonly ServerRole[];
   currentUserId: string | null;
   /** Who this account has blocked, so a row offers the action it does not have. */
   blockedUserIds: ReadonlySet<string>;
@@ -420,6 +414,8 @@ export function MembersPanel({
   serverId,
   serverName,
   role,
+  bits,
+  roles = [],
   currentUserId,
   blockedUserIds,
   onClose,
@@ -434,7 +430,7 @@ export function MembersPanel({
   const { t } = useTranslation();
   const openProfile = useProfilePopover();
   const [members, setMembers] = useState<ServerMember[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [pending, setPending] = useState<PendingRemoval | null>(null);
@@ -453,8 +449,17 @@ export function MembersPanel({
   const [voiceHint, setVoiceHint] = useState<string | null>(null);
   /** The directory filter. Matches name, username and tag. */
   const [query, setQuery] = useState("");
+  const [collapsed, setCollapsed] =
+    useState<SectionCollapseState>(NO_COLLAPSE);
+  const [shown, setShown] = useState<Record<string, number>>({});
+  const [menuOpen, setMenuOpen] = useState(false);
 
-  const canManage = role === "owner" || role === "admin";
+  const canKick = bits ? bits.kick : role === "owner" || role === "admin";
+  const canBan = bits ? bits.ban : role === "owner" || role === "admin";
+  const canTimeout = bits ? bits.timeout : role === "owner" || role === "admin";
+  const canMute = bits ? bits.mute : role === "owner" || role === "admin";
+  const canNick = bits ? bits.nicknames : role === "owner" || role === "admin";
+  const canRoles = bits ? bits.manageRoles : role === "owner" || role === "admin";
   const timeoutByUser = new Map(timeouts.map((one) => [one.userId, one]));
 
   // userId → where they are in *this server's* voice, from the live rosters.
@@ -477,8 +482,43 @@ export function MembersPanel({
   // Same identifiers the row paints, plus the account display name so a
   // nickname cannot hide someone from a query typed from the name the rest
   // of the app uses. Username and tag stay in the haystack for @mentions.
-  const visibleMembers = members.filter((member) =>
-    memberMatchesQuery(member, query),
+  const adminRoleId = useMemo(
+    () => roles.find((role) => role.systemKey === "admin")?.id ?? null,
+    [roles],
+  );
+  const ownerRoleId = useMemo(
+    () => roles.find((role) => role.systemKey === "owner")?.id ?? null,
+    [roles],
+  );
+  const hoistedRoles = useMemo(
+    () =>
+      [...roles]
+        .filter((role) => role.hoist && !role.isEveryone)
+        .sort((a, b) => b.position - a.position)
+        .map((role) => ({
+          id: role.systemKey === "owner" ? "owner" : role.id,
+          name: displayRoleName(role, t, roles),
+        })),
+    [roles, t],
+  );
+  const rows = useMemo(
+    () =>
+      members.map((member) => {
+        const ids = effectiveRoleIds(member, adminRoleId, ownerRoleId);
+        if (member.role === "owner" && !ids.includes("owner")) {
+          ids.push("owner");
+        }
+        return { ...member, roleIds: ids };
+      }),
+    [members, adminRoleId, ownerRoleId],
+  );
+  const sections = useMemo(
+    () =>
+      groupMembers(
+        rows.filter((member) => memberMatchesQuery(member, query)),
+        hoistedRoles,
+      ),
+    [rows, query, hoistedRoles],
   );
 
   useEffect(() => {
@@ -491,12 +531,16 @@ export function MembersPanel({
     setPendingMove(null);
     setVoiceHint(null);
     setQuery("");
+    setCollapsed(NO_COLLAPSE);
+    setShown({});
+    setMenuOpen(false);
     setBansOpen(false);
     setBans([]);
     setBansError(null);
     setTimeouts([]);
     setTimeoutsError(null);
     setError(null);
+    setMembers([]);
     setLoading(true);
     void fetchMembers(serverId)
       .then((res) => {
@@ -519,7 +563,7 @@ export function MembersPanel({
     // row has to be able to say so. A failure here is not fatal to the panel —
     // the roster still renders, minus the badges — so it gets its own error
     // line rather than replacing the members error.
-    if (canManage) {
+    if (canTimeout) {
       void listTimeouts(serverId)
         .then((res) => {
           if (!cancelled) {
@@ -535,7 +579,7 @@ export function MembersPanel({
     return () => {
       cancelled = true;
     };
-  }, [open, serverId, canManage]);
+  }, [open, serverId, canTimeout]);
 
   /**
    * Keep statuses fresh without re-rendering the whole roster.
@@ -552,7 +596,14 @@ export function MembersPanel({
    * behind a "Ban member?" question is pure noise.
    */
   useEffect(() => {
-    if (!open || !serverId || pending || pendingTimeout || pendingMove) {
+    if (
+      !open ||
+      !serverId ||
+      pending ||
+      pendingTimeout ||
+      pendingMove ||
+      menuOpen
+    ) {
       return;
     }
     let cancelled = false;
@@ -580,10 +631,10 @@ export function MembersPanel({
       cancelled = true;
       clearInterval(timer);
     };
-  }, [open, serverId, pending, pendingTimeout, pendingMove]);
+  }, [open, serverId, pending, pendingTimeout, pendingMove, menuOpen]);
 
   const reloadTimeouts = useCallback(async () => {
-    if (!serverId || !canManage) {
+    if (!serverId || !canTimeout) {
       return;
     }
     try {
@@ -592,7 +643,7 @@ export function MembersPanel({
     } catch (err) {
       setTimeoutsError(messageOf(err, t("timeout.loadFailed")));
     }
-  }, [serverId, canManage]);
+  }, [serverId, canTimeout]);
 
   const loadBans = useCallback(async () => {
     if (!serverId) {
@@ -611,11 +662,11 @@ export function MembersPanel({
   }, [serverId]);
 
   useEffect(() => {
-    if (!open || !canManage || !bansOpen) {
+    if (!open || !canBan || !bansOpen) {
       return;
     }
     void loadBans();
-  }, [open, canManage, bansOpen, loadBans]);
+  }, [open, canBan, bansOpen, loadBans]);
 
   if (!open) {
     return null;
@@ -623,11 +674,26 @@ export function MembersPanel({
 
   // Kick/ban: the owner can act on members and admins; an admin can act only on
   // plain members. Never on the owner or yourself.
-  function canModerate(member: ServerMember): boolean {
-    if (!canManage || member.role === "owner" || member.id === currentUserId) {
+  function canActOn(member: ServerMember): boolean {
+    if (member.role === "owner" || member.id === currentUserId) {
       return false;
     }
-    return role === "owner" || member.role === "member";
+    const actor = members.find((row) => row.id === currentUserId);
+    if (!actor) {
+      return role === "owner" || (role === "admin" && member.role === "member");
+    }
+    return canActOnMemberClient(
+      actor,
+      member,
+      roles.map((entry) => ({
+        id: entry.id,
+        position: entry.position,
+        permissions: entry.permissions,
+        systemKey: entry.systemKey,
+      })),
+      currentUserId,
+      member.id,
+    );
   }
 
   async function changeNickname(member: ServerMember) {
@@ -659,17 +725,24 @@ export function MembersPanel({
     }
   }
 
-  async function setRole(userId: string, next: "admin" | "member") {
+  async function toggleCargo(
+    member: ServerMember,
+    roleId: string,
+    next: boolean,
+  ) {
     if (!serverId) {
       return;
     }
-    setBusyId(userId);
+    setBusyId(member.id);
     setError(null);
     try {
-      await updateMemberRole(serverId, userId, next);
-      setMembers((prev) =>
-        prev.map((m) => (m.id === userId ? { ...m, role: next } : m)),
-      );
+      if (next) {
+        await assignMemberRole(serverId, member.id, roleId);
+      } else {
+        await unassignMemberRole(serverId, member.id, roleId);
+      }
+      const { members: nextMembers } = await fetchMembers(serverId);
+      setMembers(nextMembers);
     } catch (err) {
       setError(messageOf(err, t("member.roleFailed")));
     } finally {
@@ -824,7 +897,7 @@ export function MembersPanel({
     }
     if (
       serverId &&
-      (member.id === currentUserId || canManage)
+      (member.id === currentUserId || canNick)
     ) {
       actions.push({
         id: "nickname",
@@ -832,20 +905,31 @@ export function MembersPanel({
         onSelect: () => void changeNickname(member),
       });
     }
-    if (role === "owner" && member.role !== "owner" && member.id !== currentUserId) {
-      actions.push(
-        member.role === "member"
-          ? {
-              id: "promote",
-              label: t("member.promote"),
-              onSelect: () => void setRole(member.id, "admin"),
-            }
-          : {
-              id: "demote",
-              label: t("member.demote"),
-              onSelect: () => void setRole(member.id, "member"),
-            },
-      );
+    if (serverId && canRoles && canActOn(member)) {
+      const actor = members.find((row) => row.id === currentUserId);
+      if (actor) {
+        const held = new Set(member.roleIds ?? []);
+        const hierarchy = roles.map((entry) => ({
+          id: entry.id,
+          position: entry.position,
+          permissions: entry.permissions,
+          systemKey: entry.systemKey,
+          isEveryone: entry.isEveryone,
+        }));
+        for (const roleId of assignableRoleIds(actor, hierarchy)) {
+          const cargo = roles.find((entry) => entry.id === roleId);
+          if (!cargo) {
+            continue;
+          }
+          const on = held.has(roleId);
+          const label = displayRoleName(cargo, t, roles);
+          actions.push({
+            id: `cargo-${roleId}`,
+            label: on ? `✓ ${label}` : label,
+            onSelect: () => void toggleCargo(member, roleId, !on),
+          });
+        }
+      }
     }
     // Offered for anybody but yourself, whatever their role. Blocking is not
     // moderation: it is the thing a member does *instead* of asking a moderator
@@ -879,40 +963,33 @@ export function MembersPanel({
         danger: true,
       });
     }
-    if (canModerate(member)) {
-      // Listed before kick and ban, and not marked `danger`, because the order
-      // and the colour of this menu are the enforcement ladder as a moderator
-      // experiences it. A timeout is the reversible one; putting it in the red
-      // block next to "Ban from community" would teach the opposite.
+    if (canActOn(member)) {
       const active = timeoutByUser.get(member.id);
-      actions.push(
-        active
-          ? {
-              id: "untimeout",
-              label: t("timeout.end", {
-                remaining: timeRemaining(active.expiresAt),
-              }),
-              onSelect: () => void endTimeout(member.id),
-            }
-          : {
-              id: "timeout",
-              label: t("timeout.action"),
-              onSelect: () =>
-                setPendingTimeout({
-                  member,
-                  minutes: TIMEOUT_PRESET_MINUTES[1]!,
-                  reason: "",
+      if (canTimeout) {
+        actions.push(
+          active
+            ? {
+                id: "untimeout",
+                label: t("timeout.end", {
+                  remaining: timeRemaining(active.expiresAt),
                 }),
-            },
-      );
-      // --- voice moderation ---
-      // Only offered while the roster shows them in this server's voice: these
-      // act on a live call, and a button that 404s ("not in voice") teaches a
-      // moderator not to trust the panel. Ordered with timeout, above the red
-      // block — disconnect ends a session, not a membership.
+                onSelect: () => void endTimeout(member.id),
+              }
+            : {
+                id: "timeout",
+                label: t("timeout.action"),
+                onSelect: () =>
+                  setPendingTimeout({
+                    member,
+                    minutes: TIMEOUT_PRESET_MINUTES[1]!,
+                    reason: "",
+                  }),
+              },
+        );
+      }
       const voice = voiceByUser.get(member.id);
-      if (voice) {
-        if (voiceChannels.length > 1) {
+      if (voice && (canTimeout || canMute)) {
+        if (canTimeout && voiceChannels.length > 1) {
           actions.push({
             id: "voice-move",
             label: t("member.moveVoice"),
@@ -920,43 +997,45 @@ export function MembersPanel({
               setPendingMove({ member, fromChannelId: voice.channelId }),
           });
         }
-        // SFU rooms get the real server-side mute; mesh rooms get the honest
-        // refusal — tappable, so a tap explains instead of acting. An older
-        // server that omits the transport is treated as SFU-capable and the
-        // API stays the judge.
-        const meshRoom = voice.transport === "mesh";
-        actions.push({
-          id: "voice-mute",
-          label: t("member.serverMute"),
-          onSelect: () => {
-            if (meshRoom) {
-              setVoiceHint(meshMuteUnavailable());
-              return;
-            }
-            void serverMuteVoice(member);
-          },
-        });
-        actions.push({
-          id: "voice-disconnect",
-          label: t("member.disconnectVoice", { channel: voice.channelName }),
-          onSelect: () => void disconnectVoice(member),
-          danger: true,
-        });
+        if (canMute) {
+          const meshRoom = voice.transport === "mesh";
+          actions.push({
+            id: "voice-mute",
+            label: t("member.serverMute"),
+            onSelect: () => {
+              if (meshRoom) {
+                setVoiceHint(meshMuteUnavailable());
+                return;
+              }
+              void serverMuteVoice(member);
+            },
+          });
+        }
+        if (canTimeout) {
+          actions.push({
+            id: "voice-disconnect",
+            label: t("member.disconnectVoice", { channel: voice.channelName }),
+            onSelect: () => void disconnectVoice(member),
+            danger: true,
+          });
+        }
       }
-      actions.push(
-        {
+      if (canKick) {
+        actions.push({
           id: "kick",
           label: t("member.remove"),
           onSelect: () => setPending({ member, ban: false }),
           danger: true,
-        },
-        {
+        });
+      }
+      if (canBan) {
+        actions.push({
           id: "ban",
           label: t("member.ban"),
           onSelect: () => setPending({ member, ban: true }),
           danger: true,
-        },
-      );
+        });
+      }
     }
     return actions;
   }
@@ -1185,9 +1264,26 @@ export function MembersPanel({
       size="lg"
       onClose={onClose}
     >
-      {/* Directory: inset grouped list. The name opens the card; ⋯ is the
-          same action set as a right-click, centred on the row. */}
-      <div className="min-h-full bg-ink p-4">
+      <div className="min-h-full bg-ink px-4 pb-4">
+        {!loading && members.length > 0 && (
+          <div className="sticky top-0 z-10 -mx-4 bg-ink px-4 pb-3 pt-4">
+            <div className="relative">
+              <Search
+                aria-hidden="true"
+                className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-paper-muted"
+              />
+              <input
+                type="search"
+                value={query}
+                aria-label={t("memberList.search")}
+                placeholder={t("memberList.search")}
+                className="h-9 w-full rounded-xl bg-ink-2 pl-9 pr-3 text-sm text-paper placeholder:text-paper-muted focus:outline-none focus:ring-2 focus:ring-signal/60"
+                onChange={(event) => setQuery(event.target.value)}
+              />
+            </div>
+          </div>
+        )}
+
         {error && (
           <p role="alert" className="mb-3 px-2 text-sm text-danger">
             {error}
@@ -1206,90 +1302,144 @@ export function MembersPanel({
           </p>
         )}
 
-        {!loading && members.length > 0 && (
-          <div className="relative mb-3">
-            <Search
-              aria-hidden="true"
-              className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-paper-muted"
-            />
-            <input
-              type="search"
-              value={query}
-              aria-label={t("memberList.search")}
-              placeholder={t("memberList.search")}
-              className="h-9 w-full rounded-xl bg-ink-2 pl-9 pr-3 text-sm text-paper placeholder:text-paper-muted focus:outline-none focus:ring-2 focus:ring-signal/60"
-              onChange={(event) => setQuery(event.target.value)}
-            />
-          </div>
-        )}
-
         {timeoutsError && (
           <p role="alert" className="mb-3 px-2 text-sm text-danger">
             {timeoutsError}
           </p>
         )}
 
-        {/* Voice-tool explanations ("that needs the SFU"). `status`, not
-            `alert`: a stated limit is information, not an emergency. */}
         {voiceHint && (
           <p role="status" className="mb-3 px-2 text-sm text-paper-muted">
             {voiceHint}
           </p>
         )}
 
-        {!loading && members.length > 0 && visibleMembers.length === 0 && (
+        {!loading && members.length > 0 && sections.length === 0 && (
           <p className="px-2 py-6 text-sm text-paper-muted">
             {t("memberList.noMatches", { query: query.trim() })}
           </p>
         )}
 
-        {visibleMembers.length > 0 && (
-          <div className="divide-y divide-ink-4/60 overflow-hidden rounded-2xl bg-ink-2">
-            {visibleMembers.map((member) => {
-              const shown = memberDisplayName(member);
-              const timeout = timeoutByUser.get(member.id);
-              const timeoutLine = timeout
-                ? t("timeout.until", {
-                    expires: formatMoment(timeout.expiresAt),
-                    remaining: timeRemaining(timeout.expiresAt),
-                    issuer: timeout.issuedByName ?? t("timeout.formerMod"),
-                    created: formatMoment(timeout.createdAt),
-                  }) + (timeout.reason ? ` · ${timeout.reason}` : "")
-                : null;
-              return (
-                <MemberRow
-                  key={member.id}
-                  member={member}
-                  items={menuFromActions(
-                    actionsFor(member),
-                    busyId === member.id,
-                  )}
-                  timeoutLine={timeoutLine}
-                  voice={voiceByUser.get(member.id)}
-                  actionsLabel={t("memberList.actions", { name: shown })}
-                  onOpen={(anchor) =>
-                    openProfile(subjectOf(member), anchor)
+        {sections.map((section) => {
+          const label =
+            section.kind === "role"
+              ? (section.label ?? t("memberList.admins"))
+              : section.kind === "offline"
+                ? t("memberList.offline")
+                : t("memberList.online");
+          const heading = t("memberList.sectionHeading", {
+            label,
+            count: section.members.length,
+          });
+          const searching = query.trim().length > 0;
+          const shut = searching
+            ? false
+            : sectionCollapsed(section, collapsed);
+          const limit = shown[section.id] ?? MEMBER_PAGE_SIZE;
+          const visible = shut ? [] : section.members.slice(0, limit);
+          const remaining = shut ? 0 : section.members.length - visible.length;
+          return (
+            <section
+              key={section.id}
+              data-panel-member-section={section.id}
+              className="mb-4"
+            >
+              <button
+                type="button"
+                aria-expanded={!shut}
+                className="flex w-full items-center gap-1 rounded px-1 py-1 text-left text-[11px] font-semibold uppercase tracking-wider text-paper-muted hover:text-paper"
+                onClick={() => {
+                  if (searching) {
+                    return;
                   }
-                />
-              );
-            })}
-          </div>
-        )}
+                  setCollapsed((prev) => toggleSectionCollapse(section, prev));
+                }}
+              >
+                {shut ? (
+                  <ChevronRight className="h-3 w-3 shrink-0" />
+                ) : (
+                  <ChevronDown className="h-3 w-3 shrink-0" />
+                )}
+                <span className="truncate">{heading}</span>
+              </button>
+              {visible.length > 0 && (
+                <div className="divide-y divide-ink-4/60 overflow-hidden rounded-2xl bg-ink-2">
+                  {visible.map((member) => {
+                    const shownName = memberDisplayName(member);
+                    const timeout = timeoutByUser.get(member.id);
+                    const timeoutLine = timeout
+                      ? t("timeout.until", {
+                          expires: formatMoment(timeout.expiresAt),
+                          remaining: timeRemaining(timeout.expiresAt),
+                          issuer:
+                            timeout.issuedByName ?? t("timeout.formerMod"),
+                          created: formatMoment(timeout.createdAt),
+                        }) + (timeout.reason ? ` · ${timeout.reason}` : "")
+                      : null;
+                    return (
+                      <MemberRow
+                        key={member.id}
+                        member={member}
+                        items={menuFromActions(
+                          actionsFor(member),
+                          busyId === member.id,
+                        )}
+                        timeoutLine={timeoutLine}
+                        voice={voiceByUser.get(member.id)}
+                        actionsLabel={t("memberList.actions", {
+                          name: shownName,
+                        })}
+                        roles={roles}
+                        dim={section.kind === "offline"}
+                        nameColor={highestRoleColor(member.roleIds, roles)}
+                        onOpen={(anchor) =>
+                          openProfile(subjectOf(member), anchor)
+                        }
+                        onMenuOpenChange={setMenuOpen}
+                      />
+                    );
+                  })}
+                </div>
+              )}
+              {remaining > 0 && (
+                <button
+                  type="button"
+                  className="mt-1 w-full rounded px-2 py-1.5 text-left text-xs text-signal hover:bg-ink-3"
+                  onClick={() =>
+                    setShown((prev) => ({
+                      ...prev,
+                      [section.id]: limit + MEMBER_PAGE_SIZE,
+                    }))
+                  }
+                >
+                  {t("memberList.showMore", { count: remaining })}
+                </button>
+              )}
+            </section>
+          );
+        })}
 
-        {canManage && (
+        {canBan && (
           <div className="mt-4">
             <button
               type="button"
               aria-expanded={bansOpen}
-              className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-xs font-semibold uppercase tracking-wider text-paper-muted transition-colors hover:text-paper"
+              className="flex w-full items-center gap-1 rounded px-1 py-1 text-left text-[11px] font-semibold uppercase tracking-wider text-paper-muted hover:text-paper"
               onClick={() => setBansOpen((prev) => !prev)}
             >
               {bansOpen ? (
-                <ChevronDown className="h-4 w-4" />
+                <ChevronDown className="h-3 w-3 shrink-0" />
               ) : (
-                <ChevronRight className="h-4 w-4" />
+                <ChevronRight className="h-3 w-3 shrink-0" />
               )}
-              {t("member.bans")}
+              <span className="truncate">
+                {bansOpen && !bansLoading
+                  ? t("memberList.sectionHeading", {
+                      label: t("member.bans"),
+                      count: bans.length,
+                    })
+                  : t("member.bans")}
+              </span>
             </button>
 
             {bansOpen && (
