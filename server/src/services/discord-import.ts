@@ -208,10 +208,15 @@ export async function createServerFromImport(
     await seedDefaultRoles(client, server.id);
 
     if (plan.roles.length > 0) {
+      // Staff ladder is everyone=0, then Moderator/Manager/Admin/Owner at
+      // 1..4. Slide those four up so cosmetics sit under them, same as a
+      // homemade cargo created in Cargos.
       await client.query(
-        `UPDATE roles SET position = $2
-          WHERE server_id = $1 AND system_key = 'admin'`,
-        [server.id, plan.roles.length + 1],
+        `UPDATE roles SET position = position + $2
+          WHERE server_id = $1
+            AND system_key IS NOT NULL
+            AND system_key <> 'everyone'`,
+        [server.id, plan.roles.length],
       );
 
       const roleParams: unknown[] = [];

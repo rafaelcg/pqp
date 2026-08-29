@@ -1,5 +1,9 @@
 import { z } from "zod";
-import { isReservedMentionName, roleNameSchema } from "./permissions.js";
+import {
+  isReservedMentionName,
+  roleNameSchema,
+  STAFF_ROLE_NAMES,
+} from "./permissions.js";
 
 /** SSRF boundary: only this pattern is interpolated into the Discord URL. */
 export const DISCORD_TEMPLATE_CODE_RE = /^[A-Za-z0-9]{4,32}$/;
@@ -274,7 +278,13 @@ function foldLatin(value: string): string {
 }
 
 function isSeededRoleName(name: string): boolean {
-  return name.toLowerCase() === "admin" || isReservedMentionName(name);
+  if (isReservedMentionName(name)) {
+    return true;
+  }
+  const lower = name.toLowerCase();
+  return Object.values(STAFF_ROLE_NAMES).some(
+    (seeded) => seeded.toLowerCase() === lower,
+  );
 }
 
 export function sanitiseImportedRoleName(

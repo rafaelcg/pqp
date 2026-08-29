@@ -85,6 +85,9 @@ describe("sanitiseImportedRoleName", () => {
   it("drops seeded names and emoji-only labels", () => {
     const used = new Set<string>();
     expect(sanitiseImportedRoleName("Admin", used)).toBe(null);
+    expect(sanitiseImportedRoleName("Owner", used)).toBe(null);
+    expect(sanitiseImportedRoleName("Manager", used)).toBe(null);
+    expect(sanitiseImportedRoleName("Moderator", used)).toBe(null);
     expect(sanitiseImportedRoleName("everyone", used)).toBe(null);
     expect(sanitiseImportedRoleName("🎉", used)).toBe(null);
   });
@@ -286,12 +289,13 @@ describe("mapGuildTemplate", () => {
     expect(nested.map((channel) => channel.position)).toEqual([0, 1, 2]);
   });
 
-  it("skips a role whose sanitised name collides with Admin", () => {
+  it("skips a role whose sanitised name collides with a seeded staff cargo", () => {
     const plan = mapGuildTemplate(
       template({
         roles: [
           EVERYONE,
           { id: 1, name: "Admin", color: 15844367, hoist: true, mentionable: true },
+          { id: 3, name: "Moderator", color: 0, hoist: true, mentionable: true },
           { id: 2, name: "Mods", color: 3447003, hoist: false, mentionable: true },
         ],
         channels: [],
@@ -301,6 +305,11 @@ describe("mapGuildTemplate", () => {
     expect(
       plan.mappedAway.some(
         (item) => item.reason === "unsanitisableRole" && item.name === "Admin",
+      ),
+    ).toBe(true);
+    expect(
+      plan.mappedAway.some(
+        (item) => item.reason === "unsanitisableRole" && item.name === "Moderator",
       ),
     ).toBe(true);
     expect(plan.roles[0]?.color).toBe("#3498DB");

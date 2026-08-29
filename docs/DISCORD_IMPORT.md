@@ -37,8 +37,8 @@ Mapped away by pqp:
 - NSFW, slowmode, bitrate, forum tags, threads, directory channels
 - Server icon
 - Roles that cannot be sanitised to pqp's `letters, numbers, underscore` names
-- Roles named `everyone`, `here`, or `Admin` after sanitising (those names
-  are already seeded)
+- Roles named `everyone`, `here`, `Owner`, `Admin`, `Manager`, or
+  `Moderator` after sanitising (those names are already seeded)
 
 Announcement, forum, and media channels become text channels. Stage channels
 become voice channels.
@@ -70,10 +70,10 @@ Discord's global `position` is not copied as-is.
 
 ## Roles
 
-`seedDefaultRoles` still creates `@everyone` (position 0) and `Admin`
-(Administrator bits). Imported roles are cosmetic: they get
-`PERMISSION_DEFAULT_EVERYONE`. Admin is moved to position `n+1` so it
-outranks the copies.
+`seedDefaultRoles` still creates `@everyone` (position 0) plus the staff
+ladder (Moderator, Manager, Admin, Owner). Imported roles are cosmetic:
+they get `PERMISSION_DEFAULT_EVERYONE`. Staff is shifted up by `n` so
+the copies sit under the ladder, same as a homemade cargo.
 
 Names are sanitised before insert (NFD, strip marks, spaces to `_`) so
 the unique `LOWER(name)` index cannot abort the transaction.

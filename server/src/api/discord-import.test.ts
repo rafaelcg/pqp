@@ -220,7 +220,7 @@ describeDb("discord layout import API", () => {
     expect(servers.rows[0]?.n).toBe(0);
   });
 
-  it("applies privacy as @everyone deny VIEW, keeps Admin above cosmetics, and does not add the owner to channel_members", async () => {
+  it("applies privacy as @everyone deny VIEW, keeps the staff ladder above cosmetics, and does not add the owner to channel_members", async () => {
     fetchOk(
       guildTemplate(
         [
@@ -310,7 +310,12 @@ describeDb("discord layout import API", () => {
     expect(byName.everyone?.position).toBe(0);
     expect(byName.Mods?.position).toBe(1);
     expect(byName.VIP?.position).toBe(2);
-    expect(byName.Admin?.position).toBe(3);
+    expect(byName.Moderator?.position).toBe(3);
+    expect(byName.Moderator?.systemKey).toBe("moderator");
+    expect(byName.Manager?.position).toBe(4);
+    expect(byName.Admin?.position).toBe(5);
     expect(byName.Admin?.systemKey).toBe("admin");
+    expect(byName.Owner?.position).toBe(6);
+    expect(byName.Owner?.systemKey).toBe("owner");
   });
 });
