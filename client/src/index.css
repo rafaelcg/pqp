@@ -172,6 +172,23 @@
   --medal-gold-engrave: oklch(0.22 0.05 55);
   --medal-gold-relief: oklch(0.92 0.07 95);
   --shadow-medal: 0 8px 20px -10px oklch(0 0 0 / 0.55);
+
+  /*
+   * Chance and poll cards. Shade on the shell, shade under the objects.
+   * Die-face ink is printed on the sourced art, so it stays the same
+   * colour in both themes, like the medal gold.
+   */
+  --shadow-chance-card: inset 0 1px 0 oklch(1 0 0 / 0.05), 0 1px 2px oklch(0 0 0 / 0.1), 0 12px 28px -20px oklch(0 0 0 / 0.55);
+  --shadow-chance-highlight: inset 0 1px 0 oklch(1 0 0 / 0.05);
+  --shadow-chance-option: inset 0 1px 0 oklch(1 0 0 / 0.04);
+  --shadow-chance-piece: 0 4px 8px oklch(0 0 0 / 0.4);
+  --shadow-inset-field: inset 0 1px 2px oklch(0 0 0 / 0.12);
+  --shadow-inset-switch: inset 0 1px 2px oklch(0 0 0 / 0.2);
+  --shadow-switch-thumb: 0 1px 2px oklch(0 0 0 / 0.3);
+  --color-die-ink: oklch(0.15 0.01 280);
+  --color-die-ink-nat20: oklch(0.32 0.09 145);
+  --color-die-ink-nat1: oklch(0.32 0.12 25);
+  --shadow-die-face-text: 0 0 6px oklch(1 0 0), 0 0 2px oklch(1 0 0), 0 1px 0 oklch(1 0 0);
   /* A barely-there accent wash behind a section, for the depoimento wall and
      the community stat block. Weaker than --glow-accent, which is a spotlight. */
   --glow-accent-soft: oklch(0.88 0.19 125 / 0.07);
@@ -278,6 +295,13 @@
   --hero-tint-far: color-mix(in oklab, oklch(0.55 0.14 var(--hero-hue-far, 265)) var(--hero-tint-strength-far, 22%), var(--color-surface-0));
   --shadow-hero-avatar: 0 20px 44px -20px oklch(0.4 0.02 250 / 0.28);
   --shadow-testimonial: 0 10px 30px -18px oklch(0.4 0.02 250 / 0.22);
+  --shadow-chance-card: inset 0 1px 0 oklch(1 0 0 / 0.35), 0 1px 2px oklch(0.4 0.02 250 / 0.08), 0 12px 28px -20px oklch(0.4 0.02 250 / 0.22);
+  --shadow-chance-highlight: inset 0 1px 0 oklch(1 0 0 / 0.4);
+  --shadow-chance-option: inset 0 1px 0 oklch(1 0 0 / 0.35);
+  --shadow-chance-piece: 0 4px 8px oklch(0.4 0.02 250 / 0.18);
+  --shadow-inset-field: inset 0 1px 2px oklch(0.4 0.02 250 / 0.1);
+  --shadow-inset-switch: inset 0 1px 2px oklch(0.4 0.02 250 / 0.14);
+  --shadow-switch-thumb: 0 1px 2px oklch(0.4 0.02 250 / 0.16);
   --glow-accent-soft: oklch(0.52 0.16 135 / 0.06);
 
   --rgb-picker-background: 250, 249, 245;

@@ -25,7 +25,7 @@ const COMMAND_META: Record<ChanceResult["type"], { icon: LucideIcon; key: Messag
 const SHELL = cn(
   "mt-1.5 max-w-md rounded-2xl px-4 py-3",
   "bg-[linear-gradient(165deg,color-mix(in_oklab,var(--color-signal)_6%,var(--color-surface-2)),var(--color-surface-2)_72%)]",
-  "shadow-[inset_0_1px_0_rgb(255_255_255/0.05),0_1px_2px_rgb(0_0_0/0.1),0_12px_28px_-20px_rgb(0_0_0/0.55)]",
+  "shadow-[var(--shadow-chance-card)]",
 );
 
 export function ChanceCard({ result }: { result: ChanceResult }) {
@@ -166,7 +166,7 @@ function DieFace({ value, sides }: { value: number; sides: number }) {
       ? "drop-shadow-[0_0_10px_color-mix(in_oklab,var(--color-signal)_70%,transparent)]"
       : sides === 20 && value === 1
         ? "drop-shadow-[0_0_10px_color-mix(in_oklab,var(--color-danger)_70%,transparent)]"
-        : "drop-shadow-[0_4px_8px_rgb(0_0_0/0.4)]";
+        : "drop-shadow-[var(--shadow-chance-piece)]";
   const pipUrl = sides === 6 ? d6FaceUrl(value) : undefined;
   if (pipUrl) {
     return (
@@ -187,10 +187,10 @@ function DieFace({ value, sides }: { value: number; sides: number }) {
         <span
           aria-hidden
           className={cn(
-            "absolute inset-0 flex items-center justify-center font-display text-xl font-extrabold tabular-nums [text-shadow:0_0_6px_#fff,0_0_2px_#fff,0_1px_0_#fff]",
-            crit && value === 20 && "text-[#14532d]",
-            crit && value === 1 && "text-[#7f1d1d]",
-            !crit && "text-[#111114]",
+            "absolute inset-0 flex items-center justify-center font-display text-xl font-extrabold tabular-nums [text-shadow:var(--shadow-die-face-text)]",
+            crit && value === 20 && "text-[var(--color-die-ink-nat20)]",
+            crit && value === 1 && "text-[var(--color-die-ink-nat1)]",
+            !crit && "text-[var(--color-die-ink)]",
           )}
         >
           {value}
@@ -215,7 +215,7 @@ function Coin({ side }: { side: "heads" | "tails" }) {
       <img
         src={side === "heads" ? coinHeadsUrl : coinTailsUrl}
         alt=""
-        className="h-16 w-16 drop-shadow-[0_5px_10px_rgb(0_0_0/0.45)]"
+        className="h-16 w-16 drop-shadow-[var(--shadow-chance-piece)]"
       />
     </span>
   );
@@ -248,7 +248,7 @@ function PlayingCardFace({
           : undefined
       }
       className={cn(
-        "relative h-[4.75rem] w-[3.25rem] shrink-0 origin-bottom drop-shadow-[0_3px_8px_rgb(0_0_0/0.45)]",
+        "relative h-[4.75rem] w-[3.25rem] shrink-0 origin-bottom drop-shadow-[var(--shadow-chance-piece)]",
         fan && index > 0 && "-ml-3.5",
       )}
     >

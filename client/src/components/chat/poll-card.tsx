@@ -21,7 +21,7 @@ interface PollCardProps {
 const SHELL = cn(
   "mt-1.5 max-w-md rounded-2xl px-4 py-3",
   "bg-[linear-gradient(165deg,color-mix(in_oklab,var(--color-signal)_6%,var(--color-surface-2)),var(--color-surface-2)_72%)]",
-  "shadow-[inset_0_1px_0_rgb(255_255_255/0.05),0_1px_2px_rgb(0_0_0/0.1),0_12px_28px_-20px_rgb(0_0_0/0.55)]",
+  "shadow-[var(--shadow-chance-card)]",
 );
 
 export function PollCard({ poll, canManage = false, onVote, onClose }: PollCardProps) {
@@ -66,7 +66,7 @@ export function PollCard({ poll, canManage = false, onVote, onClose }: PollCardP
                 }
                 className={cn(
                   "relative flex h-11 w-full items-center overflow-hidden rounded-xl px-3.5 text-left text-sm transition-colors",
-                  "shadow-[inset_0_1px_0_rgb(255_255_255/0.04)]",
+                  "shadow-[var(--shadow-chance-option)]",
                   option.voted
                     ? "bg-[color-mix(in_oklab,var(--color-signal)_10%,var(--color-surface-1))]"
                     : "bg-[color-mix(in_oklab,var(--color-paper)_5%,var(--color-surface-1))]",

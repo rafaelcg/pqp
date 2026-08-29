@@ -172,13 +172,13 @@ function ChancePreview() {
           <img
             src={d6}
             alt=""
-            className="mb-1 h-[3.25rem] w-[3.25rem] -rotate-12 drop-shadow-[0_4px_8px_rgb(0_0_0/0.45)]"
+            className="mb-1 h-[3.25rem] w-[3.25rem] -rotate-12 drop-shadow-[var(--shadow-chance-piece)]"
           />
         )}
         {d20 && (
           <span className="relative mb-0.5 h-[4.25rem] w-[3.75rem] drop-shadow-[0_0_10px_color-mix(in_oklab,var(--color-signal)_70%,transparent)]">
             <img src={d20} alt="" className="h-full w-full" />
-            <span className="absolute inset-0 flex items-center justify-center font-display text-xl font-extrabold tabular-nums text-[#14532d] [text-shadow:0_0_6px_#fff,0_0_2px_#fff,0_1px_0_#fff]">
+            <span className="absolute inset-0 flex items-center justify-center font-display text-xl font-extrabold tabular-nums text-[var(--color-die-ink-nat20)] [text-shadow:var(--shadow-die-face-text)]">
               20
             </span>
           </span>
@@ -186,7 +186,7 @@ function ChancePreview() {
         <img
           src={coinHeadsUrl}
           alt=""
-          className="mb-2 h-14 w-14 rotate-6 drop-shadow-[0_5px_10px_rgb(0_0_0/0.45)]"
+          className="mb-2 h-14 w-14 rotate-6 drop-shadow-[var(--shadow-chance-piece)]"
         />
         <ul className="mb-1 ml-1 flex items-end">
           {cards.map((code, index) => {
@@ -200,7 +200,7 @@ function ChancePreview() {
                   zIndex: index,
                 }}
                 className={cn(
-                  "relative h-[4.5rem] w-[3.1rem] origin-bottom drop-shadow-[0_3px_8px_rgb(0_0_0/0.45)]",
+                  "relative h-[4.5rem] w-[3.1rem] origin-bottom drop-shadow-[var(--shadow-chance-piece)]",
                   index > 0 && "-ml-5",
                 )}
               >
