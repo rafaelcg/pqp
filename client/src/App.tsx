@@ -65,6 +65,7 @@ import { AgeGateDialog } from "@/components/user/age-gate-dialog";
 import { OnboardingFlow } from "@/components/onboarding/onboarding-flow";
 import { NewDmDialog } from "@/components/user/new-dm-dialog";
 import { CargosHint } from "@/components/layout/cargos-hint";
+import { QgHint } from "@/components/layout/qg-hint";
 import { ServerSettingsDialog } from "@/components/layout/server-settings-dialog";
 import {
   applyRemotePreferences,
@@ -4387,6 +4388,25 @@ function MainAppContent({
           setServerSettingsSection("roles");
           setServerSettingsOpen(true);
         }}
+      />
+      <QgHint
+        onJoined={(result) => {
+          if (result.joinedNow) {
+            const storage = browserStorage();
+            if (!hasArrived(storage, result.serverId)) {
+              rememberArrival(storage, result.serverId);
+              setArrivalServerId(result.serverId);
+            }
+          }
+          setAppNotice(
+            t(
+              result.joinedNow ? "handle.join.done" : "handle.join.already",
+              { name: result.serverName },
+            ),
+          );
+          void refreshAfterJoin(result.serverId);
+        }}
+        onFailed={() => setAppError(t("qgHint.failed"))}
       />
 
       {ratableCall && (
