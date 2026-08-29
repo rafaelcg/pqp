@@ -30,6 +30,7 @@ import {
   getReplyParent,
   mapMessage,
 } from "../services/messages.js";
+import { enqueueOutgoingMessageCreated } from "../services/outgoing-webhooks.js";
 import { closePoll, votePoll } from "../services/polls.js";
 import {
   getMessageChannelId,
@@ -1101,6 +1102,19 @@ export async function handleChatMessage(
     // a message — broadcasting an empty bubble would be worse than silence.
     if (!dbMessage) {
       return;
+    }
+
+    try {
+      await enqueueOutgoingMessageCreated({
+        channelId: payload.channelId,
+        messageId: dbMessage.id,
+        authorId: conn.user.id,
+        body: dbMessage.body,
+        createdAt: dbMessage.created_at,
+        replyToId: dbMessage.reply_to_id ?? null,
+      });
+    } catch (error) {
+      console.error("[outgoing-webhooks] enqueue failed:", error);
     }
 
     const message = mapMessage(dbMessage);

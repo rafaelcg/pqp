@@ -32,4 +32,5 @@ export * from "./threads.js";
 export * from "./user-banners.js";
 export * from "./voice-backend.js";
 export * from "./webhooks.js";
+export * from "./outgoing-webhooks.js";
 export * from "./watch-party.js";

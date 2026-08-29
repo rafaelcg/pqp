@@ -33,6 +33,7 @@ describe("permission bitfields", () => {
   it("round-trips as a decimal string, never a JS number", () => {
     expect(serializePermissions(PERMISSION_DEFAULT_EVERYONE)).toBe("571073");
     expect(parsePermissions("571073")).toBe(PERMISSION_DEFAULT_EVERYONE);
+    expect(serializePermissions(PERMISSION_ALL)).toBe("2097151");
     expect(parsePermissions(PERMISSION_ALL)).toBe(PERMISSION_ALL);
   });
 
@@ -63,6 +64,21 @@ describe("permission bitfields", () => {
     expect(hasPermission(cleaned, Permission.MODERATE_MEMBERS)).toBe(false);
     expect(hasPermission(cleaned, ADMIN)).toBe(false);
     expect(hasPermission(cleaned, Permission.SEND_MESSAGES)).toBe(true);
+  });
+
+  it("includes MANAGE_WEBHOOKS in ALL and the manager seed, not @everyone", () => {
+    expect(hasPermission(PERMISSION_ALL, Permission.MANAGE_WEBHOOKS)).toBe(
+      true,
+    );
+    expect(
+      hasPermission(PERMISSION_DEFAULT_MANAGER, Permission.MANAGE_WEBHOOKS),
+    ).toBe(true);
+    expect(
+      hasPermission(PERMISSION_DEFAULT_EVERYONE, Permission.MANAGE_WEBHOOKS),
+    ).toBe(false);
+    expect(
+      hasPermission(PERMISSION_DEFAULT_MODERATOR, Permission.MANAGE_WEBHOOKS),
+    ).toBe(false);
   });
 
   it("seeds Manager without Administrator and Moderator as extras only", () => {

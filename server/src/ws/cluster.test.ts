@@ -81,6 +81,10 @@ vi.mock("../services/messages.js", () => ({
   mapMessage: (row: { id: string }) => ({ id: row.id, body: "hi" }),
 }));
 
+vi.mock("../services/outgoing-webhooks.js", () => ({
+  enqueueOutgoingMessageCreated: async () => 0,
+}));
+
 vi.mock("../services/reactions.js", () => ({
   getMessageChannelId: async () => null,
   toggleReaction: async () => ({ added: true }),

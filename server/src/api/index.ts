@@ -25,6 +25,8 @@ import {
   executeWebhookSchema,
   expectedDeleteConfirmation,
   formatUserTag,
+  createOutgoingWebhookSchema,
+  updateOutgoingWebhookSchema,
   issueTimeoutSchema,
   MAX_AVATAR_BYTES,
   MAX_SERVER_BANNER_BYTES,
@@ -245,6 +247,14 @@ import {
   listWebhooksForChannel,
   type DbWebhook,
 } from "../services/webhooks.js";
+import {
+  createOutgoingWebhook,
+  deleteOutgoingWebhook,
+  getOutgoingWebhookRow,
+  listOutgoingWebhooks,
+  rotateOutgoingWebhookSecret,
+  updateOutgoingWebhook,
+} from "../services/outgoing-webhooks.js";
 import {
   extractFirstUrl,
   getEmbedCacheState,
@@ -3608,6 +3618,117 @@ router.delete("/api/webhooks/:webhookId", async ({ user }, { webhookId }) => {
   });
   return { ok: true };
 });
+
+// ------------------------------------------------------ outgoing webhooks
+//
+// Server-scoped. Gated on MANAGE_WEBHOOKS, not MANAGE_CHANNELS: incoming
+// execute tokens stay on the channel-row permission so an admin who can
+// make a CI bot cannot by itself subscribe an HTTPS URL to every message.
+
+router.get(
+  "/api/servers/:serverId/outgoing-webhooks",
+  async ({ user }, { serverId }) => {
+    await requirePermission(serverId!, user.id, Permission.MANAGE_WEBHOOKS);
+    return { webhooks: await listOutgoingWebhooks(serverId!) };
+  },
+);
+
+router.post(
+  "/api/servers/:serverId/outgoing-webhooks",
+  async ({ req, user }, { serverId }) => {
+    await requirePermission(serverId!, user.id, Permission.MANAGE_WEBHOOKS);
+    const body = createOutgoingWebhookSchema.parse(await readJsonBody(req));
+    const webhook = await createOutgoingWebhook(serverId!, user.id, body);
+    await logAudit({
+      serverId: serverId!,
+      actorId: user.id,
+      action: "outgoing_webhook.create",
+      targetType: "outgoing_webhook",
+      targetId: webhook.id,
+      changes: [{ key: "name", old: null, new: webhook.name }],
+    });
+    return created({ webhook });
+  },
+);
+
+router.patch(
+  "/api/outgoing-webhooks/:id",
+  async ({ req, user }, { id }) => {
+    const existing = await getOutgoingWebhookRow(id!);
+    if (!existing) {
+      throw new NotFound("Webhook not found");
+    }
+    await requirePermission(
+      existing.server_id,
+      user.id,
+      Permission.MANAGE_WEBHOOKS,
+    );
+    const body = updateOutgoingWebhookSchema.parse(await readJsonBody(req));
+    const webhook = await updateOutgoingWebhook(id!, body);
+    if (!webhook) {
+      throw new NotFound("Webhook not found");
+    }
+    await logAudit({
+      serverId: existing.server_id,
+      actorId: user.id,
+      action: "outgoing_webhook.update",
+      targetType: "outgoing_webhook",
+      targetId: id!,
+      changes: [{ key: "name", old: existing.name, new: webhook.name }],
+    });
+    return { webhook };
+  },
+);
+
+router.delete("/api/outgoing-webhooks/:id", async ({ user }, { id }) => {
+  const existing = await getOutgoingWebhookRow(id!);
+  if (!existing) {
+    throw new NotFound("Webhook not found");
+  }
+  await requirePermission(
+    existing.server_id,
+    user.id,
+    Permission.MANAGE_WEBHOOKS,
+  );
+  await deleteOutgoingWebhook(id!);
+  await logAudit({
+    serverId: existing.server_id,
+    actorId: user.id,
+    action: "outgoing_webhook.delete",
+    targetType: "outgoing_webhook",
+    targetId: id!,
+    changes: [{ key: "name", old: existing.name, new: null }],
+  });
+  return { ok: true };
+});
+
+router.post(
+  "/api/outgoing-webhooks/:id/rotate-secret",
+  async ({ user }, { id }) => {
+    const existing = await getOutgoingWebhookRow(id!);
+    if (!existing) {
+      throw new NotFound("Webhook not found");
+    }
+    await requirePermission(
+      existing.server_id,
+      user.id,
+      Permission.MANAGE_WEBHOOKS,
+    );
+    const webhook = await rotateOutgoingWebhookSecret(id!);
+    if (!webhook) {
+      throw new NotFound("Webhook not found");
+    }
+    await logAudit({
+      serverId: existing.server_id,
+      actorId: user.id,
+      action: "outgoing_webhook.rotate",
+      targetType: "outgoing_webhook",
+      targetId: id!,
+      changes: [{ key: "secret", old: "(rotated)", new: "(rotated)" }],
+    });
+    return { webhook };
+  },
+);
 
 // --------------------------------------------------------------- messages
 

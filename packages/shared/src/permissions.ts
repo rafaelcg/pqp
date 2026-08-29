@@ -5,7 +5,7 @@ import { z } from "zod";
  *
  * Names follow Discord's published flags so the 8-step overwrite algorithm
  * (https://docs.discord.com/developers/topics/permissions) maps 1:1. The bit
- * *numbers* are ours (0–19). Never do this math in JS `number` — `1 << 31`
+ * *numbers* are ours (0–20). Never do this math in JS `number` — `1 << 31`
  * overflows; always `bigint`.
  *
  * On the wire, bitfields are decimal strings. In Postgres they are `BIGINT`.
@@ -32,12 +32,14 @@ export const Permission = {
   MANAGE_ROLES: 1n << 17n,
   MODERATE_MEMBERS: 1n << 18n,
   ADD_REACTIONS: 1n << 19n,
+  /** Outgoing channel webhooks. Incoming execute tokens stay MANAGE_CHANNELS. */
+  MANAGE_WEBHOOKS: 1n << 20n,
 } as const;
 
 export type PermissionBit = (typeof Permission)[keyof typeof Permission];
 
 /** Every defined bit. Owner and Administrator resolve to this. */
-export const PERMISSION_ALL = (1n << 20n) - 1n;
+export const PERMISSION_ALL = (1n << 21n) - 1n;
 
 /**
  * Default `@everyone` mask: chat, react, attach, history, voice, own nick,
@@ -213,6 +215,7 @@ export const PERMISSION_FLAGS = [
   { bit: Permission.MANAGE_ROLES, key: "MANAGE_ROLES" },
   { bit: Permission.MODERATE_MEMBERS, key: "MODERATE_MEMBERS" },
   { bit: Permission.ADD_REACTIONS, key: "ADD_REACTIONS" },
+  { bit: Permission.MANAGE_WEBHOOKS, key: "MANAGE_WEBHOOKS" },
 ] as const;
 
 export type PermissionFlagKey = (typeof PERMISSION_FLAGS)[number]["key"];
