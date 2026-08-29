@@ -1251,3 +1251,54 @@ h2,
   color: var(--color-paper);
   font-weight: 600;
 }
+.blog-prose .blog-media {
+  margin: 1.5em 0 0.25em;
+}
+.blog-prose .blog-media-open {
+  background: none;
+  border: 0;
+  border-radius: 12px;
+  cursor: zoom-in;
+  display: block;
+  margin-inline: auto;
+  max-width: 100%;
+  padding: 0;
+  position: relative;
+  width: fit-content;
+}
+.blog-prose .blog-media-open:focus-visible {
+  outline: 2px solid var(--color-signal);
+  outline-offset: 3px;
+}
+.blog-prose .blog-media img {
+  background: color-mix(in oklab, var(--color-paper) 5%, transparent);
+  border: 1px solid color-mix(in oklab, var(--color-paper) 12%, transparent);
+  border-radius: 12px;
+  display: block;
+  height: auto;
+  max-height: min(36rem, 80vh);
+  max-width: 100%;
+  object-fit: contain;
+  width: auto;
+}
+.blog-prose .blog-media-hint {
+  align-items: center;
+  background: color-mix(in oklab, var(--color-ink) 72%, transparent);
+  border-radius: 8px;
+  bottom: 0.7rem;
+  color: var(--color-paper);
+  display: flex;
+  justify-content: center;
+  padding: 0.35rem;
+  pointer-events: none;
+  position: absolute;
+  right: 0.7rem;
+}
+.blog-prose .blog-media figcaption {
+  color: var(--color-paper-muted);
+  font-size: 0.8125rem;
+  letter-spacing: 0.01em;
+  line-height: 1.45;
+  margin-top: 0.65em;
+  opacity: 0.85;
+}

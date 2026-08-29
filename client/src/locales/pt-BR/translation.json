@@ -13,6 +13,8 @@
   "blog.hero.title": "Notas de versão",
   "blog.hero.lede": "O que mudou, no dia em que mudou. Escrito por quem fez, incluindo as partes que ainda não estão prontas.",
   "blog.back": "Todas as notas",
+  "blog.media.expand": "Ver em tela cheia",
+  "blog.media.close": "Fechar",
   "blog.notFound.title": "Não tem nota nesse endereço",
   "blog.notFound.body": "O link pode ser antigo, ou o endereço pode ter um erro de digitação. A lista completa está a um clique.",
   "landing.seo.title": "pqp: chat em grupo com voz e tela compartilhada",

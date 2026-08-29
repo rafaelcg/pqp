@@ -13,6 +13,8 @@
   "blog.hero.title": "Release notes",
   "blog.hero.lede": "What changed, on the day it changed. Written by the person who shipped it, including the parts that are not finished.",
   "blog.back": "All release notes",
+  "blog.media.expand": "View full size",
+  "blog.media.close": "Close",
   "blog.notFound.title": "There is no note at this address",
   "blog.notFound.body": "The link may be old, or the address may have a typo in it. The full list is one click away.",
   "landing.seo.title": "pqp: group chat with voice and screen sharing",
