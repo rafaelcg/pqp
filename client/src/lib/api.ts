@@ -79,6 +79,7 @@ import type {
   VoiceSessionInfo,
   Webhook,
   RoleSystemKey,
+  OutgoingWebhook,
 } from "@pqp/shared";
 import { getApiBaseUrl } from "./utils";
 
@@ -1248,6 +1249,50 @@ export const createWebhook = (
 
 export const deleteWebhook = (webhookId: string) =>
   del<{ ok: boolean }>(`/api/webhooks/${webhookId}`);
+
+export const fetchOutgoingWebhooks = (serverId: string) =>
+  apiFetch<{ webhooks: OutgoingWebhook[] }>(
+    `/api/servers/${serverId}/outgoing-webhooks`,
+  );
+
+export const createOutgoingWebhook = (
+  serverId: string,
+  body: {
+    name: string;
+    url: string;
+    channelIds: string[];
+    authHeaderName?: string | null;
+    authHeaderValue?: string | null;
+  },
+) =>
+  post<{ webhook: OutgoingWebhook }>(
+    `/api/servers/${serverId}/outgoing-webhooks`,
+    body,
+  );
+
+export const updateOutgoingWebhook = (
+  webhookId: string,
+  body: {
+    name?: string;
+    url?: string;
+    channelIds?: string[];
+    authHeaderName?: string | null;
+    authHeaderValue?: string | null;
+    status?: "active" | "disabled";
+  },
+) =>
+  patch<{ webhook: OutgoingWebhook }>(
+    `/api/outgoing-webhooks/${webhookId}`,
+    body,
+  );
+
+export const deleteOutgoingWebhook = (webhookId: string) =>
+  del<{ ok: boolean }>(`/api/outgoing-webhooks/${webhookId}`);
+
+export const rotateOutgoingWebhookSecret = (webhookId: string) =>
+  post<{ webhook: OutgoingWebhook }>(
+    `/api/outgoing-webhooks/${webhookId}/rotate-secret`,
+  );
 
 // ------------------------------------------------------- users, DMs, blocks
 

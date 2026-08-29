@@ -3463,6 +3463,7 @@ function MainAppContent({
   const canManageChannels = perms.can(Permission.MANAGE_CHANNELS);
   const canManageRoles = perms.can(Permission.MANAGE_ROLES);
   const canManageServer = perms.can(Permission.MANAGE_SERVER);
+  const canManageWebhooks = perms.can(Permission.MANAGE_WEBHOOKS);
   const canManageMessages = perms.can(Permission.MANAGE_MESSAGES);
   const canManageNicknames = perms.can(Permission.MANAGE_NICKNAMES);
   /**
@@ -4643,6 +4644,7 @@ function MainAppContent({
         currentUserId={user?.id ?? null}
         canManageRoles={canManageRoles}
         canManageServer={canManageServer}
+        canManageWebhooks={canManageWebhooks}
         canModerateQueue={
           moderationBits.kick ||
           moderationBits.ban ||
