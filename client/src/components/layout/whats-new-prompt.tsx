@@ -66,24 +66,24 @@ const PREVIEW_VOTERS = {
  * design; these are the live components and the live art.
  */
 export function WhatsNewPrompt() {
-  // Playwright sets this. A first-run card on every fresh context covers
-  // the call stage and the composer the suite came to measure.
-  if (typeof navigator !== "undefined" && navigator.webdriver) {
-    return null;
-  }
   const { t } = useTranslation();
   const [state] = useState(() => (isWhatsNewSeen() ? null : { pack: WHATS_NEW_PACK_ID }));
   const [open, setOpen] = useState(true);
   const [slide, setSlide] = useState(0);
+  // Playwright sets this. A first-run card on every fresh context covers
+  // the call stage and the composer the suite came to measure.
+  const automated =
+    typeof navigator !== "undefined" && Boolean(navigator.webdriver);
 
   useEffect(() => {
-    if (state) {
-      rememberWhatsNew(state.pack);
+    if (automated || !state) {
+      return;
     }
-  }, [state]);
+    rememberWhatsNew(state.pack);
+  }, [automated, state]);
 
   useEffect(() => {
-    if (!state || !open) {
+    if (automated || !state || !open) {
       return;
     }
     function onKeyDown(event: KeyboardEvent) {
@@ -93,9 +93,9 @@ export function WhatsNewPrompt() {
     }
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [state, open]);
+  }, [automated, state, open]);
 
-  if (!state || !open) {
+  if (automated || !state || !open) {
     return null;
   }
 
