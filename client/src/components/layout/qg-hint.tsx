@@ -31,9 +31,12 @@ export interface QgHintJoin {
 export function QgHint({
   onJoined,
   onFailed,
+  onShowingChange,
 }: {
   onJoined: (result: QgHintJoin) => void;
   onFailed: () => void;
+  /** Fired once lookup has settled, and again when the card is dismissed. */
+  onShowingChange?: (showing: boolean) => void;
 }) {
   const { t } = useTranslation();
   const [eligible] = useState(
@@ -99,6 +102,17 @@ export function QgHint({
       rememberQgHint();
     }
   }, [show]);
+
+  useEffect(() => {
+    if (!eligible) {
+      onShowingChange?.(false);
+      return;
+    }
+    if (listing.status !== "ready") {
+      return;
+    }
+    onShowingChange?.(show);
+  }, [eligible, listing.status, show, onShowingChange]);
 
   useEffect(() => {
     if (!show) {

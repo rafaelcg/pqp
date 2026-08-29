@@ -66,6 +66,7 @@ import { OnboardingFlow } from "@/components/onboarding/onboarding-flow";
 import { NewDmDialog } from "@/components/user/new-dm-dialog";
 import { CargosHint } from "@/components/layout/cargos-hint";
 import { QgHint } from "@/components/layout/qg-hint";
+import { winningCornerHint } from "@/lib/corner-hints";
 import { ServerSettingsDialog } from "@/components/layout/server-settings-dialog";
 import {
   applyRemotePreferences,
@@ -466,6 +467,8 @@ function MainAppContent({
    * for months but is opening on a new machine.
    */
   const [arrivalServerId, setArrivalServerId] = useState<string | null>(null);
+  const [qgHintReady, setQgHintReady] = useState(false);
+  const [qgHintShowing, setQgHintShowing] = useState(false);
   const [membersOpen, setMembersOpen] = useState(false);
   const [serverSettingsSection, setServerSettingsSection] = useState<
     "roles" | undefined
@@ -3016,6 +3019,11 @@ function MainAppContent({
     return ids;
   }, [conversations, voiceState.occupancy]);
 
+  const handleQgHintShowingChange = useCallback((showing: boolean) => {
+    setQgHintReady(true);
+    setQgHintShowing(showing);
+  }, []);
+
   if (bootstrapError) {
     return (
       <AppBootstrapError
@@ -3095,6 +3103,15 @@ function MainAppContent({
   const canManageServer = perms.can(Permission.MANAGE_SERVER);
   const canManageMessages = perms.can(Permission.MANAGE_MESSAGES);
   const canManageNicknames = perms.can(Permission.MANAGE_NICKNAMES);
+  /**
+   * One corner card. The dice/polls note (`whatsNew`) is the same slot when
+   * that PR lands; it goes in the middle of this list so it does not stack
+   * on the QG or on cargos.
+   */
+  const cornerHint = winningCornerHint({
+    qg: qgHintShowing,
+    cargos: qgHintReady && Boolean(canManageRoles && selectedServerId),
+  });
 
   const voiceChannel =
     voiceState.voiceChannelId
@@ -4383,13 +4400,14 @@ function MainAppContent({
       />
 
       <CargosHint
-        enabled={Boolean(canManageRoles && selectedServerId)}
+        enabled={cornerHint === "cargos"}
         onOpenRoles={() => {
           setServerSettingsSection("roles");
           setServerSettingsOpen(true);
         }}
       />
       <QgHint
+        onShowingChange={handleQgHintShowingChange}
         onJoined={(result) => {
           if (result.joinedNow) {
             const storage = browserStorage();
