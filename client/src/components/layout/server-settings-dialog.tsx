@@ -456,6 +456,11 @@ interface ServerSettingsDialogProps {
   open: boolean;
   server: Server | null;
   currentUserId: string | null;
+  canManageRoles?: boolean;
+  canManageServer?: boolean;
+  canModerateQueue?: boolean;
+  /** Land on this pane when the dialog opens, if the viewer can see it. */
+  requestedSection?: "roles";
   onClose: () => void;
   onRenamed: (server: Server) => void;
   onOwnershipTransferred: () => void;
@@ -473,6 +478,10 @@ export function ServerSettingsDialog({
   open,
   server,
   currentUserId,
+  canManageRoles = false,
+  canManageServer = false,
+  canModerateQueue = false,
+  requestedSection,
   onClose,
   onRenamed,
   onOwnershipTransferred,
@@ -513,12 +522,18 @@ export function ServerSettingsDialog({
   const communitiesEnabled = useCommunitiesEnabled();
 
   const [section, setSection] = useState<SectionId>("overview");
+  const wasOpenRef = useRef(false);
   const tabIdPrefix = useId();
   const panelId = useId();
 
   const serverId = server?.id ?? null;
   const isOwner = server?.role === "owner";
-  const isManager = isOwner || server?.role === "admin";
+  const canSeeOverview = isOwner || canManageServer;
+  const canSeeRoles = canManageRoles;
+  const canSeeModeration = canModerateQueue || isOwner;
+  const canSeeAudit = canManageServer;
+  const canOpenSettings =
+    isOwner || canSeeOverview || canSeeRoles || canSeeModeration || canSeeAudit;
 
   // Seeded from a ref so a rename landing in the parent does not overwrite what
   // is being typed here; the form only resets when the dialog opens.
@@ -555,12 +570,29 @@ export function ServerSettingsDialog({
   // Reopening lands on the first section the *current* role can see. An admin
   // reopening after an ownership change must not be left staring at a pane that
   // no longer exists for them.
-  const firstSection: SectionId = isOwner ? "overview" : "moderation";
+  const firstSection: SectionId = isOwner
+    ? "overview"
+    : canSeeOverview
+      ? "overview"
+      : canSeeRoles
+        ? "roles"
+        : canSeeModeration
+          ? "moderation"
+          : "audit";
+  const openingSection: SectionId =
+    requestedSection === "roles" && canSeeRoles ? "roles" : firstSection;
+  // Apply on the closed→open render so the first paint is the requested pane,
+  // not a frame of Overview. The effect still catches reopen / role changes.
+  if (open && !wasOpenRef.current && section !== openingSection) {
+    setSection(openingSection);
+  }
+  wasOpenRef.current = open;
   useEffect(() => {
-    if (open) {
-      setSection(firstSection);
+    if (!open) {
+      return;
     }
-  }, [open, serverId, firstSection]);
+    setSection(openingSection);
+  }, [open, serverId, openingSection]);
 
   useEffect(() => {
     if (!open || !isOwner || !serverId) {
@@ -730,7 +762,22 @@ export function ServerSettingsDialog({
     }
   }
 
-  const sections = SECTIONS.filter((s) => isOwner || !s.ownerOnly);
+  const sections = SECTIONS.filter((s) => {
+    switch (s.id) {
+      case "overview":
+        return canSeeOverview;
+      case "access":
+        return isOwner;
+      case "roles":
+        return canSeeRoles;
+      case "moderation":
+        return canSeeModeration;
+      case "audit":
+        return canSeeAudit;
+      case "danger":
+        return isOwner;
+    }
+  });
   const active = sections.find((s) => s.id === section) ?? sections[0]!;
 
   /**
@@ -740,7 +787,7 @@ export function ServerSettingsDialog({
    * it, so a five-door surface behind which four doors are locked and the fifth
    * holds a sentence would be theatre. The `size="md"` dialog stays what it was.
    */
-  if (!isManager) {
+  if (!canOpenSettings) {
     return (
       <Dialog
         open
@@ -839,7 +886,7 @@ export function ServerSettingsDialog({
                 <ServerIdentitySection server={server} onUpdated={onRenamed} />
               )}
 
-              {serverId && communitiesEnabled && (
+              {serverId && isOwner && communitiesEnabled && (
                 <CommunitySettingsSection serverId={serverId} />
               )}
             </>
@@ -939,12 +986,6 @@ export function ServerSettingsDialog({
                     </p>
                   )}
                 </Block>
-              )}
-
-              {!isOwner && (
-                <p className="text-sm text-paper-muted">
-                  {t("serverSettings.readOnly.admin")}
-                </p>
               )}
             </>
           )}

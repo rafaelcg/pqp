@@ -375,15 +375,19 @@ describeDb("API authorization", () => {
     expect(byOwner.status).toBe(200);
   });
 
-  it("only lets the owner delete or rename the server", async () => {
+  it("lets an admin rename the server but only the owner delete it", async () => {
     const { serverId } = await makeServer();
 
     expect(
       (await call(admin, "PATCH", `/api/servers/${serverId}`, { name: "x" })).status,
-    ).toBe(403);
+    ).toBe(200);
     expect((await call(admin, "DELETE", `/api/servers/${serverId}`)).status).toBe(
       403,
     );
+    expect(
+      (await call(member, "PATCH", `/api/servers/${serverId}`, { name: "nope" }))
+        .status,
+    ).toBe(403);
     expect(
       (await call(owner, "PATCH", `/api/servers/${serverId}`, { name: "Renamed" }))
         .status,
@@ -510,16 +514,18 @@ describeDb("API authorization", () => {
   });
 
   describe("permissions and nicknames", () => {
-    it("seeds @everyone and Admin, and lets a member read the snapshot", async () => {
+    it("seeds @everyone, Moderator, Manager, Admin and Owner, and lets a member read the snapshot", async () => {
       const { serverId } = await makeServer();
       const roles = await call<{
         roles: Array<{ name: string; isEveryone: boolean; systemKey: string | null }>;
       }>(member, "GET", `/api/servers/${serverId}/roles`);
       expect(roles.status).toBe(200);
-      expect(roles.body.roles.some((role) => role.isEveryone)).toBe(true);
-      expect(roles.body.roles.some((role) => role.systemKey === "admin")).toBe(
-        true,
-      );
+      const keys = new Set(roles.body.roles.map((role) => role.systemKey));
+      expect(keys.has("everyone")).toBe(true);
+      expect(keys.has("moderator")).toBe(true);
+      expect(keys.has("manager")).toBe(true);
+      expect(keys.has("admin")).toBe(true);
+      expect(keys.has("owner")).toBe(true);
 
       const snap = await call<{ server: string; version: number }>(
         member,
@@ -609,13 +615,18 @@ describeDb("API authorization", () => {
       const mods = afterCreate.body.roles.find((role) => role.name === "mods")!;
       expect(everyone.position).toBe(0);
       expect(mods.position).toBe(1);
-      expect(adminRole.position).toBe(2);
+      expect(adminRole.position).toBeGreaterThan(mods.position);
 
+      const movable = afterCreate.body.roles
+        .filter((role) => !role.isEveryone)
+        .sort((left, right) => left.position - right.position);
+      const roleIds = movable.map((role) => role.id);
+      const swapped = [roleIds[1]!, roleIds[0]!, ...roleIds.slice(2)];
       const reordered = await call(
         owner,
         "PATCH",
         `/api/servers/${serverId}/roles/order`,
-        { roleIds: [adminRole.id, mods.id] },
+        { roleIds: swapped },
       );
       expect(reordered.status).toBe(200);
       const afterOrder = await call<{
@@ -625,8 +636,8 @@ describeDb("API authorization", () => {
         afterOrder.body.roles.map((role) => [role.id, role.position]),
       );
       expect(byId[everyone.id]).toBe(0);
-      expect(byId[adminRole.id]).toBe(1);
-      expect(byId[mods.id]).toBe(2);
+      expect(byId[swapped[0]!]).toBe(1);
+      expect(byId[swapped[1]!]).toBe(2);
     });
 
     it("refuses to strip a role from a member the actor does not outrank", async () => {

@@ -40,11 +40,11 @@
 | UI design system (signal desk) | Done |
 | Usernames `name#1234` | Done |
 | Server invites | Done |
-| Roles `owner` / `admin` / `member` | Done |
+| Roles `owner` / `admin` / `member` | Done (compatibility rank; staff power is cargos) |
 | Private channels | Done (create + ACL + member picker UI) |
 | Channel delete | Done |
 | Channel rename UI | Done (context menu → prompt, prefills current name) |
-| Promote/demote admins UI | Done (members panel: context menu + inline buttons) |
+| Promote/demote admins UI | Replaced (2026-08-28). Profile cargos checklist + Cargos Members tab. iOS Promote/Demote still assigns/strips Admin. |
 | Deep links / shareable URLs | Done (`/app/server/<id>/channel/<id>`, `/app/invite/<code>`) |
 | Dev auth bypass | Done (agent testing) |
 | Per-server message retention policy | Done (owner-configurable window, daily sweep, pinned messages exempt — `servers.message_retention_days`) |
@@ -65,7 +65,7 @@
 | Copy Discord layout | On `feat/copy-discord-layout` (2026-08-25, rebased 2026-08-28). Paste a Guild Template (`discord.new/…`). Preview, then create a pqp community with the same sidebar. Cosmetic roles and inferred privacy only. No bot, no members, no messages. Field inventory: `docs/DISCORD_IMPORT.md`. |
 | In-app sounds | Demo on `feat/in-app-sounds`. Cinematic UI SFX (CC0): mention=`mention`, voice join/leave=`select`/`deselect`. Join/leave play on click; the mic pipeline waits so capture cannot cut the cue. Samples exclusive; outgoing ring waits. No ordinary-message ping. Incoming ring picker in Settings (Classic plus four motifs). Outgoing still dual-tone. |
 | Ambient life — the five launch communities | Done, canned-verified (`tools/ambient/`: 25 personas across Resenha FC / Maratona / Fone com Fio / Sala de Espera do Ranked / Véspera de Prova; provisioning + seed scripts, multi-community scheduling from one process, inbound reply screening with a per-human cap, JSONL audit log, kill switch honoured mid-scene — `docs/ambient-deploy.md`). **No live Claude generation has been made** since the spike; every run so far is `--canned` |
-| Roles, nicknames, `@everyone` / `@here` | Done locally (2026-08-24). Discord 8-step overwrites, 20 permission bits as decimal strings / `bigint`, seeded `@everyone` + Admin, nicknames display-only (mentions stay `@username`), mass mentions gated on `MENTION_EVERYONE`. Channel overwrite editor (allow / inherit / deny). Live `permissions-update` WS frame. Hoist in the member list. Role colours on message names and the member sidebar. |
+| Roles, nicknames, `@everyone` / `@here` | Done locally (2026-08-24), staff ladder 2026-08-28. Discord 8-step overwrites, 20 permission bits as decimal strings / `bigint`, seeded Owner / Admin / Manager / Moderator / `@everyone` with gold / wine / blue / teal. Nicknames display-only (mentions stay `@username`). Mass mentions gated on `MENTION_EVERYONE`. Authz uses bits, not rank. Profile card assigns cargos with checkboxes. Channel overwrite editor (allow / inherit / deny). Live `permissions-update` WS frame. Hoist in the member list and the Members dialog. Role colours on message names and the member sidebar. |
 | NEW divider, mention rows, `:emoji:` / ArrowUp | Done locally (2026-08-24). `POST /read` returns the previous cursor so the log can keep a NEW rule for the visit. Mentioned rows get an accent wash. Own messages do not wash or ping; a fired `@everyone` / `@here` from someone else does. Composer ArrowUp edits last own message; `:name` autocompletes. |
 
 ## Product roadmap

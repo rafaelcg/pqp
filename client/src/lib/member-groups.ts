@@ -28,8 +28,11 @@ import type { UserStatus } from "@pqp/shared";
  *     otherwise swap places between renders, and this list re-renders every
  *     time anybody's status changes.
  *
- * Rank promotion to `admin` does not write a `member_roles` row. Callers pass
- * `effectiveRoleIds` so a rank-admin still lands in the seeded Admin section.
+ * Rank `admin` does not always write a `member_roles` row (older servers, or
+ * iOS Promote before the cargo was assigned). Callers pass `effectiveRoleIds`
+ * so a rank-only admin still lands in Admin. Managers share that rank and
+ * must not be given the Admin id — they already hold Gerente.
+ * The owner lands in the Owner cargo section when that cargo is hoisted.
  */
 
 export type MemberRole = "owner" | "admin" | "member";
@@ -73,16 +76,26 @@ export interface MemberSection<T> {
 }
 
 /**
- * Rank `admin` does not grant the seeded Admin role. Fold that id in here so
- * grouping and colour both see it, without `groupMembers` knowing about rank.
+ * Fold the seeded Admin id in only for a rank-admin who has no cargo rows
+ * yet. A Manager is also rank `admin`; inventing Admin for them ticks Adm
+ * on the profile and hoists them under Adm instead of Gerente.
  */
 export function effectiveRoleIds(
   member: { role: MemberRole; roleIds?: readonly string[] },
   adminRoleId: string | null,
+  ownerRoleId: string | null = null,
 ): string[] {
   const ids = [...(member.roleIds ?? [])];
-  if (member.role === "admin" && adminRoleId && !ids.includes(adminRoleId)) {
+  if (
+    member.role === "admin" &&
+    adminRoleId &&
+    !ids.includes(adminRoleId) &&
+    ids.length === 0
+  ) {
     ids.push(adminRoleId);
+  }
+  if (member.role === "owner" && ownerRoleId && !ids.includes(ownerRoleId)) {
+    ids.push(ownerRoleId);
   }
   return ids;
 }
@@ -138,17 +151,12 @@ export function groupMembers<T extends GroupableMember>(
   const byHoisted = new Map<string, T[]>(
     hoistedRoles.map((role) => [role.id, []]),
   );
-  const owners: T[] = [];
   const online: T[] = [];
   const offline: T[] = [];
 
   for (const member of members) {
     if (!isAround(member.status)) {
       offline.push(member);
-      continue;
-    }
-    if (member.role === "owner") {
-      owners.push(member);
       continue;
     }
     const held = new Set(member.roleIds ?? []);
@@ -161,14 +169,6 @@ export function groupMembers<T extends GroupableMember>(
   }
 
   const sections: MemberSection<T>[] = [];
-  if (owners.length > 0) {
-    sections.push({
-      id: "role:owner",
-      kind: "role",
-      role: "owner",
-      members: owners.sort(compareMembers),
-    });
-  }
   for (const role of hoistedRoles) {
     const bucket = byHoisted.get(role.id) ?? [];
     if (bucket.length > 0) {

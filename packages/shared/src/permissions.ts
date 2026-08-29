@@ -58,6 +58,119 @@ export const PERMISSION_DEFAULT_EVERYONE =
 export const PERMISSION_TIMEOUT_KEEP =
   Permission.VIEW_CHANNEL | Permission.READ_MESSAGE_HISTORY;
 
+/** Manager / Gerente: every bit except Administrator, so overwrites still apply. */
+export const PERMISSION_DEFAULT_MANAGER = PERMISSION_ALL & ~Permission.ADMINISTRATOR;
+
+/**
+ * Moderator extras only. `@everyone` is ORed at resolve time, so copying
+ * member defaults here would freeze them against later @everyone edits.
+ */
+export const PERMISSION_DEFAULT_MODERATOR =
+  Permission.KICK_MEMBERS |
+  Permission.MODERATE_MEMBERS |
+  Permission.MUTE_MEMBERS |
+  Permission.MANAGE_MESSAGES |
+  Permission.MANAGE_NICKNAMES;
+
+export const ROLE_SYSTEM_KEYS = [
+  "everyone",
+  "owner",
+  "admin",
+  "manager",
+  "moderator",
+] as const;
+
+export type RoleSystemKey = (typeof ROLE_SYSTEM_KEYS)[number];
+
+/**
+ * Default name colours for seeded staff cargos. Dark-first, and none of them
+ * is the Classic lime accent or danger red. `@everyone` stays unpainted.
+ * Hex literals in `pqp_ensure_staff_ladder` must match this map.
+ */
+export const STAFF_ROLE_COLORS: Record<
+  Exclude<RoleSystemKey, "everyone">,
+  string
+> = {
+  owner: "#E0B84C",
+  admin: "#D46A8A",
+  manager: "#6BA3E8",
+  moderator: "#4EC4B0",
+};
+
+/**
+ * English seed names written by `seedDefaultRoles` / `pqp_ensure_staff_ladder`.
+ * The client translates these while the stored name still matches.
+ */
+export const STAFF_ROLE_NAMES: Record<
+  Exclude<RoleSystemKey, "everyone">,
+  string
+> = {
+  owner: "Owner",
+  admin: "Admin",
+  manager: "Manager",
+  moderator: "Moderator",
+};
+
+/** Seeded staff colour, or null for homemade cargos and `@everyone`. */
+export function defaultRoleColor(
+  systemKey: RoleSystemKey | null | undefined,
+): string | null {
+  if (!systemKey || systemKey === "everyone") {
+    return null;
+  }
+  return STAFF_ROLE_COLORS[systemKey];
+}
+
+/** Stored seed name, or null for homemade cargos (they have no factory name). */
+export function defaultRoleName(
+  systemKey: RoleSystemKey | null | undefined,
+): string | null {
+  if (!systemKey) {
+    return null;
+  }
+  if (systemKey === "everyone") {
+    return "everyone";
+  }
+  return STAFF_ROLE_NAMES[systemKey];
+}
+
+/**
+ * Factory permission mask. Homemade cargos start at 0 (they inherit
+ * `@everyone` at resolve time). Owner's row is 0 because the owner person
+ * short-circuits to ALL.
+ */
+export function defaultRolePermissions(
+  systemKey: RoleSystemKey | null | undefined,
+): bigint {
+  switch (systemKey) {
+    case "everyone":
+      return PERMISSION_DEFAULT_EVERYONE;
+    case "admin":
+      return PERMISSION_ALL;
+    case "manager":
+      return PERMISSION_DEFAULT_MANAGER;
+    case "moderator":
+      return PERMISSION_DEFAULT_MODERATOR;
+    default:
+      return 0n;
+  }
+}
+
+/**
+ * Owner stays at the top of the list. `@everyone` stays at the bottom.
+ * Homemade cargos and the other staff rungs can still move between those.
+ */
+export function isRoleOrderLocked(role: {
+  isEveryone?: boolean;
+  systemKey?: RoleSystemKey | null;
+}): boolean {
+  return (
+    Boolean(role.isEveryone) ||
+    role.systemKey === "everyone" ||
+    role.systemKey === "owner"
+  );
+}
+
 /**
  * Bits `@everyone` must never carry. Kick, ban, timeout and Administrator
  * belong on a higher role. Hierarchy still needs a rank above the target, but
@@ -298,6 +411,7 @@ export const updateRoleSchema = z.object({
   mentionable: z.boolean().optional(),
   permissions: permissionBitfieldSchema.optional(),
   hoist: z.boolean().optional(),
+  showBadge: z.boolean().optional(),
 });
 
 export const reorderRolesSchema = z.object({
@@ -325,7 +439,11 @@ export const roleSchema = z.object({
   permissions: permissionBitfieldSchema,
   position: z.number().int(),
   isEveryone: z.boolean(),
-  systemKey: z.enum(["everyone", "admin"]).nullable().default(null),
+  systemKey: z
+    .enum(["everyone", "owner", "admin", "manager", "moderator"])
+    .nullable()
+    .default(null),
+  showBadge: z.boolean().default(true),
 });
 
 export type Role = z.infer<typeof roleSchema>;

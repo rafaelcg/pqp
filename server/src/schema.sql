@@ -2523,10 +2523,9 @@ CREATE INDEX IF NOT EXISTS idx_connection_oauth_states_created
 --
 -- ALL = 1048575. Default @everyone = 571073.
 --
--- Two seeded roles per server: `@everyone` (is_everyone, position 0, implicit
--- membership — never a member_roles row) and `Admin` (system_key = 'admin',
--- ADMINISTRATOR, assigned to server_members.role = 'admin'). The owner is not
--- a role; servers.owner_id short-circuits to ALL.
+-- Seeded roles per server: `@everyone` (implicit, never a member_roles row),
+-- Moderator, Manager, Admin (ADMINISTRATOR), and Owner (display only;
+-- servers.owner_id is still the source of ownership and short-circuits to ALL).
 
 ALTER TABLE servers ADD COLUMN IF NOT EXISTS permissions_version INTEGER NOT NULL DEFAULT 0;
 
@@ -2545,7 +2544,8 @@ CREATE TABLE IF NOT EXISTS roles (
   permissions BIGINT NOT NULL DEFAULT 0,
   position INTEGER NOT NULL DEFAULT 0,
   is_everyone BOOLEAN NOT NULL DEFAULT FALSE,
-  system_key TEXT CHECK (system_key IN ('everyone', 'admin')),
+  system_key TEXT CHECK (system_key IN ('everyone', 'owner', 'admin', 'manager', 'moderator')),
+  show_badge BOOLEAN NOT NULL DEFAULT TRUE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -2610,9 +2610,10 @@ AS $$
 BEGIN
   IF EXISTS (
     SELECT 1 FROM roles r
-     WHERE r.id = NEW.role_id AND r.is_everyone
+     WHERE r.id = NEW.role_id
+       AND (r.is_everyone OR r.system_key IN ('everyone', 'owner'))
   ) THEN
-    RAISE EXCEPTION 'cannot assign the @everyone role';
+    RAISE EXCEPTION 'cannot assign the @everyone or Owner role';
   END IF;
   RETURN NEW;
 END;
@@ -2633,6 +2634,11 @@ AS $$
 DECLARE
   v_admin_id UUID;
 BEGIN
+  -- Rank refresh writes the compatibility column from cargos. Skip so that
+  -- assigning Manager does not also grant the Admin cargo.
+  IF current_setting('pqp.skip_rank_sync', true) = 'on' THEN
+    RETURN NEW;
+  END IF;
   SELECT id INTO v_admin_id
     FROM roles
    WHERE server_id = NEW.server_id AND system_key = 'admin';
@@ -2643,7 +2649,7 @@ BEGIN
     INSERT INTO member_roles (server_id, user_id, role_id)
     VALUES (NEW.server_id, NEW.user_id, v_admin_id)
     ON CONFLICT DO NOTHING;
-  ELSE
+  ELSIF NEW.role = 'member' THEN
     DELETE FROM member_roles
      WHERE server_id = NEW.server_id
        AND user_id = NEW.user_id
@@ -2730,6 +2736,167 @@ BEGIN
   END IF;
   UPDATE roles SET hoist = TRUE WHERE system_key = 'admin' AND NOT hoist;
   INSERT INTO data_migrations (name) VALUES ('admin_role_hoist_2026_08');
+END $$;
+
+-- Existing databases still have the old CHECK. Widen it, then add Owner /
+-- Manager / Moderator without colliding with homemade names, and park custom
+-- cargos *below* staff so a VIP does not outrank Admin.
+-- Existing databases still have the old CHECK. Drop every system_key check
+-- (the inline name is usually roles_system_key_check, but do not depend on it).
+DO $$
+DECLARE
+  cname TEXT;
+BEGIN
+  FOR cname IN
+    SELECT con.conname
+      FROM pg_constraint con
+     WHERE con.conrelid = 'roles'::regclass
+       AND con.contype = 'c'
+       AND pg_get_constraintdef(con.oid) ILIKE '%system_key%'
+  LOOP
+    EXECUTE format('ALTER TABLE roles DROP CONSTRAINT %I', cname);
+  END LOOP;
+END $$;
+ALTER TABLE roles ADD CONSTRAINT roles_system_key_check
+  CHECK (system_key IS NULL OR system_key IN ('everyone', 'owner', 'admin', 'manager', 'moderator'));
+
+ALTER TABLE roles ADD COLUMN IF NOT EXISTS show_badge BOOLEAN NOT NULL DEFAULT TRUE;
+
+CREATE OR REPLACE FUNCTION pqp_unique_role_name(p_server_id UUID, p_wanted TEXT)
+RETURNS TEXT
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  candidate TEXT := p_wanted;
+  n INTEGER := 2;
+  stem TEXT := left(p_wanted, 28);
+BEGIN
+  WHILE EXISTS (
+    SELECT 1 FROM roles
+     WHERE server_id = p_server_id AND LOWER(name) = LOWER(candidate)
+  ) LOOP
+    candidate := stem || '_' || n::text;
+    n := n + 1;
+  END LOOP;
+  RETURN candidate;
+END;
+$$;
+
+-- Moderator extras: KICK(2) | MANAGE_MESSAGES(256) | MUTE(16384) |
+-- MANAGE_NICKNAMES(65536) | MODERATE_MEMBERS(262144) = 344322.
+-- Manager: ALL(1048575) minus ADMINISTRATOR(8) = 1048567.
+-- Insert colours match STAFF_ROLE_COLORS in packages/shared/src/permissions.ts.
+CREATE OR REPLACE FUNCTION pqp_ensure_staff_ladder(p_server_id UUID)
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_pos INTEGER;
+  r RECORD;
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM roles WHERE server_id = p_server_id AND system_key = 'moderator'
+  ) THEN
+    INSERT INTO roles (
+      server_id, name, permissions, position, is_everyone, system_key,
+      mentionable, hoist, show_badge, color
+    )
+    VALUES (
+      p_server_id, pqp_unique_role_name(p_server_id, 'Moderator'), 344322, 1,
+      FALSE, 'moderator', FALSE, TRUE, TRUE, '#4EC4B0'
+    );
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM roles WHERE server_id = p_server_id AND system_key = 'manager'
+  ) THEN
+    INSERT INTO roles (
+      server_id, name, permissions, position, is_everyone, system_key,
+      mentionable, hoist, show_badge, color
+    )
+    VALUES (
+      p_server_id, pqp_unique_role_name(p_server_id, 'Manager'), 1048567, 2,
+      FALSE, 'manager', FALSE, TRUE, TRUE, '#6BA3E8'
+    );
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM roles WHERE server_id = p_server_id AND system_key = 'owner'
+  ) THEN
+    INSERT INTO roles (
+      server_id, name, permissions, position, is_everyone, system_key,
+      mentionable, hoist, show_badge, color
+    )
+    VALUES (
+      p_server_id, pqp_unique_role_name(p_server_id, 'Owner'), 0, 4,
+      FALSE, 'owner', FALSE, TRUE, TRUE, '#E0B84C'
+    );
+  END IF;
+
+  UPDATE roles SET hoist = TRUE
+   WHERE server_id = p_server_id
+     AND system_key IN ('admin', 'manager', 'moderator', 'owner')
+     AND NOT hoist;
+
+  UPDATE roles SET position = 0
+   WHERE server_id = p_server_id AND is_everyone;
+
+  v_pos := 1;
+  FOR r IN
+    SELECT id FROM roles
+     WHERE server_id = p_server_id AND system_key IS NULL
+     ORDER BY position ASC, LOWER(name) ASC, id ASC
+  LOOP
+    UPDATE roles SET position = v_pos WHERE id = r.id;
+    v_pos := v_pos + 1;
+  END LOOP;
+
+  UPDATE roles SET position = v_pos
+   WHERE server_id = p_server_id AND system_key = 'moderator';
+  v_pos := v_pos + 1;
+  UPDATE roles SET position = v_pos
+   WHERE server_id = p_server_id AND system_key = 'manager';
+  v_pos := v_pos + 1;
+  UPDATE roles SET position = v_pos
+   WHERE server_id = p_server_id AND system_key = 'admin';
+  v_pos := v_pos + 1;
+  UPDATE roles SET position = v_pos
+   WHERE server_id = p_server_id AND system_key = 'owner';
+END;
+$$;
+
+DO $$
+DECLARE
+  s RECORD;
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM data_migrations WHERE name = 'staff_ladder_2026_08'
+  ) THEN
+    RETURN;
+  END IF;
+
+  FOR s IN SELECT id FROM servers LOOP
+    PERFORM pqp_ensure_staff_ladder(s.id);
+  END LOOP;
+
+  INSERT INTO data_migrations (name) VALUES ('staff_ladder_2026_08');
+END $$;
+
+-- Paint seeded staff cargos that still have no colour. Do not overwrite a
+-- colour someone already set, and do not re-run pqp_ensure_staff_ladder
+-- (that would re-park custom cargos below staff). Hexes match STAFF_ROLE_COLORS.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM data_migrations WHERE name = 'staff_colors_2026_08'
+  ) THEN
+    RETURN;
+  END IF;
+  UPDATE roles SET color = '#E0B84C' WHERE system_key = 'owner' AND color IS NULL;
+  UPDATE roles SET color = '#D46A8A' WHERE system_key = 'admin' AND color IS NULL;
+  UPDATE roles SET color = '#6BA3E8' WHERE system_key = 'manager' AND color IS NULL;
+  UPDATE roles SET color = '#4EC4B0' WHERE system_key = 'moderator' AND color IS NULL;
+  INSERT INTO data_migrations (name) VALUES ('staff_colors_2026_08');
 END $$;
 
 -- Who may VIEW this channel (the effective row: parent for a thread).
