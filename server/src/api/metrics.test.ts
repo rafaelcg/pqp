@@ -136,6 +136,13 @@ interface MetricsBody {
       hidden: number;
     }[];
   };
+  product: {
+    friendships: number;
+    pendingFriendRequests: number;
+    attachments: { total: number; last24h: number };
+    invites: { created24h: number; uses: number };
+    push: { web: number; apns: number };
+  };
 }
 
 describe("isAdminMetricsTokenValid", () => {
@@ -339,6 +346,14 @@ describeDb("GET /api/admin/metrics", () => {
         { provider: "battlenet", enabled: false, linked: 0, public: 0, shared: 0, hidden: 0 },
         { provider: "twitch", enabled: false, linked: 1, public: 0, shared: 0, hidden: 1 },
       ],
+    });
+
+    expect(body.product).toEqual({
+      friendships: 0,
+      pendingFriendRequests: 0,
+      attachments: { total: 0, last24h: 0 },
+      invites: { created24h: 0, uses: 0 },
+      push: { web: 0, apns: 0 },
     });
 
     // Counts, never people.

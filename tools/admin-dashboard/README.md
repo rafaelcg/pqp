@@ -11,8 +11,8 @@ not part of the product and it is not linked from anywhere.
 
 A strip of **signals** sits directly under the header: one pill per thing that
 can need attention (health, **capacity**, message volume, call quality, voice
-load, house-cast share), coloured by state, so a scan does not have to read
-every figure below.
+load, house-cast share, Android APK clicks today), coloured by state, so a scan
+does not have to read every figure below.
 Under it, one line of provenance: which account kinds the numbers exclude, the
 server's cache window (and that the capacity card sits outside it), and the
 page's own refresh interval.
@@ -24,8 +24,8 @@ between them.
 
 | Tab | What is on it |
 |---|---|
-| **visão geral** | health tiles, the six headline metrics with sparklines, the two 24-hour charts, the five most active servers |
-| **usuários** | signups per day over 14 days, who is actually active (24h and 7d), the returning-writer share, what people filled in (handle / avatar / banner / game account / age check), plus first-touch acquisition and game connections |
+| **visão geral** | health tiles, the six headline metrics with sparklines, **apps e produto** (Android APK clicks + GitHub downloads, friendships, attachments, invites, push), the two 24-hour charts, the five most active servers |
+| **usuários** | signups per day over 14 days, who is actually active (24h and 7d), the returning-writer share, accepted friendships and open friend requests, what people filled in (handle / avatar / banner / game account / age check), plus first-touch acquisition and game connections |
 | **canais** | text-vs-voice composition, the eight busiest text channels of the last 24h, and the shape of the instance: direct and group conversations, private channels, channels that have never received a message |
 | **comunidades** | the directory: listed, suspended, addressed, by category, and the communities themselves. Off by default, and it says so (see below) |
 | **voz e chamadas** | the rooms open *right now* with who is sharing a screen, the voice summary against the mesh limit, and the full call-quality distribution with notes |
@@ -147,6 +147,19 @@ Live, from `GET https://api.pqp.gg/api/admin/metrics` (proxied as `/metrics`):
   timeouts, and the last eight feedback bodies (truncated by the API, never
   attributed)
 - the deployed API commit (`APP_VERSION`) and the excluded account kinds
+- **product**: accepted friendships and open friend requests, claimed
+  attachments (total and last 24h), invites created in 24h plus cumulative
+  invite uses, and push subscriptions by platform (`web` / `apns`)
+
+Live, from this Worker (merged onto `/metrics`, never stored on the API):
+
+- **Android APK button clicks**: `POST /apk-click` from the hosted `/android`
+  page, counted in KV, São Paulo day bucket. A click is a click, including
+  people who never finish the install. Rate-limited per IP. The path is
+  public on purpose; the *read* still needs the password.
+- **Android APK downloads**: GitHub `download_count` on `pqp.apk` of the
+  rolling `android-beta` prerelease, cached five minutes. That is the file
+  leaving GitHub, so it can be lower or higher than clicks.
 
 Live, from `GET https://api.pqp.gg/status.json` (proxied as `/health`): the
 component health tiles, the headline pill, database latency, and the 24h/7d
@@ -167,9 +180,9 @@ The repo is open source and a `workers.dev` hostname is guessable. The page is
 aggregate counts and holds no id, handle or email, but it is not *only* counts:
 the "most active" tables carry the **names of private servers and channels**,
 and the call-rating notes and feedback entries are **free text people wrote**.
-All of that is more than the public status page is ever allowed to say. So the Worker gates **every** request (the page, `/metrics`,
-`/health`) behind HTTP Basic Auth, compared in constant time, and refuses to
-serve anything at all (503) while the password is unset. Every response is
+All of that is more than the public status page is ever allowed to say. So the Worker gates the page, `/metrics` and `/health` behind HTTP Basic Auth, compared in constant time, and refuses to
+serve anything at all (503) while the password is unset. The one public path is
+`POST /apk-click`: it increments a counter and cannot read one. Every response is
 `Cache-Control: no-store`, `Referrer-Policy: no-referrer`, `X-Robots-Tag:
 noindex`, and `/robots.txt` disallows everything.
 
@@ -190,6 +203,8 @@ Nothing secret lives in this directory, in `wrangler.jsonc`, or in the HTML.
 | Worker | `ADMIN_DASH_USER` | var (in `wrangler.jsonc`) | Basic Auth username, default `operador`. |
 | Worker | `ADMIN_METRICS_TOKEN` | secret | Bearer token sent to the API on `/metrics`. Never reaches the page. |
 | Worker | `API_ORIGIN` | var (in `wrangler.jsonc`) | `https://api.pqp.gg` |
+| Worker | `APK_CLICKS` | KV | Click counter for `POST /apk-click`. Binding in `wrangler.jsonc`. |
+| Worker | `GITHUB_REPO` | var | `rafaelcg/pqp` — release looked up for the APK download count. |
 | API (Fly) | `ADMIN_METRICS_TOKEN` | secret | The same value. At least 16 characters or the API treats it as unset. |
 
 Generate the token once (`openssl rand -hex 32`) and set it on both sides:

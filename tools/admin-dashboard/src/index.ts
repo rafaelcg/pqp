@@ -1,15 +1,20 @@
 /**
  * pqp-admin: the Worker in front of the operator dashboard.
  *
- * Three jobs, in this order, on every request:
+ * Four jobs, in this order, on every request:
  *
- *  1. Gate. Everything (the page, /metrics, /health) sits behind HTTP Basic
- *     Auth. The repo is public and a workers.dev hostname is guessable, so the
- *     page cannot rely on obscurity. With ADMIN_DASH_PASSWORD unset the Worker
- *     serves nothing at all (503), so a misdeploy never exposes data.
+ *  1. Gate. Almost everything (the page, /metrics, /health) sits behind HTTP
+ *     Basic Auth. The repo is public and a workers.dev hostname is guessable,
+ *     so the page cannot rely on obscurity. With ADMIN_DASH_PASSWORD unset the
+ *     Worker serves nothing at all (503), so a misdeploy never exposes data.
+ *     The one exception is `POST /apk-click`: a public, CORS-open increment
+ *     that the hosted `/android` page beacons. It writes a counter and
+ *     nothing else; the read of that counter still needs the password.
  *  2. Proxy. `/metrics` is `${API_ORIGIN}/api/admin/metrics` called with the
- *     machine token; `/health` is `${API_ORIGIN}/status.json`. The page only
- *     ever talks to its own origin and never holds a credential.
+ *     machine token, then merged with the Android distribution block this
+ *     Worker owns (button clicks in KV, GitHub `download_count`); `/health`
+ *     is `${API_ORIGIN}/status.json`. The page only ever talks to its own
+ *     origin and never holds a credential.
  *  3. Serve. `/` is the static page from the assets binding. Anything else is
  *     a 404, so the Worker cannot be used as an open proxy or an asset lister.
  *
@@ -22,6 +27,18 @@
  * into the static HTML. See README.md.
  */
 
+import {
+  APK_CLICKS_KEY,
+  APK_RATE_PREFIX,
+  APK_RATE_TTL_SECONDS,
+  bumpClicks,
+  distributionBlock,
+  emptyClicks,
+  fetchGithubApkDownloads,
+  isAllowedClickOrigin,
+  type ApkClickState,
+} from "./distribution.js";
+
 export interface Env {
   ASSETS: Fetcher;
   /** Public API origin, e.g. https://api.pqp.gg (a var in wrangler.jsonc). */
@@ -32,6 +49,10 @@ export interface Env {
   ADMIN_DASH_PASSWORD?: string;
   /** Bearer token the API expects on /api/admin/metrics (secret). */
   ADMIN_METRICS_TOKEN?: string;
+  /** `owner/repo` for the Android beta release. */
+  GITHUB_REPO?: string;
+  /** Click counter. Unset: /apk-click is a no-op and the tile says so. */
+  APK_CLICKS?: KVNamespace;
 }
 
 const DEFAULT_USER = "operador";
@@ -116,6 +137,110 @@ function isAuthorized(request: Request, env: Env): boolean {
   return (Number(userOk) & Number(passwordOk)) === 1;
 }
 
+function corsHeaders(origin: string | null): Record<string, string> {
+  const allow = origin && isAllowedClickOrigin(origin) ? origin : "https://pqp.gg";
+  return {
+    "Access-Control-Allow-Origin": allow,
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Max-Age": "86400",
+    Vary: "Origin",
+  };
+}
+
+function clickResponse(status: number, origin: string | null): Response {
+  return new Response(null, {
+    status,
+    headers: { ...BASE_HEADERS, ...corsHeaders(origin) },
+  });
+}
+
+/** Public increment of the Android download-button counter. No body, ever. */
+async function handleApkClick(request: Request, env: Env): Promise<Response> {
+  const origin = request.headers.get("Origin");
+  if (origin && !isAllowedClickOrigin(origin)) {
+    return clickResponse(204, origin);
+  }
+  if (request.method === "OPTIONS") {
+    return clickResponse(204, origin);
+  }
+  if (request.method !== "POST") {
+    return clickResponse(404, origin);
+  }
+
+  const kv = env.APK_CLICKS;
+  if (!kv) {
+    return clickResponse(204, origin);
+  }
+
+  try {
+    const ip = request.headers.get("CF-Connecting-IP") || "unknown";
+    const limited = await kv.get(`${APK_RATE_PREFIX}${ip}`);
+    if (limited) {
+      return clickResponse(204, origin);
+    }
+
+    const current = (await kv.get<ApkClickState>(APK_CLICKS_KEY, "json")) ?? emptyClicks();
+    await Promise.all([
+      kv.put(APK_CLICKS_KEY, JSON.stringify(bumpClicks(current))),
+      kv.put(`${APK_RATE_PREFIX}${ip}`, "1", { expirationTtl: APK_RATE_TTL_SECONDS }),
+    ]);
+  } catch {
+    // A failed increment must not become a 500 on a public beacon.
+  }
+  return clickResponse(204, origin);
+}
+
+async function readClicks(env: Env): Promise<{ state: ApkClickState | null; configured: boolean }> {
+  if (!env.APK_CLICKS) {
+    return { state: null, configured: false };
+  }
+  const state = (await env.APK_CLICKS.get<ApkClickState>(APK_CLICKS_KEY, "json")) ?? emptyClicks();
+  return { state, configured: true };
+}
+
+/**
+ * The API payload plus the Android block this Worker owns. A failed GitHub
+ * read leaves `apkDownloads` null rather than inventing a zero.
+ */
+async function metricsWithDistribution(
+  url: string,
+  headers: Record<string, string>,
+  env: Env,
+): Promise<Response> {
+  const repo = (env.GITHUB_REPO ?? "rafaelcg/pqp").replace(/^\/+|\/+$/g, "");
+  const [upstream, clicks, github] = await Promise.all([
+    fetch(url, {
+      method: "GET",
+      headers: { Accept: "application/json", ...headers },
+      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+    }).catch(() => null),
+    readClicks(env),
+    fetchGithubApkDownloads(repo),
+  ]);
+  if (!upstream) {
+    return json(502, { error: "upstream unavailable" });
+  }
+  const text = await upstream.text();
+  if (!upstream.ok) {
+    return new Response(text, {
+      status: upstream.status,
+      headers: { ...BASE_HEADERS, "Content-Type": "application/json; charset=utf-8" },
+    });
+  }
+  let body: Record<string, unknown>;
+  try {
+    body = JSON.parse(text) as Record<string, unknown>;
+  } catch {
+    return new Response(text, {
+      status: upstream.status,
+      headers: { ...BASE_HEADERS, "Content-Type": "application/json; charset=utf-8" },
+    });
+  }
+  body.distribution = distributionBlock(clicks.state, clicks.configured, github);
+  return json(200, body);
+}
+
 /** Fetch an upstream JSON document and pass status + body through, nothing else. */
 async function proxyJson(url: string, headers: Record<string, string>): Promise<Response> {
   let upstream: Response;
@@ -144,6 +269,12 @@ export default {
       return text(200, "User-agent: *\nDisallow: /\n");
     }
 
+    // Public on purpose: the hosted site beacons here from a browser that
+    // has no admin password. It increments a counter. It cannot read one.
+    if (path === "/apk-click") {
+      return handleApkClick(request, env);
+    }
+
     // No password, no dashboard. A 503 rather than a 401, so the operator can
     // tell "not configured" from "wrong password" without reading logs.
     if (!env.ADMIN_DASH_PASSWORD) {
@@ -164,9 +295,11 @@ export default {
       if (!origin || !env.ADMIN_METRICS_TOKEN) {
         return json(503, { error: "metrics not configured" });
       }
-      return proxyJson(`${origin}/api/admin/metrics`, {
-        Authorization: `Bearer ${env.ADMIN_METRICS_TOKEN}`,
-      });
+      return metricsWithDistribution(
+        `${origin}/api/admin/metrics`,
+        { Authorization: `Bearer ${env.ADMIN_METRICS_TOKEN}` },
+        env,
+      );
     }
 
     if (path === "/health") {

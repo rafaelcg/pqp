@@ -44,13 +44,13 @@
     /* second series colour, for text/voice and human/automated splits */
     --series-2: oklch(0.62 0.09 250);
 
-    --shadow-1: 0 1px 2px oklch(0 0 0 / 0.25), 0 2px 8px oklch(0 0 0 / 0.22);
-    --shadow-2: 0 2px 6px oklch(0 0 0 / 0.30), 0 12px 32px oklch(0 0 0 / 0.30);
+    --shadow-1: none;
+    --shadow-2: none;
 
-    --r-lg: 20px;
-    --r-md: 14px;
-    --r-sm: 10px;
-    --r-xs: 8px;
+    --r-lg: 12px;
+    --r-md: 10px;
+    --r-sm: 8px;
+    --r-xs: 6px;
 
     --maxw: 1240px;
   }
@@ -90,8 +90,8 @@
       --hover: oklch(0.93 0.008 250 / 0.7);
       --series-2: oklch(0.55 0.10 255);
 
-      --shadow-1: 0 1px 2px oklch(0.45 0.03 255 / 0.08), 0 2px 8px oklch(0.45 0.03 255 / 0.06);
-      --shadow-2: 0 2px 6px oklch(0.45 0.03 255 / 0.10), 0 12px 32px oklch(0.45 0.03 255 / 0.10);
+      --shadow-1: none;
+      --shadow-2: none;
     }
     body {
       background:
@@ -126,7 +126,7 @@
   .wrap {
     max-width: var(--maxw);
     margin: 0 auto;
-    padding: 22px clamp(14px, 3vw, 34px) 60px;
+    padding: 18px clamp(14px, 3vw, 32px) 56px;
   }
 
   a { color: inherit; }
@@ -146,13 +146,15 @@
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 14px 20px;
-    padding: 6px 2px 20px;
+    gap: 12px 20px;
+    padding: 4px 2px 16px;
+    border-bottom: 1px solid var(--border-soft);
+    margin-bottom: 16px;
   }
   .brand { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
   .wordmark {
     font-family: "Dela Gothic One", "Unbounded", sans-serif;
-    font-size: clamp(24px, 3.4vw, 34px);
+    font-size: clamp(22px, 3vw, 28px);
     letter-spacing: -0.02em;
     line-height: 1;
     color: var(--text);
@@ -239,10 +241,10 @@
     flex-wrap: wrap;
   }
   .sec-head h2 {
-    font-family: "Unbounded", sans-serif;
     font-weight: 600;
-    font-size: 15px;
-    letter-spacing: 0.005em;
+    font-size: 14px;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
     margin: 0;
     color: var(--text);
   }
@@ -258,15 +260,15 @@
   /* ---------- cards ---------- */
   .card {
     background: var(--surface-1);
-    border: 1px solid var(--border-soft);
+    border: 1px solid var(--border);
     border-radius: var(--r-lg);
-    box-shadow: var(--shadow-1);
   }
   .card.pad { padding: 18px; }
 
   .grid { display: grid; gap: 14px; }
   .g-health { grid-template-columns: repeat(6, minmax(0,1fr)); }
   .g-metrics { grid-template-columns: repeat(6, minmax(0,1fr)); }
+  .g-apps { grid-template-columns: repeat(4, minmax(0,1fr)); }
   .g-charts { grid-template-columns: repeat(2, minmax(0,1fr)); }
   .g-1 { grid-template-columns: minmax(0,1fr); }
   .g-2 { grid-template-columns: repeat(2, minmax(0,1fr)); }
@@ -281,14 +283,13 @@
     display: flex; flex-direction: column; gap: 11px;
     border-radius: var(--r-md);
     background: var(--surface-1);
-    border: 1px solid var(--border-soft);
-    box-shadow: var(--shadow-1);
+    border: 1px solid var(--border);
     min-width: 0;
   }
   .health .h-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
   .health .h-name {
-    font-family: "Unbounded", sans-serif; font-weight: 500;
-    font-size: 12.5px; color: var(--muted); letter-spacing: 0.01em;
+    font-weight: 600;
+    font-size: 12px; color: var(--muted); letter-spacing: 0.01em;
   }
   .status-chip {
     display: inline-flex; align-items: center; gap: 6px;
@@ -332,16 +333,16 @@
     padding: 16px 16px 12px;
     border-radius: var(--r-md);
     background: var(--surface-1);
-    border: 1px solid var(--border-soft);
-    box-shadow: var(--shadow-1);
+    border: 1px solid var(--border);
     display: flex; flex-direction: column; gap: 9px;
     min-width: 0;
     position: relative;
     overflow: hidden;
   }
   .metric .m-label {
-    font-family: "Unbounded", sans-serif; font-weight: 500;
-    font-size: 11.5px; color: var(--muted); letter-spacing: 0.015em;
+    font-weight: 600;
+    font-size: 11.5px; color: var(--muted); letter-spacing: 0.02em;
+    text-transform: uppercase;
   }
   .metric .m-val {
     font-family: "Unbounded", sans-serif; font-weight: 700;
@@ -367,7 +368,7 @@
     margin-bottom: 4px; flex-wrap: wrap;
   }
   .chartcard .c-title {
-    font-family: "Unbounded", sans-serif; font-weight: 500;
+    font-weight: 600;
     font-size: 13px; color: var(--text); letter-spacing: 0.01em;
   }
   .chartcard .c-sum { font-size: 12px; color: var(--muted); }
@@ -382,7 +383,7 @@
     background: var(--surface-2); border: 1px solid var(--border-soft);
     display: flex; flex-direction: column; gap: 6px;
   }
-  .split .seg .k { font-size: 11.5px; color: var(--muted); font-family: "Unbounded", sans-serif; font-weight: 500; }
+  .split .seg .k { font-size: 11.5px; color: var(--muted); font-weight: 600; }
   .split .seg .v { font-family: "Unbounded", sans-serif; font-weight: 700; font-size: 24px; line-height: 1; }
   .split .seg .v .u { font-size: 11px; color: var(--muted); font-weight: 500; font-family: "Instrument Sans", sans-serif; }
   .stackbar { height: 8px; border-radius: 5px; overflow: hidden; display: flex; background: var(--surface-3); margin-top: 2px; }
@@ -398,8 +399,8 @@
     font-size: 13px;
   }
   thead th {
-    text-align: left; font-family: "Unbounded", sans-serif; font-weight: 500;
-    font-size: 10.5px; letter-spacing: 0.05em; text-transform: uppercase;
+    text-align: left; font-weight: 600;
+    font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase;
     color: var(--faint); padding: 8px 12px; border-bottom: 1px solid var(--border);
     white-space: nowrap;
   }
@@ -469,7 +470,7 @@
     background: var(--surface-2); border: 1px solid var(--border-soft);
     display: flex; flex-direction: column; gap: 3px;
   }
-  .kv .k { font-size: 11px; color: var(--muted); font-family: "Unbounded", sans-serif; font-weight: 500; }
+  .kv .k { font-size: 11px; color: var(--muted); font-weight: 600; letter-spacing: 0.02em; }
   .kv .v { font-weight: 600; font-size: 14px; }
   .kv .v.mono { font-family: ui-monospace, Menlo, monospace; font-size: 13px; color: var(--text); }
 
@@ -510,8 +511,9 @@
   }
 
   .subtle-title {
-    font-family: "Unbounded", sans-serif; font-weight: 500;
-    font-size: 12.5px; color: var(--muted); margin: 0 0 10px; letter-spacing: 0.01em;
+    font-weight: 600;
+    font-size: 12px; color: var(--muted); margin: 0 0 10px; letter-spacing: 0.03em;
+    text-transform: uppercase;
   }
 
   /* ---------- signals strip (the summary, above every detail) ---------- */
@@ -520,10 +522,9 @@
     margin: 2px 0 6px;
   }
   .sig {
-    display: inline-flex; align-items: center; gap: 9px;
-    padding: 9px 13px; border-radius: 999px;
-    background: var(--surface-1); border: 1px solid var(--border-soft);
-    box-shadow: var(--shadow-1);
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 7px 11px; border-radius: 8px;
+    background: var(--surface-1); border: 1px solid var(--border);
     font-size: 12.5px; color: var(--muted);
     min-width: 0;
   }
@@ -636,6 +637,7 @@
   @media (max-width: 1080px) {
     .g-health { grid-template-columns: repeat(3, minmax(0,1fr)); }
     .g-metrics { grid-template-columns: repeat(3, minmax(0,1fr)); }
+    .g-apps { grid-template-columns: repeat(2, minmax(0,1fr)); }
   }
   @media (max-width: 860px) {
     .g-charts, .g-2, .g-3 { grid-template-columns: minmax(0,1fr); }
@@ -647,6 +649,7 @@
     .wide-dist .dist-row { grid-template-columns: 104px 1fr 32px 42px; }
     .g-health { grid-template-columns: repeat(2, minmax(0,1fr)); }
     .g-metrics { grid-template-columns: repeat(2, minmax(0,1fr)); }
+    .g-apps { grid-template-columns: repeat(2, minmax(0,1fr)); }
     .kv-grid { grid-template-columns: 1fr; }
     .split { flex-direction: column; }
     body { font-size: 14px; }
@@ -663,12 +666,13 @@
      wrapping into two rows that push the content below the fold. */
   .tabs {
     display: flex;
-    gap: 4px;
-    margin: 0 0 22px;
-    padding: 4px;
-    background: var(--surface-1);
-    border: 1px solid var(--border-soft);
-    border-radius: var(--r-md);
+    gap: 2px;
+    margin: 0 0 20px;
+    padding: 0;
+    background: transparent;
+    border: 0;
+    border-bottom: 1px solid var(--border);
+    border-radius: 0;
     overflow-x: auto;
     scrollbar-width: none;
     -webkit-overflow-scrolling: touch;
@@ -682,23 +686,26 @@
     color: var(--muted);
     font: inherit;
     font-size: 13px;
-    font-weight: 500;
+    font-weight: 600;
     letter-spacing: 0.01em;
-    padding: 8px 14px;
-    border-radius: var(--r-sm);
+    padding: 10px 12px 11px;
+    border-radius: 0;
     cursor: pointer;
     white-space: nowrap;
     display: inline-flex;
     align-items: center;
     gap: 7px;
-    transition: background 0.15s, color 0.15s;
+    margin-bottom: -1px;
+    border-bottom: 2px solid transparent;
+    transition: color 0.15s, border-color 0.15s;
   }
-  .tab:hover { background: var(--hover); color: var(--text); }
+  .tab:hover { background: transparent; color: var(--text); }
   .tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
   .tab[aria-selected="true"] {
-    background: var(--accent-dim);
+    background: transparent;
     color: var(--text);
-    box-shadow: inset 0 0 0 1px var(--accent-edge);
+    border-bottom-color: var(--accent);
+    box-shadow: none;
   }
   /* Count badge on a tab. Deliberately quiet: it is orientation, not a metric. */
   .tab .tcount {
@@ -884,6 +891,75 @@
     <div class="grid g-metrics" id="metricGrid"><!-- injected --></div>
   </section>
 
+  <!-- ============ APPS + PRODUCT ============ -->
+  <!-- Android lives on this Worker (button clicks in KV, GitHub downloads),
+       not on the API. The rest of the row is the `product` block: friends,
+       attachments, invites, push. Either half can arrive without the other. -->
+  <section aria-label="apps e produto" id="secApps">
+    <div class="sec-head">
+      <h2>apps e produto</h2>
+      <span class="rule"></span>
+      <span class="note" id="appsNote">android · amigos · anexos · convites · push</span>
+    </div>
+    <div class="grid g-apps" id="appsGrid">
+      <div class="metric">
+        <span class="m-label">cliques no apk</span>
+        <span class="m-val num" id="apkClicks">—</span>
+        <div class="m-foot">
+          <span class="delta flat" id="apkClicksDelta">hoje</span>
+          <span class="m-note" id="apkClicksNote">botão em /android</span>
+        </div>
+      </div>
+      <div class="metric">
+        <span class="m-label">downloads do apk</span>
+        <span class="m-val num" id="apkDownloads">—</span>
+        <div class="m-foot">
+          <span class="delta flat">github</span>
+          <span class="m-note" id="apkDownloadsNote">asset pqp.apk · android-beta</span>
+        </div>
+      </div>
+      <div class="metric">
+        <span class="m-label">amizades</span>
+        <span class="m-val num" id="prodFriends">—</span>
+        <div class="m-foot">
+          <span class="delta flat" id="prodFriendsDelta">aceitas</span>
+          <span class="m-note" id="prodFriendsNote">pedidos em aberto à parte</span>
+        </div>
+      </div>
+      <div class="metric">
+        <span class="m-label">anexos · 24h</span>
+        <span class="m-val num" id="prodAttach">—</span>
+        <div class="m-foot">
+          <span class="delta flat" id="prodAttachDelta">total</span>
+          <span class="m-note" id="prodAttachNote">arquivos reclamados</span>
+        </div>
+      </div>
+    </div>
+    <div class="grid g-apps" style="margin-top:14px">
+      <div class="stat-mini">
+        <span class="k">convites criados · 24h</span>
+        <span class="v num" id="prodInvites24h">—</span>
+      </div>
+      <div class="stat-mini">
+        <span class="k">usos de convite · total</span>
+        <span class="v num" id="prodInviteUses">—</span>
+      </div>
+      <div class="stat-mini">
+        <span class="k">push · web</span>
+        <span class="v num" id="prodPushWeb">—</span>
+      </div>
+      <div class="stat-mini">
+        <span class="k">push · iphone</span>
+        <span class="v num" id="prodPushApns">—</span>
+      </div>
+    </div>
+    <p class="m-note" style="font-size:11.5px;color:var(--faint);margin:12px 2px 0">
+      clique e download são coisas diferentes: o clique é o botão em pqp.gg/android;
+      o download é o <span class="mono">pqp.apk</span> saindo do github. um pode ser maior que o outro
+      (desistiu, tentou de novo, baixou com curl).
+    </p>
+  </section>
+
   <!-- ============ GROWTH CHARTS ============ -->
   <section aria-label="crescimento nas últimas 24h">
     <div class="sec-head">
@@ -978,6 +1054,16 @@
           <div class="stat-mini">
             <span class="k">contas em exclusão</span>
             <span class="v num" id="uDeleting">—</span>
+          </div>
+        </div>
+        <div class="stat-row" style="margin-top:12px;margin-bottom:0" id="uFriendsRow">
+          <div class="stat-mini">
+            <span class="k">amizades aceitas</span>
+            <span class="v num" id="uFriends">—</span>
+          </div>
+          <div class="stat-mini">
+            <span class="k">pedidos de amizade em aberto</span>
+            <span class="v num" id="uFriendsPending">—</span>
           </div>
         </div>
         <p class="m-note" style="font-size:11.5px;color:var(--muted);margin:14px 0 0">
@@ -2315,6 +2401,61 @@
         'as mensagens do elenco da casa e de webhooks aparecem aqui, à parte, e em nenhum outro lugar.</p>';
   }
 
+  /* ---------------- render: apps + product ----------------
+     Two sources in one row. `distribution` is merged onto /metrics by this
+     Worker (clicks in KV, GitHub download_count). `product` is the API.
+     Either can be missing while the other is live; dashes stay dashes. */
+  function renderApps(d) {
+    var dist = d && d.distribution;
+    var prod = d && d.product;
+    if (!dist && !prod) return sectionUnavailable("secApps", "apps e produto");
+    sectionRestore("secApps");
+
+    if (dist) {
+      if (dist.apkClicksConfigured) {
+        setText("apkClicks", fmt(Number(dist.apkClicks) || 0));
+        var today = Number(dist.apkClicksToday) || 0;
+        var delta = $("apkClicksDelta");
+        if (delta) {
+          delta.className = "delta" + (today ? "" : " flat");
+          delta.textContent = (today ? "+" : "") + fmt(today) + " hoje";
+        }
+        setText("apkClicksNote", dist.apkClicksLastAt
+          ? "último " + fmtStamp(new Date(dist.apkClicksLastAt))
+          : "ainda nenhum clique");
+      } else {
+        setText("apkClicks", "—");
+        setText("apkClicksDelta", "off");
+        setText("apkClicksNote", "kv do worker não está ligado");
+      }
+      if (typeof dist.apkDownloads === "number") {
+        setText("apkDownloads", fmt(dist.apkDownloads));
+        setText("apkDownloadsNote",
+          (dist.apkDownloadsAsset || "pqp.apk") + " · " + (dist.apkDownloadsTag || "android-beta"));
+      } else {
+        setText("apkDownloads", "—");
+        setText("apkDownloadsNote", "github não respondeu neste ciclo");
+      }
+    }
+
+    if (!prod) {
+      setText("appsNote", "android ao vivo · o resto espera a api");
+      return;
+    }
+    setText("prodFriends", fmt(Number(prod.friendships) || 0));
+    setText("prodFriendsDelta", fmt(Number(prod.pendingFriendRequests) || 0) + " em aberto");
+    var att = prod.attachments || {};
+    setText("prodAttach", fmt(Number(att.last24h) || 0));
+    setText("prodAttachDelta", fmt(Number(att.total) || 0) + " no total");
+    var inv = prod.invites || {};
+    setText("prodInvites24h", fmt(Number(inv.created24h) || 0));
+    setText("prodInviteUses", fmt(Number(inv.uses) || 0));
+    var push = prod.push || {};
+    setText("prodPushWeb", fmt(Number(push.web) || 0));
+    setText("prodPushApns", fmt(Number(push.apns) || 0));
+    setText("appsNote", "android · amigos · anexos · convites · push");
+  }
+
   /* ---------------- render: provenance ---------------- */
   function renderProvenance(d) {
     var box = $("provenance");
@@ -2342,7 +2483,7 @@
      One pill per thing that can need attention. The colour is the message; the
      number is the detail behind it. Anything with no live reading stays out. */
   var sigState = {
-    health: null, capacity: null, messages: null, ratings: null, voice: null, automated: null
+    health: null, capacity: null, messages: null, ratings: null, voice: null, automated: null, android: null
   };
 
   function paintSignals() {
@@ -2350,7 +2491,7 @@
     if (!box) return;
     // Capacity sits second, right after health: it is the only pill that can
     // go red for something nobody has complained about yet.
-    var order = ["health", "capacity", "messages", "ratings", "voice", "automated"];
+    var order = ["health", "capacity", "messages", "ratings", "voice", "automated", "android"];
     var html = "";
     order.forEach(function (key) {
       var sig = sigState[key];
@@ -2404,6 +2545,17 @@
     sigState.automated = auto
       ? { state: "", label: "elenco da casa", value: fmt(auto) + " msgs",
           note: fmtPct(auto, auto + human) + " do tráfego bruto, fora das contagens" }
+      : null;
+
+    var dist = d.distribution;
+    sigState.android = dist && dist.apkClicksConfigured
+      ? {
+          state: "",
+          label: "apk",
+          value: fmt(dist.apkClicksToday || 0) + " hoje",
+          note: fmt(dist.apkClicks || 0) + " cliques · " +
+            (typeof dist.apkDownloads === "number" ? fmt(dist.apkDownloads) + " downloads" : "downloads indisponíveis")
+        }
       : null;
 
     paintSignals();
@@ -2547,6 +2699,10 @@
     setText("uActive24h", fmt(Number(d.distinctSenders24h) || 0));
     setText("uActive7d", fmt(Number(ud.active7d) || 0));
     setText("uDeleting", fmt(Number(ud.deletionPending) || 0));
+    if (d.product) {
+      setText("uFriends", fmt(Number(d.product.friendships) || 0));
+      setText("uFriendsPending", fmt(Number(d.product.pendingFriendRequests) || 0));
+    }
 
     var ret = ud.returning7d || {};
     var eligible = Number(ret.eligible) || 0;
@@ -3154,6 +3310,7 @@
     renderCallRatings(d.callRatings);
     renderVoiceRooms(voice.rooms);
     renderMessageSplit(msgs.last24h || 0, msgs.automated24h || 0);
+    renderApps(d);
     renderProvenance(d);
     setMetricSignals(d);
 

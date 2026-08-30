@@ -201,6 +201,20 @@ export interface AdminMetrics {
     }[];
   };
 
+  /**
+   * Product surfaces that are not users / messages / voice.
+   *
+   * Friends, attachments, invites and push sit in the same snapshot as the
+   * rest so the dashboard can draw them without a second read. Counts only.
+   */
+  product: {
+    friendships: number;
+    pendingFriendRequests: number;
+    attachments: { total: number; last24h: number };
+    invites: { created24h: number; uses: number };
+    push: { web: number; apns: number };
+  };
+
   /** Backs the "moderação" tab. */
   moderation: {
     reports: { open: number; actioned: number; dismissed: number; last24h: number };
@@ -414,6 +428,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
     banCounts,
     recentFeedback,
     voiceRoomNames,
+    productCounts,
   ] = await Promise.all([
     pool.query<{ private_text: string; dm: string; grp: string }>(
       `SELECT COUNT(*) FILTER (
@@ -594,6 +609,28 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
         [ids],
       );
     })(),
+    pool.query<{
+      friendships: string;
+      friend_pending: string;
+      attachments: string;
+      attachments_24h: string;
+      invites_24h: string;
+      invite_uses: string;
+      push_web: string;
+      push_apns: string;
+    }>(
+      `SELECT
+         (SELECT COUNT(*) FROM friendships WHERE status = 'accepted')::text AS friendships,
+         (SELECT COUNT(*) FROM friendships WHERE status = 'pending')::text AS friend_pending,
+         (SELECT COUNT(*) FROM message_attachments)::text AS attachments,
+         (SELECT COUNT(*) FROM message_attachments
+           WHERE created_at >= now() - interval '24 hours')::text AS attachments_24h,
+         (SELECT COUNT(*) FROM server_invites
+           WHERE created_at >= now() - interval '24 hours')::text AS invites_24h,
+         (SELECT COALESCE(SUM(uses), 0) FROM server_invites)::text AS invite_uses,
+         (SELECT COUNT(*) FROM push_subscriptions WHERE platform = 'web')::text AS push_web,
+         (SELECT COUNT(*) FROM push_subscriptions WHERE platform = 'apns')::text AS push_apns`,
+    ),
   ]);
 
   const channelCounts = { text: 0, voice: 0, category: 0, thread: 0 };
@@ -712,6 +749,23 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
         messages24h: Number(row.messages_24h),
         suspended: row.suspended,
       })),
+    },
+
+    product: {
+      friendships: Number(productCounts.rows[0]?.friendships ?? 0),
+      pendingFriendRequests: Number(productCounts.rows[0]?.friend_pending ?? 0),
+      attachments: {
+        total: Number(productCounts.rows[0]?.attachments ?? 0),
+        last24h: Number(productCounts.rows[0]?.attachments_24h ?? 0),
+      },
+      invites: {
+        created24h: Number(productCounts.rows[0]?.invites_24h ?? 0),
+        uses: Number(productCounts.rows[0]?.invite_uses ?? 0),
+      },
+      push: {
+        web: Number(productCounts.rows[0]?.push_web ?? 0),
+        apns: Number(productCounts.rows[0]?.push_apns ?? 0),
+      },
     },
 
     moderation: {
