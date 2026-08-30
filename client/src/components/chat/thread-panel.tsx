@@ -26,9 +26,9 @@ import type { MentionCandidate } from "@/lib/mention-autocomplete";
  * `createChatController` running on the WS `thread-join` slot, so this panel
  * and the parent channel both stay live at once.
  *
- * Overlaid on the chat pane (absolute, right-anchored) rather than splitting
- * it: the parent stays visible on wide screens, and on a phone the panel is
- * simply the screen, which is the "full view on mobile" behaviour for free.
+ * Docked as a sibling of the chat column on desktop (the same slot the
+ * member list uses), full viewport on mobile. Overlaying it on the parent
+ * while the roster stayed open is what left a long QG thread unreadable.
  */
 
 interface ThreadPanelProps {
@@ -93,7 +93,7 @@ export function ThreadPanel({
   return (
     <aside
       aria-label={`${t("thread.title")}: ${thread.name}`}
-      className="absolute inset-0 z-20 flex flex-col border-ink-4/60 bg-ink shadow-xl md:left-auto md:w-[26rem] md:border-l"
+      className="flex h-full min-h-0 w-full shrink-0 flex-col border-ink-4/60 bg-ink max-md:fixed max-md:inset-0 max-md:z-30 max-md:shadow-xl md:w-[26rem] md:border-l"
     >
       <header className="flex h-14 shrink-0 items-center gap-2 border-b border-ink-4/60 px-3">
         {thread.archived ? (
@@ -134,7 +134,7 @@ export function ThreadPanel({
             <span className="font-semibold text-paper">
               {origin.authorName}
             </span>{" "}
-            <span className="whitespace-pre-wrap break-words">
+            <span className="line-clamp-3 whitespace-pre-wrap break-words">
               {origin.body}
             </span>
           </p>

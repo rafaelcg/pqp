@@ -1,5 +1,5 @@
 import { SignInButton, SignUpButton, useAuth, useUser } from "@clerk/clerk-react";
-import { Lock, Menu, Phone, Users, Video, WifiOff } from "lucide-react";
+import { FileText, Lock, Menu, Phone, Pin, Shield, Users, Video, WifiOff } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
@@ -102,7 +102,7 @@ import { usePermissions } from "@/hooks/use-permissions";
 import { ShareHandleButton } from "@/components/handle/share-handle-button";
 import { BetaTag } from "@/components/ui/beta-tag";
 import { PromptDialog } from "@/components/ui/prompt-dialog";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { Tooltip, TooltipProvider } from "@/components/ui/tooltip";
 import { Seo } from "@/components/marketing/seo";
 import {
   createChatController,
@@ -220,6 +220,10 @@ import { Button } from "@/components/ui/button";
 export type TokenResolver = (options?: {
   forceRefresh?: boolean;
 }) => Promise<string | null>;
+
+/** Equal-width icon tiles in the chat header (pins, topic, call, roster). */
+const HEADER_ACTION_TILE =
+  "flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-paper-muted hover:bg-ink-3 hover:text-paper";
 
 interface AppProps {
   devBypass?: boolean;
@@ -3192,6 +3196,7 @@ function MainAppContent({
         tag={user?.tag ?? null}
         avatarUrl={user?.avatarUrl ?? null}
         isMuted={voiceState.isMuted}
+        isDeafened={voiceState.isDeafened}
         inVoice={voiceState.status === "connected"}
         showUserButton={showUserButton}
         manualStatus={status.manual}
@@ -3200,6 +3205,7 @@ function MainAppContent({
         statusError={status.error}
         onSetStatus={status.setManual}
         onToggleMute={() => voice.toggleMute()}
+        onToggleDeafen={() => voice.toggleDeafen()}
         onOpenSettings={() => {
           setSettingsSection(null);
           setSettingsOpen(true);
@@ -3297,7 +3303,7 @@ function MainAppContent({
                 : `${selectedChannel.isPrivate ? t("chrome.privatePrefix") : ""}${t("chrome.peopleHere", { count: chat.getPresence().length })}`}
           </p>
         </div>
-        <div className="ml-auto flex items-center gap-1 sm:gap-2">
+        <div className="ml-auto flex items-center gap-0.5 sm:gap-1">
           {/* The call entry points live here, always visible — the sidebar's
               hover affordance does not exist on touch, and a call you cannot
               start from your phone is a call that does not happen. */}
@@ -3330,58 +3336,72 @@ function MainAppContent({
               }
               return (
                 <>
-                  <button
-                    type="button"
-                    title={t("call.startVoice")}
-                    aria-label={t("call.startVoice")}
-                    className="shrink-0 rounded-md p-2 text-paper-muted hover:bg-ink-3 hover:text-paper"
-                    onClick={() =>
-                      void handleConversationCall(callChannelId, true)
-                    }
-                  >
-                    <Phone className="h-4 w-4" />
-                  </button>
-                  <button
-                    type="button"
-                    title={t("call.startVideo")}
-                    aria-label={t("call.startVideo")}
-                    className="shrink-0 rounded-md p-2 text-paper-muted hover:bg-ink-3 hover:text-paper"
-                    onClick={() =>
-                      void handleConversationCall(callChannelId, true, true)
-                    }
-                  >
-                    <Video className="h-4 w-4" />
-                  </button>
+                  <Tooltip label={t("call.startVoice")}>
+                    <button
+                      type="button"
+                      className={HEADER_ACTION_TILE}
+                      onClick={() =>
+                        void handleConversationCall(callChannelId, true)
+                      }
+                    >
+                      <Phone className="h-4 w-4" />
+                    </button>
+                  </Tooltip>
+                  <Tooltip label={t("call.startVideo")}>
+                    <button
+                      type="button"
+                      className={HEADER_ACTION_TILE}
+                      onClick={() =>
+                        void handleConversationCall(callChannelId, true, true)
+                      }
+                    >
+                      <Video className="h-4 w-4" />
+                    </button>
+                  </Tooltip>
                 </>
               );
             })()}
-          <button
-            type="button"
-            className="rounded-md px-2 py-1 text-xs text-signal hover:bg-ink-3"
-            onClick={() => setPinsOpen(true)}
-          >
-            {t("chrome.pins")}
-          </button>
-          {canManageChannels && (
+          <Tooltip label={t("chrome.pins")}>
             <button
               type="button"
-              className="rounded-md px-2 py-1 text-xs text-signal hover:bg-ink-3"
-              onClick={() => setChannelMetaChannel(selectedChannel)}
+              className={HEADER_ACTION_TILE}
+              onClick={() => setPinsOpen(true)}
             >
-              {t("chrome.topic")}
+              <Pin className="h-4 w-4" />
             </button>
+          </Tooltip>
+          {canManageChannels && (
+            <Tooltip label={t("chrome.topic")}>
+              <button
+                type="button"
+                className={HEADER_ACTION_TILE}
+                onClick={() => setChannelMetaChannel(selectedChannel)}
+              >
+                <FileText className="h-4 w-4" />
+              </button>
+            </Tooltip>
           )}
           {(canManageRoles || (canManageChannels && selectedChannel.isPrivate)) &&
             selectedChannel.kind === "server" && (
-            <button
-              type="button"
-              className="rounded-md px-2 py-1 text-xs text-signal hover:bg-ink-3"
-              onClick={() => setChannelMembersChannel(selectedChannel)}
+            <Tooltip
+              label={
+                selectedChannel.isPrivate
+                  ? t("chrome.access")
+                  : t("channelPerms.title")
+              }
             >
-              {selectedChannel.isPrivate
-                ? t("chrome.access")
-                : t("channelPerms.title")}
-            </button>
+              <button
+                type="button"
+                className={HEADER_ACTION_TILE}
+                onClick={() => setChannelMembersChannel(selectedChannel)}
+              >
+                {selectedChannel.isPrivate ? (
+                  <Lock className="h-4 w-4" />
+                ) : (
+                  <Shield className="h-4 w-4" />
+                )}
+              </button>
+            </Tooltip>
           )}
           {/* The roster toggle, last in the row — the same position and the
               same icon Discord puts it in, because that is where the muscle
@@ -3389,22 +3409,32 @@ function MainAppContent({
               every width: below the column breakpoint it opens the list as a
               drawer rather than not at all. */}
           {memberSidebarAvailable && (
-            <button
-              type="button"
-              aria-label={t("memberList.toggle")}
-              aria-pressed={memberSidebar.open}
-              title={t("memberList.toggle")}
-              data-member-sidebar-toggle=""
-              className={cn(
-                "shrink-0 rounded-md p-2 hover:bg-ink-3",
-                memberSidebar.open
-                  ? "text-paper"
-                  : "text-paper-muted hover:text-paper",
-              )}
-              onClick={memberSidebar.toggle}
-            >
-              <Users className="h-4 w-4" />
-            </button>
+            <Tooltip label={t("memberList.toggle")}>
+              <button
+                type="button"
+                aria-pressed={memberSidebar.open && !openThread}
+                data-member-sidebar-toggle=""
+                className={cn(
+                  HEADER_ACTION_TILE,
+                  memberSidebar.open && !openThread && "text-paper",
+                )}
+                onClick={() => {
+                  // A thread occupies the same right column as the roster. The
+                  // button still means "show me the people": close the thread
+                  // first, and open the list if it was already hidden.
+                  if (openThread) {
+                    closeThreadPanel();
+                    if (!memberSidebar.open) {
+                      memberSidebar.toggle();
+                    }
+                    return;
+                  }
+                  memberSidebar.toggle();
+                }}
+              >
+                <Users className="h-4 w-4" />
+              </button>
+            </Tooltip>
           )}
         </div>
       </header>
@@ -3515,57 +3545,6 @@ function MainAppContent({
         onMarkUnread={handleMarkUnread}
         onMarkRead={handleMarkRead}
       />
-      {/* --- threads --- overlaid on the pane (full width on mobile, a right
-          column on desktop) so the parent stays where it was underneath. */}
-      {openThread && (
-        <ThreadPanel
-          thread={openThread.thread}
-          origin={openThread.origin}
-          controller={threadChat}
-          currentUser={user}
-          serverId={selectedServerId}
-          canModerate={canManageMessages}
-          blockedAuthorIds={blockedUserIds}
-          mentionCandidates={mentionCandidates}
-          isLoading={threadLoading}
-          showLinkEmbeds={localSettings.showLinkEmbeds}
-          onClose={closeThreadPanel}
-          onReportMessage={(message) =>
-            setReportTarget({
-              kind: "message",
-              messageId: message.id,
-              subjectName: message.authorName,
-            })
-          }
-          authors={messageAuthors}
-          roles={serverRoles}
-          unreadHeld={unreadHeldIds.has(openThread.thread.channelId)}
-          unreadSince={threadUnreadSince}
-          onForward={setForwardMessage}
-          onMarkUnread={handleMarkUnread}
-          onMarkRead={() => clearUnread(openThread.thread.channelId)}
-          onSent={() => {
-            if (unreadHoldRef.current.has(openThread.thread.channelId)) {
-              clearUnread(openThread.thread.channelId);
-            }
-          }}
-          slashContext={{
-            updateDisplayName: async (name: string) => {
-              const updated = await updateMe({ displayName: name });
-              setUser(updated);
-              chat.setCurrentUser(updated);
-            },
-            openInvite: (mode: "create" | "join") => setInviteMode(mode),
-            joinByCode: async (code: string) => {
-              const result = await joinInvite(code);
-              await refreshAfterJoin(result.serverId);
-            },
-            setMuted: (muted: boolean) => voice.setMuted(muted),
-            isInVoice: voiceState.status === "connected",
-            isMuted: voiceState.isMuted,
-          }}
-        />
-      )}
       {/* Against the composer it explains, not floating in a corner: the frame
           names the channel the refused action happened in, so a notice from
           another room would be answering a question nobody asked here. */}
@@ -4118,8 +4097,59 @@ function MainAppContent({
           makes it a real column: the transcript reflows to the width that is
           left instead of having 15rem of itself covered up. It is also why the
           voice channel's own two-pane layout needs no change — that lives
-          inside `<main>` and simply gets a narrower box. */}
-      {memberSidebarAvailable && (
+          inside `<main>` and simply gets a narrower box. A thread takes this
+          same slot: overlaying it on the transcript while the roster stayed
+          put is what crushed #avisos on the QG. */}
+      {openThread && (
+        <ThreadPanel
+          thread={openThread.thread}
+          origin={openThread.origin}
+          controller={threadChat}
+          currentUser={user}
+          serverId={selectedServerId}
+          canModerate={canManageMessages}
+          blockedAuthorIds={blockedUserIds}
+          mentionCandidates={mentionCandidates}
+          isLoading={threadLoading}
+          showLinkEmbeds={localSettings.showLinkEmbeds}
+          onClose={closeThreadPanel}
+          onReportMessage={(message) =>
+            setReportTarget({
+              kind: "message",
+              messageId: message.id,
+              subjectName: message.authorName,
+            })
+          }
+          authors={messageAuthors}
+          roles={serverRoles}
+          unreadHeld={unreadHeldIds.has(openThread.thread.channelId)}
+          unreadSince={threadUnreadSince}
+          onForward={setForwardMessage}
+          onMarkUnread={handleMarkUnread}
+          onMarkRead={() => clearUnread(openThread.thread.channelId)}
+          onSent={() => {
+            if (unreadHoldRef.current.has(openThread.thread.channelId)) {
+              clearUnread(openThread.thread.channelId);
+            }
+          }}
+          slashContext={{
+            updateDisplayName: async (name: string) => {
+              const updated = await updateMe({ displayName: name });
+              setUser(updated);
+              chat.setCurrentUser(updated);
+            },
+            openInvite: (mode: "create" | "join") => setInviteMode(mode),
+            joinByCode: async (code: string) => {
+              const result = await joinInvite(code);
+              await refreshAfterJoin(result.serverId);
+            },
+            setMuted: (muted: boolean) => voice.setMuted(muted),
+            isInVoice: voiceState.status === "connected",
+            isMuted: voiceState.isMuted,
+          }}
+        />
+      )}
+      {memberSidebarAvailable && !openThread && (
         <MemberSidebar
           open={memberSidebar.open}
           wide={memberSidebar.wide}

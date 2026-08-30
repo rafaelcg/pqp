@@ -160,8 +160,8 @@ export function ServerRail({
         {homeUnread.count > 0 && (
           <span className="sr-only">
             {homeUnread.mentions > 0
-              ? `${homeUnread.mentions} unread mentions`
-              : "unread messages"}
+              ? t("chrome.unreadMentions", { count: homeUnread.mentions })
+              : t("chrome.unreadMessagesSr")}
           </span>
         )}
       </button>
@@ -270,8 +270,8 @@ export function ServerRail({
               {hasUnread && (
                 <span className="sr-only">
                   {mentions > 0
-                    ? `${mentions} unread mentions`
-                    : "unread messages"}
+                    ? t("chrome.unreadMentions", { count: mentions })
+                    : t("chrome.unreadMessagesSr")}
                 </span>
               )}
             </button>

@@ -36,7 +36,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { PollComposer } from "@/components/chat/poll-composer";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   AUTOCOMPLETE_GRID_COLUMNS,
   AutocompleteMenu,
@@ -142,6 +142,9 @@ const COMPOSER_ICON_BUTTON =
 
 /** Grow with the content, but never take over the whole pane. */
 const MAX_COMPOSER_HEIGHT_PX = 200;
+/** Line box used once the draft wraps. Resting uses the full 40px instead. */
+const COMPOSER_LINE_PX = 20;
+const COMPOSER_PAD_Y_PX = 8;
 
 const MENU_ID = "composer-autocomplete";
 
@@ -267,6 +270,13 @@ export function MessageComposer({
   const inputPlaceholder = placeholder ?? t("composer.placeholderFallback");
   const [body, setBody] = useState("");
   const [caret, setCaret] = useState(0);
+  const [composerBox, setComposerBox] = useState({
+    height: COMPOSER_CONTROL_PX,
+    lineHeight: COMPOSER_CONTROL_PX,
+    paddingY: 0,
+    overflowY: "hidden" as "hidden" | "auto",
+    multiline: false,
+  });
   const [isPickerOpen, setIsPickerOpen] = useState(false);
   const [isGifPickerOpen, setIsGifPickerOpen] = useState(false);
   const [isPollComposerOpen, setIsPollComposerOpen] = useState(false);
@@ -484,16 +494,69 @@ export function MessageComposer({
     };
   }, []);
 
-  // Auto-size the textarea so multi-line drafts are visible while typing.
-  useEffect(() => {
+  // Gecko ignores `line-height` on a padded textarea the way Chromium does:
+  // the placeholder sits on the top padding and the rest of the 40px box is
+  // empty, which is the "misaligned" composer in Zen. Resting metrics use a
+  // 40px line box and no vertical padding so one line is centered. Wrapped
+  // drafts switch to 8px + 20px lines. Empty always stays 40px so a large
+  // Gecko scrollHeight (or a user drag if resize leaks) cannot stick.
+  useLayoutEffect(() => {
     const node = inputRef.current;
     if (!node) {
       return;
     }
-    node.style.height = `${COMPOSER_CONTROL_PX}px`;
-    if (node.scrollHeight > COMPOSER_CONTROL_PX) {
-      node.style.height = `${Math.min(node.scrollHeight, MAX_COMPOSER_HEIGHT_PX)}px`;
+    node.style.resize = "none";
+    node.style.minHeight = `${COMPOSER_CONTROL_PX}px`;
+    node.style.overflowY = "hidden";
+
+    const applyResting = () => {
+      node.style.lineHeight = `${COMPOSER_CONTROL_PX}px`;
+      node.style.paddingTop = "0px";
+      node.style.paddingBottom = "0px";
+      node.style.height = `${COMPOSER_CONTROL_PX}px`;
+    };
+
+    if (!body) {
+      applyResting();
+      setComposerBox({
+        height: COMPOSER_CONTROL_PX,
+        lineHeight: COMPOSER_CONTROL_PX,
+        paddingY: 0,
+        overflowY: "hidden",
+        multiline: false,
+      });
+      return;
     }
+
+    node.style.lineHeight = `${COMPOSER_LINE_PX}px`;
+    node.style.paddingTop = `${COMPOSER_PAD_Y_PX}px`;
+    node.style.paddingBottom = `${COMPOSER_PAD_Y_PX}px`;
+    node.style.height = "0px";
+    const next = Math.min(
+      Math.max(node.scrollHeight, COMPOSER_CONTROL_PX),
+      MAX_COMPOSER_HEIGHT_PX,
+    );
+    if (next <= COMPOSER_CONTROL_PX) {
+      applyResting();
+      setComposerBox({
+        height: COMPOSER_CONTROL_PX,
+        lineHeight: COMPOSER_CONTROL_PX,
+        paddingY: 0,
+        overflowY: "hidden",
+        multiline: false,
+      });
+      return;
+    }
+    node.style.height = `${next}px`;
+    const overflowY = next >= MAX_COMPOSER_HEIGHT_PX ? "auto" : "hidden";
+    node.style.overflowY = overflowY;
+    setComposerBox({
+      height: next,
+      lineHeight: COMPOSER_LINE_PX,
+      paddingY: COMPOSER_PAD_Y_PX,
+      overflowY,
+      multiline: true,
+    });
   }, [body]);
 
   useEffect(() => {
@@ -1148,7 +1211,12 @@ export function MessageComposer({
           ))}
         </ul>
       )}
-      <div className="flex items-end gap-2">
+      <div
+        className={cn(
+          "flex gap-2",
+          composerBox.multiline ? "items-end" : "items-center",
+        )}
+      >
         {isAttachmentsEnabled && (
           <>
             <input
@@ -1258,42 +1326,64 @@ export function MessageComposer({
             </Button>
           </Tooltip>
         )}
-        <textarea
-          ref={inputRef}
-          value={body}
-          rows={1}
-          onChange={(e) => {
-            setMenuDismissed(false);
-            const nextValue = e.target.value;
-            const nextCaret = e.target.selectionStart ?? nextValue.length;
-            const expanded = expandClosedShortcodeAtCaret(nextValue, nextCaret);
-            if (expanded) {
-              setBody(expanded.value);
-              restoreCaret(expanded.caret);
-            } else {
-              setBody(nextValue);
-              setCaret(nextCaret);
-            }
-            const typingFrom = expanded?.value ?? nextValue;
-            if (typingFrom.trim() && !typingFrom.startsWith("/")) {
-              onTyping?.();
-            }
-          }}
-          // Arrow keys and clicks move the caret without changing the value, and
-          // the active `@token` is defined by where the caret is.
-          onSelect={(e) => syncCaret(e.currentTarget)}
-          onPaste={handlePaste}
-          placeholder={inputPlaceholder}
-          disabled={disabled || isRunningSlash}
-          maxLength={MESSAGE_MAX_LENGTH}
-          className="h-10 min-h-10 flex-1 resize-none rounded-md border border-ink-4 bg-ink-3 px-3 py-2 text-sm leading-5 text-paper placeholder:text-paper-muted focus-visible:border-signal/60 focus-visible:outline-none disabled:opacity-50"
-          role="combobox"
-          aria-expanded={Boolean(menuKind)}
-          aria-controls={menuKind ? MENU_ID : undefined}
-          aria-autocomplete="list"
-          aria-label={inputPlaceholder}
-          onKeyDown={handleKeyDown}
-        />
+        <div className="relative flex min-h-10 min-w-0 flex-1 flex-col">
+          {body.length === 0 && (
+            <span
+              aria-hidden
+              className={cn(
+                "pointer-events-none absolute inset-0 z-[1] flex items-center px-3 text-sm text-paper-muted",
+                (disabled || isRunningSlash) && "opacity-50",
+              )}
+            >
+              {inputPlaceholder}
+            </span>
+          )}
+          <textarea
+            ref={inputRef}
+            value={body}
+            rows={1}
+            onChange={(e) => {
+              setMenuDismissed(false);
+              const nextValue = e.target.value;
+              const nextCaret = e.target.selectionStart ?? nextValue.length;
+              const expanded = expandClosedShortcodeAtCaret(nextValue, nextCaret);
+              if (expanded) {
+                setBody(expanded.value);
+                restoreCaret(expanded.caret);
+              } else {
+                setBody(nextValue);
+                setCaret(nextCaret);
+              }
+              const typingFrom = expanded?.value ?? nextValue;
+              if (typingFrom.trim() && !typingFrom.startsWith("/")) {
+                onTyping?.();
+              }
+            }}
+            // Arrow keys and clicks move the caret without changing the value, and
+            // the active `@token` is defined by where the caret is.
+            onSelect={(e) => syncCaret(e.currentTarget)}
+            onPaste={handlePaste}
+            disabled={disabled || isRunningSlash}
+            maxLength={MESSAGE_MAX_LENGTH}
+            placeholder={inputPlaceholder}
+            style={{
+              resize: "none",
+              height: composerBox.height,
+              minHeight: COMPOSER_CONTROL_PX,
+              lineHeight: `${composerBox.lineHeight}px`,
+              paddingTop: composerBox.paddingY,
+              paddingBottom: composerBox.paddingY,
+              overflowY: composerBox.overflowY,
+            }}
+            className="block h-10 min-h-10 w-full resize-none overflow-hidden rounded-md border border-ink-4 bg-ink-3 px-3 py-0 text-sm text-paper placeholder:text-transparent focus-visible:border-signal/60 focus-visible:outline-none disabled:opacity-50"
+            role="combobox"
+            aria-expanded={Boolean(menuKind)}
+            aria-controls={menuKind ? MENU_ID : undefined}
+            aria-autocomplete="list"
+            aria-label={inputPlaceholder}
+            onKeyDown={handleKeyDown}
+          />
+        </div>
         <Button
           type="submit"
           className="h-10"

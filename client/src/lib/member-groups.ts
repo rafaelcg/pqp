@@ -4,10 +4,9 @@ import type { UserStatus } from "@pqp/shared";
  * How a roster becomes the sections a member list draws.
  *
  * Pure and DOM-free so the rules can be pinned by tests — the sidebar itself is
- * then only markup over this answer. Every decision below is a copy of what
- * Discord and Stoat already taught people to expect, because a member list that
- * groups differently from the two apps everybody arrives from is a member list
- * they have to learn.
+ * then only markup over this answer. Hoisted cargos follow the order Discord
+ * taught people. Unlike Discord, they keep their people when those people go
+ * offline: a six-hundred-person Offline list is where owners and admins vanish.
  *
  * THE RULES, AND WHY.
  *
@@ -15,18 +14,18 @@ import type { UserStatus } from "@pqp/shared";
  *     first and is keyed off rank, not a role row. Custom hoisted roles follow
  *     in the order the caller passed (position descending). @everyone never
  *     hoists. A person lands in the first hoisted role they hold.
- *  2. A ROLE SECTION HOLDS ONLY PEOPLE WHO ARE AROUND. An offline admin is in
- *     Offline, not in Admins — otherwise "Admins — 4" is a claim about the org
- *     chart while every other heading is a claim about who you can talk to, and
- *     the reader has to hold two meanings of the same shape at once.
- *  3. OFFLINE IS ONE SECTION AT THE BOTTOM, whatever anybody's rank.
- *  4. EMPTY SECTIONS DO NOT EXIST. A server with no admins online must not
- *     render "Admins — 0"; a heading with nothing under it is noise that scales
- *     with the number of roles.
- *  5. WITHIN A SECTION: display name, case- and accent-insensitively, then id.
- *     The id tie-break is not cosmetic — two people called "ana" would
- *     otherwise swap places between renders, and this list re-renders every
- *     time anybody's status changes.
+ *  2. A HOISTED ROLE KEEPS ITS PEOPLE WHEN THEY GO OFFLINE. Owner, Admin,
+ *     Mod, VIP, and every other hoisted cargo stay under that heading, with
+ *     an offline pip. A 600-person Offline list is where staff disappear;
+ *     the heading is who holds the role, not who is reachable this minute.
+ *     Within the section, people who are around sit above people who are
+ *     not, then the usual name order.
+ *  3. OFFLINE IS EVERYONE WITH NO HOIST, at the bottom. Empty sections still
+ *     do not exist: a cargo nobody holds is omitted, not drawn as "Admins — 0".
+ *  4. WITHIN A SECTION: around first, then display name, case- and
+ *     accent-insensitively, then id. The id tie-break is not cosmetic — two
+ *     people called "ana" would otherwise swap places between renders, and
+ *     this list re-renders every time anybody's status changes.
  *
  * Rank `admin` does not always write a `member_roles` row (older servers, or
  * iOS Promote before the cargo was assigned). Callers pass `effectiveRoleIds`
@@ -144,6 +143,15 @@ export function compareMembers(
   return byName !== 0 ? byName : a.id.localeCompare(b.id);
 }
 
+/** Around first, then the usual name order. Used inside a hoisted cargo. */
+function compareHoistedMembers(
+  a: GroupableMember,
+  b: GroupableMember,
+): number {
+  const aroundDelta = Number(isAround(b.status)) - Number(isAround(a.status));
+  return aroundDelta !== 0 ? aroundDelta : compareMembers(a, b);
+}
+
 export function groupMembers<T extends GroupableMember>(
   members: readonly T[],
   hoistedRoles: readonly HoistedRole[] = [],
@@ -155,16 +163,14 @@ export function groupMembers<T extends GroupableMember>(
   const offline: T[] = [];
 
   for (const member of members) {
-    if (!isAround(member.status)) {
-      offline.push(member);
-      continue;
-    }
     const held = new Set(member.roleIds ?? []);
     const match = hoistedRoles.find((role) => held.has(role.id));
     if (match) {
       byHoisted.get(match.id)!.push(member);
-    } else {
+    } else if (isAround(member.status)) {
       online.push(member);
+    } else {
+      offline.push(member);
     }
   }
 
@@ -176,7 +182,7 @@ export function groupMembers<T extends GroupableMember>(
         id: `role:${role.id}`,
         kind: "role",
         label: role.name,
-        members: bucket.sort(compareMembers),
+        members: bucket.sort(compareHoistedMembers),
       });
     }
   }

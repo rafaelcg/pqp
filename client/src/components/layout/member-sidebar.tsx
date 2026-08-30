@@ -23,6 +23,7 @@ import {
   MEMBER_PAGE_SIZE,
   NO_COLLAPSE,
   groupMembers,
+  isAround,
   sectionCollapsed,
   singleSection,
   toggleSectionCollapse,
@@ -558,7 +559,7 @@ export function MemberSidebar({
           <MemberRow
             key={member.id}
             member={member}
-            dim={section.kind === "offline"}
+            dim={!isAround(member.status)}
             voiceChannelName={voiceByUser.get(member.id) ?? null}
             items={menuFor(member)}
             nameColor={highestRoleColor(member.roleIds, roles)}

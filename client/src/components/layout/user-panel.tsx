@@ -1,4 +1,4 @@
-import { Bug, Check, Download, Mic, MicOff, Settings } from "lucide-react";
+import { Bug, Check, Download, HeadphoneOff, Headphones, Mic, MicOff, Settings } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { UserButton } from "@clerk/clerk-react";
 import type { ManualStatus, UserStatus } from "@pqp/shared";
@@ -22,6 +22,7 @@ interface UserPanelProps {
   tag: string | null;
   avatarUrl?: string | null;
   isMuted: boolean;
+  isDeafened: boolean;
   inVoice: boolean;
   showUserButton: boolean;
   /** What this account chose. `invisible` is only ever shown to its owner. */
@@ -32,6 +33,7 @@ interface UserPanelProps {
   statusError: string | null;
   onSetStatus: (status: ManualStatus) => void;
   onToggleMute: () => void;
+  onToggleDeafen: () => void;
   onOpenSettings: () => void;
   /** Opens settings straight at the feedback section. */
   onOpenFeedback: () => void;
@@ -77,6 +79,7 @@ export function UserPanel({
   tag,
   avatarUrl = null,
   isMuted,
+  isDeafened,
   inVoice,
   showUserButton,
   manualStatus,
@@ -85,6 +88,7 @@ export function UserPanel({
   statusError,
   onSetStatus,
   onToggleMute,
+  onToggleDeafen,
   onOpenSettings,
   onOpenFeedback,
 }: UserPanelProps) {
@@ -225,11 +229,11 @@ export function UserPanel({
           </div>
         )}
 
+        <Tooltip label={t("status.change")}>
         <button
         type="button"
         aria-haspopup="menu"
         aria-expanded={open}
-        title={t("status.change")}
         className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 py-0.5 text-left hover:bg-ink-2"
         onClick={() => setOpen((prev) => !prev)}
       >
@@ -281,38 +285,69 @@ export function UserPanel({
           </span>
         </span>
       </button>
+        </Tooltip>
 
       {showUserButton && !avatarUrl && !isDevAuthBypassEnabled() && (
         <UserButton
           appearance={{ elements: { avatarBox: "h-8 w-8 rounded-md" } }}
         />
       )}
-      {/* The short/long split the old `title` + `aria-label` pair already had,
-          kept but made honest: the bubble says "Mute", the reader hears "Mute
-          microphone", and both now come from one call instead of two
-          attributes that nothing stopped from drifting apart.
-
-          Off voice this button is `disabled`, so no tooltip fires — which is
-          not a regression, because `Button` disables pointer events and the
-          native `title` never fired there either. */}
+      {/* Mute and deafen sit here so they are reachable without opening the
+          voice channel. Off a call they stay visible but disabled; the
+          wrapper span is what the tooltip can hover, because Button drops
+          pointer events when disabled. */}
       <Tooltip
         label={isMuted ? t("userPanel.unmute") : t("userPanel.mute")}
         name={isMuted ? t("userPanel.unmuteMic") : t("userPanel.muteMic")}
+        detail={inVoice ? undefined : t("userPanel.joinToUse")}
       >
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-8 w-8 shrink-0"
-          onClick={onToggleMute}
-          disabled={!inVoice}
-          aria-pressed={isMuted}
-        >
-          {isMuted ? (
-            <MicOff className="h-4 w-4 text-danger" />
-          ) : (
-            <Mic className="h-4 w-4" />
-          )}
-        </Button>
+        <span className="inline-flex">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 shrink-0"
+            onClick={onToggleMute}
+            disabled={!inVoice}
+            aria-pressed={isMuted}
+            aria-label={isMuted ? t("userPanel.unmuteMic") : t("userPanel.muteMic")}
+          >
+            {isMuted ? (
+              <MicOff className="h-4 w-4 text-danger" />
+            ) : (
+              <Mic className="h-4 w-4" />
+            )}
+          </Button>
+        </span>
+      </Tooltip>
+      <Tooltip
+        label={
+          isDeafened
+            ? t("voice.control.undeafen")
+            : t("voice.control.deafen")
+        }
+        detail={inVoice ? undefined : t("userPanel.joinToUse")}
+      >
+        <span className="inline-flex">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 shrink-0"
+            onClick={onToggleDeafen}
+            disabled={!inVoice}
+            aria-pressed={isDeafened}
+            aria-label={
+              isDeafened
+                ? t("voice.control.undeafen")
+                : t("voice.control.deafen")
+            }
+          >
+            {isDeafened ? (
+              <HeadphoneOff className="h-4 w-4 text-danger" />
+            ) : (
+              <Headphones className="h-4 w-4" />
+            )}
+          </Button>
+        </span>
       </Tooltip>
       <Tooltip
         label={t("userPanel.settings")}

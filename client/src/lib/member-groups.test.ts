@@ -87,7 +87,7 @@ describe("groupMembers", () => {
     expect(sections[2]!.members.map((m) => m.displayName)).toEqual(["Zed"]);
   });
 
-  it("puts an offline admin in Offline rather than in their hoisted role", () => {
+  it("keeps an offline admin in their hoisted role, dimmed by status", () => {
     const sections = groupMembers(
       [
         person("1", "Ana", "admin", "offline", ["admin-role"]),
@@ -95,9 +95,8 @@ describe("groupMembers", () => {
       ],
       [ADMIN],
     );
-    expect(sections.map((s) => s.id)).toEqual(["role:admin-role", "offline"]);
-    expect(sections[0]!.members.map((m) => m.id)).toEqual(["2"]);
-    expect(sections[1]!.members.map((m) => m.id)).toEqual(["1"]);
+    expect(sections.map((s) => s.id)).toEqual(["role:admin-role"]);
+    expect(sections[0]!.members.map((m) => m.id)).toEqual(["2", "1"]);
   });
 
   it("omits a section nobody is in", () => {
@@ -137,7 +136,7 @@ describe("groupMembers", () => {
     expect(twice).toEqual(once);
   });
 
-  it("keeps offline members in one section whatever their rank", () => {
+  it("keeps unhoisted people in one Offline section whatever their rank", () => {
     const sections = groupMembers([
       person("1", "Owner", "owner", "offline"),
       person("2", "Admin", "admin", "offline", ["admin-role"]),
@@ -146,6 +145,25 @@ describe("groupMembers", () => {
     expect(sections).toHaveLength(1);
     expect(sections[0]!.kind).toBe("offline");
     expect(sections[0]!.members).toHaveLength(3);
+  });
+
+  it("keeps hoisted staff in their cargo when offline, and leaves the rest in Offline", () => {
+    const sections = groupMembers(
+      [
+        person("1", "Rafa", "owner", "offline", ["owner-role"]),
+        person("2", "Ana", "admin", "offline", ["admin-role"]),
+        person("3", "Zed", "member", "offline"),
+      ],
+      [OWNER, ADMIN],
+    );
+    expect(sections.map((s) => s.id)).toEqual([
+      "role:owner-role",
+      "role:admin-role",
+      "offline",
+    ]);
+    expect(sections[0]!.members.map((m) => m.id)).toEqual(["1"]);
+    expect(sections[1]!.members.map((m) => m.id)).toEqual(["2"]);
+    expect(sections[2]!.members.map((m) => m.id)).toEqual(["3"]);
   });
 
   it("lands a member in their highest hoisted role", () => {

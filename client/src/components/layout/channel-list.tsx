@@ -4,6 +4,7 @@ import {
   HeadphoneOff,
   Lock,
   MicOff,
+  Phone,
   Plus,
   ScreenShare,
   Search,
@@ -47,6 +48,10 @@ const SEARCH_SHORTCUT_HINT =
   typeof navigator !== "undefined" && /Mac|iPhone|iPad/i.test(navigator.userAgent)
     ? "⌘K"
     : "Ctrl K";
+
+/** Equal-width action tiles on a channel row (Join). */
+const CHANNEL_ACTION_TILE =
+  "flex h-7 w-7 shrink-0 items-center justify-center rounded-md hover:bg-ink-3";
 
 export function formatBadgeCount(value: number): string {
   return value > 99 ? "99+" : String(value);
@@ -564,7 +569,7 @@ export function ChannelList({
                         <div className="ml-2 border-l border-ink-4/70 pl-2">
                           {kids.length === 0 ? (
                             <p className="px-2 py-1 text-xs italic text-paper-muted">
-                              Empty — drag a channel here.
+                              {t("chrome.emptyCategory")}
                             </p>
                           ) : (
                             kids.map((channel) => renderRow(channel, kids))
@@ -598,6 +603,8 @@ function ChannelSection({
   onAddPrivate: () => void;
   children: ReactNode;
 }) {
+  const { t } = useTranslation();
+  const typeName = label.toLowerCase();
   return (
     <div className="mb-4">
       <div className="mb-1 flex items-center justify-between px-2">
@@ -606,22 +613,24 @@ function ChannelSection({
         </span>
         {canManage && (
           <div className="flex gap-0.5">
-            <button
-              type="button"
-              title={`New ${label.toLowerCase()} channel`}
-              className="rounded p-0.5 text-paper-muted hover:bg-ink-3 hover:text-paper"
-              onClick={onAdd}
-            >
-              <Plus className="h-3.5 w-3.5" />
-            </button>
-            <button
-              type="button"
-              title={`New private ${label.toLowerCase()} channel`}
-              className="rounded p-0.5 text-paper-muted hover:bg-ink-3 hover:text-paper"
-              onClick={onAddPrivate}
-            >
-              <Lock className="h-3 w-3" />
-            </button>
+            <Tooltip label={t("chrome.newChannel", { name: typeName })}>
+              <button
+                type="button"
+                className="rounded p-0.5 text-paper-muted hover:bg-ink-3 hover:text-paper"
+                onClick={onAdd}
+              >
+                <Plus className="h-3.5 w-3.5" />
+              </button>
+            </Tooltip>
+            <Tooltip label={t("chrome.newPrivateChannel", { name: typeName })}>
+              <button
+                type="button"
+                className="rounded p-0.5 text-paper-muted hover:bg-ink-3 hover:text-paper"
+                onClick={onAddPrivate}
+              >
+                <Lock className="h-3 w-3" />
+              </button>
+            </Tooltip>
           </div>
         )}
       </div>
@@ -681,6 +690,7 @@ function CategoryHeader({
         }}
         onDrop={(event) => {
           event.preventDefault();
+          event.stopPropagation();
           onDrop();
         }}
         className={cn(
@@ -764,6 +774,14 @@ function ChannelRow({
   const notifications = useChannelNotificationLevel(channel);
   const items: ContextMenuItemDef[] = [];
 
+  if (onJoinVoice && !connected) {
+    items.push({
+      id: "join",
+      label: t("voice.join"),
+      onSelect: onJoinVoice,
+    });
+  }
+
   if (canManage) {
     items.push({ id: "rename", label: t("chrome.renameChannel"), onSelect: onRename });
     if (onEditMeta) {
@@ -818,7 +836,7 @@ function ChannelRow({
       }
       items.push({
         id: `move-to-${category.id}`,
-        label: `Move to “${category.name}”`,
+        label: t("chrome.moveToCategory", { name: category.name }),
         onSelect: () => onMoveToCategory(category.id),
       });
     }
@@ -865,7 +883,15 @@ function ChannelRow({
     <ContextMenu items={items}>
       <div
         draggable={canManage}
-        onDragStart={onDragStart}
+        onDragStart={(event) => {
+          if (
+            (event.target as HTMLElement).closest("[data-channel-join]")
+          ) {
+            event.preventDefault();
+            return;
+          }
+          onDragStart();
+        }}
         onDragEnd={onDragEnd}
         onDragOver={(event) => {
           event.preventDefault();
@@ -873,6 +899,7 @@ function ChannelRow({
         }}
         onDrop={(event) => {
           event.preventDefault();
+          event.stopPropagation();
           onDrop();
         }}
         className={cn(
@@ -904,11 +931,6 @@ function ChannelRow({
                 }
               : undefined
           }
-          title={
-            onJoinVoice && !connected
-              ? t("voice.doubleClickToJoin")
-              : undefined
-          }
           className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
         >
           {icon}
@@ -935,13 +957,31 @@ function ChannelRow({
             {mentions > 0 && (
               <span
                 className="min-w-4 rounded-full bg-danger px-1 py-0.5 text-center text-[10px] font-bold leading-none text-paper"
-                aria-label={`${mentions} unread mentions`}
+                aria-label={t("chrome.unreadMentions", { count: mentions })}
               >
                 {formatBadgeCount(mentions)}
               </span>
             )}
           </span>
         </button>
+        {onJoinVoice && !connected && (
+          <Tooltip label={t("voice.joinNamed", { name: channel.name })}>
+            <button
+              type="button"
+              data-channel-join=""
+              draggable={false}
+              className={cn(CHANNEL_ACTION_TILE, "text-paper-muted")}
+              aria-label={t("voice.joinNamed", { name: channel.name })}
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                onJoinVoice();
+              }}
+            >
+              <Phone className="h-3.5 w-3.5" />
+            </button>
+          </Tooltip>
+        )}
       </div>
     </ContextMenu>
   );
