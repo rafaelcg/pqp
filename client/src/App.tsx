@@ -2307,6 +2307,18 @@ function MainAppContent({
     });
   }
 
+  /** Sidebar double-click: open the channel and join, unless already in it. */
+  function handleJoinVoiceFromList(channelId: string) {
+    void selectChannel(channelId);
+    if (
+      voiceState.voiceChannelId === channelId &&
+      voiceState.status !== "idle"
+    ) {
+      return;
+    }
+    void handleJoinVoice(channelId);
+  }
+
   // --- conversation calls ---------------------------------------------------
 
   /**
@@ -3820,6 +3832,7 @@ function MainAppContent({
           mobileOpen={mobileNavOpen}
           onMobileClose={() => setMobileNavOpen(false)}
           onSelectChannel={(id) => void selectChannel(id)}
+          onJoinVoice={handleJoinVoiceFromList}
           onCreateChannel={(type, isPrivate) =>
             setChannelPrompt({ mode: "create", type, isPrivate })
           }

@@ -75,6 +75,18 @@ test.describe("voice lobby", () => {
     expect(gridBox.height).toBeGreaterThanOrEqual(200);
   });
 
+  test("desktop: double-clicking a voice channel joins without the idle button", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openApp(page);
+    await page.getByRole("button", { name: /lobby/ }).first().dblclick();
+    await expect(page.getByText("Live")).toBeVisible({ timeout: 20_000 });
+    await expect(
+      page.getByRole("button", { name: "Join Voice" }),
+    ).toHaveCount(0);
+  });
+
   test("phone: the same layout at 390px", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await openApp(page);
