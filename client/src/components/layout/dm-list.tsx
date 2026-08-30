@@ -300,14 +300,14 @@ function ConversationRow({
   if (solo) {
     items.push(
       blocked
-        ? {
+        ?           {
             id: "unblock",
-            label: `Unblock ${solo.displayName}`,
+            label: t("profile.unblock"),
             onSelect: () => onUnblock(solo.id),
           }
         : {
             id: "block",
-            label: `Block ${solo.displayName}`,
+            label: t("profile.block"),
             danger: true,
             onSelect: () => onBlock(solo),
           },
@@ -348,9 +348,9 @@ function ConversationRow({
           >
             {title}
           </span>
-          {blocked && <span className="sr-only">(blocked)</span>}
-          {hasUnread && !muted && <span className="sr-only">(unread)</span>}
-          {muted && <span className="sr-only">(muted)</span>}
+          {blocked && <span className="sr-only">{t("chrome.blockedSr")}</span>}
+          {hasUnread && !muted && <span className="sr-only">{t("chrome.unreadSr")}</span>}
+          {muted && <span className="sr-only">{t("chrome.mutedSr")}</span>}
           <span className="ml-auto flex shrink-0 items-center gap-1">
             {conversation.kind === "group" && (
               <span className="rounded bg-ink-4 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-paper-muted">
@@ -360,7 +360,7 @@ function ConversationRow({
             {mentions > 0 && (
               <span
                 className="min-w-4 rounded-full bg-danger px-1 py-0.5 text-center text-[10px] font-bold leading-none text-paper"
-                aria-label={`${mentions} unread mentions`}
+                aria-label={t("chrome.unreadMentions", { count: mentions })}
               >
                 {formatBadgeCount(mentions)}
               </span>

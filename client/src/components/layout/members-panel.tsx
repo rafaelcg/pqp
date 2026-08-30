@@ -56,6 +56,7 @@ import {
   NO_COLLAPSE,
   effectiveRoleIds,
   groupMembers,
+  isAround,
   sectionCollapsed,
   toggleSectionCollapse,
   type SectionCollapseState,
@@ -1390,7 +1391,7 @@ export function MembersPanel({
                           name: shownName,
                         })}
                         roles={roles}
-                        dim={section.kind === "offline"}
+                        dim={!isAround(member.status)}
                         nameColor={highestRoleColor(member.roleIds, roles)}
                         onOpen={(anchor) =>
                           openProfile(subjectOf(member), anchor)

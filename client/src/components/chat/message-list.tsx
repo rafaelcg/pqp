@@ -115,10 +115,12 @@ export interface MessageAuthorInfo {
   roleIds?: string[];
   status?: UserStatus | null;
   username?: string | null;
+  isCharacter?: boolean;
 }
 
 export interface MessageRoleColor {
   id: string;
+  name?: string;
   color: string | null;
   position: number;
   systemKey?: string | null;
@@ -330,7 +332,6 @@ export function MessageList({
 }: MessageListProps) {
   const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
-  const bottomRef = useRef<HTMLDivElement>(null);
   const [pickerMessageId, setPickerMessageId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [isPinned, setIsPinned] = useState(true);
@@ -524,9 +525,22 @@ export function MessageList({
   );
 
   const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
-    bottomRef.current?.scrollIntoView({ behavior, block: "end" });
+    const container = scrollRef.current;
+    if (!container) {
+      return;
+    }
+    // The scrollport, not a sentinel. `scrollIntoView({ block: "end" })` on a
+    // bottom marker lined that marker up with the padding edge and left the
+    // container's `py-4` still below it, so a send sat almost-at-bottom and a
+    // refresh sometimes landed a row short. `scrollHeight` is the real end.
+    const top = container.scrollHeight;
+    if (behavior === "smooth" && !prefersReducedMotion) {
+      container.scrollTo({ top, behavior: "smooth" });
+    } else {
+      container.scrollTop = top;
+    }
     setMissedCount(0);
-  }, []);
+  }, [prefersReducedMotion]);
 
   const registerRow = useCallback((messageId: string, node: HTMLElement | null) => {
     if (node) {
@@ -686,7 +700,7 @@ export function MessageList({
   // (GIFs, images without intrinsic dimensions, embeds) instead of threading an
   // onLoad through each one. Guarded on the same two conditions as the pin
   // effect: never fight a reader who has scrolled up, and never undo a jump.
-  useEffect(() => {
+  useLayoutEffect(() => {
     const container = scrollRef.current;
     if (!container || typeof ResizeObserver === "undefined") {
       return;
@@ -703,7 +717,7 @@ export function MessageList({
       observer.observe(child);
     }
     return () => observer.disconnect();
-  }, [scrollToBottom, messages.length]);
+  }, [scrollToBottom, messages.length, isLoading]);
 
   // Land at the bottom after a jump back to the present.
   //
@@ -760,6 +774,11 @@ export function MessageList({
 
   // Open a channel: sit on the NEW rule when this visit has unread, otherwise
   // the tail. Skipped for a permalink, which already owns the scroll.
+  //
+  // Do not mark the visit as landed while `isLoading` is still showing the
+  // skeleton: that tree has no scrollport, so `scrollToBottom` is a no-op, and
+  // a later commit with the same message count would skip the real list and
+  // leave it at scrollTop 0. That is the refresh-not-at-the-bottom bug.
   useLayoutEffect(() => {
     if (highlightRef.current) {
       return;
@@ -767,7 +786,10 @@ export function MessageList({
     if (pendingTailRef.current) {
       return;
     }
-    if (messages.length === 0) {
+    if (isLoading || messages.length === 0) {
+      return;
+    }
+    if (!scrollRef.current) {
       return;
     }
     const key = `${channelId ?? ""}::${unreadSince ?? "none"}`;
@@ -802,7 +824,22 @@ export function MessageList({
     unreadLandedRef.current = key;
     setIsPinned(true);
     scrollToBottom("auto");
-  }, [channelId, unreadSince, firstUnreadId, messages.length, scrollToBottom]);
+    // One more frame: the first layout can still be short if the composer or
+    // a cached image settles after this commit.
+    const frame = requestAnimationFrame(() => {
+      if (isPinnedRef.current && !hasNewerRef.current) {
+        scrollToBottom("auto");
+      }
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [
+    channelId,
+    unreadSince,
+    firstUnreadId,
+    messages.length,
+    scrollToBottom,
+    isLoading,
+  ]);
 
   useEffect(() => {
     if (!editMessageId) {
@@ -919,7 +956,7 @@ export function MessageList({
         // in half-finished sentences. The single sr-only status region below
         // is the only thing that speaks, and only for genuine new arrivals.
         aria-live="off"
-        className="flex-1 overflow-y-auto px-3 py-4 sm:px-5"
+        className="flex-1 overflow-y-auto [overflow-anchor:none] px-3 py-4 sm:px-5"
       >
         {hasMore && (
           <div className="flex justify-center pb-3">
@@ -1079,7 +1116,7 @@ export function MessageList({
             {isLoadingNewer ? (
               <span className="flex items-center gap-2 text-xs text-paper-muted">
                 <Loader2 className="h-3 w-3 animate-spin" />
-                Loading newer messages…
+                {t("chat.loadingNewer")}
               </span>
             ) : (
               <button
@@ -1087,12 +1124,11 @@ export function MessageList({
                 onClick={loadNewer}
                 className="rounded-full border border-ink-4 px-3 py-1 text-xs text-paper-muted hover:text-paper"
               >
-                Load newer messages
+                {t("chat.loadNewer")}
               </button>
             )}
           </div>
         )}
-        <div ref={bottomRef} />
       </div>
 
       {/* Always mounted, text-only, and separate from the log itself — an
@@ -1781,32 +1817,34 @@ const MessageRow = memo(function MessageRow({
           )}
         >
           {startsGroup ? (
-            <div className="relative h-9 w-9 shrink-0">
-              <AuthorButton
-                message={message}
-                author={authorInfo}
-                tabIndex={controlTabIndex}
-                onOpenProfile={openProfile}
-                className="h-9 w-9 shrink-0 overflow-hidden rounded-md"
-              >
-                <UserAvatar
-                  name={message.authorName}
-                  avatarUrl={message.authorAvatarUrl}
-                  className="h-9 w-9"
-                  fallbackClassName="bg-ink-3 text-sm"
-                />
-              </AuthorButton>
-              {!message.isWebhook && authorInfo?.status && (
-                <StatusDot
-                  status={authorInfo.status}
-                  className="absolute -bottom-0.5 -right-0.5"
-                  ringClassName="rounded-full bg-ink ring-2 ring-ink"
-                />
-              )}
+            <div className="flex w-14 shrink-0 justify-end">
+              <div className="relative h-9 w-9 shrink-0">
+                <AuthorButton
+                  message={message}
+                  author={authorInfo}
+                  tabIndex={controlTabIndex}
+                  onOpenProfile={openProfile}
+                  className="h-9 w-9 shrink-0 overflow-hidden rounded-md"
+                >
+                  <UserAvatar
+                    name={message.authorName}
+                    avatarUrl={message.authorAvatarUrl}
+                    className="h-9 w-9"
+                    fallbackClassName="bg-ink-3 text-sm"
+                  />
+                </AuthorButton>
+                {!message.isWebhook && authorInfo?.status && (
+                  <StatusDot
+                    status={authorInfo.status}
+                    className="absolute -bottom-0.5 -right-0.5"
+                    ringClassName="rounded-full bg-ink ring-2 ring-ink"
+                  />
+                )}
+              </div>
             </div>
           ) : (
             <time
-              className="w-9 shrink-0 pt-0.5 text-right text-[10px] leading-5 text-paper-muted opacity-0 group-hover:opacity-100"
+              className="w-14 shrink-0 pt-0.5 text-right text-[10px] leading-5 whitespace-nowrap tabular-nums text-paper-muted opacity-0 group-hover:opacity-100"
               dateTime={message.createdAt}
             >
               {formatTime(message.createdAt)}
@@ -1844,6 +1882,7 @@ const MessageRow = memo(function MessageRow({
                     marks={identityMarks({
                       rank: authorInfo?.rank,
                       isWebhook: message.isWebhook,
+                      isCharacter: authorInfo?.isCharacter,
                       ...rankBadges(authorInfo?.roleIds, roles),
                     })}
                   />
@@ -1857,7 +1896,7 @@ const MessageRow = memo(function MessageRow({
                   </span>
                 )}
                 <time
-                  className="text-[11px] text-paper-muted"
+                  className="whitespace-nowrap text-[11px] text-paper-muted"
                   dateTime={message.createdAt}
                   title={formatFullTimestamp(message.createdAt)}
                 >
@@ -1950,14 +1989,14 @@ const MessageRow = memo(function MessageRow({
             {message.failed && (
               <p className="mt-1 flex flex-wrap items-center gap-2 text-xs text-danger">
                 <AlertCircle className="h-3.5 w-3.5" />
-                Message failed to send.
+                {t("chat.failedSend")}
                 <button
                   type="button"
                   tabIndex={controlTabIndex}
                   onClick={onRetry}
                   className="underline underline-offset-2 hover:text-paper"
                 >
-                  Retry
+                  {t("chat.retry")}
                 </button>
                 <button
                   type="button"
@@ -1965,7 +2004,7 @@ const MessageRow = memo(function MessageRow({
                   onClick={onDiscard}
                   className="underline underline-offset-2 hover:text-paper"
                 >
-                  Discard
+                  {t("chat.discard")}
                 </button>
               </p>
             )}
@@ -2369,7 +2408,7 @@ function GifAttachment({ media }: { media: GifMedia }) {
     <button
       type="button"
       onClick={() => setIsPlaying(true)}
-      aria-label={`Play ${media.alt}`}
+      aria-label={translateMessage("chat.playMedia", { name: media.alt })}
       className="group/gif relative mt-1 block w-fit max-w-full overflow-hidden rounded-md border border-border text-left hover:border-border-strong"
     >
       {media.stillUrl ? (

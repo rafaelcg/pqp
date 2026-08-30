@@ -16,6 +16,7 @@ import { useEffect, useRef, useState } from "react";
 import { Dialog } from "@/components/ui/dialog";
 import { fetchAttachmentUrl } from "@/lib/api";
 import { formatByteSize } from "@/lib/attachments";
+import { translateMessage } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 /** Big enough to read a screenshot, small enough that one image is not the pane. */
@@ -158,7 +159,9 @@ function ImageTile({
     <button
       type="button"
       onClick={() => onOpen(src)}
-      aria-label={`Open ${attachment.filename}`}
+      aria-label={translateMessage("chat.openAttachment", {
+        name: attachment.filename,
+      })}
       style={box ? { width: box.width, height: box.height } : undefined}
       className={cn(
         "block overflow-hidden rounded-md border border-ink-4 bg-ink-3/40 transition-colors hover:border-signal/60 focus-visible:border-signal focus-visible:outline-none",
