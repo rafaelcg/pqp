@@ -118,6 +118,11 @@ interface ChannelListProps {
   activeVoiceChannelId: string | null;
   unread: Record<string, UnreadState>;
   onSelectChannel: (channelId: string) => void;
+  /**
+   * Voice channels only. Double-click joins the call so you do not have to
+   * open the channel and then hit Join. Single click still just selects.
+   */
+  onJoinVoice?: (channelId: string) => void;
   onCreateChannel: (
     type: "text" | "voice" | "category",
     isPrivate: boolean,
@@ -153,6 +158,7 @@ export function ChannelList({
   activeVoiceChannelId,
   unread,
   onSelectChannel,
+  onJoinVoice,
   onCreateChannel,
   onRenameChannel,
   onEditChannelMeta,
@@ -278,6 +284,11 @@ export function ChannelList({
             onSelectChannel(channel.id);
             onMobileClose?.();
           }}
+          onJoinVoice={
+            channel.type === "voice" && onJoinVoice
+              ? () => onJoinVoice(channel.id)
+              : undefined
+          }
           onRename={() => onRenameChannel(channel)}
           onEditMeta={
             onEditChannelMeta ? () => onEditChannelMeta(channel) : undefined
@@ -707,6 +718,7 @@ function ChannelRow({
   isDragging,
   isDragOver,
   onSelect,
+  onJoinVoice,
   onRename,
   onEditMeta,
   onDelete,
@@ -732,6 +744,7 @@ function ChannelRow({
   isDragging: boolean;
   isDragOver: boolean;
   onSelect: () => void;
+  onJoinVoice?: () => void;
   onRename: () => void;
   onEditMeta?: () => void;
   onDelete: () => void;
@@ -883,6 +896,19 @@ function ChannelRow({
         <button
           type="button"
           onClick={onSelect}
+          onDoubleClick={
+            onJoinVoice && !connected
+              ? (event) => {
+                  event.preventDefault();
+                  onJoinVoice();
+                }
+              : undefined
+          }
+          title={
+            onJoinVoice && !connected
+              ? t("voice.doubleClickToJoin")
+              : undefined
+          }
           className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
         >
           {icon}
