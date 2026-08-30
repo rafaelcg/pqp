@@ -125,15 +125,50 @@ jobs:
         working-directory: android
         run: ./gradlew :app:assembleDebug --stacktrace
 
-      # An UNSIGNED release, on purpose. This job holds no keystore and never
-      # will; what it proves is that R8, the resource shrinker and
-      # `proguard-rules.pro` survive the release variant, which is where a
-      # kotlinx-serialization or WebRTC rule goes missing and the app crashes on
-      # a tester's phone and nowhere else. Signing is a human step, documented
-      # in docs/ANDROID_RELEASE.md.
+      # An UNSIGNED release, on purpose. This job holds no Play upload
+      # keystore and never will; what it proves is that R8, the resource
+      # shrinker and `proguard-rules.pro` survive the release variant, which
+      # is where a kotlinx-serialization or WebRTC rule goes missing and the
+      # app crashes on a tester's phone and nowhere else. Play signing stays
+      # a human step, documented in docs/ANDROID_RELEASE.md.
       - name: Release build (unsigned, shrinker check)
         working-directory: android
         run: ./gradlew :app:assembleRelease --stacktrace
+
+      # The GitHub-beta APK. Same shrinker and prod URLs as release, signed
+      # with the debug key so the artifact actually installs. The debug
+      # keystore on a runner is ephemeral unless we keep it: a new one every
+      # run would force every tester to uninstall before updating. Caching
+      # `~/.android/debug.keystore` under a stable key is the whole of that.
+      # Do not commit a keystore. Do not put this signing config on `release`.
+      - name: Persist the sideload debug keystore
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: android-sideload-debug-keystore-v1
+
+      - name: Sideload APK (prod API, debug-signed)
+        working-directory: android
+        env:
+          # Publishable, the same value Pages already bakes into the web
+          # client. Empty on fork PRs (GitHub will not hand secrets to a
+          # fork); those runs still compile, they just cannot sign in.
+          PQP_CLERKPUBLISHABLEKEY: ${{ secrets.VITE_CLERK_PUBLISHABLE_KEY }}
+        run: |
+          set -euo pipefail
+          publishing=0
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || { [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref }}" = "refs/heads/main" ]; }; then
+            publishing=1
+          fi
+          if [ "$publishing" = 1 ] && [ -z "${PQP_CLERKPUBLISHABLEKEY}" ]; then
+            echo "::error::VITE_CLERK_PUBLISHABLE_KEY is empty. The sideload APK would compile and then refuse to sign in (AuthMode.Misconfigured). Set the Actions secret (same value as the Pages build) before publishing android-beta."
+            exit 1
+          fi
+          if [ -z "${PQP_CLERKPUBLISHABLEKEY}" ]; then
+            echo "::warning::No Clerk publishable key; sideload APK is a compile check only (will not sign in against api.pqp.gg)."
+          fi
+          ./gradlew :app:assembleSideload --stacktrace
+          cp app/build/outputs/apk/sideload/app-sideload.apk app/build/outputs/apk/sideload/pqp.apk
 
       - name: Summarise
         if: always()
@@ -182,3 +217,57 @@ jobs:
           path: android/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 14
+
+      - name: Upload sideload APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pqp-android-sideload
+          path: android/app/build/outputs/apk/sideload/pqp.apk
+          if-no-files-found: error
+          retention-days: 14
+
+  # Rolling GitHub Release on the stable tag `android-beta`, never `latest`.
+  # `latest` is the Electron version tag; marking this release latest would
+  # either 404 the desktop updater or serve an APK to it. Prerelease +
+  # make_latest: false is belt and braces.
+  #
+  # PRs upload the artifact above and stop here. Publishing from a PR would
+  # put unreviewed code on the public download URL.
+  publish-sideload:
+    name: Publish sideload APK
+    needs: build
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+
+    steps:
+      - name: Download sideload APK
+        uses: actions/download-artifact@v4
+        with:
+          name: pqp-android-sideload
+          path: dist
+
+      - name: Publish to android-beta
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: android-beta
+          name: Android beta
+          prerelease: true
+          make_latest: false
+          fail_on_unmatched_files: true
+          overwrite_files: true
+          files: dist/pqp.apk
+          body: |
+            Sideload APK for the closed Play window (`pqp.gg/android`).
+
+            Built by `.github/workflows/android.yml` from the `sideload`
+            variant: production API, R8, debug-signed. Not the Play upload
+            key, so the listing cannot update over this install. Uninstall
+            this build when the store opens.
+
+            Filename is stable (`pqp.apk`) so the download URL does not
+            change when the binary does.

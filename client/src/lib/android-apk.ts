@@ -1,20 +1,22 @@
 /**
  * Public URL of the Android beta APK.
  *
- * GitHub `releases/latest/download/<name>` only works if the filename is
- * stable. Desktop artifacts are not (`pqp-0.1.0-x64.exe` dies on the next
- * tag — see `downloads.ts`). The APK is: attach it to the latest GitHub
- * Release as exactly `pqp.apk`. That is the whole reason this default can
- * live in the source the way the TestFlight URL does.
+ * Not `/releases/latest/download/…`. `latest` is the Electron version tag
+ * (`v0.1.0` and friends); pointing the APK there would either 404 or steal
+ * "latest" from the desktop updater. CI publishes a rolling prerelease on
+ * the stable tag `android-beta` as exactly `pqp.apk`, from the `sideload`
+ * variant (prod API, debug-signed — not the Play upload key). Runbook:
+ * `docs/ANDROID_RELEASE.md` §4b.
  *
  * `VITE_ANDROID_APK_URL` overrides it at build time (R2, a different
- * asset name, or a single space to hide the button). Runbook:
- * `docs/ANDROID_RELEASE.md` §4b.
+ * asset name, or a single space to hide the button).
  */
 export const ANDROID_APK_ASSET_NAME = "pqp.apk";
 
+export const ANDROID_APK_RELEASE_TAG = "android-beta";
+
 export const ANDROID_APK_DOWNLOAD_URL =
-  `https://github.com/rafaelcg/pqp/releases/latest/download/${ANDROID_APK_ASSET_NAME}`;
+  `https://github.com/rafaelcg/pqp/releases/download/${ANDROID_APK_RELEASE_TAG}/${ANDROID_APK_ASSET_NAME}`;
 
 /**
  * Empty / unset keeps the GitHub default. A whitespace-only value (the

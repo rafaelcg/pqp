@@ -5,9 +5,11 @@ import {
 } from "./android-apk";
 
 describe("androidApkUrlFrom", () => {
-  it("falls back to the GitHub latest-release APK when unset", () => {
+  it("falls back to the GitHub android-beta APK when unset", () => {
     expect(androidApkUrlFrom(undefined)).toBe(ANDROID_APK_DOWNLOAD_URL);
     expect(androidApkUrlFrom("")).toBe(ANDROID_APK_DOWNLOAD_URL);
+    expect(ANDROID_APK_DOWNLOAD_URL).toContain("/releases/download/android-beta/");
+    expect(ANDROID_APK_DOWNLOAD_URL).not.toContain("/releases/latest/");
   });
 
   it("honours an override URL", () => {

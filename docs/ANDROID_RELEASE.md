@@ -26,7 +26,7 @@ it.
 | `assembleRelease` no longer falls back to the debug key | **Done**, and with no keystore it now produces an *unsigned* APK instead of a plausible-looking rejected one |
 | R8, resource shrinking and `proguard-rules.pro` on the release variant | **Done and green**. CI builds release unsigned on every PR |
 | `bundleRelease` (the `.aab` Play actually wants) | **Verified working** |
-| `.github/workflows/android.yml` | **Done**: build, unit tests, lint, debug APK, unsigned release |
+| `.github/workflows/android.yml` | **Done**: build, unit tests, lint, debug APK, unsigned release, sideload APK. `main` (and `workflow_dispatch`) publishes `pqp.apk` to the `android-beta` tag |
 | **In-app account deletion** | **Done and exercised on a device.** See §0 |
 | Data export in the app | **Done** (`GET /api/me/export`, saved through the system file picker) |
 | Play Console: FGS declaration, data safety, listing | **Not started.** §5, §6, §7. Note the manifest now needs **two** FGS declarations, not one |
@@ -363,24 +363,42 @@ The download button reads **one** build-time variable:
 |---|---|
 | `VITE_ANDROID_APK_URL` | Direct URL of the signed APK. Empty uses the GitHub default below. A single space hides the button. |
 
-**GitHub is the default.** Attach a **signed** release APK to the latest GitHub
-Release as exactly `pqp.apk`. The site then hits:
+**GitHub is the default, and CI attaches the file.** Do not upload `pqp.apk`
+by hand. `.github/workflows/android.yml` builds the `sideload` variant
+(prod API, R8, **debug-signed**) and, on `main` or `workflow_dispatch`,
+publishes it to a rolling prerelease on the stable tag `android-beta`:
 
-`https://github.com/rafaelcg/pqp/releases/latest/download/pqp.apk`
+`https://github.com/rafaelcg/pqp/releases/download/android-beta/pqp.apk`
 
-That filename has to stay stable across tags (desktop artifacts do not — see
-`client/src/lib/downloads.ts`). Sign it with the upload key, not the debug
-key, or Play later will refuse to update over it.
+That is **not** `/releases/latest`. `latest` is the Electron version tag;
+pointing the APK there would 404 or steal the desktop updater's feed.
+`make_latest: false` and `prerelease: true` keep it that way.
+
+Sideload is a separate Gradle build type on purpose. Putting the debug key
+back on `assembleRelease` is how a Play upload gets signed with a key Play
+will refuse. Testers uninstall the GitHub build when the store opens. The
+listing cannot update over a different signature, and the `/android` copy
+already says so.
+
+The Clerk publishable key is baked from `secrets.VITE_CLERK_PUBLISHABLE_KEY`
+(the same value Pages already has). Empty, the APK compiles and then
+refuses to sign in (`AuthMode.Misconfigured`); the publish job fails rather
+than shipping that. The debug keystore is cached on the runner
+(`android-sideload-debug-keystore-v1`) so an update does not force every
+tester to uninstall first. Do not commit a keystore.
 
 An R2 (or any other) URL is an override, not a requirement:
 
 ```bash
-gh variable set VITE_ANDROID_APK_URL --body 'https://github.com/rafaelcg/pqp/releases/latest/download/pqp.apk'
+gh variable set VITE_ANDROID_APK_URL --body 'https://github.com/rafaelcg/pqp/releases/download/android-beta/pqp.apk'
 ```
 
 Then re-run Deploy Web. Empty is fine: the code default is that same GitHub
 URL. The old `VITE_ANDROID_BETA_GROUP_URL` / `VITE_ANDROID_BETA_URL` pair is
 gone; do not set them.
+
+The first `/android` click after a merge may 404 for a few minutes, until
+the Android workflow's publish job finishes. That is expected.
 
 Do not link `play.google.com/store/apps/details?id=gg.pqp.app` while the track
 is closed (it 404s). When Play opens, `/android` stays and the button becomes

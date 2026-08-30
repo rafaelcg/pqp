@@ -188,6 +188,22 @@ android {
             // without ever holding a key.
             signingConfig = signingConfigs.findByName("release")
         }
+        // GitHub beta, not Play. Same applicationId, same prod URLs, same
+        // shrinker as release, signed with the debug key so CI can produce an
+        // installable APK without ever holding the upload keystore.
+        //
+        // Do not fold this into `release`. Putting the debug key back on
+        // `assembleRelease` is how a Play upload gets signed with a key Play
+        // will refuse, and the rejection arrives days later. Sideload is
+        // honest: testers uninstall it when the store opens (the listing
+        // cannot update over a different signature anyway). See
+        // docs/ANDROID_RELEASE.md §4b.
+        create("sideload") {
+            initWith(getByName("release"))
+            matchingFallbacks += listOf("release")
+            signingConfig = signingConfigs.getByName("debug")
+            versionNameSuffix = "-beta"
+        }
     }
 
     testOptions {
@@ -323,8 +339,10 @@ val nativeJniClasses = listOf(
 )
 
 androidComponents {
-    // Release only: the debug variant is not minified, so there is nothing that
-    // could go missing and nothing to verify.
+    // Minified variants only: debug is not shrunk, so there is nothing that
+    // could go missing and nothing to verify. Sideload is minified the same
+    // way as release (it `initWith`s it), so a missing JNI keep rule would
+    // ship to every GitHub-beta phone, not only to Play.
     onVariants(selector().withBuildType("release")) { variant ->
         val name = variant.name.replaceFirstChar { it.uppercase() }
 
@@ -351,6 +369,19 @@ androidComponents {
         // that is not there yet fails the configuration outright.
         tasks.matching { it.name == "assemble$name" }.configureEach { dependsOn(verifyApk) }
         tasks.matching { it.name == "bundle$name" }.configureEach { dependsOn(verifyBundle) }
+    }
+
+    onVariants(selector().withBuildType("sideload")) { variant ->
+        val name = variant.name.replaceFirstChar { it.uppercase() }
+
+        val verifyApk = tasks.register<VerifyNativeJniClassesTask>("verify${name}NativeJniClasses") {
+            group = "verification"
+            description = "Fails when R8 has removed a class libwebrtc resolves from native code."
+            archives.from(variant.artifacts.get(SingleArtifact.APK).map { it.asFileTree })
+            required.set(nativeJniClasses)
+        }
+
+        tasks.matching { it.name == "assemble$name" }.configureEach { dependsOn(verifyApk) }
     }
 }
 
