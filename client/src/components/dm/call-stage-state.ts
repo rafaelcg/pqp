@@ -51,14 +51,16 @@ export function hasWatchableVideo(input: {
 }
 
 /**
- * The expanded stage is only for watching something. Collapsing is a user
- * choice remembered for the session; an empty stage is never offered.
+ * The expanded stage is for watching something, or for an outgoing ring.
+ * Voice-only occupancy stays a slim bar. Collapsing is a user choice
+ * remembered for the session.
  */
 export function shouldShowExpandedStage(
   hasVideo: boolean,
   userCollapsed: boolean,
+  ringing = false,
 ): boolean {
-  return hasVideo && !userCollapsed;
+  return (hasVideo || ringing) && !userCollapsed;
 }
 
 /**

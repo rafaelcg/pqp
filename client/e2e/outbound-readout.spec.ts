@@ -1,4 +1,5 @@
 import { expect, test, type Browser, type Page } from "@playwright/test";
+import { waitUntilVoiceConnected } from "./fixtures";
 
 /**
  * Does the line under the quality menu ever say a number?
@@ -112,6 +113,7 @@ async function joinVoice(page: Page): Promise<void> {
   await page.getByRole("button", { name: /stage/ }).first().click();
   await page.getByRole("button", { name: "Join Voice" }).click();
   await expect(page.getByTestId("call-stage-collapsed")).toBeVisible({ timeout: 30_000 });
+  await waitUntilVoiceConnected(page);
 }
 
 async function secondClient(browser: Browser, path: string, suffix: string) {

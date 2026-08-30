@@ -1,4 +1,5 @@
 import { expect, test, type Browser, type Page } from "@playwright/test";
+import { waitUntilVoiceConnected } from "./fixtures";
 
 /**
  * What does the OTHER end actually receive when the quality menu moves?
@@ -188,6 +189,7 @@ async function joinVoice(page: Page): Promise<void> {
   await page.getByRole("button", { name: /stage/ }).first().click();
   await page.getByRole("button", { name: "Join Voice" }).click();
   await expect(page.getByTestId("call-stage-collapsed")).toBeVisible({ timeout: 20_000 });
+  await waitUntilVoiceConnected(page);
 }
 
 async function chooseChannelQuality(page: Page, label: string): Promise<void> {

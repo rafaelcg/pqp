@@ -197,11 +197,9 @@ test("the callee's join resolves the ring and appears as a tile", async ({
     callee.send({ type: "join-voice-room", voiceChannelId: conversationId });
     await callee.waitFor((f) => f.type === "welcome");
 
-    // The caller's panel now shows the callee's tile instead of "Calling…".
-    await expect(
-      page.locator('[data-call-tile="Dev User callee"]'),
-    ).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByText("Calling…")).not.toBeVisible();
+    // Voice-only after pickup is the slim bar, not a tile on the stage.
+    await expect(page.getByText("Calling…")).not.toBeVisible({ timeout: 10_000 });
+    await expect(page.getByTestId("call-stage-collapsed")).toBeVisible();
 
     await page.getByRole("button", { name: "Leave", exact: true }).click();
   } finally {

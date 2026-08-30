@@ -88,6 +88,11 @@ describe("shouldShowExpandedStage", () => {
     expect(shouldShowExpandedStage(true, false)).toBe(true);
     expect(shouldShowExpandedStage(true, true)).toBe(false);
   });
+
+  it("expands an outgoing ring so Calling and declined stay on the stage", () => {
+    expect(shouldShowExpandedStage(false, false, true)).toBe(true);
+    expect(shouldShowExpandedStage(false, true, true)).toBe(false);
+  });
 });
 
 describe("resolvedStageLayout", () => {

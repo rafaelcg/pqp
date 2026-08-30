@@ -1,4 +1,5 @@
 import { expect, test, type Browser, type Page } from "@playwright/test";
+import { waitUntilVoiceConnected } from "./fixtures";
 
 /**
  * The WATCHER's side of a screen share, which had no surface at all.
@@ -163,6 +164,7 @@ async function joinVoice(page: Page): Promise<void> {
   await page.getByRole("button", { name: /stage/ }).first().click();
   await page.getByRole("button", { name: "Join Voice" }).click();
   await expect(page.getByTestId("call-stage-collapsed")).toBeVisible({ timeout: 20_000 });
+  await waitUntilVoiceConnected(page);
 }
 
 /**

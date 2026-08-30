@@ -548,7 +548,6 @@ function ActiveCall({
 }) {
   const { t } = useTranslation();
   const wide = useLgUp();
-  const collapsed = !shouldShowExpandedStage(hasVideo, userCollapsed);
   const joining = voiceState.status === "joining";
   // "Calling…" is a DM we started that nobody has picked up. Alone in a
   // server Lobby is occupancy, not an outgoing ring.
@@ -556,6 +555,8 @@ function ActiveCall({
     ringWhenAlone &&
     voiceState.status === "connected" &&
     voiceState.remotePeers.length === 0;
+  const ringing = callingOut || (joining && ringWhenAlone);
+  const collapsed = !shouldShowExpandedStage(hasVideo, userCollapsed, ringing);
   useEffect(() => {
     if (playOutgoingRingtone && callingOut) {
       startSoundLoop("outgoingCall");
@@ -905,6 +906,11 @@ function ActiveCall({
         />
         <p className="min-w-0 flex-1 truncate text-xs text-paper-muted" role="status">
           {statusLine ?? title}
+          {declinedNames.map((name) => (
+            <span key={name} className="ml-2 text-warning">
+              {t("call.panel.declined", { name })}
+            </span>
+          ))}
           {elapsedLabel && (
             <span className="ml-2 tabular-nums" aria-label={t("call.stage.duration")}>
               {elapsedLabel}

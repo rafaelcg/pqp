@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { openApp } from "./fixtures";
+import { openApp, waitUntilVoiceConnected } from "./fixtures";
 
 const API = process.env.E2E_API_URL ?? "http://localhost:3101";
 const DEV_TOKEN = "dev-local-token";
@@ -93,6 +93,7 @@ async function joinLobby(page: Page): Promise<void> {
   await expect(page.getByTestId("call-stage-collapsed")).toBeVisible({
     timeout: 20_000,
   });
+  await waitUntilVoiceConnected(page);
 }
 
 /** The hold-to-talk control, whichever of its three labels it is wearing. */
