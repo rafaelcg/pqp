@@ -14,6 +14,10 @@ import { testflightUrl } from "@/lib/testflight";
  * honest about what it is (a sideloaded APK, not Play Store). The download
  * URL comes from `android-apk.ts`, so the button is real whether or not a
  * build-time override is set.
+ *
+ * The hero is a two-column split (copy left, a real screenshot right) on
+ * the same grid `/download` uses. The photo is a capture of the running app,
+ * not a CSS phone, because we now have one.
  */
 
 function stagger(i: number): CSSProperties {
@@ -74,67 +78,71 @@ export function AndroidPage() {
           aria-hidden
         />
 
-        <div className="relative mx-auto max-w-3xl px-5 pb-24 pt-14 sm:px-8 sm:pt-20">
-          <div
-            className="animate-rise flex justify-center"
-            style={stagger(0)}
-          >
-            <span className="inline-flex items-center gap-2 rounded-full border border-signal/50 px-4 py-1.5 text-xs font-semibold uppercase tracking-[0.16em] text-signal">
-              <Smartphone aria-hidden className="h-3.5 w-3.5" />
-              {t("androidPage.badge")}
-            </span>
-          </div>
+        <div className="relative mx-auto w-full max-w-6xl px-5 pb-24 pt-14 sm:px-8 sm:pt-20">
+          <div className="grid items-center gap-12 lg:grid-cols-[minmax(0,1fr)_minmax(0,20rem)] lg:gap-20">
+            <div className="max-w-xl">
+              <div className="animate-rise" style={stagger(0)}>
+                <span className="inline-flex items-center gap-2 rounded-full border border-signal/50 px-4 py-1.5 text-xs font-semibold uppercase tracking-[0.16em] text-signal">
+                  <Smartphone aria-hidden className="h-3.5 w-3.5" />
+                  {t("androidPage.badge")}
+                </span>
+              </div>
 
-          <h1
-            className="animate-rise mt-6 text-balance text-center font-brand text-4xl leading-[1.05] tracking-tight sm:text-5xl"
-            style={stagger(1)}
-          >
-            {t("androidPage.title")}
-          </h1>
+              <h1
+                className="animate-rise mt-6 text-balance font-brand text-4xl leading-[1.05] tracking-tight sm:text-5xl"
+                style={stagger(1)}
+              >
+                {t("androidPage.title")}
+              </h1>
 
-          <p
-            className="animate-rise mx-auto mt-6 max-w-xl text-pretty text-center text-base leading-relaxed text-paper-muted sm:text-lg"
-            style={stagger(2)}
-          >
-            {t("androidPage.body")}
-          </p>
-
-          <div
-            className="animate-rise mt-9 flex flex-col items-center gap-3"
-            style={stagger(3)}
-          >
-            {apkUrl ? (
-              <>
-                <Button asChild className="cta-lift h-12 px-8 text-base">
-                  <a href={apkUrl} rel="noopener">
-                    {t("androidPage.cta")}
-                  </a>
-                </Button>
-                <p className="text-sm text-paper-muted">
-                  {t("androidPage.cta.sub")}
-                </p>
-              </>
-            ) : (
-              <p className="text-sm text-paper-muted">
-                {t("androidPage.cta.soon")}
+              <p
+                className="animate-rise mt-6 max-w-md text-pretty text-base leading-relaxed text-paper-muted sm:text-lg"
+                style={stagger(2)}
+              >
+                {t("androidPage.body")}
               </p>
-            )}
-            <Link
-              to="/app"
-              className="text-sm text-paper-muted underline decoration-paper-muted/40 underline-offset-4 hover:text-paper hover:decoration-paper/60"
+
+              <div
+                className="animate-rise mt-9 flex flex-col items-start gap-3"
+                style={stagger(3)}
+              >
+                {apkUrl ? (
+                  <>
+                    <Button asChild className="cta-lift h-12 px-8 text-base">
+                      <a href={apkUrl} rel="noopener">
+                        {t("androidPage.cta")}
+                      </a>
+                    </Button>
+                    <p className="text-sm text-paper-muted">
+                      {t("androidPage.cta.sub")}
+                    </p>
+                  </>
+                ) : (
+                  <p className="text-sm text-paper-muted">
+                    {t("androidPage.cta.soon")}
+                  </p>
+                )}
+                <Link
+                  to="/app"
+                  className="text-sm text-paper-muted underline decoration-paper-muted/40 underline-offset-4 hover:text-paper hover:decoration-paper/60"
+                >
+                  {t("androidPage.web")}
+                </Link>
+              </div>
+            </div>
+
+            <div
+              className="animate-rise flex justify-center lg:justify-end"
+              style={stagger(4)}
             >
-              {t("androidPage.web")}
-            </Link>
+              <PhoneShot alt={t("androidPage.shot.alt")} />
+            </div>
           </div>
 
-          <div
-            className="animate-rise mt-14 flex justify-center"
-            style={stagger(4)}
+          <section
+            className="animate-rise mx-auto mt-20 max-w-3xl"
+            style={stagger(5)}
           >
-            <PhoneFrame />
-          </div>
-
-          <section className="animate-rise mt-20" style={stagger(5)}>
             <h2 className="text-center font-display text-2xl font-bold tracking-tight sm:text-3xl">
               {t("androidPage.perks.title")}
             </h2>
@@ -161,7 +169,10 @@ export function AndroidPage() {
             </div>
           </section>
 
-          <section className="animate-rise mt-16" style={stagger(6)}>
+          <section
+            className="animate-rise mx-auto mt-16 max-w-3xl"
+            style={stagger(6)}
+          >
             <h2 className="text-center font-display text-2xl font-bold tracking-tight sm:text-3xl">
               {t("androidPage.how.title")}
             </h2>
@@ -211,28 +222,22 @@ export function AndroidPage() {
   );
 }
 
-/**
- * A phone frame drawn in CSS — same idea as `/download`'s window. There is
- * no Android screenshot in the repo, and a mocked-up fake one would be a lie.
- * The wordmark inside a squircle says "it is an app on a phone".
- */
-function PhoneFrame() {
+/** A real capture of the running Android app, not a drawn frame. */
+function PhoneShot({ alt }: { alt: string }) {
   return (
-    <div aria-hidden className="relative">
-      <div className="absolute -inset-10 rounded-full bg-signal/5 blur-3xl" />
-      <div className="relative w-[236px] overflow-hidden rounded-[2.25rem] border border-ink-4 bg-ink-2/90 shadow-2xl shadow-black/50 sm:w-[272px]">
-        <div className="mx-auto mt-3 h-5 w-24 rounded-full bg-ink-4/80" />
-        <div className="flex min-h-[28rem] flex-col items-center justify-center gap-6 px-8 py-16">
-          <span className="font-brand text-6xl tracking-tight text-paper">
-            pqp
-          </span>
-          <span className="flex items-center gap-2">
-            <span className="h-2 w-2 rounded-full bg-signal" />
-            <span className="h-2 w-16 rounded-full bg-ink-4" />
-          </span>
-        </div>
-        <div className="mx-auto mb-4 h-1.5 w-28 rounded-full bg-ink-4" />
-      </div>
+    <div className="relative">
+      <div
+        className="absolute -inset-10 rounded-full bg-signal/5 blur-3xl"
+        aria-hidden
+      />
+      <img
+        src="/images/beta-android.webp"
+        alt={alt}
+        width={720}
+        height={1607}
+        fetchPriority="high"
+        className="relative w-[236px] rounded-[2rem] shadow-2xl shadow-black/50 sm:w-[272px] lg:w-full"
+      />
     </div>
   );
 }
