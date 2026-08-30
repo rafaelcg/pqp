@@ -17,6 +17,6 @@ describe("DownloadCatalog", () => {
     expect(html).toContain("Android");
     expect(html).toContain("Download for Windows");
     expect(html).toContain("/beta");
-    expect(html).toContain("/app");
+    expect(html).toContain("/android");
   });
 });

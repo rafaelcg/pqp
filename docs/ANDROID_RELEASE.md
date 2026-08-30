@@ -353,32 +353,42 @@ In order, in the Play Console:
 
 ### 4b. Turn on the web funnel (`/android`)
 
-`pqp.gg/android` is the page that recruits those 12 testers, and the in-app
-prompt in `/app` is what tells existing users it exists. Both read **two**
-build-time variables and treat them as one gate:
+`pqp.gg/android` is the APK landing, and a dismissible corner card in `/app`
+tells phone browsers it exists. Desktop users get three marks in the existing
+**Baixa o app** sheet (this computer / iPhone / Android). No Google Group.
 
-| Variable | Step | Value |
-|---|---|---|
-| `VITE_ANDROID_BETA_GROUP_URL` | 1 | The **public Google Group** that is the tester list. Joining it with the Google account the phone's Play Store uses is what makes step 2 do anything. |
-| `VITE_ANDROID_BETA_URL` | 2 | `https://play.google.com/apps/testing/gg.pqp.app` |
+The download button reads **one** build-time variable:
 
-Neither is a secret, so both go in **repository variables**, not secrets:
-`gh variable set VITE_ANDROID_BETA_GROUP_URL`, same for the other. Then re-run
-Deploy Web.
+| Variable | Value |
+|---|---|
+| `VITE_ANDROID_APK_URL` | Direct URL of the signed APK. Empty uses the GitHub default below. A single space hides the button. |
 
-**Until both are set** the page renders an honest "the tester group is not open
-yet", offers the browser instead, and the in-app prompt does not render at all,
-so this can ship well before the track exists. That is the point of the gate.
+**GitHub is the default.** Attach a **signed** release APK to the latest GitHub
+Release as exactly `pqp.apk`. The site then hits:
 
-Two things not to do: do not link
-`play.google.com/store/apps/details?id=gg.pqp.app` anywhere (it **404s** while
-the track is closed, which is correct), and do not describe the flow as a
-one-tap install. It is two steps in a fixed order, and somebody who does step 2
-first gets a Google page that silently does nothing.
+`https://github.com/rafaelcg/pqp/releases/latest/download/pqp.apk`
 
-If the track is ever swapped for an **open** test, the two-step copy stops being
-true: the strings to rewrite are `androidPage.cta.group`, `androidPage.cta.sub`,
-`androidPage.how.1` and `androidPage.how.2` in both catalogues.
+That filename has to stay stable across tags (desktop artifacts do not — see
+`client/src/lib/downloads.ts`). Sign it with the upload key, not the debug
+key, or Play later will refuse to update over it.
+
+An R2 (or any other) URL is an override, not a requirement:
+
+```bash
+gh variable set VITE_ANDROID_APK_URL --body 'https://github.com/rafaelcg/pqp/releases/latest/download/pqp.apk'
+```
+
+Then re-run Deploy Web. Empty is fine: the code default is that same GitHub
+URL. The old `VITE_ANDROID_BETA_GROUP_URL` / `VITE_ANDROID_BETA_URL` pair is
+gone; do not set them.
+
+Do not link `play.google.com/store/apps/details?id=gg.pqp.app` while the track
+is closed (it 404s). When Play opens, `/android` stays and the button becomes
+a store link — rewrite `androidPage.how.*` and `androidPage.honest` then.
+
+The in-app phone card queues with QG, dice/polls, and cargos
+(`client/src/lib/corner-hints.ts`). One corner at a time. Playwright and
+localhost do not count as seen.
 
 ---
 

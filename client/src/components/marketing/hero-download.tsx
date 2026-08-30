@@ -1,8 +1,9 @@
 import { Download } from "lucide-react";
 import { type CSSProperties, type ReactNode } from "react";
+import { Link } from "react-router-dom";
 import { useDownloadAssets } from "@/components/downloads/use-download-assets";
 import { isDesktopApp } from "@/lib/desktop";
-import { DESKTOP_DOCS_URL, RELEASES_PAGE_URL, isIOSDevice } from "@/lib/downloads";
+import { DESKTOP_DOCS_URL, RELEASES_PAGE_URL, isAndroidDevice, isIOSDevice } from "@/lib/downloads";
 import { useTranslation } from "@/lib/i18n";
 import { testflightUrl } from "@/lib/testflight";
 import { cn } from "@/lib/utils";
@@ -74,8 +75,8 @@ export function HeroDownload({
   if (plan.platform === "mobile") {
     const beta = testflightUrl();
     // The iOS beta is only for iPhones: an Android visitor offered a TestFlight
-    // link has nothing to do with it, so they get the PWA answer instead
-    // (docs/PWA.md) — a .dmg on a phone is a dead end either way.
+    // link has nothing to do with it. Android gets `/android` (the APK).
+    // Anything else on a phone is still the PWA answer (docs/PWA.md).
     if (beta && isIOSDevice()) {
       return (
         <p className={cn(classes.muted, className)} style={style}>
@@ -87,6 +88,18 @@ export function HeroDownload({
           >
             {t("download.mobile.beta")}
           </a>
+        </p>
+      );
+    }
+    if (isAndroidDevice()) {
+      return (
+        <p className={cn(classes.muted, className)} style={style}>
+          <Link
+            to="/android"
+            className={classes.mobileLink}
+          >
+            {t("download.mobile.android")}
+          </Link>
         </p>
       );
     }

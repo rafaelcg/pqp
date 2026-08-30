@@ -58,6 +58,9 @@ const VsDiscordPage = lazy(() =>
 const BetaPage = lazy(() =>
   import("./pages/beta-page").then((m) => ({ default: m.BetaPage })),
 );
+const AndroidPage = lazy(() =>
+  import("./pages/android-page").then((m) => ({ default: m.AndroidPage })),
+);
 const DownloadPage = lazy(() =>
   import("./pages/download-page").then((m) => ({ default: m.DownloadPage })),
 );
@@ -170,6 +173,7 @@ function AppRoutes({ devBypass = false }: { devBypass?: boolean }) {
               a second one without the same thought. */}
           <Route path="/tela" element={<TelaPage />} />
           <Route path="/beta" element={<BetaPage />} />
+          <Route path="/android" element={<AndroidPage />} />
           <Route path="/download" element={<DownloadPage />} />
           {/* Static before dynamic, and both before `/:handleSegment`. React
               Router ranks a static segment above a parameter, so `/blog/x`

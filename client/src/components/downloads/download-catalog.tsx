@@ -6,6 +6,7 @@ import { useDownloadAssets } from "@/components/downloads/use-download-assets";
 import {
   DESKTOP_DOCS_URL,
   RELEASES_PAGE_URL,
+  isAndroidDevice,
   isIOSDevice,
   type AssetId,
 } from "@/lib/downloads";
@@ -24,7 +25,7 @@ import { testflightUrl } from "@/lib/testflight";
  * HONESTY, at the point of download and only there: Windows and Linux builds
  * are unsigned (the OS warns on first run), the Mac build is signed and
  * notarized, iPhone is a TestFlight beta reached via `/beta`, and Android is
- * the browser — no store listing, no APK. Nothing here claims an app store or
+ * an APK beta reached via `/android`. Nothing here claims an app store or
  * auto-update.
  */
 
@@ -46,6 +47,7 @@ export function DownloadCatalog() {
   const platform = plan?.platform ?? "unknown";
   const macArch = plan?.macArch ?? null;
   const onIos = platform === "mobile" && isIOSDevice();
+  const onAndroid = platform === "mobile" && isAndroidDevice();
 
   let primary: ReactNode;
   let note: ReactNode = null;
@@ -115,6 +117,13 @@ export function DownloadCatalog() {
       </Button>
     );
     note = t("downloadPage.ios.body");
+  } else if (onAndroid) {
+    primary = (
+      <Button asChild className={PRIMARY_CTA}>
+        <Link to="/android">{t("downloadPage.android.cta")}</Link>
+      </Button>
+    );
+    note = t("downloadPage.android.body");
   } else if (platform === "mobile") {
     primaryIsBrowser = true;
     primary = (
@@ -208,8 +217,8 @@ function PlatformList({ href }: { href: (id: AssetId) => string }) {
           </Link>
         </PlatformRow>
         <PlatformRow name={t("downloadPage.android")}>
-          <Link to="/app" className={QUIET_LINK}>
-            {t("downloadPage.web.cta")}
+          <Link to="/android" className={QUIET_LINK}>
+            {t("downloadPage.list.android")}
           </Link>
         </PlatformRow>
       </ul>

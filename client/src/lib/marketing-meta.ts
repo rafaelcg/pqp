@@ -29,7 +29,7 @@
  * bundles this outside the pnpm workspace, so it cannot import the i18n
  * JSON. The strings below are duplicates of `landing.seo.*`,
  * `vsDiscord.seo.*`, `tela.seo.*`, `claim.seo.*`, `betaPage.seo.*`,
- * `downloadPage.seo.*`, `vsDiscord.faq.*` and
+ * `androidPage.seo.*`, `downloadPage.seo.*`, `vsDiscord.faq.*` and
  * `tela.faq.*`, and
  * `marketing-meta.test.ts` pins each pair against the JSON catalogues — the
  * duplication cannot drift without failing the suite.
@@ -43,6 +43,7 @@ export type MarketingPage =
   | "/vs-discord"
   | "/tela"
   | "/beta"
+  | "/android"
   | "/download"
   | "/garanta"
   | "/claim"
@@ -58,6 +59,7 @@ const MARKETING_PATHS: ReadonlySet<string> = new Set([
   "/vs-discord",
   "/tela",
   "/beta",
+  "/android",
   "/download",
   "/garanta",
   "/claim",
@@ -150,6 +152,18 @@ const PAGE_COPY: Record<MarketingPage, PageCopy> = {
       en: "Early access to pqp on iPhone. Voice, text, and the screens other people are sharing, from your pocket. Spots via TestFlight, free and in open beta.",
     },
   },
+  "/android": {
+    canonicalPath: "/android",
+    title: {
+      "pt-BR": "Beta do Android · pqp em APK",
+      en: "Android beta · pqp APK",
+    },
+    description: {
+      "pt-BR":
+        "Acesso antecipado ao pqp no Android. Baixa o APK, autoriza uma vez, e tá dentro. Ainda não tá na Play Store. De graça.",
+      en: "Early access to pqp on Android. Download the APK, allow install once, and you're in. Not on the Play Store yet. Free.",
+    },
+  },
   "/download": {
     canonicalPath: "/download",
     title: {
@@ -158,8 +172,8 @@ const PAGE_COPY: Record<MarketingPage, PageCopy> = {
     },
     description: {
       "pt-BR":
-        "App de desktop pra Windows, Mac e Linux, e um beta de iPhone pelo TestFlight. O navegador continua funcionando sem instalar nada.",
-      en: "Desktop app for Windows, Mac, and Linux, plus an iPhone beta on TestFlight. The browser still works with nothing to install.",
+        "App de desktop pra Windows, Mac e Linux, um beta de iPhone pelo TestFlight, e um beta de Android em APK. O navegador continua funcionando sem instalar nada.",
+      en: "Desktop app for Windows, Mac, and Linux, an iPhone beta on TestFlight, and an Android beta as an APK. The browser still works with nothing to install.",
     },
   },
   "/garanta": {
@@ -326,7 +340,7 @@ export const TELA_FAQ: Record<
     {
       question: "Tem no celular?",
       answer:
-        "No Android, o navegador funciona. No iPhone tem um beta pelo TestFlight em pqp.gg/beta; ainda não está na App Store.",
+        "No Android tem um beta em APK em pqp.gg/android. No iPhone, pelo TestFlight em pqp.gg/beta. O navegador continua funcionando nos dois. Ainda não está nas lojas.",
     },
     {
       question: "O que vocês guardam sobre mim?",
@@ -358,7 +372,7 @@ export const TELA_FAQ: Record<
     {
       question: "Does it work on a phone?",
       answer:
-        "On Android, the browser works. On iPhone there is a beta via TestFlight at pqp.gg/beta; it is not on the App Store yet.",
+        "On Android there is an APK beta at pqp.gg/android. On iPhone, TestFlight at pqp.gg/beta. The browser still works on both. Neither is on the stores yet.",
     },
     {
       question: "What do you keep about me?",

@@ -1,12 +1,23 @@
 /**
  * One corner card at a time.
  *
- * Cargos, the QG invite, and (when it lands) the dice/polls note all pin
- * to `right-4 bottom-4`. Showing two is a stack, not a queue: the one
+ * QG, the Android/iOS beta invite, dice/polls, and cargos all pin to
+ * `right-4 bottom-4`. Showing two is a stack, not a queue: the one
  * underneath still records its impression, so the person never sees it.
  * First match in this list is the only one allowed to mount.
+ *
+ * Order is product, not recency:
+ *  1. qg — the house, first-run
+ *  2. mobileBeta — phone browsers only; the campaign for the native apps
+ *  3. whatsNew — feature note (dice / polls)
+ *  4. cargos — staff who can manage roles
  */
-export const CORNER_HINT_ORDER = ["qg", "whatsNew", "cargos"] as const;
+export const CORNER_HINT_ORDER = [
+  "qg",
+  "mobileBeta",
+  "whatsNew",
+  "cargos",
+] as const;
 export type CornerHintId = (typeof CORNER_HINT_ORDER)[number];
 
 export function winningCornerHint(

@@ -10,6 +10,7 @@ import { StatusDot } from "@/components/user/status-dot";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { isDesktopApp } from "@/lib/desktop";
 import { isDevAuthBypassEnabled } from "@/lib/dev-auth";
+import { isAndroidDevice, isIOSDevice } from "@/lib/downloads";
 import {
   dismissDownloadHint,
   isDownloadHintDismissed,
@@ -94,7 +95,11 @@ export function UserPanel({
   const [hintDismissed, setHintDismissed] = useState(isDownloadHintDismissed);
   const popoverRef = useRef<HTMLDivElement>(null);
   const showDownload = !isDesktopApp();
-  const showHint = showDownload && !hintDismissed;
+  // Phone browsers get the corner card instead. Two invites for the same
+  // APK/TestFlight hop in a 16rem sidebar is noise, and this strip used to
+  // open a desktop-shaped dialog on a phone.
+  const onPhone = isAndroidDevice() || isIOSDevice();
+  const showHint = showDownload && !hintDismissed && !onPhone;
 
   useEffect(() => {
     if (!open) {

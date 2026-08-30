@@ -15,6 +15,15 @@ interface ImportMetaEnv {
   readonly VITE_VOICE_BACKEND?: "mesh" | "cloudflare-sfu" | "livekit";
   readonly VITE_DEV_AUTH_BYPASS?: string;
   /**
+   * Public TestFlight join URL. Optional; a default lives in `lib/testflight.ts`.
+   */
+  readonly VITE_TESTFLIGHT_URL?: string;
+  /**
+   * Public Android beta APK URL. Optional; a GitHub Release default lives in
+   * `lib/android-apk.ts`. A single space hides the download button.
+   */
+  readonly VITE_ANDROID_APK_URL?: string;
+  /**
    * The Google Ads advertiser id (`AW-…`) and the label of the sign-up
    * conversion action. Optional, and absent on every self-hosted build: without
    * them no Google tag is injected and nothing is ever reported. See

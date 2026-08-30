@@ -7,10 +7,22 @@ describe("winningCornerHint", () => {
     expect(winningCornerHint({ qg: false, cargos: false })).toBeNull();
   });
 
-  it("lets the QG go first, then dice, then cargos", () => {
+  it("lets the QG go first, then the phone beta, then dice, then cargos", () => {
     expect(
-      winningCornerHint({ qg: true, whatsNew: true, cargos: true }),
+      winningCornerHint({
+        qg: true,
+        mobileBeta: true,
+        whatsNew: true,
+        cargos: true,
+      }),
     ).toBe("qg");
+    expect(
+      winningCornerHint({
+        mobileBeta: true,
+        whatsNew: true,
+        cargos: true,
+      }),
+    ).toBe("mobileBeta");
     expect(winningCornerHint({ whatsNew: true, cargos: true })).toBe(
       "whatsNew",
     );
