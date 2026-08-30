@@ -164,6 +164,11 @@ import {
 import { sendFriendRequest } from "@/components/friends/friends-api";
 import { shouldRunOnboarding } from "@/lib/onboarding";
 import { firstRunDismissedPatch } from "@/lib/first-run";
+import {
+  favoritesForServer,
+  writeFavoritesForServer,
+} from "@/lib/channel-favorites";
+import { queuePreferenceSync } from "@/lib/preferences";
 import { browserStorage, hasArrived, rememberArrival } from "@/lib/arrival";
 import { takeAcquisition } from "@/lib/acquisition";
 import { reportSignupConversion } from "@/lib/google-ads";
@@ -1081,6 +1086,7 @@ function MainAppContent({
         roleIds: member.roleIds,
         status: member.status ?? null,
         username: member.username ?? usernameFromTag(member.tag),
+        isCharacter: member.isCharacter,
       });
     }
     for (const person of conversationParticipants ?? []) {
@@ -2202,6 +2208,26 @@ function MainAppContent({
         error instanceof Error ? error.message : "Failed to move channel",
       );
     }
+  }
+
+  function handleFavoriteChannelIdsChange(ids: string[]) {
+    if (!selectedServerId || !user) {
+      return;
+    }
+    const next = writeFavoritesForServer(
+      user.preferences?.favoriteChannels,
+      selectedServerId,
+      ids,
+    );
+    setUser((previous) =>
+      previous
+        ? {
+            ...previous,
+            preferences: { ...previous.preferences, favoriteChannels: next },
+          }
+        : previous,
+    );
+    queuePreferenceSync({ favoriteChannels: next }, { immediate: true });
   }
 
   const dropServer = useCallback(
@@ -3823,6 +3849,15 @@ function MainAppContent({
           onMoveChannel={(id, parentId, index) =>
             void handleMoveChannel(id, parentId, index)
           }
+          favoriteChannelIds={
+            selectedServer
+              ? favoritesForServer(
+                  user?.preferences?.favoriteChannels,
+                  selectedServer.id,
+                )
+              : []
+          }
+          onFavoriteChannelIdsChange={handleFavoriteChannelIdsChange}
           onTogglePrivate={(ch) => void handleTogglePrivate(ch)}
           onManageChannelMembers={setChannelMembersChannel}
           onManageWebhooks={setWebhooksChannel}

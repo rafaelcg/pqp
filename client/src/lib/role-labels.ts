@@ -7,6 +7,7 @@ const SYSTEM_KEY: Record<RoleSystemKey, MessageKey> = {
   admin: "roles.system.admin",
   manager: "roles.system.manager",
   moderator: "roles.system.moderator",
+  vip: "roles.system.vip",
 };
 
 export type RoleNameSource = {

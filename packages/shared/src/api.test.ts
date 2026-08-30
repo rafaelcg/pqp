@@ -13,6 +13,7 @@ import {
   updateProfileSchema,
   usernameSchema,
   userPreferencesSchema,
+  FAVORITE_CHANNELS_PER_SERVER_MAX,
 } from "./api.js";
 import { messageCreateMessageSchema } from "./chat.js";
 import { gifSchema, isGifMediaUrl, stillGifUrl } from "./gifs.js";
@@ -274,6 +275,32 @@ describe("userPreferencesSchema", () => {
       outputDeviceId: "a71b…-speakers",
     });
     expect(parsed).toEqual({ muteOnJoin: true });
+  });
+
+  it("accepts a favourite-channel map keyed by server, capped per server", () => {
+    const serverId = "3c09d34c-21a3-41f7-99a9-94caf6145596";
+    const channelId = "11111111-1111-4111-8111-111111111111";
+    expect(
+      userPreferencesSchema.safeParse({
+        favoriteChannels: { [serverId]: [channelId] },
+      }).success,
+    ).toBe(true);
+    expect(
+      userPreferencesSchema.safeParse({
+        favoriteChannels: { "not-a-uuid": [channelId] },
+      }).success,
+    ).toBe(false);
+    expect(
+      userPreferencesSchema.safeParse({
+        favoriteChannels: {
+          [serverId]: Array.from(
+            { length: FAVORITE_CHANNELS_PER_SERVER_MAX + 1 },
+            (_, i) =>
+              `11111111-1111-4111-8111-${String(i).padStart(12, "0")}`,
+          ),
+        },
+      }).success,
+    ).toBe(false);
   });
 });
 

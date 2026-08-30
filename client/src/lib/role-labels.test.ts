@@ -11,6 +11,7 @@ const tPt = ((key: string) => {
     "roles.system.admin": "Adm",
     "roles.system.manager": "Gerente",
     "roles.system.moderator": "Mod",
+    "roles.system.vip": "VIP",
   };
   return map[key] ?? key;
 }) as Translator["t"];
@@ -28,6 +29,9 @@ describe("displayRoleName", () => {
     );
     expect(displayRoleName({ name: "Moderator", systemKey: "moderator" }, t)).toBe(
       "roles.system.moderator",
+    );
+    expect(displayRoleName({ name: "VIP", systemKey: "vip" }, t)).toBe(
+      "roles.system.vip",
     );
   });
 

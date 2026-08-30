@@ -139,6 +139,9 @@ export const soundPreferencesSchema = z.object({
 
 export type SoundPreferences = z.infer<typeof soundPreferencesSchema>;
 
+/** Cap on favourite channel ids stored per server. See `favoriteChannels`. */
+export const FAVORITE_CHANNELS_PER_SERVER_MAX = 50;
+
 /**
  * Settings that belong to the person rather than to the machine they are on,
  * stored as one JSONB blob so adding a preference stays a schema change here
@@ -280,6 +283,24 @@ export const userPreferencesSchema = z.object({
    * first hub visit anyway.
    */
   firstRunDismissedAt: z.string().optional(),
+  /**
+   * Personal favourite channels, keyed by server. The array is the order they
+   * appear in that server's Favorites block.
+   *
+   * Replaced as a whole on write, same as `notifications`: jsonb `||` merges
+   * one level deep, so a patch of `{ favoriteChannels: { [thisServer]: ids } }`
+   * would drop every other server's list. The client always sends the full map.
+   *
+   * A preference rather than a column: it is this person's sidebar, not the
+   * server's layout, and it has to follow them across devices. Cap keeps a
+   * JSONB blob from growing without bound if a client retries a bad loop.
+   */
+  favoriteChannels: z
+    .record(
+      z.string().uuid(),
+      z.array(z.string().uuid()).max(FAVORITE_CHANNELS_PER_SERVER_MAX),
+    )
+    .optional(),
 });
 
 export type UserPreferences = z.infer<typeof userPreferencesSchema>;

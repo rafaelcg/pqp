@@ -1,4 +1,4 @@
-import { Bot, Crown, Shield } from "lucide-react";
+import { Bot, Briefcase, Crown, Shield, ShieldCheck, Star } from "lucide-react";
 import type { IdentityMark } from "@/lib/author-display";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -7,19 +7,23 @@ const MARK: Record<
   IdentityMark,
   { icon: typeof Crown; label: MessageKey; solid: boolean }
 > = {
-  // Crown and shield read as silhouettes, so the card fills them. The bot
+  // Crown and shields read as silhouettes, so the card fills them. The bot
   // glyph is drawn with inner strokes and stays an outline at every size.
   owner: { icon: Crown, label: "chat.badge.owner", solid: true },
   admin: { icon: Shield, label: "chat.badge.admin", solid: true },
+  manager: { icon: Briefcase, label: "chat.badge.manager", solid: true },
+  moderator: { icon: ShieldCheck, label: "chat.badge.moderator", solid: true },
+  vip: { icon: Star, label: "chat.badge.vip", solid: true },
   bot: { icon: Bot, label: "chat.badge.bot", solid: false },
 };
 
 /**
- * The glyphs beside a name: owner crown, admin shield, bot for a character
- * account. Same marks everywhere, at two densities. Chat and the member list
- * keep the default quiet 12px outline; the profile card asks for
- * `size="card"`, a 16px solid accent glyph, because next to a 20px bold name
- * the quiet version disappeared and promoting somebody looked like nothing.
+ * The glyphs beside a name: owner crown, admin shield, then manager,
+ * moderator, VIP, and a bot mark for character accounts. Same marks
+ * everywhere, at two densities. Chat and the member list keep the default
+ * quiet 12px outline; the profile card asks for `size="card"`, a 16px solid
+ * accent glyph, because next to a 20px bold name the quiet version
+ * disappeared and promoting somebody looked like nothing.
  */
 export function RankMarks({
   marks,

@@ -9,6 +9,7 @@ import {
   ScreenShare,
   Search,
   Settings,
+  Star,
   UserPlus,
   Users,
   X,
@@ -25,6 +26,13 @@ import {
 import { ChannelListSkeleton } from "@/components/ui/skeleton";
 import { Tooltip } from "@/components/ui/tooltip";
 import { VoiceAvatar } from "@/components/voice/voice-avatar";
+import {
+  addFavorite,
+  favoritesCollapseKey,
+  moveFavorite,
+  removeFavorite,
+  visibleFavoriteChannels,
+} from "@/lib/channel-favorites";
 import {
   loadCollapsedCategories,
   toggleCollapsedCategory,
@@ -43,13 +51,18 @@ export interface UnreadState {
 
 const EMPTY_UNREAD: UnreadState = { count: 0, mentions: 0 };
 
+/** Drop-target ids that are not channels: the Favorites / TEXT / VOICE headers. */
+const FAVORITES_ZONE = "__favorites__";
+const TEXT_ZONE = "__text__";
+const VOICE_ZONE = "__voice__";
+
 /** Apple keyboards label the same chord differently, and the hint is the point. */
 const SEARCH_SHORTCUT_HINT =
   typeof navigator !== "undefined" && /Mac|iPhone|iPad/i.test(navigator.userAgent)
     ? "⌘K"
     : "Ctrl K";
 
-/** Equal-width action tiles on a channel row (Join). */
+/** Equal-width action tiles on a channel row (Join, star). */
 const CHANNEL_ACTION_TILE =
   "flex h-7 w-7 shrink-0 items-center justify-center rounded-md hover:bg-ink-3";
 
@@ -143,6 +156,12 @@ interface ChannelListProps {
     parentId: string | null,
     index: number,
   ) => void;
+  /**
+   * This person's favourite channel ids for the open server, in display order.
+   * A change writes the whole preference map (see `writeFavoritesForServer`).
+   */
+  favoriteChannelIds?: string[];
+  onFavoriteChannelIdsChange?: (ids: string[]) => void;
   onInvite: () => void;
   onOpenMembers: () => void;
   onOpenServerSettings: () => void;
@@ -172,6 +191,8 @@ export function ChannelList({
   onManageChannelMembers,
   onManageWebhooks,
   onMoveChannel,
+  favoriteChannelIds = [],
+  onFavoriteChannelIdsChange,
   onInvite,
   onOpenMembers,
   onOpenServerSettings,
@@ -180,11 +201,17 @@ export function ChannelList({
   onMobileClose,
 }: ChannelListProps) {
   const { t } = useTranslation();
+  const visibleFavs = visibleFavoriteChannels(channels, favoriteChannelIds);
+  const favoriteIdSet = new Set(visibleFavs.map((c) => c.id));
   const topLevelText = sortByPosition(
-    channels.filter((c) => c.type === "text" && !c.parentId),
+    channels.filter(
+      (c) => c.type === "text" && !c.parentId && !favoriteIdSet.has(c.id),
+    ),
   );
   const topLevelVoice = sortByPosition(
-    channels.filter((c) => c.type === "voice" && !c.parentId),
+    channels.filter(
+      (c) => c.type === "voice" && !c.parentId && !favoriteIdSet.has(c.id),
+    ),
   );
   const categories = sortByPosition(
     channels.filter((c) => c.type === "category"),
@@ -194,7 +221,11 @@ export function ChannelList({
   for (const category of categories) {
     childrenByCategory.set(
       category.id,
-      sortByPosition(channels.filter((c) => c.parentId === category.id)),
+      sortByPosition(
+        channels.filter(
+          (c) => c.parentId === category.id && !favoriteIdSet.has(c.id),
+        ),
+      ),
     );
   }
 
@@ -225,26 +256,74 @@ export function ChannelList({
     setCollapsed(toggleCollapsedCategory(categoryId));
   }
 
+  function clearDrag() {
+    setDraggedId(null);
+    setDragOverId(null);
+  }
+
+  function draggedChannel(): Channel | undefined {
+    return draggedId ? channels.find((c) => c.id === draggedId) : undefined;
+  }
+
+  function commitFavorites(ids: string[]) {
+    onFavoriteChannelIdsChange?.(ids);
+  }
+
   /**
-   * Dropping onto a category header files the dragged channel inside it, at
-   * the end. Dropping onto anything else takes that row's own slot within
-   * its own sibling group — pushing it and everything after it down by one,
-   * the ordinary "insert before" drag semantic. `position` is trusted as a
-   * dense 0..n-1 index directly: the server always renumbers a sibling group
-   * contiguously after every move, so there are never gaps to account for.
+   * Drop onto the Favorites header (append) or a favourite row (insert before).
+   * Categories cannot be favourited.
+   */
+  function handleDropOnFavorites(insertBeforeId?: string) {
+    const dragged = draggedChannel();
+    clearDrag();
+    if (!dragged || dragged.type === "category" || !onFavoriteChannelIdsChange) {
+      return;
+    }
+    commitFavorites(addFavorite(favoriteChannelIds, dragged, insertBeforeId));
+  }
+
+  function handleUnfavoriteDragged() {
+    const dragged = draggedChannel();
+    clearDrag();
+    if (
+      !dragged ||
+      !favoriteIdSet.has(dragged.id) ||
+      !onFavoriteChannelIdsChange
+    ) {
+      return;
+    }
+    commitFavorites(removeFavorite(favoriteChannelIds, dragged.id));
+  }
+
+  /**
+   * Dropping onto a favourite row reorders (or stars) the personal list.
+   * Dropping a favourite onto anything else unstars it; it reappears under
+   * its real parent. Shared layout (`moveChannel`) only runs for a
+   * non-favourite dropped by a manager, same as before.
    */
   function handleDrop(target: Channel) {
     if (!draggedId || draggedId === target.id) {
-      setDraggedId(null);
-      setDragOverId(null);
+      clearDrag();
       return;
     }
-    const dragged = channels.find((c) => c.id === draggedId);
-    setDraggedId(null);
-    setDragOverId(null);
+    const dragged = draggedChannel();
     if (!dragged) {
+      clearDrag();
       return;
     }
+    if (favoriteIdSet.has(target.id)) {
+      handleDropOnFavorites(target.id);
+      return;
+    }
+    if (favoriteIdSet.has(dragged.id)) {
+      handleUnfavoriteDragged();
+      return;
+    }
+    if (!canManage) {
+      clearDrag();
+      return;
+    }
+    clearDrag();
     if (target.type === "category" && dragged.type !== "category") {
       const kids = childrenByCategory.get(target.id) ?? [];
       onMoveChannel(dragged.id, target.id, kids.length);
@@ -269,10 +348,13 @@ export function ChannelList({
     onMoveChannel(channel.id, channel.parentId, targetIndex);
   }
 
-  function renderRow(channel: Channel, group: Channel[]) {
+  const visibleFavoriteIds = visibleFavs.map((c) => c.id);
+
+  function renderRow(channel: Channel, group: Channel[], inFavorites = false) {
     const index = group.findIndex((c) => c.id === channel.id);
     const occupants =
       channel.type === "voice" ? (voiceOccupancy[channel.id] ?? []) : [];
+    const isFavorite = inFavorites || favoriteIdSet.has(channel.id);
     return (
       <div key={channel.id} className="mb-0.5">
         <ChannelRow
@@ -285,6 +367,17 @@ export function ChannelList({
           icon={<ChannelIcon channel={channel} />}
           isDragging={draggedId === channel.id}
           isDragOver={dragOverId === channel.id}
+          isFavorite={isFavorite}
+          onToggleFavorite={
+            channel.type !== "category" && onFavoriteChannelIdsChange
+              ? () =>
+                  commitFavorites(
+                    isFavorite
+                      ? removeFavorite(favoriteChannelIds, channel.id)
+                      : addFavorite(favoriteChannelIds, channel),
+                  )
+              : undefined
+          }
           onSelect={() => {
             onSelectChannel(channel.id);
             onMobileClose?.();
@@ -317,12 +410,38 @@ export function ChannelList({
             )
           }
           onMoveUp={
-            index > 0 ? () => moveWithinGroup(group, channel, -1) : undefined
+            inFavorites
+              ? index > 0
+                ? () =>
+                    commitFavorites(
+                      moveFavorite(
+                        favoriteChannelIds,
+                        channel.id,
+                        -1,
+                        visibleFavoriteIds,
+                      ),
+                    )
+                : undefined
+              : index > 0
+                ? () => moveWithinGroup(group, channel, -1)
+                : undefined
           }
           onMoveDown={
-            index < group.length - 1
-              ? () => moveWithinGroup(group, channel, 1)
-              : undefined
+            inFavorites
+              ? index < group.length - 1
+                ? () =>
+                    commitFavorites(
+                      moveFavorite(
+                        favoriteChannelIds,
+                        channel.id,
+                        1,
+                        visibleFavoriteIds,
+                      ),
+                    )
+                : undefined
+              : index < group.length - 1
+                ? () => moveWithinGroup(group, channel, 1)
+                : undefined
           }
           onDragStart={() => setDraggedId(channel.id)}
           onDragEnd={() => {
@@ -501,11 +620,37 @@ export function ChannelList({
           <ChannelListSkeleton />
         ) : (
           <>
+            {visibleFavs.length > 0 && server && (
+              <FavoritesSection
+                collapsed={collapsed.has(favoritesCollapseKey(server.id))}
+                onToggle={() =>
+                  toggleCollapsed(favoritesCollapseKey(server.id))
+                }
+                isDragOver={dragOverId === FAVORITES_ZONE}
+                onDragOver={() => draggedId && setDragOverId(FAVORITES_ZONE)}
+                onDrop={() => handleDropOnFavorites()}
+              >
+                {visibleFavs.map((channel) =>
+                  renderRow(channel, visibleFavs, true),
+                )}
+              </FavoritesSection>
+            )}
+
             <ChannelSection
               label={t("chrome.text")}
               canManage={canManage}
               onAdd={() => onCreateChannel("text", false)}
               onAddPrivate={() => onCreateChannel("text", true)}
+              isDragOver={dragOverId === TEXT_ZONE}
+              onDragOver={() => draggedId && setDragOverId(TEXT_ZONE)}
+              onDrop={() => {
+                const dragged = draggedChannel();
+                if (dragged && favoriteIdSet.has(dragged.id)) {
+                  handleUnfavoriteDragged();
+                } else {
+                  clearDrag();
+                }
+              }}
             >
               {topLevelText.map((channel) => renderRow(channel, topLevelText))}
             </ChannelSection>
@@ -515,6 +660,16 @@ export function ChannelList({
               canManage={canManage}
               onAdd={() => onCreateChannel("voice", false)}
               onAddPrivate={() => onCreateChannel("voice", true)}
+              isDragOver={dragOverId === VOICE_ZONE}
+              onDragOver={() => draggedId && setDragOverId(VOICE_ZONE)}
+              onDrop={() => {
+                const dragged = draggedChannel();
+                if (dragged && favoriteIdSet.has(dragged.id)) {
+                  handleUnfavoriteDragged();
+                } else {
+                  clearDrag();
+                }
+              }}
             >
               {topLevelVoice.map((channel) =>
                 renderRow(channel, topLevelVoice),
@@ -590,24 +745,104 @@ export function ChannelList({
   );
 }
 
+function FavoritesSection({
+  collapsed,
+  onToggle,
+  isDragOver,
+  onDragOver,
+  onDrop,
+  children,
+}: {
+  collapsed: boolean;
+  onToggle: () => void;
+  isDragOver: boolean;
+  onDragOver: () => void;
+  onDrop: () => void;
+  children: ReactNode;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="mb-4">
+      <div
+        onDragOver={(event) => {
+          event.preventDefault();
+          onDragOver();
+        }}
+        onDrop={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          onDrop();
+        }}
+        className={cn(
+          "mb-1 flex items-center justify-between px-2",
+          isDragOver && "rounded-md ring-1 ring-inset ring-signal/60",
+        )}
+      >
+        <button
+          type="button"
+          onClick={onToggle}
+          className="flex min-w-0 flex-1 items-center gap-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-paper-muted hover:text-paper"
+          aria-expanded={!collapsed}
+        >
+          <ChevronRight
+            className={cn(
+              "h-3 w-3 shrink-0 transition-transform",
+              !collapsed && "rotate-90",
+            )}
+          />
+          <span className="truncate">{t("chrome.favorites")}</span>
+        </button>
+      </div>
+      {!collapsed && children}
+    </div>
+  );
+}
+
 function ChannelSection({
   label,
   canManage,
   onAdd,
   onAddPrivate,
   children,
+  isDragOver = false,
+  onDragOver,
+  onDrop,
 }: {
   label: string;
   canManage: boolean;
   onAdd: () => void;
   onAddPrivate: () => void;
   children: ReactNode;
+  isDragOver?: boolean;
+  onDragOver?: () => void;
+  onDrop?: () => void;
 }) {
   const { t } = useTranslation();
   const typeName = label.toLowerCase();
   return (
     <div className="mb-4">
-      <div className="mb-1 flex items-center justify-between px-2">
+      <div
+        className={cn(
+          "mb-1 flex items-center justify-between px-2",
+          isDragOver && "rounded-md ring-1 ring-inset ring-signal/60",
+        )}
+        onDragOver={
+          onDragOver
+            ? (event) => {
+                event.preventDefault();
+                onDragOver();
+              }
+            : undefined
+        }
+        onDrop={
+          onDrop
+            ? (event) => {
+                event.preventDefault();
+                onDrop();
+              }
+            : undefined
+        }
+      >
         <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-paper-muted">
           {label}
         </span>
@@ -727,6 +962,8 @@ function ChannelRow({
   icon,
   isDragging,
   isDragOver,
+  isFavorite = false,
+  onToggleFavorite,
   onSelect,
   onJoinVoice,
   onRename,
@@ -753,6 +990,8 @@ function ChannelRow({
   icon: ReactNode;
   isDragging: boolean;
   isDragOver: boolean;
+  isFavorite?: boolean;
+  onToggleFavorite?: () => void;
   onSelect: () => void;
   onJoinVoice?: () => void;
   onRename: () => void;
@@ -774,6 +1013,16 @@ function ChannelRow({
   const notifications = useChannelNotificationLevel(channel);
   const items: ContextMenuItemDef[] = [];
 
+  if (onToggleFavorite) {
+    items.push({
+      id: "favorite",
+      label: isFavorite
+        ? t("chrome.unfavoriteChannel")
+        : t("chrome.favoriteChannel"),
+      onSelect: onToggleFavorite,
+    });
+  }
+
   if (onJoinVoice && !connected) {
     items.push({
       id: "join",
@@ -783,6 +1032,9 @@ function ChannelRow({
   }
 
   if (canManage) {
+    if (onToggleFavorite) {
+      items.push({ id: "sep-fav", label: "", separator: true });
+    }
     items.push({ id: "rename", label: t("chrome.renameChannel"), onSelect: onRename });
     if (onEditMeta) {
       items.push({
@@ -851,6 +1103,22 @@ function ChannelRow({
     );
   }
 
+  if (!canManage && isFavorite && (onMoveUp || onMoveDown)) {
+    if (onToggleFavorite) {
+      items.push({ id: "sep-fav-move", label: "", separator: true });
+    }
+    if (onMoveUp) {
+      items.push({ id: "move-up", label: t("chrome.moveUp"), onSelect: onMoveUp });
+    }
+    if (onMoveDown) {
+      items.push({
+        id: "move-down",
+        label: t("chrome.moveDown"),
+        onSelect: onMoveDown,
+      });
+    }
+  }
+
   if (!canManage && canManageRoles) {
     items.push({
       id: "invite-private",
@@ -862,7 +1130,7 @@ function ChannelRow({
   }
 
   items.push(
-    ...(items.length > 0 && canManage
+    ...(items.length > 0
       ? [{ id: "sep-3", label: "", separator: true } as ContextMenuItemDef]
       : []),
     {
@@ -882,10 +1150,12 @@ function ChannelRow({
   return (
     <ContextMenu items={items}>
       <div
-        draggable={canManage}
+        draggable={channel.type === "category" ? canManage : true}
         onDragStart={(event) => {
           if (
-            (event.target as HTMLElement).closest("[data-channel-join]")
+            (event.target as HTMLElement).closest(
+              "[data-channel-favorite], [data-channel-join]",
+            )
           ) {
             event.preventDefault();
             return;
@@ -979,6 +1249,41 @@ function ChannelRow({
               }}
             >
               <Phone className="h-3.5 w-3.5" />
+            </button>
+          </Tooltip>
+        )}
+        {onToggleFavorite && (
+          <Tooltip
+            label={
+              isFavorite
+                ? t("chrome.unfavoriteChannel")
+                : t("chrome.favoriteChannel")
+            }
+          >
+            <button
+              type="button"
+              data-channel-favorite=""
+              draggable={false}
+              className={cn(
+                CHANNEL_ACTION_TILE,
+                isFavorite
+                  ? "text-warning"
+                  : "text-paper-muted opacity-0 group-hover:opacity-100 group-focus-within:opacity-100",
+              )}
+              aria-label={
+                isFavorite
+                  ? t("chrome.unfavoriteChannel")
+                  : t("chrome.favoriteChannel")
+              }
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                onToggleFavorite();
+              }}
+            >
+              <Star
+                className={cn("h-3.5 w-3.5", isFavorite && "fill-current")}
+              />
             </button>
           </Tooltip>
         )}

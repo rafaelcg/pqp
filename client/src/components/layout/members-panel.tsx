@@ -270,6 +270,7 @@ function MemberRow({
               <RankMarks
                 marks={identityMarks({
                   rank: member.role,
+                  isCharacter: member.isCharacter,
                   ...rankBadges(member.roleIds, roles),
                 })}
               />
@@ -397,6 +398,7 @@ function subjectOf(member: ServerMember): ProfileSubject {
     username: member.username ?? null,
     roleIds: member.roleIds,
     rank: member.role,
+    isCharacter: member.isCharacter,
     // The raw nickname too, so the card's Change-nickname prompt can prefill
     // it instead of starting from blank.
     nickname: member.nickname ?? null,

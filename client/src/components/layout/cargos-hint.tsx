@@ -10,6 +10,7 @@ const PREVIEW = [
   { key: "admin", label: "roles.system.admin", checked: false },
   { key: "manager", label: "roles.system.manager", checked: true },
   { key: "moderator", label: "roles.system.moderator", checked: false },
+  { key: "vip", label: "roles.system.vip", checked: false },
 ] as const;
 
 /**

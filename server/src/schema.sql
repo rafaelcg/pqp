@@ -2587,7 +2587,7 @@ CREATE TABLE IF NOT EXISTS roles (
   permissions BIGINT NOT NULL DEFAULT 0,
   position INTEGER NOT NULL DEFAULT 0,
   is_everyone BOOLEAN NOT NULL DEFAULT FALSE,
-  system_key TEXT CHECK (system_key IN ('everyone', 'owner', 'admin', 'manager', 'moderator')),
+  system_key TEXT CHECK (system_key IN ('everyone', 'owner', 'admin', 'manager', 'moderator', 'vip')),
   show_badge BOOLEAN NOT NULL DEFAULT TRUE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -2781,11 +2781,11 @@ BEGIN
   INSERT INTO data_migrations (name) VALUES ('admin_role_hoist_2026_08');
 END $$;
 
--- Existing databases still have the old CHECK. Widen it, then add Owner /
--- Manager / Moderator without colliding with homemade names, and park custom
--- cargos *below* staff so a VIP does not outrank Admin.
 -- Existing databases still have the old CHECK. Drop every system_key check
 -- (the inline name is usually roles_system_key_check, but do not depend on it).
+-- Widen it, then add Owner / Manager / Moderator / VIP without colliding with
+-- homemade names, and park custom cargos *below* staff so a homemade cargo
+-- does not outrank Admin.
 DO $$
 DECLARE
   cname TEXT;
@@ -2801,7 +2801,7 @@ BEGIN
   END LOOP;
 END $$;
 ALTER TABLE roles ADD CONSTRAINT roles_system_key_check
-  CHECK (system_key IS NULL OR system_key IN ('everyone', 'owner', 'admin', 'manager', 'moderator'));
+  CHECK (system_key IS NULL OR system_key IN ('everyone', 'owner', 'admin', 'manager', 'moderator', 'vip'));
 
 ALTER TABLE roles ADD COLUMN IF NOT EXISTS show_badge BOOLEAN NOT NULL DEFAULT TRUE;
 
@@ -2828,6 +2828,7 @@ $$;
 -- Moderator extras: KICK(2) | MANAGE_MESSAGES(256) | MUTE(16384) |
 -- MANAGE_NICKNAMES(65536) | MODERATE_MEMBERS(262144) = 344322.
 -- Manager: ALL(1048575) minus ADMINISTRATOR(8) = 1048567.
+-- VIP is a colour and a hoist with no extra bits (0).
 -- Insert colours match STAFF_ROLE_COLORS in packages/shared/src/permissions.ts.
 CREATE OR REPLACE FUNCTION pqp_ensure_staff_ladder(p_server_id UUID)
 RETURNS void
@@ -2837,6 +2838,33 @@ DECLARE
   v_pos INTEGER;
   r RECORD;
 BEGIN
+  -- Claim a homemade cargo named VIP so existing halls keep their grants
+  -- and colour instead of growing a second row called VIP_2.
+  UPDATE roles
+     SET system_key = 'vip',
+         hoist = TRUE,
+         show_badge = TRUE
+   WHERE server_id = p_server_id
+     AND system_key IS NULL
+     AND LOWER(name) = 'vip'
+     AND NOT EXISTS (
+       SELECT 1 FROM roles x
+        WHERE x.server_id = p_server_id AND x.system_key = 'vip'
+     );
+
+  IF NOT EXISTS (
+    SELECT 1 FROM roles WHERE server_id = p_server_id AND system_key = 'vip'
+  ) THEN
+    INSERT INTO roles (
+      server_id, name, permissions, position, is_everyone, system_key,
+      mentionable, hoist, show_badge, color
+    )
+    VALUES (
+      p_server_id, pqp_unique_role_name(p_server_id, 'VIP'), 0, 1,
+      FALSE, 'vip', FALSE, TRUE, TRUE, '#B794D4'
+    );
+  END IF;
+
   IF NOT EXISTS (
     SELECT 1 FROM roles WHERE server_id = p_server_id AND system_key = 'moderator'
   ) THEN
@@ -2878,8 +2906,11 @@ BEGIN
 
   UPDATE roles SET hoist = TRUE
    WHERE server_id = p_server_id
-     AND system_key IN ('admin', 'manager', 'moderator', 'owner')
+     AND system_key IN ('vip', 'admin', 'manager', 'moderator', 'owner')
      AND NOT hoist;
+
+  UPDATE roles SET color = '#B794D4'
+   WHERE server_id = p_server_id AND system_key = 'vip' AND color IS NULL;
 
   UPDATE roles SET position = 0
    WHERE server_id = p_server_id AND is_everyone;
@@ -2894,6 +2925,9 @@ BEGIN
     v_pos := v_pos + 1;
   END LOOP;
 
+  UPDATE roles SET position = v_pos
+   WHERE server_id = p_server_id AND system_key = 'vip';
+  v_pos := v_pos + 1;
   UPDATE roles SET position = v_pos
    WHERE server_id = p_server_id AND system_key = 'moderator';
   v_pos := v_pos + 1;
@@ -2940,6 +2974,25 @@ BEGIN
   UPDATE roles SET color = '#6BA3E8' WHERE system_key = 'manager' AND color IS NULL;
   UPDATE roles SET color = '#4EC4B0' WHERE system_key = 'moderator' AND color IS NULL;
   INSERT INTO data_migrations (name) VALUES ('staff_colors_2026_08');
+END $$;
+
+-- Seed VIP on halls that already ran staff_ladder_2026_08. Claims a homemade
+-- cargo named VIP (keeps grants and colour) instead of inserting VIP_2.
+DO $$
+DECLARE
+  s RECORD;
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM data_migrations WHERE name = 'staff_vip_2026_08'
+  ) THEN
+    RETURN;
+  END IF;
+
+  FOR s IN SELECT id FROM servers LOOP
+    PERFORM pqp_ensure_staff_ladder(s.id);
+  END LOOP;
+
+  INSERT INTO data_migrations (name) VALUES ('staff_vip_2026_08');
 END $$;
 
 -- Who may VIEW this channel (the effective row: parent for a thread).

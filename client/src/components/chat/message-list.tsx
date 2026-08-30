@@ -2289,6 +2289,7 @@ function AuthorButton({
               author?.username ?? usernameFromTag(message.authorTag),
             roleIds: author?.roleIds,
             rank: author?.rank,
+            isCharacter: author?.isCharacter,
           },
           event.currentTarget,
         );

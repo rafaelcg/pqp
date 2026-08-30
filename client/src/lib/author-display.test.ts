@@ -68,25 +68,81 @@ describe("identityMarks", () => {
       identityMarks({ rank: "admin", ownerBadge: false, adminBadge: false }),
     ).toEqual([]);
   });
+
+  it("picks the highest staff cargo, then VIP, then a bot mark", () => {
+    expect(
+      identityMarks({
+        rank: "member",
+        managerBadge: true,
+        moderatorBadge: true,
+        vipBadge: true,
+      }),
+    ).toEqual(["manager"]);
+    expect(
+      identityMarks({
+        rank: "member",
+        moderatorBadge: true,
+        vipBadge: true,
+      }),
+    ).toEqual(["moderator"]);
+    expect(identityMarks({ rank: "member", vipBadge: true })).toEqual(["vip"]);
+    expect(
+      identityMarks({ rank: "member", vipBadge: true, isCharacter: true }),
+    ).toEqual(["vip", "bot"]);
+  });
 });
 
 describe("rankBadges", () => {
   const roles = [
     { id: "owner", systemKey: "owner", showBadge: true },
     { id: "admin", systemKey: "admin", showBadge: true },
+    { id: "mgr", name: "Manager", systemKey: "manager" },
+    { id: "mod", name: "Moderator", systemKey: "moderator" },
+    { id: "vip", name: "VIP", systemKey: "vip" },
   ];
 
   it("reads the Owner and Admin cargos from held ids", () => {
     expect(rankBadges(["owner", "admin"], roles)).toEqual({
       ownerBadge: true,
       adminBadge: true,
+      managerBadge: false,
+      moderatorBadge: false,
+      vipBadge: false,
     });
   });
 
   it("hides the crown when showBadge is off", () => {
     expect(
       rankBadges(["owner"], [{ id: "owner", systemKey: "owner", showBadge: false }]),
-    ).toEqual({ ownerBadge: false, adminBadge: false });
+    ).toEqual({
+      ownerBadge: false,
+      adminBadge: false,
+      managerBadge: false,
+      moderatorBadge: false,
+      vipBadge: false,
+    });
+  });
+
+  it("flags manager, moderator and a VIP cargo by system key", () => {
+    expect(rankBadges(["mgr", "mod", "vip"], roles)).toEqual({
+      ownerBadge: false,
+      adminBadge: false,
+      managerBadge: true,
+      moderatorBadge: true,
+      vipBadge: true,
+    });
+  });
+
+  it("still flags a homemade VIP by name before the ladder claims it", () => {
+    expect(
+      rankBadges(["old"], [{ id: "old", name: "VIP", systemKey: null }]),
+    ).toEqual({
+      ownerBadge: false,
+      adminBadge: false,
+      managerBadge: false,
+      moderatorBadge: false,
+      vipBadge: true,
+    });
   });
 });
 

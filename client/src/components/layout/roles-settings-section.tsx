@@ -383,7 +383,9 @@ export function RolesSettingsSection({ serverId }: { serverId: string }) {
             ? t("roles.managerHint")
             : selected?.systemKey === "moderator"
               ? t("roles.moderatorHint")
-              : null;
+              : selected?.systemKey === "vip"
+                ? t("roles.vipHint")
+                : null;
 
   const seedName = selected ? defaultRoleName(selected.systemKey) : null;
   const canResetName = Boolean(
