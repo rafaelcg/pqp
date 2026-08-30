@@ -1207,9 +1207,10 @@ function ActiveCall({
             {title}
           </p>
           <p className="truncate text-xs text-paper-muted" role="status">
-            {/* The ring layout already announces "Calling…"/"Connecting…" at
-                centre stage — saying it twice reads like two calls. */}
-            {layout === "ring"
+            {/* RingView already says Connecting/Calling at centre stage.
+                A video-call ring uses the self preview instead, so the
+                overlay still has to carry that line. */}
+            {layout === "ring" && !self?.stream
               ? null
               : (statusLine ??
                 t("call.panel.inCall", { count: remotes.length + 1 }))}
