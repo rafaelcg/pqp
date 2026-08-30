@@ -3223,7 +3223,7 @@ function MainAppContent({
         avatarUrl={user?.avatarUrl ?? null}
         isMuted={voiceState.isMuted}
         isDeafened={voiceState.isDeafened}
-        inVoice={voiceState.status !== "idle"}
+        inVoice={voiceState.status === "connected"}
         showUserButton={showUserButton}
         manualStatus={status.manual}
         effectiveStatus={status.effective}

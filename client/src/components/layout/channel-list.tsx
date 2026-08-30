@@ -1235,13 +1235,13 @@ function ChannelRow({
           </span>
         </button>
         {onJoinVoice && !connected && (
-          <Tooltip label={t("voice.join")}>
+          <Tooltip label={t("voice.joinNamed", { name: channel.name })}>
             <button
               type="button"
               data-channel-join=""
               draggable={false}
               className={cn(CHANNEL_ACTION_TILE, "text-paper-muted")}
-              aria-label={t("voice.join")}
+              aria-label={t("voice.joinNamed", { name: channel.name })}
               onClick={(event) => {
                 event.preventDefault();
                 event.stopPropagation();

@@ -657,6 +657,7 @@
   "voice.meshWarning": "Chegando no limite do mesh, configure um SFU pra chamadas maiores.",
   "voice.idle.body": "Entre na call para falar. O chat continua aqui do lado.",
   "voice.join": "Entre na call",
+  "voice.joinNamed": "Entrar em {name}",
   "voice.doubleClickToJoin": "Clique duas vezes pra entrar na call",
   "voice.connectingTo": "Conectando em {channel}…",
   "voice.cancel": "Cancelar",

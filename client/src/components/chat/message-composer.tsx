@@ -1365,6 +1365,7 @@ export function MessageComposer({
             onPaste={handlePaste}
             disabled={disabled || isRunningSlash}
             maxLength={MESSAGE_MAX_LENGTH}
+            placeholder={inputPlaceholder}
             style={{
               resize: "none",
               height: composerBox.height,
@@ -1374,7 +1375,7 @@ export function MessageComposer({
               paddingBottom: composerBox.paddingY,
               overflowY: composerBox.overflowY,
             }}
-            className="block h-10 min-h-10 w-full resize-none overflow-hidden rounded-md border border-ink-4 bg-ink-3 px-3 py-0 text-sm text-paper focus-visible:border-signal/60 focus-visible:outline-none disabled:opacity-50"
+            className="block h-10 min-h-10 w-full resize-none overflow-hidden rounded-md border border-ink-4 bg-ink-3 px-3 py-0 text-sm text-paper placeholder:text-transparent focus-visible:border-signal/60 focus-visible:outline-none disabled:opacity-50"
             role="combobox"
             aria-expanded={Boolean(menuKind)}
             aria-controls={menuKind ? MENU_ID : undefined}

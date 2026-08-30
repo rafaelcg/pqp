@@ -300,7 +300,7 @@ function ConversationRow({
   if (solo) {
     items.push(
       blocked
-        ?           {
+        ? {
             id: "unblock",
             label: t("profile.unblock"),
             onSelect: () => onUnblock(solo.id),
