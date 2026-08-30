@@ -20,6 +20,17 @@ describe("shouldSeedDevHall", () => {
     expect(shouldSeedDevHall({ ...on, VITEST: "true" })).toBe(false);
     expect(shouldSeedDevHall({ ...on, DEV_SEED: "false" })).toBe(false);
   });
+
+  it("still seeds under a development bypass unless opted out", () => {
+    expect(shouldSeedDevHall({ ...on, NODE_ENV: "development" })).toBe(true);
+    expect(
+      shouldSeedDevHall({
+        ...on,
+        NODE_ENV: "development",
+        DEV_SEED: "false",
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("DEV_HALL_ROSTER", () => {
