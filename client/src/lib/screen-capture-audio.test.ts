@@ -17,6 +17,10 @@ const shell: ScreenCaptureEnvironment = {
   isDesktopShell: true,
   supportsRestrictOwnAudio: false,
 };
+const newShell: ScreenCaptureEnvironment = {
+  isDesktopShell: true,
+  supportsRestrictOwnAudio: true,
+};
 
 describe("screenCaptureOptions", () => {
   it("does not ask for the machine's audio unless the user opted in", () => {
@@ -72,6 +76,14 @@ describe("screenCaptureOptions", () => {
   it("lets the shell have loopback once the user opts in", () => {
     expect(screenCaptureOptions(true, shell).audio).toMatchObject({
       echoCancellation: false,
+    });
+  });
+
+  it("asks a current shell to strip its own playback", () => {
+    // Electron 43.4+ remaps Windows `"loopback"` to `loopbackWithoutChrome`
+    // only when this constraint is on the getDisplayMedia request.
+    expect(screenCaptureOptions(true, newShell).audio).toMatchObject({
+      restrictOwnAudio: true,
     });
   });
 

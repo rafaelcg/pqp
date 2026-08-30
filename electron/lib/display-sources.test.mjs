@@ -302,13 +302,10 @@ describe("captureResponse", () => {
   });
 
   it("is the echo switch: no request, no whole-system loopback", () => {
-    // The 23 Aug 2026 report. `"loopback"` is the machine's entire output with
-    // no per-process exclusion, so on Windows it carried the call's own audio
-    // straight back into the call. The web client now sends `audio: false`
-    // from the shell unless the user opted in (see
-    // `client/src/lib/screen-capture-audio.ts`), and this is the assertion
-    // that says a false `audioRequested` is honoured rather than second
-    // guessed. It has to hold for every source kind, not just a display.
+    // The 23 Aug 2026 report. `"loopback"` is what we hand the embedder; from
+    // Electron 43.4 the embedder remaps it to `loopbackWithoutChrome` when the
+    // page asked `restrictOwnAudio`. A false `audioRequested` must still skip
+    // the tap entirely, including on v0.1.3, and for every source kind.
     for (const candidate of [source, { id: "window:12:0", name: "Game" }]) {
       const response = captureResponse(candidate, "win32", false);
       assert.equal(response.audio, undefined);
