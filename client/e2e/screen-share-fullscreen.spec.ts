@@ -63,7 +63,7 @@ async function ensureVoiceChannel(): Promise<void> {
 async function joinLobby(page: Page): Promise<void> {
   await page.getByRole("button", { name: /lobby/ }).first().click();
   await page.getByRole("button", { name: "Join Voice" }).click();
-  await expect(page.getByText("Live")).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId("call-stage-collapsed")).toBeVisible({ timeout: 20_000 });
 }
 
 /** Rendered geometry of the share, plus whether anything is fullscreen. */

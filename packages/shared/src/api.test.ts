@@ -34,6 +34,11 @@ describe("messageBodySchema", () => {
   it("rejects empty and oversized bodies", () => {
     expect(messageBodySchema.safeParse("").success).toBe(false);
     expect(messageBodySchema.safeParse("x".repeat(4001)).success).toBe(false);
+    expect(messageBodySchema.safeParse("\n\n\n").success).toBe(false);
+  });
+
+  it("collapses extra blank lines on parse", () => {
+    expect(messageBodySchema.parse("hello\n\n\nworld")).toBe("hello\n\nworld");
   });
 
   it("rejects control characters that Postgres cannot store", () => {

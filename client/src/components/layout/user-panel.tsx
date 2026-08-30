@@ -20,6 +20,8 @@ import { cn } from "@/lib/utils";
 interface UserPanelProps {
   displayName: string;
   tag: string | null;
+  /** Public @handle when this account has claimed one. */
+  handle?: string | null;
   avatarUrl?: string | null;
   isMuted: boolean;
   isDeafened: boolean;
@@ -77,6 +79,7 @@ const CHOICES: readonly {
 export function UserPanel({
   displayName,
   tag,
+  handle = null,
   avatarUrl = null,
   isMuted,
   isDeafened,
@@ -255,33 +258,19 @@ export function UserPanel({
           <span className="block truncate text-sm font-semibold">
             {displayName}
           </span>
-          {/* Was a hardcoded "Online" under every account regardless of
-              anything. The tag stays the primary line when there is one —
-              it is the thing people copy to add you — with the real status
-              beside it rather than in place of it. */}
-          <span className="flex items-center gap-1.5">
-            {tag && (
-              <span className="truncate font-mono text-[11px] text-paper-muted">
-                {tag}
-              </span>
+          {/* Presence is the pip on the avatar. This line is one identity
+              string, Discord's user-panel rule: handle if you have one, else
+              the tag. "Invisible" is the exception because the pip then lies.
+              Putting status words next to the tag is what produced
+              "dev_us… O…". */}
+          <span
+            className={cn(
+              "block truncate text-[11px]",
+              statusSaving ? "text-paper-muted/60" : "text-paper-muted",
             )}
-            <span
-              className={cn(
-                "truncate text-[11px]",
-                statusSaving ? "text-paper-muted/60" : "text-paper-muted",
-              )}
-            >
-              {ownLabel ??
-                t(
-                  effectiveStatus === "online"
-                    ? "status.online"
-                    : effectiveStatus === "idle"
-                      ? "status.idle"
-                      : effectiveStatus === "dnd"
-                        ? "status.dnd"
-                        : "status.offline",
-                )}
-            </span>
+          >
+            {ownLabel ??
+              (handle ? `@${handle}` : tag)}
           </span>
         </span>
       </button>

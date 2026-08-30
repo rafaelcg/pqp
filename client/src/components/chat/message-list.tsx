@@ -31,13 +31,11 @@ import {
   type Ref,
 } from "react";
 import { createPortal } from "react-dom";
-import ReactMarkdown from "react-markdown";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { RankMarks } from "@/components/user/rank-marks";
 import { StatusDot } from "@/components/user/status-dot";
-import remarkBreaks from "remark-breaks";
-import remarkGfm from "remark-gfm";
 import { AttachmentGrid } from "@/components/chat/attachment-grid";
+import { MessageBody } from "@/components/chat/message-body";
 import { ChanceCard } from "@/components/chat/chance-card";
 import { PollCard } from "@/components/chat/poll-card";
 import { EmojiPickerPanel } from "@/components/chat/emoji-picker";
@@ -64,7 +62,6 @@ import {
   placeAnchoredPanel,
 } from "@/lib/anchored-panel";
 import { formatReactionWho } from "@/lib/reaction-who";
-import { remarkMentions } from "@/lib/remark-mentions";
 import { translateMessage, useTranslation } from "@/lib/i18n";
 import {
   cn,
@@ -954,7 +951,7 @@ export function MessageList({
         // in half-finished sentences. The single sr-only status region below
         // is the only thing that speaks, and only for genuine new arrivals.
         aria-live="off"
-        className="flex-1 overflow-y-auto [overflow-anchor:none] px-3 py-4 sm:px-5"
+        className="flex-1 overflow-y-auto [overflow-anchor:none] py-4"
       >
         {hasMore && (
           <div className="flex justify-center pb-3">
@@ -1211,65 +1208,6 @@ function TypingIndicator({ users }: { users: TypingUser[] }) {
     </p>
   );
 }
-
-/** Message body: markdown, with `@username` highlighted inside it. */
-function MessageBody({
-  body,
-  currentUsername,
-}: {
-  body: string;
-  currentUsername: string | null;
-}) {
-  const plugins = useMemo(
-    // remark-breaks turns a single newline into a <br>, which is what a chat
-    // message means by it — plain markdown would fold it into a space.
-    () => [remarkGfm, remarkBreaks, remarkMentions(currentUsername)],
-    [currentUsername],
-  );
-
-  return (
-    <ReactMarkdown
-      remarkPlugins={plugins}
-      allowedElements={MARKDOWN_ELEMENTS}
-      unwrapDisallowed
-      components={MARKDOWN_COMPONENTS}
-    >
-      {body}
-    </ReactMarkdown>
-  );
-}
-
-/**
- * Note the absence of `img`: attachments render from the structured array on
- * the message, never from markdown a sender typed. Allowing it here would let
- * any message embed any URL, which is a per-reader tracking pixel and a way to
- * put arbitrary remote content inside our own origin.
- */
-const MARKDOWN_ELEMENTS = [
-  "p",
-  "span",
-  "strong",
-  "em",
-  "del",
-  "code",
-  "pre",
-  "a",
-  "br",
-  "ul",
-  "ol",
-  "li",
-  "blockquote",
-];
-
-const MARKDOWN_COMPONENTS = {
-  // Links in user content are untrusted: never hand the opener a window
-  // reference, and never leak the app URL as a referrer.
-  a: ({ children, href }: { children?: ReactNode; href?: string }) => (
-    <a href={href} target="_blank" rel="noopener noreferrer nofollow ugc">
-      {children}
-    </a>
-  ),
-};
 
 /**
  * What a screen reader gets for one message, as a single accessible name on
@@ -1591,7 +1529,7 @@ const MessageRow = memo(function MessageRow({
           aria-label={t("chat.blocked")}
           onFocus={onFocusRow}
           onKeyDown={(event) => onNavigate(event, message.id)}
-          className="group mt-1 flex items-center gap-2 rounded-md px-1 py-1 text-xs text-paper-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
+          className="group mt-1 flex items-center gap-2 rounded-md px-5 py-1 text-xs text-paper-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
         >
           <span className="italic">{t("chat.blocked")}</span>
           <button
@@ -1801,13 +1739,13 @@ const MessageRow = memo(function MessageRow({
           // gets from the keyboard Menu key / Shift+F10.
           onContextMenu={onMenuOpenRow}
           className={cn(
-            "group relative flex gap-3 px-1 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60",
-            startsGroup ? "mt-3" : null,
-            mentionJoinTop ? "pt-0" : startsGroup ? "pt-0.5" : "pt-px",
-            mentionJoinBottom ? "pb-0" : startsGroup ? "pb-0.5" : "pb-px",
+            "group relative flex items-start gap-0 px-5 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60",
+            startsGroup ? "mt-2 pt-1" : "pt-px",
+            mentionJoinTop ? "pt-0" : null,
+            mentionJoinBottom ? "pb-0" : startsGroup ? "pb-1" : "pb-px",
             mentionsYou && !isFlashing
               ? mentionRowRadius(mentionJoinTop, mentionJoinBottom)
-              : "rounded-md",
+              : null,
             message.pending && "opacity-60",
             isFlashing && "bg-accent/15 ring-1 ring-accent/50",
             mentionsYou && !isFlashing && "pqp-message-mention",
@@ -1815,18 +1753,19 @@ const MessageRow = memo(function MessageRow({
           )}
         >
           {startsGroup ? (
-            <div className="flex w-14 shrink-0 justify-end">
+            <div className="flex w-14 shrink-0 items-start justify-end pr-2">
               <div className="relative h-9 w-9 shrink-0">
                 <AuthorButton
                   message={message}
                   author={authorInfo}
                   tabIndex={controlTabIndex}
                   onOpenProfile={openProfile}
-                  className="h-9 w-9 shrink-0 overflow-hidden rounded-md"
+                  className="block h-9 w-9 shrink-0 overflow-hidden rounded-lg leading-none hover:no-underline"
                 >
                   <UserAvatar
                     name={message.authorName}
                     avatarUrl={message.authorAvatarUrl}
+                    rounded="lg"
                     className="h-9 w-9"
                     fallbackClassName="bg-ink-3 text-sm"
                   />
@@ -1835,14 +1774,14 @@ const MessageRow = memo(function MessageRow({
                   <StatusDot
                     status={authorInfo.status}
                     className="absolute -bottom-0.5 -right-0.5"
-                    ringClassName="rounded-full bg-ink ring-2 ring-ink"
+                    ringClassName="rounded-full bg-channel ring-2 ring-channel"
                   />
                 )}
               </div>
             </div>
           ) : (
             <time
-              className="w-14 shrink-0 pt-0.5 text-right text-[10px] leading-5 whitespace-nowrap tabular-nums text-paper-muted opacity-0 group-hover:opacity-100"
+              className="w-14 shrink-0 pr-2 text-right text-[12px] leading-[22px] whitespace-nowrap tabular-nums text-paper-muted opacity-0 group-hover:opacity-100"
               dateTime={message.createdAt}
             >
               {formatTime(message.createdAt)}
@@ -1858,15 +1797,15 @@ const MessageRow = memo(function MessageRow({
               />
             )}
             {startsGroup && (
-              <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-                <span className="inline-flex items-center gap-1">
+              <div className="flex flex-wrap items-baseline gap-x-2">
+                <span className="inline-flex items-baseline gap-1">
                   <AuthorButton
                     message={message}
                     author={authorInfo}
                     tabIndex={controlTabIndex}
                     onOpenProfile={openProfile}
                     className={cn(
-                      "rounded font-semibold",
+                      "rounded text-[15px] font-bold leading-[22px]",
                       !roleColor && (isMine ? "text-signal" : "text-paper"),
                     )}
                     style={roleColor ? { color: roleColor } : undefined}
@@ -1893,7 +1832,7 @@ const MessageRow = memo(function MessageRow({
                   </span>
                 )}
                 <time
-                  className="whitespace-nowrap text-[11px] text-paper-muted"
+                  className="whitespace-nowrap text-[12px] leading-[22px] text-paper-muted"
                   dateTime={message.createdAt}
                   title={formatFullTimestamp(message.createdAt)}
                 >
@@ -1901,7 +1840,7 @@ const MessageRow = memo(function MessageRow({
                 </time>
                 {isMessagePinned && (
                   <span
-                    className="inline-flex items-center gap-0.5 text-[11px] text-signal"
+                    className="inline-flex items-center gap-0.5 text-[12px] leading-[22px] text-signal"
                     title={
                       message.pinnedBy
                         ? t("chat.pinnedBy", {
@@ -1943,7 +1882,7 @@ const MessageRow = memo(function MessageRow({
                     onClose={() => onClosePoll?.(message.id)}
                   />
                 ) : message.body ? (
-                  <div className="markdown-body text-[15px] leading-normal text-paper/90">
+                  <div className="markdown-body text-[15px] leading-[22px] text-paper/90">
                     <MessageBody
                       body={message.body}
                       currentUsername={currentUsername}
@@ -2299,7 +2238,7 @@ function AuthorButton({
 /** The date rule between two days of messages. */
 function DaySeparator({ label }: { label: string }) {
   return (
-    <div className="my-4 flex items-center gap-3" role="separator">
+    <div className="my-4 flex items-center gap-3 px-5" role="separator">
       <span className="h-px flex-1 bg-ink-4/60" />
       <span className="text-[11px] font-medium uppercase tracking-wider text-paper-muted">
         {label}
@@ -2320,7 +2259,7 @@ function UnreadSeparator({
   return (
     <div
       ref={dividerRef}
-      className="my-2 flex items-center gap-3"
+      className="my-2 flex items-center gap-3 px-5"
       role="separator"
       aria-label={label}
     >

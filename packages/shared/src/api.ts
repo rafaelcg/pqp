@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { attachmentSchema } from "./attachments.js";
+import { clampChatNewlines } from "./chat-text.js";
 import { embedSchema } from "./embeds.js";
 import { handleSchema } from "./profiles.js";
 import { nicknameSchema } from "./permissions.js";
@@ -636,11 +637,21 @@ export const messageSchema = z.object({
 
 export const MESSAGE_MAX_LENGTH = 4000;
 
-export const messageBodySchema = z
+/**
+ * A message body after the newline clamp. Empty is legal: a send with
+ * attachments and no caption uses it, and `requireBodyOrAttachment` is what
+ * refuses a send that is neither.
+ */
+export const messageBodyTextSchema = z
   .string()
-  .min(1)
   .max(MESSAGE_MAX_LENGTH)
-  .refine((value) => !CONTROL_CHARS.test(value), "Invalid characters");
+  .refine((value) => !CONTROL_CHARS.test(value), "Invalid characters")
+  .transform(clampChatNewlines);
+
+export const messageBodySchema = messageBodyTextSchema.refine(
+  (value) => value.length >= 1,
+  "A message needs a body",
+);
 
 export const updateMessageSchema = z.object({
   body: messageBodySchema,

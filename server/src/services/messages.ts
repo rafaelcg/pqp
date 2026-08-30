@@ -1,6 +1,7 @@
 import {
   buildReplyExcerpt,
   chanceResultSchema,
+  clampChatNewlines,
   extractMentions,
   formatChanceBody,
   formatUserTag,
@@ -548,7 +549,7 @@ export async function createMessage(
   if (interactive?.chance && interactive.poll) {
     return null;
   }
-  let storedBody = body;
+  let storedBody = clampChatNewlines(body);
   let chance: ChanceResult | null = null;
   const deckAction =
     interactive?.chance?.type === "draw" || interactive?.chance?.type === "shuffle"
@@ -672,6 +673,7 @@ export async function updateMessageBody(
   messageId: string,
   body: string,
 ): Promise<HydratedMessage | null> {
+  const storedBody = clampChatNewlines(body);
   const result = await getPool().query<DbMessage>(
     `WITH updated AS (
        UPDATE messages SET body = $2, edited_at = NOW()
@@ -694,7 +696,7 @@ export async function updateMessageBody(
        ON author_sm.user_id = m.author_id AND author_sm.server_id = msg_ch.server_id
      ${REPLY_JOINS}
      ${PIN_JOIN}`,
-    [messageId, body],
+    [messageId, storedBody],
   );
   const message = result.rows[0];
   if (!message) {
@@ -711,7 +713,7 @@ export async function updateMessageBody(
     messageId,
     message.channel_id,
     message.author_id,
-    body,
+    storedBody,
     message.reply_to_id
       ? { parentId: message.reply_to_id, authorId: message.author_id }
       : undefined,

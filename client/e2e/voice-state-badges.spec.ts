@@ -60,7 +60,7 @@ test.describe("voice state badges", () => {
     await openApp(page);
     await page.getByRole("button", { name: /lobby/ }).first().click();
     await page.getByRole("button", { name: "Join Voice" }).click();
-    await expect(page.getByText("Live")).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByTestId("call-stage-collapsed")).toBeVisible({ timeout: 20_000 });
 
     // The observer is a separate browser context that never joins voice.
     const context = await browser.newContext();
@@ -78,29 +78,20 @@ test.describe("voice state badges", () => {
       await expect(observer.getByLabel("Muted")).toHaveCount(0);
 
       // The participant mutes; the observer's sidebar badge follows.
-      await page
-        .getByRole("main")
-        .getByRole("button", { name: "Mute microphone" })
-        .click();
+      await page.getByRole("button", { name: "Mute microphone" }).click();
       await expect(observer.getByLabel("Muted")).toBeVisible({
         timeout: 10_000,
       });
 
       // Deafen replaces it — one badge, the stronger one.
-      await page
-        .getByRole("main")
-        .getByRole("button", { name: "Deafen" })
-        .click();
+      await page.getByRole("button", { name: "Deafen" }).click();
       await expect(observer.getByLabel("Deafened")).toBeVisible({
         timeout: 10_000,
       });
       await expect(observer.getByLabel("Muted")).toHaveCount(0);
 
       // And clearing it clears the badge rather than leaving it stuck.
-      await page
-        .getByRole("main")
-        .getByRole("button", { name: "Undeafen" })
-        .click();
+      await page.getByRole("button", { name: "Undeafen" }).click();
       await expect(observer.getByLabel("Deafened")).toHaveCount(0, {
         timeout: 10_000,
       });

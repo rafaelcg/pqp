@@ -20,7 +20,7 @@ interface UserAvatarProps {
    */
   fallbackClassName?: string;
   /** Circle for voice and profile surfaces, rounded square for lists. */
-  rounded?: "md" | "full";
+  rounded?: "md" | "lg" | "full";
   /** Muted people are drawn dimmer in the voice roster. */
   dimmed?: boolean;
 }
@@ -58,7 +58,12 @@ export function UserAvatar({
 }: UserAvatarProps) {
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
   const resolved = resolveAvatarUrl(avatarUrl);
-  const shape = rounded === "full" ? "rounded-full" : "rounded-md";
+  const shape =
+    rounded === "full"
+      ? "rounded-full"
+      : rounded === "lg"
+        ? "rounded-lg"
+        : "rounded-md";
   const dim = dimmed ? "opacity-50" : "";
 
   if (resolved && resolved !== failedUrl) {

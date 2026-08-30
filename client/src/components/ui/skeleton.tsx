@@ -38,20 +38,22 @@ export function ChannelListSkeleton() {
 export function MessageListSkeleton() {
   return (
     <div
-      className="flex flex-1 flex-col gap-5 overflow-hidden px-3 py-4 sm:px-5"
+      className="flex flex-1 flex-col gap-5 overflow-hidden py-4"
       aria-busy="true"
       aria-label={translateMessage("a11y.loadingMessages")}
     >
       {Array.from({ length: 6 }).map((_, i) => (
-        <div key={i} className="flex gap-3">
-          <Skeleton className="h-9 w-9 shrink-0 rounded-full" />
+        <div key={i} className="flex items-start px-5">
+          <div className="flex w-14 shrink-0 justify-end pr-2">
+            <Skeleton className="h-9 w-9 shrink-0 rounded-lg" />
+          </div>
           <div className="min-w-0 flex-1 space-y-2">
-            <div className="flex items-center gap-2">
-              <Skeleton className="h-3 w-24" />
+            <div className="flex items-baseline gap-2">
+              <Skeleton className="h-3.5 w-24" />
               <Skeleton className="h-3 w-12" />
             </div>
-            <Skeleton className={`h-3 ${i % 2 === 0 ? "w-[90%]" : "w-[65%]"}`} />
-            {i % 3 === 0 && <Skeleton className="h-3 w-[40%]" />}
+            <Skeleton className={`h-3.5 ${i % 2 === 0 ? "w-[90%]" : "w-[65%]"}`} />
+            {i % 3 === 0 && <Skeleton className="h-3.5 w-[40%]" />}
           </div>
         </div>
       ))}

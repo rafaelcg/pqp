@@ -1,6 +1,6 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { Permission } from "@pqp/shared";
+import { DiscordPermission, Permission } from "@pqp/shared";
 import {
   afterAll,
   beforeAll,
@@ -232,6 +232,12 @@ describeDb("discord layout import API", () => {
             parent_id: null,
             permission_overwrites: [
               { id: 0, type: 0, allow: "0", deny: DISCORD_VIEW },
+              {
+                id: 8,
+                type: 0,
+                allow: DiscordPermission.VIEW_CHANNEL.toString(),
+                deny: "0",
+              },
             ],
           },
           {
@@ -245,7 +251,14 @@ describeDb("discord layout import API", () => {
         ],
         [
           { id: 9, name: "Mods", color: 3447003, hoist: true, mentionable: true },
-          { id: 8, name: "VIP", color: 0, hoist: false, mentionable: false },
+          {
+            id: 8,
+            name: "VIP",
+            color: 0,
+            hoist: false,
+            mentionable: false,
+            permissions: DiscordPermission.SEND_MESSAGES.toString(),
+          },
         ],
       ),
     );
@@ -253,7 +266,12 @@ describeDb("discord layout import API", () => {
     const res = await call<{
       server: { id: string };
       channels: Array<{ id: string; name: string; isPrivate: boolean }>;
-      roles: Array<{ name: string; position: number; systemKey: string | null }>;
+      roles: Array<{
+        name: string;
+        position: number;
+        systemKey: string | null;
+        permissions: string;
+      }>;
       invite: { code: string };
     }>(user, "POST", "/api/import/discord/apply", { source: "abcd1234" });
 
@@ -272,10 +290,14 @@ describeDb("discord layout import API", () => {
         WHERE channel_id = $1 AND target_type = 'role'`,
       [staff.id],
     );
-    expect(overwrite.rows).toHaveLength(1);
-    expect(BigInt(overwrite.rows[0]!.deny) & Permission.VIEW_CHANNEL).toBe(
-      Permission.VIEW_CHANNEL,
-    );
+    expect(overwrite.rows.length).toBeGreaterThanOrEqual(1);
+    expect(
+      overwrite.rows.some(
+        (row) =>
+          (BigInt(row.deny) & Permission.VIEW_CHANNEL) ===
+          Permission.VIEW_CHANNEL,
+      ),
+    ).toBe(true);
 
     const ownerRows = await getPool().query(
       `SELECT 1 FROM channel_members WHERE channel_id = $1 AND user_id = $2`,
@@ -317,5 +339,31 @@ describeDb("discord layout import API", () => {
     expect(byName.Admin?.systemKey).toBe("admin");
     expect(byName.Owner?.position).toBe(6);
     expect(byName.Owner?.systemKey).toBe("owner");
+    expect(BigInt(byName.VIP?.permissions ?? "0") & Permission.SEND_MESSAGES).toBe(
+      Permission.SEND_MESSAGES,
+    );
+    expect(BigInt(byName.VIP?.permissions ?? "0") & Permission.ADMINISTRATOR).toBe(
+      0n,
+    );
+
+    const staffOverwrites = await getPool().query<{
+      allow: string;
+      deny: string;
+      name: string;
+    }>(
+      `SELECT o.allow::text AS allow, o.deny::text AS deny, r.name
+         FROM channel_overwrites o
+         JOIN roles r ON r.id = o.target_id
+        WHERE o.channel_id = $1 AND o.target_type = 'role'`,
+      [staff.id],
+    );
+    const everyoneRow = staffOverwrites.rows.find((row) => row.name === "everyone");
+    expect(BigInt(everyoneRow?.deny ?? "0") & Permission.VIEW_CHANNEL).toBe(
+      Permission.VIEW_CHANNEL,
+    );
+    const vipRow = staffOverwrites.rows.find((row) => row.name === "VIP");
+    expect(BigInt(vipRow?.allow ?? "0") & Permission.VIEW_CHANNEL).toBe(
+      Permission.VIEW_CHANNEL,
+    );
   });
 });

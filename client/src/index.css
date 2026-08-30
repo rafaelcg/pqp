@@ -916,12 +916,18 @@ h2,
   app-region: no-drag;
 }
 
+.markdown-body {
+  overflow-wrap: anywhere;
+  /* 15px / 22px, same as Slack's name and body. */
+  line-height: 1.4667;
+}
+
 .markdown-body p {
   margin: 0;
 }
 
 .markdown-body p + p {
-  margin-top: 0.35rem;
+  margin-top: 0.25em;
 }
 
 .markdown-body code {
@@ -939,7 +945,7 @@ h2,
 }
 
 .markdown-body strong {
-  font-weight: 600;
+  font-weight: 700;
   color: var(--color-text);
 }
 
@@ -966,6 +972,11 @@ h2,
   padding: 0.5rem 0.65rem;
   margin: 0.35rem 0;
   overflow-x: auto;
+  white-space: pre;
+}
+
+.markdown-body del {
+  text-decoration: line-through;
 }
 
 .markdown-body pre code {

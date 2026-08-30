@@ -21,9 +21,13 @@ Discord itself is not changed.
 - Categories, text channels, and voice channels, in sidebar order
 - Channel names as Discord spelled them (emoji and spaces included)
 - Topics, truncated at 200 characters
-- Cosmetic roles: name, colour, hoist, mentionable
-- Privacy: a channel is private if Discord `@everyone` (placeholder id `0`)
-  is denied VIEW on the channel or its parent category
+- Cosmetic roles: name, colour, hoist, mentionable, and mapped permission bits
+  (never Administrator)
+- Privacy and role overwrites for view, send, and connect. Category
+  overwrites flatten onto children.
+- Server icon, when the template has `icon_hash` and `source_guild_id`.
+  Fetched from Discord CDN after create. Needs storage. Scan if a provider
+  is on.
 
 ## What is not copied
 
@@ -33,9 +37,7 @@ Not in a Guild Template:
 
 Mapped away by pqp:
 
-- Discord permission bits and overwrites other than privacy
 - NSFW, slowmode, bitrate, forum tags, threads, directory channels
-- Server icon
 - Roles that cannot be sanitised to pqp's `letters, numbers, underscore` names
 - Roles named `everyone`, `here`, `Owner`, `Admin`, `Manager`, or
   `Moderator` after sanitising (those names are already seeded)
@@ -71,9 +73,10 @@ Discord's global `position` is not copied as-is.
 ## Roles
 
 `seedDefaultRoles` still creates `@everyone` (position 0) plus the staff
-ladder (Moderator, Manager, Admin, Owner). Imported roles are cosmetic:
-they get `PERMISSION_DEFAULT_EVERYONE`. Staff is shifted up by `n` so
-the copies sit under the ladder, same as a homemade cargo.
+ladder (Moderator, Manager, Admin, Owner). Imported roles sit under the
+ladder. Their permission bits are the named pqp subset of Discord's mask.
+Administrator is never copied. `@everyone` is updated from the template
+the same way, minus manage bits.
 
 Names are sanitised before insert (NFD, strip marks, spaces to `_`) so
 the unique `LOWER(name)` index cannot abort the transaction.
@@ -135,7 +138,10 @@ Checked against Discord's Guild Template docs and
 | Stage | Flattened to voice |
 | Channel name, topic | Name kept; topic cut at 200 |
 | `@everyone` deny VIEW | Private channel (`channel_overwrites`) |
-| Role name, colour, hoist, mentionable | Cosmetic role (`PERMISSION_DEFAULT_EVERYONE`) |
+| Role name, colour, hoist, mentionable | Cosmetic role |
+| Role `permissions` | Named pqp flags. Never Administrator. `@everyone` also drops manage bits. |
+| Overwrites (role targets) | VIEW / SEND / CONNECT. Category overwrites flatten onto children. |
+| `icon_hash` | Fetched from Discord CDN after create, stored as the server icon. |
 
 ### In the template, not copied (pqp has no home, or we refused)
 
@@ -144,14 +150,11 @@ matching feature, or if we accept a lossy map.
 
 | Discord field | Why it is dropped | Later? |
 |---|---|---|
-| `icon_hash` | pqp has `servers.icon_url` / `icon_key`, but the API does not PUT bytes. Icons are a client presign. The template has a hash, not a file. | Yes, if we fetch `cdn.discordapp.com/icons/{source_guild_id}/{hash}` ourselves (constructed URL, not the paste) and add a server-side store path. Scan the image. |
 | Guild `description` | pqp `community_tagline` is for listed communities. Import does not opt the server into the directory (`COMMUNITIES_ENABLED` / `is_community`). | Prefill tagline without listing, if we want a poster later. |
-| Role `permissions` | Discord bit numbers are not pqp's 20 bits, even when names match (`VIEW_CHANNEL` is Discord `1<<10`, pqp `1<<6`). Auto-map is a privilege decision (`Muted` becoming a full member). | Possible as an explicit, documented subset. Not silent. |
-| Overwrites other than `@everyone` VIEW | pqp has a real overwrite editor. Template overwrites name other roles by placeholder id, which we do create. Copying SEND / CONNECT / etc. has the same bit-number problem. | Best next mapping: VIEW allow/deny per imported role only. Still fail closed. |
 | Role `icon` / `unicode_emoji` | pqp roles have no icon column. | After role icons exist. |
 | `nsfw` | The instance is already 18+. No per-channel NSFW flag. | Unlikely. |
 | `rate_limit_per_user` (slowmode) | Gap #20 in [`DISCORD_GAPS.md`](./DISCORD_GAPS.md). No `slowmode_seconds` column. | When slowmode ships. |
-| `bitrate`, `user_limit`, `video_quality_mode`, `rtc_region` | No per-channel Discord-style voice caps in schema. | Only if we add those knobs. |
+| `bitrate`, `user_limit`, `video_quality_mode`, `rtc_region` | No per-channel Discord-style voice caps. Discord's default is 64 kbps on every voice channel; copying it would make imported Lobbies worse than homemade ones. | Only if pqp grows its own per-channel voice knobs. |
 | Forum tags, default reaction, sort, layout, auto-archive | Flattened to text. pqp threads hang off a root message, which a template does not contain. | After a real forum type, not by inventing empty threads. |
 | Threads (types 10/11/12), directory (14) | Dropped. Directory is Discord hub-only. | Directory: never. Threads: not from a template. |
 | `verification_level`, `explicit_content_filter` | pqp uses an age gate, not Discord's verification ladder. | No. |

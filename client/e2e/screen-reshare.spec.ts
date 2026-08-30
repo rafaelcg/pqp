@@ -503,7 +503,7 @@ async function seedVoiceServer(
 async function joinVoice(page: Page): Promise<void> {
   await page.getByRole("button", { name: /stage/ }).first().click();
   await page.getByRole("button", { name: "Join Voice" }).click();
-  await expect(page.getByText("Live")).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId("call-stage-collapsed")).toBeVisible({ timeout: 20_000 });
 }
 
 test("a voice channel's SECOND screen share renders for the other member", async ({

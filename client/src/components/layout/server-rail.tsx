@@ -107,54 +107,43 @@ export function ServerRail({
       {/* Every bubble on this rail points right. The rail is 72px against the
           left edge of the window, so a bubble above or below a tile would sit
           on the tile next to it, and one on the left would be off-screen. */}
-      <Tooltip label={t("chrome.directMessages")} side="right">
+      <Tooltip label={t("chrome.directMessages")} side="right" tone="rail">
       <button
         type="button"
         onClick={onSelectHome}
         aria-current={homeSelected ? "page" : undefined}
         className={cn(
-          "relative flex h-12 w-12 items-center justify-center rounded-2xl transition-all duration-200 hover:rounded-xl",
+          "group relative flex h-12 w-12 items-center justify-center rounded-2xl transition-all duration-200 hover:rounded-xl",
           homeSelected
             ? "rounded-xl bg-signal text-ink"
             : "bg-ink-3 text-paper hover:bg-signal hover:text-ink",
         )}
       >
-        {homeSelected && (
-          <span className="absolute -left-3 h-8 w-1 rounded-r bg-signal" />
-        )}
+        <RailPill kind={homeSelected ? "selected" : homeUnread.count > 0 ? "unread" : "none"} />
         <MessageCircle className="h-5 w-5" />
-        {/* Friend requests, in `signal` rather than `danger`, at the top corner
-            where the plain-unread dot would sit.
-            IT TAKES PRECEDENCE over that dot rather than sitting beside it:
-            72px of rail has room for one thing per corner, and a count is
-            strictly more informative than a dot. The mention badge keeps its own
-            bottom corner, so a request and a mention are both visible at once
-            and remain the two different colours they are. */}
+        {/* Friend requests stay lime and take the top-right corner. Unread
+            DMs use the red bubble Discord puts on Home — that is how a
+            waiting conversation shows up on this rail at all. Both can
+            land at once: requests above, DMs below. */}
         {friendRequestCount > 0 ? (
-          <span
-            aria-hidden="true"
-            data-friend-requests={friendRequestCount}
-            className="absolute -right-1 -top-1 min-w-[1.15rem] rounded-full bg-signal px-1 py-0.5 text-center text-[10px] font-bold leading-none text-ink ring-2 ring-rail"
-          >
-            {formatBadgeCount(friendRequestCount)}
-          </span>
-        ) : (
-          homeUnread.count > 0 &&
-          homeUnread.mentions === 0 && (
-            <span
-              aria-hidden="true"
-              className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-paper ring-2 ring-rail"
-            />
-          )
+          <RailCountBadge
+            count={friendRequestCount}
+            tone="signal"
+            dataFriendRequests
+          />
+        ) : homeUnread.count > 0 ? (
+          <RailCountBadge count={homeUnread.count} tone="danger" />
+        ) : null}
+        {friendRequestCount > 0 && homeUnread.count > 0 && (
+          <RailCountBadge
+            count={homeUnread.count}
+            tone="danger"
+            corner="bottom"
+          />
         )}
         {friendRequestCount > 0 && (
           <span className="sr-only">
             {t("friends.pendingBadge", { count: friendRequestCount })}
-          </span>
-        )}
-        {homeUnread.mentions > 0 && (
-          <span className="absolute -bottom-0.5 -right-0.5 min-w-[1.15rem] rounded-full bg-danger px-1 py-0.5 text-[10px] font-bold leading-none text-paper ring-2 ring-rail">
-            {formatBadgeCount(homeUnread.mentions)}
           </span>
         )}
         {homeUnread.count > 0 && (
@@ -226,29 +215,27 @@ export function ServerRail({
         }
 
         return (
-          // The one tile on this rail that keeps a native `title`. Radix's
-          // context-menu trigger and its tooltip trigger both want to BE this
-          // button, and neither forwards props through the other, so pairing
-          // them means composing both primitives onto one element by hand.
-          // Not worth it here: a server tile shows its own picture, its name is
-          // the first thing in the header the moment you click it, and the
-          // right-click menu is the interaction this tile is really for.
-          <ContextMenu key={server.id} items={items}>
+          // Tooltip wraps a span so the context-menu trigger can still be the
+          // button. Both primitives want `asChild` on the same node, and
+          // neither forwards through the other.
+          <Tooltip key={server.id} label={server.name} side="right" tone="rail">
+            <span className="relative inline-flex">
+          <ContextMenu items={items}>
             <button
               type="button"
               onClick={() => onSelectServer(server.id)}
-              title={server.name}
+              aria-label={server.name}
               className={cn(
-                "relative flex h-12 w-12 items-center justify-center rounded-xl font-display text-sm font-bold transition-colors",
+                "group relative flex h-12 w-12 items-center justify-center rounded-xl font-display text-sm font-bold transition-colors",
                 selected
                   ? "bg-signal text-ink"
                   : "bg-ink-3 text-paper hover:bg-signal hover:text-ink",
                 muted && !selected && "opacity-50",
               )}
             >
-              {selected && (
-                <span className="absolute -left-3 h-8 w-1 rounded-r bg-signal" />
-              )}
+              <RailPill
+                kind={selected ? "selected" : hasUnread ? "unread" : "none"}
+              />
               {/* The clip lives on this span rather than on the button so the
                   selection pip, which is drawn outside the button's own box,
                   survives. `rounded-[inherit]` keeps the photo in the same
@@ -256,16 +243,8 @@ export function ServerRail({
               <span className="flex h-full w-full items-center justify-center overflow-hidden rounded-[inherit]">
                 <ServerIcon name={server.name} iconUrl={server.iconUrl} />
               </span>
-              {hasUnread && mentions === 0 && (
-                <span
-                  aria-hidden="true"
-                  className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-paper ring-2 ring-rail"
-                />
-              )}
               {mentions > 0 && (
-                <span className="absolute -bottom-0.5 -right-0.5 min-w-[1.15rem] rounded-full bg-danger px-1 py-0.5 text-[10px] font-bold leading-none text-paper ring-2 ring-rail">
-                  {formatBadgeCount(mentions)}
-                </span>
+                <RailCountBadge count={mentions} tone="danger" />
               )}
               {hasUnread && (
                 <span className="sr-only">
@@ -276,9 +255,11 @@ export function ServerRail({
               )}
             </button>
           </ContextMenu>
+            </span>
+          </Tooltip>
         );
       })}
-      <Tooltip label={t("empty.createServer")} side="right">
+      <Tooltip label={t("empty.createServer")} side="right" tone="rail">
         <Button
           variant="secondary"
           size="icon"
@@ -288,7 +269,7 @@ export function ServerRail({
           <Plus className="h-5 w-5" />
         </Button>
       </Tooltip>
-      <Tooltip label={t("chrome.joinInvite")} side="right">
+      <Tooltip label={t("chrome.joinInvite")} side="right" tone="rail">
         <Button
           variant="ghost"
           size="icon"
@@ -317,27 +298,71 @@ export function ServerRail({
             aria-hidden="true"
             className="mt-auto h-px w-8 shrink-0 rounded-full bg-ink-4/70"
           />
-          <Tooltip label={t("communities.title")} side="right">
+          <Tooltip label={t("communities.title")} side="right" tone="rail">
             <button
               type="button"
               data-communities-rail
               onClick={onOpenCommunities}
               aria-current={communitiesSelected ? "page" : undefined}
               className={cn(
-                "relative flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl transition-all duration-200 hover:rounded-xl",
+                "group relative flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl transition-all duration-200 hover:rounded-xl",
                 communitiesSelected
                   ? "rounded-xl bg-signal text-ink"
                   : "bg-ink-3 text-paper hover:bg-signal hover:text-ink",
               )}
             >
-              {communitiesSelected && (
-                <span className="absolute -left-3 h-8 w-1 rounded-r bg-signal" />
-              )}
+              <RailPill kind={communitiesSelected ? "selected" : "none"} />
               <Compass className="h-5 w-5" />
             </button>
           </Tooltip>
         </>
       )}
     </nav>
+  );
+}
+
+function RailPill({ kind }: { kind: "selected" | "unread" | "none" }) {
+  if (kind === "none") {
+    return null;
+  }
+  return (
+    <span
+      aria-hidden="true"
+      className={cn(
+        "pointer-events-none absolute -left-3 w-1 rounded-r-full transition-[height] duration-200",
+        kind === "selected"
+          ? "h-8 bg-signal"
+          : "h-2 bg-paper group-hover:h-5",
+      )}
+    />
+  );
+}
+
+function RailCountBadge({
+  count,
+  tone,
+  corner = "top",
+  dataFriendRequests = false,
+}: {
+  count: number;
+  tone: "danger" | "signal";
+  corner?: "top" | "bottom";
+  dataFriendRequests?: boolean;
+}) {
+  if (count <= 0) {
+    return null;
+  }
+  return (
+    <span
+      aria-hidden="true"
+      {...(dataFriendRequests ? { "data-friend-requests": count } : {})}
+      className={cn(
+        "absolute right-[-5px] flex h-[18px] min-w-[18px] items-center justify-center rounded-full px-1 text-[11px] font-bold leading-none ring-[3px] ring-rail",
+        corner === "top" ? "top-[-5px]" : "bottom-[-5px]",
+        tone === "danger" ? "bg-danger text-paper" : "bg-signal text-ink",
+      )}
+    >
+      {formatBadgeCount(count)}
+    </span>
   );
 }

@@ -242,6 +242,34 @@ test("desktop: a 1:1 video call gives the remote person at least half the viewpo
   }
 });
 
+test("desktop: a voice-only DM stays a slim bar until a camera turns on", async ({
+  page,
+  browser,
+}) => {
+  const pair = await seedConversation("stage-e", "stage-f");
+  const callee = await openCallee(browser, pair);
+
+  try {
+    await openConversation(page, pair.conversationId, pair.callerSuffix);
+    await page.getByRole("button", { name: "Start voice call", exact: true }).click();
+    await expect(page.getByTestId("call-stage-collapsed")).toBeVisible({
+      timeout: 20_000,
+    });
+    await expect(page.getByTestId("call-stage")).toHaveCount(0);
+
+    await callee.page
+      .getByRole("button", { name: "Accept" })
+      .click({ timeout: 20_000 });
+    await expect(page.getByTestId("call-stage-collapsed")).toBeVisible();
+    await expect(page.getByTestId("call-stage")).toHaveCount(0);
+
+    await page.getByRole("button", { name: "Turn camera on", exact: true }).click();
+    await expect(page.getByTestId("call-stage")).toBeVisible({ timeout: 20_000 });
+  } finally {
+    await callee.context.close();
+  }
+});
+
 test.describe("mobile viewport", () => {
   test.use({ viewport: { width: 390, height: 844 } });
 
