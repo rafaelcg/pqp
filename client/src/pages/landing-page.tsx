@@ -475,15 +475,24 @@ export function LandingPage() {
           decoratePrimary
           className="mt-8"
         />
-        {/* iOS beta is not just a mobile-visitor affordance (HeroDownload
-            handles that); it gets a standing mention here so a desktop visitor
-            can send the /beta link to a friend on iPhone. */}
+        {/* Phone betas are not just a mobile-visitor affordance (HeroDownload
+            handles that); they get a standing mention here so a desktop
+            visitor can send the right link to a friend. */}
         <p className="mt-6 text-sm text-paper-muted">
           <Link
             to="/beta"
             className="underline decoration-paper-muted/40 underline-offset-4 transition-colors duration-150 hover:text-paper hover:decoration-paper/60"
           >
             {t("landing.cta.beta")}
+          </Link>
+          <span aria-hidden className="mx-2 text-paper-muted/40">
+            ·
+          </span>
+          <Link
+            to="/android"
+            className="underline decoration-paper-muted/40 underline-offset-4 transition-colors duration-150 hover:text-paper hover:decoration-paper/60"
+          >
+            {t("landing.cta.android")}
           </Link>
         </p>
       </section>

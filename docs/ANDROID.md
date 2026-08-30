@@ -96,8 +96,9 @@ export ANDROID_HOME="$HOME/Library/Android/sdk"
 Then, from `android/`:
 
 ```bash
-./gradlew :app:assembleDebug     # build
+./gradlew :app:assembleDebug     # build (localhost API, `.debug` applicationId)
 ./gradlew :app:installDebug      # build and install on the running emulator
+./gradlew :app:assembleSideload  # prod API, debug-signed; what CI puts on GitHub
 ```
 
 Opening `android/` in Android Studio works too and needs neither variable.
@@ -1640,5 +1641,6 @@ search, members and moderation surfaces, profile editing, communities, game
 connections. Invites can be redeemed from a link but not created or shown. No
 camera (send or receive), no screen-share audio, no speaking indicators, no
 per-peer volume, no push-to-talk. LiveKit rooms are refused rather than joined.
-`assembleRelease` signs with the debug key and needs a real keystore before it
-goes anywhere near Play.
+`assembleRelease` is unsigned unless a Play upload keystore is provided
+(see [`ANDROID_RELEASE.md`](./ANDROID_RELEASE.md)). The GitHub beta APK is
+a separate `sideload` build type, debug-signed on purpose.

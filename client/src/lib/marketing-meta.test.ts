@@ -34,6 +34,7 @@ describe("marketingPageFromMetaPath", () => {
       "/vs-discord",
       "/tela",
       "/beta",
+      "/android",
       "/download",
       "/garanta",
       "/claim",
@@ -92,6 +93,7 @@ describe("the duplicated copy is pinned to the JSON catalogues", () => {
     { path: "/vs-discord", prefix: "vsDiscord" },
     { path: "/tela", prefix: "tela" },
     { path: "/beta", prefix: "betaPage" },
+    { path: "/android", prefix: "androidPage" },
     { path: "/download", prefix: "downloadPage" },
     { path: "/claim", prefix: "claim" },
   ];

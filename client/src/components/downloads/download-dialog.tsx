@@ -1,20 +1,22 @@
 import { useState } from "react";
 import { Check, Link2 } from "lucide-react";
 import { Link } from "react-router-dom";
-import { HeroDownload } from "@/components/marketing/hero-download";
+import { PlatformPicker } from "@/components/downloads/platform-picker";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { DOWNLOAD_PAGE_PATH, DOWNLOAD_PAGE_URL } from "@/lib/downloads";
 import { useTranslation } from "@/lib/i18n";
 
 /**
- * In-app "there is a native app" hint.
+ * In-app "there is a native app" sheet.
  *
  * Opened from the user menu, only in a browser. The desktop shell already *is*
- * the app, so offering a download there would be a loop. The copy-link control
- * always copies the hosted URL: that is the string you paste into a chat, not
- * whatever origin this tab happens to be on. "See every platform" opens
- * `/download` in a new tab so this one stays on the server they were looking at.
+ * the app, so offering a download there would be a loop. Three marks — this
+ * computer, iPhone, Android — because a sentence that only named the detected
+ * desktop file hid the phones. The copy-link control always copies the hosted
+ * URL: that is the string you paste into a chat, not whatever origin this tab
+ * happens to be on. "See every platform" opens `/download` in a new tab so
+ * this one stays on the server they were looking at.
  */
 export function DownloadDialog({
   open,
@@ -55,7 +57,7 @@ export function DownloadDialog({
       }}
     >
       <div className="space-y-5 px-5 py-5">
-        <HeroDownload tone="ink" />
+        <PlatformPicker onNavigate={onClose} />
 
         <div className="rounded-xl border border-ink-4 bg-ink/40 p-3">
           <p className="text-xs uppercase tracking-[0.14em] text-paper-muted">

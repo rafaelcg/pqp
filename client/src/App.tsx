@@ -66,8 +66,12 @@ import { AgeGateDialog } from "@/components/user/age-gate-dialog";
 import { OnboardingFlow } from "@/components/onboarding/onboarding-flow";
 import { NewDmDialog } from "@/components/user/new-dm-dialog";
 import { CargosHint } from "@/components/layout/cargos-hint";
+import { MobileBetaHint } from "@/components/layout/mobile-beta-hint";
 import { QgHint } from "@/components/layout/qg-hint";
 import { winningCornerHint } from "@/lib/corner-hints";
+import { isAutomatedBrowser } from "@/lib/cargos-hint";
+import { shouldShowMobileBetaHint } from "@/lib/mobile-beta-hint";
+import { isWhatsNewSeen } from "@/lib/whats-new";
 import { ServerSettingsDialog } from "@/components/layout/server-settings-dialog";
 import { CreateServerDialog } from "@/components/layout/create-server-dialog";
 import {
@@ -475,6 +479,15 @@ function MainAppContent({
   const [arrivalServerId, setArrivalServerId] = useState<string | null>(null);
   const [qgHintReady, setQgHintReady] = useState(false);
   const [qgHintShowing, setQgHintShowing] = useState(false);
+  /**
+   * Captured once per mount so recording the impression cannot drop the
+   * card mid-session (and cannot leave the slot empty while the next card
+   * waits). A refresh reads storage again and the queue moves on.
+   */
+  const [wantsMobileBeta] = useState(() => shouldShowMobileBetaHint());
+  const [wantsWhatsNew] = useState(
+    () => !isAutomatedBrowser() && !isWhatsNewSeen(),
+  );
   const [membersOpen, setMembersOpen] = useState(false);
   const [serverSettingsSection, setServerSettingsSection] = useState<
     "roles" | undefined
@@ -3111,12 +3124,14 @@ function MainAppContent({
   const canManageMessages = perms.can(Permission.MANAGE_MESSAGES);
   const canManageNicknames = perms.can(Permission.MANAGE_NICKNAMES);
   /**
-   * One corner card. The dice/polls note (`whatsNew`) is the same slot when
-   * that PR lands; it goes in the middle of this list so it does not stack
-   * on the QG or on cargos.
+   * One corner card. QG first (the house), then the phone-app invite,
+   * then dice/polls, then cargos. WhatsNew used to mount outside this
+   * queue and stack on the others; it does not any more.
    */
   const cornerHint = winningCornerHint({
     qg: qgHintShowing,
+    mobileBeta: wantsMobileBeta,
+    whatsNew: wantsWhatsNew,
     cargos: qgHintReady && Boolean(canManageRoles && selectedServerId),
   });
 
@@ -3703,11 +3718,6 @@ function MainAppContent({
         />
       )}
 
-
-      {/* One corner card per ship. Same shape as the old Android beta prompt:
-          no backdrop, does not steal the composer. Decides for itself whether
-          this pack has already been seen. */}
-      <WhatsNewPrompt />
 
       {/* Also at the root: a call rings you wherever you are in the app. */}
       <IncomingCallOverlay
@@ -4427,6 +4437,8 @@ function MainAppContent({
           setServerSettingsOpen(true);
         }}
       />
+      <WhatsNewPrompt enabled={cornerHint === "whatsNew"} />
+      <MobileBetaHint enabled={cornerHint === "mobileBeta"} />
       <QgHint
         onShowingChange={handleQgHintShowingChange}
         onJoined={(result) => {

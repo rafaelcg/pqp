@@ -74,9 +74,14 @@ jobs:
           # simply builds without the tag (see the `umami` plugin in
           # client/vite.config.ts).
           VITE_UMAMI_WEBSITE_ID: "7ac342b9-238a-43ae-a7e2-13b338a52990"
-          # Optional — public TestFlight join link. Empty is fine; the site then
-          # points "Join the iOS beta" at /vs-discord#ios-beta instead.
+          # Optional — public TestFlight join link. Empty is fine; the client
+          # then uses the default in client/src/lib/testflight.ts.
           VITE_TESTFLIGHT_URL: ${{ secrets.VITE_TESTFLIGHT_URL }}
+          # Optional — Android beta APK. Empty uses GitHub
+          # releases/download/android-beta/pqp.apk (not /releases/latest;
+          # that tag is Electron). A single space hides the button.
+          # Not a secret; a repository variable is enough.
+          VITE_ANDROID_APK_URL: ${{ vars.VITE_ANDROID_APK_URL }}
           # Google Ads conversion tracking. Both empty until the conversion
           # action exists in the Ads account, and empty means the build emits no
           # Google tag whatsoever, so setting them is what turns this on. They

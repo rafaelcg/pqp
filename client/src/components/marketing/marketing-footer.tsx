@@ -60,6 +60,9 @@ export function MarketingFooter() {
             <Link to="/beta" className={FOOTER_LINK}>
               {t("footer.iosBeta")}
             </Link>
+            <Link to="/android" className={FOOTER_LINK}>
+              {t("footer.androidBeta")}
+            </Link>
             <Link to="/blog" className={FOOTER_LINK}>
               {t("nav.blog")}
             </Link>

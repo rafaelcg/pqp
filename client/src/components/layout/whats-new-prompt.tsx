@@ -65,7 +65,7 @@ const PREVIEW_VOTERS = {
  * New all lead with the thing itself. A PNG would freeze last week's card
  * design; these are the live components and the live art.
  */
-export function WhatsNewPrompt() {
+export function WhatsNewPrompt({ enabled = true }: { enabled?: boolean }) {
   const { t } = useTranslation();
   const [state] = useState(() => (isWhatsNewSeen() ? null : { pack: WHATS_NEW_PACK_ID }));
   const [open, setOpen] = useState(true);
@@ -76,14 +76,14 @@ export function WhatsNewPrompt() {
     typeof navigator !== "undefined" && Boolean(navigator.webdriver);
 
   useEffect(() => {
-    if (automated || !state) {
+    if (automated || !state || !enabled) {
       return;
     }
     rememberWhatsNew(state.pack);
-  }, [automated, state]);
+  }, [automated, state, enabled]);
 
   useEffect(() => {
-    if (automated || !state || !open) {
+    if (automated || !state || !enabled || !open) {
       return;
     }
     function onKeyDown(event: KeyboardEvent) {
@@ -93,9 +93,9 @@ export function WhatsNewPrompt() {
     }
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [automated, state, open]);
+  }, [automated, state, enabled, open]);
 
-  if (automated || !state || !open) {
+  if (automated || !state || !enabled || !open) {
     return null;
   }
 
