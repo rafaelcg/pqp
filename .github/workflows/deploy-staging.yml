@@ -1,0 +1,181 @@
+name: Deploy Staging
+
+# Staging twin of deploy-web.yml + deploy-api-fly.yml, deliberately simpler.
+# See docs/STAGING.md for what staging is and how to use it.
+#
+# Two triggers:
+#   * push to the long-lived `staging` branch
+#   * workflow_dispatch on any ref: gh workflow run deploy-staging.yml --ref my-branch
+#
+# What is deliberately NOT here, compared to the production workflows:
+#   * no workflow_run chaining on CI — staging exists to try things, a red
+#     typecheck is something you find out about on staging instead of in prod
+#   * no vars.DEPLOY_TARGET gate — there is only one staging API target
+#   * no deployed-commit relevance/skip check — staging deploys are cheap and
+#     nobody is in a voice call that matters
+#   * no "exactly 1 machine in gru" assertion — the health+version verify below
+#     is enough for an environment that scales to zero anyway
+on:
+  push:
+    branches: [staging]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-staging
+  # Unlike prod, cancelling a half-finished staging deploy is fine: the next
+  # run redeploys everything from scratch.
+  cancel-in-progress: true
+
+jobs:
+  web:
+    name: Build & deploy web (Pages branch staging)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      deployments: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        # Version comes from the root package.json "packageManager" field.
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build shared
+        run: pnpm --filter @pqp/shared build
+
+      # Same failure mode as prod (deploy-web.yml): a build with an empty Clerk
+      # key ships a /app that cannot sign anyone in. The API/WS URLs are
+      # hardcoded below, so the publishable key is the only value to preflight.
+      - name: Check client environment
+        env:
+          STAGING_CLERK_PUBLISHABLE_KEY: ${{ vars.STAGING_CLERK_PUBLISHABLE_KEY }}
+        run: |
+          if [ -z "$STAGING_CLERK_PUBLISHABLE_KEY" ]; then
+            echo "::error::Missing repo variable STAGING_CLERK_PUBLISHABLE_KEY (pk_test, public by definition). Set it with: gh variable set STAGING_CLERK_PUBLISHABLE_KEY"
+            exit 1
+          fi
+
+      # Staging gets the clean self-hoster build: no Umami, no Google Ads, no
+      # APK click beacon, no TestFlight/APK overrides. Those tags are
+      # hosted-production-only on purpose (see CLAUDE.md, "Hosted-only tags"),
+      # and staging traffic polluting prod analytics would be worse than no
+      # analytics at all.
+      - name: Build client (staging)
+        env:
+          VITE_CLERK_PUBLISHABLE_KEY: ${{ vars.STAGING_CLERK_PUBLISHABLE_KEY }}
+          VITE_API_URL: https://pqp-api-staging.fly.dev
+          VITE_WS_URL: wss://pqp-api-staging.fly.dev/ws
+          VITE_DEV_AUTH_BYPASS: "false"
+        run: pnpm --filter @pqp/client build
+
+      # Same mktemp-wrangler pattern as deploy-web.yml, for the same reasons:
+      # wrangler is installed outside the pnpm workspace (npm + workspace:*
+      # fails in client/), and the deploy RUNS FROM client/ so that
+      # client/functions/_middleware.ts is picked up. --branch=staging makes
+      # this a Pages branch deploy of the existing `pqp` project, which lands at
+      # https://staging.pqp-3yr.pages.dev without touching production.
+      - name: Deploy to Cloudflare Pages (branch staging)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "::error::Missing secret CLOUDFLARE_API_TOKEN"
+            exit 1
+          fi
+          if [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "::error::Missing secret CLOUDFLARE_ACCOUNT_ID"
+            exit 1
+          fi
+          TMP="$(mktemp -d)"
+          (cd "$TMP" && npm init -y >/dev/null && npm install wrangler@4 --no-fund --no-audit)
+          cd "$GITHUB_WORKSPACE/client"
+          "$TMP/node_modules/.bin/wrangler" pages deploy dist \
+            --project-name=pqp --branch=staging --commit-dirty=true
+
+      # Same tripwire as deploy-web.yml: the /@handle middleware is only useful
+      # if it is in the bundle and can find the API.
+      - name: Verify the profile middleware shipped
+        run: |
+          test -f "$GITHUB_WORKSPACE/client/functions/_middleware.ts" \
+            || { echo "::error::client/functions/_middleware.ts is missing — /@handle will not unfurl"; exit 1; }
+          test -f "$GITHUB_WORKSPACE/client/dist/edge-config.json" \
+            || { echo "::error::dist/edge-config.json was not emitted — the middleware cannot find the API"; exit 1; }
+          grep -q '"apiUrl":"http' "$GITHUB_WORKSPACE/client/dist/edge-config.json" \
+            || { echo "::error::edge-config.json has no apiUrl — VITE_API_URL was empty at build time"; exit 1; }
+
+  api:
+    name: Build & deploy API (Fly, pqp-api-staging)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve commit
+        id: commit
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Check deploy environment
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_STAGING }}
+        run: |
+          if [ -z "$FLY_API_TOKEN" ]; then
+            echo "::error::Missing secret FLY_API_TOKEN_STAGING. Create a deploy token scoped to the staging app (fly tokens create deploy -a pqp-api-staging) and run: gh secret set FLY_API_TOKEN_STAGING"
+            exit 1
+          fi
+
+      - name: Install flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      # --ha=false and rolling for the same reason as prod: the server is
+      # single-process by design (see fly.staging.toml / fly.toml headers), and
+      # even on staging two machines would be two disjoint chat servers.
+      # -e APP_VERSION stamps the commit so /health can report it and the verify
+      # step below can read it back.
+      - name: Deploy
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_STAGING }}
+        run: |
+          flyctl deploy \
+            --config fly.staging.toml \
+            --app pqp-api-staging \
+            --remote-only \
+            --ha=false \
+            --strategy rolling \
+            --wait-timeout 15m \
+            -e APP_VERSION="${{ steps.commit.outputs.sha }}"
+
+      # A green deploy step only proves Fly accepted a build; /health is the
+      # only surface that says what code is actually serving (every /api/*
+      # route answers 401 before it routes). The curl also wakes the machine if
+      # auto-stop already parked it.
+      - name: Verify the deployed commit
+        env:
+          EXPECTED: ${{ steps.commit.outputs.sha }}
+        run: |
+          for attempt in $(seq 1 40); do
+            body=$(curl -fsS --max-time 10 "https://pqp-api-staging.fly.dev/health" || echo '{}')
+            got=$(printf '%s' "$body" | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')
+            if [ "$got" = "$EXPECTED" ]; then
+              echo "staging API is serving $got"
+              exit 0
+            fi
+            echo "attempt $attempt: serving '${got:-unknown}', want '$EXPECTED'"
+            sleep 15
+          done
+          echo "::error::Staging API never reported the deployed commit. It is probably still serving the previous build."
+          exit 1

@@ -1,0 +1,67 @@
+# Staging
+
+A full staging environment: real Clerk auth, real Postgres, real Fly and Pages, zero overlap with production users or data. Use it to try a change against hosted infrastructure without restarting `pqp-api` or touching pqp.gg.
+
+## URLs
+
+| Piece | URL |
+|---|---|
+| Web (Pages branch deploy of project `pqp`) | https://staging.pqp-3yr.pages.dev |
+| API (Fly.io app `pqp-api-staging`, region `gru`) | https://pqp-api-staging.fly.dev |
+| WebSocket | `wss://pqp-api-staging.fly.dev/ws` |
+| Health | `GET https://pqp-api-staging.fly.dev/health` |
+
+## What staging is (and is not)
+
+- **Separate users.** Auth is a Clerk DEVELOPMENT instance (`pk_test` / `sk_test`). Accounts, sessions and origins are fully disjoint from production Clerk. Your prod account does not exist here; sign up again.
+- **Separate, empty database.** Database `pqp_staging` on the existing Fly Managed Postgres cluster `pqp-db`. The schema self-applies at boot via `server/src/schema.sql` (`initDb()` in `server/src/db.ts`); there is no migration step and nothing to run by hand.
+- **No S3, so no attachments.** `GET /api/attachments/config` reports disabled and the client hides the attach button, same as any self-host without `S3_*`.
+- **No TURN.** Cross-NAT voice may fail on staging; same-network voice works. This is the known STUN-only limitation (CLAUDE.md pitfall 1), accepted here to keep staging cheap.
+- **No analytics or ads tags.** The build omits Umami, Google Ads and the APK click beacon on purpose; staging traffic must not pollute production numbers.
+- **Scales to zero.** `fly.staging.toml` sets `auto_stop_machines = "stop"` and `min_machines_running = 0`, so the machine parks when idle and the first request after an idle period takes a few seconds while it boots. Production deliberately keeps min 1 because a stop drops every live WebSocket; staging accepts that trade.
+
+## How to deploy
+
+Both jobs (web and API) run in parallel from `.github/workflows/deploy-staging.yml`; neither blocks the other, and neither waits for CI.
+
+```bash
+# Option A: the long-lived branch
+git push origin my-branch:staging     # or merge to staging and push
+
+# Option B: try any ref without touching the staging branch
+gh workflow run deploy-staging.yml --ref my-feature-branch
+```
+
+A deploy to staging never restarts production: the workflow only talks to `pqp-api-staging` and to the `staging` branch alias of the Pages project.
+
+## Resetting the staging database
+
+Drop and recreate `pqp_staging` on the `pqp-db` cluster; the next boot recreates the whole schema from `server/src/schema.sql`.
+
+```bash
+fly postgres connect -a pqp-db
+# then, in psql (nothing else connects to pqp_staging except the staging app):
+#   DROP DATABASE pqp_staging;
+#   CREATE DATABASE pqp_staging;
+fly apps restart pqp-api-staging
+```
+
+If the drop is refused because the staging app holds connections, stop its machine first (`fly machine stop -a pqp-api-staging`) or terminate the backends in psql.
+
+## Credentials that back it (names only, never values)
+
+| Where | Name | What |
+|---|---|---|
+| GitHub Actions secret | `FLY_API_TOKEN_STAGING` | Deploy token scoped to `pqp-api-staging` |
+| GitHub Actions secrets | `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` | Shared with the production web deploy |
+| GitHub repo variable | `STAGING_CLERK_PUBLISHABLE_KEY` | Clerk dev `pk_test`; public by definition, so a variable, not a secret |
+| Fly secrets on `pqp-api-staging` | `DATABASE_URL` | Points at `pqp_staging` on `pqp-db` |
+| Fly secrets on `pqp-api-staging` | `CLERK_SECRET_KEY` | The dev instance `sk_test`, never the prod key |
+| Fly secrets on `pqp-api-staging` | `CORS_ALLOWED_ORIGINS`, `CLERK_AUTHORIZED_PARTIES` | The staging Pages origin |
+
+## Known caveats
+
+- **Canonical URLs point at production.** Marketing and blog routes pin their canonical tag to https://pqp.gg (`client/src/lib/marketing-meta.ts`, `client/src/lib/blog-meta.ts`), so staging pages carry prod canonicals. Harmless for testing; it only means staging marketing pages are not independently indexable, which is a feature.
+- **Game connections do not work.** Steam, Battle.net and Twitch OAuth apps are registered for the production origin only; the staging origin has no provider registrations, so those linking flows will fail or stay hidden.
+- **First request after idle is slow.** A parked machine takes a few seconds to wake. If a probe or test suite hits a timeout, retry once before suspecting the deploy.
+- **Staging shares the `pqp-db` cluster with production's database.** Different database, same Postgres machines. Do not point load tests at staging expecting them to be free; heavy load shows up on the shared cluster.
