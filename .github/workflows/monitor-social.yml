@@ -1,6 +1,7 @@
 name: Monitor (social)
 
-# "Did we say something out there that is no longer true?" — once a day.
+# "Did we say something out there that is no longer true?" — hourly, every
+# 15 min during peak Brazilian social hours (lunch + evening prime time).
 #
 # This workflow exists because of one incident: a published Reddit comment was
 # still telling people screen share had no audio, weeks after that stopped being
@@ -26,10 +27,15 @@ name: Monitor (social)
 
 on:
   schedule:
-    # 12:23 UTC ≈ 09:23 in São Paulo. Off the hour on purpose (GitHub queues a
-    # flood at :00), and after monitor-limits so two anonymous Reddit calls in
-    # the same minute cannot rate-limit each other.
-    - cron: "23 12 * * *"
+    # Hourly off-peak, at :23 (off the hour on purpose — GitHub queues a flood
+    # at :00). Excludes the peak UTC hours below so the two entries don't
+    # double up in the same hour.
+    - cron: "23 2-14,17-21 * * *"
+    # Every 15 min during peak Brazilian social hours: lunch (12:00-14:00 BRT)
+    # and evening prime time (19:00-23:00 BRT) = 15:00-16:59 and 22:00-01:59
+    # UTC (BRT = UTC-3). Still anonymous RSS/read calls, same rate-limit
+    # profile as monitor-limits just at higher frequency in these windows.
+    - cron: "*/15 15,16,22,23,0,1 * * *"
   workflow_dispatch:
     inputs:
       dry_run:
