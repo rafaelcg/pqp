@@ -27,7 +27,15 @@ jobs:
           POSTGRES_DB: pqp
         ports:
           - 5432:5432
+        # CI data is disposable, so keep postgres off the runner's disk.
+        # The DB-backed suites are commit-latency-bound (thousands of tiny
+        # transactions and truncates, each an fsync), and hosted-runner disk
+        # latency varies wildly between VMs: the same Test step measured 3m06
+        # on one runner and 14+ min (cancelled) on another, with identical
+        # container args. tmpfs makes the fsync a memory write, which removes
+        # that lottery for the unit suites and the e2e shards alike.
         options: >-
+          --tmpfs /var/lib/postgresql/data
           --health-cmd "pg_isready -U pqp"
           --health-interval 5s
           --health-timeout 5s
@@ -137,7 +145,15 @@ jobs:
           POSTGRES_DB: pqp
         ports:
           - 5432:5432
+        # CI data is disposable, so keep postgres off the runner's disk.
+        # The DB-backed suites are commit-latency-bound (thousands of tiny
+        # transactions and truncates, each an fsync), and hosted-runner disk
+        # latency varies wildly between VMs: the same Test step measured 3m06
+        # on one runner and 14+ min (cancelled) on another, with identical
+        # container args. tmpfs makes the fsync a memory write, which removes
+        # that lottery for the unit suites and the e2e shards alike.
         options: >-
+          --tmpfs /var/lib/postgresql/data
           --health-cmd "pg_isready -U pqp"
           --health-interval 5s
           --health-timeout 5s
