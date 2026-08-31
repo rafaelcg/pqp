@@ -78,6 +78,7 @@ export const ROLE_SYSTEM_KEYS = [
   "admin",
   "manager",
   "moderator",
+  "vip",
 ] as const;
 
 export type RoleSystemKey = (typeof ROLE_SYSTEM_KEYS)[number];
@@ -95,6 +96,7 @@ export const STAFF_ROLE_COLORS: Record<
   admin: "#D46A8A",
   manager: "#6BA3E8",
   moderator: "#4EC4B0",
+  vip: "#B794D4",
 };
 
 /**
@@ -109,6 +111,7 @@ export const STAFF_ROLE_NAMES: Record<
   admin: "Admin",
   manager: "Manager",
   moderator: "Moderator",
+  vip: "VIP",
 };
 
 /** Seeded staff colour, or null for homemade cargos and `@everyone`. */
@@ -151,6 +154,9 @@ export function defaultRolePermissions(
       return PERMISSION_DEFAULT_MANAGER;
     case "moderator":
       return PERMISSION_DEFAULT_MODERATOR;
+    case "vip":
+    case "owner":
+      return 0n;
     default:
       return 0n;
   }
@@ -439,10 +445,7 @@ export const roleSchema = z.object({
   permissions: permissionBitfieldSchema,
   position: z.number().int(),
   isEveryone: z.boolean(),
-  systemKey: z
-    .enum(["everyone", "owner", "admin", "manager", "moderator"])
-    .nullable()
-    .default(null),
+  systemKey: z.enum(ROLE_SYSTEM_KEYS).nullable().default(null),
   showBadge: z.boolean().default(true),
 });
 

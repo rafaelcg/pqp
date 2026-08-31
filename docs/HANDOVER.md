@@ -8,7 +8,7 @@ Cold-start status for agents and humans. Companion: [`../CLAUDE.md`](../CLAUDE.m
 
 - **Repo:** https://github.com/rafaelcg/pqp
 - **Model:** servers (invite codes) → public/private channels → text chat + full-mesh voice
-- **Roles:** `owner` / `admin` / `member` compatibility rank plus a staff ladder of cargos (`Owner`, `Admin`/`Adm`, `Manager`/`Gerente`, `Moderator`/`Mod`, `@everyone`). Assignment is checkboxes on the profile card. Seeded staff cargos paint gold / wine / blue / teal unless a colour was already set. A translated seed name yields to a homemade cargo that already uses that label. Nicknames are display-only.
+- **Roles:** `owner` / `admin` / `member` compatibility rank plus a staff ladder of cargos (`Owner`, `Admin`/`Adm`, `Manager`/`Gerente`, `Moderator`/`Mod`, `VIP`, `@everyone`). Assignment is checkboxes on the profile card. Seeded staff cargos paint gold / wine / blue / teal / lilac unless a colour was already set. Bot is an account mark (`users.is_character`), not a cargo. A translated seed name yields to a homemade cargo that already uses that label. Nicknames are display-only.
 
 ## Live endpoints (hosted)
 
@@ -39,6 +39,8 @@ pnpm workspaces: `client/` · `server/` · `packages/shared/` · `electron/`
 ```bash
 docker compose up -d postgres
 pnpm install && pnpm dev          # :5173 + :3001
+# With DEV_AUTH_BYPASS, boot seeds Sandbox (dummy members). DEV_SEED=false skips.
+# Point TEST_DATABASE_URL at pqp_test so Vitest cannot truncate this database.
 pnpm electron:dev                 # desktop shell vs Vite
 
 # Optional profiles

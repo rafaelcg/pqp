@@ -88,6 +88,7 @@ describe("sanitiseImportedRoleName", () => {
     expect(sanitiseImportedRoleName("Owner", used)).toBe(null);
     expect(sanitiseImportedRoleName("Manager", used)).toBe(null);
     expect(sanitiseImportedRoleName("Moderator", used)).toBe(null);
+    expect(sanitiseImportedRoleName("VIP", used)).toBe(null);
     expect(sanitiseImportedRoleName("everyone", used)).toBe(null);
     expect(sanitiseImportedRoleName("🎉", used)).toBe(null);
   });

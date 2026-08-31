@@ -13,6 +13,7 @@ import {
 } from "./auth/clerk.js";
 import { closePool, getPool, initDb } from "./db.js";
 import { closeApnsSessions } from "./services/apns.js";
+import { seedDevHall } from "./services/dev-seed.js";
 import { closeBus, INSTANCE_ID, setBusTransport } from "./lib/bus.js";
 import { createPostgresBusTransport } from "./lib/bus-postgres.js";
 import {
@@ -554,6 +555,9 @@ async function main() {
   httpServer.listen(PORT, () => {
     console.log(`pqp server listening on http://localhost:${PORT}`);
     console.log(`WebSocket: ws://localhost:${PORT}/ws`);
+    void seedDevHall({ port: PORT }).catch((error) => {
+      console.error("[dev-seed] failed:", error);
+    });
   });
 }
 

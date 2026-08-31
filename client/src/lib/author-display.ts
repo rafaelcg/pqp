@@ -3,14 +3,36 @@
  * the username half of a `name#1234` tag when the roster did not send one.
  */
 
-/** Quiet glyphs next to a name: rank, then a bot mark for character accounts. */
-export type IdentityMark = "owner" | "admin" | "bot";
+/** Quiet glyphs next to a name: one staff cargo, then a bot mark. */
+export type IdentityMark =
+  | "owner"
+  | "admin"
+  | "manager"
+  | "moderator"
+  | "vip"
+  | "bot";
+
+export type RankBadges = {
+  ownerBadge: boolean;
+  adminBadge: boolean;
+  managerBadge: boolean;
+  moderatorBadge: boolean;
+  vipBadge: boolean;
+};
+
+const EMPTY_BADGES: RankBadges = {
+  ownerBadge: false,
+  adminBadge: false,
+  managerBadge: false,
+  moderatorBadge: false,
+  vipBadge: false,
+};
 
 /**
  * Which marks belong next to a name. A webhook is a posting mechanism, not a
- * member, so it keeps the separate chip and gets none of these. Owner and
- * admin are mutually exclusive ranks; a character can still hold one, and then
- * both marks show.
+ * member, so it keeps the separate chip and gets none of these. Staff cargos
+ * are one glyph: the highest held (owner, admin, manager, moderator, VIP).
+ * A character can still hold one, and then both marks show.
  */
 export function identityMarks(input: {
   rank?: "owner" | "admin" | "member" | null;
@@ -20,6 +42,9 @@ export function identityMarks(input: {
   ownerBadge?: boolean;
   /** Shield from the Admin cargo, not from compatibility rank (Managers share that rank). */
   adminBadge?: boolean;
+  managerBadge?: boolean;
+  moderatorBadge?: boolean;
+  vipBadge?: boolean;
 }): IdentityMark[] {
   if (input.isWebhook) {
     return [];
@@ -31,6 +56,12 @@ export function identityMarks(input: {
     marks.push("owner");
   } else if (admin) {
     marks.push("admin");
+  } else if (input.managerBadge) {
+    marks.push("manager");
+  } else if (input.moderatorBadge) {
+    marks.push("moderator");
+  } else if (input.vipBadge) {
+    marks.push("vip");
   }
   if (input.isCharacter) {
     marks.push("bot");
@@ -38,20 +69,36 @@ export function identityMarks(input: {
   return marks;
 }
 
+function isVipRoleName(name: string | undefined): boolean {
+  return name?.trim().toLowerCase() === "vip";
+}
+
 export function rankBadges(
   roleIds: readonly string[] | undefined,
   roles: readonly {
     id: string;
+    name?: string;
     systemKey?: string | null;
     showBadge?: boolean;
   }[],
-): { ownerBadge: boolean; adminBadge: boolean } {
+): RankBadges {
   const held = new Set(roleIds ?? []);
+  if (held.size === 0) {
+    return EMPTY_BADGES;
+  }
   const owner = roles.find((role) => role.systemKey === "owner");
   const admin = roles.find((role) => role.systemKey === "admin");
+  const manager = roles.find((role) => role.systemKey === "manager");
+  const moderator = roles.find((role) => role.systemKey === "moderator");
+  const vip =
+    roles.find((role) => role.systemKey === "vip") ??
+    roles.find((role) => isVipRoleName(role.name));
   return {
     ownerBadge: !!owner && held.has(owner.id) && owner.showBadge !== false,
     adminBadge: !!admin && held.has(admin.id),
+    managerBadge: !!manager && held.has(manager.id),
+    moderatorBadge: !!moderator && held.has(moderator.id),
+    vipBadge: !!vip && held.has(vip.id),
   };
 }
 

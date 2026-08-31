@@ -151,7 +151,7 @@ describeDb("staff ladder", () => {
     const { serverId } = await makeServer();
     await getPool().query(
       `INSERT INTO roles (server_id, name, permissions, position, is_everyone, mentionable, hoist, color)
-       VALUES ($1, 'VIP', 0, 1, FALSE, FALSE, TRUE, '#ff00aa')`,
+       VALUES ($1, 'Friends', 0, 1, FALSE, FALSE, TRUE, '#ff00aa')`,
       [serverId],
     );
     const listed = await call<{
@@ -170,9 +170,10 @@ describeDb("staff ladder", () => {
     expect(byKey.admin!.color).toBe(STAFF_ROLE_COLORS.admin);
     expect(byKey.manager!.color).toBe(STAFF_ROLE_COLORS.manager);
     expect(byKey.moderator!.color).toBe(STAFF_ROLE_COLORS.moderator);
+    expect(byKey.vip!.color).toBe(STAFF_ROLE_COLORS.vip);
     expect(byKey.everyone!.color).toBeNull();
     expect(
-      listed.body.roles.find((role) => role.name === "VIP")?.color,
+      listed.body.roles.find((role) => role.name === "Friends")?.color,
     ).toBe("#ff00aa");
   });
 
@@ -184,7 +185,7 @@ describeDb("staff ladder", () => {
     );
     await getPool().query(
       `INSERT INTO roles (server_id, name, permissions, position, is_everyone, mentionable, hoist)
-       VALUES ($1, 'VIP', 0, 1, FALSE, FALSE, TRUE),
+       VALUES ($1, 'Friends', 0, 1, FALSE, FALSE, TRUE),
               ($1, 'Moderator', 0, 2, FALSE, FALSE, TRUE)`,
       [serverId],
     );
@@ -203,7 +204,7 @@ describeDb("staff ladder", () => {
         .filter((role) => role.systemKey)
         .map((role) => [role.systemKey, role]),
     );
-    const vip = listed.body.roles.find((role) => role.name === "VIP")!;
+    const friends = listed.body.roles.find((role) => role.name === "Friends")!;
     const homemade = listed.body.roles.find(
       (role) => role.name === "Moderator" && role.systemKey === null,
     )!;
@@ -212,11 +213,43 @@ describeDb("staff ladder", () => {
     )!;
     expect(seededMod.name).toBe("Moderator_2");
     expect(seededMod.color).toBe(STAFF_ROLE_COLORS.moderator);
-    expect(vip.position).toBeLessThan(homemade.position);
-    expect(homemade.position).toBeLessThan(byKey.moderator!.position);
+    expect(friends.position).toBeLessThan(homemade.position);
+    expect(homemade.position).toBeLessThan(byKey.vip!.position);
+    expect(byKey.vip!.position).toBeLessThan(byKey.moderator!.position);
     expect(byKey.moderator!.position).toBeLessThan(byKey.manager!.position);
     expect(byKey.manager!.position).toBeLessThan(byKey.admin!.position);
     expect(byKey.admin!.position).toBeLessThan(byKey.owner!.position);
+  });
+
+  it("claims an existing VIP cargo instead of inserting VIP_2", async () => {
+    const { serverId } = await makeServer();
+    await getPool().query(
+      `DELETE FROM roles WHERE server_id = $1 AND system_key = 'vip'`,
+      [serverId],
+    );
+    await getPool().query(
+      `INSERT INTO roles (server_id, name, permissions, position, is_everyone, mentionable, hoist, color)
+       VALUES ($1, 'VIP', 0, 1, FALSE, FALSE, TRUE, '#ff00aa')`,
+      [serverId],
+    );
+    await getPool().query(`SELECT pqp_ensure_staff_ladder($1)`, [serverId]);
+
+    const listed = await call<{
+      roles: Array<{
+        name: string;
+        systemKey: string | null;
+        color: string | null;
+        hoist: boolean;
+      }>;
+    }>(owner, "GET", `/api/servers/${serverId}/roles`);
+    const vips = listed.body.roles.filter(
+      (role) => role.systemKey === "vip" || role.name.toLowerCase() === "vip",
+    );
+    expect(vips).toHaveLength(1);
+    expect(vips[0]!.systemKey).toBe("vip");
+    expect(vips[0]!.name).toBe("VIP");
+    expect(vips[0]!.color).toBe("#ff00aa");
+    expect(vips[0]!.hoist).toBe(true);
   });
 
   it("keeps Owner at the top even if the payload puts it last", async () => {

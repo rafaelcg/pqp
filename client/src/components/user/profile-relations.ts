@@ -2,6 +2,7 @@ import {
   canModerateMember,
   type FriendsResponse,
   type MemberRole,
+  type RoleSystemKey,
   type UserStatus,
 } from "@pqp/shared";
 import { canActOnMemberClient } from "@/lib/role-hierarchy";
@@ -40,6 +41,8 @@ export interface ProfileSubject {
   roleIds?: string[];
   /** Rank column: owner / admin / member. Compatibility only. */
   rank?: MemberRole | null;
+  /** Character accounts (the house cast). Drives the bot mark. */
+  isCharacter?: boolean;
   /**
    * The server nickname, when the opener knows it (the members panel does).
    * Prefills the card's Change-nickname prompt; absent means "unknown", not
@@ -55,7 +58,7 @@ export interface ProfileRoleChip {
   color: string | null;
   position: number;
   isEveryone: boolean;
-  systemKey?: "everyone" | "owner" | "admin" | "manager" | "moderator" | null;
+  systemKey?: RoleSystemKey | null;
   permissions?: string;
   showBadge?: boolean;
 }

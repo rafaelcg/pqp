@@ -12,6 +12,7 @@ export const ROLE_COLOR_PRESETS = [
   STAFF_ROLE_COLORS.admin,
   STAFF_ROLE_COLORS.manager,
   STAFF_ROLE_COLORS.moderator,
+  STAFF_ROLE_COLORS.vip,
   rgbBytes(201, 134, 74),
   rgbBytes(139, 126, 212),
   rgbBytes(227, 155, 138),

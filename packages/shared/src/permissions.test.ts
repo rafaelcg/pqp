@@ -92,6 +92,7 @@ describe("permission bitfields", () => {
     expect(STAFF_ROLE_COLORS.admin).toBe("#D46A8A");
     expect(STAFF_ROLE_COLORS.manager).toBe("#6BA3E8");
     expect(STAFF_ROLE_COLORS.moderator).toBe("#4EC4B0");
+    expect(STAFF_ROLE_COLORS.vip).toBe("#B794D4");
     expect(defaultRoleColor("owner")).toBe(STAFF_ROLE_COLORS.owner);
     expect(defaultRoleColor("everyone")).toBeNull();
     expect(defaultRoleColor(null)).toBeNull();
@@ -100,6 +101,7 @@ describe("permission bitfields", () => {
   it("knows the English seed names and factory permission masks", () => {
     expect(STAFF_ROLE_NAMES.owner).toBe("Owner");
     expect(defaultRoleName("owner")).toBe("Owner");
+    expect(defaultRoleName("vip")).toBe("VIP");
     expect(defaultRoleName("everyone")).toBe("everyone");
     expect(defaultRoleName(null)).toBeNull();
     expect(defaultRolePermissions("everyone")).toBe(PERMISSION_DEFAULT_EVERYONE);
@@ -108,6 +110,7 @@ describe("permission bitfields", () => {
     expect(defaultRolePermissions("moderator")).toBe(
       PERMISSION_DEFAULT_MODERATOR,
     );
+    expect(defaultRolePermissions("vip")).toBe(0n);
     expect(defaultRolePermissions("owner")).toBe(0n);
     expect(defaultRolePermissions(null)).toBe(0n);
   });

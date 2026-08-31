@@ -5,6 +5,7 @@ import {
   isRoleOrderLocked,
   parsePermissions,
   Permission,
+  ROLE_SYSTEM_KEYS,
   roleNameSchema,
   serializePermissions,
   type RoleSystemKey,
@@ -32,13 +33,7 @@ export interface RoleRow {
   show_badge: boolean;
 }
 
-const SYSTEM_KEYS = new Set<RoleSystemKey>([
-  "everyone",
-  "owner",
-  "admin",
-  "manager",
-  "moderator",
-]);
+const SYSTEM_KEYS = new Set<RoleSystemKey>(ROLE_SYSTEM_KEYS);
 
 function asSystemKey(value: string | null): RoleSystemKey | null {
   if (value && SYSTEM_KEYS.has(value as RoleSystemKey)) {

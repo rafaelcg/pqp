@@ -50,7 +50,18 @@ export async function seedDefaultRoles(
   );
   await db.query(
     `INSERT INTO roles (server_id, name, permissions, position, is_everyone, system_key, mentionable, hoist, show_badge, color)
-     VALUES ($1, $2, $3, 1, FALSE, 'moderator', FALSE, TRUE, TRUE, $4)
+     VALUES ($1, $2, $3, 1, FALSE, 'vip', FALSE, TRUE, TRUE, $4)
+     ON CONFLICT DO NOTHING`,
+    [
+      serverId,
+      STAFF_ROLE_NAMES.vip,
+      serializePermissions(0n),
+      STAFF_ROLE_COLORS.vip,
+    ],
+  );
+  await db.query(
+    `INSERT INTO roles (server_id, name, permissions, position, is_everyone, system_key, mentionable, hoist, show_badge, color)
+     VALUES ($1, $2, $3, 2, FALSE, 'moderator', FALSE, TRUE, TRUE, $4)
      ON CONFLICT DO NOTHING`,
     [
       serverId,
@@ -61,7 +72,7 @@ export async function seedDefaultRoles(
   );
   await db.query(
     `INSERT INTO roles (server_id, name, permissions, position, is_everyone, system_key, mentionable, hoist, show_badge, color)
-     VALUES ($1, $2, $3, 2, FALSE, 'manager', FALSE, TRUE, TRUE, $4)
+     VALUES ($1, $2, $3, 3, FALSE, 'manager', FALSE, TRUE, TRUE, $4)
      ON CONFLICT DO NOTHING`,
     [
       serverId,
@@ -72,7 +83,7 @@ export async function seedDefaultRoles(
   );
   await db.query(
     `INSERT INTO roles (server_id, name, permissions, position, is_everyone, system_key, mentionable, hoist, show_badge, color)
-     VALUES ($1, $2, $3, 3, FALSE, 'admin', FALSE, TRUE, TRUE, $4)
+     VALUES ($1, $2, $3, 4, FALSE, 'admin', FALSE, TRUE, TRUE, $4)
      ON CONFLICT DO NOTHING`,
     [
       serverId,
@@ -83,7 +94,7 @@ export async function seedDefaultRoles(
   );
   await db.query(
     `INSERT INTO roles (server_id, name, permissions, position, is_everyone, system_key, mentionable, hoist, show_badge, color)
-     VALUES ($1, $2, $3, 4, FALSE, 'owner', FALSE, TRUE, TRUE, $4)
+     VALUES ($1, $2, $3, 5, FALSE, 'owner', FALSE, TRUE, TRUE, $4)
      ON CONFLICT DO NOTHING`,
     [
       serverId,

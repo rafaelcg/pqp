@@ -1156,6 +1156,7 @@ function UserProfileCard({
             size="card"
             marks={identityMarks({
               rank: subject.rank,
+              isCharacter: subject.isCharacter,
               ...rankBadges(heldIds, roles ?? []),
             })}
           />

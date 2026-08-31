@@ -46,6 +46,8 @@ pnpm electron:dev
 
 **Dev auth bypass** (no Clerk): set `DEV_AUTH_BYPASS=true` in root `.env` and `VITE_DEV_AUTH_BYPASS=true` in `client/.env`, then restart server.
 
+With the bypass on, API boot seeds a **Sandbox** hall (text + voice, dummy members, a few messages, one bot). Opt out with `DEV_SEED=false`. Vitest suites truncate: set `TEST_DATABASE_URL` to a copy (`pqp_test`), never to `DATABASE_URL`.
+
 **A second local user** (voice, watch party, DMs, friends, reactions — anything that needs two people). The bypass signs *every* browser in as one shared "Dev User", so two windows are the same account and a two-person feature looks broken rather than untested. To get a genuinely separate account, set a suffix in the second window's console **before** loading `/app`:
 
 ```js
@@ -62,7 +64,7 @@ See `.env.example`. Important names:
 
 | Area | Names |
 |---|---|
-| Server | `DATABASE_URL`, `CLERK_SECRET_KEY`, `PORT`, `DEV_AUTH_BYPASS`, `CHARACTER_ACCOUNTS_ENABLED`, `INSTANCE_MODERATOR_CLERK_IDS`, `ADMIN_METRICS_TOKEN` (machine token for `GET /api/admin/metrics`, the operator dashboard feed; see `tools/admin-dashboard/README.md`) |
+| Server | `DATABASE_URL`, `TEST_DATABASE_URL`, `CLERK_SECRET_KEY`, `PORT`, `DEV_AUTH_BYPASS`, `DEV_SEED`, `CHARACTER_ACCOUNTS_ENABLED`, `INSTANCE_MODERATOR_CLERK_IDS`, `ADMIN_METRICS_TOKEN` (machine token for `GET /api/admin/metrics`, the operator dashboard feed; see `tools/admin-dashboard/README.md`) |
 | Game connections | `PUBLIC_APP_URL`, `STEAM_WEB_API_KEY`, `BATTLENET_CLIENT_ID`, `BATTLENET_CLIENT_SECRET`, `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET` (off per provider until set; see `docs/CONNECTIONS.md`) |
 | Ambient runner (`tools/ambient`) | `PQP_API_URL`, `AMBIENT_TOKENS_FILE`, `AMBIENT_STATE_DIR`, `AMBIENT_CONFIG`, `AMBIENT_MODEL`, `ANTHROPIC_API_KEY`, `AMBIENT_KILL_SWITCH` |
 | Client | `VITE_CLERK_PUBLISHABLE_KEY`, `VITE_API_URL`, `VITE_WS_URL`, `VITE_DEV_AUTH_BYPASS`, `VITE_VOICE_BACKEND` (leave empty to follow the server; `mesh` forces peer-to-peer) |

@@ -60,6 +60,7 @@ import type {
   VoiceBackendType,
   VoiceSessionInfo,
   Webhook,
+  RoleSystemKey,
 } from "@pqp/shared";
 import { getApiBaseUrl } from "./utils";
 
@@ -951,6 +952,8 @@ export interface ServerMember {
    * instead of "everybody is".
    */
   status?: UserStatus;
+  /** Character accounts (the house cast). Drives the bot mark next to the name. */
+  isCharacter?: boolean;
 }
 
 export function memberDisplayName(member: {
@@ -1016,7 +1019,7 @@ export interface ServerRole {
   permissions: string;
   position: number;
   isEveryone: boolean;
-  systemKey: "everyone" | "owner" | "admin" | "manager" | "moderator" | null;
+  systemKey: RoleSystemKey | null;
   showBadge: boolean;
 }
 

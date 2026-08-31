@@ -115,6 +115,7 @@ export interface MessageAuthorInfo {
   roleIds?: string[];
   status?: UserStatus | null;
   username?: string | null;
+  isCharacter?: boolean;
 }
 
 export interface MessageRoleColor {
@@ -1880,6 +1881,7 @@ const MessageRow = memo(function MessageRow({
                     marks={identityMarks({
                       rank: authorInfo?.rank,
                       isWebhook: message.isWebhook,
+                      isCharacter: authorInfo?.isCharacter,
                       ...rankBadges(authorInfo?.roleIds, roles),
                     })}
                   />
@@ -2286,6 +2288,7 @@ function AuthorButton({
               author?.username ?? usernameFromTag(message.authorTag),
             roleIds: author?.roleIds,
             rank: author?.rank,
+            isCharacter: author?.isCharacter,
           },
           event.currentTarget,
         );

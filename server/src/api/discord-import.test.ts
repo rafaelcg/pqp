@@ -310,6 +310,7 @@ describeDb("discord layout import API", () => {
     expect(byName.everyone?.position).toBe(0);
     expect(byName.Mods?.position).toBe(1);
     expect(byName.VIP?.position).toBe(2);
+    expect(byName.VIP?.systemKey).toBe("vip");
     expect(byName.Moderator?.position).toBe(3);
     expect(byName.Moderator?.systemKey).toBe("moderator");
     expect(byName.Manager?.position).toBe(4);

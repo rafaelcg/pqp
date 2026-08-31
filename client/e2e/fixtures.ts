@@ -115,6 +115,7 @@ const DEFAULT_PREFERENCES = {
     incomingCall: true,
     outgoingCall: true,
   },
+  favoriteChannels: {},
 } as const;
 
 /**

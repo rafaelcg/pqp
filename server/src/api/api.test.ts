@@ -514,7 +514,7 @@ describeDb("API authorization", () => {
   });
 
   describe("permissions and nicknames", () => {
-    it("seeds @everyone, Moderator, Manager, Admin and Owner, and lets a member read the snapshot", async () => {
+    it("seeds @everyone, VIP, Moderator, Manager, Admin and Owner, and lets a member read the snapshot", async () => {
       const { serverId } = await makeServer();
       const roles = await call<{
         roles: Array<{ name: string; isEveryone: boolean; systemKey: string | null }>;
@@ -522,6 +522,7 @@ describeDb("API authorization", () => {
       expect(roles.status).toBe(200);
       const keys = new Set(roles.body.roles.map((role) => role.systemKey));
       expect(keys.has("everyone")).toBe(true);
+      expect(keys.has("vip")).toBe(true);
       expect(keys.has("moderator")).toBe(true);
       expect(keys.has("manager")).toBe(true);
       expect(keys.has("admin")).toBe(true);
