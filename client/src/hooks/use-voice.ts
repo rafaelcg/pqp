@@ -62,6 +62,9 @@ import { playCue, stopAllSoundLoops, whenCueSettled } from "@/lib/sounds";
 
 export type VoiceStatus = "idle" | "joining" | "connected";
 
+/** Aligned with the server orphan TTL (`VOICE_RESUME_TTL_MS`). */
+const VOICE_RESUME_GRACE_MS = 90_000;
+
 /**
  * One wording for "this browser cannot capture a screen", shared with the UI.
  *
@@ -457,6 +460,14 @@ export function createVoiceController(transport: RealtimeTransport) {
   // The room the user means to be in. Kept across a WS drop so we can auto-
   // rejoin on reconnect instead of ejecting them from the call.
   let intendedChannelId: string | null = null;
+  /** HMAC from the last `welcome`. Sent on the next join so the server can reattach. */
+  let resumeToken: string | null = null;
+  /**
+   * True while `/ws` is down (or a resume join is in flight) and we are keeping
+   * the mesh / LiveKit session alive. `welcome` must not hang up in this state.
+   */
+  let holdingMedia = false;
+  let resumeGraceId: ReturnType<typeof setTimeout> | null = null;
   let audioOptions: Required<
     Pick<VoiceAudioOptions, "inputDeviceId" | "inputVolume" | "processing">
   > = {
@@ -536,6 +547,33 @@ export function createVoiceController(transport: RealtimeTransport) {
       type: "join-voice-room",
       voiceChannelId,
       transports: transportCapabilities(),
+      ...(state.peerId && resumeToken
+        ? { resumePeerId: state.peerId, resumeToken }
+        : {}),
+    });
+  }
+
+  function clearResumeGrace() {
+    if (resumeGraceId) {
+      clearTimeout(resumeGraceId);
+      resumeGraceId = null;
+    }
+  }
+
+  function redeclareLocalMedia() {
+    transport.sendVoice({
+      type: "set-voice-state",
+      muted: state.isMuted,
+      deafened: state.isDeafened,
+    });
+    if (screenCaptureStream) {
+      announceSharing();
+    } else {
+      transport.sendVoice({ type: "set-sharing-screen", sharing: false });
+    }
+    transport.sendVoice({
+      type: "set-camera",
+      streamId: cameraCaptureStream?.id ?? null,
     });
   }
 
@@ -596,6 +634,9 @@ export function createVoiceController(transport: RealtimeTransport) {
    */
   function refuseTransport(failure: VoiceTransportFailure) {
     clearJoinTimeout();
+    clearResumeGrace();
+    holdingMedia = false;
+    resumeToken = null;
     joinGeneration++;
     intendedChannelId = null;
     ringOnWelcomeChannelId = null;
@@ -621,21 +662,6 @@ export function createVoiceController(transport: RealtimeTransport) {
     state.transportFailure = failure;
     state.error = translateMessage(TRANSPORT_FAILURE_KEY[failure.reason]);
     emit();
-  }
-
-  // WS dropped mid-call: the media session is dead. Tear it down but keep the
-  // mic pipeline and intendedChannelId so we can rejoin on reconnect.
-  function teardownMeshForReconnect() {
-    knownPeerIds.clear();
-    stopSpeakingLoop();
-    disposeRemoteAnalysers();
-    manager?.dispose();
-    manager = null;
-    void teardownSfu();
-    state.peerId = null;
-    state.remotePeers = [];
-    state.self = null;
-    state.speakingPeerIds = [];
   }
 
   function snapshot(): VoiceState {
@@ -1098,6 +1124,21 @@ export function createVoiceController(transport: RealtimeTransport) {
     if (!sessionProvider) {
       return false;
     }
+    if (sfu?.isConnected() && state.usingSfu && state.peerId === peerId) {
+      for (const peer of peers) {
+        identities.set(peer.peerId, toIdentity(peer));
+      }
+      if (screenCaptureStream) {
+        announceSharing();
+      }
+      if (cameraCaptureStream) {
+        transport.sendVoice({
+          type: "set-camera",
+          streamId: cameraCaptureStream.id,
+        });
+      }
+      return true;
+    }
     try {
       const session = await sessionProvider(voiceChannelId, peerId);
       if (!session) {
@@ -1208,6 +1249,72 @@ export function createVoiceController(transport: RealtimeTransport) {
     }
   }
 
+  function leaveCall() {
+    const wasInLobby =
+      state.status === "connected" || state.status === "joining";
+    stopAllSoundLoops();
+    if (wasInLobby) {
+      playCue("voiceLeave");
+    }
+    clearJoinTimeout();
+    clearResumeGrace();
+    holdingMedia = false;
+    resumeToken = null;
+    joinGeneration++;
+    intendedChannelId = null;
+    ringOnWelcomeChannelId = null;
+    knownPeerIds.clear();
+    stopSpeakingLoop();
+    const closingAnalysers = [...remoteAnalysers.values()];
+    remoteAnalysers.clear();
+    transport.sendVoice({ type: "leave-voice-room" });
+    manager?.dispose();
+    manager = null;
+    void teardownSfu();
+    const closingPipeline = pipeline;
+    pipeline = null;
+    stopMicTracks(closingPipeline);
+    releaseScreenCapture();
+    releaseCameraCapture();
+    pushToTalkHeld = false;
+    state = {
+      status: "idle",
+      peerId: null,
+      remotePeers: [],
+      isMuted: false,
+      isDeafened: false,
+      inputMode: state.inputMode,
+      isTransmitting: false,
+      error: null,
+      voiceChannelId: null,
+      self: null,
+      speakingPeerIds: [],
+      occupancy: state.occupancy,
+      peerVolumes: state.peerVolumes,
+      usingSfu: false,
+      transportFailure: null,
+      roomTransport: null,
+      isSharingScreen: false,
+      screenSharePeerIds: [],
+      focusedScreenPeerId: null,
+      audibleScreenPeerIds: [],
+      localScreenStream: null,
+      isSharingScreenAudio: false,
+      isSharingSystemAudio: false,
+      incomingCalls: state.incomingCalls,
+      isCameraOn: false,
+      localCameraStream: null,
+      callDeclinedUserIds: [],
+    };
+    void whenCueSettled().then(() => {
+      closeMicContext(closingPipeline);
+      for (const entry of closingAnalysers) {
+        entry.dispose();
+      }
+    });
+    emit();
+  }
+
   function handleSignaling(message: VoiceSignalingMessage) {
     switch (message.type) {
       case "voice-roster":
@@ -1225,23 +1332,32 @@ export function createVoiceController(transport: RealtimeTransport) {
         // peer-left can't linger as a trusted signaling source. Safe against
         // dropping a valid peer: the server sends peer-joined before the roster
         // on the same ordered socket, and only our own room's roster resets it.
+        //
+        // While holding media across a signaling blip, a roster can arrive
+        // before resume welcome (fresh process: empty room). Absence is not
+        // departure: union ids, do not clear, do not tear down PCs.
         if (message.voiceChannelId === state.voiceChannelId) {
-          knownPeerIds.clear();
-          for (const participant of message.participants) {
-            if (participant.peerId !== state.peerId) {
-              knownPeerIds.add(participant.peerId);
+          if (holdingMedia) {
+            for (const participant of message.participants) {
+              if (participant.peerId !== state.peerId) {
+                knownPeerIds.add(participant.peerId);
+              }
             }
+          } else {
+            knownPeerIds.clear();
+            for (const participant of message.participants) {
+              if (participant.peerId !== state.peerId) {
+                knownPeerIds.add(participant.peerId);
+              }
+            }
+            if (message.transport) {
+              state.roomTransport = message.transport;
+            }
+            applyScreenShareRoster(message.participants);
+            applyCameraStreamIds(message.participants);
+            applyScreenAudioStreamIds(message.participants);
+            applySharingScreen(message.participants);
           }
-          if (message.transport) {
-            state.roomTransport = message.transport;
-          }
-          applyScreenShareRoster(message.participants);
-          // Mesh camera classification rides the roster — see the banner.
-          applyCameraStreamIds(message.participants);
-          applyScreenAudioStreamIds(message.participants);
-          // Last: it drops every video stream that is not the camera, so the
-          // camera has to be announced by the time it runs.
-          applySharingScreen(message.participants);
         }
         emit();
         break;
@@ -1270,9 +1386,47 @@ export function createVoiceController(transport: RealtimeTransport) {
       case "welcome": {
         // Drop a welcome that arrives after we already gave up (join timeout)
         // or left — otherwise it would flip us back to "connected" with no mic.
-        if (state.status !== "joining") {
+        if (state.status === "idle") {
           transport.sendVoice({ type: "leave-voice-room" });
           return;
+        }
+        if (message.resumeToken) {
+          resumeToken = message.resumeToken;
+        }
+
+        const welcomePeers = message.peers;
+        const channelId = message.voiceChannelId;
+        const peerId = message.peerId;
+        const roomTransport = message.transport ?? legacyRoomTransport;
+        const transportChanged =
+          state.roomTransport !== null &&
+          roomTransport !== state.roomTransport;
+        const isResume =
+          Boolean(message.resumed) &&
+          peerId === state.peerId &&
+          !transportChanged;
+
+        if (isResume && (holdingMedia || state.status === "connected")) {
+          holdingMedia = false;
+          clearResumeGrace();
+          state.peerId = peerId;
+          state.voiceChannelId = channelId;
+          state.self = message.self;
+          state.roomTransport = roomTransport;
+          state.status = "connected";
+          for (const peer of welcomePeers) {
+            knownPeerIds.add(peer.peerId);
+          }
+          applyScreenShareRoster([message.self, ...welcomePeers]);
+          redeclareLocalMedia();
+          emit();
+          break;
+        }
+
+        holdingMedia = false;
+        clearResumeGrace();
+        if (state.status === "connected") {
+          state.status = "joining";
         }
         knownPeerIds.clear();
         state.peerId = message.peerId;
@@ -1280,16 +1434,10 @@ export function createVoiceController(transport: RealtimeTransport) {
         state.self = message.self;
         state.transportFailure = null;
 
-        const welcomePeers = message.peers;
         for (const peer of welcomePeers) {
           knownPeerIds.add(peer.peerId);
         }
         applyScreenShareRoster([message.self, ...welcomePeers]);
-        const channelId = message.voiceChannelId;
-        const peerId = message.peerId;
-        // The server owns this. We never re-derive it, and we never substitute
-        // the other transport when ours fails.
-        const roomTransport = message.transport ?? legacyRoomTransport;
         state.roomTransport = roomTransport;
 
         // Rejoin/channel-switch: tear the previous session down before building
@@ -1370,7 +1518,22 @@ export function createVoiceController(transport: RealtimeTransport) {
           reason: "unsupported",
         });
         break;
-      case "peer-joined":
+      case "voice-join-refused":
+        if (
+          message.voiceChannelId !== intendedChannelId &&
+          message.voiceChannelId !== state.voiceChannelId
+        ) {
+          return;
+        }
+        holdingMedia = false;
+        resumeToken = null;
+        clearResumeGrace();
+        if (state.status !== "idle") {
+          leaveCall();
+        }
+        break;
+      case "peer-joined": {
+        const alreadyKnown = knownPeerIds.has(message.peer.peerId);
         knownPeerIds.add(message.peer.peerId);
         identities.set(message.peer.peerId, toIdentity(message.peer));
         manager?.connectToPeer(message.peer.peerId, toIdentity(message.peer));
@@ -1386,8 +1549,11 @@ export function createVoiceController(transport: RealtimeTransport) {
           message.peer.peerId,
           message.peer.sharingScreen,
         );
-        playCue("voiceJoin");
+        if (!alreadyKnown) {
+          playCue("voiceJoin");
+        }
         break;
+      }
       case "peer-left":
         knownPeerIds.delete(message.peerId);
         identities.delete(message.peerId);
@@ -1465,6 +1631,14 @@ export function createVoiceController(transport: RealtimeTransport) {
     }
   }
 
+  if (typeof globalThis.window?.addEventListener === "function") {
+    globalThis.window.addEventListener("pagehide", () => {
+      if (intendedChannelId && state.status !== "idle") {
+        transport.sendVoice({ type: "leave-voice-room" });
+      }
+    });
+  }
+
   return {
     onStateChange(cb: (next: VoiceState) => void) {
       listener = cb;
@@ -1514,6 +1688,11 @@ export function createVoiceController(transport: RealtimeTransport) {
         state.status === "connected" &&
         state.voiceChannelId !== null &&
         state.voiceChannelId !== voiceChannelId;
+      if (switching) {
+        resumeToken = null;
+        holdingMedia = false;
+        clearResumeGrace();
+      }
       // Rings outrank samples if they overlap; kill them before the click cue.
       stopAllSoundLoops();
       if (switching) {
@@ -1606,100 +1785,51 @@ export function createVoiceController(transport: RealtimeTransport) {
     },
 
     leave() {
-      const wasInLobby =
-        state.status === "connected" || state.status === "joining";
-      stopAllSoundLoops();
-      if (wasInLobby) {
-        playCue("voiceLeave");
-      }
-      clearJoinTimeout();
-      joinGeneration++;
-      intendedChannelId = null;
-      ringOnWelcomeChannelId = null;
-      knownPeerIds.clear();
-      stopSpeakingLoop();
-      const closingAnalysers = [...remoteAnalysers.values()];
-      remoteAnalysers.clear();
-      transport.sendVoice({ type: "leave-voice-room" });
-      manager?.dispose();
-      manager = null;
-      void teardownSfu();
-      const closingPipeline = pipeline;
-      pipeline = null;
-      stopMicTracks(closingPipeline);
-      releaseScreenCapture();
-      releaseCameraCapture();
-      pushToTalkHeld = false;
-      state = {
-        status: "idle",
-        peerId: null,
-        remotePeers: [],
-        isMuted: false,
-        isDeafened: false,
-        // The input mode is a user preference, not call state: it survives
-        // leaving, exactly as the device and volume choices do.
-        inputMode: state.inputMode,
-        isTransmitting: false,
-        error: null,
-        voiceChannelId: null,
-        self: null,
-        speakingPeerIds: [],
-        occupancy: state.occupancy,
-        peerVolumes: state.peerVolumes,
-        usingSfu: false,
-        transportFailure: null,
-        roomTransport: null,
-        isSharingScreen: false,
-        screenSharePeerIds: [],
-        focusedScreenPeerId: null,
-        audibleScreenPeerIds: [],
-        localScreenStream: null,
-        isSharingScreenAudio: false,
-    isSharingSystemAudio: false,
-        // Invitations from OTHER conversations are not our call state and
-        // survive hanging up, the way a second phone line keeps ringing.
-        incomingCalls: state.incomingCalls,
-        isCameraOn: false,
-        localCameraStream: null,
-        callDeclinedUserIds: [],
-      };
-      void whenCueSettled().then(() => {
-        closeMicContext(closingPipeline);
-        for (const entry of closingAnalysers) {
-          entry.dispose();
-        }
-      });
-      emit();
+      leaveCall();
     },
 
-    /** WS connection lost mid-call: keep the mic + intent, drop the dead mesh. */
+    /** WS connection lost mid-call: keep media, reattach on the next welcome. */
     notifyDisconnected() {
       if (state.status === "idle" || !intendedChannelId) {
         return;
       }
-      clearJoinTimeout();
-      teardownMeshForReconnect();
-      // Show "joining" (reconnecting) rather than kicking the user to idle.
-      state.status = "joining";
+      holdingMedia = true;
+      clearResumeGrace();
+      resumeGraceId = setTimeout(() => {
+        resumeGraceId = null;
+        if (holdingMedia) {
+          leaveCall();
+        }
+      }, VOICE_RESUME_GRACE_MS);
       emit();
     },
 
-    /** WS reconnected: auto-rejoin the room so the call resumes seamlessly. */
+    /** WS reconnected: resume the same peer id, or rejoin if we have no token. */
     async notifyReconnected() {
       if (!intendedChannelId || state.status === "idle") {
         return;
       }
       if (!pipeline) {
-        // Mic was released (e.g. a long outage) — re-acquire via a full join.
         await this.join(intendedChannelId);
         return;
       }
-      // Mic still live: re-enter the room; welcome rebuilds the mesh with a
-      // fresh peer id and other participants reconnect to us.
+      if (holdingMedia || resumeToken) {
+        holdingMedia = true;
+        sendJoin(intendedChannelId);
+        return;
+      }
       state.status = "joining";
       emit();
       armJoinTimeout();
       sendJoin(intendedChannelId);
+    },
+
+    /** Auth is gone for good (token provider returned null). Hang up held media. */
+    notifyAuthLost() {
+      if (state.status === "idle" && !holdingMedia) {
+        return;
+      }
+      leaveCall();
     },
 
     setMuted(muted: boolean) {

@@ -52,7 +52,7 @@ const {
   evictVoiceUser,
   evictVoiceUsersExcept,
   handleVoiceMessage,
-  removeVoicePeerBySocket,
+  resetVoicePeers,
   resetVoiceRateLimits,
 } = await import("./voice.js");
 const { evictSfuRoom, evictSfuUser, evictSfuUsersExcept } = await import(
@@ -112,9 +112,8 @@ describe("voice eviction pairs mesh with SFU", () => {
 
   beforeEach(() => {
     // Peers live in module state; drop anything a previous test left behind.
-    for (const rec of sockets.splice(0)) {
-      removeVoicePeerBySocket(rec.socket);
-    }
+    sockets.length = 0;
+    resetVoicePeers();
     resetVoiceRateLimits();
     vi.mocked(evictSfuRoom).mockClear();
     vi.mocked(evictSfuUser).mockClear();

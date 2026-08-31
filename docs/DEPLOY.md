@@ -38,12 +38,20 @@ Nothing was broken and the gate behaved correctly; the PR simply did not look
 like a server change to anyone reading it.
 
 A Fly deploy is a rolling restart of a single machine, so every WebSocket goes
-with it: open chats reconnect on their own, and anyone in a call is cut off
-mid-sentence. Voice does not follow the message curve, either. Traffic
-overnight in Brazil is mostly *calls*, so "it is 2am, nobody is around" is a
-bad instinct: on 24 Aug there were 26 people in 12 rooms at 02:20Z while text
-had fallen to 11 messages an hour. Read `GET /api/admin/metrics` (`voice.participants`)
-before merging something server-relevant, rather than guessing from the clock.
+with it. Open chats reconnect on their own. **Web and Electron** keep the media
+session and reattach the same peer id within about 90 seconds, so audio should
+continue. **iOS and Android** still cold-join (new peer id, call drops) until a
+follow-up. Tabs that have not refreshed since this shipped also cold-join.
+
+The PR that added resume still drops everyone once on merge: old clients do not
+send the token. After that refresh, later API deploys should not cut web/Electron
+audio.
+
+Voice does not follow the message curve, either. Traffic overnight in Brazil is
+mostly *calls*, so "it is 2am, nobody is around" is a bad instinct: on 24 Aug
+there were 26 people in 12 rooms at 02:20Z while text had fallen to 11 messages
+an hour. Read `GET /api/admin/metrics` (`voice.participants`) before merging
+something server-relevant, rather than guessing from the clock.
 
 Client-only changes skip all of this and can ship whenever.
 

@@ -309,4 +309,70 @@ describe("createRealtimeTransport", () => {
     sockets[0]!.emit({ type: "presence-update", channelId: "c", users: [] });
     expect(received).toHaveLength(1);
   });
+
+  it("drops queued voice signaling on connection loss", async () => {
+    const transport = createRealtimeTransport();
+    transport.connect(async () => "t");
+    await flush();
+    transport.sendVoice({
+      type: "offer",
+      from: "a",
+      to: "b",
+      sdp: "v=0",
+    });
+
+    sockets[0]!.close(1006);
+    await vi.advanceTimersByTimeAsync(2_000);
+    await flush();
+    sockets[1]!.accept();
+
+    const types = sockets[1]!.sent.map((raw) => JSON.parse(raw).type);
+    expect(types).toEqual(["auth"]);
+  });
+
+  it("reconnects immediately on close 1001", async () => {
+    const transport = createRealtimeTransport();
+    transport.connect(async () => "t");
+    await flush();
+    sockets[0]!.accept();
+
+    sockets[0]!.close(1001);
+    await vi.advanceTimersByTimeAsync(0);
+    await flush();
+
+    expect(sockets).toHaveLength(2);
+  });
+
+  it("does not fire onClose for 4401", async () => {
+    let closed = 0;
+    const transport = createRealtimeTransport();
+    transport.onClose(() => {
+      closed += 1;
+    });
+    transport.connect(async () => "t");
+    await flush();
+    sockets[0]!.accept();
+
+    sockets[0]!.close(4401);
+    expect(closed).toBe(0);
+    expect(transport.getStatus()).toBe("unauthorized");
+  });
+
+  it("fires onAuthUnavailable when a later token fetch returns null", async () => {
+    let issued = 0;
+    let lost = 0;
+    const transport = createRealtimeTransport();
+    transport.onAuthUnavailable(() => {
+      lost += 1;
+    });
+    transport.connect(async () => (issued++ === 0 ? "t" : null));
+    await flush();
+    sockets[0]!.accept();
+
+    sockets[0]!.close(1006);
+    await vi.advanceTimersByTimeAsync(2_000);
+    await flush();
+
+    expect(lost).toBe(1);
+  });
 });

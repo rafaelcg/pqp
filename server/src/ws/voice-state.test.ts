@@ -54,7 +54,7 @@ vi.mock("../voice/backends.js", () => ({
 
 const {
   handleVoiceMessage,
-  removeVoicePeerBySocket,
+  resetVoicePeers,
   resetVoiceRateLimits,
   resetVoiceRoomTransports,
 } = await import("./voice.js");
@@ -123,9 +123,8 @@ describe("voice roster carries mute/deafen state", () => {
   const viewers: Recorder[] = [];
 
   beforeEach(() => {
-    for (const rec of sockets.splice(0)) {
-      removeVoicePeerBySocket(rec.socket);
-    }
+    sockets.length = 0;
+    resetVoicePeers();
     for (const rec of viewers.splice(0)) {
       deleteAuthenticatedSocket(rec.socket);
     }
@@ -305,9 +304,8 @@ describe("concurrent screen shares are capped per transport", () => {
   const viewers: Recorder[] = [];
 
   beforeEach(() => {
-    for (const rec of sockets.splice(0)) {
-      removeVoicePeerBySocket(rec.socket);
-    }
+    sockets.length = 0;
+    resetVoicePeers();
     for (const rec of viewers.splice(0)) {
       deleteAuthenticatedSocket(rec.socket);
     }

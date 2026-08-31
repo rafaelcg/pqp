@@ -92,6 +92,19 @@ export const welcomeMessageSchema = z.object({
    * there.
    */
   transport: voiceRoomTransportSchema.optional(),
+  /**
+   * True when this welcome reattached or reconstructed an existing peer id
+   * rather than minting a new one. Absent means a cold join (older servers,
+   * or a resume the server declined). A client that held media across a
+   * signaling drop uses this to skip tearing down WebRTC / LiveKit.
+   */
+  resumed: z.boolean().optional(),
+  /**
+   * Opaque HMAC the client sends back on `join-voice-room.resumeToken` so a
+   * process restart cannot be turned into "whoever saw the roster claims this
+   * id". Memory-only; a tab reload starts a cold join.
+   */
+  resumeToken: z.string().min(1).optional(),
 });
 
 export const peerJoinedMessageSchema = z.object({
@@ -127,6 +140,16 @@ export const voiceTransportUnsupportedMessageSchema = z.object({
   type: z.literal("voice-transport-unsupported"),
   voiceChannelId: z.string(),
   transport: voiceRoomTransportSchema,
+});
+
+/**
+ * Join was refused after the client asked to resume (ACL, timeout, block).
+ * A holding client must hang up rather than sit on live media outside the room.
+ * Older clients ignore an unknown type.
+ */
+export const voiceJoinRefusedMessageSchema = z.object({
+  type: z.literal("voice-join-refused"),
+  voiceChannelId: z.string().uuid(),
 });
 
 export const screenShareDeniedMessageSchema = z.object({
@@ -278,6 +301,7 @@ export const voiceSignalingMessageSchema = z.discriminatedUnion("type", [
   voiceRosterMessageSchema,
   voiceRoomFullMessageSchema,
   voiceTransportUnsupportedMessageSchema,
+  voiceJoinRefusedMessageSchema,
   screenShareDeniedMessageSchema,
   offerMessageSchema,
   answerMessageSchema,
@@ -295,6 +319,9 @@ export const voiceSignalingMessageSchema = z.discriminatedUnion("type", [
 export type VoiceParticipant = z.infer<typeof voiceParticipantSchema>;
 export type VoiceTransportUnsupportedMessage = z.infer<
   typeof voiceTransportUnsupportedMessageSchema
+>;
+export type VoiceJoinRefusedMessage = z.infer<
+  typeof voiceJoinRefusedMessageSchema
 >;
 export type WelcomeMessage = z.infer<typeof welcomeMessageSchema>;
 export type PeerJoinedMessage = z.infer<typeof peerJoinedMessageSchema>;
@@ -342,6 +369,14 @@ export const joinVoiceRoomMessageSchema = z.object({
    * leaving them on the behaviour they already had.
    */
   transports: z.array(voiceRoomTransportSchema).nonempty().optional(),
+  /**
+   * Peer id from a previous `welcome` in this channel. Optional: older clients
+   * omit it and get a new id. The server only honours it with a valid
+   * `resumeToken` (same user, same channel, unexpired).
+   */
+  resumePeerId: z.string().uuid().optional(),
+  /** HMAC issued on `welcome`. Missing or invalid → cold join, never 500. */
+  resumeToken: z.string().min(1).optional(),
 });
 
 export const leaveVoiceRoomMessageSchema = z.object({

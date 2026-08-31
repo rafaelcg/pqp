@@ -71,7 +71,7 @@ const { handleChatMessage, resetChatRateLimits } = await import(
 const {
   handleVoiceMessage,
   isSocketInVoice,
-  removeVoicePeerBySocket,
+  resetVoicePeers,
   resetVoiceRateLimits,
 } = await import("../ws/voice.js");
 
@@ -3503,7 +3503,7 @@ describeDb("API authorization", () => {
         { type: "join-voice-room", voiceChannelId: channelId },
       );
       expect(isSocketInVoice(allowed)).toBe(true);
-      removeVoicePeerBySocket(allowed);
+      resetVoicePeers();
 
       await call(admin, "POST", "/api/blocks", { userId: member.id });
       const refused = fakeSocket();

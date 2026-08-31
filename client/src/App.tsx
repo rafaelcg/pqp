@@ -1899,10 +1899,13 @@ function MainAppContent({
         });
 
         transport.onClose(() => {
-          // The server dropped our voice peer with the socket. Keep the mic and
-          // the intended room so the call resumes on reconnect instead of
-          // kicking the user out (they just see "connecting" briefly).
+          // Keep media. A Fly restart closes /ws with 1001; ICE and LiveKit do
+          // not need that socket once they are up. Resume reattaches the peer.
           voice.notifyDisconnected();
+        });
+
+        transport.onAuthUnavailable(() => {
+          voice.notifyAuthLost();
         });
 
         transport.onReady((reconnected) => {
@@ -1922,8 +1925,7 @@ function MainAppContent({
           // --- threads --- the secondary slot re-announces itself the same
           // way; the panel's window is refreshed by its next open.
           threadChat.resubscribe();
-          // The server drops a voice peer as soon as its socket closes, so the
-          // call has to be re-entered before the UI matches reality again.
+          // Join with resumePeerId before any other voice frames.
           void voice.notifyReconnected();
           if (channelId) {
             void fetchMessages(channelId)

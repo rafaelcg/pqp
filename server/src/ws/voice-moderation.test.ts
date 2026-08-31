@@ -42,7 +42,7 @@ const {
   getVoiceChannelForUser,
   handleVoiceMessage,
   notifyVoiceModeration,
-  removeVoicePeerBySocket,
+  resetVoicePeers,
   resetVoiceRateLimits,
 } = await import("./voice.js");
 const { evictSfuUser } = await import("../voice/admin.js");
@@ -98,9 +98,8 @@ describe("voice moderation helpers", () => {
   const sockets: Recorder[] = [];
 
   beforeEach(() => {
-    for (const rec of sockets.splice(0)) {
-      removeVoicePeerBySocket(rec.socket);
-    }
+    sockets.length = 0;
+    resetVoicePeers();
     resetVoiceRateLimits();
     vi.mocked(evictSfuUser).mockClear();
   });
