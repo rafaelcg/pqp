@@ -1,0 +1,120 @@
+# Fly.io configuration for the STAGING API + WebSocket server (pqp-api-staging).
+#
+# A copy of fly.toml with three deliberate differences, all about cost: staging
+# scales to zero when idle. auto_stop_machines = "stop", auto_start_machines =
+# true, min_machines_running = 0. Production keeps min 1 and auto-stop OFF on
+# purpose — a stopped machine drops every live WebSocket at once — but on
+# staging nobody is mid-call, and the price of the trade is only that the first
+# request after an idle period takes a few seconds while the machine boots.
+#
+# Deployed by .github/workflows/deploy-staging.yml (push to the `staging`
+# branch, or workflow_dispatch on any ref). Operator doc: docs/STAGING.md.
+# Everything not commented below matches fly.toml — keep the two files in sync
+# when the production one changes.
+#
+# THE ONE THING TO KNOW BEFORE EDITING THIS FILE (same as fly.toml)
+# -----------------------------------------------------------------
+# This server is single-process BY DESIGN. WebSocket connection state, presence,
+# voice-room membership and rate-limit buckets all live in in-process Maps
+# (server/src/ws/, server/src/lib/rate-limit.ts). There is no pub/sub layer.
+# A SECOND MACHINE SILENTLY SPLITS THE USERBASE — even on staging that makes
+# every two-person test look broken. Machine count is not expressible in this
+# file; the guard rail is `--ha=false` on every deploy (CI does this).
+
+app = "pqp-api-staging"
+
+# Same region as production and as the pqp-db cluster that holds pqp-staging.
+# A cross-region DB would make staging slower than prod for no reason.
+primary_region = "gru"
+
+# The server installs SIGTERM/SIGINT handlers that close every socket with
+# code 1001 ("going away") and drain the HTTP server and pg pool before exit
+# (server/src/index.ts). Give it room to finish.
+kill_signal = "SIGTERM"
+kill_timeout = 30
+
+[build]
+  # Same multi-stage image production builds, unchanged. The runner stage sets
+  # NODE_ENV=production, runs as the `node` user and CMDs
+  # `node server/dist/index.js`.
+  dockerfile = "Dockerfile"
+
+[env]
+  # Non-secret configuration lives here (in git, reviewable). Everything with a
+  # credential in it goes through `fly secrets set -a pqp-api-staging`. Do NOT
+  # also set these as secrets: a secret of the same name shadows [env].
+
+  # Must agree with `internal_port` below; a silent disagreement presents as
+  # "deploy succeeded, health check never passes".
+  PORT = "3001"
+
+  # Exactly one proxy (fly-proxy) sits in front of this process. See fly.toml
+  # for the full rationale; raise only if another proxy goes in front of Fly.
+  TRUST_PROXY = "true"
+
+  # pg pool ceiling per process. Staging shares the pqp-db cluster with
+  # production's database, so keep this modest.
+  PG_POOL_MAX = "10"
+
+[http_service]
+  internal_port = 3001
+  force_https = true
+
+  # STAGING DIFFERENCE. Production says "off" here because a stopped machine
+  # terminates every live WebSocket; on staging that is an acceptable trade for
+  # not paying for an idle machine. Clients reconnect with backoff anyway
+  # (client/src/lib/realtime.ts). "stop", not "suspend": a suspended machine
+  # restores in-process presence/voice Maps from a snapshot that no longer
+  # matches any connected client.
+  auto_stop_machines = "stop"
+
+  # STAGING DIFFERENCE. The proxy wakes the machine on the first request after
+  # an idle stop. Note this only ever restarts the one machine that exists —
+  # fly-proxy never creates machines, so this is not the second-machine risk.
+  auto_start_machines = true
+
+  # STAGING DIFFERENCE. Zero: idle staging costs nothing.
+  min_machines_running = 0
+
+  processes = ["app"]
+
+  [http_service.concurrency]
+    # `connections`, NOT `requests` — every signed-in client holds one
+    # WebSocket for its whole session. Same numbers as prod; the defaults
+    # (soft 20 / hard 25) 503 the 26th connection on an idle app.
+    type = "connections"
+    soft_limit = 400
+    hard_limit = 600
+
+  # Health check. `/health` does a real `SELECT 1`, so a 200 means "process up
+  # AND database reachable". Same slack timings as prod: a tight interval turns
+  # a two-second Postgres blip into a failed check.
+  [[http_service.checks]]
+    method = "GET"
+    path = "/health"
+    protocol = "http"
+    interval = "30s"
+    timeout = "5s"
+    # initDb() runs the whole of server/src/schema.sql before listen(), and the
+    # first boot against the empty pqp-staging database is the slow one. Do not
+    # shrink this to where a cold start looks like a failure.
+    grace_period = "30s"
+
+[[vm]]
+  # Same size as prod so staging behaves like prod: signalling and chat only,
+  # media never touches this process.
+  size = "shared-cpu-1x"
+  memory = "1gb"
+
+[deploy]
+  # rolling + max_unavailable = 1 on a single machine: replace it in place.
+  # Do NOT switch to "bluegreen" or "canary" — both run a second machine
+  # alongside the first, the split-brain this app cannot survive.
+  strategy = "rolling"
+  max_unavailable = 1
+
+  # No release_command. Schema application is initDb() at boot
+  # (server/src/db.ts reads server/src/schema.sql), which is idempotent and
+  # runs before listen() — it is also what creates the whole schema in
+  # pqp-staging on the very first boot; a release_command would be a second
+  # machine talking to the same database for no benefit.

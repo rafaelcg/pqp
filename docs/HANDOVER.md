@@ -22,6 +22,8 @@ Cold-start status for agents and humans. Companion: [`../CLAUDE.md`](../CLAUDE.m
 
 ICE config: `GET https://api.pqp.gg/api/ice-servers`.
 
+A staging environment exists (Clerk dev instance, Fly app `pqp-api-staging`, Pages branch deploy at https://staging.pqp-3yr.pages.dev); it is documented in [`STAGING.md`](./STAGING.md).
+
 **The API moved off Railway.** A stale copy may still answer at
 `api-production-206d.up.railway.app`, and nothing points at it. This table said
 so for three weeks after it stopped being true, which is the kind of error that
