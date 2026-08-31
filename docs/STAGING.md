@@ -36,14 +36,15 @@ A deploy to staging never restarts production: the workflow only talks to `pqp-a
 
 ## Resetting the staging database
 
-Delete and recreate `pqp-staging` on the `pqp-db` cluster with the Managed Postgres CLI; the next boot recreates the whole schema from `server/src/schema.sql`. This has to go through `fly mpg`, not psql: the cluster's `schema_admin` role cannot `CREATE DATABASE` over a psql connection, and `fly mpg databases create` is how the database was created in the first place.
+Wipe the contents of `pqp-staging` in place; the next boot recreates the whole schema from `server/src/schema.sql`. Dropping the database itself is not an option on Managed Postgres: the `schema_admin` role owns neither the database nor the `public` schema (both belong to `postgres`, and there is no `fly mpg databases delete`), so `DROP DATABASE` and `DROP SCHEMA public` are both refused. What the role can drop is everything it created, which is exactly the app's tables and the `pgcrypto` extension (the app's `fly-user` login resolves to `schema_admin` on this cluster).
 
 ```bash
-fly machine stop -a pqp-api-staging          # so nothing holds connections
-fly mpg databases delete pqp-staging          # pick the pqp-db cluster when prompted
-fly mpg databases create --name pqp-staging   # same cluster
-fly apps restart pqp-api-staging              # boot applies the schema
+fly machine stop -a pqp-api-staging     # so nothing holds connections or recreates tables mid-wipe
+echo 'DROP OWNED BY current_user;' | fly mpg connect 82ylg01v4n30zx19 -d pqp-staging
+fly machine start -a pqp-api-staging    # boot reapplies schema.sql, including CREATE EXTENSION pgcrypto
 ```
+
+`82ylg01v4n30zx19` is the `pqp-db` cluster id (`fly mpg list -o personal` to look it up). Double-check the `-d pqp-staging` flag before running anything here: the same command without it connects to `fly-db`, which is production.
 
 ## Credentials that back it (names only, never values)
 
