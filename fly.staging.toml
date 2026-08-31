@@ -23,7 +23,7 @@
 
 app = "pqp-api-staging"
 
-# Same region as production and as the pqp-db cluster that holds pqp_staging.
+# Same region as production and as the pqp-db cluster that holds pqp-staging.
 # A cross-region DB would make staging slower than prod for no reason.
 primary_region = "gru"
 
@@ -96,7 +96,7 @@ kill_timeout = 30
     interval = "30s"
     timeout = "5s"
     # initDb() runs the whole of server/src/schema.sql before listen(), and the
-    # first boot against the empty pqp_staging database is the slow one. Do not
+    # first boot against the empty pqp-staging database is the slow one. Do not
     # shrink this to where a cold start looks like a failure.
     grace_period = "30s"
 
@@ -116,5 +116,5 @@ kill_timeout = 30
   # No release_command. Schema application is initDb() at boot
   # (server/src/db.ts reads server/src/schema.sql), which is idempotent and
   # runs before listen() — it is also what creates the whole schema in
-  # pqp_staging on the very first boot; a release_command would be a second
+  # pqp-staging on the very first boot; a release_command would be a second
   # machine talking to the same database for no benefit.

@@ -14,7 +14,7 @@ A full staging environment: real Clerk auth, real Postgres, real Fly and Pages, 
 ## What staging is (and is not)
 
 - **Separate users.** Auth is a Clerk DEVELOPMENT instance (`pk_test` / `sk_test`). Accounts, sessions and origins are fully disjoint from production Clerk. Your prod account does not exist here; sign up again.
-- **Separate, empty database.** Database `pqp_staging` on the existing Fly Managed Postgres cluster `pqp-db`. The schema self-applies at boot via `server/src/schema.sql` (`initDb()` in `server/src/db.ts`); there is no migration step and nothing to run by hand.
+- **Separate, empty database.** Database `pqp-staging` (hyphen: Fly Managed Postgres rejects underscores in database names) on the existing cluster `pqp-db`, created with `fly mpg databases create --name pqp-staging`. The schema self-applies at boot via `server/src/schema.sql` (`initDb()` in `server/src/db.ts`); there is no migration step and nothing to run by hand.
 - **No S3, so no attachments.** `GET /api/attachments/config` reports disabled and the client hides the attach button, same as any self-host without `S3_*`.
 - **No TURN.** Cross-NAT voice may fail on staging; same-network voice works. This is the known STUN-only limitation (CLAUDE.md pitfall 1), accepted here to keep staging cheap.
 - **No analytics or ads tags.** The build omits Umami, Google Ads and the APK click beacon on purpose; staging traffic must not pollute production numbers.
@@ -36,17 +36,14 @@ A deploy to staging never restarts production: the workflow only talks to `pqp-a
 
 ## Resetting the staging database
 
-Drop and recreate `pqp_staging` on the `pqp-db` cluster; the next boot recreates the whole schema from `server/src/schema.sql`.
+Delete and recreate `pqp-staging` on the `pqp-db` cluster with the Managed Postgres CLI; the next boot recreates the whole schema from `server/src/schema.sql`. This has to go through `fly mpg`, not psql: the cluster's `schema_admin` role cannot `CREATE DATABASE` over a psql connection, and `fly mpg databases create` is how the database was created in the first place.
 
 ```bash
-fly postgres connect -a pqp-db
-# then, in psql (nothing else connects to pqp_staging except the staging app):
-#   DROP DATABASE pqp_staging;
-#   CREATE DATABASE pqp_staging;
-fly apps restart pqp-api-staging
+fly machine stop -a pqp-api-staging          # so nothing holds connections
+fly mpg databases delete pqp-staging          # pick the pqp-db cluster when prompted
+fly mpg databases create --name pqp-staging   # same cluster
+fly apps restart pqp-api-staging              # boot applies the schema
 ```
-
-If the drop is refused because the staging app holds connections, stop its machine first (`fly machine stop -a pqp-api-staging`) or terminate the backends in psql.
 
 ## Credentials that back it (names only, never values)
 
@@ -55,7 +52,7 @@ If the drop is refused because the staging app holds connections, stop its machi
 | GitHub Actions secret | `FLY_API_TOKEN_STAGING` | Deploy token scoped to `pqp-api-staging` |
 | GitHub Actions secrets | `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` | Shared with the production web deploy |
 | GitHub repo variable | `STAGING_CLERK_PUBLISHABLE_KEY` | Clerk dev `pk_test`; public by definition, so a variable, not a secret |
-| Fly secrets on `pqp-api-staging` | `DATABASE_URL` | Points at `pqp_staging` on `pqp-db` |
+| Fly secrets on `pqp-api-staging` | `DATABASE_URL` | Points at `pqp-staging` on `pqp-db` |
 | Fly secrets on `pqp-api-staging` | `CLERK_SECRET_KEY` | The dev instance `sk_test`, never the prod key |
 | Fly secrets on `pqp-api-staging` | `CORS_ALLOWED_ORIGINS`, `CLERK_AUTHORIZED_PARTIES` | The staging Pages origin |
 
