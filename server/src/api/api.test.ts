@@ -2068,33 +2068,55 @@ describeDb("API authorization", () => {
       gifs: Array<Record<string, unknown>>;
     }
 
-    /** One upstream entry, shaped like GIPHY's — trimmed to what we read. */
-    function giphyEntry(overrides: Record<string, unknown> = {}) {
+    /** One upstream entry, shaped like Klipy's — trimmed to what we read. */
+    function klipyEntry(overrides: Record<string, unknown> = {}) {
       return {
-        id: "abc123",
+        id: 8041071659142944,
+        slug: "hello-hi-662",
         title: "a cat  ",
-        images: {
-          downsized_medium: {
-            url: "https://media3.giphy.com/media/abc123/giphy.gif?cid=track&ct=g",
-            width: "480",
-            height: "270",
+        type: "gif",
+        file: {
+          md: {
+            gif: {
+              url: "https://static.klipy.com/ii/abc123/14/af/8GCrVAB7.gif",
+              width: 480,
+              height: 270,
+              size: 1405000,
+            },
           },
-          fixed_width: {
-            url: "https://media3.giphy.com/media/abc123/200w.gif?cid=track",
-            width: "200",
-            height: "112",
-          },
-          fixed_width_still: {
-            url: "https://media3.giphy.com/media/abc123/200w_s.gif",
-            width: "200",
-            height: "112",
+          sm: {
+            gif: {
+              url: "https://static.klipy.com/ii/abc123/14/af/y6iepZM7.gif",
+              width: 220,
+              height: 124,
+              size: 206000,
+            },
+            jpg: {
+              url: "https://static.klipy.com/ii/abc123/14/af/LyWpim71.jpg",
+              width: 220,
+              height: 124,
+              size: 6000,
+            },
           },
         },
         ...overrides,
       };
     }
 
-    /** URLs GIPHY was asked for, so the forced parameters can be asserted. */
+    /** The page wrapper every Klipy answer arrives in. */
+    function klipyPage(items: unknown[]) {
+      return {
+        result: true,
+        data: {
+          data: items,
+          current_page: 1,
+          per_page: 24,
+          has_next: false,
+        },
+      };
+    }
+
+    /** URLs Klipy was asked for, so the forced parameters can be asserted. */
     let upstreamCalls: string[];
     let upstreamReply: () => Response;
     const realFetch = globalThis.fetch;
@@ -2102,16 +2124,16 @@ describeDb("API authorization", () => {
     beforeEach(() => {
       upstreamCalls = [];
       upstreamReply = () =>
-        new Response(JSON.stringify({ data: [giphyEntry()] }), {
+        new Response(JSON.stringify(klipyPage([klipyEntry()])), {
           headers: { "Content-Type": "application/json" },
         });
 
-      process.env.GIPHY_API_KEY = "test-key";
-      // Only GIPHY is intercepted: `call()` reaches the API under test with the
+      process.env.KLIPY_API_KEY = "test-key";
+      // Only Klipy is intercepted: `call()` reaches the API under test with the
       // same global, and stubbing that too would break every request here.
       vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
         const url = String(input);
-        if (!url.startsWith("https://api.giphy.com/")) {
+        if (!url.startsWith("https://api.klipy.com/")) {
           return realFetch(input, init);
         }
         upstreamCalls.push(url);
@@ -2121,47 +2143,79 @@ describeDb("API authorization", () => {
 
     afterEach(() => {
       vi.restoreAllMocks();
-      delete process.env.GIPHY_API_KEY;
+      delete process.env.KLIPY_API_KEY;
     });
 
-    it("normalises upstream results to the wire shape and drops tracking", async () => {
+    it("normalises upstream results to the wire shape", async () => {
       const res = await call<GifsBody>(owner, "GET", "/api/gifs/search?q=cat");
       expect(res.status).toBe(200);
       expect(res.body.gifs).toEqual([
         {
-          id: "abc123",
-          // The chosen URL becomes a message body that outlives the session
-          // that fetched it, so the per-request analytics id must not ride along.
-          url: "https://media3.giphy.com/media/abc123/giphy.gif",
-          previewUrl: "https://media3.giphy.com/media/abc123/200w.gif",
-          previewStillUrl: "https://media3.giphy.com/media/abc123/200w_s.gif",
-          width: 200,
-          height: 112,
+          // Klipy ids are numbers; the wire shape has always carried strings.
+          id: "8041071659142944",
+          url: "https://static.klipy.com/ii/abc123/14/af/8GCrVAB7.gif",
+          previewUrl: "https://static.klipy.com/ii/abc123/14/af/y6iepZM7.gif",
+          previewStillUrl:
+            "https://static.klipy.com/ii/abc123/14/af/LyWpim71.jpg",
+          width: 220,
+          height: 124,
           title: "a cat",
         },
       ]);
     });
 
-    it("forces a pg-13 rating on every upstream call", async () => {
+    it("forces the pg-13-equivalent content filter on every upstream call", async () => {
       await call(owner, "GET", "/api/gifs/search?q=cat");
       await call(owner, "GET", "/api/gifs/trending");
       expect(upstreamCalls).toHaveLength(2);
       for (const url of upstreamCalls) {
-        expect(new URL(url).searchParams.get("rating")).toBe("pg-13");
+        // Klipy's `low` admits G, PG and PG-13, the set the old forced
+        // GIPHY `rating=pg-13` admitted.
+        expect(new URL(url).searchParams.get("content_filter")).toBe("low");
       }
+    });
+
+    it("never identifies the searcher to the provider", async () => {
+      await call(owner, "GET", "/api/gifs/search?q=cat");
+      // `customer_id` is Klipy's per-user attribution hook; this proxy is
+      // anonymous on purpose, so it must never be sent.
+      expect(new URL(upstreamCalls[0]!).searchParams.has("customer_id")).toBe(
+        false,
+      );
     });
 
     it("never leaks the API key to the caller", async () => {
       const res = await call(owner, "GET", "/api/gifs/search?q=cat");
       expect(JSON.stringify(res.body)).not.toContain("test-key");
-      expect(new URL(upstreamCalls[0]!).searchParams.get("api_key")).toBe(
-        "test-key",
+      // On Klipy the key is a path segment, not a query parameter.
+      expect(upstreamCalls[0]).toContain(
+        "https://api.klipy.com/api/v1/test-key/gifs/search",
       );
     });
 
     it("clamps the page size a caller may ask for", async () => {
       await call(owner, "GET", "/api/gifs/trending?limit=5000");
-      expect(new URL(upstreamCalls[0]!).searchParams.get("limit")).toBe("50");
+      expect(new URL(upstreamCalls[0]!).searchParams.get("per_page")).toBe(
+        "50",
+      );
+    });
+
+    it("drops a sponsored entry rather than rendering it as a result", async () => {
+      // No ad parameters are ever sent, so none should arrive; if one does,
+      // the picker must not show it unmarked.
+      upstreamReply = () =>
+        new Response(
+          JSON.stringify(
+            klipyPage([
+              klipyEntry({ type: "ad", file: undefined }),
+              klipyEntry(),
+            ]),
+          ),
+          { headers: { "Content-Type": "application/json" } },
+        );
+
+      const res = await call<GifsBody>(owner, "GET", "/api/gifs/trending");
+      expect(res.body.gifs).toHaveLength(1);
     });
 
     it("drops a result whose media host is outside the allowlist", async () => {
@@ -2169,23 +2223,29 @@ describeDb("API authorization", () => {
       // <img> pointed at it in every reader's browser.
       upstreamReply = () =>
         new Response(
-          JSON.stringify({
-            data: [
-              giphyEntry({
-                images: {
-                  original: { url: "https://evil.example/x.gif", width: "1", height: "1" },
+          JSON.stringify(
+            klipyPage([
+              klipyEntry({
+                file: {
+                  md: {
+                    gif: {
+                      url: "https://evil.example/x.gif",
+                      width: 1,
+                      height: 1,
+                    },
+                  },
                 },
               }),
-              giphyEntry(),
-            ],
-          }),
+              klipyEntry(),
+            ]),
+          ),
           { headers: { "Content-Type": "application/json" } },
         );
 
       const res = await call<GifsBody>(owner, "GET", "/api/gifs/trending");
       expect(res.body.gifs).toHaveLength(1);
       expect(res.body.gifs[0]!.url).toBe(
-        "https://media3.giphy.com/media/abc123/giphy.gif",
+        "https://static.klipy.com/ii/abc123/14/af/8GCrVAB7.gif",
       );
     });
 
@@ -2202,7 +2262,7 @@ describeDb("API authorization", () => {
     });
 
     it("reports itself disabled and refuses with 503 when no key is set", async () => {
-      delete process.env.GIPHY_API_KEY;
+      delete process.env.KLIPY_API_KEY;
 
       const config = await call<{ enabled: boolean }>(
         owner,
@@ -2220,7 +2280,7 @@ describeDb("API authorization", () => {
 
     it("treats a placeholder key as no key at all", async () => {
       // `.env.example` copies are the usual source of this.
-      process.env.GIPHY_API_KEY = "your-giphy-api-key";
+      process.env.KLIPY_API_KEY = "your-klipy-api-key";
       const res = await call(owner, "GET", "/api/gifs/trending");
       expect(res.status).toBe(503);
     });

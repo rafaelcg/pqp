@@ -1919,7 +1919,7 @@
   "chat.reactionsSummary": "Reactions: {summary}",
   "chat.gifAlt": "GIF: {alt}",
   "chat.webhookPosted": "Posted by a webhook, not a member",
-  "gif.search": "Search GIFs",
+  "gif.search": "Search KLIPY",
   "gif.results": "GIF results",
   "gif.unavailable": "GIF search is unavailable right now.",
   "gif.noMatch": "Nothing matched that.",

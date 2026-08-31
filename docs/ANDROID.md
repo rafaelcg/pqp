@@ -1607,7 +1607,7 @@ picker GIF is always one somebody sent from the web or the iOS client.
   animated decoder registered answers a GIF with its first frame and no error
   anywhere. Both attachment routes are covered, because both arrive as
   `image/gif` and go through the same decoder: the picker's (`POST
-  /api/channels/:id/attachments/gif`, a row holding a GIPHY URL) and a `.gif`
+  /api/channels/:id/attachments/gif`, a row holding a GIF provider URL) and a `.gif`
   uploaded as a file, which since **Attachments** can now be uploaded from here
   too. `AnimatedImageDecoder` is registered from API 28 and `GifDecoder` below
   it, because `minSdk` here is 26 and the former is `@RequiresApi(28)`.

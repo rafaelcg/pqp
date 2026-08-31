@@ -11,7 +11,7 @@ export const privacyEn: LegalDocument = {
   description:
     "How pqp.gg handles personal data: what we collect, our legal bases, where it is processed, retention, and your rights under the LGPD and UK data protection law.",
   heading: "Privacy Policy",
-  updated: "25 August 2026",
+  updated: "31 August 2026",
   sections: [
     {
       id: "intro",
@@ -493,10 +493,12 @@ export const privacyEn: LegalDocument = {
               address and which page you loaded.
             </li>
             <li>
-              <strong>GIPHY and Tenor</strong> — GIF search runs through our
-              server (so the provider sees the search term from us, not from
-              you), but the GIF image itself loads straight from their CDN, so
-              they see the IP address of everyone who views it in the channel.
+              <strong>KLIPY, GIPHY and Tenor</strong> — GIF search runs through
+              our server and is answered by KLIPY (so the provider sees the
+              search term from us, not from you), but the GIF image itself
+              loads straight from the provider&apos;s CDN, so it sees the IP
+              address of everyone who views it in the channel. GIFs picked
+              before the switch to KLIPY still load from GIPHY or Tenor.
             </li>
             <li>
               <strong>DiceBear</strong> — the preset avatar images in Settings

@@ -12,6 +12,10 @@ import { z } from "zod";
  * picker would post messages that render as bare URLs.
  */
 const GIF_MEDIA_HOSTS: RegExp[] = [
+  // Klipy is the live search provider; every picker result points here.
+  /^static\.klipy\.com$/,
+  // GIPHY and Tenor no longer back the search, but stored messages hot-link
+  // them and must keep rendering.
   /^media\d*\.giphy\.com$/,
   /^i\.giphy\.com$/,
   /^media\d*\.tenor\.com$/,
@@ -56,8 +60,8 @@ export function isGifMediaUrl(value: string): boolean {
  * Only the message body is stored, so the picker's own still URL is long gone
  * by render time and this is the only thing a reduced-motion reader can be
  * shown without first downloading the animation. GIPHY publishes `giphy_s.gif`
- * alongside every `giphy.gif`; Tenor has no such convention, hence the null,
- * which the client answers with click-to-play instead.
+ * alongside every `giphy.gif`; Klipy and Tenor name their stills unguessably,
+ * hence the null, which the client answers with click-to-play instead.
  */
 export function stillGifUrl(value: string): string | null {
   const url = parseMediaUrl(value);

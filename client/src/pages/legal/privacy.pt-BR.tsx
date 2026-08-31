@@ -27,7 +27,7 @@ export const privacyPtBr: LegalDocument = {
   description:
     "Como o pqp.gg trata dados pessoais: o que a gente coleta, as bases legais, onde os dados são tratados, por quanto tempo ficam e os seus direitos sob a LGPD e a lei de proteção de dados do Reino Unido.",
   heading: "Política de Privacidade",
-  updated: "25 de agosto de 2026",
+  updated: "31 de agosto de 2026",
   sections: [
     {
       id: "intro",
@@ -492,7 +492,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "who-sees",
-      sourceRev: "a1e5b534",
+      sourceRev: "fac060aa",
       heading: "Quem mais vê os seus dados",
       body: (
         <>
@@ -538,10 +538,12 @@ export const privacyPtBr: LegalDocument = {
               qual página você abriu.
             </li>
             <li>
-              <strong>GIPHY e Tenor</strong> — a busca de GIF passa pelo nosso
-              servidor (então o provedor vê o termo buscado vindo da gente, não
-              de você), mas a imagem do GIF em si carrega direto da CDN deles,
-              então eles veem o endereço IP de todo mundo que vê o GIF no canal.
+              <strong>KLIPY, GIPHY e Tenor</strong> — a busca de GIF passa pelo
+              nosso servidor e é respondida pelo KLIPY (então o provedor vê o
+              termo buscado vindo da gente, não de você), mas a imagem do GIF
+              em si carrega direto da CDN do provedor, então ele vê o endereço
+              IP de todo mundo que vê o GIF no canal. GIFs escolhidos antes da
+              troca para o KLIPY ainda carregam do GIPHY ou do Tenor.
             </li>
             <li>
               <strong>DiceBear</strong> — as imagens de avatar prontas em{" "}

@@ -109,12 +109,12 @@ These live on the API, never in the client build. Names only — see [`../.env.e
 | Hardening | `PG_POOL_MAX`, `DATABASE_SSL` | Recommended |
 | ICE / TURN | one of the options in [`deploy-railway.md`](./deploy-railway.md) | For cross-NAT voice |
 | SFU | `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` | Only past the mesh limit |
-| GIF search | `GIPHY_API_KEY` | Optional feature |
+| GIF search | `KLIPY_API_KEY` | Optional feature |
 | **Game connections** | `PUBLIC_APP_URL`, `STEAM_WEB_API_KEY`, `BATTLENET_CLIENT_ID`, `BATTLENET_CLIENT_SECRET`, `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET` | Optional, per provider — [`CONNECTIONS.md`](./CONNECTIONS.md) |
 | **Attachments** | `S3_ENDPOINT`, `S3_BUCKET`, `S3_REGION`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_FORCE_PATH_STYLE` | Optional feature |
 | Attachments (tuning) | `S3_PUBLIC_BASE_URL`, `MAX_ATTACHMENT_BYTES`, `ATTACHMENT_URL_TTL_SECONDS` | Optional |
 
-Attachments are **off** until the six `S3_*` names above are set: `GET /api/attachments/config` reports `{"enabled":false}` and the client hides the attach button, the same way GIF search behaves without `GIPHY_API_KEY`.
+Attachments are **off** until the six `S3_*` names above are set: `GET /api/attachments/config` reports `{"enabled":false}` and the client hides the attach button, the same way GIF search behaves without `KLIPY_API_KEY`.
 
 Setting the variables is not the whole job — an R2 bucket also needs a **CORS policy** or every browser upload fails while the API logs stay silent. Full walkthrough: [`ATTACHMENTS.md`](./ATTACHMENTS.md).
 

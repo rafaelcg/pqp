@@ -1815,8 +1815,9 @@ router.post(
  * Stage a picked GIF as an attachment on this channel.
  *
  * Deliberately not gated on `isAttachmentsConfigured()`. A GIF needs no bucket
- * — its bytes never leave GIPHY — and the common deployment has GIF search on
- * with S3 off, so gating this on storage would turn the GIF button into a 503
+ * — its bytes never leave the GIF host's CDN — and the common deployment has
+ * GIF search on with S3 off, so gating this on storage would turn the GIF
+ * button into a 503
  * on exactly the setup that has GIFs working.
  */
 router.post(
@@ -1839,8 +1840,8 @@ router.post(
         channelId: channelId!,
         uploaderId: user.id,
         url: body.url,
-        // GIPHY titles arrive with a trailing " GIF" and are occasionally
-        // empty; either way this is a display name, never a path.
+        // Provider titles are occasionally empty; either way this is a
+        // display name, never a path.
         filename: body.title?.trim() || "GIF",
         contentType: "image/gif",
         width: body.width,

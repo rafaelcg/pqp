@@ -247,7 +247,7 @@ export function GifPickerPanel({
       )}
 
       <p className="border-t border-border px-2.5 py-1.5 text-[11px] text-text-muted">
-        Powered by GIPHY
+        Powered by KLIPY
       </p>
     </div>
   );
