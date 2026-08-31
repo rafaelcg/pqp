@@ -384,7 +384,7 @@ describe("mapDiscordPermissions", () => {
   });
 
   it("copies named role bits and flattens category overwrites onto children", () => {
-    const vipSend = DiscordPermission.SEND_MESSAGES.toString();
+    const boostersSend = DiscordPermission.SEND_MESSAGES.toString();
     const everyoneDenyView = DISCORD_VIEW_CHANNEL.toString();
     const plan = mapGuildTemplate(
       template({
@@ -392,11 +392,11 @@ describe("mapDiscordPermissions", () => {
           EVERYONE,
           {
             id: 9,
-            name: "VIP",
+            name: "Boosters",
             color: 0,
             hoist: false,
             mentionable: false,
-            permissions: vipSend,
+            permissions: boostersSend,
           },
         ],
         channels: [
