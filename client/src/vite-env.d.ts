@@ -24,6 +24,12 @@ interface ImportMetaEnv {
    */
   readonly VITE_ANDROID_APK_URL?: string;
   /**
+   * Public POST URL that counts a tap on the Android APK button. Hosted-only:
+   * unset means the client never beacons, which is what every self-hosted
+   * build wants. See `lib/android-apk-click.ts`.
+   */
+  readonly VITE_ANDROID_APK_CLICK_URL?: string;
+  /**
    * The Google Ads advertiser id (`AW-…`) and the label of the sign-up
    * conversion action. Optional, and absent on every self-hosted build: without
    * them no Google tag is injected and nothing is ever reported. See

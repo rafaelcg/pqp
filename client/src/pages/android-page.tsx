@@ -6,6 +6,7 @@ import { MarketingNav } from "@/components/marketing/marketing-nav";
 import { Seo } from "@/components/marketing/seo";
 import { Button } from "@/components/ui/button";
 import { androidApkUrl } from "@/lib/android-apk";
+import { recordAndroidApkClick } from "@/lib/android-apk-click";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { testflightUrl } from "@/lib/testflight";
 
@@ -109,7 +110,7 @@ export function AndroidPage() {
                 {apkUrl ? (
                   <>
                     <Button asChild className="cta-lift h-12 px-8 text-base">
-                      <a href={apkUrl} rel="noopener">
+                      <a href={apkUrl} rel="noopener" onClick={() => recordAndroidApkClick()}>
                         {t("androidPage.cta")}
                       </a>
                     </Button>
@@ -208,7 +209,7 @@ export function AndroidPage() {
           {apkUrl && (
             <div className="mt-10 flex justify-center">
               <Button asChild className="cta-lift h-12 px-8 text-base">
-                <a href={apkUrl} rel="noopener">
+                <a href={apkUrl} rel="noopener" onClick={() => recordAndroidApkClick()}>
                   {t("androidPage.cta")}
                 </a>
               </Button>
