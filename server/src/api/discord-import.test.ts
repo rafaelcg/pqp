@@ -253,7 +253,7 @@ describeDb("discord layout import API", () => {
           { id: 9, name: "Mods", color: 3447003, hoist: true, mentionable: true },
           {
             id: 8,
-            name: "VIP",
+            name: "Boosters",
             color: 0,
             hoist: false,
             mentionable: false,
@@ -331,21 +331,25 @@ describeDb("discord layout import API", () => {
     );
     expect(byName.everyone?.position).toBe(0);
     expect(byName.Mods?.position).toBe(1);
-    expect(byName.VIP?.position).toBe(2);
+    expect(byName.Boosters?.position).toBe(2);
+    expect(byName.VIP?.position).toBe(3);
     expect(byName.VIP?.systemKey).toBe("vip");
-    expect(byName.Moderator?.position).toBe(3);
+    expect(byName.Moderator?.position).toBe(4);
     expect(byName.Moderator?.systemKey).toBe("moderator");
-    expect(byName.Manager?.position).toBe(4);
-    expect(byName.Admin?.position).toBe(5);
+    expect(byName.Manager?.position).toBe(5);
+    expect(byName.Admin?.position).toBe(6);
     expect(byName.Admin?.systemKey).toBe("admin");
-    expect(byName.Owner?.position).toBe(6);
+    expect(byName.Owner?.position).toBe(7);
     expect(byName.Owner?.systemKey).toBe("owner");
-    expect(BigInt(byName.VIP?.permissions ?? "0") & Permission.SEND_MESSAGES).toBe(
-      Permission.SEND_MESSAGES,
-    );
-    expect(BigInt(byName.VIP?.permissions ?? "0") & Permission.ADMINISTRATOR).toBe(
-      0n,
-    );
+    expect(
+      BigInt(byName.Boosters?.permissions ?? "0") & Permission.SEND_MESSAGES,
+    ).toBe(Permission.SEND_MESSAGES);
+    expect(
+      BigInt(byName.Boosters?.permissions ?? "0") & Permission.ADMINISTRATOR,
+    ).toBe(0n);
+    expect(
+      BigInt(byName.VIP?.permissions ?? "0") & Permission.SEND_MESSAGES,
+    ).toBe(0n);
 
     const staffOverwrites = await getPool().query<{
       allow: string;
@@ -362,8 +366,10 @@ describeDb("discord layout import API", () => {
     expect(BigInt(everyoneRow?.deny ?? "0") & Permission.VIEW_CHANNEL).toBe(
       Permission.VIEW_CHANNEL,
     );
-    const vipRow = staffOverwrites.rows.find((row) => row.name === "VIP");
-    expect(BigInt(vipRow?.allow ?? "0") & Permission.VIEW_CHANNEL).toBe(
+    const boostersRow = staffOverwrites.rows.find(
+      (row) => row.name === "Boosters",
+    );
+    expect(BigInt(boostersRow?.allow ?? "0") & Permission.VIEW_CHANNEL).toBe(
       Permission.VIEW_CHANNEL,
     );
   });
