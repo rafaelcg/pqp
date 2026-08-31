@@ -101,10 +101,12 @@ Browser/Electron → Clerk (auth)
 |---|---|---|
 | Static SPA | Cloudflare Pages project `pqp` | https://pqp-3yr.pages.dev |
 | API + WS | Fly.io app `pqp-api`, region `gru` (São Paulo) | https://api.pqp.gg — `wss://api.pqp.gg/ws` |
+| Staging SPA | Cloudflare Pages branch `staging` of project `pqp` | https://staging.pqp-3yr.pages.dev |
+| Staging API + WS | Fly.io app `pqp-api-staging`, region `gru` | https://pqp-api-staging.fly.dev — `wss://pqp-api-staging.fly.dev/ws` |
 
-CI workflows: `.github/workflows/ci.yml`, `deploy-web.yml`, `deploy-api-fly.yml` (API auto-deploys from `main` — a merged schema/endpoint change is live minutes later), `electron.yml`.
+CI workflows: `.github/workflows/ci.yml`, `deploy-web.yml`, `deploy-api-fly.yml` (API auto-deploys from `main` — a merged schema/endpoint change is live minutes later), `electron.yml`, `deploy-staging.yml` (staging web + API from the `staging` branch or `workflow_dispatch`; see `docs/STAGING.md`).
 
-**GitHub Actions secrets (names):** `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `VITE_CLERK_PUBLISHABLE_KEY`, `VITE_API_URL`, `VITE_WS_URL`.
+**GitHub Actions secrets (names):** `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `VITE_CLERK_PUBLISHABLE_KEY`, `VITE_API_URL`, `VITE_WS_URL`; staging adds secret `FLY_API_TOKEN_STAGING` and repo variable `STAGING_CLERK_PUBLISHABLE_KEY`.
 
 **API secrets on Fly (names):** `DATABASE_URL`, `CLERK_SECRET_KEY`, plus TURN/ICE vars above, `S3_*` if attachments are wanted, and `PUBLIC_APP_URL` plus `STEAM_WEB_API_KEY` / `BATTLENET_*` / `TWITCH_*` if game connections are wanted. A stale Railway copy may still answer at api-production-206d.up.railway.app; nothing points at it. Do not put Clerk secret, TURN credentials, S3 keys, or those provider secrets in Pages/client secrets.
 
@@ -126,6 +128,6 @@ CI workflows: `.github/workflows/ci.yml`, `deploy-web.yml`, `deploy-api-fly.yml`
 
 - Do not invent secret values in docs or commits.
 - Shipping and PR loop: [`AGENTS.md`](./AGENTS.md) (run locally, one feature per branch, babysit CI/Farol, do not merge unless asked, warn if the PR restarts `pqp-api`).
-- Point humans to `docs/I18N.md` for adding UI copy (i18next, `{name}` slots, `_one`/`_other`, Electron menus); `docs/HANDLES.md` for public handles, the `/@` profile page and its edge-injected SEO; `docs/CONNECTIONS.md` for Steam / Battle.net / Twitch linking; `docs/DISCORD_IMPORT.md` for copying a Discord Guild Template layout; `docs/ambient-deploy.md` for character accounts and the ambient-life runner (the house cast); `tools/support-bot/README.md` for the QG support bot, its fact file and the disclosure seam (it is a **disclosed bot**, not a resident, and the QG still gets no AI residents); `docs/CLERK_SETUP.md` for Clerk CLI setup; `docs/SSO.md` for SAML/enterprise domain joining; `docs/voice-backends.md` for SFU notes; `docs/ATTACHMENTS.md` for R2/MinIO setup; `docs/CONTENT_SAFETY.md` for image scanning, what is
+- Point humans to `docs/I18N.md` for adding UI copy (i18next, `{name}` slots, `_one`/`_other`, Electron menus); `docs/HANDLES.md` for public handles, the `/@` profile page and its edge-injected SEO; `docs/CONNECTIONS.md` for Steam / Battle.net / Twitch linking; `docs/DISCORD_IMPORT.md` for copying a Discord Guild Template layout; `docs/ambient-deploy.md` for character accounts and the ambient-life runner (the house cast); `tools/support-bot/README.md` for the QG support bot, its fact file and the disclosure seam (it is a **disclosed bot**, not a resident, and the QG still gets no AI residents); `docs/CLERK_SETUP.md` for Clerk CLI setup; `docs/STAGING.md` for the staging environment (separate Clerk dev instance, `pqp-api-staging`, Pages branch deploy); `docs/SSO.md` for SAML/enterprise domain joining; `docs/voice-backends.md` for SFU notes; `docs/ATTACHMENTS.md` for R2/MinIO setup; `docs/CONTENT_SAFETY.md` for image scanning, what is
  *not* scanned, and the CSAM reporting runbook; `docs/PWA.md` for the mobile/installable app; `docs/ANDROID.md` for the native Android client, why it is native rather than a TWA, and what is actually verified; `docs/TESTFLIGHT.md` for the iOS beta / App Review demo account; `tools/admin-dashboard/README.md` for the operator dashboard (`pqp-admin` Worker) and its `ADMIN_METRICS_TOKEN` / Basic Auth secrets.
 - Update `docs/HANDOVER.md` + `docs/PLAN_STATUS.md` when phase status changes.

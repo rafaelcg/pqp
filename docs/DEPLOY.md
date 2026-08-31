@@ -53,6 +53,7 @@ Client-only changes skip all of this and can ship whenever.
 | CI | `.github/workflows/ci.yml` | PR + push to `main` | pnpm install, build shared/server/client |
 | Deploy Web | `.github/workflows/deploy-web.yml` | push to `main`, `workflow_dispatch` | Production client → Cloudflare Pages |
 | Electron | `.github/workflows/electron.yml` | push `main`, tags `v*`, `workflow_dispatch` | Unsigned mac/win/linux artifacts |
+| Deploy Staging | `.github/workflows/deploy-staging.yml` | push to `staging`, `workflow_dispatch` on any ref | Staging client (Pages branch `staging`) + staging API (`pqp-api-staging`). Never touches production. See [`STAGING.md`](./STAGING.md) |
 
 ### Trigger deploy manually
 
