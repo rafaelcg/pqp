@@ -37,9 +37,9 @@ import {
   GIF_PAGE_MAX,
   GIF_PAGE_SIZE,
   GIF_QUERY_MAX_LENGTH,
-  MESSAGE_MAX_LENGTH,
   MESSAGE_PAGE_MAX,
   MESSAGE_PAGE_SIZE,
+  messageBodyTextSchema,
   messageSearchQuerySchema,
   removeMemberSchema,
   REPORT_PAGE_MAX,
@@ -68,7 +68,6 @@ import {
   updateCommunitySchema,
   reportStatusSchema,
   resolveReportSchema,
-  safeTextSchema,
   ssoEmailDomainSchema,
   SEARCH_PAGE_MAX,
   SEARCH_PAGE_SIZE,
@@ -3115,7 +3114,7 @@ router.get(
  * never sees what the message already has attached.
  */
 const captionEditSchema = z.object({
-  body: z.string().max(MESSAGE_MAX_LENGTH).pipe(safeTextSchema),
+  body: messageBodyTextSchema,
 });
 
 router.patch("/api/messages/:messageId", async ({ req, user }, { messageId }) => {

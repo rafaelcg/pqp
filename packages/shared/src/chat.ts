@@ -1,12 +1,11 @@
 import { z } from "zod";
 import {
   channelKindSchema,
-  MESSAGE_MAX_LENGTH,
+  messageBodyTextSchema,
   messagePinnedBySchema,
   messageReactionSchema,
   messageReplyRefSchema,
   reactionEmojiSchema,
-  safeTextSchema,
 } from "./api.js";
 import {
   attachmentSchema,
@@ -46,7 +45,7 @@ const messageCreateFrameSchema = z.object({
    * emptiness rule moves to `requireBodyOrAttachment` below instead of being
    * dropped — see there for why it cannot live on the leaf.
    */
-  body: z.string().max(MESSAGE_MAX_LENGTH).pipe(safeTextSchema),
+  body: messageBodyTextSchema,
   /**
    * Client-generated id echoed back on the broadcast so the sender can swap its
    * optimistic bubble for the stored message instead of rendering it twice.

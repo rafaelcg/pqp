@@ -177,6 +177,17 @@ export async function openApp(page: Page): Promise<void> {
   });
 }
 
+/**
+ * Camera, screen share, and push-to-talk are no-ops until the socket is
+ * connected. The slim bar appears while still joining, so waiting on it alone
+ * is not enough.
+ */
+export async function waitUntilVoiceConnected(page: Page): Promise<void> {
+  await expect(page.getByText("Voice connected")).toBeVisible({
+    timeout: 20_000,
+  });
+}
+
 /** Read a resolved CSS custom property off :root. */
 export function cssVar(page: Page, name: string): Promise<string> {
   return page.evaluate(

@@ -434,7 +434,7 @@ test("a community chip appears on a profile and the opt-out hides it", async ({
     // Waits on the rail icon rather than on a composer: the switch lives on the
     // server's own context menu, and `/app` opens with no channel selected.
     await openAs(second.page, "/app", "dep-f");
-    const icon = second.page.getByTitle(name, { exact: true });
+    const icon = second.page.getByRole("button", { name, exact: true });
     await expect(icon).toBeVisible({ timeout: 20_000 });
     await icon.click({ button: "right" });
     const hide = second.page.getByRole("menuitem", {

@@ -1,4 +1,5 @@
 import { expect, test, type Browser, type Page } from "@playwright/test";
+import { waitUntilVoiceConnected } from "./fixtures";
 
 /**
  * The DM call *stage*, measured — not assumed.
@@ -237,6 +238,38 @@ test("desktop: a 1:1 video call gives the remote person at least half the viewpo
     await expect(
       page.locator(`[data-call-tile="${pair.calleeName}"]`),
     ).not.toBeVisible();
+  } finally {
+    await callee.context.close();
+  }
+});
+
+test("desktop: a voice-only DM stays a slim bar until a camera turns on", async ({
+  page,
+  browser,
+}) => {
+  const pair = await seedConversation("stage-e", "stage-f");
+  const callee = await openCallee(browser, pair);
+
+  try {
+    await openConversation(page, pair.conversationId, pair.callerSuffix);
+    await page.getByRole("button", { name: "Start voice call", exact: true }).click();
+    // An outgoing ring owns the stage. After pickup, voice-only is the slim bar.
+    await expect(page.getByTestId("call-stage")).toBeVisible({
+      timeout: 20_000,
+    });
+    await expect(page.getByText("Calling…")).toBeVisible({ timeout: 20_000 });
+
+    await callee.page
+      .getByRole("button", { name: "Accept" })
+      .click({ timeout: 20_000 });
+    await expect(page.getByTestId("call-stage-collapsed")).toBeVisible({
+      timeout: 20_000,
+    });
+    await expect(page.getByTestId("call-stage")).toHaveCount(0);
+
+    await waitUntilVoiceConnected(page);
+    await page.getByRole("button", { name: "Turn camera on", exact: true }).click();
+    await expect(page.getByTestId("call-stage")).toBeVisible({ timeout: 20_000 });
   } finally {
     await callee.context.close();
   }

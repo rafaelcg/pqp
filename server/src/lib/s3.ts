@@ -402,6 +402,47 @@ export function presignPut(
   }).url;
 }
 
+/**
+ * PUT bytes this process already holds.
+ *
+ * The rest of storage is presign-and-forget so a 10 MiB attachment never
+ * enters Railway. Discord import icons are the exception: they are a few
+ * hundred kilobytes, fetched from a URL we constructed (not a paste), and
+ * there is no browser on that path to do the PUT. The signed headers are
+ * the same ones `presignPut` already binds.
+ */
+export async function putObject(
+  key: string,
+  body: Buffer,
+  contentType: string,
+): Promise<void> {
+  const url = presignPut(
+    key,
+    contentType,
+    body.length,
+    INTERNAL_URL_TTL_SECONDS,
+  );
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "PUT",
+      headers: {
+        "Content-Type": contentType,
+        "Content-Length": String(body.length),
+      },
+      body: new Uint8Array(body),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+  } catch (error) {
+    throw new StorageError(
+      error instanceof Error ? error.message : "Storage unreachable",
+    );
+  }
+  if (!response.ok) {
+    throw new StorageError(`Storage returned HTTP ${response.status} for PUT`);
+  }
+}
+
 export interface PresignGetOptions {
   ttlSeconds: number;
   /**

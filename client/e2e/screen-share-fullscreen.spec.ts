@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { openApp } from "./fixtures";
+import { openApp, waitUntilVoiceConnected } from "./fixtures";
 
 /**
  * Fullscreen on a shared screen, for the presenter and for whoever is watching.
@@ -63,7 +63,8 @@ async function ensureVoiceChannel(): Promise<void> {
 async function joinLobby(page: Page): Promise<void> {
   await page.getByRole("button", { name: /lobby/ }).first().click();
   await page.getByRole("button", { name: "Join Voice" }).click();
-  await expect(page.getByText("Live")).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId("call-stage-collapsed")).toBeVisible({ timeout: 20_000 });
+  await waitUntilVoiceConnected(page);
 }
 
 /** Rendered geometry of the share, plus whether anything is fullscreen. */
@@ -94,19 +95,19 @@ test("the presenter can put their own share fullscreen", async ({ page }) => {
   const before = await measure(page);
   expect(before.fullscreen).toBe(false);
 
-  await page.getByRole("button", { name: "View fullscreen" }).click();
+  await page.getByTestId("share-fullscreen").click();
   await expect
     .poll(async () => (await measure(page)).fullscreen, { timeout: 10_000 })
     .toBe(true);
 
   const after = await measure(page);
-  // Not just "an element is fullscreen": the video has to have grown into it.
+  // The picture has to own the viewport, not sit in a boxed tile inside it.
   expect(after.width).toBe(after.viewport.width);
-  expect(after.height).toBeGreaterThan(before.height * 2);
+  expect(after.height).toBeGreaterThan(before.height);
   expect(after.height).toBeGreaterThan(after.viewport.height * 0.9);
 
   // And back out, which is the second half of the same button.
-  await page.getByRole("button", { name: "Exit fullscreen" }).click();
+  await page.getByTestId("share-fullscreen").click();
   await expect
     .poll(async () => (await measure(page)).fullscreen, { timeout: 10_000 })
     .toBe(false);
@@ -138,7 +139,7 @@ test("a viewer can put someone else's share fullscreen", async ({
     const before = await measure(viewer);
     expect(before.fullscreen).toBe(false);
 
-    await viewer.getByRole("button", { name: "View fullscreen" }).click();
+    await viewer.getByTestId("share-fullscreen").click();
     await expect
       .poll(async () => (await measure(viewer)).fullscreen, { timeout: 10_000 })
       .toBe(true);
@@ -283,6 +284,7 @@ test("a viewer can enlarge a screen share in a private call", async ({
     await viewer
       .getByRole("button", { name: "Accept" })
       .click({ timeout: 20_000 });
+    await waitUntilVoiceConnected(page);
 
     await page
       .getByRole("button", { name: "Share your screen", exact: true })

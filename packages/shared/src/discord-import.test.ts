@@ -1,9 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { FRIENDS_FAMILY_TEMPLATE } from "./discord-import.fixture.js";
+import { Permission, serializePermissions } from "./permissions.js";
 import {
   DISCORD_VIEW_CHANNEL,
   DiscordImportCapError,
+  DiscordPermission,
+  discordGuildIconUrl,
+  mapDiscordPermissions,
   mapGuildTemplate,
+  mapImportedEveryonePermissions,
+  mapImportedOverwriteBits,
+  mapImportedRolePermissions,
   parseDiscordTemplateCode,
   sanitiseImportedRoleName,
 } from "./discord-import.js";
@@ -131,6 +138,23 @@ describe("mapGuildTemplate", () => {
       "Stream Room",
     ]);
     expect(plan.privateChannelNames).toEqual([]);
+    expect(
+      plan.mappedAway.some((item) => item.reason === "permissionBits"),
+    ).toBe(false);
+    expect(
+      plan.mappedAway.some((item) => item.reason === "overwrites"),
+    ).toBe(false);
+    expect(
+      plan.mappedAway.some((item) => item.reason === "serverIcon"),
+    ).toBe(false);
+    expect(plan.mappedAway.some((item) => item.reason === "bitrate")).toBe(true);
+    expect(plan.iconUrl).toBeNull();
+    expect(plan.everyonePermissions).toBe(
+      serializePermissions(
+        mapImportedEveryonePermissions(2248329584434769n),
+      ),
+    );
+    expect(plan.overwrites).toEqual([]);
   });
 
   it("marks a staff channel private when @everyone id 0 is denied VIEW", () => {
@@ -330,5 +354,126 @@ describe("mapGuildTemplate", () => {
         }),
       ),
     ).toThrow(DiscordImportCapError);
+  });
+});
+
+describe("mapDiscordPermissions", () => {
+  it("translates Discord VIEW, not pqp's bit 6, and never copies Administrator", () => {
+    expect(mapDiscordPermissions(DiscordPermission.VIEW_CHANNEL)).toBe(
+      Permission.VIEW_CHANNEL,
+    );
+    expect(mapDiscordPermissions(64n)).toBe(Permission.ADD_REACTIONS);
+    expect(
+      mapImportedRolePermissions(DiscordPermission.ADMINISTRATOR),
+    ).toBe(0n);
+    expect(
+      mapImportedEveryonePermissions(
+        DiscordPermission.ADMINISTRATOR | DiscordPermission.SEND_MESSAGES,
+      ),
+    ).toBe(Permission.SEND_MESSAGES);
+    expect(
+      mapImportedEveryonePermissions(DiscordPermission.MANAGE_GUILD),
+    ).toBe(0n);
+    expect(
+      mapImportedOverwriteBits(
+        DiscordPermission.VIEW_CHANNEL |
+          DiscordPermission.SEND_MESSAGES |
+          DiscordPermission.MANAGE_MESSAGES,
+      ),
+    ).toBe(Permission.VIEW_CHANNEL | Permission.SEND_MESSAGES);
+  });
+
+  it("copies named role bits and flattens category overwrites onto children", () => {
+    const vipSend = DiscordPermission.SEND_MESSAGES.toString();
+    const everyoneDenyView = DISCORD_VIEW_CHANNEL.toString();
+    const plan = mapGuildTemplate(
+      template({
+        roles: [
+          EVERYONE,
+          {
+            id: 9,
+            name: "VIP",
+            color: 0,
+            hoist: false,
+            mentionable: false,
+            permissions: vipSend,
+          },
+        ],
+        channels: [
+          {
+            id: 10,
+            type: 4,
+            name: "Staff",
+            position: 0,
+            parent_id: null,
+            permission_overwrites: [
+              { id: 0, type: 0, allow: "0", deny: everyoneDenyView },
+              {
+                id: 9,
+                type: 0,
+                allow: DiscordPermission.VIEW_CHANNEL.toString(),
+                deny: "0",
+              },
+            ],
+          },
+          {
+            id: 11,
+            type: 0,
+            name: "mods",
+            position: 0,
+            parent_id: 10,
+            permission_overwrites: [],
+          },
+        ],
+      }),
+    );
+    expect(plan.roles[0]?.permissions).toBe(
+      serializePermissions(Permission.SEND_MESSAGES),
+    );
+    const child = plan.overwrites.filter(
+      (row) => row.channelTemplateId === 11,
+    );
+    expect(child).toEqual(
+      expect.arrayContaining([
+        {
+          channelTemplateId: 11,
+          roleTemplateId: 0,
+          allow: "0",
+          deny: serializePermissions(Permission.VIEW_CHANNEL),
+        },
+        {
+          channelTemplateId: 11,
+          roleTemplateId: 9,
+          allow: serializePermissions(Permission.VIEW_CHANNEL),
+          deny: "0",
+        },
+      ]),
+    );
+    expect(
+      plan.overwrites.some((row) => row.channelTemplateId === 10),
+    ).toBe(false);
+  });
+
+  it("builds a Discord CDN icon URL only from a snowflake and a hash", () => {
+    expect(
+      discordGuildIconUrl("123456789012345678", "a".repeat(32)),
+    ).toBe(
+      `https://cdn.discordapp.com/icons/123456789012345678/${"a".repeat(32)}.png?size=256`,
+    );
+    expect(discordGuildIconUrl("not-an-id", "a".repeat(32))).toBeNull();
+    expect(discordGuildIconUrl("123456789012345678", "../x")).toBeNull();
+    const plan = mapGuildTemplate({
+      source_guild_id: "123456789012345678",
+      serialized_source_guild: {
+        name: "With icon",
+        icon_hash: "b".repeat(32),
+        roles: [EVERYONE],
+        channels: [],
+      },
+    });
+    expect(plan.iconUrl).toContain("cdn.discordapp.com/icons/");
+    expect(plan.mappedAway.some((item) => item.reason === "serverIcon")).toBe(
+      false,
+    );
   });
 });

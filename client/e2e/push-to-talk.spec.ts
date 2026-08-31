@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { openApp } from "./fixtures";
+import { openApp, waitUntilVoiceConnected } from "./fixtures";
 
 const API = process.env.E2E_API_URL ?? "http://localhost:3101";
 const DEV_TOKEN = "dev-local-token";
@@ -90,9 +90,10 @@ async function joinLobby(page: Page): Promise<void> {
   await openApp(page);
   await page.getByRole("button", { name: /lobby/ }).first().click();
   await page.getByRole("button", { name: "Join Voice" }).click();
-  await expect(page.getByText("Live").first()).toBeVisible({
+  await expect(page.getByTestId("call-stage-collapsed")).toBeVisible({
     timeout: 20_000,
   });
+  await waitUntilVoiceConnected(page);
 }
 
 /** The hold-to-talk control, whichever of its three labels it is wearing. */
@@ -202,10 +203,7 @@ test.describe("push-to-talk", () => {
     await usePushToTalk(page);
     await joinLobby(page);
 
-    await page
-      .getByRole("main")
-      .getByRole("button", { name: "Mute microphone" })
-      .click();
+    await page.getByRole("button", { name: "Mute microphone" }).click();
 
     await focusThePage(page);
     await page.keyboard.down("Backquote");
@@ -229,7 +227,7 @@ test.describe("push-to-talk", () => {
     await page.getByRole("button", { name: "Cancel" }).click();
 
     // Still in the call — the mode change is `track.enabled`, not a rejoin.
-    await expect(page.getByText("Live").first()).toBeVisible();
+    await expect(page.getByTestId("call-stage-collapsed")).toBeVisible();
     await expect(holdButton(page)).toBeVisible();
     await expect(holdButton(page)).toHaveAttribute("aria-pressed", "false");
   });

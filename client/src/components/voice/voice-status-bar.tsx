@@ -1,12 +1,4 @@
-import {
-  HeadphoneOff,
-  Headphones,
-  Loader2,
-  Mic,
-  MicOff,
-  PhoneOff,
-  ScreenShare,
-} from "lucide-react";
+import { Loader2, PhoneOff, ScreenShare } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useTranslation } from "@/lib/i18n";
@@ -17,44 +9,41 @@ interface VoiceStatusBarProps {
   status: "idle" | "joining" | "connected";
   peerCount: number;
   isMuted: boolean;
-  isDeafened: boolean;
   usingSfu: boolean;
   /**
    * Somebody in the call is sharing a screen — anybody, including you.
    *
-   * This widget is what you see *after* navigating out of the voice channel, so
-   * it is the only place a live share is visible from the rest of the app.
-   * Without it, walking away from the channel makes a running presentation
-   * indistinguishable from no presentation.
+   * This strip sits above the user panel for the whole call, the Discord
+   * corner, so hangup stays in the same place whether you are in the channel
+   * or have walked away. It is also the only place a live share is visible
+   * from the rest of the app.
    */
   isPresenting?: boolean;
   /**
-   * Push-to-talk state, for the same reason `isPresenting` is here: this bar is
-   * what you see once you have navigated away from the voice channel, and
-   * without it a closed push-to-talk mic looks identical to an open one. The
-   * mute button beside it answers a different question.
+   * Push-to-talk state: without it a closed push-to-talk mic looks identical
+   * to an open one once you have left the channel.
    */
   inputMode?: "voice-activity" | "push-to-talk";
   isTransmitting?: boolean;
   onOpen: () => void;
-  onToggleMute: () => void;
-  onToggleDeafen: () => void;
   onLeave: () => void;
 }
 
+/**
+ * Discord's Voice Connected corner: status, the channel, hangup.
+ *
+ * Mute and deafen live on the user panel under this strip, not here.
+ */
 export function VoiceStatusBar({
   channelName,
   status,
   peerCount,
   isMuted,
-  isDeafened,
   usingSfu,
   isPresenting = false,
   inputMode = "voice-activity",
   isTransmitting = true,
   onOpen,
-  onToggleMute,
-  onToggleDeafen,
   onLeave,
 }: VoiceStatusBarProps) {
   const { t } = useTranslation();
@@ -121,6 +110,7 @@ export function VoiceStatusBar({
             variant="ghost"
             size="icon"
             className="h-7 w-7 shrink-0"
+            aria-label={t("voice.bar.leave")}
             onClick={onLeave}
           >
             <PhoneOff className="h-4 w-4 text-danger" />
@@ -128,55 +118,14 @@ export function VoiceStatusBar({
         </Tooltip>
       </div>
 
-      <div className="mt-1 flex items-center gap-1">
-        <button
-          type="button"
-          onClick={onOpen}
-          aria-label={t("voice.bar.open", { name: channelName })}
-          className="min-w-0 flex-1 truncate rounded-md px-1.5 py-1 text-left text-sm text-paper-muted transition-colors hover:bg-ink-3 hover:text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
-        >
-          <Mic className="mr-1 inline-block h-3 w-3 align-[-1px] text-paper-muted" />
-          {channelName}
-        </button>
-        <Tooltip
-          label={isMuted ? t("voice.control.unmute") : t("voice.control.mute")}
-        >
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7 shrink-0"
-            aria-pressed={isMuted}
-            onClick={onToggleMute}
-          >
-            {isMuted ? (
-              <MicOff className="h-4 w-4 text-danger" />
-            ) : (
-              <Mic className="h-4 w-4" />
-            )}
-          </Button>
-        </Tooltip>
-        <Tooltip
-          label={
-            isDeafened
-              ? t("voice.control.undeafen")
-              : t("voice.control.deafen")
-          }
-        >
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7 shrink-0"
-            aria-pressed={isDeafened}
-            onClick={onToggleDeafen}
-          >
-            {isDeafened ? (
-              <HeadphoneOff className="h-4 w-4 text-danger" />
-            ) : (
-              <Headphones className="h-4 w-4" />
-            )}
-          </Button>
-        </Tooltip>
-      </div>
+      <button
+        type="button"
+        onClick={onOpen}
+        aria-label={t("voice.bar.open", { name: channelName })}
+        className="mt-1 w-full truncate rounded-md px-1.5 py-1 text-left text-sm text-paper-muted transition-colors hover:bg-ink-3 hover:text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
+      >
+        {channelName}
+      </button>
     </div>
   );
 }

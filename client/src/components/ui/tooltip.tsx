@@ -225,6 +225,12 @@ export interface TooltipProps extends TooltipA11yProps {
   side?: "top" | "right" | "bottom" | "left";
   align?: "start" | "center" | "end";
   /**
+   * `rail` is the server-list bubble: a bit larger, darker, and further from
+   * the tile, the way Discord names a server on hover. Default is the compact
+   * label on icon buttons in a bar.
+   */
+  tone?: "default" | "rail";
+  /**
    * The control. Must be a single element that forwards props and a ref to a
    * real DOM node — our `Button`, or a plain `<button>`.
    */
@@ -237,10 +243,12 @@ export function Tooltip({
   name,
   side = "top",
   align = "center",
+  tone = "default",
   children,
 }: TooltipProps) {
   const a11y = tooltipA11y({ label, detail, name });
   const container = useContext(TooltipContainerContext);
+  const rail = tone === "rail";
 
   return (
     <TooltipPrimitive.Root>
@@ -260,7 +268,7 @@ export function Tooltip({
         <TooltipPrimitive.Content
           side={side}
           align={align}
-          sideOffset={6}
+          sideOffset={rail ? 12 : 6}
           collisionPadding={COLLISION_PADDING}
           aria-label={a11y.description}
           className={cn(
@@ -268,7 +276,10 @@ export function Tooltip({
             // tallest things a tooltipped button can sit next to, and matching
             // the reaction tip in `message-list.tsx` so the two read as one
             // object rather than two house styles.
-            "z-[140] max-w-64 select-none rounded-md border border-ink-4 bg-ink-2 px-2 py-1 text-xs leading-snug text-paper shadow-[var(--shadow-popover)] animate-fade-in",
+            "z-[140] max-w-64 select-none text-paper shadow-[var(--shadow-popover)] animate-fade-in",
+            rail
+              ? "rounded-lg border border-ink-3 bg-ink px-2.5 py-1.5 text-[13px] font-semibold leading-snug"
+              : "rounded-md border border-ink-4 bg-ink-2 px-2 py-1 text-xs leading-snug",
             // Never intercept a click aimed at what is underneath. The bubble
             // is placed over the stage, and a swallowed click on a call
             // control is a worse bug than a missing label.

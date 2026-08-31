@@ -34,6 +34,113 @@ export function stageLayout(
   return remoteCount === 1 ? "spotlight" : "grid";
 }
 
+/**
+ * Whether the stage has a picture worth owning the room: a camera (ours or
+ * someone else's) or a screen share. Voice-only occupancy is not a picture.
+ */
+export function hasWatchableVideo(input: {
+  localCameraOn: boolean;
+  remoteHasCamera: boolean;
+  screenShareCount: number;
+}): boolean {
+  return (
+    input.localCameraOn ||
+    input.remoteHasCamera ||
+    input.screenShareCount > 0
+  );
+}
+
+/**
+ * The expanded stage is for watching something, or for an outgoing ring.
+ * Voice-only occupancy stays a slim bar. Collapsing is a user choice
+ * remembered for the session.
+ */
+export function shouldShowExpandedStage(
+  hasVideo: boolean,
+  userCollapsed: boolean,
+  ringing = false,
+): boolean {
+  return (hasVideo || ringing) && !userCollapsed;
+}
+
+/**
+ * Layout once the stage is actually showing a picture.
+ *
+ * Camera count, not headcount: five people with one camera is a spotlight,
+ * not a grid of avatars. Grid is an explicit choice, and only with two
+ * cameras to share the stage between.
+ */
+export function resolvedStageLayout(input: {
+  remoteCount: number;
+  hasScreenShare: boolean;
+  cameraCount: number;
+  preferGrid: boolean;
+}): StageLayout {
+  if (input.hasScreenShare) {
+    return "screen";
+  }
+  if (input.remoteCount === 0) {
+    return "ring";
+  }
+  if (input.preferGrid && input.cameraCount >= 2) {
+    return "grid";
+  }
+  if (input.cameraCount >= 1) {
+    return "spotlight";
+  }
+  return stageLayout(input.remoteCount, false);
+}
+
+/**
+ * Who fills the spotlight: a pin the user chose, else someone speaking on
+ * camera, else the first remote camera, else anyone with a camera, else the
+ * first remote person.
+ */
+export function pickSpotlightKey(
+  people: readonly {
+    key: string;
+    /** Camera picture when they send one; null is an avatar. */
+    stream: unknown;
+    speaking: boolean;
+    isSelf: boolean;
+  }[],
+  pinnedKey: string | null,
+): string | null {
+  if (pinnedKey && people.some((person) => person.key === pinnedKey)) {
+    return pinnedKey;
+  }
+  const speakingCam = people.find(
+    (person) => person.speaking && person.stream !== null && !person.isSelf,
+  );
+  if (speakingCam) {
+    return speakingCam.key;
+  }
+  const remoteCam = people.find(
+    (person) => person.stream !== null && !person.isSelf,
+  );
+  if (remoteCam) {
+    return remoteCam.key;
+  }
+  const anyCam = people.find((person) => person.stream !== null);
+  if (anyCam) {
+    return anyCam.key;
+  }
+  return people.find((person) => !person.isSelf)?.key ?? people[0]?.key ?? null;
+}
+
+/** Prefix so a camera solo does not collide with that peer's screen share. */
+export function cameraSoloId(personKey: string): string {
+  return `camera:${personKey}`;
+}
+
+export function isCameraSoloId(soloId: string | null): boolean {
+  return soloId !== null && soloId.startsWith("camera:");
+}
+
+export function personKeyFromCameraSoloId(soloId: string): string | null {
+  return soloId.startsWith("camera:") ? soloId.slice("camera:".length) : null;
+}
+
 /** "0:07", "12:41", "1:05:09" — a call timer, never a timestamp. */
 export function formatCallDuration(elapsedMs: number): string {
   const total = Math.max(0, Math.floor(elapsedMs / 1000));
@@ -85,6 +192,33 @@ export function rememberStageCollapsed(
   collapsed: boolean,
 ): void {
   collapsedByConversation.set(conversationId, collapsed);
+}
+
+/**
+ * Grid vs spotlight, session-scoped per channel the same way collapse is.
+ * Default is spotlight: the picture owns the room, the rest sit on a strip.
+ */
+const preferGridByChannel = new Map<string, boolean>();
+
+export function isStageGrid(channelId: string): boolean {
+  return preferGridByChannel.get(channelId) ?? false;
+}
+
+export function rememberStageGrid(channelId: string, grid: boolean): void {
+  preferGridByChannel.set(channelId, grid);
+}
+
+const pinnedByChannel = new Map<string, string | null>();
+
+export function stagePinnedKey(channelId: string): string | null {
+  return pinnedByChannel.get(channelId) ?? null;
+}
+
+export function rememberStagePinnedKey(
+  channelId: string,
+  key: string | null,
+): void {
+  pinnedByChannel.set(channelId, key);
 }
 
 /**

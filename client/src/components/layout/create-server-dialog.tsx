@@ -1,5 +1,29 @@
-import { Check, Copy, Folder, Hash, Lock, Mic } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  Ban,
+  Check,
+  ChevronRight,
+  Copy,
+  Hash,
+  LayoutList,
+  Link2,
+  Lock,
+  MessageSquare,
+  Mic,
+  Minus,
+  Paperclip,
+  Smile,
+  Users,
+  Webhook,
+  type LucideIcon,
+} from "lucide-react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 import type {
   Channel,
   DiscordImportPlan,
@@ -11,6 +35,8 @@ import type {
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { ServerIcon } from "@/components/layout/server-identity";
+import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import {
   applyDiscordImport,
@@ -18,6 +44,14 @@ import {
   previewDiscordImport,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
+
+type PlanChannel = DiscordImportPlan["channels"][number];
+
+const STAGGER_CAP = 10;
+
+function staggerVars(index: number): CSSProperties {
+  return { "--stagger": index } as CSSProperties;
+}
 
 type Step = "name" | "paste" | "preview" | "done";
 
@@ -212,7 +246,11 @@ export function CreateServerDialog({
           ? t("importDiscord.done.body")
           : t("communities.create.body");
 
-  const size = step === "preview" || step === "done" ? "lg" : "sm";
+  const size = step === "preview" || step === "done" ? "lg" : "md";
+  const eyebrow =
+    step === "paste" || step === "preview" || step === "done"
+      ? t("importDiscord.eyebrow")
+      : undefined;
   const link = done ? inviteLink(done.invite.code) : "";
   const pasteMessage = done
     ? t("importDiscord.done.pasteMessage", {
@@ -225,6 +263,7 @@ export function CreateServerDialog({
     <Dialog
       open={open}
       title={title}
+      eyebrow={eyebrow}
       description={description}
       size={size}
       onClose={onClose}
@@ -302,15 +341,31 @@ export function CreateServerDialog({
               autoFocus
               disabled={busy}
             />
+            <div className="flex items-center gap-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-paper-muted">
+              <span className="h-px flex-1 bg-ink-4" />
+              {t("importDiscord.mode.or")}
+              <span className="h-px flex-1 bg-ink-4" />
+            </div>
             <button
               type="button"
-              className="text-sm text-signal hover:underline"
+              data-discord-import-path=""
+              disabled={busy}
+              className="flex w-full items-start gap-3 rounded-xl border border-signal/35 bg-signal/5 px-4 py-3.5 text-left transition-colors hover:border-signal/60 hover:bg-signal/10 disabled:opacity-50"
               onClick={() => {
                 setStep("paste");
                 setError(null);
               }}
             >
-              {t("importDiscord.mode.discord")}
+              <LayoutList className="mt-0.5 h-5 w-5 shrink-0 text-signal" />
+              <span className="min-w-0 flex-1">
+                <span className="block font-semibold text-paper">
+                  {t("importDiscord.mode.discord")}
+                </span>
+                <span className="mt-0.5 block text-sm text-paper-muted">
+                  {t("importDiscord.mode.discordBody")}
+                </span>
+              </span>
+              <ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-paper-muted" />
             </button>
           </>
         )}
@@ -418,6 +473,7 @@ function PreviewBody({
   snapshotLabel: string | null;
 }) {
   const { t } = useTranslation();
+  const reduced = usePrefersReducedMotion();
   const categories = plan.channels
     .filter((channel) => channel.type === "category")
     .sort((a, b) => a.position - b.position);
@@ -429,10 +485,19 @@ function PreviewBody({
     .sort((a, b) => a.position - b.position);
   const cosmeticRoles = plan.roles;
 
+  const comingCount =
+    topText.length +
+    topVoice.length +
+    categories.length +
+    plan.channels.filter((channel) => channel.parentTemplateId != null).length +
+    (cosmeticRoles.length > 0 ? 1 : 0);
+  let comingIndex = 0;
+  const nextComing = () => staggerVars(Math.min(comingIndex++, STAGGER_CAP));
+
   return (
     <div className="space-y-4 text-sm">
       {plan.isDirty && (
-          <p className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-paper">
+        <p className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-paper">
           {t("importDiscord.preview.unsynced")}
         </p>
       )}
@@ -443,98 +508,221 @@ function PreviewBody({
       )}
       <p className="text-paper-muted">{t("importDiscord.preview.renameNote")}</p>
 
-      <div className="max-h-64 space-y-2 overflow-y-auto rounded-md border border-ink-4 p-3">
-        {topText.map((channel) => (
-          <ChannelRow key={channel.templateId} channel={channel} />
-        ))}
-        {categories.map((category) => {
-          const children = plan.channels
-            .filter((channel) => channel.parentTemplateId === category.templateId)
-            .sort((a, b) => a.position - b.position);
-          return (
-            <div key={category.templateId}>
-              <ChannelRow channel={category} />
-              <div className="ml-5 mt-1 space-y-1">
-                {children.map((child) => (
-                  <ChannelRow key={child.templateId} channel={child} />
-                ))}
-              </div>
-            </div>
-          );
-        })}
-        {topVoice.map((channel) => (
-          <ChannelRow key={channel.templateId} channel={channel} />
-        ))}
-      </div>
-
-      {cosmeticRoles.length > 0 && (
-        <div>
-          <p className="mb-2 font-medium text-paper">
-            {t("importDiscord.preview.roles")}
+      <aside className="overflow-hidden rounded-xl border border-ink-4/60 bg-channel">
+        <div className="flex min-h-14 items-center gap-2.5 border-b border-ink-4/60 px-4 py-3">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-ink-3 font-display text-xs font-bold text-paper">
+            <ServerIcon name={plan.serverName} iconUrl={plan.iconUrl} />
+          </span>
+          <p className="truncate font-display text-base font-bold leading-tight">
+            {plan.serverName}
           </p>
-          <ul className="flex flex-wrap gap-2">
-            {cosmeticRoles.map((role) => (
-              <li
-                key={role.name}
-                className="rounded-full border border-ink-4 px-2 py-0.5 text-xs"
-                style={role.color ? { color: role.color } : undefined}
-              >
-                {role.name}
-              </li>
-            ))}
-          </ul>
         </div>
-      )}
+        <div className="max-h-72 overflow-y-auto px-1 py-3">
+          {topText.length > 0 && (
+            <PreviewSection label={t("chrome.text")}>
+              {topText.map((channel) => (
+                <PreviewChannelRow
+                  key={channel.templateId}
+                  channel={channel}
+                  reduced={reduced}
+                  style={nextComing()}
+                />
+              ))}
+            </PreviewSection>
+          )}
+          {topVoice.length > 0 && (
+            <PreviewSection label={t("chrome.voice")}>
+              {topVoice.map((channel) => (
+                <PreviewChannelRow
+                  key={channel.templateId}
+                  channel={channel}
+                  reduced={reduced}
+                  style={nextComing()}
+                />
+              ))}
+            </PreviewSection>
+          )}
+          {categories.length > 0 && (
+            <PreviewSection label={t("chrome.categories")}>
+              {categories.map((category) => {
+                const children = plan.channels
+                  .filter(
+                    (channel) => channel.parentTemplateId === category.templateId,
+                  )
+                  .sort((a, b) => a.position - b.position);
+                const headerStyle = nextComing();
+                return (
+                  <div key={category.templateId} className="mb-1">
+                    <div
+                      className={cn(
+                        "flex items-center gap-1 rounded-md px-2 py-1 text-xs font-semibold uppercase tracking-wide text-paper-muted",
+                        !reduced && "animate-rise",
+                      )}
+                      style={reduced ? undefined : headerStyle}
+                    >
+                      <ChevronRight className="h-3 w-3 shrink-0 rotate-90" />
+                      <span className="truncate">{category.name}</span>
+                    </div>
+                    <div className="ml-2 border-l border-ink-4/70 pl-2">
+                      {children.map((child) => (
+                        <PreviewChannelRow
+                          key={child.templateId}
+                          channel={child}
+                          reduced={reduced}
+                          style={nextComing()}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </PreviewSection>
+          )}
+          {cosmeticRoles.length > 0 && (
+            <PreviewSection label={t("importDiscord.preview.rolesSection")}>
+              <ul
+                className={cn(
+                  "flex flex-wrap gap-1.5 px-2 py-1",
+                  !reduced && "animate-rise",
+                )}
+                style={reduced ? undefined : nextComing()}
+              >
+                {cosmeticRoles.map((role) => (
+                  <li
+                    key={role.name}
+                    className="rounded-full border border-ink-4 bg-ink-3/50 px-2 py-0.5 text-xs"
+                    style={role.color ? { color: role.color } : undefined}
+                  >
+                    {role.name}
+                  </li>
+                ))}
+              </ul>
+              <p className="px-2 pt-1 text-[11px] text-paper-muted">
+                {t("importDiscord.preview.rolesHint")}
+              </p>
+            </PreviewSection>
+          )}
+        </div>
+      </aside>
 
-      <div>
-        <p className="mb-1 font-medium text-paper">
-          {t("importDiscord.dropped.notInTemplateTitle")}
-        </p>
-        <ul className="list-disc space-y-0.5 pl-5 text-paper-muted">
-          {plan.notInTemplate.map((reason) => (
-            <li key={reason}>{t(NOT_IN_TEMPLATE_KEYS[reason])}</li>
-          ))}
-        </ul>
-      </div>
-      <div>
-        <p className="mb-1 font-medium text-paper">
-          {t("importDiscord.dropped.mappedTitle")}
-        </p>
-        <ul className="list-disc space-y-0.5 pl-5 text-paper-muted">
-          {plan.mappedAway.map((item, index) => (
-            <li key={`${item.reason}:${item.name ?? index}`}>
-              {t(MAPPED_AWAY_KEYS[item.reason], item.name ? { name: item.name } : undefined)}
-            </li>
-          ))}
-        </ul>
-      </div>
+      <aside
+        className={cn(
+          "overflow-hidden rounded-xl border border-ink-4/60 bg-channel",
+          !reduced && "animate-rise",
+        )}
+        style={reduced ? undefined : staggerVars(Math.min(comingCount, STAGGER_CAP) + 4)}
+      >
+        <div className="border-b border-ink-4/60 px-4 py-3">
+          <p className="font-display text-base font-bold leading-tight text-paper-muted">
+            {t("importDiscord.dropped.sectionTitle")}
+          </p>
+        </div>
+        <div className="max-h-56 overflow-y-auto px-1 py-3">
+          <PreviewSection label={t("importDiscord.dropped.notInTemplateTitle")}>
+            {plan.notInTemplate.map((reason) => (
+              <DroppedRow
+                key={reason}
+                icon={NOT_IN_TEMPLATE_ICONS[reason]}
+                label={t(NOT_IN_TEMPLATE_KEYS[reason])}
+              />
+            ))}
+          </PreviewSection>
+          {plan.mappedAway.length > 0 && (
+            <PreviewSection label={t("importDiscord.dropped.mappedTitle")}>
+              {plan.mappedAway.map((item, index) => (
+                <DroppedRow
+                  key={`${item.reason}:${item.name ?? index}`}
+                  icon={Minus}
+                  label={t(
+                    MAPPED_AWAY_KEYS[item.reason],
+                    item.name ? { name: item.name } : undefined,
+                  )}
+                />
+              ))}
+            </PreviewSection>
+          )}
+        </div>
+      </aside>
     </div>
   );
 }
 
-function ChannelRow({
-  channel,
+function PreviewSection({
+  label,
+  children,
 }: {
-  channel: DiscordImportPlan["channels"][number];
+  label: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="mb-3 last:mb-0">
+      <div className="mb-1 px-2">
+        <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-paper-muted">
+          {label}
+        </span>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function PreviewChannelRow({
+  channel,
+  reduced,
+  style,
+}: {
+  channel: PlanChannel;
+  reduced: boolean;
+  style: CSSProperties;
 }) {
   const { t } = useTranslation();
-  const Icon =
-    channel.type === "category"
-      ? Folder
-      : channel.isPrivate
-        ? Lock
-        : channel.type === "voice"
-          ? Mic
-          : Hash;
+  const Icon = channel.isPrivate ? Lock : channel.type === "voice" ? Mic : Hash;
   return (
-    <div className={cn("flex items-center gap-2 text-paper")}>
-      <Icon className="h-3.5 w-3.5 shrink-0 text-paper-muted" />
+    <div
+      className={cn(
+        "flex items-center gap-1.5 rounded-md px-2 py-1.5 text-sm text-paper-muted",
+        !reduced && "animate-rise",
+      )}
+      style={reduced ? undefined : style}
+    >
+      <Icon
+        className={cn(
+          "h-3.5 w-3.5 shrink-0",
+          channel.isPrivate ? "text-warning" : "text-paper-muted",
+        )}
+      />
       <span className="truncate">{channel.name}</span>
       {channel.isPrivate && (
-        <span className="rounded-sm bg-ink-3 px-1.5 py-px text-[10px] uppercase tracking-wide text-paper-muted">
+        <span className="ml-auto shrink-0 rounded bg-warning/10 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-warning">
           {t("importDiscord.preview.private")}
         </span>
       )}
     </div>
   );
 }
+
+const NOT_IN_TEMPLATE_ICONS: Record<NotInTemplateReason, LucideIcon> = {
+  members: Users,
+  messages: MessageSquare,
+  attachments: Paperclip,
+  customEmoji: Smile,
+  webhooks: Webhook,
+  bans: Ban,
+  discordInvites: Link2,
+};
+
+function DroppedRow({
+  icon: Icon,
+  label,
+}: {
+  icon: LucideIcon;
+  label: string;
+}) {
+  return (
+    <div className="flex items-start gap-1.5 rounded-md px-2 py-1.5 text-sm text-paper-muted/80">
+      <Icon className="mt-0.5 h-3.5 w-3.5 shrink-0 opacity-70" />
+      <span className="leading-snug">{label}</span>
+    </div>
+  );
+}
+

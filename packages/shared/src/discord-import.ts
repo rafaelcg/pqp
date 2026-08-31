@@ -1,7 +1,10 @@
 import { z } from "zod";
 import {
+  clampEveryonePermissions,
   isReservedMentionName,
+  Permission,
   roleNameSchema,
+  serializePermissions,
   STAFF_ROLE_NAMES,
 } from "./permissions.js";
 
@@ -9,6 +12,107 @@ import {
 export const DISCORD_TEMPLATE_CODE_RE = /^[A-Za-z0-9]{4,32}$/;
 
 export const DISCORD_VIEW_CHANNEL = 1n << 10n;
+
+/**
+ * Discord's published flag numbers. Names match pqp; the shifts do not,
+ * except the first six. Never copy a Discord bitfield into `roles.permissions`
+ * without going through `mapDiscordPermissions`.
+ */
+export const DiscordPermission = {
+  CREATE_INSTANT_INVITE: 1n << 0n,
+  KICK_MEMBERS: 1n << 1n,
+  BAN_MEMBERS: 1n << 2n,
+  ADMINISTRATOR: 1n << 3n,
+  MANAGE_CHANNELS: 1n << 4n,
+  MANAGE_GUILD: 1n << 5n,
+  ADD_REACTIONS: 1n << 6n,
+  VIEW_CHANNEL: 1n << 10n,
+  SEND_MESSAGES: 1n << 11n,
+  MANAGE_MESSAGES: 1n << 13n,
+  ATTACH_FILES: 1n << 15n,
+  READ_MESSAGE_HISTORY: 1n << 16n,
+  MENTION_EVERYONE: 1n << 17n,
+  CONNECT: 1n << 20n,
+  SPEAK: 1n << 21n,
+  MUTE_MEMBERS: 1n << 22n,
+  CHANGE_NICKNAME: 1n << 26n,
+  MANAGE_NICKNAMES: 1n << 27n,
+  MANAGE_ROLES: 1n << 28n,
+  MODERATE_MEMBERS: 1n << 40n,
+} as const;
+
+const DISCORD_TO_PQP: ReadonlyArray<{ discord: bigint; pqp: bigint }> = [
+  { discord: DiscordPermission.CREATE_INSTANT_INVITE, pqp: Permission.CREATE_INVITE },
+  { discord: DiscordPermission.KICK_MEMBERS, pqp: Permission.KICK_MEMBERS },
+  { discord: DiscordPermission.BAN_MEMBERS, pqp: Permission.BAN_MEMBERS },
+  { discord: DiscordPermission.MANAGE_CHANNELS, pqp: Permission.MANAGE_CHANNELS },
+  { discord: DiscordPermission.MANAGE_GUILD, pqp: Permission.MANAGE_SERVER },
+  { discord: DiscordPermission.ADD_REACTIONS, pqp: Permission.ADD_REACTIONS },
+  { discord: DiscordPermission.VIEW_CHANNEL, pqp: Permission.VIEW_CHANNEL },
+  { discord: DiscordPermission.SEND_MESSAGES, pqp: Permission.SEND_MESSAGES },
+  { discord: DiscordPermission.MANAGE_MESSAGES, pqp: Permission.MANAGE_MESSAGES },
+  { discord: DiscordPermission.ATTACH_FILES, pqp: Permission.ATTACH_FILES },
+  { discord: DiscordPermission.READ_MESSAGE_HISTORY, pqp: Permission.READ_MESSAGE_HISTORY },
+  { discord: DiscordPermission.MENTION_EVERYONE, pqp: Permission.MENTION_EVERYONE },
+  { discord: DiscordPermission.CONNECT, pqp: Permission.CONNECT },
+  { discord: DiscordPermission.SPEAK, pqp: Permission.SPEAK },
+  { discord: DiscordPermission.MUTE_MEMBERS, pqp: Permission.MUTE_MEMBERS },
+  { discord: DiscordPermission.CHANGE_NICKNAME, pqp: Permission.CHANGE_NICKNAME },
+  { discord: DiscordPermission.MANAGE_NICKNAMES, pqp: Permission.MANAGE_NICKNAMES },
+  { discord: DiscordPermission.MANAGE_ROLES, pqp: Permission.MANAGE_ROLES },
+  { discord: DiscordPermission.MODERATE_MEMBERS, pqp: Permission.MODERATE_MEMBERS },
+];
+
+const OVERWRITE_PQP_BITS =
+  Permission.VIEW_CHANNEL | Permission.SEND_MESSAGES | Permission.CONNECT;
+
+/** Manage bits we will not put on imported `@everyone`, even if Discord had them. */
+const EVERYONE_IMPORT_DENIED =
+  Permission.MANAGE_CHANNELS |
+  Permission.MANAGE_SERVER |
+  Permission.MANAGE_ROLES |
+  Permission.MANAGE_MESSAGES |
+  Permission.MUTE_MEMBERS |
+  Permission.MANAGE_NICKNAMES;
+
+export function mapDiscordPermissions(discordBits: bigint): bigint {
+  let mapped = 0n;
+  for (const entry of DISCORD_TO_PQP) {
+    if ((discordBits & entry.discord) === entry.discord) {
+      mapped |= entry.pqp;
+    }
+  }
+  return mapped;
+}
+
+export function mapImportedEveryonePermissions(discordBits: bigint): bigint {
+  return (
+    clampEveryonePermissions(mapDiscordPermissions(discordBits)) &
+    ~EVERYONE_IMPORT_DENIED
+  );
+}
+
+export function mapImportedRolePermissions(discordBits: bigint): bigint {
+  return mapDiscordPermissions(discordBits) & ~Permission.ADMINISTRATOR;
+}
+
+export function mapImportedOverwriteBits(discordBits: bigint): bigint {
+  return mapDiscordPermissions(discordBits) & OVERWRITE_PQP_BITS;
+}
+
+const DISCORD_GUILD_ID_RE = /^\d{17,22}$/;
+const DISCORD_ICON_HASH_RE = /^(a_)?[a-fA-F0-9]{32}$/;
+
+export function discordGuildIconUrl(
+  guildId: string,
+  hash: string,
+  size: 64 | 128 | 256 | 512 = 256,
+): string | null {
+  if (!DISCORD_GUILD_ID_RE.test(guildId) || !DISCORD_ICON_HASH_RE.test(hash)) {
+    return null;
+  }
+  return `https://cdn.discordapp.com/icons/${guildId}/${hash}.png?size=${size}`;
+}
 
 export const MAX_IMPORT_CHANNELS = 200;
 export const MAX_IMPORT_CATEGORIES = 30;
@@ -84,19 +188,34 @@ export interface MappedImportChannel {
 }
 
 export interface MappedImportRole {
+  templateId: number;
   name: string;
   originalName: string;
   color: string | null;
   hoist: boolean;
   mentionable: boolean;
+  /** pqp bitfield, decimal string. Administrator is never set. */
+  permissions: string;
+}
+
+export interface MappedImportOverwrite {
+  channelTemplateId: number;
+  /** Discord placeholder id. `0` is `@everyone`. */
+  roleTemplateId: number;
+  allow: string;
+  deny: string;
 }
 
 export interface DiscordImportPlan {
   serverName: string;
   templateUpdatedAt: string | null;
   isDirty: boolean;
+  iconUrl: string | null;
   channels: MappedImportChannel[];
   roles: MappedImportRole[];
+  /** Mapped pqp bits for `@everyone`, or null to keep the seeded default. */
+  everyonePermissions: string | null;
+  overwrites: MappedImportOverwrite[];
   privateChannelNames: string[];
   notInTemplate: NotInTemplateReason[];
   mappedAway: MappedAwayItem[];
@@ -156,6 +275,7 @@ const templateRoleSchema = z
     color: z.number().optional(),
     hoist: z.boolean().optional(),
     mentionable: z.boolean().optional(),
+    permissions: z.union([z.string(), z.number()]).optional(),
   })
   .passthrough();
 
@@ -163,8 +283,10 @@ const guildTemplateSchema = z
   .object({
     updated_at: z.string().optional(),
     is_dirty: z.boolean().nullable().optional(),
+    source_guild_id: idSchema.optional(),
     serialized_source_guild: z
       .object({
+        id: idSchema.optional(),
         name: z.string().optional(),
         icon_hash: z.string().nullable().optional(),
         roles: z.array(templateRoleSchema).optional(),
@@ -386,6 +508,56 @@ function renumberGroup<T extends { position: number; templateId: number }>(
   }));
 }
 
+function collectImportedOverwrites(
+  channels: MappedImportChannel[],
+  byId: Map<number, z.infer<typeof templateChannelSchema>>,
+  importedRoleIds: Set<number>,
+): MappedImportOverwrite[] {
+  const imported = new Set(importedRoleIds);
+  imported.add(DISCORD_EVERYONE_PLACEHOLDER_ID);
+  const result: MappedImportOverwrite[] = [];
+
+  for (const channel of channels) {
+    if (channel.type === "category") {
+      continue;
+    }
+    const own = byId.get(channel.templateId);
+    const parent =
+      channel.parentTemplateId != null
+        ? byId.get(channel.parentTemplateId)
+        : undefined;
+    const merged = new Map<number, { allow: bigint; deny: bigint }>();
+    for (const row of [
+      ...(parent?.permission_overwrites ?? []),
+      ...(own?.permission_overwrites ?? []),
+    ]) {
+      const type = toIntId(row.type ?? DISCORD_ROLE_OVERWRITE);
+      if (type !== DISCORD_ROLE_OVERWRITE) {
+        continue;
+      }
+      const roleTemplateId = toIntId(row.id);
+      if (roleTemplateId == null || !imported.has(roleTemplateId)) {
+        continue;
+      }
+      const allow = mapImportedOverwriteBits(parseBitfield(row.allow));
+      const deny = mapImportedOverwriteBits(parseBitfield(row.deny));
+      merged.set(roleTemplateId, { allow, deny });
+    }
+    for (const [roleTemplateId, bits] of merged) {
+      if (bits.allow === 0n && bits.deny === 0n) {
+        continue;
+      }
+      result.push({
+        channelTemplateId: channel.templateId,
+        roleTemplateId,
+        allow: serializePermissions(bits.allow),
+        deny: serializePermissions(bits.deny),
+      });
+    }
+  }
+  return result;
+}
+
 export function mapGuildTemplate(raw: unknown): DiscordImportPlan {
   const parsed = guildTemplateSchema.safeParse(raw);
   if (!parsed.success) {
@@ -393,11 +565,7 @@ export function mapGuildTemplate(raw: unknown): DiscordImportPlan {
   }
 
   const guild = parsed.data.serialized_source_guild;
-  const mappedAway: MappedAwayItem[] = [
-    { reason: "permissionBits" },
-    { reason: "overwrites" },
-    { reason: "serverIcon" },
-  ];
+  const mappedAway: MappedAwayItem[] = [];
   let droppedBitrate = false;
 
   const sourceChannels = guild.channels ?? [];
@@ -521,9 +689,17 @@ export function mapGuildTemplate(raw: unknown): DiscordImportPlan {
 
   const usedRoleNames = new Set<string>();
   const roles: MappedImportRole[] = [];
+  let everyonePermissions: string | null = null;
+  const importedRoleIds = new Set<number>();
   for (const role of guild.roles ?? []) {
     const id = toIntId(role.id);
     if (id === DISCORD_EVERYONE_PLACEHOLDER_ID) {
+      everyonePermissions = serializePermissions(
+        mapImportedEveryonePermissions(parseBitfield(role.permissions)),
+      );
+      continue;
+    }
+    if (id == null) {
       continue;
     }
     if (roles.length >= MAX_IMPORT_ROLES) {
@@ -535,13 +711,37 @@ export function mapGuildTemplate(raw: unknown): DiscordImportPlan {
       mappedAway.push({ reason: "unsanitisableRole", name: role.name });
       continue;
     }
+    importedRoleIds.add(id);
     roles.push({
+      templateId: id,
       name,
       originalName: role.name,
       color: discordColorToHex(role.color),
       hoist: role.hoist ?? false,
       mentionable: role.mentionable ?? false,
+      permissions: serializePermissions(
+        mapImportedRolePermissions(parseBitfield(role.permissions)),
+      ),
     });
+  }
+
+  const overwrites = collectImportedOverwrites(
+    channels,
+    byId,
+    importedRoleIds,
+  );
+
+  const guildIdRaw =
+    parsed.data.source_guild_id ?? guild.id ?? null;
+  const guildId =
+    guildIdRaw == null ? "" : String(guildIdRaw);
+  const iconHash = guild.icon_hash?.trim() || "";
+  let iconUrl: string | null = null;
+  if (iconHash) {
+    iconUrl = discordGuildIconUrl(guildId, iconHash);
+    if (!iconUrl) {
+      mappedAway.push({ reason: "serverIcon" });
+    }
   }
 
   const serverName = (guild.name ?? "Imported server").trim().slice(0, 100) ||
@@ -562,8 +762,11 @@ export function mapGuildTemplate(raw: unknown): DiscordImportPlan {
     serverName,
     templateUpdatedAt: parsed.data.updated_at ?? null,
     isDirty: parsed.data.is_dirty === true,
+    iconUrl,
     channels,
     roles,
+    everyonePermissions,
+    overwrites,
     privateChannelNames: channels
       .filter((channel) => channel.isPrivate)
       .map((channel) => channel.name),

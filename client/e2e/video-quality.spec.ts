@@ -5,6 +5,7 @@ import {
   type Locator,
   type Page,
 } from "@playwright/test";
+import { waitUntilVoiceConnected } from "./fixtures";
 
 /**
  * Does picking a video quality change the bytes that leave this machine?
@@ -636,6 +637,7 @@ test("a DM call's screen encoder follows the quality menu", async ({
     await watcher.page
       .getByRole("button", { name: "Accept" })
       .click({ timeout: 20_000 });
+    await waitUntilVoiceConnected(page);
 
     await wakeControls(page);
     await page
@@ -797,7 +799,8 @@ async function seedVoiceServer(
 async function joinVoice(page: Page): Promise<void> {
   await page.getByRole("button", { name: /stage/ }).first().click();
   await page.getByRole("button", { name: "Join Voice" }).click();
-  await expect(page.getByText("Live")).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId("call-stage-collapsed")).toBeVisible({ timeout: 20_000 });
+  await waitUntilVoiceConnected(page);
 }
 
 /**

@@ -87,12 +87,8 @@ import { SanctionNoticeBar } from "@/components/layout/sanction-notice-bar";
 import { SsoServerSuggestions } from "@/components/layout/sso-server-suggestions";
 import { UserPanel } from "@/components/layout/user-panel";
 import { ConnectionCallbackOverlay } from "@/components/connections/connection-callback";
-import {
-  ScreenStage,
-  collectScreenTiles,
-} from "@/components/voice/screen-stage";
 import { VoiceAudioSinks } from "@/components/voice/voice-audio-sinks";
-import { VoicePanel } from "@/components/voice/voice-panel";
+import { VoiceChannelStage } from "@/components/voice/voice-channel-stage";
 import {
   formatBinding,
   supportsKeyBinding,
@@ -3171,14 +3167,6 @@ function MainAppContent({
         (one) => one.channelId === voiceState.voiceChannelId,
       ) ?? null)
     : null;
-  // A conversation counts as "viewing the call" too: its DmCallPanel already
-  // carries the controls, so the sidebar strip would say the same thing twice.
-  const isViewingVoiceChannel =
-    (selectedChannel?.type === "voice" &&
-      selectedChannel.id === voiceState.voiceChannelId) ||
-    (activeConversation !== null &&
-      activeConversation.channelId === voiceState.voiceChannelId);
-
   const canDropFiles = isAttachmentsEnabled && selectedChannel?.type === "text";
 
   /**
@@ -3207,7 +3195,7 @@ function MainAppContent({
    */
   const sidebarFooter = (
     <>
-      {voiceState.status !== "idle" && !isViewingVoiceChannel && (
+      {voiceState.status !== "idle" && (
         <VoiceStatusBar
           channelName={
             voiceChannel?.name ??
@@ -3218,27 +3206,22 @@ function MainAppContent({
           status={voiceState.status}
           peerCount={voiceState.remotePeers.length}
           isMuted={voiceState.isMuted}
-          isDeafened={voiceState.isDeafened}
           inputMode={voiceState.inputMode}
           isTransmitting={voiceState.isTransmitting}
           usingSfu={voiceState.usingSfu}
-          // This widget only exists once you have navigated away from the voice
-          // channel, so it is the only thing that can tell you a share is live
-          // while you are somewhere else.
           isPresenting={voiceState.screenSharePeerIds.length > 0}
           onOpen={() => void openVoiceChannel()}
-          onToggleMute={() => voice.toggleMute()}
-          onToggleDeafen={() => voice.toggleDeafen()}
           onLeave={() => voice.leave()}
         />
       )}
       <UserPanel
         displayName={user?.displayName ?? "User"}
         tag={user?.tag ?? null}
+        handle={user?.handle ?? null}
         avatarUrl={user?.avatarUrl ?? null}
         isMuted={voiceState.isMuted}
         isDeafened={voiceState.isDeafened}
-        inVoice={voiceState.status === "connected"}
+        inVoice={voiceState.status !== "idle"}
         showUserButton={showUserButton}
         manualStatus={status.manual}
         effectiveStatus={status.effective}
@@ -3348,6 +3331,24 @@ function MainAppContent({
           {/* The call entry points live here, always visible — the sidebar's
               hover affordance does not exist on touch, and a call you cannot
               start from your phone is a call that does not happen. */}
+          {selectedChannel.kind === "server" &&
+            selectedChannel.type === "voice" &&
+            !(
+              voiceState.voiceChannelId === selectedChannel.id &&
+              voiceState.status !== "idle"
+            ) && (
+              <Tooltip label={t("voice.joinNamed", { name: selectedChannel.name })}>
+                <button
+                  type="button"
+                  aria-label={t("voice.join")}
+                  className="flex shrink-0 items-center gap-1.5 rounded-md bg-success/90 px-2.5 py-1.5 text-xs font-semibold text-ink hover:bg-success"
+                  onClick={() => void handleJoinVoice(selectedChannel.id)}
+                >
+                  <Phone className="h-3.5 w-3.5" />
+                  {t("voice.join")}
+                </button>
+              </Tooltip>
+            )}
           {activeConversation &&
             user &&
             (() => {
@@ -3498,6 +3499,47 @@ function MainAppContent({
         )}
       {/* The conversation's call surface: invisible until a call exists, a
           join banner while others talk, the full stage once we are in. */}
+      {selectedChannel.kind === "server" &&
+        selectedChannel.type === "voice" &&
+        user && (
+          <VoiceChannelStage
+            channelId={selectedChannel.id}
+            channelName={selectedChannel.name}
+            currentUser={{
+              id: user.id,
+              displayName: user.displayName,
+              avatarUrl: user.avatarUrl,
+            }}
+            voiceState={voiceState}
+            videoQuality={localSettings.videoQuality}
+            onLeave={() => voice.leave()}
+            onToggleMute={() => voice.toggleMute()}
+            onToggleCamera={() => void voice.toggleCamera()}
+            onVideoQualityChange={handleVideoQualityChange}
+            onStartScreenShare={() =>
+              void voice.startScreenShare(shareSystemAudio)
+            }
+            onStopScreenShare={() => void voice.stopScreenShare()}
+            shareSystemAudio={shareSystemAudio}
+            onShareSystemAudioChange={setShareSystemAudio}
+            onFocusScreenShare={(peerId) => voice.focusScreenShare(peerId)}
+            inputMode={voiceState.inputMode}
+            pushToTalkKeyLabel={
+              supportsKeyBinding()
+                ? formatBinding(localSettings.pushToTalkKey)
+                : null
+            }
+            windowFocused={windowFocused}
+            onPushToTalk={handlePushToTalk}
+            onSetPeerVolume={(userId, volume) =>
+              voice.setPeerVolume(userId, volume)
+            }
+            onRetryPeer={(peerId) => {
+              void voice.retryPeer(peerId);
+            }}
+            compactPeers={localSettings.compactPeers}
+          />
+        )}
       {activeConversation && user && (
         <DmCallStage
           conversation={activeConversation}
@@ -3520,6 +3562,7 @@ function MainAppContent({
           shareSystemAudio={shareSystemAudio}
           onShareSystemAudioChange={setShareSystemAudio}
           onFocusScreenShare={(peerId) => voice.focusScreenShare(peerId)}
+          compactPeers={localSettings.compactPeers}
         />
       )}
       <MessageList
@@ -4030,111 +4073,7 @@ function MainAppContent({
 
         {selectedChannel?.type === "text" && chatPane}
 
-        {selectedChannel?.type === "voice" && (
-          <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
-            <div className="h-[38%] min-h-[160px] shrink-0 lg:h-auto lg:w-[min(100%,20rem)]">
-              <VoicePanel
-                channelName={selectedChannel.name}
-                status={
-                  voiceState.voiceChannelId === selectedChannel.id
-                    ? voiceState.status
-                    : "idle"
-                }
-                remotePeers={
-                  voiceState.voiceChannelId === selectedChannel.id
-                    ? voiceState.remotePeers
-                    : []
-                }
-                self={
-                  voiceState.voiceChannelId === selectedChannel.id
-                    ? voiceState.self
-                    : null
-                }
-                localPeerId={voiceState.peerId}
-                speakingPeerIds={voiceState.speakingPeerIds}
-                isMuted={voiceState.isMuted}
-                isDeafened={voiceState.isDeafened}
-                inputMode={voiceState.inputMode}
-                isTransmitting={voiceState.isTransmitting}
-                pushToTalkKeyLabel={
-                  supportsKeyBinding()
-                    ? formatBinding(localSettings.pushToTalkKey)
-                    : null
-                }
-                windowFocused={windowFocused}
-                onPushToTalk={handlePushToTalk}
-                peerVolumes={voiceState.peerVolumes}
-                error={voiceState.error}
-                compactPeers={localSettings.compactPeers}
-                usingSfu={voiceState.usingSfu}
-                // The room's roster — mute/deafen badges for the other tiles.
-                participants={voiceState.occupancy[selectedChannel.id] ?? []}
-                isSharingScreen={voiceState.isSharingScreen}
-                isSharingScreenAudio={voiceState.isSharingScreenAudio}
-                isSharingSystemAudio={voiceState.isSharingSystemAudio}
-                shareSystemAudio={shareSystemAudio}
-                onShareSystemAudioChange={setShareSystemAudio}
-                // The camera is only ever this machine's when the call in
-                // progress is *this* channel's; the state is a single
-                // controller, so a stale preview would otherwise show up in a
-                // channel you are merely looking at.
-                isCameraOn={
-                  voiceState.voiceChannelId === selectedChannel.id &&
-                  voiceState.isCameraOn
-                }
-                localCameraStream={
-                  voiceState.voiceChannelId === selectedChannel.id
-                    ? voiceState.localCameraStream
-                    : null
-                }
-                videoQuality={localSettings.videoQuality}
-                screenSharePeerIds={
-                  voiceState.voiceChannelId === selectedChannel.id
-                    ? voiceState.screenSharePeerIds
-                    : []
-                }
-                roomTransport={voiceState.roomTransport}
-                onJoin={() => void handleJoinVoice(selectedChannel.id)}
-                onLeave={() => voice.leave()}
-                onToggleMute={() => voice.toggleMute()}
-                onToggleDeafen={() => voice.toggleDeafen()}
-                onSetPeerVolume={(userId, volume) =>
-                  voice.setPeerVolume(userId, volume)
-                }
-                onRetryPeer={(peerId) => {
-                  void voice.retryPeer(peerId);
-                }}
-                onStartScreenShare={() => void voice.startScreenShare(shareSystemAudio)}
-                onStopScreenShare={() => void voice.stopScreenShare()}
-                onToggleCamera={() => void voice.toggleCamera()}
-                // The same handler the conversation call and the Settings
-                // dialog use, so there is one stored choice and three views of
-                // it rather than three settings that drift.
-                onVideoQualityChange={handleVideoQualityChange}
-              />
-            </div>
-            <div className="flex min-h-0 flex-1 flex-col">
-              {voiceState.voiceChannelId === selectedChannel.id &&
-                voiceState.screenSharePeerIds.length > 0 && (
-                  <ScreenStage
-                    tiles={collectScreenTiles({
-                      peerIds: voiceState.screenSharePeerIds,
-                      localPeerId: voiceState.peerId,
-                      localName:
-                        voiceState.self?.displayName ?? t("voice.share.someone"),
-                      localStream: voiceState.localScreenStream,
-                      remotePeers: voiceState.remotePeers,
-                      fallbackName: t("voice.share.someone"),
-                    })}
-                    focusedPeerId={voiceState.focusedScreenPeerId}
-                    onFocus={(peerId) => voice.focusScreenShare(peerId)}
-                    onStopSharing={() => void voice.stopScreenShare()}
-                  />
-                )}
-              {chatPane}
-            </div>
-          </div>
-        )}
+        {selectedChannel?.type === "voice" && chatPane}
       </main>
 
       {/* A SIBLING OF `<main>`, not a child of the chat pane. The root is the

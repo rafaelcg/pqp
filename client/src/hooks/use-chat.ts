@@ -12,7 +12,7 @@ import type {
   ReactionBroadcast,
   ThreadSummary,
 } from "@pqp/shared";
-import { buildReplyExcerpt, MESSAGE_PAGE_SIZE } from "@pqp/shared";
+import { buildReplyExcerpt, clampChatNewlines, MESSAGE_PAGE_SIZE } from "@pqp/shared";
 import { notifyOpenChannelMessage } from "@/lib/notifications";
 import { messagePingsYou } from "@/lib/message-mentions-you";
 import {
@@ -635,6 +635,10 @@ export function createChatController(
       if (!channelId || !currentUserId) {
         return;
       }
+      const clamped = clampChatNewlines(body);
+      if (!clamped && attachments.length === 0) {
+        return;
+      }
       const nonce = createNonce();
       /**
        * The local files, so an image is on screen the instant Enter is pressed
@@ -659,7 +663,7 @@ export function createChatController(
         authorName: currentUser?.displayName ?? "You",
         authorTag: currentUser?.tag ?? null,
         authorAvatarUrl: currentUser?.avatarUrl ?? null,
-        body,
+        body: clamped,
         createdAt: new Date().toISOString(),
         editedAt: null,
         reactions: [],
@@ -699,7 +703,7 @@ export function createChatController(
       emit();
       transmit(
         nonce,
-        body,
+        clamped,
         channelId,
         replyTo?.id,
         optimisticAttachments.map((attachment) => attachment.id),
@@ -740,15 +744,16 @@ export function createChatController(
     },
 
     async editMessage(messageId: string, body: string) {
+      const clamped = clampChatNewlines(body);
       const previous = messages;
       messages = messages.map((message) =>
         message.id === messageId
-          ? { ...message, body, editedAt: new Date().toISOString() }
+          ? { ...message, body: clamped, editedAt: new Date().toISOString() }
           : message,
       );
       emit();
       try {
-        await editMessageRequest(messageId, body);
+        await editMessageRequest(messageId, clamped);
       } catch (error) {
         messages = previous;
         emit();

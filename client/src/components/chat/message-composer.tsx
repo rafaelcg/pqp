@@ -26,6 +26,7 @@ import {
   MicOff,
   Paperclip,
   Pencil,
+  Plus,
   Shuffle,
   Smile,
   Spade,
@@ -280,6 +281,7 @@ export function MessageComposer({
   const [isPickerOpen, setIsPickerOpen] = useState(false);
   const [isGifPickerOpen, setIsGifPickerOpen] = useState(false);
   const [isPollComposerOpen, setIsPollComposerOpen] = useState(false);
+  const [isInsertMenuOpen, setIsInsertMenuOpen] = useState(false);
   const [gifQuery, setGifQuery] = useState("");
   const [isGifSearchEnabled, setIsGifSearchEnabled] = useState(false);
   const [attachmentLimits, setAttachmentLimits] = useState<{
@@ -293,6 +295,7 @@ export function MessageComposer({
   const [menuDismissed, setMenuDismissed] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const insertMenuRef = useRef<HTMLDivElement>(null);
   /** Lets the insert effect append without listing the draft as a dependency. */
   const bodyRef = useRef(body);
   bodyRef.current = body;
@@ -532,11 +535,15 @@ export function MessageComposer({
     node.style.paddingTop = `${COMPOSER_PAD_Y_PX}px`;
     node.style.paddingBottom = `${COMPOSER_PAD_Y_PX}px`;
     node.style.height = "0px";
+    const hasBreak = body.includes("\n");
+    const minHeight = hasBreak
+      ? COMPOSER_PAD_Y_PX * 2 + COMPOSER_LINE_PX * 2
+      : COMPOSER_CONTROL_PX;
     const next = Math.min(
-      Math.max(node.scrollHeight, COMPOSER_CONTROL_PX),
+      Math.max(node.scrollHeight, minHeight),
       MAX_COMPOSER_HEIGHT_PX,
     );
-    if (next <= COMPOSER_CONTROL_PX) {
+    if (next <= COMPOSER_CONTROL_PX && !hasBreak) {
       applyResting();
       setComposerBox({
         height: COMPOSER_CONTROL_PX,
@@ -587,6 +594,29 @@ export function MessageComposer({
     const timer = window.setTimeout(() => setFeedback(null), 5000);
     return () => window.clearTimeout(timer);
   }, [feedback]);
+
+  useEffect(() => {
+    if (!isInsertMenuOpen) {
+      return;
+    }
+    function closeIfOutside(event: PointerEvent) {
+      if (insertMenuRef.current?.contains(event.target as Node)) {
+        return;
+      }
+      setIsInsertMenuOpen(false);
+    }
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setIsInsertMenuOpen(false);
+      }
+    }
+    document.addEventListener("pointerdown", closeIfOutside);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeIfOutside);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [isInsertMenuOpen]);
 
   function syncCaret(input: HTMLTextAreaElement) {
     setCaret(input.selectionStart ?? input.value.length);
@@ -896,6 +926,7 @@ export function MessageComposer({
     } finally {
       setIsRunningSlash(false);
       setIsPickerOpen(false);
+      setIsInsertMenuOpen(false);
     }
   }
 
@@ -955,14 +986,16 @@ export function MessageComposer({
     setCaret(0);
     setIsPickerOpen(false);
     setIsGifPickerOpen(false);
+    setIsInsertMenuOpen(false);
   }
 
   function handleKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key === "Escape") {
-      if (menuKind || isPickerOpen || isGifPickerOpen || feedback) {
+      if (menuKind || isPickerOpen || isGifPickerOpen || isInsertMenuOpen || feedback) {
         event.preventDefault();
         setIsPickerOpen(false);
         setIsGifPickerOpen(false);
+        setIsInsertMenuOpen(false);
         setFeedback(null);
         if (menuKind) {
           setMenuDismissed(true);
@@ -1097,6 +1130,63 @@ export function MessageComposer({
     }
   }
 
+  function keepComposerFocused(event: { preventDefault: () => void }) {
+    if (menuKind) {
+      event.preventDefault();
+    }
+  }
+
+  const insertItems = [
+    isAttachmentsEnabled
+      ? {
+          id: "attach",
+          label: t("composer.attach"),
+          icon: Paperclip,
+          onSelect: () => {
+            setIsInsertMenuOpen(false);
+            fileInputRef.current?.click();
+          },
+        }
+      : null,
+    {
+      id: "emoji",
+      label: t("composer.addEmoji"),
+      icon: Smile,
+      onSelect: () => {
+        setIsInsertMenuOpen(false);
+        setIsGifPickerOpen(false);
+        setIsPollComposerOpen(false);
+        setIsPickerOpen(true);
+      },
+    },
+    slashContext
+      ? {
+          id: "poll",
+          label: t("composer.addPoll"),
+          icon: BarChart3,
+          onSelect: () => {
+            setIsInsertMenuOpen(false);
+            setIsPickerOpen(false);
+            setIsGifPickerOpen(false);
+            setIsPollComposerOpen(true);
+          },
+        }
+      : null,
+    isGifSearchEnabled
+      ? {
+          id: "gif",
+          label: t("composer.addGif"),
+          icon: ImagePlay,
+          onSelect: () => {
+            setIsInsertMenuOpen(false);
+            setIsPickerOpen(false);
+            setGifQuery("");
+            setIsGifPickerOpen(true);
+          },
+        }
+      : null,
+  ].filter((item): item is NonNullable<typeof item> => item !== null);
+
   return (
     <form
       onSubmit={(event) => void handleSubmit(event)}
@@ -1213,129 +1303,145 @@ export function MessageComposer({
       )}
       <div
         className={cn(
-          "flex gap-2",
+          "grid grid-cols-[auto_minmax(0,1fr)_auto] gap-2",
           composerBox.multiline ? "items-end" : "items-center",
         )}
       >
         {isAttachmentsEnabled && (
-          <>
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              // Greys out everything that would only be rejected on the way
-              // back. It is a filter in the OS picker and nothing more — a drop
-              // or a paste bypasses it entirely, so `selectAttachments` is
-              // still the check that counts.
-              accept={ATTACHMENT_MIME_ALLOWLIST.join(",")}
-              className="hidden"
-              onChange={(event) => {
-                addFiles([...(event.target.files ?? [])]);
-                // Cleared so that picking the same file twice in a row still
-                // fires a change event the second time.
-                event.target.value = "";
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            // Greys out everything that would only be rejected on the way
+            // back. It is a filter in the OS picker and nothing more — a drop
+            // or a paste bypasses it entirely, so `selectAttachments` is
+            // still the check that counts.
+            accept={ATTACHMENT_MIME_ALLOWLIST.join(",")}
+            className="hidden"
+            onChange={(event) => {
+              addFiles([...(event.target.files ?? [])]);
+              // Cleared so that picking the same file twice in a row still
+              // fires a change event the second time.
+              event.target.value = "";
+            }}
+          />
+        )}
+        <div className="relative flex items-center">
+          <div ref={insertMenuRef} className="relative sm:hidden">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              disabled={disabled}
+              id="composer-insert"
+              aria-label={t("composer.insert")}
+              aria-haspopup="menu"
+              aria-expanded={isInsertMenuOpen}
+              onClick={() => {
+                setIsPickerOpen(false);
+                setIsGifPickerOpen(false);
+                setIsPollComposerOpen(false);
+                setIsInsertMenuOpen((open) => !open);
               }}
-            />
-            <Tooltip label={t("composer.attach")}>
+              onMouseDown={keepComposerFocused}
+              className={COMPOSER_ICON_BUTTON}
+            >
+              <Plus className="h-5 w-5" />
+            </Button>
+            {isInsertMenuOpen && (
+              <ComposerInsertMenu
+                labelledBy="composer-insert"
+                items={insertItems}
+              />
+            )}
+          </div>
+          <div className="hidden items-center gap-2 sm:flex">
+            {isAttachmentsEnabled && (
+              <Tooltip label={t("composer.attach")}>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  disabled={disabled}
+                  onClick={() => fileInputRef.current?.click()}
+                  onMouseDown={keepComposerFocused}
+                  className={COMPOSER_ICON_BUTTON}
+                >
+                  <Paperclip className="h-5 w-5" />
+                </Button>
+              </Tooltip>
+            )}
+            <Tooltip label={t("composer.addEmoji")}>
               <Button
                 type="button"
                 variant="ghost"
                 size="icon"
                 disabled={disabled}
-                onClick={() => fileInputRef.current?.click()}
-                onMouseDown={(event) => {
-                  if (menuKind) {
-                    event.preventDefault();
-                  }
+                aria-expanded={isPickerOpen}
+                onClick={() => {
+                  setIsGifPickerOpen(false);
+                  setIsPickerOpen((open) => !open);
                 }}
+                onMouseDown={keepComposerFocused}
                 className={COMPOSER_ICON_BUTTON}
               >
-                <Paperclip className="h-5 w-5" />
+                <Smile className="h-5 w-5" />
               </Button>
             </Tooltip>
-          </>
-        )}
-        <Tooltip label={t("composer.addEmoji")}>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            disabled={disabled}
-            aria-expanded={isPickerOpen}
-            onClick={() => {
-              setIsGifPickerOpen(false);
-              setIsPickerOpen((open) => !open);
-            }}
-            onMouseDown={(event) => {
-              if (menuKind) {
-                event.preventDefault();
-              }
-            }}
-            className={COMPOSER_ICON_BUTTON}
-          >
-            <Smile className="h-5 w-5" />
-          </Button>
-        </Tooltip>
-        {slashContext && (
-          <Tooltip label={t("composer.addPoll")}>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              disabled={disabled}
-              aria-expanded={isPollComposerOpen}
-              onClick={() => {
-                setIsPickerOpen(false);
-                setIsGifPickerOpen(false);
-                setIsPollComposerOpen((open) => !open);
-              }}
-              onMouseDown={(event) => {
-                if (menuKind) {
-                  event.preventDefault();
-                }
-              }}
-              className={COMPOSER_ICON_BUTTON}
-            >
-              <BarChart3 className="h-5 w-5" />
-            </Button>
-          </Tooltip>
-        )}
-        {isGifSearchEnabled && (
-          <Tooltip label={t("composer.addGif")}>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              disabled={disabled}
-              aria-expanded={isGifPickerOpen}
-              onClick={() => {
-                setIsPickerOpen(false);
-                // The button always opens on trending. Without this it would
-                // reopen on whatever a previous `/gif <query>` had seeded.
-                setGifQuery("");
-                setIsGifPickerOpen((open) => !open);
-              }}
-              onMouseDown={(event) => {
-                if (menuKind) {
-                  event.preventDefault();
-                }
-              }}
-              className={COMPOSER_ICON_BUTTON}
-            >
-              <ImagePlay className="h-5 w-5" />
-            </Button>
-          </Tooltip>
-        )}
-        <div className="relative flex min-h-10 min-w-0 flex-1 flex-col">
+            {slashContext && (
+              <Tooltip label={t("composer.addPoll")}>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  disabled={disabled}
+                  aria-expanded={isPollComposerOpen}
+                  onClick={() => {
+                    setIsPickerOpen(false);
+                    setIsGifPickerOpen(false);
+                    setIsPollComposerOpen((open) => !open);
+                  }}
+                  onMouseDown={keepComposerFocused}
+                  className={COMPOSER_ICON_BUTTON}
+                >
+                  <BarChart3 className="h-5 w-5" />
+                </Button>
+              </Tooltip>
+            )}
+            {isGifSearchEnabled && (
+              <Tooltip label={t("composer.addGif")}>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  disabled={disabled}
+                  aria-expanded={isGifPickerOpen}
+                  onClick={() => {
+                    setIsPickerOpen(false);
+                    // The button always opens on trending. Without this it would
+                    // reopen on whatever a previous `/gif <query>` had seeded.
+                    setGifQuery("");
+                    setIsGifPickerOpen((open) => !open);
+                  }}
+                  onMouseDown={keepComposerFocused}
+                  className={COMPOSER_ICON_BUTTON}
+                >
+                  <ImagePlay className="h-5 w-5" />
+                </Button>
+              </Tooltip>
+            )}
+          </div>
+        </div>
+        <div className="relative min-h-10 min-w-0">
           {body.length === 0 && (
             <span
               aria-hidden
               className={cn(
-                "pointer-events-none absolute inset-0 z-[1] flex items-center px-3 text-sm text-paper-muted",
+                "pointer-events-none absolute inset-0 z-[1] flex items-center overflow-hidden px-3 text-base leading-10 text-paper-muted sm:text-sm",
                 (disabled || isRunningSlash) && "opacity-50",
               )}
             >
-              {inputPlaceholder}
+              <span className="min-w-0 truncate">{inputPlaceholder}</span>
             </span>
           )}
           <textarea
@@ -1386,7 +1492,7 @@ export function MessageComposer({
         </div>
         <Button
           type="submit"
-          className="h-10"
+          className="h-10 shrink-0"
           // An attachment is a message on its own, so an empty body is only a
           // reason to stay disabled when nothing is attached either.
           disabled={
@@ -1475,5 +1581,42 @@ function AttachmentChip({
         <X className="h-3.5 w-3.5" />
       </button>
     </li>
+  );
+}
+
+function ComposerInsertMenu({
+  labelledBy,
+  items,
+}: {
+  labelledBy: string;
+  items: Array<{
+    id: string;
+    label: string;
+    icon: LucideIcon;
+    onSelect: () => void;
+  }>;
+}) {
+  return (
+    <div
+      role="menu"
+      aria-labelledby={labelledBy}
+      className="absolute bottom-full left-0 z-30 mb-1 min-w-52 rounded-md border border-ink-4 bg-ink-2 py-1 shadow-[var(--shadow-popover)]"
+    >
+      {items.map((item) => {
+        const Icon = item.icon;
+        return (
+          <button
+            key={item.id}
+            type="button"
+            role="menuitem"
+            onClick={item.onSelect}
+            className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-paper hover:bg-ink-3"
+          >
+            <Icon className="h-4 w-4 shrink-0 text-paper-muted" aria-hidden />
+            {item.label}
+          </button>
+        );
+      })}
+    </div>
   );
 }

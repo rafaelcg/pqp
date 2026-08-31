@@ -2,12 +2,23 @@ import { describe, expect, it } from "vitest";
 import {
   callStartKey,
   callStartedAt,
+  cameraSoloId,
   formatCallDuration,
+  hasWatchableVideo,
+  isCameraSoloId,
   isStageCollapsed,
+  isStageGrid,
   markCallStarted,
   nearestCorner,
+  personKeyFromCameraSoloId,
+  pickSpotlightKey,
   rememberStageCollapsed,
+  rememberStageGrid,
+  rememberStagePinnedKey,
+  resolvedStageLayout,
+  shouldShowExpandedStage,
   stageLayout,
+  stagePinnedKey,
 } from "./call-stage-state";
 
 describe("stageLayout", () => {
@@ -28,6 +39,155 @@ describe("stageLayout", () => {
   it("grids a group", () => {
     expect(stageLayout(2, false)).toBe("grid");
     expect(stageLayout(7, false)).toBe("grid");
+  });
+});
+
+describe("hasWatchableVideo", () => {
+  it("is false for a voice-only room", () => {
+    expect(
+      hasWatchableVideo({
+        localCameraOn: false,
+        remoteHasCamera: false,
+        screenShareCount: 0,
+      }),
+    ).toBe(false);
+  });
+
+  it("is true for a local camera, a remote camera, or a share", () => {
+    expect(
+      hasWatchableVideo({
+        localCameraOn: true,
+        remoteHasCamera: false,
+        screenShareCount: 0,
+      }),
+    ).toBe(true);
+    expect(
+      hasWatchableVideo({
+        localCameraOn: false,
+        remoteHasCamera: true,
+        screenShareCount: 0,
+      }),
+    ).toBe(true);
+    expect(
+      hasWatchableVideo({
+        localCameraOn: false,
+        remoteHasCamera: false,
+        screenShareCount: 1,
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("shouldShowExpandedStage", () => {
+  it("hides the stage when there is nothing to watch", () => {
+    expect(shouldShowExpandedStage(false, false)).toBe(false);
+    expect(shouldShowExpandedStage(false, true)).toBe(false);
+  });
+
+  it("expands for video unless the user tucked it away", () => {
+    expect(shouldShowExpandedStage(true, false)).toBe(true);
+    expect(shouldShowExpandedStage(true, true)).toBe(false);
+  });
+
+  it("expands an outgoing ring so Calling and declined stay on the stage", () => {
+    expect(shouldShowExpandedStage(false, false, true)).toBe(true);
+    expect(shouldShowExpandedStage(false, true, true)).toBe(false);
+  });
+});
+
+describe("resolvedStageLayout", () => {
+  it("still lets a share own the stage", () => {
+    expect(
+      resolvedStageLayout({
+        remoteCount: 4,
+        hasScreenShare: true,
+        cameraCount: 3,
+        preferGrid: true,
+      }),
+    ).toBe("screen");
+  });
+
+  it("rings when we are alone, even with a camera", () => {
+    expect(
+      resolvedStageLayout({
+        remoteCount: 0,
+        hasScreenShare: false,
+        cameraCount: 1,
+        preferGrid: false,
+      }),
+    ).toBe("ring");
+  });
+
+  it("spotlights one camera in a populated room", () => {
+    expect(
+      resolvedStageLayout({
+        remoteCount: 4,
+        hasScreenShare: false,
+        cameraCount: 1,
+        preferGrid: false,
+      }),
+    ).toBe("spotlight");
+  });
+
+  it("keeps spotlight for two cameras until grid is asked for", () => {
+    expect(
+      resolvedStageLayout({
+        remoteCount: 2,
+        hasScreenShare: false,
+        cameraCount: 2,
+        preferGrid: false,
+      }),
+    ).toBe("spotlight");
+    expect(
+      resolvedStageLayout({
+        remoteCount: 2,
+        hasScreenShare: false,
+        cameraCount: 2,
+        preferGrid: true,
+      }),
+    ).toBe("grid");
+  });
+});
+
+describe("pickSpotlightKey", () => {
+  const alice = {
+    key: "alice",
+    stream: {},
+    speaking: false,
+    isSelf: false,
+  };
+  const bob = {
+    key: "bob",
+    stream: {},
+    speaking: true,
+    isSelf: false,
+  };
+  const self = {
+    key: "self",
+    stream: {},
+    speaking: false,
+    isSelf: true,
+  };
+
+  it("honours a pin that is still in the room", () => {
+    expect(pickSpotlightKey([self, alice, bob], "alice")).toBe("alice");
+  });
+
+  it("drops a pin that has left", () => {
+    expect(pickSpotlightKey([self, bob], "alice")).toBe("bob");
+  });
+
+  it("prefers a remote person who is speaking on camera", () => {
+    expect(pickSpotlightKey([self, alice, bob], null)).toBe("bob");
+  });
+});
+
+describe("camera solo ids", () => {
+  it("prefixes so they cannot collide with a screen share from the same peer", () => {
+    expect(cameraSoloId("peer-1")).toBe("camera:peer-1");
+    expect(isCameraSoloId("camera:peer-1")).toBe(true);
+    expect(isCameraSoloId("peer-1")).toBe(false);
+    expect(personKeyFromCameraSoloId("camera:peer-1")).toBe("peer-1");
   });
 });
 
@@ -78,6 +238,27 @@ describe("stage collapse memory", () => {
     expect(isStageCollapsed("conv-b")).toBe(false);
     rememberStageCollapsed("conv-a", false);
     expect(isStageCollapsed("conv-a")).toBe(false);
+  });
+});
+
+describe("grid and pin memory", () => {
+  it("defaults to spotlight, not grid", () => {
+    expect(isStageGrid("never-seen-grid")).toBe(false);
+  });
+
+  it("remembers grid vs focus per channel", () => {
+    rememberStageGrid("chan-a", true);
+    rememberStageGrid("chan-b", false);
+    expect(isStageGrid("chan-a")).toBe(true);
+    expect(isStageGrid("chan-b")).toBe(false);
+  });
+
+  it("remembers a pin per channel", () => {
+    expect(stagePinnedKey("never-seen-pin")).toBeNull();
+    rememberStagePinnedKey("chan-pin", "alice");
+    expect(stagePinnedKey("chan-pin")).toBe("alice");
+    rememberStagePinnedKey("chan-pin", null);
+    expect(stagePinnedKey("chan-pin")).toBeNull();
   });
 });
 
