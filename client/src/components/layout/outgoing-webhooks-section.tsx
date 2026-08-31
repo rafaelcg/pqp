@@ -1,7 +1,10 @@
 import type { Channel, OutgoingWebhook } from "@pqp/shared";
-import { useEffect, useState } from "react";
+import { Check, ChevronDown, Copy, Hash, Plus, Webhook } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
+import { UserAvatar } from "@/components/user/user-avatar";
 import {
   ApiError,
   createOutgoingWebhook,
@@ -38,44 +41,425 @@ function messageOf(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
 }
 
-function formatWhen(iso: string | null, empty: string): string {
-  if (!iso) {
-    return empty;
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
   }
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) {
-    return empty;
+}
+
+function formatRelative(iso: string, locale: string): string {
+  const deltaSec = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
+  const rtf = new Intl.RelativeTimeFormat(locale === "pt-BR" ? "pt-BR" : "en", {
+    numeric: "auto",
+  });
+  const abs = Math.abs(deltaSec);
+  if (abs < 45) {
+    return rtf.format(-Math.round(deltaSec), "second");
   }
-  return date.toLocaleString();
+  if (abs < 3600) {
+    return rtf.format(-Math.round(deltaSec / 60), "minute");
+  }
+  if (abs < 86400) {
+    return rtf.format(-Math.round(deltaSec / 3600), "hour");
+  }
+  return rtf.format(-Math.round(deltaSec / 86400), "day");
+}
+
+type Draft = {
+  name: string;
+  url: string;
+  channelIds: string[];
+  skipUserIds: string[];
+  authName: string;
+  authValue: string;
+};
+
+const EMPTY_DRAFT: Draft = {
+  name: "",
+  url: "",
+  channelIds: [],
+  skipUserIds: [],
+  authName: "",
+  authValue: "",
+};
+
+function draftFromHook(hook: OutgoingWebhook): Draft {
+  return {
+    name: hook.name,
+    url: hook.url,
+    channelIds: [...hook.channelIds],
+    skipUserIds: [...hook.skipUserIds],
+    authName: hook.authHeaderName ?? "",
+    authValue: "",
+  };
+}
+
+function ChannelChips({
+  channels,
+  selected,
+  disabled,
+  empty,
+  onToggle,
+}: {
+  channels: Channel[];
+  selected: string[];
+  disabled?: boolean;
+  empty: string;
+  onToggle: (id: string) => void;
+}) {
+  if (channels.length === 0) {
+    return <p className="text-sm text-paper-muted">{empty}</p>;
+  }
+  return (
+    <ul className="flex flex-wrap gap-2">
+      {channels.map((channel) => {
+        const on = selected.includes(channel.id);
+        return (
+          <li key={channel.id}>
+            <button
+              type="button"
+              disabled={disabled}
+              aria-pressed={on}
+              onClick={() => onToggle(channel.id)}
+              className={cn(
+                "inline-flex max-w-full items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm transition-colors",
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60",
+                on
+                  ? "border-signal/45 bg-signal/12 text-paper"
+                  : "border-ink-4 bg-ink text-paper-muted hover:bg-ink-3 hover:text-paper",
+                disabled && "opacity-50",
+              )}
+            >
+              <Hash className="h-3.5 w-3.5 shrink-0" aria-hidden />
+              <span className="min-w-0 truncate">{channel.name}</span>
+            </button>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function SkipPicker({
+  members,
+  selected,
+  query,
+  disabled,
+  searchLabel,
+  onQuery,
+  onToggle,
+}: {
+  members: ServerMember[];
+  selected: string[];
+  query: string;
+  disabled?: boolean;
+  searchLabel: string;
+  onQuery: (value: string) => void;
+  onToggle: (id: string) => void;
+}) {
+  const visible = members.filter(
+    (member) =>
+      !query.trim() ||
+      memberMatchesQuery(member, query) ||
+      selected.includes(member.id),
+  );
+  return (
+    <div className="space-y-2">
+      <Input
+        value={query}
+        placeholder={searchLabel}
+        aria-label={searchLabel}
+        disabled={disabled}
+        className="h-9 rounded-xl border-0 bg-ink-2"
+        onChange={(e) => onQuery(e.target.value)}
+      />
+      <ul className="max-h-48 overflow-y-auto rounded-2xl bg-ink-2">
+        {visible.map((member) => {
+          const shown = memberDisplayName(member);
+          return (
+            <li key={member.id}>
+              <div className="flex items-center gap-2 px-1">
+                <UserAvatar
+                  name={shown}
+                  avatarUrl={member.avatarUrl}
+                  className="h-7 w-7 shrink-0"
+                  fallbackClassName="bg-ink-3 text-[10px]"
+                  rounded="full"
+                />
+                <Switch
+                  className="min-w-0 flex-1"
+                  checked={selected.includes(member.id)}
+                  disabled={disabled}
+                  label={
+                    member.tag ? `${shown} (${member.tag})` : shown
+                  }
+                  onCheckedChange={() => onToggle(member.id)}
+                />
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+function HookForm({
+  draft,
+  textChannels,
+  members,
+  memberQuery,
+  disabled,
+  submitLabel,
+  busyLabel,
+  busy,
+  showAuthValueRequired,
+  authHint,
+  onChange,
+  onMemberQuery,
+  onSubmit,
+  onCancel,
+}: {
+  draft: Draft;
+  textChannels: Channel[];
+  members: ServerMember[];
+  memberQuery: string;
+  disabled?: boolean;
+  submitLabel: string;
+  busyLabel: string;
+  busy: boolean;
+  showAuthValueRequired: boolean;
+  authHint?: string | null;
+  onChange: (next: Draft) => void;
+  onMemberQuery: (value: string) => void;
+  onSubmit: () => void;
+  onCancel: () => void;
+}) {
+  const { t } = useTranslation();
+  const [showSkip, setShowSkip] = useState(draft.skipUserIds.length > 0);
+  const [showAuth, setShowAuth] = useState(
+    Boolean(draft.authName || authHint),
+  );
+  const canSubmit =
+    draft.name.trim().length > 0 &&
+    draft.url.trim().length > 0 &&
+    draft.channelIds.length > 0 &&
+    (!draft.authName || draft.authValue.trim().length > 0 || !showAuthValueRequired);
+
+  function toggleChannel(id: string) {
+    onChange({
+      ...draft,
+      channelIds: draft.channelIds.includes(id)
+        ? draft.channelIds.filter((one) => one !== id)
+        : [...draft.channelIds, id],
+    });
+  }
+
+  function toggleSkip(id: string) {
+    onChange({
+      ...draft,
+      skipUserIds: draft.skipUserIds.includes(id)
+        ? draft.skipUserIds.filter((one) => one !== id)
+        : [...draft.skipUserIds, id],
+    });
+  }
+
+  return (
+    <div className="space-y-5">
+      <label className="block space-y-1.5">
+        <span className="text-xs font-medium text-paper-muted">
+          {t("integrations.nameLabel")}
+        </span>
+        <Input
+          value={draft.name}
+          maxLength={80}
+          placeholder={t("integrations.namePlaceholder")}
+          aria-label={t("integrations.nameLabel")}
+          disabled={disabled}
+          onChange={(e) => onChange({ ...draft, name: e.target.value })}
+        />
+      </label>
+
+      <label className="block space-y-1.5">
+        <span className="text-xs font-medium text-paper-muted">
+          {t("integrations.urlLabel")}
+        </span>
+        <Input
+          value={draft.url}
+          placeholder={t("integrations.urlPlaceholder")}
+          aria-label={t("integrations.urlLabel")}
+          disabled={disabled}
+          onChange={(e) => onChange({ ...draft, url: e.target.value })}
+        />
+        <span className="block text-xs text-paper-muted">
+          {t("integrations.urlHint")}
+        </span>
+      </label>
+
+      <fieldset className="space-y-2">
+        <legend className="text-xs font-medium text-paper-muted">
+          {t("integrations.channelsLabel")}
+        </legend>
+        <ChannelChips
+          channels={textChannels}
+          selected={draft.channelIds}
+          disabled={disabled}
+          empty={t("integrations.channelsEmpty")}
+          onToggle={toggleChannel}
+        />
+      </fieldset>
+
+      <div className="space-y-2">
+        <button
+          type="button"
+          className="flex w-full items-center justify-between rounded-md py-1 text-left text-sm text-paper hover:text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
+          aria-expanded={showSkip}
+          onClick={() => setShowSkip((open) => !open)}
+        >
+          <span>{t("integrations.skipLabel")}</span>
+          <ChevronDown
+            className={cn(
+              "h-4 w-4 text-paper-muted transition-transform",
+              showSkip && "rotate-180",
+            )}
+            aria-hidden
+          />
+        </button>
+        {showSkip && (
+          <div className="space-y-2">
+            <p className="text-xs text-paper-muted">{t("integrations.skipHint")}</p>
+            <SkipPicker
+              members={members}
+              selected={draft.skipUserIds}
+              query={memberQuery}
+              disabled={disabled}
+              searchLabel={t("integrations.skipSearch")}
+              onQuery={onMemberQuery}
+              onToggle={toggleSkip}
+            />
+          </div>
+        )}
+      </div>
+
+      <div className="space-y-2">
+        <button
+          type="button"
+          className="flex w-full items-center justify-between rounded-md py-1 text-left text-sm text-paper hover:text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
+          aria-expanded={showAuth}
+          onClick={() => setShowAuth((open) => !open)}
+        >
+          <span>{t("integrations.authNameLabel")}</span>
+          <ChevronDown
+            className={cn(
+              "h-4 w-4 text-paper-muted transition-transform",
+              showAuth && "rotate-180",
+            )}
+            aria-hidden
+          />
+        </button>
+        {showAuth && (
+          <div className="space-y-2">
+            {authHint && !draft.authValue && (
+              <p className="text-xs text-paper-muted">
+                {t("integrations.authKept", { hint: authHint })}
+              </p>
+            )}
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <label className="space-y-1.5 text-sm text-paper">
+                <span className="text-xs font-medium text-paper-muted">
+                  {t("integrations.authNameLabel")}
+                </span>
+                <select
+                  value={draft.authName}
+                  aria-label={t("integrations.authNameLabel")}
+                  disabled={disabled}
+                  className="h-10 w-full rounded-md border border-ink-4 bg-ink px-3 text-sm text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/50 disabled:opacity-50"
+                  onChange={(e) =>
+                    onChange({
+                      ...draft,
+                      authName: e.target.value,
+                      authValue: e.target.value ? draft.authValue : "",
+                    })
+                  }
+                >
+                  {AUTH_HEADER_OPTIONS.map((option) => (
+                    <option key={option || "none"} value={option}>
+                      {option || t("integrations.authNone")}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="space-y-1.5 text-sm text-paper">
+                <span className="text-xs font-medium text-paper-muted">
+                  {t("integrations.authValueLabel")}
+                </span>
+                <Input
+                  value={draft.authValue}
+                  type="password"
+                  autoComplete="off"
+                  disabled={disabled || !draft.authName}
+                  aria-label={t("integrations.authValueLabel")}
+                  placeholder={
+                    draft.authName === "Authorization"
+                      ? t("integrations.authValuePlaceholder")
+                      : undefined
+                  }
+                  onChange={(e) =>
+                    onChange({ ...draft, authValue: e.target.value })
+                  }
+                />
+              </label>
+            </div>
+            <p className="text-xs text-paper-muted">{t("integrations.authHint")}</p>
+          </div>
+        )}
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        <Button
+          className="min-w-0 whitespace-nowrap"
+          disabled={busy || !canSubmit}
+          onClick={onSubmit}
+        >
+          {busy ? busyLabel : submitLabel}
+        </Button>
+        <Button
+          variant="ghost"
+          className="min-w-0 whitespace-nowrap"
+          disabled={busy}
+          onClick={onCancel}
+        >
+          {t("integrations.cancel")}
+        </Button>
+      </div>
+    </div>
+  );
 }
 
 export function OutgoingWebhooksSection({ serverId }: { serverId: string }) {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   const [hooks, setHooks] = useState<OutgoingWebhook[]>([]);
   const [textChannels, setTextChannels] = useState<Channel[]>([]);
   const [members, setMembers] = useState<ServerMember[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const [name, setName] = useState("");
-  const [url, setUrl] = useState("");
-  const [channelIds, setChannelIds] = useState<string[]>([]);
-  const [skipUserIds, setSkipUserIds] = useState<string[]>([]);
-  const [authName, setAuthName] = useState("");
-  const [authValue, setAuthValue] = useState("");
+  const [composing, setComposing] = useState(false);
+  const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
   const [creating, setCreating] = useState(false);
   const [revealedSecret, setRevealedSecret] = useState<{
     id: string;
     secret: string;
   } | null>(null);
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<"secret" | "url" | null>(null);
+  const [copiedUrlId, setCopiedUrlId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [editName, setEditName] = useState("");
-  const [editUrl, setEditUrl] = useState("");
-  const [editChannelIds, setEditChannelIds] = useState<string[]>([]);
-  const [editSkipUserIds, setEditSkipUserIds] = useState<string[]>([]);
+  const [editDraft, setEditDraft] = useState<Draft>(EMPTY_DRAFT);
   const [memberQuery, setMemberQuery] = useState("");
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   async function reload() {
     const [hookRes, channelRes, memberRes] = await Promise.all([
@@ -109,72 +493,52 @@ export function OutgoingWebhooksSection({ serverId }: { serverId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reload on server change only
   }, [serverId]);
 
-  function toggleChannel(id: string) {
-    setChannelIds((prev) =>
-      prev.includes(id) ? prev.filter((one) => one !== id) : [...prev, id],
-    );
-  }
+  const channelName = useMemo(() => {
+    const map = new Map(textChannels.map((channel) => [channel.id, channel.name]));
+    return (id: string) => map.get(id);
+  }, [textChannels]);
 
-  function toggleSkip(id: string) {
-    setSkipUserIds((prev) =>
-      prev.includes(id) ? prev.filter((one) => one !== id) : [...prev, id],
-    );
-  }
-
-  function toggleEditChannel(id: string) {
-    setEditChannelIds((prev) =>
-      prev.includes(id) ? prev.filter((one) => one !== id) : [...prev, id],
-    );
-  }
-
-  function toggleEditSkip(id: string) {
-    setEditSkipUserIds((prev) =>
-      prev.includes(id) ? prev.filter((one) => one !== id) : [...prev, id],
-    );
-  }
-
-  function startEdit(hook: OutgoingWebhook) {
-    setEditingId(hook.id);
-    setEditName(hook.name);
-    setEditUrl(hook.url);
-    setEditChannelIds([...hook.channelIds]);
-    setEditSkipUserIds([...hook.skipUserIds]);
-  }
-
-  async function copySecret(secret: string) {
+  async function copyText(value: string, kind: "secret" | "url", hookId?: string) {
     try {
-      await navigator.clipboard.writeText(secret);
-      setCopied(true);
+      await navigator.clipboard.writeText(value);
+      setCopied(kind);
+      if (kind === "url" && hookId) {
+        setCopiedUrlId(hookId);
+        window.setTimeout(() => {
+          setCopiedUrlId((current) => (current === hookId ? null : current));
+        }, 1600);
+      }
     } catch {
       setError(t("integrations.copyBlocked"));
     }
   }
 
+  function closeComposer() {
+    setComposing(false);
+    setDraft(EMPTY_DRAFT);
+    setMemberQuery("");
+  }
+
   async function create() {
-    const trimmedName = name.trim();
-    const trimmedUrl = url.trim();
-    if (!trimmedName || !trimmedUrl || channelIds.length === 0) {
+    const trimmedName = draft.name.trim();
+    const trimmedUrl = draft.url.trim();
+    if (!trimmedName || !trimmedUrl || draft.channelIds.length === 0) {
       return;
     }
     setCreating(true);
     setError(null);
-    setCopied(false);
+    setCopied(null);
     try {
       const res = await createOutgoingWebhook(serverId, {
         name: trimmedName,
         url: trimmedUrl,
-        channelIds,
-        skipUserIds,
-        authHeaderName: authName || null,
-        authHeaderValue: authValue.trim() || null,
+        channelIds: draft.channelIds,
+        skipUserIds: draft.skipUserIds,
+        authHeaderName: draft.authName || null,
+        authHeaderValue: draft.authValue.trim() || null,
       });
       setHooks((prev) => [...prev, res.webhook]);
-      setName("");
-      setUrl("");
-      setChannelIds([]);
-      setSkipUserIds([]);
-      setAuthName("");
-      setAuthValue("");
+      closeComposer();
       if (res.webhook.signingSecret) {
         setRevealedSecret({
           id: res.webhook.id,
@@ -188,20 +552,38 @@ export function OutgoingWebhooksSection({ serverId }: { serverId: string }) {
     }
   }
 
+  function startEdit(hook: OutgoingWebhook) {
+    setEditingId(hook.id);
+    setEditDraft(draftFromHook(hook));
+    setConfirmDeleteId(null);
+    setMemberQuery("");
+  }
+
   async function saveEdit(hook: OutgoingWebhook) {
-    const trimmedName = editName.trim();
-    const trimmedUrl = editUrl.trim();
-    if (!trimmedName || !trimmedUrl || editChannelIds.length === 0) {
+    const trimmedName = editDraft.name.trim();
+    const trimmedUrl = editDraft.url.trim();
+    if (!trimmedName || !trimmedUrl || editDraft.channelIds.length === 0) {
       return;
     }
     setBusyId(hook.id);
     setError(null);
     try {
+      const authChanged =
+        editDraft.authName !== (hook.authHeaderName ?? "") ||
+        editDraft.authValue.trim().length > 0;
       const res = await updateOutgoingWebhook(hook.id, {
         name: trimmedName,
         url: trimmedUrl,
-        channelIds: editChannelIds,
-        skipUserIds: editSkipUserIds,
+        channelIds: editDraft.channelIds,
+        skipUserIds: editDraft.skipUserIds,
+        ...(authChanged
+          ? editDraft.authName
+            ? {
+                authHeaderName: editDraft.authName,
+                authHeaderValue: editDraft.authValue.trim(),
+              }
+            : { authHeaderName: null, authHeaderValue: null }
+          : {}),
       });
       setHooks((prev) => prev.map((one) => (one.id === hook.id ? res.webhook : one)));
       setEditingId(null);
@@ -228,7 +610,7 @@ export function OutgoingWebhooksSection({ serverId }: { serverId: string }) {
   async function rotate(hook: OutgoingWebhook) {
     setBusyId(hook.id);
     setError(null);
-    setCopied(false);
+    setCopied(null);
     try {
       const res = await rotateOutgoingWebhookSecret(hook.id);
       setHooks((prev) => prev.map((one) => (one.id === hook.id ? res.webhook : one)));
@@ -246,13 +628,21 @@ export function OutgoingWebhooksSection({ serverId }: { serverId: string }) {
   }
 
   async function remove(hook: OutgoingWebhook) {
+    if (confirmDeleteId !== hook.id) {
+      setConfirmDeleteId(hook.id);
+      return;
+    }
     setBusyId(hook.id);
     setError(null);
     try {
       await deleteOutgoingWebhook(hook.id);
       setHooks((prev) => prev.filter((one) => one.id !== hook.id));
+      setConfirmDeleteId(null);
       if (revealedSecret?.id === hook.id) {
         setRevealedSecret(null);
+      }
+      if (editingId === hook.id) {
+        setEditingId(null);
       }
     } catch (err) {
       setError(messageOf(err, t("integrations.deleteFailed")));
@@ -261,15 +651,9 @@ export function OutgoingWebhooksSection({ serverId }: { serverId: string }) {
     }
   }
 
-  const canCreate =
-    name.trim().length > 0 &&
-    url.trim().length > 0 &&
-    channelIds.length > 0 &&
-    (!authName || authValue.trim().length > 0);
-
   return (
-    <div className="space-y-6">
-      <p className="text-sm text-paper-muted">{t("integrations.lead")}</p>
+    <div className="space-y-5">
+      <p className="text-sm text-paper-muted">{t("integrations.incomingHint")}</p>
 
       {error && (
         <p role="alert" className="text-sm text-danger">
@@ -277,159 +661,35 @@ export function OutgoingWebhooksSection({ serverId }: { serverId: string }) {
         </p>
       )}
 
-      <section className="space-y-3">
-        <h4 className="font-display text-sm font-bold uppercase tracking-wider text-paper-muted">
-          {t("integrations.createTitle")}
-        </h4>
-        <Input
-          value={name}
-          maxLength={80}
-          placeholder={t("integrations.namePlaceholder")}
-          aria-label={t("integrations.nameLabel")}
-          disabled={creating}
-          onChange={(e) => setName(e.target.value)}
-        />
-        <Input
-          value={url}
-          placeholder={t("integrations.urlPlaceholder")}
-          aria-label={t("integrations.urlLabel")}
-          disabled={creating}
-          onChange={(e) => setUrl(e.target.value)}
-        />
-        <p className="text-xs text-paper-muted">{t("integrations.urlHint")}</p>
-
-        <fieldset className="space-y-2">
-          <legend className="text-sm text-paper">{t("integrations.channelsLabel")}</legend>
-          {textChannels.length === 0 && !loading && (
-            <p className="text-sm text-paper-muted">
-              {t("integrations.channelsEmpty")}
-            </p>
-          )}
-          <ul className="max-h-40 space-y-1 overflow-y-auto">
-            {textChannels.map((channel) => (
-              <li key={channel.id}>
-                <label className="flex cursor-pointer items-center gap-2 text-sm text-paper">
-                  <input
-                    type="checkbox"
-                    checked={channelIds.includes(channel.id)}
-                    onChange={() => toggleChannel(channel.id)}
-                  />
-                  <span className="min-w-0">{channel.name}</span>
-                </label>
-              </li>
-            ))}
-          </ul>
-        </fieldset>
-
-        <fieldset className="space-y-2">
-          <legend className="text-sm text-paper">{t("integrations.skipLabel")}</legend>
-          <p className="text-xs text-paper-muted">{t("integrations.skipHint")}</p>
-          <Input
-            value={memberQuery}
-            placeholder={t("integrations.skipSearch")}
-            aria-label={t("integrations.skipSearch")}
-            disabled={creating}
-            onChange={(e) => setMemberQuery(e.target.value)}
-          />
-          <ul className="max-h-40 space-y-1 overflow-y-auto">
-            {members
-              .filter(
-                (member) =>
-                  !memberQuery.trim() ||
-                  memberMatchesQuery(member, memberQuery) ||
-                  skipUserIds.includes(member.id),
-              )
-              .map((member) => (
-                <li key={member.id}>
-                  <label className="flex cursor-pointer items-center gap-2 text-sm text-paper">
-                    <input
-                      type="checkbox"
-                      checked={skipUserIds.includes(member.id)}
-                      onChange={() => toggleSkip(member.id)}
-                    />
-                    <span className="min-w-0 truncate">
-                      {memberDisplayName(member)}
-                      {member.tag ? ` (${member.tag})` : ""}
-                    </span>
-                  </label>
-                </li>
-              ))}
-          </ul>
-        </fieldset>
-
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-          <label className="space-y-1 text-sm text-paper">
-            <span>{t("integrations.authNameLabel")}</span>
-            <select
-              value={authName}
-              aria-label={t("integrations.authNameLabel")}
-              disabled={creating}
-              className="h-10 w-full rounded-md border border-ink-4 bg-ink px-3 text-sm text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/50 disabled:opacity-50"
-              onChange={(e) => {
-                setAuthName(e.target.value);
-                if (!e.target.value) {
-                  setAuthValue("");
-                }
-              }}
-            >
-              {AUTH_HEADER_OPTIONS.map((option) => (
-                <option key={option || "none"} value={option}>
-                  {option || t("integrations.authNone")}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="space-y-1 text-sm text-paper">
-            <span>{t("integrations.authValueLabel")}</span>
-            <Input
-              value={authValue}
-              type="password"
-              autoComplete="off"
-              disabled={creating || !authName}
-              aria-label={t("integrations.authValueLabel")}
-              placeholder={
-                authName === "Authorization"
-                  ? t("integrations.authValuePlaceholder")
-                  : undefined
-              }
-              onChange={(e) => setAuthValue(e.target.value)}
-            />
-          </label>
-        </div>
-        <p className="text-xs text-paper-muted">{t("integrations.authHint")}</p>
-
-        <Button
-          disabled={creating || !canCreate}
-          className="w-full sm:w-auto"
-          onClick={() => void create()}
-        >
-          {creating ? t("integrations.creating") : t("integrations.create")}
-        </Button>
-      </section>
-
       {revealedSecret && (
-        <section className="space-y-2 rounded-lg border border-signal/40 bg-signal/10 p-4">
-          <h4 className="font-display text-sm font-bold uppercase tracking-wider text-paper">
-            {t("integrations.secretTitle")}
-          </h4>
-          <p className="text-sm text-paper-muted">{t("integrations.secretOnce")}</p>
-          <code className="block break-all rounded-md bg-ink px-3 py-2 text-xs text-paper">
+        <section className="space-y-3 rounded-2xl border border-signal/35 bg-signal/10 p-4">
+          <div>
+            <h4 className="text-sm font-semibold text-paper">
+              {t("integrations.secretTitle")}
+            </h4>
+            <p className="mt-1 text-sm text-paper-muted">
+              {t("integrations.secretOnce")}
+            </p>
+          </div>
+          <code className="block break-all rounded-xl bg-ink px-3 py-2.5 font-mono text-xs text-paper">
             {revealedSecret.secret}
           </code>
           <div className="grid grid-cols-2 gap-2">
             <Button
               variant="secondary"
               className="min-w-0 whitespace-nowrap"
-              onClick={() => void copySecret(revealedSecret.secret)}
+              onClick={() => void copyText(revealedSecret.secret, "secret")}
             >
-              {copied ? t("integrations.secretCopied") : t("integrations.copySecret")}
+              {copied === "secret"
+                ? t("integrations.secretCopied")
+                : t("integrations.copySecret")}
             </Button>
             <Button
               variant="ghost"
               className="min-w-0 whitespace-nowrap"
               onClick={() => {
                 setRevealedSecret(null);
-                setCopied(false);
+                setCopied(null);
               }}
             >
               {t("integrations.secretDismiss")}
@@ -438,166 +698,195 @@ export function OutgoingWebhooksSection({ serverId }: { serverId: string }) {
         </section>
       )}
 
-      <section className="space-y-3">
+      <div className="flex items-center justify-between gap-3">
         <h4 className="font-display text-sm font-bold uppercase tracking-wider text-paper-muted">
           {t("integrations.listTitle")}
         </h4>
-        {loading && (
-          <p className="text-sm text-paper-muted">{t("integrations.loading")}</p>
+        {!composing && (
+          <Button
+            size="sm"
+            className="shrink-0"
+            onClick={() => {
+              setComposing(true);
+              setEditingId(null);
+              setDraft(EMPTY_DRAFT);
+              setMemberQuery("");
+            }}
+          >
+            <Plus className="h-4 w-4" aria-hidden />
+            {t("integrations.add")}
+          </Button>
         )}
-        {!loading && hooks.length === 0 && (
-          <p className="text-sm text-paper-muted">{t("integrations.empty")}</p>
-        )}
-        <ul className="space-y-4">
-          {hooks.map((hook) => (
+      </div>
+
+      {composing && (
+        <section className="rounded-2xl border border-ink-4 bg-ink-2/60 p-4">
+          <h5 className="mb-4 text-sm font-semibold text-paper">
+            {t("integrations.createTitle")}
+          </h5>
+          <HookForm
+            draft={draft}
+            textChannels={textChannels}
+            members={members}
+            memberQuery={memberQuery}
+            disabled={creating}
+            submitLabel={t("integrations.create")}
+            busyLabel={t("integrations.creating")}
+            busy={creating}
+            showAuthValueRequired
+            onChange={setDraft}
+            onMemberQuery={setMemberQuery}
+            onSubmit={() => void create()}
+            onCancel={closeComposer}
+          />
+        </section>
+      )}
+
+      {loading && (
+        <p className="text-sm text-paper-muted">{t("integrations.loading")}</p>
+      )}
+
+      {!loading && hooks.length === 0 && !composing && (
+        <div className="flex flex-col items-center rounded-2xl border border-dashed border-ink-4 bg-ink-2/40 px-6 py-10 text-center">
+          <span className="flex h-11 w-11 items-center justify-center rounded-full bg-ink-3 text-paper-muted">
+            <Webhook className="h-5 w-5" aria-hidden />
+          </span>
+          <p className="mt-3 text-sm font-medium text-paper">
+            {t("integrations.empty")}
+          </p>
+          <p className="mt-1 max-w-sm text-xs text-paper-muted">
+            {t("integrations.emptyHint")}
+          </p>
+          <Button
+            className="mt-4"
+            onClick={() => {
+              setComposing(true);
+              setDraft(EMPTY_DRAFT);
+            }}
+          >
+            <Plus className="h-4 w-4" aria-hidden />
+            {t("integrations.add")}
+          </Button>
+        </div>
+      )}
+
+      <ul className="space-y-3">
+        {hooks.map((hook) => {
+          const editing = editingId === hook.id;
+          const channelNames = hook.channelIds
+            .map((id) => channelName(id))
+            .filter((name): name is string => Boolean(name));
+          return (
             <li
               key={hook.id}
-              className="space-y-3 rounded-lg border border-ink-4 p-4"
+              className="space-y-3 rounded-2xl border border-ink-4 bg-ink-2/40 p-4"
             >
-              <div className="flex flex-wrap items-baseline justify-between gap-2">
-                <h5 className="min-w-0 text-sm font-semibold text-paper">
-                  {hook.name}
-                </h5>
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <h5 className="truncate text-sm font-semibold text-paper">
+                    {hook.name}
+                  </h5>
+                  <button
+                    type="button"
+                    className="mt-0.5 flex max-w-full items-center gap-1.5 text-xs text-paper-muted hover:text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
+                    title={hook.url}
+                    onClick={() => void copyText(hook.url, "url", hook.id)}
+                  >
+                    <span className="truncate">{hostOf(hook.url)}</span>
+                    {copiedUrlId === hook.id ? (
+                      <Check className="h-3.5 w-3.5 shrink-0 text-signal" aria-hidden />
+                    ) : (
+                      <Copy className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                    )}
+                    <span className="sr-only">{t("integrations.copyUrl")}</span>
+                  </button>
+                </div>
                 <span
                   className={cn(
-                    "text-xs uppercase tracking-wider",
-                    hook.status === "active" && "text-signal",
-                    hook.status === "failing" && "text-danger",
-                    hook.status === "disabled" && "text-paper-muted",
+                    "shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide",
+                    hook.status === "active" && "bg-signal/15 text-signal",
+                    hook.status === "failing" && "bg-danger/15 text-danger",
+                    hook.status === "disabled" && "bg-ink-3 text-paper-muted",
                   )}
                 >
                   {t(STATUS_KEYS[hook.status])}
                 </span>
               </div>
-              <p className="break-all text-xs text-paper-muted">{hook.url}</p>
-              {editingId === hook.id ? (
-                <div className="space-y-3">
-                  <Input
-                    value={editName}
-                    maxLength={80}
-                    aria-label={t("integrations.nameLabel")}
-                    disabled={busyId === hook.id}
-                    onChange={(e) => setEditName(e.target.value)}
-                  />
-                  <Input
-                    value={editUrl}
-                    aria-label={t("integrations.urlLabel")}
-                    disabled={busyId === hook.id}
-                    onChange={(e) => setEditUrl(e.target.value)}
-                  />
-                  <fieldset className="space-y-2">
-                    <legend className="text-sm text-paper">
-                      {t("integrations.channelsLabel")}
-                    </legend>
-                    <ul className="max-h-40 space-y-1 overflow-y-auto">
-                      {textChannels.map((channel) => (
-                        <li key={channel.id}>
-                          <label className="flex cursor-pointer items-center gap-2 text-sm text-paper">
-                            <input
-                              type="checkbox"
-                              checked={editChannelIds.includes(channel.id)}
-                              onChange={() => toggleEditChannel(channel.id)}
-                            />
-                            <span className="min-w-0">{channel.name}</span>
-                          </label>
-                        </li>
-                      ))}
-                    </ul>
-                  </fieldset>
-                  <fieldset className="space-y-2">
-                    <legend className="text-sm text-paper">
-                      {t("integrations.skipLabel")}
-                    </legend>
-                    <ul className="max-h-40 space-y-1 overflow-y-auto">
-                      {members.map((member) => (
-                        <li key={member.id}>
-                          <label className="flex cursor-pointer items-center gap-2 text-sm text-paper">
-                            <input
-                              type="checkbox"
-                              checked={editSkipUserIds.includes(member.id)}
-                              onChange={() => toggleEditSkip(member.id)}
-                            />
-                            <span className="min-w-0 truncate">
-                              {memberDisplayName(member)}
-                              {member.tag ? ` (${member.tag})` : ""}
-                            </span>
-                          </label>
-                        </li>
-                      ))}
-                    </ul>
-                  </fieldset>
-                  <div className="grid grid-cols-2 gap-2">
-                    <Button
-                      size="sm"
-                      className="min-w-0 whitespace-nowrap"
-                      disabled={
-                        busyId === hook.id ||
-                        !editName.trim() ||
-                        !editUrl.trim() ||
-                        editChannelIds.length === 0
-                      }
-                      onClick={() => void saveEdit(hook)}
-                    >
-                      {t("integrations.save")}
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="min-w-0 whitespace-nowrap"
-                      disabled={busyId === hook.id}
-                      onClick={() => setEditingId(null)}
-                    >
-                      {t("integrations.cancel")}
-                    </Button>
-                  </div>
-                </div>
+
+              {editing ? (
+                <HookForm
+                  draft={editDraft}
+                  textChannels={textChannels}
+                  members={members}
+                  memberQuery={memberQuery}
+                  disabled={busyId === hook.id}
+                  submitLabel={t("integrations.save")}
+                  busyLabel={t("integrations.save")}
+                  busy={busyId === hook.id}
+                  showAuthValueRequired={
+                    Boolean(editDraft.authName) &&
+                    editDraft.authName !== (hook.authHeaderName ?? "")
+                  }
+                  authHint={hook.authHeaderHint}
+                  onChange={setEditDraft}
+                  onMemberQuery={setMemberQuery}
+                  onSubmit={() => void saveEdit(hook)}
+                  onCancel={() => setEditingId(null)}
+                />
               ) : (
                 <>
+                  <div className="flex flex-wrap gap-1.5">
+                    {channelNames.length > 0
+                      ? channelNames.map((name) => (
+                          <span
+                            key={name}
+                            className="inline-flex items-center gap-1 rounded-full bg-ink px-2 py-0.5 text-xs text-paper-muted"
+                          >
+                            <Hash className="h-3 w-3" aria-hidden />
+                            {name}
+                          </span>
+                        ))
+                      : (
+                          <span className="text-xs text-paper-muted">
+                            {t("integrations.channelsUnknown")}
+                          </span>
+                        )}
+                    {hook.skipUsers.map((user) => (
+                      <span
+                        key={user.id}
+                        className="inline-flex items-center rounded-full bg-ink px-2 py-0.5 text-xs text-paper-muted"
+                      >
+                        {t("integrations.skipChip", {
+                          name: user.tag || user.displayName,
+                        })}
+                      </span>
+                    ))}
+                  </div>
                   <p className="text-xs text-paper-muted">
-                    {t("integrations.channelsSummary", {
-                      names:
-                        textChannels
-                          .filter((channel) => hook.channelIds.includes(channel.id))
-                          .map((channel) => channel.name)
-                          .join(", ") || t("integrations.channelsUnknown"),
-                    })}
+                    {hook.lastDeliveredAt
+                      ? t("integrations.delivered", {
+                          when: formatRelative(hook.lastDeliveredAt, locale),
+                        })
+                      : t("integrations.neverDelivered")}
                   </p>
-                  {hook.skipUsers.length > 0 && (
-                    <p className="text-xs text-paper-muted">
-                      {t("integrations.skipSummary", {
-                        names: hook.skipUsers
-                          .map((user) => user.tag || user.displayName)
-                          .join(", "),
-                      })}
+                  {hook.lastError && (
+                    <p className="rounded-xl bg-danger/10 px-3 py-2 text-xs text-danger">
+                      {hook.lastError}
                     </p>
                   )}
                 </>
               )}
-              <p className="text-xs text-paper-muted">
-                {t("integrations.secretHint", { hint: hook.secretHint })}
-              </p>
-              <p className="text-xs text-paper-muted">
-                {t("integrations.lastDelivery")}:{" "}
-                {formatWhen(hook.lastDeliveredAt, t("integrations.neverDelivered"))}
-              </p>
-              {hook.lastError && (
-                <p className="text-xs text-danger">
-                  {t("integrations.lastError")}: {hook.lastError}
-                </p>
-              )}
+
+              {!editing && (
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                 <Button
                   variant="secondary"
                   size="sm"
                   className="min-w-0 whitespace-nowrap"
                   disabled={busyId === hook.id}
-                  onClick={() =>
-                    editingId === hook.id ? setEditingId(null) : startEdit(hook)
-                  }
+                  onClick={() => startEdit(hook)}
                 >
-                  {editingId === hook.id
-                    ? t("integrations.cancel")
-                    : t("integrations.edit")}
+                  {t("integrations.edit")}
                 </Button>
                 <Button
                   variant="secondary"
@@ -631,13 +920,16 @@ export function OutgoingWebhooksSection({ serverId }: { serverId: string }) {
                   disabled={busyId === hook.id}
                   onClick={() => void remove(hook)}
                 >
-                  {t("integrations.delete")}
+                  {confirmDeleteId === hook.id
+                    ? t("integrations.deleteConfirm")
+                    : t("integrations.delete")}
                 </Button>
               </div>
+              )}
             </li>
-          ))}
-        </ul>
-      </section>
+          );
+        })}
+      </ul>
     </div>
   );
 }
