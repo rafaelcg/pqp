@@ -12,14 +12,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
-    name: Lint, typecheck, test, build
+  checks:
     runs-on: ubuntu-latest
-    # E2E is serial (one worker, shared DB) and now includes voice-quality
-    # plus appearance specs. 20 minutes cancelled a green run on the last
-    # step. 30 minutes cancelled mid-E2E when video-stage retries each ate
-    # their 2-minute budget.
-    timeout-minutes: 45
+    timeout-minutes: 15
 
     # The authorization matrix is covered by integration tests that run against a
     # real database — a mocked one would not catch a wrong SQL predicate.
@@ -99,24 +94,6 @@ jobs:
         env:
           BENCH_MAX_LEAKS: "0"
 
-      - name: Install Playwright browser
-        run: pnpm --filter @pqp/client exec playwright install --with-deps chromium
-
-      - name: E2E
-        run: pnpm --filter @pqp/client e2e
-        env:
-          E2E_DATABASE_URL: postgres://pqp:pqp@localhost:5432/pqp
-
-      - name: Upload E2E artifacts
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: playwright-report
-          path: |
-            client/test-results
-            client/e2e-results.json
-          retention-days: 7
-
       - name: Build client
         env:
           # Publishable key is public; placeholder keeps the Vite build green in PRs.
@@ -135,3 +112,89 @@ jobs:
       - name: Bundle Pages functions
         working-directory: client
         run: npx wrangler pages functions build --outfile=/tmp/functions-bundle.js
+
+  # The Playwright suite runs on one worker (shared DB, computed-colour
+  # assertions) and took ~18 minutes serial, which dominated the old single
+  # job's ~24 minutes. Four shards, each with its own postgres service, bring
+  # the wall clock down without touching the worker count. The suite boots the
+  # server via `tsx watch` and the client via `vite dev` (see
+  # client/playwright.config.ts webServer), so only @pqp/shared needs a build
+  # here.
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: pqp
+          POSTGRES_PASSWORD: pqp
+          POSTGRES_DB: pqp
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U pqp"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgres://pqp:pqp@localhost:5432/pqp
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        # Version comes from the root package.json "packageManager" field.
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build shared
+        run: pnpm --filter @pqp/shared build
+
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Install Playwright browser
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: pnpm --filter @pqp/client exec playwright install --with-deps chromium
+
+      # A cache hit restores the browser binaries but not the apt packages the
+      # runner image may be missing; install-deps alone is cheap.
+      - name: Install Playwright system deps
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: pnpm --filter @pqp/client exec playwright install-deps chromium
+
+      - name: E2E (shard ${{ matrix.shard }}/4)
+        run: pnpm --filter @pqp/client e2e --shard=${{ matrix.shard }}/4
+        env:
+          E2E_DATABASE_URL: postgres://pqp:pqp@localhost:5432/pqp
+
+      - name: Upload E2E artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          # upload-artifact@v4 hard-fails on duplicate names across matrix jobs.
+          name: playwright-report-${{ matrix.shard }}
+          path: |
+            client/test-results
+            client/e2e-results.json
+          retention-days: 7
