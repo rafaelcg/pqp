@@ -4,7 +4,6 @@ import {
   HeadphoneOff,
   Lock,
   MicOff,
-  Phone,
   Plus,
   ScreenShare,
   Search,
@@ -1190,17 +1189,15 @@ function ChannelRow({
             className="absolute -left-1 top-1/2 h-4 w-1 -translate-y-1/2 rounded-r-full bg-paper"
           />
         )}
+        {/* A voice row is the call: one click joins it, the way a text row
+            opens its channel. The old phone tile and double-click were two
+            more ways to do the same thing, and the tile read as a state
+            ("someone is calling") rather than an action. Connected rows
+            fall back to plain selection, so clicking the room you are in
+            just shows it. */}
         <button
           type="button"
-          onClick={onSelect}
-          onDoubleClick={
-            onJoinVoice && !connected
-              ? (event) => {
-                  event.preventDefault();
-                  onJoinVoice();
-                }
-              : undefined
-          }
+          onClick={onJoinVoice && !connected ? onJoinVoice : onSelect}
           className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
         >
           {icon}
@@ -1234,24 +1231,6 @@ function ChannelRow({
             )}
           </span>
         </button>
-        {onJoinVoice && !connected && (
-          <Tooltip label={t("voice.joinNamed", { name: channel.name })}>
-            <button
-              type="button"
-              data-channel-join=""
-              draggable={false}
-              className={cn(CHANNEL_ACTION_TILE, "text-paper-muted")}
-              aria-label={t("voice.joinNamed", { name: channel.name })}
-              onClick={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                onJoinVoice();
-              }}
-            >
-              <Phone className="h-3.5 w-3.5" />
-            </button>
-          </Tooltip>
-        )}
         {onToggleFavorite && (
           <Tooltip
             label={
@@ -1266,9 +1245,12 @@ function ChannelRow({
               draggable={false}
               className={cn(
                 CHANNEL_ACTION_TILE,
+                // The star slides in from the right edge on hover and stays
+                // put once the channel is a favourite.
+                "transition-[opacity,transform] duration-150 ease-out motion-reduce:transition-none",
                 isFavorite
                   ? "text-warning"
-                  : "text-paper-muted opacity-0 group-hover:opacity-100 group-focus-within:opacity-100",
+                  : "translate-x-2 text-paper-muted opacity-0 group-hover:translate-x-0 group-hover:opacity-100 group-focus-within:translate-x-0 group-focus-within:opacity-100",
               )}
               aria-label={
                 isFavorite
