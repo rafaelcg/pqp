@@ -1560,12 +1560,16 @@ function MainAppContent({
 
         let initialChannelId: string | null = null;
         const first = serverList[0];
-        // A URL that already names a channel owns the first navigation. Without
-        // this the bootstrap opens the first text channel anyway and `syncRoute`
-        // rewrites the address bar, so a shared `/message/<id>` link is thrown
-        // away before the deep-link effect below ever reads it — permalinks
-        // worked only in a tab that was already running.
+        // A URL that already names a server or channel owns the first
+        // navigation. Without this the bootstrap opens the first text channel
+        // anyway and `syncRoute` rewrites the address bar, so a shared
+        // `/message/<id>` link is thrown away before the deep-link effect
+        // below ever reads it — permalinks worked only in a tab that was
+        // already running. The same race hits `/app/server/<id>` (no channel):
+        // bootstrap's `onReady` openChannel(initial) can overwrite the deep
+        // link's landing (Home, or first text) and leave "Pick a channel".
         const deepLink = parseAppRoute(window.location.pathname);
+        const deepLinksServer = deepLink?.kind === "channel";
         const deepLinksChannel =
           deepLink?.kind === "channel" && deepLink.channelId !== null;
         // A conversation link owns the navigation outright: opening a server
@@ -1573,7 +1577,7 @@ function MainAppContent({
         // back, and the trip through a server is a fetch nobody asked for.
         const deepLinksConversation = deepLink?.kind === "conversation";
 
-        if (first && !deepLinksConversation) {
+        if (first && !deepLinksConversation && !deepLinksServer) {
           setSelection({ kind: "server", serverId: first.id });
           setChannelsLoading(true);
           try {
@@ -1587,6 +1591,7 @@ function MainAppContent({
               : pickServerLandingTarget(
                   channelList,
                   isCommunityHomeEnabled(),
+                  Boolean(first.isCommunity),
                 );
             initialChannelId = land?.id ?? null;
             void loadUnread(first.id);
@@ -2085,9 +2090,11 @@ function MainAppContent({
         setAppError(null);
         setChannels(list);
         void loadUnread(serverId);
+        const server = serversRef.current.find((row) => row.id === serverId);
         const land = pickServerLandingTarget(
           list,
           isCommunityHomeEnabled(),
+          Boolean(server?.isCommunity),
         );
         if (land) {
           await selectChannel(land.id, serverId);
@@ -2524,9 +2531,13 @@ function MainAppContent({
             setHighlightMessageId(targetMessageId);
           }
         } else {
+          const targetServer = serversRef.current.find(
+            (row) => row.id === targetServerId,
+          );
           const land = pickServerLandingTarget(
             list,
             isCommunityHomeEnabled(),
+            Boolean(targetServer?.isCommunity),
           );
           if (land) {
             await selectChannel(land.id, targetServerId);
@@ -3165,7 +3176,9 @@ function MainAppContent({
       ? channels.find((c) => c.id === selectedChannelId)
       : undefined;
   const selectedServer = servers.find((s) => s.id === selectedServerId);
-  const communityHomeEnabled = isCommunityHomeEnabled();
+  const communityHomeFlagOn = isCommunityHomeEnabled();
+  const communityHomeEnabled =
+    communityHomeFlagOn && Boolean(selectedServer?.isCommunity);
   const communityHomeOpen =
     selection.kind === "server" &&
     isCommunityHomeChannelId(selectedChannelId) &&
@@ -4103,11 +4116,10 @@ function MainAppContent({
           <CommunityHomeFeed
             serverId={selectedServer.id}
             serverName={selectedServer.name}
-            channels={channels}
             authorName={user?.displayName ?? user?.username ?? "você"}
+            canManageServer={canManageServer}
             isOwner={selectedServer.role === "owner"}
             isVip={meVip}
-            onJoinVoice={handleJoinVoiceFromList}
             onOpenNav={() => setMobileNavOpen(true)}
           />
         )}
@@ -4306,6 +4318,7 @@ function MainAppContent({
           const land = pickServerLandingTarget(
             newChannels,
             isCommunityHomeEnabled(),
+            Boolean(server.isCommunity),
           );
           if (land) {
             await selectChannel(land.id, server.id);

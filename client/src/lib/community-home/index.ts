@@ -24,13 +24,36 @@ export {
 } from "./visibility";
 export { pickServerLandingTarget } from "./landing";
 export {
+  COMMUNITY_HOME_MAX_BYTES,
+  formatHomeBytes,
+  parseYoutubeVideoId,
+  youtubeEmbedSrc,
+  isHomeVideoFile,
+  isHomeImageFile,
+  readFileAsDataUrl,
+  type CommunityHomeMedia,
+  type CommunityHomeMediaKind,
+} from "./media";
+export {
+  COMMUNITY_HOME_POSTS_VERSION,
   seedCommunityHomePosts,
   loadCommunityHomePosts,
   saveCommunityHomePosts,
   createCommunityHomePost,
   prependCommunityHomePost,
+  upsertCommunityHomePost,
+  updateCommunityHomePost,
+  deleteCommunityHomePost,
+  addCommunityHomeComment,
+  deleteCommunityHomeComment,
+  visibleCommunityHomePosts,
+  homeMediaFromFile,
+  homeMediaFromYoutube,
+  homeMediaKindFromFile,
   resolveHomeVoiceChannelId,
   type CommunityHomePost,
   type CommunityHomeComposeInput,
-  type CommunityHomeMedia,
+  type CommunityHomeComment,
+  type CommunityHomePostStatus,
+  type CommunityHomeAuthorBadge,
 } from "./posts";
