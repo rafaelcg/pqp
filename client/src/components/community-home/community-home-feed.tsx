@@ -7,7 +7,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { useTranslation } from "@/lib/i18n";
+import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import {
   addCommunityHomeComment,
@@ -48,6 +48,13 @@ type Props = {
 };
 
 type StaffTab = "compose" | "preview";
+
+/** Catalogue keys for resolved viewer roles — never interpolate into t(). */
+const VIEWER_ROLE_LABEL: Record<CommunityHomeViewerRole, MessageKey> = {
+  owner: "communityHome.viewer.owner",
+  free: "communityHome.viewer.free",
+  vip: "communityHome.viewer.vip",
+};
 
 function relativeDayLabel(
   iso: string,
@@ -510,7 +517,7 @@ type ComposeState = {
   media: CommunityHomeMedia | null;
   editingId: string | null;
   commentsEnabled: boolean;
-  errorKey: string | null;
+  errorKey: MessageKey | null;
 };
 
 const emptyCompose = (): ComposeState => ({
@@ -912,7 +919,7 @@ export function CommunityHomeFeed({
           {t("communityHome.note")}
           {canManageServer && staffTab === "preview"
             ? ` · ${t("communityHome.viewer.showing", {
-                role: t(`communityHome.viewer.${viewer}`),
+                role: t(VIEWER_ROLE_LABEL[viewer]),
               })}`
             : null}
         </p>
