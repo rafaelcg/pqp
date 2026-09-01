@@ -82,7 +82,8 @@ describe("ChannelList Community Home row", () => {
     expect(html).not.toContain("data-community-home-row");
   });
 
-  it("flag on: pins Home above TEXT", () => {
+  it("flag on: pins Home above TEXT on a private (non-community) server", () => {
+    expect(server.isCommunity).toBe(false);
     const html = renderList(
       <ChannelList
         {...baseProps}

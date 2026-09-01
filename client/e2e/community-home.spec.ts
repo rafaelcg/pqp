@@ -8,7 +8,8 @@ import { openApp } from "./fixtures";
  * `VITE_COMMUNITY_HOME_ENABLED` into the shared Vite webServer — that would
  * turn the surface on for every other e2e that shares the process.
  *
- * Needs a listed community: Home only appears / lands on `isCommunity` servers.
+ * Row: flag on → Home shows on any server (including private halls).
+ * Landing: flag on + isCommunity → Home; private halls still land on text.
  */
 
 const API = process.env.E2E_API_URL ?? "http://localhost:3101";
@@ -173,7 +174,7 @@ test.describe("Community Home", () => {
     await expect(seedWithComments.locator("[data-home-comment]").first()).toBeVisible();
   });
 
-  test("private (non-community) server does not show Home even with latch", async ({
+  test("private server with latch shows Home row but lands on text", async ({
     page,
   }) => {
     // openApp seeds a plain "E2E" server that is not a community.
@@ -182,7 +183,14 @@ test.describe("Community Home", () => {
     await expect(page.getByText("Dev auth bypass")).toBeVisible({
       timeout: 20_000,
     });
-    await expect(page.locator("[data-community-home-row]")).toHaveCount(0);
+    // Row is available on private halls when the flag is on…
+    await expect(page.locator("[data-community-home-row]")).toBeVisible({
+      timeout: 20_000,
+    });
+    // …but landing stays on a real text channel (not auto-open Home).
     await expect(page.locator("[data-community-home-feed]")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Send" })).toBeVisible({
+      timeout: 20_000,
+    });
   });
 });
