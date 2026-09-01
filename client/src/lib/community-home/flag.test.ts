@@ -22,7 +22,10 @@ function memoryStorage(initial: Record<string, string> = {}) {
 
 describe("isCommunityHomeEnabled", () => {
   it("is off by default (flag-off path)", () => {
-    expect(isCommunityHomeEnabled(undefined, "", memoryStorage())).toBe(false);
+    // Pass "" rather than undefined: an explicit undefined still triggers the
+    // default parameter, which reads Vite's env (and can be true in a local
+    // .env used for manual demos).
+    expect(isCommunityHomeEnabled("", "", memoryStorage())).toBe(false);
   });
 
   it("turns on from VITE env", () => {
@@ -32,14 +35,12 @@ describe("isCommunityHomeEnabled", () => {
 
   it("turns on from localStorage latch", () => {
     const storage = memoryStorage({ [COMMUNITY_HOME_STORAGE_KEY]: "1" });
-    expect(isCommunityHomeEnabled(undefined, "", storage)).toBe(true);
+    expect(isCommunityHomeEnabled("", "", storage)).toBe(true);
   });
 
   it("turns on from ?communityHome=1 and sticky-writes storage", () => {
     const storage = memoryStorage();
-    expect(isCommunityHomeEnabled(undefined, "?communityHome=1", storage)).toBe(
-      true,
-    );
+    expect(isCommunityHomeEnabled("", "?communityHome=1", storage)).toBe(true);
     expect(storage.getItem(COMMUNITY_HOME_STORAGE_KEY)).toBe("1");
   });
 
