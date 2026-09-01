@@ -54,6 +54,11 @@ enum RealtimeEvent: Sendable {
     /// about. The web client has refetched on this frame since roles shipped;
     /// this app dropped it on the floor as `.other`.
     case permissionsUpdate(serverId: String, version: Int?)
+    /// `serverId`'s Baú changed (a publish, a comment, a deletion), so re-read
+    /// it. Content-free like `permissionsUpdate`, and server-scoped: it goes to
+    /// every member, never through a channel relay. Likes deliberately do not
+    /// send it. See `packages/shared/src/community-home.ts`.
+    case communityHomeUpdate(serverId: String)
 
     // Voice signalling. The server is a pure relay for offer/answer/candidate;
     // everything else here is room membership.
@@ -713,6 +718,9 @@ actor RealtimeClient {
         case "permissions-update":
             guard let serverId = envelope.serverId else { return }
             event = .permissionsUpdate(serverId: serverId, version: envelope.version)
+        case "community-home-update":
+            guard let serverId = envelope.serverId else { return }
+            event = .communityHomeUpdate(serverId: serverId)
 
         case "welcome":
             guard let peerId = envelope.peerId,

@@ -66,7 +66,16 @@ class ModelShapeTest {
 
     @Test
     fun `ServerSummary matches serverSchema`() {
-        assertSubsetOfSchema(ServerSummary.serializer(), api, "serverSchema")
+        assertSubsetOfSchema(
+            ServerSummary.serializer(),
+            api,
+            "serverSchema",
+            // The Baú's per-server switch. It reaches `serverSchema` on main
+            // with the Community Home branch (PR #176); until then the field
+            // is on the staging API only, and this client decodes it to its
+            // default. Drop this extra once the schema carries it.
+            knownExtras = setOf("communityHomeEnabled"),
+        )
     }
 
     @Test

@@ -64,6 +64,13 @@ data class ServerSummary(
     val iconUrl: String? = null,
     val bannerUrl: String? = null,
     val isCommunity: Boolean = false,
+    /**
+     * The owner's own switch for the Baú (`servers.community_home_enabled`).
+     * Defaulted, because a server that predates the feature does not send it
+     * and must still decode. The row needs this AND the instance flag from
+     * `GET /api/community-home/config`; see `gg.pqp.app.bau`.
+     */
+    val communityHomeEnabled: Boolean = false,
 )
 
 @Serializable

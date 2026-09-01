@@ -92,10 +92,16 @@ struct Server: Codable, Identifiable, Hashable, Sendable {
     /// This membership's badge opt-out, TRUE by default. Meaningless unless
     /// `isCommunity`.
     var showOnProfile: Bool
+    /// The owner's own switch for the Baú (`servers.community_home_enabled`).
+    /// The row needs this AND the instance flag from
+    /// `GET /api/community-home/config`; see CommunityHomeAPI.swift. Defaulted
+    /// like the two above: a server that predates the feature does not send it.
+    var communityHomeEnabled: Bool
 
     enum CodingKeys: String, CodingKey {
         case id, name, ownerId, role, createdAt, messageRetentionDays
         case ssoEmailDomain, iconUrl, bannerUrl, isCommunity, showOnProfile
+        case communityHomeEnabled
     }
 
     /// Hand-written for the four fields the communities wave added.
@@ -119,6 +125,7 @@ struct Server: Codable, Identifiable, Hashable, Sendable {
         bannerUrl = try c.decodeIfPresent(String.self, forKey: .bannerUrl)
         isCommunity = try c.decodeIfPresent(Bool.self, forKey: .isCommunity) ?? false
         showOnProfile = try c.decodeIfPresent(Bool.self, forKey: .showOnProfile) ?? true
+        communityHomeEnabled = try c.decodeIfPresent(Bool.self, forKey: .communityHomeEnabled) ?? false
     }
 
     /// For tests and previews; never for anything the server sent.
@@ -133,7 +140,8 @@ struct Server: Codable, Identifiable, Hashable, Sendable {
         iconUrl: String? = nil,
         bannerUrl: String? = nil,
         isCommunity: Bool = false,
-        showOnProfile: Bool = true
+        showOnProfile: Bool = true,
+        communityHomeEnabled: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -146,6 +154,7 @@ struct Server: Codable, Identifiable, Hashable, Sendable {
         self.bannerUrl = bannerUrl
         self.isCommunity = isCommunity
         self.showOnProfile = showOnProfile
+        self.communityHomeEnabled = communityHomeEnabled
     }
 }
 

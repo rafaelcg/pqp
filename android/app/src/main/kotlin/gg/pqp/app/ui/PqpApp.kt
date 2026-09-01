@@ -27,6 +27,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
 import gg.pqp.app.R
+import gg.pqp.app.bau.ui.BauScreen
 import gg.pqp.app.core.SessionPhase
 import gg.pqp.app.core.SessionStore
 import gg.pqp.app.push.DeepLinkTarget
@@ -50,6 +51,9 @@ import kotlinx.serialization.Serializable
 @Serializable object ServersRoute
 
 @Serializable data class ChannelsRoute(val serverId: String, val serverName: String)
+
+/** A server's Baú. Reached from its channel list only, so it carries what that list knew. */
+@Serializable data class BauRoute(val serverId: String, val serverName: String)
 
 /**
  * `channelName` defaults because a notification tap knows the channel's id and
@@ -200,6 +204,18 @@ private fun SignedInNav(session: SessionStore, voice: VoiceController, push: Pus
                         onOpenChannel = { channel ->
                             nav.navigate(ChatRoute(channel.id, channel.name))
                         },
+                        onOpenBau = {
+                            nav.navigate(BauRoute(route.serverId, route.serverName))
+                        },
+                    )
+                }
+                composable<BauRoute> { entry ->
+                    val route = entry.toRoute<BauRoute>()
+                    BauScreen(
+                        session = session,
+                        serverId = route.serverId,
+                        serverName = route.serverName,
+                        onBack = nav::popBackStack,
                     )
                 }
                 composable<ChatRoute> { entry ->
