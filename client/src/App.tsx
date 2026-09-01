@@ -202,8 +202,10 @@ import { usernameFromTag, rankBadges } from "@/lib/author-display";
 import { devAuthToken, getAuthToken, isDevAuthBypassEnabled } from "@/lib/dev-auth";
 import {
   COMMUNITY_HOME_CHANNEL_ID,
+  COMMUNITY_HOME_CONFIG_OFF,
   isCommunityHomeChannelId,
   isCommunityHomeEnabled,
+  loadCommunityHomeConfig,
   pickServerLandingTarget,
 } from "@/lib/community-home";
 import { CommunityHomeFeed } from "@/components/community-home/community-home-feed";
@@ -525,6 +527,21 @@ function MainAppContent({
   // its posts rather than the client trying to patch one row from the frame,
   // since the frame carries no post id (see `communityHomeUpdateSchema`).
   const [communityHomeUpdateNudge, setCommunityHomeUpdateNudge] = useState(0);
+  // The instance's Baú flags, resolved once before the first landing so the
+  // bootstrap can choose between Home and the first text channel. Off until
+  // the API answers; a ref mirrors it for the callbacks that pick a landing.
+  const [communityHomeConfig, setCommunityHomeConfig] = useState(
+    COMMUNITY_HOME_CONFIG_OFF,
+  );
+  const communityHomeConfigRef = useRef(COMMUNITY_HOME_CONFIG_OFF);
+  const communityHomeOn = useCallback(
+    () =>
+      isCommunityHomeEnabled({
+        config: communityHomeConfigRef.current,
+        allowLocalOverride: isDevAuthBypassEnabled(),
+      }),
+    [],
+  );
   // One dialog for both subjects — the target says which. Null means closed.
   const [reportTarget, setReportTarget] = useState<ReportTarget | null>(null);
   const [pinsOpen, setPinsOpen] = useState(false);
@@ -1550,10 +1567,15 @@ function MainAppContent({
           }
         }
 
-        const { servers: serverList } = await fetchServers();
+        const [{ servers: serverList }, homeConfig] = await Promise.all([
+          fetchServers(),
+          loadCommunityHomeConfig(),
+        ]);
         if (cancelled) {
           return;
         }
+        communityHomeConfigRef.current = homeConfig;
+        setCommunityHomeConfig(homeConfig);
         setServers(serverList);
 
         // Conversations and blocks are loaded whatever the first view is: the
@@ -1594,7 +1616,7 @@ function MainAppContent({
               ? null
               : pickServerLandingTarget(
                   channelList,
-                  isCommunityHomeEnabled(),
+                  communityHomeOn(),
                   Boolean(first.isCommunity),
                 );
             initialChannelId = land?.id ?? null;
@@ -2108,7 +2130,7 @@ function MainAppContent({
         const server = serversRef.current.find((row) => row.id === serverId);
         const land = pickServerLandingTarget(
           list,
-          isCommunityHomeEnabled(),
+          communityHomeOn(),
           Boolean(server?.isCommunity),
         );
         if (land) {
@@ -2130,7 +2152,7 @@ function MainAppContent({
         setChannelsLoading(false);
       }
     },
-    [loadUnread, selectChannel, syncRoute],
+    [communityHomeOn, loadUnread, selectChannel, syncRoute],
   );
 
   async function handleChannelPromptConfirm(name: string, isPrivate?: boolean) {
@@ -2551,7 +2573,7 @@ function MainAppContent({
           );
           const land = pickServerLandingTarget(
             list,
-            isCommunityHomeEnabled(),
+            communityHomeOn(),
             Boolean(targetServer?.isCommunity),
           );
           if (land) {
@@ -2573,7 +2595,7 @@ function MainAppContent({
         setChannelsLoading(false);
       }
     },
-    [loadUnread, selectChannel],
+    [communityHomeOn, loadUnread, selectChannel],
   );
 
   /**
@@ -2627,6 +2649,22 @@ function MainAppContent({
     void updatePreferences(patch).catch(() => {
       // Nothing to recover. The next bootstrap re-reads the truth, and the worst
       // case is the card offered once more.
+    });
+  }, []);
+
+  /**
+   * The Baú intro card is put away. Same optimistic shape as `settleFirstRun`:
+   * the local `user` is patched first so the card goes on the click.
+   */
+  const settleCommunityHomeIntro = useCallback(() => {
+    const patch = { communityHomeIntroDismissedAt: new Date().toISOString() };
+    setUser((previous) =>
+      previous
+        ? { ...previous, preferences: { ...previous.preferences, ...patch } }
+        : previous,
+    );
+    void updatePreferences(patch).catch(() => {
+      // Worst case the card is offered once more on the next bootstrap.
     });
   }, []);
 
@@ -3191,9 +3229,13 @@ function MainAppContent({
       ? channels.find((c) => c.id === selectedChannelId)
       : undefined;
   const selectedServer = servers.find((s) => s.id === selectedServerId);
-  // Flag alone drives the Home row + feed. Landing stays community-only
-  // (pickServerLandingTarget still requires isCommunity).
-  const communityHomeEnabled = isCommunityHomeEnabled();
+  // Flag alone drives the Baú row + feed. Landing stays community-only
+  // (pickServerLandingTarget still requires isCommunity). `communityHomeConfig`
+  // is in the deps so the row appears the moment the probe answers.
+  const communityHomeEnabled = isCommunityHomeEnabled({
+    config: communityHomeConfig,
+    allowLocalOverride: isDevAuthBypassEnabled(),
+  });
   const communityHomeOpen =
     selection.kind === "server" &&
     isCommunityHomeChannelId(selectedChannelId) &&
@@ -4127,14 +4169,26 @@ function MainAppContent({
           </div>
         )}
 
-        {communityHomeOpen && selectedServer && (
+        {communityHomeOpen && selectedServer && user && (
           <CommunityHomeFeed
             serverId={selectedServer.id}
             serverName={selectedServer.name}
-            authorName={user?.displayName ?? user?.username ?? "você"}
+            me={{
+              id: user.id,
+              displayName: user.displayName,
+              username: user.username ?? null,
+              tag: user.tag ?? null,
+              avatarUrl: user.avatarUrl ?? null,
+            }}
             canManageServer={canManageServer}
             isOwner={selectedServer.role === "owner"}
             isVip={meVip}
+            vipEnabled={communityHomeConfig.vipEnabled}
+            mediaEnabled={communityHomeConfig.mediaEnabled}
+            introDismissed={Boolean(
+              user.preferences?.communityHomeIntroDismissedAt,
+            )}
+            onDismissIntro={settleCommunityHomeIntro}
             onOpenNav={() => setMobileNavOpen(true)}
             refreshSignal={communityHomeUpdateNudge}
           />
@@ -4333,7 +4387,7 @@ function MainAppContent({
           const general = newChannels.find((c) => c.type === "text");
           const land = pickServerLandingTarget(
             newChannels,
-            isCommunityHomeEnabled(),
+            communityHomeOn(),
             Boolean(server.isCommunity),
           );
           if (land) {

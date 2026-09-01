@@ -285,6 +285,14 @@ export const userPreferencesSchema = z.object({
    */
   firstRunDismissedAt: z.string().optional(),
   /**
+   * When the Baú intro card was put away, as an ISO instant.
+   *
+   * A preference and not localStorage for the same reason as
+   * `firstRunDismissedAt`: the card explains a surface once per person, not
+   * once per browser. Absent means "never dismissed".
+   */
+  communityHomeIntroDismissedAt: z.string().optional(),
+  /**
    * Personal favourite channels, keyed by server. The array is the order they
    * appear in that server's Favorites block.
    *

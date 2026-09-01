@@ -12,6 +12,7 @@ import type {
   ClaimCommunityHomeMediaResponse,
   CommunityHomeComment,
   CommunityHomeCommentsResponse,
+  CommunityHomeConfig,
   CommunityHomeLikeResponse,
   CommunityHomePostResponse,
   CommunityHomePostsResponse,
@@ -1330,6 +1331,10 @@ export const previewInvite = (code: string) =>
 // Durable posts, comments and likes for a server's Baú. Media bytes go through
 // the same mint / PUT / claim dance as attachments — see `uploadHomeMedia` in
 // `lib/community-home/media.ts` for the sequence in one place.
+
+/** The instance flags. Off is a 200 with `enabled: false`, never a 404. */
+export const fetchCommunityHomeConfig = () =>
+  apiFetch<CommunityHomeConfig>("/api/community-home/config");
 
 export const fetchCommunityHomePosts = (serverId: string) =>
   apiFetch<CommunityHomePostsResponse>(`/api/servers/${serverId}/home/posts`);

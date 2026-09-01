@@ -36,6 +36,7 @@ import {
   sweepQuarantinedAttachments,
 } from "./services/attachments.js";
 import {
+  isCommunityHomeEnabled,
   publishDueCommunityHomePosts,
   sweepOrphanedCommunityHomeMedia,
 } from "./services/community-home.js";
@@ -503,6 +504,11 @@ pendingDeletionSweep.unref?.();
 const COMMUNITY_HOME_SCHEDULE_MS = 30_000;
 
 async function sweepCommunityHomeSchedule(): Promise<void> {
+  // Flag off: nothing to publish and nothing to sweep. Read per tick so a
+  // restart with the variable set picks it up without touching this code.
+  if (!isCommunityHomeEnabled()) {
+    return;
+  }
   try {
     const serverIds = await publishDueCommunityHomePosts();
     for (const serverId of serverIds) {

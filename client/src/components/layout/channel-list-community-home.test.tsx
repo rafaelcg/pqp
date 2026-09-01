@@ -82,7 +82,7 @@ describe("ChannelList Community Home row", () => {
     expect(html).not.toContain("data-community-home-row");
   });
 
-  it("flag on: pins Home above TEXT on a private (non-community) server", () => {
+  it("flag on: pins Baú above TEXT on a private (non-community) server, without a Community badge", () => {
     expect(server.isCommunity).toBe(false);
     const html = renderList(
       <ChannelList
@@ -93,6 +93,20 @@ describe("ChannelList Community Home row", () => {
       />,
     );
     expect(html).toContain("data-community-home-row");
-    expect(html).toContain("Home");
+    expect(html).toContain("Baú");
+    // The badge is a fact about the server, not about the flag.
+    expect(html).not.toContain(">Community<");
+  });
+
+  it("flag on + community server: the Community badge shows", () => {
+    const html = renderList(
+      <ChannelList
+        {...baseProps}
+        server={{ ...server, isCommunity: true }}
+        communityHomeEnabled
+        onSelectCommunityHome={() => {}}
+      />,
+    );
+    expect(html).toContain(">Community<");
   });
 });

@@ -357,6 +357,21 @@ export type CommunityHomeLikeResponse = z.infer<
   typeof communityHomeLikeResponseSchema
 >;
 
+/**
+ * `GET /api/community-home/config`. `enabled` is the instance flag
+ * (`COMMUNITY_HOME_ENABLED`); `vipEnabled` the separate VIP switch
+ * (`COMMUNITY_HOME_VIP_ENABLED`, meaningless without the first);
+ * `mediaEnabled` whether object storage is configured, so the composer can
+ * hide the file picker and offer YouTube only.
+ */
+export const communityHomeConfigSchema = z.object({
+  enabled: z.boolean(),
+  vipEnabled: z.boolean(),
+  mediaEnabled: z.boolean(),
+});
+
+export type CommunityHomeConfig = z.infer<typeof communityHomeConfigSchema>;
+
 /** WS nudge: clients refetch Home for this server. Not a channel broadcast. */
 export const communityHomeUpdateSchema = z.object({
   type: z.literal("community-home-update"),
