@@ -1657,7 +1657,7 @@ export function CommunityHomeFeed({
           {canManageServer && staffTab === "compose" && (
             <>
               {feedEmpty && drafts.length === 0 && !compose.editingId && (
-                <CommunityHomeStaffGuide variant="compose" />
+                <CommunityHomeStaffGuide variant="compose" vipEnabled={vipEnabled} />
               )}
               <ComposeCard
                 state={compose}
@@ -1770,6 +1770,7 @@ export function CommunityHomeFeed({
                 (canManageServer ? (
                   <CommunityHomeStaffGuide
                     variant="empty"
+                    vipEnabled={vipEnabled}
                     onCompose={() => setStaffTab("compose")}
                   />
                 ) : (

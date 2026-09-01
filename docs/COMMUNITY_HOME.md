@@ -63,9 +63,15 @@ See [`BAU_VIP_STRATEGY.md`](./BAU_VIP_STRATEGY.md) for what would replace it.
   (`preferences.communityHomeIntroDismissedAt`, not `localStorage`, so a new
   browser does not re-offer it). Says what the Baú is, that likes and comments
   are the only verbs, and, with VIP on, what a locked post is.
-- **Staff guide** instead of an empty feed for managers (three things that
-  work: the clip, the file, the scheduled recap), and again above the composer
-  until the first post exists.
+- **Staff guide** instead of an empty feed for managers: a headline that
+  sells the idea, a 14 s recording of a filled Baú (member view: posts with
+  an image, a PDF, a like, comments expanding, the VIP lock), and four or
+  five big-icon rows (clip, file, likes and comments, schedule, VIP when the
+  flag is on). The reel is `client/src/assets/bau/bau-demo.<lang>.{webm,mp4,jpg}`,
+  one per language, muted and looping, still under `prefers-reduced-motion`.
+  Re-record it with `client/e2e/bau-demo-record.spec.ts` (instructions in
+  the file) whenever the card design changes. The compose tab repeats the
+  rows, small, until the first post exists.
 - **Composer** (staff tab "Write"): title, body, one media (file when
   `mediaEnabled`, else YouTube only), comments on/off, VIP toggle + teaser
   when `vipEnabled`. **Preview** renders the card as members will see it, and

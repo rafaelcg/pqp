@@ -8,8 +8,16 @@ import {
   PenLine,
   X,
 } from "lucide-react";
+import { useEffect, useRef } from "react";
+import demoPosterEn from "@/assets/bau/bau-demo.en.jpg?url";
+import demoMp4En from "@/assets/bau/bau-demo.en.mp4?url";
+import demoWebmEn from "@/assets/bau/bau-demo.en.webm?url";
+import demoPosterPt from "@/assets/bau/bau-demo.pt-BR.jpg?url";
+import demoMp4Pt from "@/assets/bau/bau-demo.pt-BR.mp4?url";
+import demoWebmPt from "@/assets/bau/bau-demo.pt-BR.webm?url";
 import { Button } from "@/components/ui/button";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
+import { cn } from "@/lib/utils";
 
 /**
  * The two ways Baú explains itself, both inside the feed and both quiet.
@@ -20,18 +28,53 @@ import { useTranslation, type MessageKey } from "@/lib/i18n";
  * one click (a preference, so a new browser does not re-offer it).
  *
  * WHY TWO CARDS. A member needs to know what this is and what they can do
- * here (like, comment, nothing else). An owner needs to know what to put in
- * it and why it beats #avisos: that is a different sentence, and it gets the
- * empty state and the composer rather than a card the member also reads.
+ * here (like, comment, nothing else). An owner needs to be sold on it: what
+ * to put in, why it beats #avisos, what it looks like with a week of posts in
+ * it. That second card leads with a short recording of a filled Baú, because
+ * an empty feed cannot show what a full one feels like, and a screenshot
+ * would freeze last week's card design. The recording is made by
+ * `client/e2e` tooling from seeded posts, one per language.
  */
 
-interface IntroRow {
+interface Row {
   icon: typeof Heart;
   title: MessageKey;
   body: MessageKey;
 }
 
-const MEMBER_ROWS: IntroRow[] = [
+function RowList({ rows, large }: { rows: Row[]; large: boolean }) {
+  const { t } = useTranslation();
+  return (
+    <ul className={cn("grid gap-3", large && "sm:grid-cols-2 sm:gap-4")}>
+      {rows.map((row) => {
+        const Icon = row.icon;
+        return (
+          <li key={row.title} className="flex gap-3">
+            <span
+              aria-hidden="true"
+              className={cn(
+                "flex shrink-0 items-center justify-center rounded-xl border border-ink-4 bg-ink text-signal",
+                large ? "h-12 w-12" : "mt-0.5 h-8 w-8 rounded-full",
+              )}
+            >
+              <Icon className={large ? "h-6 w-6" : "h-4 w-4"} />
+            </span>
+            <div className="min-w-0">
+              <p className={cn("font-semibold", large ? "text-base" : "text-sm")}>
+                {t(row.title)}
+              </p>
+              <p className={cn("text-paper-muted", large ? "text-sm" : "text-xs")}>
+                {t(row.body)}
+              </p>
+            </div>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+const MEMBER_ROWS: Row[] = [
   {
     icon: Clapperboard,
     title: "communityHome.intro.posts.title",
@@ -49,7 +92,7 @@ const MEMBER_ROWS: IntroRow[] = [
   },
 ];
 
-const VIP_ROW: IntroRow = {
+const MEMBER_VIP_ROW: Row = {
   icon: Lock,
   title: "communityHome.intro.vip.title",
   body: "communityHome.intro.vip.body",
@@ -65,7 +108,7 @@ export function CommunityHomeIntroCard({
   onDismiss: () => void;
 }) {
   const { t } = useTranslation();
-  const rows = vipEnabled ? [...MEMBER_ROWS, VIP_ROW] : MEMBER_ROWS;
+  const rows = vipEnabled ? [...MEMBER_ROWS, MEMBER_VIP_ROW] : MEMBER_ROWS;
   return (
     <section
       data-home-intro
@@ -95,25 +138,7 @@ export function CommunityHomeIntroCard({
           <X aria-hidden="true" className="h-4 w-4" />
         </button>
       </div>
-      <ul className="space-y-2.5">
-        {rows.map((row) => {
-          const Icon = row.icon;
-          return (
-            <li key={row.title} className="flex gap-3">
-              <span
-                aria-hidden="true"
-                className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-ink-4 bg-ink text-signal"
-              >
-                <Icon className="h-3.5 w-3.5" />
-              </span>
-              <div className="min-w-0">
-                <p className="text-sm font-semibold">{t(row.title)}</p>
-                <p className="text-xs text-paper-muted">{t(row.body)}</p>
-              </div>
-            </li>
-          );
-        })}
-      </ul>
+      <RowList rows={rows} large={false} />
       <div className="mt-4">
         <Button size="sm" variant="secondary" onClick={onDismiss}>
           {t("communityHome.intro.ok")}
@@ -123,13 +148,7 @@ export function CommunityHomeIntroCard({
   );
 }
 
-interface GuideRow {
-  icon: typeof PenLine;
-  title: MessageKey;
-  body: MessageKey;
-}
-
-const STAFF_ROWS: GuideRow[] = [
+const STAFF_ROWS: Row[] = [
   {
     icon: Clapperboard,
     title: "communityHome.guide.clip.title",
@@ -141,11 +160,71 @@ const STAFF_ROWS: GuideRow[] = [
     body: "communityHome.guide.file.body",
   },
   {
+    icon: Heart,
+    title: "communityHome.guide.react.title",
+    body: "communityHome.guide.react.body",
+  },
+  {
     icon: CalendarClock,
     title: "communityHome.guide.schedule.title",
     body: "communityHome.guide.schedule.body",
   },
 ];
+
+const STAFF_VIP_ROW: Row = {
+  icon: Lock,
+  title: "communityHome.guide.vip.title",
+  body: "communityHome.guide.vip.body",
+};
+
+/**
+ * The recording of a filled Baú. Muted, looping, `playsInline`, no controls:
+ * a product shot that moves, not a video player. Autoplay is skipped under
+ * `prefers-reduced-motion`, where the poster frame stands on its own.
+ */
+function DemoReel() {
+  const { t, locale } = useTranslation();
+  const ref = useRef<HTMLVideoElement>(null);
+  const pt = locale === "pt-BR";
+
+  useEffect(() => {
+    const video = ref.current;
+    if (!video) {
+      return;
+    }
+    const still =
+      typeof window !== "undefined" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (still) {
+      video.pause();
+      return;
+    }
+    void video.play().catch(() => {
+      // Autoplay refused: the poster stays, which is fine.
+    });
+  }, []);
+
+  return (
+    <figure className="overflow-hidden rounded-xl border border-ink-4 bg-ink" data-home-guide-demo>
+      <video
+        ref={ref}
+        className="block aspect-[952/800] w-full"
+        muted
+        loop
+        playsInline
+        preload="metadata"
+        poster={pt ? demoPosterPt : demoPosterEn}
+        aria-label={t("communityHome.guide.demoLabel")}
+      >
+        <source src={pt ? demoWebmPt : demoWebmEn} type="video/webm" />
+        <source src={pt ? demoMp4Pt : demoMp4En} type="video/mp4" />
+      </video>
+      <figcaption className="border-t border-ink-4 px-3 py-1.5 text-[11px] text-paper-muted">
+        {t("communityHome.guide.demoLabel")}
+      </figcaption>
+    </figure>
+  );
+}
 
 /**
  * What an owner sees instead of an empty feed, and again (collapsed to the
@@ -153,62 +232,65 @@ const STAFF_ROWS: GuideRow[] = [
  */
 export function CommunityHomeStaffGuide({
   variant,
+  vipEnabled,
   onCompose,
 }: {
   variant: "empty" | "compose";
+  vipEnabled: boolean;
   onCompose?: () => void;
 }) {
   const { t } = useTranslation();
-  return (
-    <section
-      data-home-staff-guide={variant}
-      className="rounded-xl border border-dashed border-signal/40 bg-ink-3/30 p-4 sm:p-5"
-    >
-      {variant === "empty" && (
-        <>
-          <h2 className="font-display text-lg font-bold leading-tight">
-            {t("communityHome.guide.emptyTitle")}
-          </h2>
-          <p className="mt-1 mb-4 text-sm text-paper-muted">
-            {t("communityHome.guide.emptyLead")}
-          </p>
-        </>
-      )}
-      {variant === "compose" && (
+  const rows = vipEnabled ? [...STAFF_ROWS, STAFF_VIP_ROW] : STAFF_ROWS;
+
+  if (variant === "compose") {
+    return (
+      <section
+        data-home-staff-guide="compose"
+        className="rounded-xl border border-dashed border-signal/40 bg-ink-3/30 p-4"
+      >
         <p className="mb-3 text-xs font-semibold uppercase tracking-[0.14em] text-paper-muted">
           {t("communityHome.guide.composeTitle")}
         </p>
-      )}
-      <ul className="space-y-2.5">
-        {STAFF_ROWS.map((row) => {
-          const Icon = row.icon;
-          return (
-            <li key={row.title} className="flex gap-3">
-              <span
-                aria-hidden="true"
-                className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-ink-4 bg-ink text-signal"
-              >
-                <Icon className="h-3.5 w-3.5" />
-              </span>
-              <div className="min-w-0">
-                <p className="text-sm font-semibold">{t(row.title)}</p>
-                <p className="text-xs text-paper-muted">{t(row.body)}</p>
-              </div>
-            </li>
-          );
-        })}
-      </ul>
-      <p className="mt-4 text-xs text-paper-muted">
-        {t("communityHome.guide.notAvisos")}
-      </p>
-      {variant === "empty" && onCompose && (
-        <div className="mt-4">
-          <Button size="sm" onClick={onCompose} data-home-guide-compose>
-            <PenLine className="mr-1.5 h-3.5 w-3.5" aria-hidden />
-            {t("communityHome.guide.cta")}
-          </Button>
-        </div>
-      )}
+        <RowList rows={rows} large={false} />
+      </section>
+    );
+  }
+
+  return (
+    <section
+      data-home-staff-guide="empty"
+      className="animate-rise overflow-hidden rounded-2xl border border-signal/30 bg-[radial-gradient(120%_80%_at_0%_0%,var(--glow-accent-soft),transparent_55%)] bg-ink-3/30"
+    >
+      <div className="p-5 sm:p-6">
+        <p className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-signal">
+          {t("communityHome.title")}
+        </p>
+        <h2 className="font-display text-2xl font-bold leading-tight sm:text-3xl">
+          {t("communityHome.guide.emptyTitle")}
+        </h2>
+        <p className="mt-2 max-w-prose text-sm text-paper-muted sm:text-base">
+          {t("communityHome.guide.emptyLead")}
+        </p>
+      </div>
+
+      <div className="px-5 sm:px-6">
+        <DemoReel />
+      </div>
+
+      <div className="p-5 sm:p-6">
+        <RowList rows={rows} large />
+        <p className="mt-5 text-xs text-paper-muted">
+          {t("communityHome.guide.notAvisos")}
+        </p>
+        {onCompose && (
+          <div className="mt-4">
+            <Button onClick={onCompose} data-home-guide-compose>
+              <PenLine className="mr-2 h-4 w-4" aria-hidden />
+              {t("communityHome.guide.cta")}
+            </Button>
+          </div>
+        )}
+      </div>
     </section>
   );
 }
