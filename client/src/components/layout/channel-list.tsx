@@ -383,7 +383,12 @@ export function ChannelList({
           }}
           onJoinVoice={
             channel.type === "voice" && onJoinVoice
-              ? () => onJoinVoice(channel.id)
+              ? () => {
+                  onJoinVoice(channel.id);
+                  // Same as a select: on a phone the drawer must get out of
+                  // the way of the call it just started.
+                  onMobileClose?.();
+                }
               : undefined
           }
           onRename={() => onRenameChannel(channel)}
