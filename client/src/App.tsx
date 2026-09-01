@@ -3176,9 +3176,9 @@ function MainAppContent({
       ? channels.find((c) => c.id === selectedChannelId)
       : undefined;
   const selectedServer = servers.find((s) => s.id === selectedServerId);
-  const communityHomeFlagOn = isCommunityHomeEnabled();
-  const communityHomeEnabled =
-    communityHomeFlagOn && Boolean(selectedServer?.isCommunity);
+  // Flag alone drives the Home row + feed. Landing stays community-only
+  // (pickServerLandingTarget still requires isCommunity).
+  const communityHomeEnabled = isCommunityHomeEnabled();
   const communityHomeOpen =
     selection.kind === "server" &&
     isCommunityHomeChannelId(selectedChannelId) &&
