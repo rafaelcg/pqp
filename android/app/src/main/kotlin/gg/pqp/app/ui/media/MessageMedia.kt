@@ -87,7 +87,8 @@ fun MessageAttachment(
 
 @Composable
 private fun ImageAttachment(attachment: Attachment, modifier: Modifier = Modifier) {
-    // A picker GIF's filename is the GIPHY title, which is a description and
+    // A picker GIF's filename is the provider's title (Klipy today, and the
+    // GIPHY and Tenor rows stored before it), which is a description and
     // reads well; an uploaded file's is a filename, which does not, but it is
     // still the only thing known about it. Neither says "this moves", so an
     // animated one says so, once, in the accessible name.
