@@ -2,6 +2,7 @@ import {
   ChevronRight,
   FolderPlus,
   HeadphoneOff,
+  Home,
   Lock,
   MicOff,
   Phone,
@@ -168,6 +169,13 @@ interface ChannelListProps {
   footer?: ReactNode;
   mobileOpen?: boolean;
   onMobileClose?: () => void;
+  /**
+   * Community Home experiment (client-only). When on, pins a Home / Início
+   * row above TEXT. Not a real channel type and not COMMUNITIES_ENABLED.
+   */
+  communityHomeEnabled?: boolean;
+  communityHomeSelected?: boolean;
+  onSelectCommunityHome?: () => void;
 }
 
 export function ChannelList({
@@ -199,6 +207,9 @@ export function ChannelList({
   footer,
   mobileOpen = false,
   onMobileClose,
+  communityHomeEnabled = false,
+  communityHomeSelected = false,
+  onSelectCommunityHome,
 }: ChannelListProps) {
   const { t } = useTranslation();
   const visibleFavs = visibleFavoriteChannels(channels, favoriteChannelIds);
@@ -521,9 +532,16 @@ export function ChannelList({
               </span>
             )}
             <div className="min-w-0">
-              <p className="truncate font-display text-base font-bold leading-tight">
-                {server?.name ?? (isLoading ? t("common.loading") : t("chrome.noServer"))}
-              </p>
+              <div className="flex min-w-0 items-center gap-2">
+                <p className="truncate font-display text-base font-bold leading-tight">
+                  {server?.name ?? (isLoading ? t("common.loading") : t("chrome.noServer"))}
+                </p>
+                {communityHomeEnabled && (
+                  <span className="shrink-0 rounded bg-accent/15 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-accent">
+                    {t("communityHome.communityBadge")}
+                  </span>
+                )}
+              </div>
               {server?.role && (
                 <p className="mt-0.5 text-[11px] uppercase tracking-wider text-paper-muted">
                   {server.role}
@@ -634,6 +652,41 @@ export function ChannelList({
                   renderRow(channel, visibleFavs, true),
                 )}
               </FavoritesSection>
+            )}
+
+            {communityHomeEnabled && server && onSelectCommunityHome && (
+              <div className="mb-3 px-1">
+                <button
+                  type="button"
+                  data-community-home-row
+                  className={cn(
+                    "flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left transition-colors",
+                    communityHomeSelected
+                      ? "bg-surface-3 text-text"
+                      : "text-text-muted hover:bg-surface-3/70 hover:text-text",
+                  )}
+                  onClick={() => {
+                    onSelectCommunityHome();
+                    onMobileClose?.();
+                  }}
+                >
+                  <Home
+                    className={cn(
+                      "mt-0.5 h-4 w-4 shrink-0",
+                      communityHomeSelected ? "text-accent" : "text-text-muted",
+                    )}
+                    aria-hidden
+                  />
+                  <span className="min-w-0">
+                    <span className="block truncate text-sm font-semibold text-text">
+                      {t("communityHome.channelName")}
+                    </span>
+                    <span className="block truncate text-[10px] text-text-muted">
+                      {t("communityHome.channelHint")}
+                    </span>
+                  </span>
+                </button>
+              </div>
             )}
 
             <ChannelSection
