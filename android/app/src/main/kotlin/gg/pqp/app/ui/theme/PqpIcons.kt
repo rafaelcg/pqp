@@ -90,6 +90,31 @@ private fun lucide(vararg paths: String) = lazy {
 }
 
 /**
+ * The same glyph, filled and unstroked: the one state Lucide draws that way
+ * itself (a liked heart is `fill="currentColor"` on lucide.dev too). Kept to
+ * that one job so the set stays a stroke set.
+ */
+private fun lucideFilled(vararg paths: String) = lazy {
+    ImageVector.Builder(
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f,
+    ).apply {
+        paths.forEach { d ->
+            addPath(
+                pathData = addPathNodes(d),
+                fill = SolidColor(Color.Black),
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round,
+            )
+        }
+    }.build()
+}
+
+/**
  * The glyphs, named as Lucide names them, so a shape can be found by searching
  * lucide.dev and matched here.
  *
@@ -100,6 +125,11 @@ private fun lucide(vararg paths: String) = lazy {
  */
 private object Lucide {
 
+    val archive by lucide(
+        "M3 3h18a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z",
+        "M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8",
+        "M10 12h4",
+    )
     val arrowLeft by lucide(
         "m12 19-7-7 7-7",
         "M19 12H5",
@@ -155,6 +185,12 @@ private object Lucide {
     )
     val headphones by lucide(
         "M3 14h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a9 9 0 0 1 18 0v7a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3",
+    )
+    val heart by lucide(
+        "M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z",
+    )
+    val heartFilled by lucideFilled(
+        "M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z",
     )
     val inbox by lucide(
         "M22 12L16 12L14 15L10 15L8 12L2 12",
@@ -358,6 +394,13 @@ object PqpIcons {
 
     val Messages get() = Lucide.messageCircle
     val Send get() = Lucide.send
+
+    /** The Baú: a server's chest of posts that stay. A box, not a feed icon. */
+    val Bau get() = Lucide.archive
+
+    /** A like on a Baú post, outline until it is yours. */
+    val Like get() = Lucide.heart
+    val LikeFilled get() = Lucide.heartFilled
     val Empty get() = Lucide.inbox
 
     val Mic get() = Lucide.mic
