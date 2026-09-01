@@ -69,16 +69,23 @@ describe("pickServerLandingTarget", () => {
   ];
 
   it("flag off lands on the first text channel (today)", () => {
-    expect(pickServerLandingTarget(channels, false)).toEqual({
+    expect(pickServerLandingTarget(channels, false, true)).toEqual({
       kind: "channel",
       id: "t1",
     });
   });
 
-  it("flag on lands on Community Home", () => {
-    expect(pickServerLandingTarget(channels, true)).toEqual({
+  it("flag on + community lands on Community Home", () => {
+    expect(pickServerLandingTarget(channels, true, true)).toEqual({
       kind: "home",
       id: COMMUNITY_HOME_CHANNEL_ID,
+    });
+  });
+
+  it("flag on + private server still lands on first text channel", () => {
+    expect(pickServerLandingTarget(channels, true, false)).toEqual({
+      kind: "channel",
+      id: "t1",
     });
   });
 
@@ -89,6 +96,7 @@ describe("pickServerLandingTarget", () => {
           { id: "c1", type: "category" },
           { id: "v1", type: "voice" },
         ],
+        false,
         false,
       ),
     ).toEqual({ kind: "channel", id: "v1" });

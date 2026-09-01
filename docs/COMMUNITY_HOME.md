@@ -1,7 +1,7 @@
 # Community Home (client-only experiment)
 
-Patreon-like durable owner-post timeline inside a server. **Mock only.** No
-Stripe, no Clerk Billing, no schema, no `pqp-api` restart.
+Patreon-like durable media timeline inside a **community** server. **Mock only.**
+No Stripe, no Clerk Billing, no schema, no `pqp-api` restart.
 
 ## Flag: `VITE_COMMUNITY_HOME_ENABLED`
 
@@ -31,35 +31,45 @@ Production Pages must leave this unset so Home never appears for real users.
 
 Turn off: `localStorage.removeItem("pqp:community-home")` or `?communityHome=0`.
 
-## Viewer states (no billing)
+## Who publishes / who sees
 
-VIP cargo (`system_key=vip`, permissions `0n`) is the cosmetic stand-in for a
-paid plan. Flip the mock without assigning cargos:
-
-| How | Values |
+| Role | Behaviour |
 |---|---|
-| Header toggles on the Home feed | `auto` / `owner` / `free` / `VIP` |
-| `localStorage` | `pqp:community-home-viewer` = `auto`\|`owner`\|`free`\|`vip` |
-| Query | `?homeViewer=free` (etc.) |
+| `MANAGE_SERVER` | Compose / edit / delete, draft vs publish, turn comments off, delete comments |
+| VIP cargo alone (`system_key=vip`) | **Cannot** publish. Sees members-only posts. |
+| Everyone else | Free posts full; VIP posts = title + teaser + lock |
 
-- **owner** — compose + set free vs VIP visibility
-- **free** — free posts full; VIP posts show teaser + lock
-- **VIP** — sees members-only posts
-- **auto** — owner rank, else VIP cargo, else free
+Staff CMS is **Compose | Preview**. Compose stays available while Preview flips
+`auto` / `owner` / `free` / `VIP` — the composer must not vanish when checking
+Free/VIP. Same overrides via `localStorage` `pqp:community-home-viewer` or
+`?homeViewer=`.
 
 Unlock CTA does nothing on purpose. There is no checkout.
 
+## Media types (client-only)
+
+Image, native short video (`mp4`/`webm` via `<video>`, 10 MiB), YouTube/embed
+(watch / youtu.be / shorts iframe), text, file (PDF etc download card).
+
+Locked members-only posts must **not** put the embed URL in the free DOM —
+title + teaser + lock only. Over-limit video asks for a YouTube link instead.
+
+Home is durable media, **not** a call invite. There is no "Join the call" /
+"entrar na call" primary CTA in this pass.
+
 ## What you should see when on
 
-- Pinned **Home / Início** at the top of the channel list (above TEXT)
-- Default land on Home (not first `#geral`)
-- Feed of fixture posts (localStorage per server); comments are counts
-- Voice CTA ("entrar na call") joins the first voice channel
+- Only on **community** servers (`isCommunity`): pinned **Home / Início** above TEXT
+- Those servers default-land on Home (not first `#geral`)
+- Feed from `localStorage` key `pqp:community-home-posts:{serverId}` (versioned envelope)
+- Flat comments on published posts; staff can delete / disable per post
+- Sentinel channel id `__community_home__` — **not** a real channel type
 - Flag off: identical to today
 
 ## Out of scope (hard nos)
 
 - Migrations / new tables / API routes
-- Second Fly machine, Stripe, Patreon OAuth
+- Second Fly machine, Stripe, Patreon OAuth, pub/sub
 - New permission bits (VIP stays `0n`)
 - Turning the flag on in production
+- Merging this to `main` / restarting production `pqp-api`

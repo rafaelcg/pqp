@@ -1587,6 +1587,7 @@ function MainAppContent({
               : pickServerLandingTarget(
                   channelList,
                   isCommunityHomeEnabled(),
+                  Boolean(first.isCommunity),
                 );
             initialChannelId = land?.id ?? null;
             void loadUnread(first.id);
@@ -2085,9 +2086,11 @@ function MainAppContent({
         setAppError(null);
         setChannels(list);
         void loadUnread(serverId);
+        const server = serversRef.current.find((row) => row.id === serverId);
         const land = pickServerLandingTarget(
           list,
           isCommunityHomeEnabled(),
+          Boolean(server?.isCommunity),
         );
         if (land) {
           await selectChannel(land.id, serverId);
@@ -2524,9 +2527,13 @@ function MainAppContent({
             setHighlightMessageId(targetMessageId);
           }
         } else {
+          const targetServer = serversRef.current.find(
+            (row) => row.id === targetServerId,
+          );
           const land = pickServerLandingTarget(
             list,
             isCommunityHomeEnabled(),
+            Boolean(targetServer?.isCommunity),
           );
           if (land) {
             await selectChannel(land.id, targetServerId);
@@ -3165,7 +3172,9 @@ function MainAppContent({
       ? channels.find((c) => c.id === selectedChannelId)
       : undefined;
   const selectedServer = servers.find((s) => s.id === selectedServerId);
-  const communityHomeEnabled = isCommunityHomeEnabled();
+  const communityHomeFlagOn = isCommunityHomeEnabled();
+  const communityHomeEnabled =
+    communityHomeFlagOn && Boolean(selectedServer?.isCommunity);
   const communityHomeOpen =
     selection.kind === "server" &&
     isCommunityHomeChannelId(selectedChannelId) &&
@@ -4103,11 +4112,10 @@ function MainAppContent({
           <CommunityHomeFeed
             serverId={selectedServer.id}
             serverName={selectedServer.name}
-            channels={channels}
             authorName={user?.displayName ?? user?.username ?? "você"}
+            canManageServer={canManageServer}
             isOwner={selectedServer.role === "owner"}
             isVip={meVip}
-            onJoinVoice={handleJoinVoiceFromList}
             onOpenNav={() => setMobileNavOpen(true)}
           />
         )}
@@ -4306,6 +4314,7 @@ function MainAppContent({
           const land = pickServerLandingTarget(
             newChannels,
             isCommunityHomeEnabled(),
+            Boolean(server.isCommunity),
           );
           if (land) {
             await selectChannel(land.id, server.id);
