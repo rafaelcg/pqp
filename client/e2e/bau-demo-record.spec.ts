@@ -1,6 +1,7 @@
 import { test } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 /**
  * Re-records the Baú demo reel that the owner's empty-state guide plays
@@ -28,13 +29,14 @@ import path from "node:path";
  *     -frames:v 1 -q:v 4 src/assets/bau/bau-demo.pt-BR.jpg
  *
  * Needs MinIO up (`docker compose --profile storage up -d`) for the image
- * and PDF posts, and an e2e database with no other "Mesa da Tues" in it
+ * and PDF posts (the two images were made with GPT Image 2 via Higgsfield;
+ * the PDF is hand-written), and an e2e database with no other "Mesa da Tues" in it
  * (the community slug must be unique or the server lands on #general).
  */
 
 const API = process.env.E2E_API_URL ?? "http://localhost:3101";
 const OUT = process.env.BAU_DEMO_DIR;
-const FIXTURES = path.join(__dirname, "fixtures", "bau");
+const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures", "bau");
 
 test.skip(!OUT, "Set BAU_DEMO_DIR to record the Baú demo reel");
 
@@ -169,7 +171,7 @@ async function seed(): Promise<string> {
   const map = await post({
     title: "Mapa do porão",
     body: "O porão da Taverna do Corvo, do jeito que ficou depois da sessão 10. O X no Tesouro é onde o Tobias caiu.",
-    mediaUploadId: await upload(server.id, "mapa-porao.png", "image/png"),
+    mediaUploadId: await upload(server.id, "mapa-porao.jpg", "image/jpeg"),
   });
   await comment(map.id, "rec-ana", "hahaha o Tobias");
   await comment(map.id, "rec-leo", "eu faltei, valeu por postar");
@@ -179,7 +181,7 @@ async function seed(): Promise<string> {
   const poster = await post({
     title: "Sessão 11: terça, 20h",
     body: "Quem faltou lê o resumo do porão antes de entrar na call.",
-    mediaUploadId: await upload(server.id, "sessao-11.png", "image/png"),
+    mediaUploadId: await upload(server.id, "sessao-11.jpg", "image/jpeg"),
   });
   await comment(poster.id, "rec-ana", "presente!");
   await like(poster.id, "rec-ana");
