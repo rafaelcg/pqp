@@ -1171,15 +1171,14 @@ h2,
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .animate-toast-in,
+  .animate-toast-out,
+  .animate-badge-pop,
   .animate-pop-in,
   .animate-pop-out,
   .animate-step-in,
   .animate-rise,
   .animate-fade-in,
-  .hero-parallax {,
-  .animate-toast-in,
-  .animate-toast-out,
-  .animate-badge-pop,
   .hero-parallax {
     animation: none;
   }
