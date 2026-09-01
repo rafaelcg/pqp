@@ -109,6 +109,7 @@ const EVICT_TOPIC = "chat.evict";
 const PROFILE_TOPIC = "chat.profile";
 const FRIEND_TOPIC = "chat.friend";
 const PERMISSIONS_TOPIC = "chat.permissions";
+const COMMUNITY_HOME_TOPIC = "chat.community-home";
 
 interface PresenceUser {
   id: string;
@@ -537,6 +538,40 @@ export function deliverPermissionsUpdate(
     type: "permissions-update",
     serverId,
     version,
+  } as const);
+  forEachAuthenticatedSocket((socket, user) => {
+    if (socket.readyState === 1 && allowed.has(user.id)) {
+      socket.send(payload);
+    }
+  });
+}
+
+/**
+ * Tell every connected member of a server that Baú changed. Content-free:
+ * each client refetches `GET /api/servers/:id/home/posts`. Same addressing as
+ * permissions-update (per member, never a channel fan-out).
+ */
+export async function notifyCommunityHomeUpdate(
+  serverId: string,
+): Promise<void> {
+  const memberIds = await listServerMemberIds(serverId);
+  deliverCommunityHomeUpdate(serverId, memberIds);
+  if (isBusEnabled()) {
+    publishToCluster(COMMUNITY_HOME_TOPIC, {
+      type: "community-home-update",
+      serverId,
+    });
+  }
+}
+
+export function deliverCommunityHomeUpdate(
+  serverId: string,
+  memberIds: readonly string[],
+): void {
+  const allowed = new Set(memberIds);
+  const payload = encode({
+    type: "community-home-update",
+    serverId,
   } as const);
   forEachAuthenticatedSocket((socket, user) => {
     if (socket.readyState === 1 && allowed.has(user.id)) {
@@ -1506,6 +1541,25 @@ subscribeToCluster(PERMISSIONS_TOPIC, (data) => {
     })
     .catch((error) => {
       console.error("[ws] permissions-update relay failed:", error);
+    });
+});
+
+subscribeToCluster(COMMUNITY_HOME_TOPIC, (data) => {
+  if (
+    !data ||
+    typeof data !== "object" ||
+    (data as { type?: string }).type !== "community-home-update" ||
+    typeof (data as { serverId?: string }).serverId !== "string"
+  ) {
+    return;
+  }
+  const serverId = (data as { serverId: string }).serverId;
+  void listServerMemberIds(serverId)
+    .then((memberIds) => {
+      deliverCommunityHomeUpdate(serverId, memberIds);
+    })
+    .catch((error) => {
+      console.error("[ws] community-home-update relay failed:", error);
     });
 });
 

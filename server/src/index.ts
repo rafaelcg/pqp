@@ -35,6 +35,10 @@ import {
   sweepOrphanedAttachments,
   sweepQuarantinedAttachments,
 } from "./services/attachments.js";
+import {
+  publishDueCommunityHomePosts,
+  sweepOrphanedCommunityHomeMedia,
+} from "./services/community-home.js";
 import { sweepPendingAccountDeletions } from "./services/account.js";
 import { pruneAuditLog } from "./services/audit.js";
 import { pruneResolvedReports } from "./services/reports.js";
@@ -51,6 +55,7 @@ import {
 import {
   getSocketUser,
   handleWsConnection,
+  notifyCommunityHomeUpdate,
   startClusterPresenceRefresh,
   startClusterStatusRefresh,
 } from "./ws/index.js";
@@ -488,6 +493,42 @@ const pendingDeletionSweep = setInterval(() => {
 pendingDeletionSweep.unref?.();
 
 /**
+ * Community Home schedule catch-up.
+ *
+ * Single Node process, no worker, no queue. Every 30s flip due `scheduled`
+ * rows to `published` and nudge connected members. Correctness does not
+ * depend on the interval staying up — a redeploy that misses a tick catches
+ * up on the next one (and on boot below). Staging stays one machine.
+ */
+const COMMUNITY_HOME_SCHEDULE_MS = 30_000;
+
+async function sweepCommunityHomeSchedule(): Promise<void> {
+  try {
+    const serverIds = await publishDueCommunityHomePosts();
+    for (const serverId of serverIds) {
+      await notifyCommunityHomeUpdate(serverId);
+    }
+    if (serverIds.length > 0) {
+      console.log(
+        `[community-home] published scheduled posts on ${serverIds.length} server(s)`,
+      );
+    }
+  } catch (error) {
+    console.error("[community-home] schedule sweep failed:", error);
+  }
+  try {
+    await sweepOrphanedCommunityHomeMedia();
+  } catch (error) {
+    console.error("[community-home] media sweep failed:", error);
+  }
+}
+
+const communityHomeSweep = setInterval(() => {
+  void sweepCommunityHomeSchedule();
+}, COMMUNITY_HOME_SCHEDULE_MS);
+communityHomeSweep.unref?.();
+
+/**
  * Multi-instance chat, off by default.
  *
  * Unset (or `off`) leaves every fan-out purely in-process — exactly what this
@@ -551,6 +592,7 @@ async function main() {
   // deployment. After initDb so it cannot race schema creation, and unawaited
   // so a bucket that is merely unreachable cannot hold up listen().
   void sweepAttachments();
+  void sweepCommunityHomeSchedule();
 
   httpServer.listen(PORT, () => {
     console.log(`pqp server listening on http://localhost:${PORT}`);
@@ -577,6 +619,7 @@ async function shutdown(signal: string) {
   clearInterval(rateLimitSweep);
   clearInterval(attachmentSweep);
   clearInterval(pendingDeletionSweep);
+  clearInterval(communityHomeSweep);
   stopPresenceRefresh?.();
   for (const socket of wss.clients) {
     socket.close(1001, "Server shutting down");

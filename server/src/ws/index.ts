@@ -29,6 +29,7 @@ export {
   evictChannelViewers,
   evictUserFromChannels,
   notifyPermissionsUpdate,
+  notifyCommunityHomeUpdate,
   resolveEmbedInBackground,
   startClusterPresenceRefresh,
 } from "./chat.js";
