@@ -111,7 +111,6 @@ async function bootAs(page: Page, path: string, suffix: string): Promise<void> {
 
 async function joinVoice(page: Page): Promise<void> {
   await page.getByRole("button", { name: /stage/ }).first().click();
-  await page.getByRole("button", { name: "Join Voice" }).click();
   await expect(page.getByTestId("call-stage-collapsed")).toBeVisible({ timeout: 30_000 });
   await waitUntilVoiceConnected(page);
 }

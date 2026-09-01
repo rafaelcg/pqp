@@ -55,7 +55,6 @@ test("camera on expands the lobby stage; camera off returns the slim bar", async
   await page.setViewportSize({ width: 1440, height: 900 });
   await openApp(page);
   await page.getByRole("button", { name: /lobby/i }).first().click();
-  await page.getByRole("button", { name: "Join Voice" }).click();
   await expect(page.getByTestId("call-stage-collapsed")).toBeVisible({
     timeout: 20_000,
   });
