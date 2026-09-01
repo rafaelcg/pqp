@@ -59,8 +59,9 @@ Home is durable media, **not** a call invite. There is no "Join the call" /
 
 ## What you should see when on
 
-- Only on **community** servers (`isCommunity`): pinned **Home / Início** above TEXT
-- Those servers default-land on Home (not first `#geral`)
+- Pinned **Home / Início** above TEXT on **any** server (including private halls)
+- **Landing** is community-only: `isCommunity` servers default-land on Home;
+  private halls still land on the first text channel
 - Feed from `localStorage` key `pqp:community-home-posts:{serverId}` (versioned envelope)
 - Flat comments on published posts; staff can delete / disable per post
 - Sentinel channel id `__community_home__` — **not** a real channel type
