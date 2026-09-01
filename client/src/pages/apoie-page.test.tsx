@@ -3,6 +3,13 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApoiePage, ApoieRoute } from "./apoie-page";
 
+// The marketing nav renders Clerk's sign-in CTAs, which need a ClerkProvider.
+// Locally the dev-auth bypass hides them; CI has no bypass and no provider, so
+// stub the CTAs: this test is about the donation copy, not the auth buttons.
+vi.mock("@/components/marketing/marketing-auth-ctas", () => ({
+  MarketingAuthCtas: () => null,
+}));
+
 const SPONSOR = "https://github.com/sponsors/rafaelcg";
 const PIX_KEY = "9c1b6f8e-1111-4222-8333-444455556666";
 const BRCODE = "00020126580014br.gov.bcb.pix0136" + PIX_KEY + "5204000053039865802BR";
