@@ -1124,10 +1124,6 @@ h2,
   animation: badge-pop 0.32s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .animate-toast-in,
-  .animate-toast-out,
-  .animate-badge-pop,
 /* Corner cards and steps inside a dialog: one entrance, one exit. */
 @keyframes pop-in {
   from {
@@ -1180,6 +1176,10 @@ h2,
   .animate-step-in,
   .animate-rise,
   .animate-fade-in,
+  .hero-parallax {,
+  .animate-toast-in,
+  .animate-toast-out,
+  .animate-badge-pop,
   .hero-parallax {
     animation: none;
   }
