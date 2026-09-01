@@ -175,7 +175,7 @@ Do **not** put `CLERK_SECRET_KEY`, `DATABASE_URL`, or TURN credentials in Pages/
 - `CLOUDFLARE_TURN_KEY_ID` + `CLOUDFLARE_TURN_API_TOKEN`, or
 - `METERED_API_KEY` (+ optional `METERED_DOMAIN`)
 
-Optional features, each off until its names are set: `GIPHY_API_KEY` (GIF search), `LIVEKIT_*`
+Optional features, each off until its names are set: `KLIPY_API_KEY` (GIF search), `LIVEKIT_*`
 (SFU), `S3_*` (attachments — see [`ATTACHMENTS.md`](./ATTACHMENTS.md)), `STEAM_WEB_API_KEY` /
 `BATTLENET_*` / `TWITCH_*` plus `PUBLIC_APP_URL` (game connections — see [`CONNECTIONS.md`](./CONNECTIONS.md)).
 

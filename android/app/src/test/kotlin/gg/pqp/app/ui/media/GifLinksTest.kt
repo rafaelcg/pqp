@@ -23,6 +23,7 @@ class GifLinksTest {
     fun `an allowlisted host serving an image is media`() {
         assertTrue(GifLinks.isMediaUrl(giphy))
         assertTrue(GifLinks.isMediaUrl(tenor))
+        assertTrue(GifLinks.isMediaUrl("https://static.klipy.com/ii/abc/14/af/um0L4dFH.gif"))
         assertTrue(GifLinks.isMediaUrl("https://i.giphy.com/abc123.gif"))
         assertTrue(GifLinks.isMediaUrl("https://c.tenor.com/abc/x.gif"))
         assertTrue(GifLinks.isMediaUrl("https://media.giphy.com/media/abc/giphy.webp"))

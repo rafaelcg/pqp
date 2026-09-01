@@ -3,6 +3,7 @@ import { gifMessageMedia } from "./gif-media";
 
 const GIPHY = "https://media3.giphy.com/media/abc123/giphy.gif";
 const TENOR = "https://media.tenor.com/x8v1o/excited-happy-dance-gif-9912.gif";
+const KLIPY = "https://static.klipy.com/ii/abc123/14/af/um0L4dFH.gif";
 
 describe("gifMessageMedia", () => {
   it("reads a body that is nothing but an allowlisted URL as media", () => {
@@ -34,6 +35,16 @@ describe("gifMessageMedia", () => {
 
   it("reports no still for a host that publishes none", () => {
     expect(gifMessageMedia(TENOR)?.stillUrl).toBeNull();
+    expect(gifMessageMedia(KLIPY)?.stillUrl).toBeNull();
+  });
+
+  it("reads a Klipy picker result as media", () => {
+    expect(gifMessageMedia(KLIPY)).toEqual({
+      url: KLIPY,
+      stillUrl: null,
+      // Klipy filenames are random ids, so nothing readable can come of them.
+      alt: "GIF",
+    });
   });
 });
 

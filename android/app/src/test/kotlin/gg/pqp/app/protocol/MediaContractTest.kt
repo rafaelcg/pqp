@@ -172,7 +172,7 @@ class MediaContractTest {
             .toList()
         assertEquals(
             "Parsed the wrong number of host patterns out of $gifs",
-            4,
+            5,
             hosts.size,
         )
 
@@ -180,6 +180,7 @@ class MediaContractTest {
         // built for it. A regex-to-regex comparison would only prove the two
         // strings match; this proves the two *decisions* match.
         val samples = mapOf(
+            """static\.klipy\.com""" to "https://static.klipy.com/ii/a/b/c/d.gif",
             """media\d*\.giphy\.com""" to "https://media3.giphy.com/media/a/giphy.gif",
             """i\.giphy\.com""" to "https://i.giphy.com/a.gif",
             """media\d*\.tenor\.com""" to "https://media.tenor.com/a/b.gif",

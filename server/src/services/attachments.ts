@@ -350,7 +350,7 @@ async function verifyUpload(row: DbAttachment): Promise<number | null> {
  * A stored row gets a presigned GET good for two minutes; a remote row — a
  * GIF on somebody else's host — is already a public URL and is passed through.
  * Remote rows are scanned too: the host allowlist proves the bytes came from
- * GIPHY or Tenor, which says nothing at all about what is in them.
+ * an allowlisted GIF host, which says nothing at all about what is in them.
  *
  * Returns `unscanned` with no provider when scanning is off, which is the
  * honest default and the one every existing deployment is in.

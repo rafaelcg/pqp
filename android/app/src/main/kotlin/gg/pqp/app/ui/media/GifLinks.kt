@@ -34,6 +34,7 @@ object GifLinks {
      * and the bare domain serves pages.
      */
     private val MEDIA_HOSTS = listOf(
+        Regex("""^static\.klipy\.com$"""),
         Regex("""^media\d*\.giphy\.com$"""),
         Regex("""^i\.giphy\.com$"""),
         Regex("""^media\d*\.tenor\.com$"""),
