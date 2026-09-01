@@ -15,8 +15,8 @@ interface ImportMetaEnv {
   readonly VITE_VOICE_BACKEND?: "mesh" | "cloudflare-sfu" | "livekit";
   readonly VITE_DEV_AUTH_BYPASS?: string;
   /**
-   * Community Home experiment (client-only). Default off. Do not set in
-   * production Pages builds. See docs/COMMUNITY_HOME.md.
+   * Community Home rollout gate. Each server still opts in through its
+   * API-backed setting. Default off; see docs/COMMUNITY_HOME.md.
    */
   readonly VITE_COMMUNITY_HOME_ENABLED?: string;
   /**

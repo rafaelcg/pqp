@@ -2,16 +2,17 @@
  * Community Home experiment flag.
  *
  * OWN FLAG, deliberately separate from `COMMUNITIES_ENABLED`. That one is a
- * legal-category switch (STF Art. 19); this one is a client-only UI mock so Raf
- * can feel a Patreon-like home inside the real chrome. Default OFF. Production
- * Pages builds must leave `VITE_COMMUNITY_HOME_ENABLED` unset.
+ * legal-category switch (STF Art. 19); this one exposes the Baú UI while each
+ * server's persisted `communityHomeEnabled` setting decides whether its row is
+ * actually present. Default OFF. Production Pages builds must leave
+ * `VITE_COMMUNITY_HOME_ENABLED` unset.
  *
  * Enable locally (any one is enough):
  *   1. `VITE_COMMUNITY_HOME_ENABLED=true` in `client/.env`, then restart Vite
  *   2. `localStorage.setItem("pqp:community-home", "1")` then reload
  *   3. `?communityHome=1` on the URL (also sticky-writes localStorage)
  *
- * No server env, no config endpoint, no Fly restart.
+ * This rollout latch is still client-side. The per-server choice is API-backed.
  */
 
 export const COMMUNITY_HOME_STORAGE_KEY = "pqp:community-home";

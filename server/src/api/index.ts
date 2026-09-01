@@ -102,6 +102,7 @@ import {
   parseCommunityHomeTeaser,
   parseCommunityHomeTitle,
   scheduleCommunityHomePostSchema,
+  updateCommunityHomeConfigSchema,
   updateCommunityHomePostSchema,
 } from "@pqp/shared";
 import { z } from "zod";
@@ -292,6 +293,7 @@ import {
   deleteServer,
   getChannel,
   getChannelAudience,
+  getServer,
   InvalidChannelMoveError,
   listChannelMembers,
   listChannels,
@@ -303,6 +305,7 @@ import {
   removeChannelMember,
   renameServer,
   SERVER_COLUMNS,
+  setCommunityHomeEnabled,
   transferOwnership,
   updateChannel,
   updateMessageRetention,
@@ -2384,6 +2387,31 @@ async function notifyHome(serverId: string): Promise<void> {
     console.error("[community-home] notify failed:", error);
   }
 }
+
+router.get(
+  "/api/servers/:serverId/home/config",
+  async ({ user }, { serverId }) => {
+    await requireServerMember(serverId!, user.id);
+    const server = await getServer(serverId!);
+    if (!server) {
+      throw new NotFound("Server not found");
+    }
+    return { enabled: server.community_home_enabled ?? false };
+  },
+);
+
+router.patch(
+  "/api/servers/:serverId/home/config",
+  async ({ req, user }, { serverId }) => {
+    await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+    const body = updateCommunityHomeConfigSchema.parse(await readJsonBody(req));
+    const server = await setCommunityHomeEnabled(serverId!, body.enabled);
+    return {
+      enabled: server.community_home_enabled ?? false,
+      server: mapServer(server),
+    };
+  },
+);
 
 router.get("/api/servers/:serverId/home/posts", async ({ user }, { serverId }) => {
   await requireServerMember(serverId!, user.id);

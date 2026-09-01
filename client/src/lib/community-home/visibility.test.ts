@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   canViewHomePostFull,
   homePostIsLocked,
+  isPostLockedForViewer,
 } from "./visibility";
 import {
   loadCommunityHomeViewerMode,
@@ -10,16 +11,16 @@ import {
 } from "./viewer";
 
 describe("home post lock visibility", () => {
-  it("free posts are open to free, vip, and owner", () => {
-    for (const viewer of ["free", "vip", "owner"] as const) {
+  it("free posts are open to members, vip, and owner", () => {
+    for (const viewer of ["members", "vip", "owner"] as const) {
       expect(canViewHomePostFull("free", viewer)).toBe(true);
       expect(homePostIsLocked("free", viewer)).toBe(false);
     }
   });
 
-  it("members-only posts lock for free members", () => {
-    expect(canViewHomePostFull("members", "free")).toBe(false);
-    expect(homePostIsLocked("members", "free")).toBe(true);
+  it("members-only posts lock for plain members", () => {
+    expect(canViewHomePostFull("members", "members")).toBe(false);
+    expect(homePostIsLocked("members", "members")).toBe(true);
   });
 
   it("members-only posts open for VIP and owner", () => {
@@ -27,10 +28,44 @@ describe("home post lock visibility", () => {
     expect(canViewHomePostFull("members", "owner")).toBe(true);
     expect(homePostIsLocked("members", "vip")).toBe(false);
   });
+
+  it("isPostLockedForViewer trusts API locked in auto mode", () => {
+    expect(
+      isPostLockedForViewer(
+        { visibility: "members", locked: true },
+        false,
+        "auto",
+      ),
+    ).toBe(true);
+    expect(
+      isPostLockedForViewer(
+        { visibility: "members", locked: false },
+        true,
+        "auto",
+      ),
+    ).toBe(false);
+  });
+
+  it("staff inspector can simulate the locked teaser", () => {
+    expect(
+      isPostLockedForViewer(
+        { visibility: "members", locked: false },
+        true,
+        "members",
+      ),
+    ).toBe(true);
+    expect(
+      isPostLockedForViewer(
+        { visibility: "members", locked: false },
+        true,
+        "owner",
+      ),
+    ).toBe(false);
+  });
 });
 
 describe("resolveCommunityHomeViewer", () => {
-  it("auto prefers owner, then vip, else free", () => {
+  it("auto prefers owner, then vip, else members", () => {
     expect(
       resolveCommunityHomeViewer({
         mode: "auto",
@@ -51,29 +86,29 @@ describe("resolveCommunityHomeViewer", () => {
         isOwner: false,
         isVip: false,
       }),
-    ).toBe("free");
+    ).toBe("members");
   });
 
   it("explicit mode overrides real membership", () => {
     expect(
       resolveCommunityHomeViewer({
-        mode: "free",
+        mode: "members",
         isOwner: true,
         isVip: true,
       }),
-    ).toBe("free");
+    ).toBe("members");
     expect(
       resolveCommunityHomeViewer({
-        mode: "vip",
+        mode: "owner",
         isOwner: false,
         isVip: false,
       }),
-    ).toBe("vip");
+    ).toBe("owner");
   });
 });
 
 describe("viewer mode storage", () => {
-  it("reads ?homeViewer= and sticky-writes", () => {
+  it("reads ?homeViewer= and sticky-writes; free remaps to members", () => {
     const map = new Map<string, string>();
     const storage = {
       getItem: (k: string) => map.get(k) ?? null,
@@ -82,9 +117,9 @@ describe("viewer mode storage", () => {
       },
     };
     expect(loadCommunityHomeViewerMode("?homeViewer=free", storage)).toBe(
-      "free",
+      "members",
     );
-    expect(map.get("pqp:community-home-viewer")).toBe("free");
+    expect(map.get("pqp:community-home-viewer")).toBe("members");
   });
 
   it("saveCommunityHomeViewerMode persists", () => {
@@ -95,7 +130,7 @@ describe("viewer mode storage", () => {
         map.set(k, v);
       },
     };
-    saveCommunityHomeViewerMode("vip", storage);
-    expect(loadCommunityHomeViewerMode("", storage)).toBe("vip");
+    saveCommunityHomeViewerMode("members", storage);
+    expect(loadCommunityHomeViewerMode("", storage)).toBe("members");
   });
 });

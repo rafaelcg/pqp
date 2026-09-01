@@ -68,28 +68,28 @@ describe("pickServerLandingTarget", () => {
     { id: "c1", type: "category" as const },
   ];
 
-  it("flag off lands on the first text channel (today)", () => {
+  it("rollout or server opt-in off lands on the first text channel", () => {
     expect(pickServerLandingTarget(channels, false, true)).toEqual({
       kind: "channel",
       id: "t1",
     });
   });
 
-  it("flag on + community lands on Community Home", () => {
+  it("rollout and server opt-in on + community lands on Community Home", () => {
     expect(pickServerLandingTarget(channels, true, true)).toEqual({
       kind: "home",
       id: COMMUNITY_HOME_CHANNEL_ID,
     });
   });
 
-  it("flag on + private server still lands on first text channel", () => {
+  it("rollout and server opt-in on + hall still lands on first text channel", () => {
     expect(pickServerLandingTarget(channels, true, false)).toEqual({
       kind: "channel",
       id: "t1",
     });
   });
 
-  it("flag off with no text falls back to first non-category", () => {
+  it("Home off with no text falls back to first non-category", () => {
     expect(
       pickServerLandingTarget(
         [

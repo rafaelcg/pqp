@@ -3225,3 +3225,7 @@ END $$;
 CREATE INDEX IF NOT EXISTS idx_community_home_media_unclaimed
   ON community_home_media_uploads (created_at)
   WHERE claimed_post_id IS NULL AND verified_at IS NULL;
+
+-- The rollout flag above only decides whether a client may offer Baú at all.
+-- Each server opts in separately, and existing servers stay off.
+ALTER TABLE servers ADD COLUMN IF NOT EXISTS community_home_enabled BOOLEAN NOT NULL DEFAULT FALSE;
