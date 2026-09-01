@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import type { User } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
@@ -74,6 +74,19 @@ interface OnboardingFlowProps {
   onDone: () => void;
 }
 
+/** What one step hands the shared dialog. */
+interface StepView {
+  eyebrow: string;
+  title: string;
+  description: string;
+  body: ReactNode;
+  footer: ReactNode;
+  dismissible: boolean;
+  onClose: () => void;
+}
+
+const STEPS: readonly OnboardingStep[] = ["handle", "profile", "landing"];
+
 export function OnboardingFlow({
   user,
   pendingInvite = false,
@@ -90,18 +103,14 @@ export function OnboardingFlow({
    * costs one repeat of the flow on the next cold start, whereas awaiting it
    * would make a slow network look like a frozen dialog on the last click of
    * signup — the worst possible moment to look broken.
-   */
-  /**
-   * Record that the flow is answered, then get out of the way.
    *
-   * Deliberately does NOT patch the local `user` to match. It is tempting —
-   * the app's copy now says "onboarding never ran" while the server says it did
-   * — but `ProfileStep` calls `onUserUpdated` and then this in the same handler,
-   * so the `user` this closure holds can still be the pre-save one, and writing
-   * it back would undo the display name and avatar that were just saved. The
-   * staleness is harmless instead: nothing downstream keys off `onboardedAt`
-   * except `shouldRunOnboarding`, and `needsOnboarding` has already been set
-   * false by `onDone`.
+   * Deliberately does NOT patch the local `user` to match. `ProfileStep` calls
+   * `onUserUpdated` and then this in the same handler, so the `user` this
+   * closure holds can still be the pre-save one, and writing it back would undo
+   * the display name and avatar that were just saved. The staleness is
+   * harmless: nothing downstream keys off `onboardedAt` except
+   * `shouldRunOnboarding`, and `needsOnboarding` has already been set false by
+   * `onDone`.
    */
   function finish() {
     void updatePreferences(onboardingCompletedPatch()).catch(() => {
@@ -111,44 +120,87 @@ export function OnboardingFlow({
     onDone();
   }
 
-  if (step === "handle") {
-    return (
-      <HandleStep
-        user={user}
-        onUserUpdated={onUserUpdated}
-        onNext={() => setStep("profile")}
-      />
-    );
-  }
+  // ONE DIALOG, THREE STEPS. Each step is a hook that owns its own fields and
+  // hands back what to draw; all three run every render (hooks must), and the
+  // current one is picked below. The panel therefore stays mounted from the
+  // first screen to the last: only the content slides, the frame never blinks.
+  // Three separate dialogs used to re-run the entrance animation between
+  // steps, which is what made the flow read as three windows.
+  const handle = useHandleStep({
+    user,
+    onUserUpdated,
+    onNext: () => setStep("profile"),
+  });
+  const profile = useProfileStep({
+    user,
+    onUserUpdated,
+    // With an invite in hand this is the last screen, so Continue means
+    // "done" rather than "next" — and finishing here is what uncovers the
+    // channel they were invited to.
+    onNext: pendingInvite ? finish : () => setStep("landing"),
+    onSkip: finish,
+  });
+  const landing = useLandingStep({
+    onServerReady: async (serverId) => {
+      await onServerReady(serverId);
+      finish();
+    },
+    onSkip: finish,
+  });
 
-  if (step === "profile") {
-    return (
-      <ProfileStep
-        user={user}
-        onUserUpdated={onUserUpdated}
-        // With an invite in hand this is the last screen, so Continue means
-        // "done" rather than "next" — and finishing here is what uncovers the
-        // channel they were invited to.
-        onNext={pendingInvite ? finish : () => setStep("landing")}
-        onSkip={finish}
-      />
-    );
-  }
+  const view: StepView =
+    step === "handle" ? handle : step === "profile" ? profile : landing;
+  const total = pendingInvite ? 2 : STEPS.length;
+  const index = STEPS.indexOf(step);
 
   return (
-    <LandingStep
-      onServerReady={async (serverId) => {
-        await onServerReady(serverId);
-        finish();
-      }}
-      onSkip={finish}
-    />
+    <Dialog
+      open
+      eyebrow={view.eyebrow}
+      title={view.title}
+      description={view.description}
+      size="sm"
+      dismissible={view.dismissible}
+      onClose={view.onClose}
+      footer={
+        <>
+          {/* Where you are in the flow, on the left of the buttons. Not
+              clickable: the steps are answered in order. */}
+          <span
+            aria-label={`${index + 1} / ${total}`}
+            data-onboarding-progress={index + 1}
+            className="mr-auto flex items-center gap-1.5 self-center"
+          >
+            {Array.from({ length: total }, (_, dot) => (
+              <span
+                key={dot}
+                aria-hidden="true"
+                className={
+                  dot === index
+                    ? "h-1.5 w-4 rounded-full bg-signal transition-all duration-300"
+                    : dot < index
+                      ? "h-1.5 w-1.5 rounded-full bg-signal/50 transition-all duration-300"
+                      : "h-1.5 w-1.5 rounded-full bg-ink-4 transition-all duration-300"
+                }
+              />
+            ))}
+          </span>
+          {view.footer}
+        </>
+      }
+    >
+      {/* Keyed on the step so the new content slides in from the right while
+          the panel itself holds still. */}
+      <div key={step} className="animate-step-in" data-onboarding-step={step}>
+        {view.body}
+      </div>
+    </Dialog>
   );
 }
 
 // ------------------------------------------------------------- step 1: handle
 
-function HandleStep({
+function useHandleStep({
   user,
   onUserUpdated,
   onNext,
@@ -156,7 +208,7 @@ function HandleStep({
   user: User;
   onUserUpdated: (user: User) => void;
   onNext: () => void;
-}) {
+}): StepView {
   const { t } = useTranslation();
   const [username, setUsername] = useState(user.username ?? "");
   const [tag, setTag] = useState(user.tag);
@@ -199,30 +251,27 @@ function HandleStep({
     }
   }
 
-  return (
-    <Dialog
-      open
-      eyebrow={t("onboarding.handle.eyebrow")}
-      title={t("onboarding.handle.title")}
-      description={t("onboarding.handle.description")}
-      size="sm"
-      // No X and no Escape on this one screen. There is nothing behind it yet
-      // — the app opens the moment it closes — and a close affordance on the
-      // step whose whole purpose is "read this" is a way to not read it.
-      dismissible={false}
-      onClose={() => {}}
-      footer={
-        <Button disabled={!canSubmit} onClick={() => void submit()}>
-          {saving
-            ? t("onboarding.saving")
-            : reassignedTag
-              ? t("onboarding.continue")
-              : t("onboarding.handle.confirm")}
-        </Button>
-      }
-    >
+  return {
+    eyebrow: t("onboarding.handle.eyebrow"),
+    title: t("onboarding.handle.title"),
+    description: t("onboarding.handle.description"),
+    // No X and no Escape on this one screen. There is nothing behind it yet
+    // — the app opens the moment it closes — and a close affordance on the
+    // step whose whole purpose is "read this" is a way to not read it.
+    dismissible: false,
+    onClose: () => {},
+    footer: (
+      <Button disabled={!canSubmit} onClick={() => void submit()}>
+        {saving
+          ? t("onboarding.saving")
+          : reassignedTag
+            ? t("onboarding.continue")
+            : t("onboarding.handle.confirm")}
+      </Button>
+    ),
+    body: (
       <div className="space-y-4 px-5 py-4">
-        {/* Fires once, on arrival. `HandleStep` stays mounted for the whole of
+        {/* Fires once, on arrival. The step stays mounted for the whole of
             step one, so typing, an error and a reassigned tag all re-render
             around this without re-triggering it. */}
         <Confetti />
@@ -277,13 +326,13 @@ function HandleStep({
           </p>
         )}
       </div>
-    </Dialog>
-  );
+    ),
+  };
 }
 
 // ------------------------------------------------ step 2: display name, avatar
 
-function ProfileStep({
+function useProfileStep({
   user,
   onUserUpdated,
   onNext,
@@ -293,7 +342,7 @@ function ProfileStep({
   onUserUpdated: (user: User) => void;
   onNext: () => void;
   onSkip: () => void;
-}) {
+}): StepView {
   const { t } = useTranslation();
   const [displayName, setDisplayName] = useState(user.displayName);
   const [avatarUrl, setAvatarUrl] = useState(user.avatarUrl ?? "");
@@ -327,29 +376,25 @@ function ProfileStep({
     }
   }
 
-  return (
-    <Dialog
-      open
-      eyebrow={t("onboarding.profile.eyebrow")}
-      title={t("onboarding.profile.title")}
-      description={t("onboarding.profile.description")}
-      size="sm"
-      // Dismissible from here on: closing is a valid answer, and it means the
-      // same thing the skip button does.
-      onClose={onSkip}
-      footer={
-        <>
-          <Button variant="ghost" onClick={onSkip}>
-            {t("onboarding.skip")}
-          </Button>
-          <Button disabled={saving} onClick={() => void submit()}>
-            {saving
-              ? t("onboarding.saving")
-              : t("onboarding.continue")}
-          </Button>
-        </>
-      }
-    >
+  return {
+    eyebrow: t("onboarding.profile.eyebrow"),
+    title: t("onboarding.profile.title"),
+    description: t("onboarding.profile.description"),
+    // Dismissible from here on: closing is a valid answer, and it means the
+    // same thing the skip button does.
+    dismissible: true,
+    onClose: onSkip,
+    footer: (
+      <>
+        <Button variant="ghost" onClick={onSkip}>
+          {t("onboarding.skip")}
+        </Button>
+        <Button disabled={saving} onClick={() => void submit()}>
+          {saving ? t("onboarding.saving") : t("onboarding.continue")}
+        </Button>
+      </>
+    ),
+    body: (
       <div className="space-y-4 px-5 py-4">
         <label className="block">
           <span className="mb-1 block text-xs uppercase tracking-wide text-paper-muted">
@@ -393,19 +438,19 @@ function ProfileStep({
           </p>
         )}
       </div>
-    </Dialog>
-  );
+    ),
+  };
 }
 
 // ----------------------------------------------- step 3: somewhere to land in
 
-function LandingStep({
+function useLandingStep({
   onServerReady,
   onSkip,
 }: {
   onServerReady: (serverId: string) => Promise<void> | void;
   onSkip: () => void;
-}) {
+}): StepView {
   const { t } = useTranslation();
   const [name, setName] = useState("");
   const [code, setCode] = useState("");
@@ -447,20 +492,18 @@ function LandingStep({
     }
   }
 
-  return (
-    <Dialog
-      open
-      eyebrow={t("onboarding.landing.eyebrow")}
-      title={t("onboarding.landing.title")}
-      description={t("onboarding.landing.description")}
-      size="sm"
-      onClose={onSkip}
-      footer={
-        <Button variant="ghost" onClick={onSkip}>
-          {t("onboarding.skip")}
-        </Button>
-      }
-    >
+  return {
+    eyebrow: t("onboarding.landing.eyebrow"),
+    title: t("onboarding.landing.title"),
+    description: t("onboarding.landing.description"),
+    dismissible: true,
+    onClose: onSkip,
+    footer: (
+      <Button variant="ghost" onClick={onSkip}>
+        {t("onboarding.skip")}
+      </Button>
+    ),
+    body: (
       <div className="space-y-5 px-5 py-4">
         <div>
           <span className="mb-1 block text-xs uppercase tracking-wide text-paper-muted">
@@ -529,6 +572,6 @@ function LandingStep({
           </p>
         )}
       </div>
-    </Dialog>
-  );
+    ),
+  };
 }

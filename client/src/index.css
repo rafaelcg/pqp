@@ -1078,7 +1078,56 @@ h2,
   animation: fade-in 0.28s ease both;
 }
 
+/* Corner cards and steps inside a dialog: one entrance, one exit. */
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes pop-out {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+}
+
+@keyframes step-in {
+  from {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.animate-pop-in {
+  animation: pop-in 0.32s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.animate-pop-out {
+  animation: pop-out 0.18s ease-in both;
+}
+
+.animate-step-in {
+  animation: step-in 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
 @media (prefers-reduced-motion: reduce) {
+  .animate-pop-in,
+  .animate-pop-out,
+  .animate-step-in,
   .animate-rise,
   .animate-fade-in,
   .hero-parallax {

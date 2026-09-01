@@ -1,10 +1,11 @@
 import type { Poll } from "@pqp/shared";
-import { X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import coinHeadsUrl from "@/assets/chance/coin-heads.svg?url";
 import { PollCard } from "@/components/chat/poll-card";
+import { CornerCard } from "@/components/layout/corner-card";
 import { Button } from "@/components/ui/button";
 import { d6FaceUrl, playingCardUrl, polyhedralDieUrl } from "@/lib/chance-art";
+import { isAutomatedBrowser } from "@/lib/hints";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import {
@@ -72,8 +73,7 @@ export function WhatsNewPrompt({ enabled = true }: { enabled?: boolean }) {
   const [slide, setSlide] = useState(0);
   // Playwright sets this. A first-run card on every fresh context covers
   // the call stage and the composer the suite came to measure.
-  const automated =
-    typeof navigator !== "undefined" && Boolean(navigator.webdriver);
+  const automated = isAutomatedBrowser();
 
   useEffect(() => {
     if (automated || !state || !enabled) {
@@ -82,84 +82,56 @@ export function WhatsNewPrompt({ enabled = true }: { enabled?: boolean }) {
     rememberWhatsNew(state.pack);
   }, [automated, state, enabled]);
 
-  useEffect(() => {
-    if (automated || !state || !enabled || !open) {
-      return;
-    }
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        setOpen(false);
-      }
-    }
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [automated, state, enabled, open]);
-
-  if (automated || !state || !enabled || !open) {
-    return null;
-  }
-
+  const show = !automated && Boolean(state) && enabled && open;
   const current = SLIDES[slide]!;
   const last = slide >= SLIDES.length - 1;
 
   return (
-    <aside
-      aria-label={t("whatsNew.label")}
-      className="animate-fade-in safe-pb fixed inset-x-3 bottom-3 z-30 sm:inset-x-auto sm:right-4 sm:bottom-4 sm:w-[22rem]"
-    >
-      <div className="relative overflow-hidden rounded-2xl border border-ink-4 bg-ink-2 shadow-[var(--shadow-popover)]">
-        {current.id === "chance" ? <ChancePreview /> : <PollPreview />}
-        <button
-          type="button"
-          onClick={() => setOpen(false)}
-          aria-label={t("whatsNew.dismiss")}
-          className="absolute right-2 top-2 z-10 inline-flex h-7 w-7 items-center justify-center rounded-md bg-ink/70 text-paper outline-none backdrop-blur-sm hover:bg-ink hover:text-paper focus-visible:ring-2 focus-visible:ring-signal/60"
-        >
-          <X className="h-3.5 w-3.5" aria-hidden />
-        </button>
-
-        <div className="p-4">
-          <h2 className="font-display text-sm font-bold tracking-tight text-paper">
-            {t(current.titleKey)}
-          </h2>
-          <p className="mt-1.5 text-pretty text-xs leading-relaxed text-paper-muted">
-            {t(current.bodyKey)}
-          </p>
-
-          <div className="mt-3 flex items-center justify-between gap-3">
-            <p className="flex items-center gap-1.5" aria-hidden>
-              {SLIDES.map((_, index) => (
-                <span
-                  key={index}
-                  className={
-                    index === slide
-                      ? "h-1.5 w-1.5 rounded-full bg-signal"
-                      : "h-1.5 w-1.5 rounded-full bg-ink-4"
-                  }
-                />
-              ))}
-            </p>
-            <Button
-              size="sm"
-              className="rounded-full px-4"
-              onClick={() => {
-                if (last) {
-                  setOpen(false);
-                  return;
-                }
-                setSlide((currentSlide) => currentSlide + 1);
-              }}
-            >
-              {t(last ? "whatsNew.done" : "whatsNew.next")}
-            </Button>
-          </div>
+    <CornerCard
+      open={show}
+      onClose={() => setOpen(false)}
+      label={t("whatsNew.label")}
+      dismissLabel={t("whatsNew.dismiss")}
+      dataAttribute="whats-new"
+      hero={
+        <div key={current.id} className="animate-step-in">
+          {current.id === "chance" ? <ChancePreview /> : <PollPreview />}
         </div>
-      </div>
-    </aside>
+      }
+      title={t(current.titleKey)}
+      body={t(current.bodyKey)}
+      footer={
+        <div className="flex items-center justify-between gap-3">
+          <p className="flex items-center gap-1.5" aria-hidden>
+            {SLIDES.map((_, index) => (
+              <span
+                key={index}
+                className={cn(
+                  "h-1.5 rounded-full transition-all duration-300",
+                  index === slide ? "w-4 bg-signal" : "w-1.5 bg-ink-4",
+                )}
+              />
+            ))}
+          </p>
+          <Button
+            size="sm"
+            className="rounded-full px-4"
+            onClick={() => {
+              if (last) {
+                setOpen(false);
+                return;
+              }
+              setSlide((currentSlide) => currentSlide + 1);
+            }}
+          >
+            {t(last ? "whatsNew.done" : "whatsNew.next")}
+          </Button>
+        </div>
+      }
+    />
   );
 }
 
-/** Dice, a coin, a fan of cards: the objects, not an icon of them. */
 function ChancePreview() {
   const d20 = polyhedralDieUrl(20);
   const d6 = d6FaceUrl(6);
