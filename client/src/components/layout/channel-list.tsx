@@ -170,10 +170,11 @@ interface ChannelListProps {
   mobileOpen?: boolean;
   onMobileClose?: () => void;
   /**
-   * Community Home experiment (client-only). When on, pins a Home / Início
-   * row above TEXT. Not a real channel type and not COMMUNITIES_ENABLED.
+   * Community Home rollout. The parent combines the client feature flag with
+   * this server's persisted opt-in before asking this list to show the row.
    */
   communityHomeEnabled?: boolean;
+  communityHomeShowNew?: boolean;
   communityHomeSelected?: boolean;
   onSelectCommunityHome?: () => void;
 }
@@ -208,6 +209,7 @@ export function ChannelList({
   mobileOpen = false,
   onMobileClose,
   communityHomeEnabled = false,
+  communityHomeShowNew = false,
   communityHomeSelected = false,
   onSelectCommunityHome,
 }: ChannelListProps) {
@@ -677,13 +679,15 @@ export function ChannelList({
                     )}
                     aria-hidden
                   />
-                  <span className="min-w-0">
-                    <span className="block truncate text-sm font-semibold text-text">
+                  <span className="flex min-w-0 flex-1 items-center gap-2">
+                    <span className="truncate text-sm font-semibold text-text">
                       {t("communityHome.channelName")}
                     </span>
-                    <span className="block truncate text-[10px] text-text-muted">
-                      {t("communityHome.channelHint")}
-                    </span>
+                    {communityHomeShowNew && (
+                      <span className="shrink-0 rounded bg-accent/15 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-accent">
+                        {t("communityHome.badge.new")}
+                      </span>
+                    )}
                   </span>
                 </button>
               </div>

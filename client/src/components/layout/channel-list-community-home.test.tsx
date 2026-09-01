@@ -8,7 +8,7 @@ import { ChannelList } from "./channel-list";
 
 const server: Server = {
   id: "11111111-1111-4111-8111-111111111111",
-  name: "Mesa da Tues",
+  name: "Mesa Staging",
   ownerId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
   createdAt: "2026-07-01T00:00:00.000Z",
   messageRetentionDays: null,
@@ -17,6 +17,7 @@ const server: Server = {
   bannerUrl: null,
   role: "owner",
   isCommunity: false,
+  communityHomeEnabled: false,
   showOnProfile: true,
 };
 
@@ -94,5 +95,18 @@ describe("ChannelList Community Home row", () => {
     );
     expect(html).toContain("data-community-home-row");
     expect(html).toContain("Home");
+    expect(html).not.toContain("Library of photos");
+  });
+
+  it("renders the local discovery badge after the row label", () => {
+    const html = renderList(
+      <ChannelList
+        {...baseProps}
+        communityHomeEnabled
+        communityHomeShowNew
+        onSelectCommunityHome={() => {}}
+      />,
+    );
+    expect(html).toMatch(/Home<\/span><span[^>]*>NEW<\/span>/);
   });
 });

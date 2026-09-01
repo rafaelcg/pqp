@@ -222,7 +222,9 @@ function buildMedia(
   let url: string | null = null;
   if (row.media_storage_key && isStorageConfigured()) {
     try {
-      url = presignGet(row.media_storage_key, READ_URL_TTL_SECONDS);
+      url = presignGet(row.media_storage_key, {
+        ttlSeconds: READ_URL_TTL_SECONDS,
+      });
     } catch {
       url = null;
     }

@@ -204,6 +204,8 @@ import {
   COMMUNITY_HOME_CHANNEL_ID,
   isCommunityHomeChannelId,
   isCommunityHomeEnabled,
+  isCommunityHomeRowNew,
+  markCommunityHomeRowSeen,
   pickServerLandingTarget,
 } from "@/lib/community-home";
 import { CommunityHomeFeed } from "@/components/community-home/community-home-feed";
@@ -525,6 +527,7 @@ function MainAppContent({
   // its posts rather than the client trying to patch one row from the frame,
   // since the frame carries no post id (see `communityHomeUpdateSchema`).
   const [communityHomeUpdateNudge, setCommunityHomeUpdateNudge] = useState(0);
+  const [communityHomeRowNew, setCommunityHomeRowNew] = useState(false);
   // One dialog for both subjects — the target says which. Null means closed.
   const [reportTarget, setReportTarget] = useState<ReportTarget | null>(null);
   const [pinsOpen, setPinsOpen] = useState(false);
@@ -735,6 +738,26 @@ function MainAppContent({
   selectedServerIdRef.current = selectedServerId;
   const serversRef = useRef(servers);
   serversRef.current = servers;
+  const selectedServer = servers.find((server) => server.id === selectedServerId);
+  const communityHomeFeatureOn = isCommunityHomeEnabled();
+  const serverHomeOn = selectedServer?.communityHomeEnabled === true;
+  const communityHomeEnabled = communityHomeFeatureOn && serverHomeOn;
+  const communityHomeOpen =
+    selection.kind === "server" &&
+    isCommunityHomeChannelId(selectedChannelId) &&
+    communityHomeEnabled;
+  useEffect(() => {
+    if (!communityHomeEnabled || !selectedServerId) {
+      setCommunityHomeRowNew(false);
+      return;
+    }
+    if (communityHomeOpen) {
+      markCommunityHomeRowSeen(selectedServerId);
+      setCommunityHomeRowNew(false);
+      return;
+    }
+    setCommunityHomeRowNew(isCommunityHomeRowNew(selectedServerId));
+  }, [communityHomeEnabled, communityHomeOpen, selectedServerId]);
   const perms = usePermissions(selectedServerId);
   const permsRef = useRef(perms);
   permsRef.current = perms;
@@ -1270,7 +1293,7 @@ function MainAppContent({
       setUnreadSince(null);
       setEditMessageId(null);
 
-      // Community Home is a client-only surface, not a channel the API knows.
+      // Community Home has API data but is not a channel the chat API knows.
       if (isCommunityHomeChannelId(channelId)) {
         setMessagesLoading(false);
         return;
@@ -1594,7 +1617,8 @@ function MainAppContent({
               ? null
               : pickServerLandingTarget(
                   channelList,
-                  isCommunityHomeEnabled(),
+                  isCommunityHomeEnabled() &&
+                    first.communityHomeEnabled === true,
                   Boolean(first.isCommunity),
                 );
             initialChannelId = land?.id ?? null;
@@ -2108,7 +2132,8 @@ function MainAppContent({
         const server = serversRef.current.find((row) => row.id === serverId);
         const land = pickServerLandingTarget(
           list,
-          isCommunityHomeEnabled(),
+          isCommunityHomeEnabled() &&
+            server?.communityHomeEnabled === true,
           Boolean(server?.isCommunity),
         );
         if (land) {
@@ -2551,7 +2576,8 @@ function MainAppContent({
           );
           const land = pickServerLandingTarget(
             list,
-            isCommunityHomeEnabled(),
+            isCommunityHomeEnabled() &&
+              targetServer?.communityHomeEnabled === true,
             Boolean(targetServer?.isCommunity),
           );
           if (land) {
@@ -3190,14 +3216,6 @@ function MainAppContent({
     : selection.kind === "server"
       ? channels.find((c) => c.id === selectedChannelId)
       : undefined;
-  const selectedServer = servers.find((s) => s.id === selectedServerId);
-  // Flag alone drives the Home row + feed. Landing stays community-only
-  // (pickServerLandingTarget still requires isCommunity).
-  const communityHomeEnabled = isCommunityHomeEnabled();
-  const communityHomeOpen =
-    selection.kind === "server" &&
-    isCommunityHomeChannelId(selectedChannelId) &&
-    communityHomeEnabled;
   const meMember = serverMembers.find((member) => member.id === user?.id);
   const meVip = rankBadges(meMember?.roleIds, serverRoles).vipBadge;
   const canManageChannels = perms.can(Permission.MANAGE_CHANNELS);
@@ -3979,9 +3997,12 @@ function MainAppContent({
           onOpenServerSettings={() => setServerSettingsOpen(true)}
           footer={sidebarFooter}
           communityHomeEnabled={communityHomeEnabled}
+          communityHomeShowNew={communityHomeRowNew}
           communityHomeSelected={communityHomeOpen}
           onSelectCommunityHome={() => {
             if (selectedServerId) {
+              markCommunityHomeRowSeen(selectedServerId);
+              setCommunityHomeRowNew(false);
               void selectChannel(COMMUNITY_HOME_CHANNEL_ID, selectedServerId);
             }
           }}
@@ -4135,6 +4156,7 @@ function MainAppContent({
             canManageServer={canManageServer}
             isOwner={selectedServer.role === "owner"}
             isVip={meVip}
+            currentUserId={user?.id}
             onOpenNav={() => setMobileNavOpen(true)}
             refreshSignal={communityHomeUpdateNudge}
           />
@@ -4307,11 +4329,32 @@ function MainAppContent({
           setServerSettingsOpen(false);
           setServerSettingsSection(undefined);
         }}
-        onRenamed={(server) =>
+        onRenamed={(server) => {
           setServers((prev) =>
-            prev.map((s) => (s.id === server.id ? { ...s, ...server } : s)),
-          )
-        }
+            prev.map((current) =>
+              current.id === server.id
+                ? {
+                    ...current,
+                    ...server,
+                    // Settings writes update the server row, not this viewer's
+                    // membership row. Keep its role and profile opt-out.
+                    role: current.role,
+                    showOnProfile: current.showOnProfile,
+                  }
+                : current,
+            ),
+          );
+          if (
+            server.id === selectedServerId &&
+            !server.communityHomeEnabled &&
+            isCommunityHomeChannelId(selectedChannelId)
+          ) {
+            const fallback = pickServerLandingTarget(channels, false);
+            if (fallback) {
+              void selectChannel(fallback.id, server.id);
+            }
+          }
+        }}
         onOwnershipTransferred={() => {
           void fetchServers().then(({ servers: list }) => setServers(list));
         }}
@@ -4333,7 +4376,8 @@ function MainAppContent({
           const general = newChannels.find((c) => c.type === "text");
           const land = pickServerLandingTarget(
             newChannels,
-            isCommunityHomeEnabled(),
+            isCommunityHomeEnabled() &&
+              server.communityHomeEnabled === true,
             Boolean(server.isCommunity),
           );
           if (land) {

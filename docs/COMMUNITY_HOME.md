@@ -1,14 +1,18 @@
-# Community Home (client-only experiment)
+# Community Home (Baú / Home)
 
-Patreon-like durable media timeline inside a **community** server. **Mock only.**
-No Stripe, no Clerk Billing, no schema, no `pqp-api` restart.
+Patreon-like durable media timeline inside a server. Posts, comments, likes,
+drafts, schedules, and the per-server opt-in are stored in Postgres; media uses
+the configured S3/R2 storage.
 
 ## Flag: `VITE_COMMUNITY_HOME_ENABLED`
 
 Own flag. **Default off.** Do **not** reuse `COMMUNITIES_ENABLED` (that one
 changes the instance's legal category under STF Art. 19).
 
-Production Pages must leave this unset so Home never appears for real users.
+The flag only makes the feature available. Each server still defaults to OFF
+and a member with `MANAGE_SERVER` must enable **Baú / Home** in Server Settings
+→ Overview. With the flag/latch off, neither the setting nor the channel-list
+row exists.
 
 ### Enable locally (any one)
 
@@ -40,13 +44,13 @@ Turn off: `localStorage.removeItem("pqp:community-home")` or `?communityHome=0`.
 | Everyone else | Free posts full; VIP posts = title + teaser + lock |
 
 Staff CMS is **Compose | Preview**. Compose stays available while Preview flips
-`auto` / `owner` / `free` / `VIP` — the composer must not vanish when checking
-Free/VIP. Same overrides via `localStorage` `pqp:community-home-viewer` or
-`?homeViewer=`.
+`auto` / `owner` / `members` — the composer must not vanish when checking the
+member lock. Same overrides via `localStorage`
+`pqp:community-home-viewer` or `?homeViewer=`.
 
 Unlock CTA does nothing on purpose. There is no checkout.
 
-## Media types (client-only)
+## Media types
 
 Image, native short video (`mp4`/`webm` via `<video>`, 10 MiB), YouTube/embed
 (watch / youtu.be / shorts iframe), text, file (PDF etc download card).
@@ -57,20 +61,27 @@ title + teaser + lock only. Over-limit video asks for a YouTube link instead.
 Home is durable media, **not** a call invite. There is no "Join the call" /
 "entrar na call" primary CTA in this pass.
 
-## What you should see when on
+## What you should see when available and enabled
 
-- Pinned **Home / Início** above TEXT on **any** server (including private halls)
-- **Landing** is community-only: `isCommunity` servers default-land on Home;
-  private halls still land on the first text channel
-- Feed from `localStorage` key `pqp:community-home-posts:{serverId}` (versioned envelope)
+- Pinned **Home / Baú** above TEXT after that server opts in
+- **Landing** is community-only: opted-in `isCommunity` servers default-land
+  on Home; opted-in private halls show the row but still land on the first text
+  channel
+- Feed and mutations through `/api/servers/:serverId/home/*`; no posts are
+  stored in `localStorage`
 - Flat comments on published posts; staff can delete / disable per post
 - Sentinel channel id `__community_home__` — **not** a real channel type
 - Flag off: identical to today
 
+The `NEW` markers are local discovery state only:
+
+- `pqp:community-home-settings-seen`
+- `pqp:community-home-row-seen:{serverId}`
+
 ## Out of scope (hard nos)
 
-- Migrations / new tables / API routes
-- Second Fly machine, Stripe, Patreon OAuth, pub/sub
+- Stripe, Clerk Billing, Patreon OAuth
+- A second Fly machine
 - New permission bits (VIP stays `0n`)
 - Turning the flag on in production
 - Merging this to `main` / restarting production `pqp-api`

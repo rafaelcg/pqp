@@ -397,6 +397,30 @@ describeDb("API authorization", () => {
     );
   });
 
+  it("stores Community Home opt-in per server behind MANAGE_SERVER", async () => {
+    const { serverId } = await makeServer();
+    const path = `/api/servers/${serverId}/home/config`;
+
+    const initial = await call<{ enabled: boolean }>(member, "GET", path);
+    expect(initial.status).toBe(200);
+    expect(initial.body.enabled).toBe(false);
+    expect((await call(outsider, "GET", path)).status).toBe(404);
+    expect(
+      (await call(member, "PATCH", path, { enabled: true })).status,
+    ).toBe(403);
+
+    const enabled = await call<{
+      enabled: boolean;
+      server: { communityHomeEnabled: boolean };
+    }>(admin, "PATCH", path, { enabled: true });
+    expect(enabled.status).toBe(200);
+    expect(enabled.body.enabled).toBe(true);
+    expect(enabled.body.server.communityHomeEnabled).toBe(true);
+
+    const persisted = await call<{ enabled: boolean }>(member, "GET", path);
+    expect(persisted.body.enabled).toBe(true);
+  });
+
   it("refuses to let the owner leave and abandon the server", async () => {
     const { serverId } = await makeServer();
     const res = await call(owner, "POST", `/api/servers/${serverId}/leave`);

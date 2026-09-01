@@ -471,12 +471,26 @@ export const serverSchema = z.object({
    * offering the switch there would be offering a no-op.
    */
   isCommunity: z.boolean().default(false),
+  /** Whether this server has opted into the rollout-gated Baú / Home feed. */
+  communityHomeEnabled: z.boolean().default(false),
   /**
    * This membership's profile-badge opt-out, TRUE by default. Meaningless
    * unless `isCommunity`; see `server_members.show_on_profile` in schema.sql.
    */
   showOnProfile: z.boolean().default(true),
 });
+
+export const communityHomeConfigSchema = z.object({
+  enabled: z.boolean(),
+});
+export type CommunityHomeConfig = z.infer<typeof communityHomeConfigSchema>;
+
+export const updateCommunityHomeConfigSchema = z.object({
+  enabled: z.boolean(),
+});
+export type UpdateCommunityHomeConfig = z.infer<
+  typeof updateCommunityHomeConfigSchema
+>;
 
 export const channelSchema = z.object({
   id: z.string().uuid(),
