@@ -61,6 +61,36 @@
     <string name="chat_attachment_unsupported">Este servidor não aceita esse tipo de arquivo.</string>
     <string name="chat_attachment_too_many">Uma mensagem leva no máximo %1$d arquivos.</string>
     <string name="chat_attachment_unreadable">Não foi possível ler esse arquivo.</string>
+    <string name="chat_day_today">Hoje</string>
+    <string name="chat_day_yesterday">Ontem</string>
+
+    <!-- Baú -->
+    <string name="bau_title">Baú</string>
+    <string name="bau_row_hint">Posts que ficam. Não é chat.</string>
+    <string name="bau_subtitle">Posts de %1$s que ficam guardados</string>
+    <string name="bau_empty">Nada no Baú ainda. Quando a staff de %1$s postar, aparece aqui.</string>
+    <string name="bau_load_failed">Não deu pra carregar o Baú. %1$s</string>
+    <string name="bau_badge_owner">dono</string>
+    <string name="bau_badge_staff">staff</string>
+    <string name="bau_vip_chip">VIP</string>
+    <string name="bau_locked_title">Post VIP</string>
+    <string name="bau_locked_body">O post inteiro é pra quem tem o cargo VIP.</string>
+    <string name="bau_unlock_cta">VIP, em breve</string>
+    <string name="bau_like">Curtir</string>
+    <string name="bau_unlike">Tirar curtida</string>
+    <string name="bau_comments">Comentários</string>
+    <string name="bau_comments_view_one">Ver %1$d comentário</string>
+    <string name="bau_comments_view_all">Ver todos os %1$d comentários</string>
+    <string name="bau_comments_show_less">Mostrar menos</string>
+    <string name="bau_comment_placeholder">Escreve um comentário</string>
+    <string name="bau_comment_submit">Comentar</string>
+    <string name="bau_comment_failed">Não deu pra comentar.</string>
+    <string name="bau_comments_off">Comentários desligados neste post.</string>
+    <string name="bau_media_file">Arquivo</string>
+    <string name="bau_media_image">Imagem</string>
+    <string name="bau_media_video">Ver vídeo</string>
+    <string name="bau_media_youtube">Ver no YouTube</string>
+    <string name="bau_media_unavailable">Mídia indisponível agora.</string>
 
     <!-- Anexos -->
     <string name="attachment_animated_image">%1$s, animado</string>
