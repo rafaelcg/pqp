@@ -383,6 +383,13 @@ describe("reply protocol", () => {
 describe("isGifMediaUrl", () => {
   it("accepts the media hosts the picker actually returns", () => {
     expect(
+      isGifMediaUrl("https://static.klipy.com/ii/abc/14/af/um0L4dFH.gif"),
+    ).toBe(true);
+    // The still frames the picker carries are jpg on the same host.
+    expect(
+      isGifMediaUrl("https://static.klipy.com/ii/abc/14/af/LyWpim71.jpg"),
+    ).toBe(true);
+    expect(
       isGifMediaUrl("https://media3.giphy.com/media/abc123/giphy.gif"),
     ).toBe(true);
     expect(isGifMediaUrl("https://media.giphy.com/media/abc/giphy.webp")).toBe(
@@ -410,6 +417,10 @@ describe("isGifMediaUrl", () => {
     expect(isGifMediaUrl("https://notgiphy.com/media/abc/giphy.gif")).toBe(
       false,
     );
+    // Only Klipy's static media host serves bytes; the bare domain and the
+    // API host serve pages and JSON.
+    expect(isGifMediaUrl("https://klipy.com/a.gif")).toBe(false);
+    expect(isGifMediaUrl("https://api.klipy.com/a.gif")).toBe(false);
   });
 
   it("refuses http and embedded credentials", () => {
@@ -444,7 +455,10 @@ describe("stillGifUrl", () => {
   });
 
   it("returns null where no still can be named", () => {
-    // Tenor publishes no derivable still, and inventing one would 404.
+    // Klipy and Tenor publish no derivable still, and inventing one would 404.
+    expect(
+      stillGifUrl("https://static.klipy.com/ii/abc/14/af/um0L4dFH.gif"),
+    ).toBeNull();
     expect(stillGifUrl("https://media.tenor.com/xyz/dance.gif")).toBeNull();
     expect(stillGifUrl("https://media.giphy.com/media/abc/200w.gif")).toBeNull();
     expect(stillGifUrl("https://evil.example/giphy.gif")).toBeNull();

@@ -851,8 +851,8 @@ ALTER TABLE message_attachments
   ADD COLUMN IF NOT EXISTS position SMALLINT NOT NULL DEFAULT 0;
 
 -- An attachment whose bytes live on somebody else's host. GIFs are the case:
--- the picker returns a GIPHY URL, and re-hosting a GIF we are allowed to hot-link
--- would cost storage and egress to gain nothing.
+-- the picker returns a GIF provider URL, and re-hosting a GIF we are allowed
+-- to hot-link would cost storage and egress to gain nothing.
 --
 -- Making a GIF an attachment rather than the message body is what lets it carry
 -- a caption, be edited without exposing the URL, and be previewed before

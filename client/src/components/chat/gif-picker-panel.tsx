@@ -1,7 +1,10 @@
 import type { Gif } from "@pqp/shared";
 import { Loader2, Search } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import poweredByKlipyBlackUrl from "@/assets/klipy/powered-by-klipy-black.svg?url";
+import poweredByKlipyWhiteUrl from "@/assets/klipy/powered-by-klipy-white.svg?url";
 import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
+import { useTheme } from "@/hooks/use-theme";
 import { fetchTrendingGifs, searchGifs } from "@/lib/api";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -42,6 +45,7 @@ export function GifPickerPanel({
   const [status, setStatus] = useState<Status>("loading");
   const [selectedIndex, setSelectedIndex] = useState(0);
   const prefersReducedMotion = usePrefersReducedMotion();
+  const { resolved: theme } = useTheme();
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -246,8 +250,19 @@ export function GifPickerPanel({
         </div>
       )}
 
-      <p className="border-t border-border px-2.5 py-1.5 text-[11px] text-text-muted">
-        Powered by GIPHY
+      {/* Klipy's official lockup, per their attribution guidelines. Two
+          single-colour assets swapped on the resolved theme, the same way the
+          emoji picker follows brightness. */}
+      <p className="flex items-center border-t border-border px-2.5 py-1.5">
+        <img
+          src={
+            theme === "light" ? poweredByKlipyBlackUrl : poweredByKlipyWhiteUrl
+          }
+          alt="Powered by KLIPY"
+          className="h-3 w-auto opacity-60"
+          loading="lazy"
+          decoding="async"
+        />
       </p>
     </div>
   );

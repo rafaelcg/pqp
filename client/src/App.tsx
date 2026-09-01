@@ -198,8 +198,15 @@ import {
   loadAttachmentConfig,
 } from "@/lib/attachments";
 import type { MentionCandidate } from "@/lib/mention-autocomplete";
-import { usernameFromTag } from "@/lib/author-display";
+import { usernameFromTag, rankBadges } from "@/lib/author-display";
 import { devAuthToken, getAuthToken, isDevAuthBypassEnabled } from "@/lib/dev-auth";
+import {
+  COMMUNITY_HOME_CHANNEL_ID,
+  isCommunityHomeChannelId,
+  isCommunityHomeEnabled,
+  pickServerLandingTarget,
+} from "@/lib/community-home";
+import { CommunityHomeFeed } from "@/components/community-home/community-home-feed";
 import { getDesktop } from "@/lib/desktop";
 import {
   describeActivity,
@@ -1258,6 +1265,13 @@ function MainAppContent({
       closeThreadPanelRef.current();
       setUnreadSince(null);
       setEditMessageId(null);
+
+      // Community Home is a client-only surface, not a channel the API knows.
+      if (isCommunityHomeChannelId(channelId)) {
+        setMessagesLoading(false);
+        return;
+      }
+
       const held = unreadHoldRef.current.has(channelId);
       setMessagesLoading(true);
       chat.joinChannel(channelId);
@@ -1568,9 +1582,13 @@ function MainAppContent({
               return;
             }
             setChannels(channelList);
-            initialChannelId = deepLinksChannel
+            const land = deepLinksChannel
               ? null
-              : (channelList.find((c) => c.type === "text")?.id ?? null);
+              : pickServerLandingTarget(
+                  channelList,
+                  isCommunityHomeEnabled(),
+                );
+            initialChannelId = land?.id ?? null;
             void loadUnread(first.id);
           } finally {
             if (!cancelled) {
@@ -1997,11 +2015,13 @@ function MainAppContent({
       // The override matters when a server was only just chosen: `selection` is
       // still the previous one this render, and the URL has to name the server
       // whose channel is being opened rather than the one being left.
+      const nextSelection = serverIdOverride
+        ? { kind: "server" as const, serverId: serverIdOverride }
+        : selection;
+      // Home is not a real channel id in the address bar — keep `/app/server/<id>`.
       syncRoute(
-        serverIdOverride
-          ? { kind: "server", serverId: serverIdOverride }
-          : selection,
-        channelId,
+        nextSelection,
+        isCommunityHomeChannelId(channelId) ? null : channelId,
       );
       // Voice deliberately survives navigating away: leaving a call because you
       // clicked another channel is not how a chat app should behave.
@@ -2065,11 +2085,12 @@ function MainAppContent({
         setAppError(null);
         setChannels(list);
         void loadUnread(serverId);
-        const general =
-          list.find((c) => c.type === "text") ??
-          list.find((c) => c.type !== "category");
-        if (general) {
-          await selectChannel(general.id, serverId);
+        const land = pickServerLandingTarget(
+          list,
+          isCommunityHomeEnabled(),
+        );
+        if (land) {
+          await selectChannel(land.id, serverId);
         } else {
           setSelectedChannelId(null);
           selectedChannelIdRef.current = null;
@@ -2497,18 +2518,22 @@ function MainAppContent({
         if (targetChannelId && !requested) {
           setAppError("That channel no longer exists or is private.");
         }
-        const target =
-          requested ??
-          list.find((c) => c.type === "text") ??
-          list.find((c) => c.type !== "category");
-        if (target) {
-          await selectChannel(target.id, targetServerId);
-          if (targetMessageId && target.id === targetChannelId) {
+        if (requested) {
+          await selectChannel(requested.id, targetServerId);
+          if (targetMessageId) {
             setHighlightMessageId(targetMessageId);
           }
         } else {
-          setSelectedChannelId(null);
-          selectedChannelIdRef.current = null;
+          const land = pickServerLandingTarget(
+            list,
+            isCommunityHomeEnabled(),
+          );
+          if (land) {
+            await selectChannel(land.id, targetServerId);
+          } else {
+            setSelectedChannelId(null);
+            selectedChannelIdRef.current = null;
+          }
         }
       } catch (error) {
         setAppError(
@@ -3140,6 +3165,13 @@ function MainAppContent({
       ? channels.find((c) => c.id === selectedChannelId)
       : undefined;
   const selectedServer = servers.find((s) => s.id === selectedServerId);
+  const communityHomeEnabled = isCommunityHomeEnabled();
+  const communityHomeOpen =
+    selection.kind === "server" &&
+    isCommunityHomeChannelId(selectedChannelId) &&
+    communityHomeEnabled;
+  const meMember = serverMembers.find((member) => member.id === user?.id);
+  const meVip = rankBadges(meMember?.roleIds, serverRoles).vipBadge;
   const canManageChannels = perms.can(Permission.MANAGE_CHANNELS);
   const canManageRoles = perms.can(Permission.MANAGE_ROLES);
   const canManageServer = perms.can(Permission.MANAGE_SERVER);
@@ -3918,6 +3950,13 @@ function MainAppContent({
           onOpenMembers={() => setMembersOpen(true)}
           onOpenServerSettings={() => setServerSettingsOpen(true)}
           footer={sidebarFooter}
+          communityHomeEnabled={communityHomeEnabled}
+          communityHomeSelected={communityHomeOpen}
+          onSelectCommunityHome={() => {
+            if (selectedServerId) {
+              void selectChannel(COMMUNITY_HOME_CHANNEL_ID, selectedServerId);
+            }
+          }}
         />
       )}
 
@@ -4014,7 +4053,10 @@ function MainAppContent({
           />
         )}
 
-        {selection.kind !== "dm" && !selectedChannel && !channelsLoading && (
+        {selection.kind !== "dm" &&
+          !selectedChannel &&
+          !communityHomeOpen &&
+          !channelsLoading && (
           <div className="flex flex-1 flex-col items-start justify-center gap-4 p-8">
             <button
               type="button"
@@ -4057,7 +4099,20 @@ function MainAppContent({
           </div>
         )}
 
-        {!selectedChannel && channelsLoading && (
+        {communityHomeOpen && selectedServer && (
+          <CommunityHomeFeed
+            serverId={selectedServer.id}
+            serverName={selectedServer.name}
+            channels={channels}
+            authorName={user?.displayName ?? user?.username ?? "você"}
+            isOwner={selectedServer.role === "owner"}
+            isVip={meVip}
+            onJoinVoice={handleJoinVoiceFromList}
+            onOpenNav={() => setMobileNavOpen(true)}
+          />
+        )}
+
+        {!selectedChannel && channelsLoading && !communityHomeOpen && (
           <div className="flex min-h-0 flex-1 flex-col">
             <header className="flex h-14 shrink-0 items-center border-b border-ink-4/60 px-4">
               <div className="h-5 w-36 animate-pulse rounded-md bg-ink-4/50" />
@@ -4248,7 +4303,13 @@ function MainAppContent({
           setChannels(newChannels);
           setAppError(null);
           const general = newChannels.find((c) => c.type === "text");
-          if (general) {
+          const land = pickServerLandingTarget(
+            newChannels,
+            isCommunityHomeEnabled(),
+          );
+          if (land) {
+            await selectChannel(land.id, server.id);
+          } else if (general) {
             await selectChannel(general.id, server.id);
           }
         }}

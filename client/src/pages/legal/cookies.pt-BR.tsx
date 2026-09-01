@@ -17,7 +17,7 @@ export const cookiesPtBr: LegalDocument = {
   description:
     "Exatamente quais cookies, chaves de armazenamento local e caches o pqp.gg coloca no seu dispositivo, e quais terceiros o seu navegador contata.",
   heading: "Aviso de cookies",
-  updated: "25 de agosto de 2026",
+  updated: "31 de agosto de 2026",
   sections: [
     {
       id: "intro",
@@ -184,7 +184,7 @@ export const cookiesPtBr: LegalDocument = {
     },
     {
       id: "third-parties",
-      sourceRev: "7f28937c",
+      sourceRev: "43d8adbf",
       heading: "Terceiros que o seu navegador contata",
       body: (
         <>
@@ -206,9 +206,10 @@ export const cookiesPtBr: LegalDocument = {
               páginas legais.
             </li>
             <li>
-              <strong>GIPHY e Tenor</strong> — quando um GIF aparece em um canal
-              ou no seletor de GIF, a imagem carrega direto dos servidores
-              deles.
+              <strong>KLIPY, GIPHY e Tenor</strong> — quando um GIF aparece em
+              um canal ou no seletor de GIF, a imagem carrega direto dos
+              servidores deles. GIFs novos vêm do KLIPY; mensagens antigas
+              ainda podem carregar do GIPHY ou do Tenor.
             </li>
             <li>
               <strong>DiceBear</strong> — as imagens de avatar prontas que
