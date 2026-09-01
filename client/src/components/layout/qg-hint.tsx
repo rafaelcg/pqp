@@ -1,10 +1,10 @@
-import { X } from "lucide-react";
 import { useEffect, useState } from "react";
 import qgHintArtUrl from "@/assets/qg-hint.webp";
+import { CornerCard } from "@/components/layout/corner-card";
 import { Button } from "@/components/ui/button";
 import { joinCommunity, lookupCommunityBySlug } from "@/lib/api";
 import { resolveUploadedImageUrl } from "@/lib/avatar";
-import { isAutomatedBrowser } from "@/lib/cargos-hint";
+import { isAutomatedBrowser } from "@/lib/hints";
 import { useTranslation } from "@/lib/i18n";
 import {
   QG_HINT_SLUG,
@@ -114,19 +114,6 @@ export function QgHint({
     onShowingChange?.(show);
   }, [eligible, listing.status, show, onShowingChange]);
 
-  useEffect(() => {
-    if (!show) {
-      return;
-    }
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        setOpen(false);
-      }
-    }
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [show]);
-
   if (!show || listing.status !== "ready") {
     return null;
   }
@@ -160,45 +147,25 @@ export function QgHint({
   }
 
   return (
-    <aside
-      aria-label={t("qgHint.title")}
-      className="animate-fade-in safe-pb fixed inset-x-3 bottom-3 z-[31] sm:inset-x-auto sm:right-4 sm:bottom-4 sm:w-[22rem]"
-    >
-      <div className="relative overflow-hidden rounded-2xl border border-ink-4 bg-ink-2 shadow-[var(--shadow-popover)]">
-        <div aria-hidden className="relative h-40 overflow-hidden bg-ink-1">
-          <img
-            src={art}
-            alt=""
-            className="h-full w-full object-cover"
-          />
-          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-ink-2 to-transparent" />
-        </div>
-        <button
-          type="button"
-          onClick={() => setOpen(false)}
-          aria-label={t("qgHint.dismiss")}
-          className="absolute right-2 top-2 z-10 inline-flex h-7 w-7 items-center justify-center rounded-md bg-ink/70 text-paper outline-none backdrop-blur-sm hover:bg-ink hover:text-paper focus-visible:ring-2 focus-visible:ring-signal/60"
+    <CornerCard
+      open={show}
+      onClose={() => setOpen(false)}
+      label={t("qgHint.title")}
+      dismissLabel={t("qgHint.dismiss")}
+      dataAttribute="qg"
+      hero={<img src={art} alt="" className="h-40 w-full object-cover" />}
+      title={t("qgHint.title")}
+      body={t("qgHint.body")}
+      footer={
+        <Button
+          size="sm"
+          className="cta-lift rounded-full px-4"
+          disabled={joining}
+          onClick={() => void join()}
         >
-          <X className="h-3.5 w-3.5" aria-hidden />
-        </button>
-
-        <div className="p-4">
-          <h2 className="font-display text-sm font-bold tracking-tight text-paper">
-            {t("qgHint.title")}
-          </h2>
-          <p className="mt-1.5 text-pretty text-sm leading-relaxed text-paper-muted">
-            {t("qgHint.body")}
-          </p>
-          <Button
-            size="sm"
-            className="cta-lift mt-3 rounded-full px-4"
-            disabled={joining}
-            onClick={() => void join()}
-          >
-            {t(joining ? "communities.joining" : "qgHint.cta")}
-          </Button>
-        </div>
-      </div>
-    </aside>
+          {t(joining ? "communities.joining" : "qgHint.cta")}
+        </Button>
+      }
+    />
   );
 }
