@@ -521,6 +521,10 @@ function MainAppContent({
   const [memberRosterNudge, setMemberRosterNudge] = useState(0);
   const [lastProfileUpdate, setLastProfileUpdate] =
     useState<ProfileUpdate | null>(null);
+  // Bumped on `community-home-update` for the OPEN server only — Baú refetches
+  // its posts rather than the client trying to patch one row from the frame,
+  // since the frame carries no post id (see `communityHomeUpdateSchema`).
+  const [communityHomeUpdateNudge, setCommunityHomeUpdateNudge] = useState(0);
   // One dialog for both subjects — the target says which. Null means closed.
   const [reportTarget, setReportTarget] = useState<ReportTarget | null>(null);
   const [pinsOpen, setPinsOpen] = useState(false);
@@ -1783,6 +1787,17 @@ function MainAppContent({
               .catch(() => {
                 // Next navigation will refetch.
               });
+            return;
+          }
+
+          // Baú changed on some server — a publish, an unpublish, a like, a
+          // comment. The frame carries only the serverId (no post id, no
+          // diff), so the only thing to do with it is nudge a refetch, and
+          // only if that server's Baú is the one currently open.
+          if (message.type === "community-home-update") {
+            if (message.serverId === selectedServerIdRef.current) {
+              setCommunityHomeUpdateNudge((n) => n + 1);
+            }
             return;
           }
 
@@ -4121,6 +4136,7 @@ function MainAppContent({
             isOwner={selectedServer.role === "owner"}
             isVip={meVip}
             onOpenNav={() => setMobileNavOpen(true)}
+            refreshSignal={communityHomeUpdateNudge}
           />
         )}
 

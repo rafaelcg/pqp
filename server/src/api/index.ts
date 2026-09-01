@@ -93,6 +93,16 @@ import {
   DiscordImportCapError,
   DiscordImportParseError,
   parseDiscordTemplateCode,
+  claimCommunityHomeMediaSchema,
+  createCommunityHomeCommentSchema,
+  createCommunityHomeMediaUploadSchema,
+  createCommunityHomePostSchema,
+  communityHomeCommentBodySchema,
+  parseCommunityHomeBody,
+  parseCommunityHomeTeaser,
+  parseCommunityHomeTitle,
+  scheduleCommunityHomePostSchema,
+  updateCommunityHomePostSchema,
 } from "@pqp/shared";
 import { z } from "zod";
 import {
@@ -111,6 +121,7 @@ import {
   evictVoiceUsersExcept,
   forEachAuthenticatedSocket,
   notifyPermissionsUpdate,
+  notifyCommunityHomeUpdate,
   resolveEmbedInBackground,
   resolveStatuses,
 } from "../ws/index.js";
@@ -184,6 +195,25 @@ import {
   setServerImage,
   verifyServerImageObject,
 } from "../services/server-images.js";
+import {
+  addCommunityHomeComment,
+  claimCommunityHomeMediaUpload,
+  CommunityHomeError,
+  createCommunityHomePost,
+  deleteCommunityHomeComment,
+  deleteCommunityHomePost,
+  getCommunityHomePost,
+  isCommunityHomeMediaConfigured,
+  listCommunityHomeComments,
+  listCommunityHomeDrafts,
+  listCommunityHomePosts,
+  mintCommunityHomeMediaUpload,
+  publishCommunityHomePost,
+  scheduleCommunityHomePost,
+  toggleCommunityHomeLike,
+  unpublishCommunityHomePost,
+  updateCommunityHomePost,
+} from "../services/community-home.js";
 import { buildServerExport } from "../services/export.js";
 import {
   CommunitySlugError,
@@ -2325,6 +2355,339 @@ router.post("/api/servers/:serverId/banner/claim", async (ctx, { serverId }) =>
 );
 router.delete("/api/servers/:serverId/banner", async ({ user }, { serverId }) =>
   clearServerImage("banner", user.id, serverId!),
+);
+
+// ---------------------------------------------------------- community home (Baú)
+
+function mapCommunityHomeError(error: unknown): never {
+  if (error instanceof CommunityHomeError) {
+    switch (error.code) {
+      case "not_found":
+        throw new NotFound(error.message);
+      case "forbidden":
+        throw new Forbidden(error.message);
+      case "storage_off":
+        throw new HttpError(503, error.message);
+      case "over_limit":
+        throw new HttpError(413, error.message);
+      default:
+        throw new HttpError(400, error.message);
+    }
+  }
+  throw error;
+}
+
+async function notifyHome(serverId: string): Promise<void> {
+  try {
+    await notifyCommunityHomeUpdate(serverId);
+  } catch (error) {
+    console.error("[community-home] notify failed:", error);
+  }
+}
+
+router.get("/api/servers/:serverId/home/posts", async ({ user }, { serverId }) => {
+  await requireServerMember(serverId!, user.id);
+  try {
+    const posts = await listCommunityHomePosts(serverId!, user.id);
+    return { posts };
+  } catch (error) {
+    mapCommunityHomeError(error);
+  }
+});
+
+router.get(
+  "/api/servers/:serverId/home/drafts",
+  async ({ user }, { serverId }) => {
+    await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+    try {
+      const posts = await listCommunityHomeDrafts(serverId!, user.id);
+      return { posts };
+    } catch (error) {
+      mapCommunityHomeError(error);
+    }
+  },
+);
+
+router.get(
+  "/api/servers/:serverId/home/posts/:postId",
+  async ({ user }, { serverId, postId }) => {
+    await requireServerMember(serverId!, user.id);
+    try {
+      const post = await getCommunityHomePost(serverId!, postId!, user.id);
+      return { post };
+    } catch (error) {
+      mapCommunityHomeError(error);
+    }
+  },
+);
+
+router.post(
+  "/api/servers/:serverId/home/posts",
+  async ({ req, user }, { serverId }) => {
+    await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+    const raw = createCommunityHomePostSchema.parse(await readJsonBody(req));
+    try {
+      const post = await createCommunityHomePost(serverId!, user.id, {
+        title: parseCommunityHomeTitle(raw.title),
+        body: parseCommunityHomeBody(raw.body),
+        teaser: parseCommunityHomeTeaser(raw.teaser),
+        visibility: raw.visibility,
+        commentsEnabled: raw.commentsEnabled !== false,
+        mediaUploadId: raw.mediaUploadId ?? null,
+        youtubeUrl: raw.youtubeUrl ?? null,
+        status: raw.status,
+        scheduledAt: raw.scheduledAt ?? null,
+        scheduleTimezone: raw.scheduleTimezone ?? null,
+      });
+      await notifyHome(serverId!);
+      return created({ post });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        throw new HttpError(400, error.issues[0]?.message ?? "Invalid request");
+      }
+      mapCommunityHomeError(error);
+    }
+  },
+);
+
+router.patch(
+  "/api/servers/:serverId/home/posts/:postId",
+  async ({ req, user }, { serverId, postId }) => {
+    await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+    const raw = updateCommunityHomePostSchema.parse(await readJsonBody(req));
+    try {
+      const post = await updateCommunityHomePost(serverId!, postId!, user.id, {
+        title:
+          raw.title === undefined
+            ? undefined
+            : parseCommunityHomeTitle(raw.title),
+        body:
+          raw.body === undefined ? undefined : parseCommunityHomeBody(raw.body),
+        teaser:
+          raw.teaser === undefined
+            ? undefined
+            : parseCommunityHomeTeaser(raw.teaser),
+        visibility: raw.visibility,
+        commentsEnabled: raw.commentsEnabled,
+        mediaUploadId: raw.mediaUploadId,
+        youtubeUrl: raw.youtubeUrl,
+        clearMedia: raw.clearMedia,
+      });
+      await notifyHome(serverId!);
+      return { post };
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        throw new HttpError(400, error.issues[0]?.message ?? "Invalid request");
+      }
+      mapCommunityHomeError(error);
+    }
+  },
+);
+
+router.delete(
+  "/api/servers/:serverId/home/posts/:postId",
+  async ({ user }, { serverId, postId }) => {
+    await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+    try {
+      await deleteCommunityHomePost(serverId!, postId!, user.id);
+      await notifyHome(serverId!);
+      return { ok: true };
+    } catch (error) {
+      mapCommunityHomeError(error);
+    }
+  },
+);
+
+router.post(
+  "/api/servers/:serverId/home/posts/:postId/publish",
+  async ({ user }, { serverId, postId }) => {
+    await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+    try {
+      const post = await publishCommunityHomePost(serverId!, postId!, user.id);
+      await notifyHome(serverId!);
+      return { post };
+    } catch (error) {
+      mapCommunityHomeError(error);
+    }
+  },
+);
+
+router.post(
+  "/api/servers/:serverId/home/posts/:postId/unpublish",
+  async ({ user }, { serverId, postId }) => {
+    await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+    try {
+      const post = await unpublishCommunityHomePost(
+        serverId!,
+        postId!,
+        user.id,
+      );
+      await notifyHome(serverId!);
+      return { post };
+    } catch (error) {
+      mapCommunityHomeError(error);
+    }
+  },
+);
+
+router.post(
+  "/api/servers/:serverId/home/posts/:postId/schedule",
+  async ({ req, user }, { serverId, postId }) => {
+    await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+    const body = scheduleCommunityHomePostSchema.parse(await readJsonBody(req));
+    try {
+      const post = await scheduleCommunityHomePost(
+        serverId!,
+        postId!,
+        user.id,
+        body.scheduledAt,
+        body.scheduleTimezone,
+      );
+      await notifyHome(serverId!);
+      return { post };
+    } catch (error) {
+      mapCommunityHomeError(error);
+    }
+  },
+);
+
+router.get(
+  "/api/servers/:serverId/home/posts/:postId/comments",
+  async ({ user }, { serverId, postId }) => {
+    await requireServerMember(serverId!, user.id);
+    try {
+      const comments = await listCommunityHomeComments(
+        serverId!,
+        postId!,
+        user.id,
+      );
+      return { comments };
+    } catch (error) {
+      mapCommunityHomeError(error);
+    }
+  },
+);
+
+router.post(
+  "/api/servers/:serverId/home/posts/:postId/comments",
+  async ({ req, user }, { serverId, postId }) => {
+    await requireServerMember(serverId!, user.id);
+    const raw = createCommunityHomeCommentSchema.parse(await readJsonBody(req));
+    let body: string;
+    try {
+      body = communityHomeCommentBodySchema.parse(raw.body);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        throw new HttpError(400, error.issues[0]?.message ?? "Invalid comment");
+      }
+      throw error;
+    }
+    try {
+      const comment = await addCommunityHomeComment(
+        serverId!,
+        postId!,
+        user.id,
+        body,
+      );
+      await notifyHome(serverId!);
+      return created({ comment });
+    } catch (error) {
+      mapCommunityHomeError(error);
+    }
+  },
+);
+
+router.delete(
+  "/api/servers/:serverId/home/posts/:postId/comments/:commentId",
+  async ({ user }, { serverId, postId, commentId }) => {
+    await requireServerMember(serverId!, user.id);
+    try {
+      await deleteCommunityHomeComment(
+        serverId!,
+        postId!,
+        commentId!,
+        user.id,
+      );
+      await notifyHome(serverId!);
+      return { ok: true };
+    } catch (error) {
+      mapCommunityHomeError(error);
+    }
+  },
+);
+
+router.post(
+  "/api/servers/:serverId/home/posts/:postId/likes",
+  async ({ user }, { serverId, postId }) => {
+    await requireServerMember(serverId!, user.id);
+    try {
+      const result = await toggleCommunityHomeLike(
+        serverId!,
+        postId!,
+        user.id,
+      );
+      await notifyHome(serverId!);
+      return result;
+    } catch (error) {
+      mapCommunityHomeError(error);
+    }
+  },
+);
+
+router.get("/api/servers/:serverId/home/media/config", async ({ user }, { serverId }) => {
+  await requireServerMember(serverId!, user.id);
+  return {
+    enabled: isCommunityHomeMediaConfigured(),
+    maxBytes: 10 * 1024 * 1024,
+  };
+});
+
+router.post(
+  "/api/servers/:serverId/home/media",
+  async (ctx, { serverId }) => {
+    await requirePermission(serverId!, ctx.user.id, Permission.MANAGE_SERVER);
+    if (!isCommunityHomeMediaConfigured()) {
+      throw new HttpError(503, "Media uploads are not configured on this server");
+    }
+    const key = `home-media:${ctx.user.id}`;
+    if (!uploadLimiter.take(key)) {
+      ctx.res.setHeader("Retry-After", String(uploadLimiter.retryAfter(key)));
+      throw new HttpError(429, "Slow down");
+    }
+    const body = createCommunityHomeMediaUploadSchema.parse(
+      await readJsonBody(ctx.req),
+    );
+    try {
+      return created(
+        await mintCommunityHomeMediaUpload({
+          serverId: serverId!,
+          uploaderId: ctx.user.id,
+          contentType: body.contentType,
+          byteSize: body.byteSize,
+          filename: body.filename,
+        }),
+      );
+    } catch (error) {
+      mapCommunityHomeError(error);
+    }
+  },
+);
+
+router.post(
+  "/api/servers/:serverId/home/media/claim",
+  async ({ req, user }, { serverId }) => {
+    await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+    const body = claimCommunityHomeMediaSchema.parse(await readJsonBody(req));
+    try {
+      return await claimCommunityHomeMediaUpload({
+        serverId: serverId!,
+        uploaderId: user.id,
+        uploadId: body.uploadId,
+      });
+    } catch (error) {
+      mapCommunityHomeError(error);
+    }
+  },
 );
 
 // ------------------------------------------------------------- communities
