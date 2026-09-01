@@ -2,12 +2,16 @@ import { Link } from "react-router-dom";
 import { BetaTag } from "@/components/ui/beta-tag";
 import { DOWNLOAD_PAGE_PATH, SOURCE_REPO_URL } from "@/lib/downloads";
 import { useTranslation } from "@/lib/i18n";
+import { isSupportPageEnabled, supportPagePath } from "@/lib/support-links";
 
 const FOOTER_LINK =
   "text-paper transition-colors duration-150 hover:text-signal";
 
 export function MarketingFooter() {
   const { t, locale } = useTranslation();
+  // Hosted-only: a self-hosted build has no donation links and gets no link
+  // to a page that would only redirect home. See `lib/support-links.ts`.
+  const supportEnabled = isSupportPageEnabled();
 
   return (
     <footer className="border-t border-ink-4/40 bg-ink px-5 py-10 sm:px-8">
@@ -69,6 +73,11 @@ export function MarketingFooter() {
             <Link to="/status" className={FOOTER_LINK}>
               {t("footer.status")}
             </Link>
+            {supportEnabled && (
+              <Link to={supportPagePath(locale)} className={FOOTER_LINK}>
+                {t("footer.support")}
+              </Link>
+            )}
             {/* Sits with self-host rather than in its own column: the person
                 who wants the code is usually the person who just read that
                 they can run their own copy. */}
