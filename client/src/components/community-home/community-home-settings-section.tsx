@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { Server } from "@pqp/shared";
-import { updateCommunityHomeConfig } from "@/lib/api";
+import { updateServerCommunityHomeConfig } from "@/lib/api";
 import {
   isCommunityHomeSettingsNew,
   markCommunityHomeRowNew,
@@ -41,7 +41,7 @@ export function CommunityHomeSettingsSection({
     setShowNew(false);
     markCommunityHomeSettingsSeen();
     try {
-      const result = await updateCommunityHomeConfig(serverId, {
+      const result = await updateServerCommunityHomeConfig(serverId, {
         enabled: next,
       });
       setChecked(result.enabled);

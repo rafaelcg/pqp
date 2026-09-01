@@ -13,6 +13,8 @@ import type {
   CommunityHomeComment,
   CommunityHomeCommentsResponse,
   CommunityHomeConfig,
+  ServerCommunityHomeConfig,
+  UpdateServerCommunityHomeConfig,
   CommunityHomeLikeResponse,
   CommunityHomePostResponse,
   CommunityHomePostsResponse,
@@ -21,7 +23,6 @@ import type {
   CreateCommunityHomeMediaUploadResponse,
   CreateCommunityHomePostRequest,
   ScheduleCommunityHomePostRequest,
-  UpdateCommunityHomeConfig,
   UpdateCommunityHomePostRequest,
   CommunityConfig,
   CommunityPage,
@@ -1333,14 +1334,19 @@ export const previewInvite = (code: string) =>
 // the same mint / PUT / claim dance as attachments — see `uploadHomeMedia` in
 // `lib/community-home/media.ts` for the sequence in one place.
 
-export const fetchCommunityHomeConfig = (serverId: string) =>
-  apiFetch<CommunityHomeConfig>(`/api/servers/${serverId}/home/config`);
+/** The instance flags. Off is a 200 with `enabled: false`, never a 404. */
+export const fetchCommunityHomeConfig = () =>
+  apiFetch<CommunityHomeConfig>("/api/community-home/config");
 
-export const updateCommunityHomeConfig = (
+/** This server's own opt-in (owner-set in Server settings). */
+export const fetchServerCommunityHomeConfig = (serverId: string) =>
+  apiFetch<ServerCommunityHomeConfig>(`/api/servers/${serverId}/home/config`);
+
+export const updateServerCommunityHomeConfig = (
   serverId: string,
-  body: UpdateCommunityHomeConfig,
+  body: UpdateServerCommunityHomeConfig,
 ) =>
-  patch<CommunityHomeConfig & { server: Server }>(
+  patch<ServerCommunityHomeConfig & { server: Server }>(
     `/api/servers/${serverId}/home/config`,
     body,
   );

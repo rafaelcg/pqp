@@ -1,155 +1,187 @@
-import type { CommunityHomePost } from "@pqp/shared";
+import type { PublicUser } from "@pqp/shared";
 import { renderToStaticMarkup } from "react-dom/server";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import type { CommunityHomePost } from "@/lib/community-home";
+import { PostCard } from "./community-home-feed";
 
-vi.mock("@/lib/api", () => ({
-  claimCommunityHomeMediaUpload: vi.fn(),
-  createCommunityHomeComment: vi.fn(),
-  createCommunityHomeMediaUpload: vi.fn(),
-  createCommunityHomePost: vi.fn(),
-  deleteCommunityHomeComment: vi.fn(),
-  deleteCommunityHomePost: vi.fn(),
-  fetchCommunityHomeComments: vi.fn(),
-  fetchCommunityHomeDrafts: vi.fn(),
-  fetchCommunityHomeMediaConfig: vi.fn(),
-  fetchCommunityHomePost: vi.fn(),
-  fetchCommunityHomePosts: vi.fn(),
-  publishCommunityHomePost: vi.fn(),
-  scheduleCommunityHomePost: vi.fn(),
-  toggleCommunityHomeLike: vi.fn(),
-  unpublishCommunityHomePost: vi.fn(),
-  updateCommunityHomePost: vi.fn(),
-}));
+/**
+ * The card's contract, rendered without the feed's network around it.
+ *
+ *  - a locked post leaks nothing: no body, no media URL, no comment words;
+ *  - "free" is never a chip, and VIP is one only while the VIP flag is on;
+ *  - the two newest comments and nothing more are in the card's own DOM.
+ */
 
-vi.mock("@/lib/i18n", () => ({
-  useTranslation: () => ({
-    locale: "en",
-    t: (key: string, vars?: { count?: number }) =>
-      key === "communityHome.comments"
-        ? `${vars?.count ?? 0} comments`
-        : key,
-  }),
-}));
+const me: PublicUser = {
+  id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
+  displayName: "Rafa",
+  username: "rafa",
+  tag: "rafa#0001",
+  avatarUrl: null,
+};
 
-const api = await import("@/lib/api");
-const {
-  CommunityHomeFeed,
-  CommunityHomeFeedContent,
-} = await import("./community-home-feed");
+const author: PublicUser = {
+  id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2",
+  displayName: "Tues",
+  username: "tues",
+  tag: "tues#0002",
+  avatarUrl: null,
+};
 
-const SERVER_ID = "11111111-1111-4111-8111-111111111111";
-const AUTHOR_ID = "22222222-2222-4222-8222-222222222222";
-
-function post(
-  overrides: Partial<CommunityHomePost> = {},
-): CommunityHomePost {
+function post(overrides: Partial<CommunityHomePost> = {}): CommunityHomePost {
+  const now = "2026-09-01T12:00:00.000Z";
   return {
-    id: "33333333-3333-4333-8333-333333333333",
-    serverId: SERVER_ID,
-    author: {
-      id: AUTHOR_ID,
-      displayName: "Raf",
-      username: "raf",
-      tag: "raf#1234",
-      avatarUrl: null,
-    },
+    id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb1",
+    serverId: "cccccccc-cccc-4ccc-8ccc-ccccccccccc1",
+    author,
     authorBadge: "owner",
-    title: "A post",
-    body: "The full body",
+    title: "Sessão 11",
+    body: "o mapa do porão",
     teaser: null,
     visibility: "free",
     status: "published",
     commentsEnabled: true,
-    media: {
-      kind: "image",
-      name: "photo.webp",
-      contentType: "image/webp",
-      byteSize: 1024,
-      url: "https://media.example/free-photo.webp",
-      youtubeUrl: null,
-    },
+    media: null,
     locked: false,
-    likeCount: 0,
+    likeCount: 3,
     likedByMe: false,
     commentCount: 0,
     commentTeaser: [],
     scheduledAt: null,
     scheduleTimezone: null,
-    publishedAt: "2026-09-01T12:00:00.000Z",
-    createdAt: "2026-09-01T12:00:00.000Z",
-    updatedAt: "2026-09-01T12:00:00.000Z",
+    publishedAt: now,
+    createdAt: now,
+    updatedAt: now,
     ...overrides,
   };
 }
 
-describe("CommunityHomeFeed", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
+function render(node: Parameters<typeof renderToStaticMarkup>[0]) {
+  return renderToStaticMarkup(node);
+}
+
+describe("PostCard", () => {
+  it("a free post carries no tier chip at all", () => {
+    const html = render(
+      <PostCard post={post()} me={me} locked={false} canManageServer={false} vipEnabled />,
+    );
+    expect(html).toContain("o mapa do porão");
+    expect(html).not.toContain("data-home-vip-chip");
+    expect(html).not.toContain("Everyone");
+    expect(html).toContain("data-home-like");
   });
 
-  it("renders API posts without leaking locked media URLs", async () => {
-    const freePost = post();
-    const lockedPost = post({
-      id: "44444444-4444-4444-8444-444444444444",
-      title: "Members archive",
-      body: null,
-      teaser: "A look at what is inside",
-      visibility: "members",
-      locked: true,
-      media: {
-        kind: "video",
-        name: "members.webm",
-        contentType: "video/webm",
-        byteSize: 2048,
-        url: "https://media.example/private-members.webm",
-        youtubeUrl: null,
-      },
-    });
-    vi.mocked(api.fetchCommunityHomePosts).mockResolvedValue({
-      posts: [freePost, lockedPost],
-    });
-
-    const response = await api.fetchCommunityHomePosts(SERVER_ID);
-    const html = renderToStaticMarkup(
-      <CommunityHomeFeedContent
-        posts={response.posts}
+  it("a locked VIP post shows title and teaser only, and no comment words", () => {
+    const html = render(
+      <PostCard
+        post={post({
+          visibility: "members",
+          body: null,
+          teaser: "só o inner vê o clip",
+          media: null,
+          locked: true,
+          commentCount: 4,
+          commentTeaser: [],
+        })}
+        me={me}
+        locked
         canManageServer={false}
+        vipEnabled
       />,
     );
-
-    expect(api.fetchCommunityHomePosts).toHaveBeenCalledWith(SERVER_ID);
-    expect(html).toContain("https://media.example/free-photo.webp");
+    expect(html).toContain("Sessão 11");
+    expect(html).toContain("só o inner vê o clip");
     expect(html).toContain("data-home-locked-media");
-    expect(html).not.toContain("https://media.example/private-members.webm");
+    expect(html).toContain("data-home-unlock-cta");
+    expect(html).toContain("data-home-vip-chip");
+    expect(html).not.toContain("data-home-comments");
+    expect(html).not.toContain("data-home-like");
   });
 
-  it("has locked header chrome without Compose or Preview tabs", () => {
-    const html = renderToStaticMarkup(
-      <CommunityHomeFeed
-        serverId={SERVER_ID}
-        serverName="Mesa"
-        authorName="Raf"
+  it("with the VIP flag off, a members post renders no VIP chip", () => {
+    const html = render(
+      <PostCard
+        post={post({ visibility: "members" })}
+        me={me}
+        locked={false}
         canManageServer
-        isOwner
-        isVip={false}
-        currentUserId={AUTHOR_ID}
+        vipEnabled={false}
       />,
     );
-
-    expect(html).toContain("data-home-staff-pen");
-    expect(html).toContain("data-home-staff-overflow");
-    expect(html).not.toContain("data-home-staff-tabs");
+    expect(html).not.toContain("data-home-vip-chip");
   });
 
-  it("renders the quiet empty-state copy when the API has no posts", () => {
-    const html = renderToStaticMarkup(
-      <CommunityHomeFeedContent
-        posts={[]}
+  it("an unlocked post with media puts the URL in the DOM, a locked one does not", () => {
+    const media = {
+      kind: "video" as const,
+      name: "sessao-11-clip.webm",
+      contentType: "video/webm",
+      byteSize: 1024,
+      url: "https://bucket.example/sessao-11-clip.webm?sig=1",
+      youtubeUrl: null,
+    };
+    const open = render(
+      <PostCard post={post({ media })} me={me} locked={false} canManageServer={false} vipEnabled={false} />,
+    );
+    expect(open).toContain("sessao-11-clip.webm");
+    // The API nulls media for a locked viewer; the card must not invent it.
+    const shut = render(
+      <PostCard
+        post={post({ visibility: "members", media: null, body: null, locked: true })}
+        me={me}
+        locked
         canManageServer={false}
+        vipEnabled
       />,
     );
+    expect(shut).not.toContain("sessao-11-clip.webm");
+  });
 
-    expect(html).toContain("data-home-empty");
-    expect(html).toContain("communityHome.empty.body");
+  it("shows only the two newest comments the API sent, plus a see-all when more exist", () => {
+    const comment = (id: string, body: string) => ({
+      id,
+      author,
+      body,
+      createdAt: "2026-09-01T12:00:00.000Z",
+    });
+    const html = render(
+      <PostCard
+        post={post({
+          commentCount: 5,
+          commentTeaser: [
+            comment("dddddddd-dddd-4ddd-8ddd-ddddddddddd1", "primeiro"),
+            comment("dddddddd-dddd-4ddd-8ddd-ddddddddddd2", "segundo"),
+          ],
+        })}
+        me={me}
+        locked={false}
+        canManageServer={false}
+        vipEnabled={false}
+        onPatch={() => {}}
+      />,
+    );
+    expect(html.match(/data-home-comment(?![s-])/g)?.length).toBe(2);
+    expect(html).toContain("data-home-comments-toggle");
+    expect(html).toContain("See all 5 comments");
+  });
+
+  it("staff see edit and delete; members do not", () => {
+    const staff = render(
+      <PostCard
+        post={post()}
+        me={me}
+        locked={false}
+        canManageServer
+        vipEnabled={false}
+        onEdit={() => {}}
+        onDelete={() => {}}
+      />,
+    );
+    expect(staff).toContain("data-home-edit");
+    expect(staff).toContain("data-home-delete");
+    const member = render(
+      <PostCard post={post()} me={me} locked={false} canManageServer={false} vipEnabled={false} />,
+    );
+    expect(member).not.toContain("data-home-edit");
   });
 });

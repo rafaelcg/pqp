@@ -25,7 +25,6 @@ import { CommunityHomeSettingsSection } from "@/components/community-home/commun
 import { CommunitySettingsSection } from "@/components/communities/community-settings-section";
 import { RolesSettingsSection } from "@/components/layout/roles-settings-section";
 import { useCommunitiesEnabled } from "@/components/communities/use-communities-enabled";
-import { isCommunityHomeEnabled } from "@/lib/community-home";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import {
@@ -465,6 +464,8 @@ interface ServerSettingsDialogProps {
   requestedSection?: "roles";
   onClose: () => void;
   onRenamed: (server: Server) => void;
+  /** `COMMUNITY_HOME_ENABLED` on this instance, from the config probe. */
+  communityHomeFeatureOn?: boolean;
   onOwnershipTransferred: () => void;
   onDeleted: (serverId: string) => void;
 }
@@ -486,6 +487,7 @@ export function ServerSettingsDialog({
   requestedSection,
   onClose,
   onRenamed,
+  communityHomeFeatureOn = false,
   onOwnershipTransferred,
   onDeleted,
 }: ServerSettingsDialogProps) {
@@ -890,7 +892,7 @@ export function ServerSettingsDialog({
 
               {serverId &&
                 canManageServer &&
-                isCommunityHomeEnabled() && (
+                communityHomeFeatureOn && (
                   <CommunityHomeSettingsSection
                     serverId={serverId}
                     enabled={server.communityHomeEnabled}

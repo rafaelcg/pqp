@@ -8,7 +8,7 @@ import { ChannelList } from "./channel-list";
 
 const server: Server = {
   id: "11111111-1111-4111-8111-111111111111",
-  name: "Mesa Staging",
+  name: "Mesa da Tues",
   ownerId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
   createdAt: "2026-07-01T00:00:00.000Z",
   messageRetentionDays: null,
@@ -17,7 +17,7 @@ const server: Server = {
   bannerUrl: null,
   role: "owner",
   isCommunity: false,
-  communityHomeEnabled: false,
+  communityHomeEnabled: true,
   showOnProfile: true,
 };
 
@@ -83,7 +83,7 @@ describe("ChannelList Community Home row", () => {
     expect(html).not.toContain("data-community-home-row");
   });
 
-  it("flag on: pins Home above TEXT on a private (non-community) server", () => {
+  it("flag on: pins Baú above TEXT on a private (non-community) server, without a Community badge", () => {
     expect(server.isCommunity).toBe(false);
     const html = renderList(
       <ChannelList
@@ -94,19 +94,20 @@ describe("ChannelList Community Home row", () => {
       />,
     );
     expect(html).toContain("data-community-home-row");
-    expect(html).toContain("Home");
-    expect(html).not.toContain("Library of photos");
+    expect(html).toContain("Baú");
+    // The badge is a fact about the server, not about the flag.
+    expect(html).not.toContain(">Community<");
   });
 
-  it("renders the local discovery badge after the row label", () => {
+  it("flag on + community server: the Community badge shows", () => {
     const html = renderList(
       <ChannelList
         {...baseProps}
+        server={{ ...server, isCommunity: true }}
         communityHomeEnabled
-        communityHomeShowNew
         onSelectCommunityHome={() => {}}
       />,
     );
-    expect(html).toMatch(/Home<\/span><span[^>]*>NEW<\/span>/);
+    expect(html).toContain(">Community<");
   });
 });

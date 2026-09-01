@@ -53,6 +53,29 @@ const EXTENSION_BY_CONTENT_TYPE: Record<CommunityHomeContentType, string> = {
   "application/pdf": ".pdf",
 };
 
+/**
+ * The instance flag for Baú, read per call like `isCommunitiesEnabled`.
+ *
+ * Deliberately NOT `COMMUNITIES_ENABLED`: that one changes the instance's
+ * legal category (STF Art. 19). This one only says whether the Baú surface
+ * exists here. Off means every `/home/*` route answers 404, the schedule
+ * sweep stays idle, and the client hides the row. Default off.
+ */
+export function isCommunityHomeEnabled(): boolean {
+  return process.env.COMMUNITY_HOME_ENABLED === "true";
+}
+
+/**
+ * The VIP half, separately switchable so the free feed can ship first and
+ * measure appetite. Off means: no `members` posts can be created or edited
+ * into existence, existing ones are hidden from the member feed (staff still
+ * see them in drafts), and the client shows no lock, no tier chip and no
+ * "preview as" inspector. Requires the main flag; on its own it does nothing.
+ */
+export function isCommunityHomeVipEnabled(): boolean {
+  return isCommunityHomeEnabled() && process.env.COMMUNITY_HOME_VIP_ENABLED === "true";
+}
+
 export function isCommunityHomeMediaConfigured(): boolean {
   return isStorageConfigured();
 }
@@ -224,6 +247,12 @@ function buildMedia(
     try {
       url = presignGet(row.media_storage_key, {
         ttlSeconds: READ_URL_TTL_SECONDS,
+        // Same rule as attachments: anything that is not an inline image or
+        // video is signed as a download, so a PDF never renders as a
+        // top-level document on the bucket's origin.
+        ...(row.media_kind === "file" && row.media_name
+          ? { downloadFilename: row.media_name }
+          : {}),
       });
     } catch {
       url = null;
@@ -314,7 +343,9 @@ function toPost(
     likeCount: Number(row.like_count),
     likedByMe: row.liked_by_me,
     commentCount: Number(row.comment_count),
-    commentTeaser: teaser,
+    // A locked viewer gets the count but not the words: a comment on a VIP
+    // post can quote the clip, and that is the exact thing the lock hides.
+    commentTeaser: locked ? [] : teaser,
     scheduledAt: row.scheduled_at?.toISOString() ?? null,
     scheduleTimezone: row.schedule_timezone,
     publishedAt: row.published_at?.toISOString() ?? null,
@@ -355,9 +386,15 @@ export async function listCommunityHomePosts(
   const caps = await resolveHomeViewerCaps(serverId, viewerId);
   // Feed is published-only for everyone. Drafts/scheduled live in the staff
   // overflow via listCommunityHomeDrafts — never mixed into the member feed.
+  // With VIP off, members-only rows stay out of the feed for everybody,
+  // staff included. They are still reachable through the drafts list so an
+  // owner can flip them to free rather than lose them.
+  const visibilityFilter = isCommunityHomeVipEnabled()
+    ? ""
+    : " AND p.visibility = 'free'";
   const result = await getPool().query<PostRow>(
     `SELECT ${postSelectSql("$1")}
-      WHERE p.server_id = $2 AND p.status = 'published'
+      WHERE p.server_id = $2 AND p.status = 'published'${visibilityFilter}
       ORDER BY p.published_at DESC NULLS LAST, p.created_at DESC`,
     [viewerId, serverId],
   );
@@ -513,6 +550,15 @@ function assertPublishable(input: {
   }
 }
 
+function assertVisibilityAllowed(visibility: CommunityHomeVisibility): void {
+  if (visibility === "members" && !isCommunityHomeVipEnabled()) {
+    throw new CommunityHomeError(
+      "invalid",
+      "VIP posts are off on this instance",
+    );
+  }
+}
+
 export type CreateHomePostInput = {
   title: string | null;
   body: string;
@@ -543,6 +589,7 @@ export async function createCommunityHomePost(
   if (input.mediaUploadId && input.youtubeUrl) {
     throw new CommunityHomeError("invalid", "Pick one media source");
   }
+  assertVisibilityAllowed(input.visibility);
 
   const status = input.status;
   if (status === "scheduled") {
@@ -678,6 +725,7 @@ export async function updateCommunityHomePost(
       status: CommunityHomePostStatus;
       title: string | null;
       body: string;
+      teaser: string | null;
       media_kind: string | null;
       media_name: string | null;
       media_content_type: string | null;
@@ -685,7 +733,7 @@ export async function updateCommunityHomePost(
       media_storage_key: string | null;
       media_youtube_url: string | null;
     }>(
-      `SELECT id, visibility, status, title, body,
+      `SELECT id, visibility, status, title, body, teaser,
               media_kind, media_name, media_content_type, media_byte_size,
               media_storage_key, media_youtube_url
          FROM community_home_posts
@@ -707,6 +755,7 @@ export async function updateCommunityHomePost(
       media_youtube_url: row.media_youtube_url,
     };
 
+    const previousKey = row.media_storage_key;
     if (input.clearMedia) {
       media = emptyMedia();
     } else if (input.mediaUploadId) {
@@ -724,13 +773,18 @@ export async function updateCommunityHomePost(
     }
 
     const visibility = input.visibility ?? row.visibility;
+    if (input.visibility !== undefined) {
+      assertVisibilityAllowed(visibility);
+    }
     const title = input.title !== undefined ? input.title : row.title;
     const body = input.body !== undefined ? (input.body ?? "") : row.body;
+    // An edit that does not mention the teaser keeps the one already saved;
+    // only flipping the post to free clears it.
     const teaser =
       visibility === "members"
         ? input.teaser !== undefined
           ? input.teaser
-          : null
+          : row.teaser
         : null;
 
     if (row.status === "published" || row.status === "scheduled") {
@@ -774,6 +828,26 @@ export async function updateCommunityHomePost(
       ],
     );
     await client.query("COMMIT");
+    // Only after COMMIT: a rolled-back edit must not have deleted the object
+    // the row still points at.
+    if (
+      previousKey &&
+      previousKey !== media.media_storage_key &&
+      isStorageConfigured()
+    ) {
+      await client.query(
+        `DELETE FROM community_home_media_uploads WHERE storage_key = $1`,
+        [previousKey],
+      );
+      try {
+        await deleteObject(previousKey);
+      } catch (error) {
+        console.error(
+          "[community-home] failed to delete replaced media object:",
+          error instanceof Error ? error.message : error,
+        );
+      }
+    }
     return getCommunityHomePost(serverId, postId, actorId);
   } catch (error) {
     await client.query("ROLLBACK");
@@ -940,6 +1014,14 @@ export async function deleteCommunityHomePost(
     throw new CommunityHomeError("not_found", "Post not found");
   }
   const key = result.rows[0].media_storage_key;
+  // The FK only nulls `claimed_post_id`, and the orphan sweep skips verified
+  // rows, so without this the upload row would outlive its post forever.
+  if (key) {
+    await getPool().query(
+      `DELETE FROM community_home_media_uploads WHERE storage_key = $1`,
+      [key],
+    );
+  }
   if (key && isStorageConfigured()) {
     try {
       await deleteObject(key);

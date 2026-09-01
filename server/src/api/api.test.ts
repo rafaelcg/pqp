@@ -398,6 +398,8 @@ describeDb("API authorization", () => {
   });
 
   it("stores Community Home opt-in per server behind MANAGE_SERVER", async () => {
+    // The per-server toggle only exists while the instance flag is on.
+    process.env.COMMUNITY_HOME_ENABLED = "true";
     const { serverId } = await makeServer();
     const path = `/api/servers/${serverId}/home/config`;
 
@@ -419,6 +421,7 @@ describeDb("API authorization", () => {
 
     const persisted = await call<{ enabled: boolean }>(member, "GET", path);
     expect(persisted.body.enabled).toBe(true);
+    delete process.env.COMMUNITY_HOME_ENABLED;
   });
 
   it("refuses to let the owner leave and abandon the server", async () => {

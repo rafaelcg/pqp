@@ -285,6 +285,14 @@ export const userPreferencesSchema = z.object({
    */
   firstRunDismissedAt: z.string().optional(),
   /**
+   * When the Baú intro card was put away, as an ISO instant.
+   *
+   * A preference and not localStorage for the same reason as
+   * `firstRunDismissedAt`: the card explains a surface once per person, not
+   * once per browser. Absent means "never dismissed".
+   */
+  communityHomeIntroDismissedAt: z.string().optional(),
+  /**
    * Personal favourite channels, keyed by server. The array is the order they
    * appear in that server's Favorites block.
    *
@@ -480,16 +488,19 @@ export const serverSchema = z.object({
   showOnProfile: z.boolean().default(true),
 });
 
-export const communityHomeConfigSchema = z.object({
+/** `GET /api/servers/:id/home/config`: this server's own Baú opt-in. */
+export const serverCommunityHomeConfigSchema = z.object({
   enabled: z.boolean(),
 });
-export type CommunityHomeConfig = z.infer<typeof communityHomeConfigSchema>;
+export type ServerCommunityHomeConfig = z.infer<
+  typeof serverCommunityHomeConfigSchema
+>;
 
-export const updateCommunityHomeConfigSchema = z.object({
+export const updateServerCommunityHomeConfigSchema = z.object({
   enabled: z.boolean(),
 });
-export type UpdateCommunityHomeConfig = z.infer<
-  typeof updateCommunityHomeConfigSchema
+export type UpdateServerCommunityHomeConfig = z.infer<
+  typeof updateServerCommunityHomeConfigSchema
 >;
 
 export const channelSchema = z.object({

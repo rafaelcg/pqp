@@ -94,6 +94,7 @@ import {
   DiscordImportParseError,
   parseDiscordTemplateCode,
   claimCommunityHomeMediaSchema,
+  COMMUNITY_HOME_MAX_BYTES,
   createCommunityHomeCommentSchema,
   createCommunityHomeMediaUploadSchema,
   createCommunityHomePostSchema,
@@ -102,8 +103,8 @@ import {
   parseCommunityHomeTeaser,
   parseCommunityHomeTitle,
   scheduleCommunityHomePostSchema,
-  updateCommunityHomeConfigSchema,
   updateCommunityHomePostSchema,
+  updateServerCommunityHomeConfigSchema,
 } from "@pqp/shared";
 import { z } from "zod";
 import {
@@ -204,7 +205,9 @@ import {
   deleteCommunityHomeComment,
   deleteCommunityHomePost,
   getCommunityHomePost,
+  isCommunityHomeEnabled,
   isCommunityHomeMediaConfigured,
+  isCommunityHomeVipEnabled,
   listCommunityHomeComments,
   listCommunityHomeDrafts,
   listCommunityHomePosts,
@@ -293,7 +296,6 @@ import {
   deleteServer,
   getChannel,
   getChannelAudience,
-  getServer,
   InvalidChannelMoveError,
   listChannelMembers,
   listChannels,
@@ -305,6 +307,7 @@ import {
   removeChannelMember,
   renameServer,
   SERVER_COLUMNS,
+  getServer,
   setCommunityHomeEnabled,
   transferOwnership,
   updateChannel,
@@ -2388,9 +2391,39 @@ async function notifyHome(serverId: string): Promise<void> {
   }
 }
 
+/**
+ * The gate every Baú route runs first. Same shape as communities: 404, not
+ * 503, because with the flag off the surface does not exist here and the
+ * paths below name nothing.
+ */
+function requireCommunityHome(): void {
+  if (!isCommunityHomeEnabled()) {
+    throw new NotFound("Not found");
+  }
+}
+
+/**
+ * Still behind auth like every other `/api` route. Answers 200 with the
+ * flags rather than 404ing, so the client can tell "off" from "unreachable".
+ * `mediaEnabled` is the storage probe, folded in so the client needs one
+ * request rather than two before it can draw the composer.
+ */
+router.get("/api/community-home/config", async () => ({
+  enabled: isCommunityHomeEnabled(),
+  vipEnabled: isCommunityHomeVipEnabled(),
+  mediaEnabled: isCommunityHomeEnabled() && isCommunityHomeMediaConfigured(),
+}));
+
+/**
+ * This server's own opt-in. The instance flag says Baú exists here; this
+ * says the owner turned it on for this server (Server settings). Both gate
+ * the row and the landing on the client; only the instance flag gates the
+ * routes, so an owner can flip the setting through the same API.
+ */
 router.get(
   "/api/servers/:serverId/home/config",
   async ({ user }, { serverId }) => {
+    requireCommunityHome();
     await requireServerMember(serverId!, user.id);
     const server = await getServer(serverId!);
     if (!server) {
@@ -2403,8 +2436,11 @@ router.get(
 router.patch(
   "/api/servers/:serverId/home/config",
   async ({ req, user }, { serverId }) => {
+    requireCommunityHome();
     await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
-    const body = updateCommunityHomeConfigSchema.parse(await readJsonBody(req));
+    const body = updateServerCommunityHomeConfigSchema.parse(
+      await readJsonBody(req),
+    );
     const server = await setCommunityHomeEnabled(serverId!, body.enabled);
     return {
       enabled: server.community_home_enabled ?? false,
@@ -2414,6 +2450,8 @@ router.patch(
 );
 
 router.get("/api/servers/:serverId/home/posts", async ({ user }, { serverId }) => {
+  requireCommunityHome();
+  requireCommunityHome();
   await requireServerMember(serverId!, user.id);
   try {
     const posts = await listCommunityHomePosts(serverId!, user.id);
@@ -2426,6 +2464,7 @@ router.get("/api/servers/:serverId/home/posts", async ({ user }, { serverId }) =
 router.get(
   "/api/servers/:serverId/home/drafts",
   async ({ user }, { serverId }) => {
+    requireCommunityHome();
     await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
     try {
       const posts = await listCommunityHomeDrafts(serverId!, user.id);
@@ -2439,6 +2478,7 @@ router.get(
 router.get(
   "/api/servers/:serverId/home/posts/:postId",
   async ({ user }, { serverId, postId }) => {
+    requireCommunityHome();
     await requireServerMember(serverId!, user.id);
     try {
       const post = await getCommunityHomePost(serverId!, postId!, user.id);
@@ -2452,6 +2492,7 @@ router.get(
 router.post(
   "/api/servers/:serverId/home/posts",
   async ({ req, user }, { serverId }) => {
+    requireCommunityHome();
     await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
     const raw = createCommunityHomePostSchema.parse(await readJsonBody(req));
     try {
@@ -2481,6 +2522,7 @@ router.post(
 router.patch(
   "/api/servers/:serverId/home/posts/:postId",
   async ({ req, user }, { serverId, postId }) => {
+    requireCommunityHome();
     await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
     const raw = updateCommunityHomePostSchema.parse(await readJsonBody(req));
     try {
@@ -2515,6 +2557,7 @@ router.patch(
 router.delete(
   "/api/servers/:serverId/home/posts/:postId",
   async ({ user }, { serverId, postId }) => {
+    requireCommunityHome();
     await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
     try {
       await deleteCommunityHomePost(serverId!, postId!, user.id);
@@ -2529,6 +2572,7 @@ router.delete(
 router.post(
   "/api/servers/:serverId/home/posts/:postId/publish",
   async ({ user }, { serverId, postId }) => {
+    requireCommunityHome();
     await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
     try {
       const post = await publishCommunityHomePost(serverId!, postId!, user.id);
@@ -2543,6 +2587,7 @@ router.post(
 router.post(
   "/api/servers/:serverId/home/posts/:postId/unpublish",
   async ({ user }, { serverId, postId }) => {
+    requireCommunityHome();
     await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
     try {
       const post = await unpublishCommunityHomePost(
@@ -2561,6 +2606,7 @@ router.post(
 router.post(
   "/api/servers/:serverId/home/posts/:postId/schedule",
   async ({ req, user }, { serverId, postId }) => {
+    requireCommunityHome();
     await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
     const body = scheduleCommunityHomePostSchema.parse(await readJsonBody(req));
     try {
@@ -2582,6 +2628,7 @@ router.post(
 router.get(
   "/api/servers/:serverId/home/posts/:postId/comments",
   async ({ user }, { serverId, postId }) => {
+    requireCommunityHome();
     await requireServerMember(serverId!, user.id);
     try {
       const comments = await listCommunityHomeComments(
@@ -2599,6 +2646,7 @@ router.get(
 router.post(
   "/api/servers/:serverId/home/posts/:postId/comments",
   async ({ req, user }, { serverId, postId }) => {
+    requireCommunityHome();
     await requireServerMember(serverId!, user.id);
     const raw = createCommunityHomeCommentSchema.parse(await readJsonBody(req));
     let body: string;
@@ -2628,6 +2676,7 @@ router.post(
 router.delete(
   "/api/servers/:serverId/home/posts/:postId/comments/:commentId",
   async ({ user }, { serverId, postId, commentId }) => {
+    requireCommunityHome();
     await requireServerMember(serverId!, user.id);
     try {
       await deleteCommunityHomeComment(
@@ -2647,15 +2696,13 @@ router.delete(
 router.post(
   "/api/servers/:serverId/home/posts/:postId/likes",
   async ({ user }, { serverId, postId }) => {
+    requireCommunityHome();
     await requireServerMember(serverId!, user.id);
     try {
-      const result = await toggleCommunityHomeLike(
-        serverId!,
-        postId!,
-        user.id,
-      );
-      await notifyHome(serverId!);
-      return result;
+      // No fan-out: a like on a 300-member server would make 300 clients
+      // refetch the feed. The actor gets the new count in the response and
+      // everybody else sees it on their next load.
+      return await toggleCommunityHomeLike(serverId!, postId!, user.id);
     } catch (error) {
       mapCommunityHomeError(error);
     }
@@ -2663,16 +2710,18 @@ router.post(
 );
 
 router.get("/api/servers/:serverId/home/media/config", async ({ user }, { serverId }) => {
+  requireCommunityHome();
   await requireServerMember(serverId!, user.id);
   return {
     enabled: isCommunityHomeMediaConfigured(),
-    maxBytes: 10 * 1024 * 1024,
+    maxBytes: COMMUNITY_HOME_MAX_BYTES,
   };
 });
 
 router.post(
   "/api/servers/:serverId/home/media",
   async (ctx, { serverId }) => {
+    requireCommunityHome();
     await requirePermission(serverId!, ctx.user.id, Permission.MANAGE_SERVER);
     if (!isCommunityHomeMediaConfigured()) {
       throw new HttpError(503, "Media uploads are not configured on this server");
@@ -2704,6 +2753,7 @@ router.post(
 router.post(
   "/api/servers/:serverId/home/media/claim",
   async ({ req, user }, { serverId }) => {
+    requireCommunityHome();
     await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
     const body = claimCommunityHomeMediaSchema.parse(await readJsonBody(req));
     try {

@@ -2,7 +2,7 @@ import {
   ChevronRight,
   FolderPlus,
   HeadphoneOff,
-  Home,
+  Archive,
   Lock,
   MicOff,
   Phone,
@@ -170,10 +170,12 @@ interface ChannelListProps {
   mobileOpen?: boolean;
   onMobileClose?: () => void;
   /**
-   * Community Home rollout. The parent combines the client feature flag with
-   * this server's persisted opt-in before asking this list to show the row.
+   * Baú (Community Home), on when `GET /api/community-home/config` says so.
+   * Pins a Baú row above TEXT on every server. Not a real channel type and
+   * not `COMMUNITIES_ENABLED`.
    */
   communityHomeEnabled?: boolean;
+  /** "NEW" chip until the row is opened once on this server. */
   communityHomeShowNew?: boolean;
   communityHomeSelected?: boolean;
   onSelectCommunityHome?: () => void;
@@ -538,8 +540,10 @@ export function ChannelList({
                 <p className="truncate font-display text-base font-bold leading-tight">
                   {server?.name ?? (isLoading ? t("common.loading") : t("chrome.noServer"))}
                 </p>
-                {communityHomeEnabled && (
-                  <span className="shrink-0 rounded bg-accent/15 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-accent">
+                {/* Says "community" only about a listed community; the Baú
+                    flag being on is not a fact about this server. */}
+                {communityHomeEnabled && server?.isCommunity && (
+                  <span className="shrink-0 rounded bg-signal/15 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-signal">
                     {t("communityHome.communityBadge")}
                   </span>
                 )}
@@ -664,30 +668,35 @@ export function ChannelList({
                   className={cn(
                     "flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left transition-colors",
                     communityHomeSelected
-                      ? "bg-surface-3 text-text"
-                      : "text-text-muted hover:bg-surface-3/70 hover:text-text",
+                      ? "bg-ink-4 text-paper"
+                      : "text-paper-muted hover:bg-ink-4/70 hover:text-paper",
                   )}
                   onClick={() => {
                     onSelectCommunityHome();
                     onMobileClose?.();
                   }}
                 >
-                  <Home
+                  <Archive
                     className={cn(
                       "mt-0.5 h-4 w-4 shrink-0",
-                      communityHomeSelected ? "text-accent" : "text-text-muted",
+                      communityHomeSelected ? "text-signal" : "text-paper-muted",
                     )}
                     aria-hidden
                   />
-                  <span className="flex min-w-0 flex-1 items-center gap-2">
-                    <span className="truncate text-sm font-semibold text-text">
-                      {t("communityHome.channelName")}
-                    </span>
-                    {communityHomeShowNew && (
-                      <span className="shrink-0 rounded bg-accent/15 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-accent">
-                        {t("communityHome.badge.new")}
+                  <span className="min-w-0 flex-1">
+                    <span className="flex items-center gap-2">
+                      <span className="truncate text-sm font-semibold text-paper">
+                        {t("communityHome.channelName")}
                       </span>
-                    )}
+                      {communityHomeShowNew && (
+                        <span className="shrink-0 rounded bg-signal/15 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-signal">
+                          {t("communityHome.badge.new")}
+                        </span>
+                      )}
+                    </span>
+                    <span className="block truncate text-[10px] text-paper-muted">
+                      {t("communityHome.channelHint")}
+                    </span>
                   </span>
                 </button>
               </div>

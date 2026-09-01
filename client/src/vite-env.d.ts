@@ -15,11 +15,6 @@ interface ImportMetaEnv {
   readonly VITE_VOICE_BACKEND?: "mesh" | "cloudflare-sfu" | "livekit";
   readonly VITE_DEV_AUTH_BYPASS?: string;
   /**
-   * Community Home rollout gate. Each server still opts in through its
-   * API-backed setting. Default off; see docs/COMMUNITY_HOME.md.
-   */
-  readonly VITE_COMMUNITY_HOME_ENABLED?: string;
-  /**
    * Public TestFlight join URL. Optional; a default lives in `lib/testflight.ts`.
    */
   readonly VITE_TESTFLIGHT_URL?: string;

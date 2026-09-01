@@ -7,7 +7,13 @@ export {
   COMMUNITY_HOME_QUERY_PARAM,
   isCommunityHomeEnabled,
   setCommunityHomeEnabled,
+  type CommunityHomeFlagInput,
 } from "./flag";
+export {
+  COMMUNITY_HOME_CONFIG_OFF,
+  loadCommunityHomeConfig,
+  resetCommunityHomeConfigProbe,
+} from "./config";
 export {
   COMMUNITY_HOME_VIEWER_STORAGE_KEY,
   COMMUNITY_HOME_VIEWER_QUERY_PARAM,

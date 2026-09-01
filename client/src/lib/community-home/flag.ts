@@ -1,33 +1,45 @@
 /**
- * Community Home experiment flag.
+ * Whether Baú (Community Home) is on for this tab.
  *
- * OWN FLAG, deliberately separate from `COMMUNITIES_ENABLED`. That one is a
- * legal-category switch (STF Art. 19); this one exposes the Baú UI while each
- * server's persisted `communityHomeEnabled` setting decides whether its row is
- * actually present. Default OFF. Production Pages builds must leave
- * `VITE_COMMUNITY_HOME_ENABLED` unset.
+ * THE SERVER DECIDES. `GET /api/community-home/config` answers with the
+ * instance flags (`COMMUNITY_HOME_ENABLED`, `COMMUNITY_HOME_VIP_ENABLED`),
+ * and the client follows that answer the way it follows the attachments and
+ * communities configs. There is no `VITE_` flag any more: two switches for
+ * one feature is how a surface ends up half-on, with a row in the sidebar
+ * that 404s when clicked.
  *
- * Enable locally (any one is enough):
- *   1. `VITE_COMMUNITY_HOME_ENABLED=true` in `client/.env`, then restart Vite
- *   2. `localStorage.setItem("pqp:community-home", "1")` then reload
- *   3. `?communityHome=1` on the URL (also sticky-writes localStorage)
+ * THE ONE LOCAL OVERRIDE. With the dev auth bypass on (local + e2e only,
+ * ignored when `NODE_ENV=production` on the API), `?communityHome=1|0` on
+ * `/app` forces the answer for that tab and latches it in localStorage. That
+ * is what lets one Playwright run prove both the flag-on and the flag-off
+ * chrome against a single API process, and lets a local run flip the row
+ * without restarting the server. Outside the bypass the query is ignored.
  *
- * This rollout latch is still client-side. The per-server choice is API-backed.
+ * FAIL CLOSED. No config, denied storage, and a missing query all mean off.
  */
+
+import type { CommunityHomeConfig } from "@pqp/shared";
 
 export const COMMUNITY_HOME_STORAGE_KEY = "pqp:community-home";
 export const COMMUNITY_HOME_QUERY_PARAM = "communityHome";
 
 type StorageLike = Pick<Storage, "getItem" | "setItem" | "removeItem"> | null;
 
-function readStorageFlag(storage: StorageLike): boolean {
+function readStorageFlag(storage: StorageLike): boolean | null {
   if (!storage) {
-    return false;
+    return null;
   }
   try {
-    return storage.getItem(COMMUNITY_HOME_STORAGE_KEY) === "1";
+    const raw = storage.getItem(COMMUNITY_HOME_STORAGE_KEY);
+    if (raw === "1") {
+      return true;
+    }
+    if (raw === "0") {
+      return false;
+    }
+    return null;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -36,13 +48,9 @@ function writeStorageFlag(storage: StorageLike, on: boolean): void {
     return;
   }
   try {
-    if (on) {
-      storage.setItem(COMMUNITY_HOME_STORAGE_KEY, "1");
-    } else {
-      storage.removeItem(COMMUNITY_HOME_STORAGE_KEY);
-    }
+    storage.setItem(COMMUNITY_HOME_STORAGE_KEY, on ? "1" : "0");
   } catch {
-    // Privacy mode: session still works via the Vite env / query param.
+    // Privacy mode: the query still wins for this navigation.
   }
 }
 
@@ -75,38 +83,53 @@ function queryWantsHome(search: string): boolean | null {
   }
 }
 
-/**
- * Whether the Community Home experiment is on for this tab.
- *
- * FAIL CLOSED. Unset env, denied storage, and a missing query all mean off —
- * the app must look identical to today until somebody opts in.
- */
-export function isCommunityHomeEnabled(
-  env: string | undefined = typeof import.meta !== "undefined"
-    ? (import.meta.env?.VITE_COMMUNITY_HOME_ENABLED as string | undefined)
-    : undefined,
-  search: string = typeof window !== "undefined" ? window.location.search : "",
-  storage: StorageLike = browserStorage(),
-): boolean {
-  const fromQuery = queryWantsHome(search);
-  if (fromQuery === true) {
-    writeStorageFlag(storage, true);
-    return true;
-  }
-  if (fromQuery === false) {
-    writeStorageFlag(storage, false);
-    return false;
-  }
-  if (env === "true") {
-    return true;
-  }
-  return readStorageFlag(storage);
+export interface CommunityHomeFlagInput {
+  /** The API's answer, or null while it has not arrived / failed. */
+  config: Pick<CommunityHomeConfig, "enabled"> | null;
+  /**
+   * Whether the local override (query + localStorage latch) is honoured.
+   * Callers pass `isDevAuthBypassEnabled()`; tests pass what they mean.
+   */
+  allowLocalOverride: boolean;
+  search?: string;
+  storage?: StorageLike;
 }
 
-/** Test / debug: force the localStorage latch on or off. */
+export function isCommunityHomeEnabled({
+  config,
+  allowLocalOverride,
+  search = typeof window !== "undefined" ? window.location.search : "",
+  storage = browserStorage(),
+}: CommunityHomeFlagInput): boolean {
+  if (allowLocalOverride) {
+    const fromQuery = queryWantsHome(search);
+    if (fromQuery !== null) {
+      writeStorageFlag(storage, fromQuery);
+      return fromQuery;
+    }
+    const latched = readStorageFlag(storage);
+    if (latched !== null) {
+      return latched;
+    }
+  }
+  return config?.enabled === true;
+}
+
+/** Test / local QA: force the latch on or off, or clear it with `null`. */
 export function setCommunityHomeEnabled(
-  on: boolean,
+  on: boolean | null,
   storage: StorageLike = browserStorage(),
 ): void {
-  writeStorageFlag(storage, on);
+  if (!storage) {
+    return;
+  }
+  try {
+    if (on === null) {
+      storage.removeItem(COMMUNITY_HOME_STORAGE_KEY);
+    } else {
+      writeStorageFlag(storage, on);
+    }
+  } catch {
+    // ignore
+  }
 }
