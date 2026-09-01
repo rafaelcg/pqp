@@ -66,7 +66,7 @@ function MockMedia({
           aria-hidden
         />
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-surface-0/70 px-4 text-center">
-          <span className="flex h-10 w-10 items-center justify-center rounded-full bg-accent/15 text-accent shadow-[0_0_24px_rgba(186,237,77,0.35)]">
+          <span className="flex h-10 w-10 items-center justify-center rounded-full bg-accent/15 text-accent shadow-[0_0_24px_var(--glow-accent)]">
             <Lock className="h-4 w-4" aria-hidden />
           </span>
           <p className="font-display text-sm font-semibold text-accent">
@@ -95,7 +95,7 @@ function MockMedia({
   return (
     <div className="overflow-hidden rounded-lg border border-border bg-surface-0">
       <div
-        className="flex h-44 items-end bg-[linear-gradient(180deg,rgba(186,237,77,0.08),transparent_40%),repeating-linear-gradient(0deg,transparent_0_19px,rgba(39,47,55,0.9)_19px_20px),repeating-linear-gradient(90deg,transparent_0_19px,rgba(39,47,55,0.9)_19px_20px)] px-3 py-2"
+        className="flex h-44 items-end bg-[linear-gradient(180deg,var(--glow-accent-soft),transparent_40%),repeating-linear-gradient(0deg,transparent_0_19px,color-mix(in_oklab,var(--color-surface-3)_90%,transparent)_19px_20px),repeating-linear-gradient(90deg,transparent_0_19px,color-mix(in_oklab,var(--color-surface-3)_90%,transparent)_19px_20px)] px-3 py-2"
         role="img"
         aria-label={post.media.name}
       >
