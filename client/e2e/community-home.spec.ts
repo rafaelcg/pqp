@@ -75,12 +75,15 @@ async function seedCommunity(name: string): Promise<string> {
     headers: headers(OWNER),
     body: JSON.stringify({
       isCommunity: true,
-      category: "gaming",
+      category: "games",
       tagline: "RPG às terças. mapa na tela.",
     }),
   });
   if (!patched.ok) {
-    throw new Error(`could not list ${name}: ${patched.status}`);
+    const detail = await patched.text().catch(() => "");
+    throw new Error(
+      `could not list ${name}: ${patched.status} ${detail.slice(0, 200)}`,
+    );
   }
   return server.id;
 }
@@ -157,12 +160,17 @@ test.describe("Community Home", () => {
     await page.locator("[data-home-compose-submit]").click();
     await page.locator('[data-home-staff-tab="preview"]').click();
     await expect(page.getByText("post de e2e na mesa")).toBeVisible();
-    await expect(page.getByText("Dev User home-owner")).toBeVisible();
+    await expect(
+      page.getByRole("main").getByText("Dev User home-owner"),
+    ).toBeVisible();
 
-    // Comments flat list on a published seed post.
-    const commentsToggle = page.locator("[data-home-comments-toggle]").first();
-    await commentsToggle.click();
-    await expect(page.locator("[data-home-comment]").first()).toBeVisible();
+    // Comments flat list on a published seed post that already has replies.
+    const seedWithComments = page
+      .locator("[data-home-post]")
+      .filter({ hasText: "mapa-porao.png" });
+    await expect(seedWithComments).toBeVisible();
+    await seedWithComments.locator("[data-home-comments-toggle]").click();
+    await expect(seedWithComments.locator("[data-home-comment]").first()).toBeVisible();
   });
 
   test("private (non-community) server does not show Home even with latch", async ({
