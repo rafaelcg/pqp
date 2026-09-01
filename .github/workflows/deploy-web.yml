@@ -94,6 +94,14 @@ jobs:
           # conversion tracking. See client/src/lib/google-ads-tag.ts.
           VITE_GOOGLE_ADS_ID: ${{ vars.VITE_GOOGLE_ADS_ID }}
           VITE_GOOGLE_ADS_SIGNUP_LABEL: ${{ vars.VITE_GOOGLE_ADS_SIGNUP_LABEL }}
+          # Donations page (/apoie, /support). The Sponsors URL is public and
+          # inline, like the APK click URL. The Pix values go through repository
+          # VARIABLES, not secrets: a Pix key is meant to be handed out and is
+          # printed on the page. Empty simply hides Pix; the page still exists
+          # while the Sponsors URL is set. See client/src/lib/support-links.ts.
+          VITE_SPONSOR_URL: "https://github.com/sponsors/rafaelcg"
+          VITE_PIX_KEY: ${{ vars.VITE_PIX_KEY }}
+          VITE_PIX_BRCODE: ${{ vars.VITE_PIX_BRCODE }}
         run: pnpm --filter @pqp/client build
 
       # Install wrangler outside the pnpm workspace (npm + workspace:* fails in client/)

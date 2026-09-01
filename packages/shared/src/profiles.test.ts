@@ -99,6 +99,11 @@ describe("validateHandle", () => {
     expect(validateHandle("android")).toBe("reserved");
   });
 
+  it("reserves the donations page's path (support is already reserved as a brand word)", () => {
+    expect(validateHandle("apoie")).toBe("reserved");
+    expect(validateHandle("support")).toBe("reserved");
+  });
+
   it("refuses slurs, and refuses them through leetspeak and padding", () => {
     expect(validateHandle("viado")).toBe("blocked");
     expect(validateHandle("v1ado_oficial2")).toBe("blocked");
