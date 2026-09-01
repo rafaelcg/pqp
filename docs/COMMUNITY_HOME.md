@@ -108,9 +108,10 @@ relay) and clients refetch. Likes deliberately do **not** fan out.
 ## Staging
 
 `fly secrets set COMMUNITY_HOME_ENABLED=true COMMUNITY_HOME_VIP_ENABLED=true -a pqp-api-staging`
-then push to `staging`. Staging has no `S3_*`, so `mediaEnabled` is false
-there: the composer offers YouTube and text only. That is the expected shape
-of a self-host without storage, not a bug.
+then push to `staging`. Media needs the staging R2 credentials on the app
+(see `docs/STAGING.md`); without them `mediaEnabled` is false and the
+composer offers YouTube and text only, which is the expected shape of a
+self-host without storage, not a bug.
 
 ## Tests
 
