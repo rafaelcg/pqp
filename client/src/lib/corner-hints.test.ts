@@ -28,4 +28,10 @@ describe("winningCornerHint", () => {
     );
     expect(winningCornerHint({ cargos: true })).toBe("cargos");
   });
+
+  it("a waiting build beats every campaign", () => {
+    expect(winningCornerHint({ update: true, qg: true, whatsNew: true })).toBe(
+      "update",
+    );
+  });
 });

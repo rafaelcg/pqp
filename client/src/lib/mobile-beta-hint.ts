@@ -1,60 +1,27 @@
-import { browserStorage } from "./arrival";
 import { isAutomatedBrowser } from "./cargos-hint";
 import { isDesktopApp } from "./desktop";
 import { isAndroidDevice, isIOSDevice } from "./downloads";
+import { isHintSeen, rememberHint, shouldPersistHints } from "./hints";
 
-/**
- * One-shot "there is a native app" card for people already in `/app` on a
- * phone. Survives reloads on a real host. localhost / 127.0.0.1 never
- * record the impression, so a local preview comes back on every refresh.
- *
- * Desktop browsers never see this: they already have the "Baixa o app"
- * strip and the three-icon picker. Electron never sees it because it *is*
- * the app.
- */
 export const MOBILE_BETA_HINT_STORAGE_KEY = "pqp:mobile-beta-hint-2026-08";
 
-export function shouldPersistMobileBetaHint(
-  hostname: string = typeof window === "undefined"
-    ? ""
-    : window.location.hostname,
-): boolean {
-  return hostname !== "localhost" && hostname !== "127.0.0.1";
+/** See `lib/hints.ts`; kept as a name so call sites and tests read the same. */
+export function shouldPersistMobileBetaHint(hostname?: string): boolean {
+  return shouldPersistHints(hostname);
 }
 
 export function isMobileBetaHintSeen(
-  storage: Pick<Storage, "getItem"> | null = browserStorage(),
-  persist: boolean = shouldPersistMobileBetaHint(),
+  storage?: Pick<Storage, "getItem"> | null,
+  persist?: boolean,
 ): boolean {
-  if (!persist) {
-    return false;
-  }
-  if (!storage) {
-    return true;
-  }
-  try {
-    return storage.getItem(MOBILE_BETA_HINT_STORAGE_KEY) === "1";
-  } catch {
-    return true;
-  }
+  return isHintSeen(MOBILE_BETA_HINT_STORAGE_KEY, storage, persist);
 }
 
-/**
- * Record the impression. Written when the card is shown, not when it is
- * dismissed: scrolling past it still counts. No-op on localhost.
- */
 export function rememberMobileBetaHint(
-  storage: Pick<Storage, "setItem"> | null = browserStorage(),
-  persist: boolean = shouldPersistMobileBetaHint(),
+  storage?: Pick<Storage, "setItem"> | null,
+  persist?: boolean,
 ): void {
-  if (!persist) {
-    return;
-  }
-  try {
-    storage?.setItem(MOBILE_BETA_HINT_STORAGE_KEY, "1");
-  } catch {
-    // Session-only hide lives in the component that called this.
-  }
+  rememberHint(MOBILE_BETA_HINT_STORAGE_KEY, storage, persist);
 }
 
 export interface MobileBetaAudience {

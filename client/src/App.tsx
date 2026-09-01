@@ -70,6 +70,7 @@ import { CargosHint } from "@/components/layout/cargos-hint";
 import { MobileBetaHint } from "@/components/layout/mobile-beta-hint";
 import { QgHint } from "@/components/layout/qg-hint";
 import { winningCornerHint } from "@/lib/corner-hints";
+import { useUpdatePromptShowing } from "@/lib/update-prompt-state";
 import { isAutomatedBrowser } from "@/lib/cargos-hint";
 import { shouldShowMobileBetaHint } from "@/lib/mobile-beta-hint";
 import { isWhatsNewSeen } from "@/lib/whats-new";
@@ -3062,6 +3063,8 @@ function MainAppContent({
     return ids;
   }, [conversations, voiceState.occupancy]);
 
+  const updatePromptShowing = useUpdatePromptShowing();
+
   const handleQgHintShowingChange = useCallback((showing: boolean) => {
     setQgHintReady(true);
     setQgHintShowing(showing);
@@ -3152,6 +3155,7 @@ function MainAppContent({
    * queue and stack on the others; it does not any more.
    */
   const cornerHint = winningCornerHint({
+    update: updatePromptShowing,
     qg: qgHintShowing,
     mobileBeta: wantsMobileBeta,
     whatsNew: wantsWhatsNew,

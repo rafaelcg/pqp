@@ -64,118 +64,127 @@ export function ApoiePage({ links }: { links: SupportLinks }) {
           aria-hidden
         />
 
-        <div className="relative mx-auto max-w-3xl px-5 pb-24 pt-14 sm:px-8 sm:pt-20">
-          <div className="animate-rise flex justify-center" style={stagger(0)}>
-            <span className="inline-flex items-center gap-2 rounded-full border border-signal/50 px-4 py-1.5 text-xs font-semibold uppercase tracking-[0.16em] text-signal">
-              <Heart aria-hidden className="h-3.5 w-3.5" />
-              {t("apoie.badge")}
-            </span>
-          </div>
+        <div className="relative mx-auto max-w-6xl px-5 pb-24 pt-14 sm:px-8 sm:pt-20">
+          {/* Two columns from lg up: the words on the left, the two ways to give on
+              the right. Below that they stack, words first. */}
+          <div className="grid gap-12 lg:grid-cols-[1.15fr_1fr] lg:items-start lg:gap-16">
+            <div>
+              <div
+                className="animate-rise flex justify-start"
+                style={stagger(0)}
+              >
+                <span className="inline-flex items-center gap-2 rounded-full border border-signal/50 px-4 py-1.5 text-xs font-semibold uppercase tracking-[0.16em] text-signal">
+                  <Heart aria-hidden className="h-3.5 w-3.5" />
+                  {t("apoie.badge")}
+                </span>
+              </div>
 
-          <h1
-            className="animate-rise mt-6 text-balance text-center font-brand text-4xl leading-[1.05] tracking-tight sm:text-5xl"
-            style={stagger(1)}
-          >
-            {t("apoie.title")}
-          </h1>
+              <h1
+                className="animate-rise mt-6 text-balance font-brand text-4xl leading-[1.05] tracking-tight sm:text-5xl"
+                style={stagger(1)}
+              >
+                {t("apoie.title")}
+              </h1>
 
-          {/* Two paragraphs, in the first person. The first says what the
+              {/* Two paragraphs, in the first person. The first says what the
               money is for and who is asking; the second says what it does not
               buy. Neither is a footnote. */}
-          <p
-            className="animate-rise mx-auto mt-8 max-w-xl text-pretty text-base leading-relaxed text-paper-muted sm:text-lg"
-            style={stagger(2)}
-          >
-            {t("apoie.body.1")}
-          </p>
-          <p
-            className="animate-rise mx-auto mt-5 max-w-xl text-pretty text-base leading-relaxed text-paper-muted sm:text-lg"
-            style={stagger(3)}
-          >
-            {t("apoie.body.2")}
-          </p>
-
-          <div className="mt-14 grid gap-4 sm:grid-cols-1">
-            {links.sponsorUrl && (
-              <section
-                className="animate-rise rounded-2xl border border-ink-4 bg-ink-2/60 p-6 sm:p-8"
-                style={stagger(4)}
-                aria-labelledby="apoie-sponsors"
+              <p
+                className="animate-rise mt-8 max-w-xl text-pretty text-base leading-relaxed text-paper-muted sm:text-lg"
+                style={stagger(2)}
               >
-                <h2
-                  id="apoie-sponsors"
-                  className="font-display text-xl font-bold tracking-tight text-paper sm:text-2xl"
+                {t("apoie.body.1")}
+              </p>
+              <p
+                className="animate-rise mt-5 max-w-xl text-pretty text-base leading-relaxed text-paper-muted sm:text-lg"
+                style={stagger(3)}
+              >
+                {t("apoie.body.2")}
+              </p>
+
+              <p
+                className="animate-rise mt-10 max-w-xl text-pretty text-sm leading-relaxed text-paper-muted"
+                style={stagger(6)}
+              >
+                {t("apoie.closing")}{" "}
+                <a
+                  href={SOURCE_REPO_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-paper underline decoration-paper-muted/40 underline-offset-4 hover:decoration-paper/60"
                 >
-                  {t("apoie.sponsors.title")}
-                </h2>
-                <p className="mt-2 text-pretty text-sm leading-relaxed text-paper-muted sm:text-base">
-                  {t("apoie.sponsors.body")}
-                </p>
-                <Button asChild className="cta-lift mt-6 h-11 px-6 text-base">
-                  <a
-                    href={links.sponsorUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
+                  {t("apoie.closing.link")}
+                </a>
+              </p>
+              <p
+                className="animate-rise mt-4 font-display text-base font-bold tracking-tight text-paper"
+                style={stagger(7)}
+              >
+                {t("apoie.thanks")}
+              </p>
+            </div>
+
+            <div className="grid gap-4 lg:mt-2">
+              {links.sponsorUrl && (
+                <section
+                  className="animate-rise rounded-2xl border border-ink-4 bg-ink-2/60 p-6 sm:p-8"
+                  style={stagger(4)}
+                  aria-labelledby="apoie-sponsors"
+                >
+                  <h2
+                    id="apoie-sponsors"
+                    className="font-display text-xl font-bold tracking-tight text-paper sm:text-2xl"
                   >
-                    {t("apoie.sponsors.cta")}
-                  </a>
-                </Button>
-              </section>
-            )}
+                    {t("apoie.sponsors.title")}
+                  </h2>
+                  <p className="mt-2 text-pretty text-sm leading-relaxed text-paper-muted sm:text-base">
+                    {t("apoie.sponsors.body")}
+                  </p>
+                  <Button asChild className="cta-lift mt-6 h-11 px-6 text-base">
+                    <a
+                      href={links.sponsorUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      {t("apoie.sponsors.cta")}
+                    </a>
+                  </Button>
+                </section>
+              )}
 
-            {links.pixKey && (
-              <section
-                className="animate-rise rounded-2xl border border-ink-4 bg-ink-2/60 p-6 sm:p-8"
-                style={stagger(5)}
-                aria-labelledby="apoie-pix"
-              >
-                <h2
-                  id="apoie-pix"
-                  className="font-display text-xl font-bold tracking-tight text-paper sm:text-2xl"
+              {links.pixKey && (
+                <section
+                  className="animate-rise rounded-2xl border border-ink-4 bg-ink-2/60 p-6 sm:p-8"
+                  style={stagger(5)}
+                  aria-labelledby="apoie-pix"
                 >
-                  {t("apoie.pix.title")}
-                </h2>
-                <p className="mt-2 text-pretty text-sm leading-relaxed text-paper-muted sm:text-base">
-                  {t("apoie.pix.body")}
-                </p>
+                  <h2
+                    id="apoie-pix"
+                    className="font-display text-xl font-bold tracking-tight text-paper sm:text-2xl"
+                  >
+                    {t("apoie.pix.title")}
+                  </h2>
+                  <p className="mt-2 text-pretty text-sm leading-relaxed text-paper-muted sm:text-base">
+                    {t("apoie.pix.body")}
+                  </p>
 
-                <CopyField
-                  label={t("apoie.pix.keyLabel")}
-                  value={links.pixKey}
-                  className="mt-6"
-                />
-                {links.pixBrCode && (
                   <CopyField
-                    label={t("apoie.pix.brcodeLabel")}
-                    value={links.pixBrCode}
-                    className="mt-4"
-                    multiline
+                    label={t("apoie.pix.keyLabel")}
+                    value={links.pixKey}
+                    className="mt-6"
                   />
-                )}
-              </section>
-            )}
+                  {links.pixBrCode && (
+                    <CopyField
+                      label={t("apoie.pix.brcodeLabel")}
+                      value={links.pixBrCode}
+                      className="mt-4"
+                      multiline
+                    />
+                  )}
+                </section>
+              )}
+            </div>
           </div>
-
-          <p
-            className="animate-rise mx-auto mt-14 max-w-xl text-pretty text-center text-sm leading-relaxed text-paper-muted"
-            style={stagger(6)}
-          >
-            {t("apoie.closing")}{" "}
-            <a
-              href={SOURCE_REPO_URL}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-paper underline decoration-paper-muted/40 underline-offset-4 hover:decoration-paper/60"
-            >
-              {t("apoie.closing.link")}
-            </a>
-          </p>
-          <p
-            className="animate-rise mt-4 text-center font-display text-base font-bold tracking-tight text-paper"
-            style={stagger(7)}
-          >
-            {t("apoie.thanks")}
-          </p>
         </div>
       </main>
 
