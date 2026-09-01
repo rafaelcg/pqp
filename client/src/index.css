@@ -1078,7 +1078,56 @@ h2,
   animation: fade-in 0.28s ease both;
 }
 
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(16px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+@keyframes toast-out {
+  from {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+}
+
+@keyframes badge-pop {
+  0% {
+    transform: scale(0.5);
+  }
+  60% {
+    transform: scale(1.18);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.animate-toast-in {
+  animation: toast-in 0.26s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.animate-toast-out {
+  animation: toast-out 0.18s ease-in both;
+}
+
+.animate-badge-pop {
+  animation: badge-pop 0.32s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
 @media (prefers-reduced-motion: reduce) {
+  .animate-toast-in,
+  .animate-toast-out,
+  .animate-badge-pop,
   .animate-rise,
   .animate-fade-in,
   .hero-parallax {

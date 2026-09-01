@@ -19,7 +19,7 @@ import {
 } from "@/hooks/use-notifications";
 import { useTranslation } from "@/lib/i18n";
 import { conversationTitle } from "@/lib/conversations";
-import { cn } from "@/lib/utils";
+import { cn, formatFullTimestamp, formatRecency } from "@/lib/utils";
 
 const EMPTY_UNREAD: UnreadState = { count: 0, mentions: 0 };
 
@@ -317,6 +317,10 @@ function ConversationRow({
   const muted = notifications.level === "none";
   const hasUnread = !selected && unread.count > 0;
   const mentions = selected || muted ? 0 : unread.mentions;
+  // A DM is addressed to you, so every unread one earns a count, not just the
+  // mentions a server channel would badge. The mention count wins when both
+  // exist, since it is the more specific claim.
+  const badge = mentions > 0 ? mentions : muted || selected ? 0 : unread.count;
 
   return (
     <ContextMenu items={items}>
@@ -351,18 +355,40 @@ function ConversationRow({
           {blocked && <span className="sr-only">{t("chrome.blockedSr")}</span>}
           {hasUnread && !muted && <span className="sr-only">{t("chrome.unreadSr")}</span>}
           {muted && <span className="sr-only">{t("chrome.mutedSr")}</span>}
-          <span className="ml-auto flex shrink-0 items-center gap-1">
+          <span className="ml-auto flex shrink-0 items-center gap-1.5">
             {conversation.kind === "group" && (
               <span className="rounded bg-ink-4 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-paper-muted">
                 {conversation.participants.length + 1}
               </span>
             )}
-            {mentions > 0 && (
-              <span
-                className="min-w-4 rounded-full bg-danger px-1 py-0.5 text-center text-[10px] font-bold leading-none text-paper"
-                aria-label={t("chrome.unreadMentions", { count: mentions })}
+            {/* When the last message landed: a time only if that was today,
+                otherwise the day, so an old thread never passes for a fresh
+                one. Steps aside for the hover actions. */}
+            {conversation.lastMessageAt && (
+              <time
+                dateTime={conversation.lastMessageAt}
+                title={formatFullTimestamp(conversation.lastMessageAt)}
+                className={cn(
+                  "text-[11px] tabular-nums transition-opacity group-hover:opacity-0 group-focus-within:opacity-0",
+                  hasUnread && !muted ? "text-paper" : "text-paper-muted",
+                )}
+                data-dm-recency
               >
-                {formatBadgeCount(mentions)}
+                {formatRecency(conversation.lastMessageAt)}
+              </time>
+            )}
+            {badge > 0 && (
+              <span
+                key={badge}
+                className="min-w-4 animate-badge-pop rounded-full bg-danger px-1 py-0.5 text-center text-[10px] font-bold leading-none text-paper"
+                aria-label={
+                  mentions > 0
+                    ? t("chrome.unreadMentions", { count: mentions })
+                    : t("notify.messages", { count: badge })
+                }
+                data-dm-unread
+              >
+                {formatBadgeCount(badge)}
               </span>
             )}
           </span>

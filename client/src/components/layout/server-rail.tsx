@@ -354,10 +354,12 @@ function RailCountBadge({
   }
   return (
     <span
+      // Re-mounts on every change so the pop plays for each new count.
+      key={count}
       aria-hidden="true"
       {...(dataFriendRequests ? { "data-friend-requests": count } : {})}
       className={cn(
-        "absolute right-[-5px] flex h-[18px] min-w-[18px] items-center justify-center rounded-full px-1 text-[11px] font-bold leading-none ring-[3px] ring-rail",
+        "absolute right-[-5px] flex h-[18px] min-w-[18px] animate-badge-pop items-center justify-center rounded-full px-1 text-[11px] font-bold leading-none ring-[3px] ring-rail",
         corner === "top" ? "top-[-5px]" : "bottom-[-5px]",
         tone === "danger" ? "bg-danger text-paper" : "bg-signal text-ink",
       )}

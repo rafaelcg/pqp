@@ -1784,6 +1784,7 @@ const MessageRow = memo(function MessageRow({
             <time
               className="w-14 shrink-0 pr-2 text-right text-[12px] leading-[22px] whitespace-nowrap tabular-nums text-paper-muted opacity-0 group-hover:opacity-100"
               dateTime={message.createdAt}
+              title={formatFullTimestamp(message.createdAt)}
             >
               {formatTime(message.createdAt)}
             </time>
