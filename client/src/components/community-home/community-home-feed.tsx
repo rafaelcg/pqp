@@ -1638,7 +1638,16 @@ export function CommunityHomeFeed({
       )}
 
       <div className="min-h-0 flex-1 overflow-y-auto px-3 py-4 sm:px-4">
-        <div className="mx-auto flex max-w-2xl flex-col gap-4">
+        <div
+          className={cn(
+            "mx-auto flex flex-col gap-4",
+            // The empty-state pitch is a two-column layout; the feed itself
+            // stays a reading column.
+            feedEmpty && canManageServer && staffTab === "feed"
+              ? "max-w-5xl"
+              : "max-w-2xl",
+          )}
+        >
           {notice && (
             <p
               className="animate-rise rounded-lg border border-success/40 bg-success/10 px-3 py-2 text-xs text-success"

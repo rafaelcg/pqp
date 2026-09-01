@@ -45,7 +45,7 @@ interface Row {
 function RowList({ rows, large }: { rows: Row[]; large: boolean }) {
   const { t } = useTranslation();
   return (
-    <ul className={cn("grid gap-3", large && "sm:grid-cols-2 sm:gap-4")}>
+    <ul className={cn("grid gap-3", large && "gap-4")}>
       {rows.map((row) => {
         const Icon = row.icon;
         return (
@@ -208,7 +208,7 @@ function DemoReel() {
     <figure className="overflow-hidden rounded-xl border border-ink-4 bg-ink" data-home-guide-demo>
       <video
         ref={ref}
-        className="block aspect-[952/800] w-full"
+        className="block aspect-[672/744] w-full"
         muted
         loop
         playsInline
@@ -259,37 +259,41 @@ export function CommunityHomeStaffGuide({
   return (
     <section
       data-home-staff-guide="empty"
-      className="animate-rise overflow-hidden rounded-2xl border border-signal/30 bg-[radial-gradient(120%_80%_at_0%_0%,var(--glow-accent-soft),transparent_55%)] bg-ink-3/30"
+      className="animate-rise overflow-hidden rounded-2xl border border-signal/30 bg-[radial-gradient(120%_80%_at_0%_0%,var(--glow-accent-soft),transparent_55%)] bg-ink-3/30 p-5 sm:p-6"
     >
-      <div className="p-5 sm:p-6">
-        <p className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-signal">
-          {t("communityHome.title")}
-        </p>
-        <h2 className="font-display text-2xl font-bold leading-tight sm:text-3xl">
-          {t("communityHome.guide.emptyTitle")}
-        </h2>
-        <p className="mt-2 max-w-prose text-sm text-paper-muted sm:text-base">
-          {t("communityHome.guide.emptyLead")}
-        </p>
-      </div>
+      {/* Wide: reel on the left spanning both rows, pitch on the right.
+          Narrow: pitch, then reel, then the rows, in DOM order. */}
+      <div className="grid gap-6 md:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] md:gap-8">
+        <div className="md:col-start-2 md:row-start-1">
+          <p className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-signal">
+            {t("communityHome.title")}
+          </p>
+          <h2 className="font-display text-2xl font-bold leading-tight sm:text-3xl">
+            {t("communityHome.guide.emptyTitle")}
+          </h2>
+          <p className="mt-2 text-sm text-paper-muted sm:text-base">
+            {t("communityHome.guide.emptyLead")}
+          </p>
+        </div>
 
-      <div className="px-5 sm:px-6">
-        <DemoReel />
-      </div>
+        <div className="md:col-start-1 md:row-span-2 md:row-start-1 md:self-start">
+          <DemoReel />
+        </div>
 
-      <div className="p-5 sm:p-6">
-        <RowList rows={rows} large />
-        <p className="mt-5 text-xs text-paper-muted">
-          {t("communityHome.guide.notAvisos")}
-        </p>
-        {onCompose && (
-          <div className="mt-4">
-            <Button onClick={onCompose} data-home-guide-compose>
-              <PenLine className="mr-2 h-4 w-4" aria-hidden />
-              {t("communityHome.guide.cta")}
-            </Button>
-          </div>
-        )}
+        <div className="md:col-start-2 md:row-start-2">
+          <RowList rows={rows} large />
+          <p className="mt-5 text-xs text-paper-muted">
+            {t("communityHome.guide.notAvisos")}
+          </p>
+          {onCompose && (
+            <div className="mt-4">
+              <Button onClick={onCompose} data-home-guide-compose>
+                <PenLine className="mr-2 h-4 w-4" aria-hidden />
+                {t("communityHome.guide.cta")}
+              </Button>
+            </div>
+          )}
+        </div>
       </div>
     </section>
   );
