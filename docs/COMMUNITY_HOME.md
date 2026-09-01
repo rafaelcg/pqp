@@ -16,6 +16,14 @@ Staging is the proving ground. Production has the flags unset.
 | `COMMUNITY_HOME_ENABLED` | off | The surface exists. Off: every `/home/*` route 404s, the schedule sweep idles, the client hides the row. |
 | `COMMUNITY_HOME_VIP_ENABLED` | off | The VIP half. Off: `visibility: members` is refused on write, existing members-only posts leave the feed (staff still see them in Drafts), and the client shows no lock, no VIP chip, no tier picker and no "view as" inspector. Needs the first flag. |
 
+**Plus one per-server switch.** With the instance flag on, each server still
+starts with Baú off. An owner turns it on in Server settings (the Baú section,
+`PATCH /api/servers/:id/home/config`, column `servers.community_home_enabled`).
+The row, the landing and the feed need both; the routes need only the instance
+flag, so the setting itself can be flipped through the API. Until the row is
+opened once on a server it carries a small "New" chip (`localStorage`, per
+server, `client/src/lib/community-home/new-badges.ts`).
+
 Do **not** reuse `COMMUNITIES_ENABLED`. That one changes the instance's legal
 category (STF, Art. 19, see `docs/CONTENT_SAFETY.md`); this one only adds a
 feed. There is no `VITE_` flag: the client asks `GET /api/community-home/config`
@@ -55,7 +63,8 @@ See [`BAU_VIP_STRATEGY.md`](./BAU_VIP_STRATEGY.md) for what would replace it.
 
 ## What is in the pane
 
-- **Row** in the channel list above TEXT on every server while the flag is on.
+- **Row** in the channel list above TEXT on every server that opted in while
+  the flag is on.
   Landing on Baú is community-only: `isCommunity` servers open on the feed,
   private halls still open on the first text channel
   (`client/src/lib/community-home/landing.ts`).

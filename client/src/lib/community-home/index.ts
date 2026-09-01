@@ -31,6 +31,15 @@ export {
 } from "./visibility";
 export { pickServerLandingTarget } from "./landing";
 export {
+  COMMUNITY_HOME_SETTINGS_SEEN_KEY,
+  communityHomeRowSeenKey,
+  isCommunityHomeRowNew,
+  isCommunityHomeSettingsNew,
+  markCommunityHomeRowNew,
+  markCommunityHomeRowSeen,
+  markCommunityHomeSettingsSeen,
+} from "./new-badges";
+export {
   COMMUNITY_HOME_MAX_BYTES,
   formatHomeBytes,
   homeMediaKindFromFile,

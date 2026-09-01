@@ -90,6 +90,16 @@ async function seedCommunity(name: string): Promise<string> {
       `could not list ${name}: ${patched.status} ${detail.slice(0, 200)}`,
     );
   }
+  // The owner's own opt-in (Server settings); the instance flag alone shows
+  // nothing.
+  const opted = await fetch(`${API}/api/servers/${server.id}/home/config`, {
+    method: "PATCH",
+    headers: headers(OWNER),
+    body: JSON.stringify({ enabled: true }),
+  });
+  if (!opted.ok) {
+    throw new Error(`could not enable Baú on ${name}: ${opted.status}`);
+  }
   return server.id;
 }
 
@@ -247,18 +257,19 @@ test.describe("Baú", () => {
     await expect(feed.locator("[data-home-intro]")).toHaveCount(0);
   });
 
-  test("private server: Baú row shows but landing stays on text", async ({
+  test("server that never opted in: no Baú row even with the flag on", async ({
     page,
   }) => {
-    // openApp seeds a plain "E2E" server that is not a community.
+    // openApp seeds a plain "E2E" server; nobody flipped its Baú setting.
     await openApp(page);
     await page.goto("/app?lang=en&communityHome=1");
     await expect(page.getByText("Dev auth bypass")).toBeVisible({
       timeout: 20_000,
     });
-    await expect(page.locator("[data-community-home-row]")).toBeVisible({
+    await expect(page.getByRole("button", { name: "Send" })).toBeVisible({
       timeout: 20_000,
     });
+    await expect(page.locator("[data-community-home-row]")).toHaveCount(0);
     await expect(page.locator("[data-community-home-feed]")).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Send" })).toBeVisible({
       timeout: 20_000,

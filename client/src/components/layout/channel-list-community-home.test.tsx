@@ -17,6 +17,7 @@ const server: Server = {
   bannerUrl: null,
   role: "owner",
   isCommunity: false,
+  communityHomeEnabled: true,
   showOnProfile: true,
 };
 

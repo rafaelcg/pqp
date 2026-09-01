@@ -175,6 +175,8 @@ interface ChannelListProps {
    * not `COMMUNITIES_ENABLED`.
    */
   communityHomeEnabled?: boolean;
+  /** "NEW" chip until the row is opened once on this server. */
+  communityHomeShowNew?: boolean;
   communityHomeSelected?: boolean;
   onSelectCommunityHome?: () => void;
 }
@@ -209,6 +211,7 @@ export function ChannelList({
   mobileOpen = false,
   onMobileClose,
   communityHomeEnabled = false,
+  communityHomeShowNew = false,
   communityHomeSelected = false,
   onSelectCommunityHome,
 }: ChannelListProps) {
@@ -680,9 +683,16 @@ export function ChannelList({
                     )}
                     aria-hidden
                   />
-                  <span className="min-w-0">
-                    <span className="block truncate text-sm font-semibold text-paper">
-                      {t("communityHome.channelName")}
+                  <span className="min-w-0 flex-1">
+                    <span className="flex items-center gap-2">
+                      <span className="truncate text-sm font-semibold text-paper">
+                        {t("communityHome.channelName")}
+                      </span>
+                      {communityHomeShowNew && (
+                        <span className="shrink-0 rounded bg-signal/15 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-signal">
+                          {t("communityHome.badge.new")}
+                        </span>
+                      )}
                     </span>
                     <span className="block truncate text-[10px] text-paper-muted">
                       {t("communityHome.channelHint")}

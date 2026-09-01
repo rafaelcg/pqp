@@ -205,7 +205,9 @@ import {
   COMMUNITY_HOME_CONFIG_OFF,
   isCommunityHomeChannelId,
   isCommunityHomeEnabled,
+  isCommunityHomeRowNew,
   loadCommunityHomeConfig,
+  markCommunityHomeRowSeen,
   pickServerLandingTarget,
 } from "@/lib/community-home";
 import { CommunityHomeFeed } from "@/components/community-home/community-home-feed";
@@ -534,6 +536,8 @@ function MainAppContent({
     COMMUNITY_HOME_CONFIG_OFF,
   );
   const communityHomeConfigRef = useRef(COMMUNITY_HOME_CONFIG_OFF);
+  // "NEW" chip on the Baú row until it is opened once per server.
+  const [communityHomeRowNew, setCommunityHomeRowNew] = useState(false);
   const communityHomeOn = useCallback(
     () =>
       isCommunityHomeEnabled({
@@ -1616,7 +1620,7 @@ function MainAppContent({
               ? null
               : pickServerLandingTarget(
                   channelList,
-                  communityHomeOn(),
+                  communityHomeOn() && first.communityHomeEnabled === true,
                   Boolean(first.isCommunity),
                 );
             initialChannelId = land?.id ?? null;
@@ -2130,7 +2134,7 @@ function MainAppContent({
         const server = serversRef.current.find((row) => row.id === serverId);
         const land = pickServerLandingTarget(
           list,
-          communityHomeOn(),
+          communityHomeOn() && server?.communityHomeEnabled === true,
           Boolean(server?.isCommunity),
         );
         if (land) {
@@ -2573,7 +2577,7 @@ function MainAppContent({
           );
           const land = pickServerLandingTarget(
             list,
-            communityHomeOn(),
+            communityHomeOn() && targetServer?.communityHomeEnabled === true,
             Boolean(targetServer?.isCommunity),
           );
           if (land) {
@@ -2651,6 +2655,36 @@ function MainAppContent({
       // case is the card offered once more.
     });
   }, []);
+
+  // Two switches gate the Baú row + feed: the instance flag (config probe,
+  // dev override) and this server's own opt-in from Server settings. Landing
+  // stays community-only on top (pickServerLandingTarget requires isCommunity).
+  // Computed here, above every early return, because the "New" chip below is
+  // a hook.
+  const communityHomeFeatureOn = isCommunityHomeEnabled({
+    config: communityHomeConfig,
+    allowLocalOverride: isDevAuthBypassEnabled(),
+  });
+  const communityHomeEnabled =
+    communityHomeFeatureOn &&
+    servers.find((s) => s.id === selectedServerId)?.communityHomeEnabled ===
+      true;
+  const communityHomeOpen =
+    selection.kind === "server" &&
+    isCommunityHomeChannelId(selectedChannelId) &&
+    communityHomeEnabled;
+  useEffect(() => {
+    if (!communityHomeEnabled || !selectedServerId) {
+      setCommunityHomeRowNew(false);
+      return;
+    }
+    if (communityHomeOpen) {
+      markCommunityHomeRowSeen(selectedServerId);
+      setCommunityHomeRowNew(false);
+      return;
+    }
+    setCommunityHomeRowNew(isCommunityHomeRowNew(selectedServerId));
+  }, [communityHomeEnabled, communityHomeOpen, selectedServerId]);
 
   /**
    * The Baú intro card is put away. Same optimistic shape as `settleFirstRun`:
@@ -3229,17 +3263,8 @@ function MainAppContent({
       ? channels.find((c) => c.id === selectedChannelId)
       : undefined;
   const selectedServer = servers.find((s) => s.id === selectedServerId);
-  // Flag alone drives the Baú row + feed. Landing stays community-only
-  // (pickServerLandingTarget still requires isCommunity). `communityHomeConfig`
-  // is in the deps so the row appears the moment the probe answers.
-  const communityHomeEnabled = isCommunityHomeEnabled({
-    config: communityHomeConfig,
-    allowLocalOverride: isDevAuthBypassEnabled(),
-  });
-  const communityHomeOpen =
-    selection.kind === "server" &&
-    isCommunityHomeChannelId(selectedChannelId) &&
-    communityHomeEnabled;
+  // Baú gating is computed above the early returns (it owns a hook); see
+  // `communityHomeEnabled` / `communityHomeOpen` near `settleCommunityHomeIntro`.
   const meMember = serverMembers.find((member) => member.id === user?.id);
   const meVip = rankBadges(meMember?.roleIds, serverRoles).vipBadge;
   const canManageChannels = perms.can(Permission.MANAGE_CHANNELS);
@@ -4021,9 +4046,12 @@ function MainAppContent({
           onOpenServerSettings={() => setServerSettingsOpen(true)}
           footer={sidebarFooter}
           communityHomeEnabled={communityHomeEnabled}
+          communityHomeShowNew={communityHomeRowNew}
           communityHomeSelected={communityHomeOpen}
           onSelectCommunityHome={() => {
             if (selectedServerId) {
+              markCommunityHomeRowSeen(selectedServerId);
+              setCommunityHomeRowNew(false);
               void selectChannel(COMMUNITY_HOME_CHANNEL_ID, selectedServerId);
             }
           }}
@@ -4361,11 +4389,34 @@ function MainAppContent({
           setServerSettingsOpen(false);
           setServerSettingsSection(undefined);
         }}
-        onRenamed={(server) =>
+        communityHomeFeatureOn={communityHomeFeatureOn}
+        onRenamed={(server) => {
           setServers((prev) =>
-            prev.map((s) => (s.id === server.id ? { ...s, ...server } : s)),
-          )
-        }
+            prev.map((current) =>
+              current.id === server.id
+                ? {
+                    ...current,
+                    ...server,
+                    // Settings writes update the server row, not this viewer's
+                    // membership row. Keep its role and profile opt-out.
+                    role: current.role,
+                    showOnProfile: current.showOnProfile,
+                  }
+                : current,
+            ),
+          );
+          // Baú turned off while it was open: step back to a real channel.
+          if (
+            server.id === selectedServerId &&
+            !server.communityHomeEnabled &&
+            isCommunityHomeChannelId(selectedChannelId)
+          ) {
+            const fallback = pickServerLandingTarget(channels, false);
+            if (fallback) {
+              void selectChannel(fallback.id, server.id);
+            }
+          }
+        }}
         onOwnershipTransferred={() => {
           void fetchServers().then(({ servers: list }) => setServers(list));
         }}
@@ -4387,7 +4438,7 @@ function MainAppContent({
           const general = newChannels.find((c) => c.type === "text");
           const land = pickServerLandingTarget(
             newChannels,
-            communityHomeOn(),
+            communityHomeOn() && server.communityHomeEnabled === true,
             Boolean(server.isCommunity),
           );
           if (land) {

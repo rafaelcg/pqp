@@ -104,6 +104,7 @@ import {
   parseCommunityHomeTitle,
   scheduleCommunityHomePostSchema,
   updateCommunityHomePostSchema,
+  updateServerCommunityHomeConfigSchema,
 } from "@pqp/shared";
 import { z } from "zod";
 import {
@@ -306,6 +307,8 @@ import {
   removeChannelMember,
   renameServer,
   SERVER_COLUMNS,
+  getServer,
+  setCommunityHomeEnabled,
   transferOwnership,
   updateChannel,
   updateMessageRetention,
@@ -2410,6 +2413,41 @@ router.get("/api/community-home/config", async () => ({
   vipEnabled: isCommunityHomeVipEnabled(),
   mediaEnabled: isCommunityHomeEnabled() && isCommunityHomeMediaConfigured(),
 }));
+
+/**
+ * This server's own opt-in. The instance flag says Baú exists here; this
+ * says the owner turned it on for this server (Server settings). Both gate
+ * the row and the landing on the client; only the instance flag gates the
+ * routes, so an owner can flip the setting through the same API.
+ */
+router.get(
+  "/api/servers/:serverId/home/config",
+  async ({ user }, { serverId }) => {
+    requireCommunityHome();
+    await requireServerMember(serverId!, user.id);
+    const server = await getServer(serverId!);
+    if (!server) {
+      throw new NotFound("Server not found");
+    }
+    return { enabled: server.community_home_enabled ?? false };
+  },
+);
+
+router.patch(
+  "/api/servers/:serverId/home/config",
+  async ({ req, user }, { serverId }) => {
+    requireCommunityHome();
+    await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+    const body = updateServerCommunityHomeConfigSchema.parse(
+      await readJsonBody(req),
+    );
+    const server = await setCommunityHomeEnabled(serverId!, body.enabled);
+    return {
+      enabled: server.community_home_enabled ?? false,
+      server: mapServer(server),
+    };
+  },
+);
 
 router.get("/api/servers/:serverId/home/posts", async ({ user }, { serverId }) => {
   requireCommunityHome();

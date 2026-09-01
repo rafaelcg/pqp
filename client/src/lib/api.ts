@@ -13,6 +13,8 @@ import type {
   CommunityHomeComment,
   CommunityHomeCommentsResponse,
   CommunityHomeConfig,
+  ServerCommunityHomeConfig,
+  UpdateServerCommunityHomeConfig,
   CommunityHomeLikeResponse,
   CommunityHomePostResponse,
   CommunityHomePostsResponse,
@@ -1335,6 +1337,19 @@ export const previewInvite = (code: string) =>
 /** The instance flags. Off is a 200 with `enabled: false`, never a 404. */
 export const fetchCommunityHomeConfig = () =>
   apiFetch<CommunityHomeConfig>("/api/community-home/config");
+
+/** This server's own opt-in (owner-set in Server settings). */
+export const fetchServerCommunityHomeConfig = (serverId: string) =>
+  apiFetch<ServerCommunityHomeConfig>(`/api/servers/${serverId}/home/config`);
+
+export const updateServerCommunityHomeConfig = (
+  serverId: string,
+  body: UpdateServerCommunityHomeConfig,
+) =>
+  patch<ServerCommunityHomeConfig & { server: Server }>(
+    `/api/servers/${serverId}/home/config`,
+    body,
+  );
 
 export const fetchCommunityHomePosts = (serverId: string) =>
   apiFetch<CommunityHomePostsResponse>(`/api/servers/${serverId}/home/posts`);

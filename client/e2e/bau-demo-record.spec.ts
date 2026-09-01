@@ -134,6 +134,13 @@ async function seed(): Promise<string> {
       body: JSON.stringify({ isCommunity: true, category: "games", tagline: "RPG às terças." }),
     }),
   );
+  await json(
+    await fetch(`${API}/api/servers/${server.id}/home/config`, {
+      method: "PATCH",
+      headers: headers("rec-owner"),
+      body: JSON.stringify({ enabled: true }),
+    }),
+  );
   const post = async (body: object) =>
     (
       await json(
