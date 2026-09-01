@@ -194,6 +194,14 @@ test.describe("Baú", () => {
     const feed = page.locator("[data-community-home-feed]");
     await expect(feed).toBeVisible({ timeout: 20_000 });
 
+    // Locked chrome: four-slot header (drawer · title · pen · overflow), no tabs/FAB.
+    await expect(feed.locator("[data-home-staff-tabs]")).toHaveCount(0);
+    await expect(feed.locator("[data-home-viewer-tabs]")).toHaveCount(0);
+    await expect(feed.locator("[data-home-new-post-fab]")).toHaveCount(0);
+    await expect(feed.locator("[data-home-staff-pen]")).toBeVisible();
+    await expect(feed.locator("[data-home-staff-overflow]")).toBeVisible();
+    await expect(page.getByText(/channel ·/i)).toHaveCount(0);
+
     // Empty Baú: the owner gets the guide, not a blank pane.
     await expect(feed.locator('[data-home-staff-guide="empty"]')).toBeVisible();
     await feed.locator("[data-home-guide-compose]").click();
@@ -247,6 +255,8 @@ test.describe("Baú", () => {
 
     // No staff chrome for a plain member.
     await expect(feed.locator("[data-home-staff-tabs]")).toHaveCount(0);
+    await expect(feed.locator("[data-home-staff-pen]")).toHaveCount(0);
+    await expect(feed.locator("[data-home-new-post-fab]")).toHaveCount(0);
     await expect(feed.locator("[data-home-compose]")).toHaveCount(0);
 
     // Intro card, dismissed for good.
@@ -261,11 +271,11 @@ test.describe("Baú", () => {
     await expect(locked.locator("[data-home-unlock-cta]")).toBeDisabled();
     await expect(feed).not.toContainText("sessao-11-clip.webm");
 
-    // Comments: two newest in the card, the rest on demand.
+    // Comments: 0–2 teasers on the card; rest on detail tap.
     const open = feed.locator("[data-home-post]").filter({
       hasText: "Mapa do porão",
     });
-    await expect(open.locator("[data-home-comment]")).toHaveCount(2);
+    await expect(open.locator("[data-home-comment-teaser] li")).toHaveCount(2);
     await open.locator("[data-home-comments-toggle]").click();
     await expect(open.locator("[data-home-comment]")).toHaveCount(3);
 

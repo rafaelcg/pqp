@@ -309,17 +309,41 @@ async function loadCommentTeasers(
   if (postIds.length === 0) {
     return map;
   }
+  // Card teaser: up to 2. Prefer post-author replies (oldest first); else
+  // oldest overall. Newest accordion is out of the chrome lock. Blocked
+  // authors stay out of the card the same way they stay out of the full list.
   const result = await getPool().query<CommentRow & { post_id: string }>(
-    `SELECT * FROM (
+    `WITH comments AS (
        SELECT c.id, c.post_id, c.body, c.created_at, c.author_id,
               u.display_name, u.username, u.discriminator, u.avatar_url,
-              ROW_NUMBER() OVER (PARTITION BY c.post_id ORDER BY c.created_at DESC) AS rn
+              (c.author_id = p.author_id) AS is_owner_reply
          FROM community_home_comments c
+         JOIN community_home_posts p ON p.id = c.post_id
          JOIN users u ON u.id = c.author_id
         WHERE c.post_id = ANY($1::uuid[]) ${notBlockedSql("$2")}
-     ) ranked
-     WHERE rn <= 2
-     ORDER BY created_at ASC`,
+     ),
+     has_owner AS (
+       SELECT post_id, BOOL_OR(is_owner_reply) AS any_owner
+         FROM comments
+        GROUP BY post_id
+     ),
+     ranked AS (
+       SELECT c.id, c.post_id, c.body, c.created_at, c.author_id,
+              c.display_name, c.username, c.discriminator, c.avatar_url,
+              ROW_NUMBER() OVER (
+                PARTITION BY c.post_id
+                ORDER BY c.created_at ASC
+              ) AS rn
+         FROM comments c
+         JOIN has_owner h ON h.post_id = c.post_id
+        WHERE (h.any_owner AND c.is_owner_reply)
+           OR (NOT h.any_owner)
+     )
+     SELECT id, post_id, body, created_at, author_id,
+            display_name, username, discriminator, avatar_url
+       FROM ranked
+      WHERE rn <= 2
+      ORDER BY created_at ASC`,
     [postIds, viewerId],
   );
   for (const row of result.rows) {
