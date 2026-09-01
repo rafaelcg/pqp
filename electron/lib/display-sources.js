@@ -187,29 +187,26 @@ function screenPermission(platform, status) {
  * It is also skipped when the page never asked for audio, so a video-only
  * request cannot be failed by an audio track nobody wanted.
  *
- * `audioRequested` IS THE ECHO SWITCH, and it is the reason that last sentence
- * matters more than it looks. `"loopback"` is WASAPI's render endpoint: the
- * machine's entire output, this app's own included, with no per-process
- * exclusion available anywhere in Chromium 132 (Electron 34). So a Windows user
- * who shared a screen was sending the call's own audio back to the call, which
- * is the 23 Aug 2026 echo report. Chromium 141 gained a `restrictOwnAudio`
- * constraint for exactly this; the shell is nine major versions short of it and
- * would not see it here anyway, because this branch is taken before any
- * constraint reaches the capturer.
+ * `audioRequested` is still the echo switch for *whether* Windows loopback
+ * runs. This function must keep returning `"loopback"` when it is true, not a
+ * homemade device id: that string is what Electron documents, and from 43.4.0
+ * the embedder remaps it to `loopbackWithoutChrome` when the page asked
+ * `getDisplayMedia({ audio: { restrictOwnAudio: true } })`. That device is
+ * WASAPI process-loopback excluding this app's tree, which is the 23 Aug 2026
+ * report (the call playing in this window, sent back into the call). Passing
+ * `"loopbackWithoutChrome"` here is not a supported callback value.
  *
- * Which leaves one lever, and it is on the other side: the renderer decides
- * whether to ask for audio at all. `client/src/lib/screen-capture-audio.ts`
- * now sends `audio: false` from the shell unless the user explicitly opted in,
- * so `audioRequested` is false and this returns video only. That is deliberate
- * placement rather than laziness: the shell loads the live web client, so the
- * fix reaches builds that are ALREADY INSTALLED, including v0.1.3, without
- * anybody shipping a binary. Nothing is lost by it, because this picker lists
- * screens and windows and never tabs, so the shell has no tab-audio path that
- * `audio: false` could take away.
+ * The renderer still sends `audio: false` unless the user opted in
+ * (`client/src/lib/screen-capture-audio.ts`). A shell that never asked for
+ * audio cannot be failed by an audio track, and a v0.1.3 install that has
+ * not taken this binary still needs that off switch. This picker lists
+ * screens and windows, never tabs, so there is no tab-audio path for
+ * `audio: false` to take away.
  *
- * Do not "helpfully" default this to loopback. A true `audioRequested` is now a
+ * Do not "helpfully" default this to loopback. A true `audioRequested` is a
  * statement that a human ticked something, and it is the only such statement
- * this function will ever get.
+ * this function will ever get. Keep macOS and Linux video-only: loopback
+ * there still fails the whole request.
  */
 function captureResponse(source, platform, audioRequested) {
   if (!source) {

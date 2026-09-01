@@ -44,20 +44,20 @@
  *   Chromium was long assumed not to expose. Feature-detected, because it is
  *   young: a browser that does not know the name would be handed a constraint it
  *   cannot honour, and this is not a promise worth risking a whole capture on.
- *   NOT verified against a real Windows loopback capture by anyone here, which
- *   is exactly why it is a second line of defence and not the whole answer.
+ *   On Chrome this is the path that already stops the call coming back (heard
+ *   on a Windows Chrome share, 30 Aug 2026). On the desktop app it needs
+ *   Electron 43.4+, where the handler started honouring the constraint.
  *
  * - `audio: false` in the Electron shell, unless the user opted in. The shell
  *   answers `setDisplayMediaRequestHandler` itself and returns
  *   `{ video: source, audio: "loopback" }` on Windows (`electron/lib/display-
- *   sources.js`), which is whole-system loopback with no self-exclusion of any
- *   kind, and which Chromium 132 (Electron 34) has no `restrictOwnAudio` to
- *   soften. The shell only asks for loopback when the page asked for audio, so
- *   the page not asking is the off switch, and it is an off switch that works on
- *   shells that are ALREADY INSTALLED: the desktop app loads the live web
- *   client, so this lands on v0.1.3 without anybody shipping a new binary.
- *   The shell's picker lists screens and windows only, never tabs, so there is
- *   no tab-audio path in Electron for this to take away.
+ *   sources.js`). From Electron 43.4 / 44 that `"loopback"` is remapped to
+ *   `loopbackWithoutChrome` when this file asked `restrictOwnAudio: true`, so
+ *   the call playing in this window is kept out of the tap. Electron 34
+ *   (v0.1.3) ignores the constraint, which is why a new desktop binary is the
+ *   remaining fix. The page not asking for audio is still the off switch, and
+ *   the picker lists screens and windows only, never tabs, so there is no
+ *   tab-audio path for `audio: false` to take away.
  */
 
 /**
