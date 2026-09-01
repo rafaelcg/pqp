@@ -146,7 +146,7 @@ bilingual at [pqp.gg/terms](https://pqp.gg/terms) and
 
 ## Apoie o projeto / Support the project
 
-pqp.gg is built by one person and the hosting comes out of one pocket. If it is
+pqp.gg is built by two brothers and the hosting comes out of our pockets. If it is
 useful to you and you want to help with that bill, there is
 [GitHub Sponsors](https://github.com/sponsors/rafaelcg) and, for Pix,
 [pqp.gg/apoie](https://pqp.gg/apoie). A donation is a gift toward hosting costs:
