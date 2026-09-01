@@ -17,7 +17,16 @@ import {
  * `COMMUNITIES_ENABLED` (legal Art. 19). This module is the wire contract only.
  */
 
-export const COMMUNITY_HOME_MAX_BYTES = 10 * 1024 * 1024;
+/**
+ * Per-file ceiling for Baú media. 100 MiB, not the attachments' 10 MiB: a
+ * phone records 1080p at 8 to 12 Mbps, so 10 MiB is under ten seconds of
+ * clip, and "upload it to YouTube instead" is the wrong answer for the one
+ * surface whose job is to keep the clip. R2 charges nothing for egress and
+ * cents per GB-month for storage, and the bytes go browser to bucket, so the
+ * API never sees them. Signed into the presigned PUT and re-checked by HEAD
+ * on claim, same as attachments.
+ */
+export const COMMUNITY_HOME_MAX_BYTES = 100 * 1024 * 1024;
 
 export const COMMUNITY_HOME_TITLE_MAX = 200;
 export const COMMUNITY_HOME_BODY_MAX = 4000;
@@ -57,7 +66,7 @@ export type CommunityHomeAuthorBadge = z.infer<
 
 /**
  * MIME types Home will mint an upload for. Subset of attachment allowlist —
- * no audio; video capped at the Home 10 MiB product rule.
+ * no audio; video capped at `COMMUNITY_HOME_MAX_BYTES`.
  */
 export const COMMUNITY_HOME_MIME_ALLOWLIST = [
   "image/png",

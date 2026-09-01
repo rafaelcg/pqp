@@ -94,6 +94,7 @@ import {
   DiscordImportParseError,
   parseDiscordTemplateCode,
   claimCommunityHomeMediaSchema,
+  COMMUNITY_HOME_MAX_BYTES,
   createCommunityHomeCommentSchema,
   createCommunityHomeMediaUploadSchema,
   createCommunityHomePostSchema,
@@ -2675,7 +2676,7 @@ router.get("/api/servers/:serverId/home/media/config", async ({ user }, { server
   await requireServerMember(serverId!, user.id);
   return {
     enabled: isCommunityHomeMediaConfigured(),
-    maxBytes: 10 * 1024 * 1024,
+    maxBytes: COMMUNITY_HOME_MAX_BYTES,
   };
 });
 

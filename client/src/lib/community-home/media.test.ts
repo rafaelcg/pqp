@@ -27,8 +27,8 @@ describe("community home media helpers", () => {
     expect(youtubeEmbedSrc("not-a-url")).toBeNull();
   });
 
-  it("formats bytes and keeps the 10 MiB ceiling", () => {
+  it("formats bytes and keeps the 100 MiB ceiling", () => {
     expect(formatHomeBytes(420 * 1024)).toBe("420 KiB");
-    expect(COMMUNITY_HOME_MAX_BYTES).toBe(10 * 1024 * 1024);
+    expect(COMMUNITY_HOME_MAX_BYTES).toBe(100 * 1024 * 1024);
   });
 });
