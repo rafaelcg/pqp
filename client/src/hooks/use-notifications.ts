@@ -221,7 +221,13 @@ export function useChannelNotifications({
       if (resolveNotificationLevel(state, known?.serverId ?? null, channelId) === "none") {
         continue;
       }
-      total += counts.mentions;
+      // A conversation is addressed to you: every unread counts in the tab
+      // title, not only the mentions. Server channels stay mention-only so a
+      // busy hall does not pin "(99)" on the dock forever.
+      total +=
+        known?.kind === "dm" || known?.kind === "group"
+          ? Math.max(counts.count, counts.mentions)
+          : counts.mentions;
     }
     setUnreadBadge(total);
   }, [state, unread]);

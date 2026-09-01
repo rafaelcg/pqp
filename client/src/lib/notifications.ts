@@ -20,7 +20,7 @@ import { channelRoutePath, conversationRoutePath } from "@/lib/app-route";
 import { getDesktop } from "@/lib/desktop";
 import { translateMessage } from "@/lib/i18n";
 import { queuePreferenceSync } from "@/lib/preferences";
-import { playActivitySound } from "@/lib/sounds";
+import { playActivitySound, playCue } from "@/lib/sounds";
 
 export type { NotificationLevel };
 
@@ -432,6 +432,7 @@ export function describeActivity(
       : null,
     count: counts.count,
     mentions: counts.mentions,
+    kind: known?.kind ?? "server",
   };
 }
 
@@ -475,6 +476,43 @@ export interface ChannelActivity {
   count: number;
   /** How many of them named the reader. */
   mentions: number;
+  /** Server channel, 1:1 or group conversation. Absent means server. */
+  kind?: ChannelKind;
+}
+
+/**
+ * An in-app card for a conversation message that arrived while this tab was
+ * visible but looking elsewhere. Server channels never toast: their badge is
+ * the signal, and a busy hall would bury the screen. Conversations are
+ * addressed to you, which is the difference.
+ */
+export interface ActivityToast {
+  channelId: string;
+  kind: ChannelKind;
+  count: number;
+  mentions: number;
+}
+
+const toastListeners = new Set<(toast: ActivityToast) => void>();
+
+export function onActivityToast(
+  listener: (toast: ActivityToast) => void,
+): () => void {
+  toastListeners.add(listener);
+  return () => {
+    toastListeners.delete(listener);
+  };
+}
+
+/** Pure: whether this activity earns an in-app card. */
+export function wantsActivityToast(
+  activity: Pick<ChannelActivity, "kind">,
+  context: ActivityContext,
+): boolean {
+  return (
+    context.documentVisible &&
+    (activity.kind === "dm" || activity.kind === "group")
+  );
 }
 
 export interface NotificationDecision {
@@ -644,6 +682,13 @@ function flush(channelId: string): void {
   // no cue; only a mention plays.
   if (burst.mentions > 0) {
     playActivitySound(burst.mentions);
+  } else if (
+    burst.activity.kind === "dm" ||
+    burst.activity.kind === "group"
+  ) {
+    // A conversation message is addressed to you even without an @, so it
+    // gets the quiet "message" cue (its own switch in sound settings).
+    playCue("message");
   }
   if (state.desktop && notificationPermission() === "granted") {
     deliver(burst);
@@ -708,6 +753,17 @@ export function notifyChannelActivity(
     })
   ) {
     return;
+  }
+
+  if (wantsActivityToast(activity, context)) {
+    for (const listener of toastListeners) {
+      listener({
+        channelId: activity.channelId,
+        kind: activity.kind ?? "server",
+        count: activity.count,
+        mentions: activity.mentions,
+      });
+    }
   }
 
   const burst = bursts.get(activity.channelId) ?? {

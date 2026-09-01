@@ -44,6 +44,7 @@ import { WebhooksPanel } from "@/components/layout/webhooks-panel";
 import { ChannelMetaDialog } from "@/components/layout/channel-meta-dialog";
 import { DmCallStage } from "@/components/dm/dm-call-stage";
 import { IncomingCallOverlay } from "@/components/dm/incoming-call-overlay";
+import { DmToasts } from "@/components/dm/dm-toasts";
 import { WhatsNewPrompt } from "@/components/layout/whats-new-prompt";
 import { DmList } from "@/components/layout/dm-list";
 import { FriendsView } from "@/components/friends/friends-view";
@@ -3791,6 +3792,13 @@ function MainAppContent({
         />
       )}
 
+
+      {/* Also at the root: a DM finds you wherever you are in the app. */}
+      <DmToasts
+        conversations={conversations}
+        selectedChannelId={selectedChannelId}
+        onOpen={(channelId) => void selectConversation(channelId)}
+      />
 
       {/* Also at the root: a call rings you wherever you are in the app. */}
       <IncomingCallOverlay

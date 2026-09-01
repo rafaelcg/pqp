@@ -119,6 +119,7 @@ describe("describeActivity", () => {
       serverName: "pqp",
       count: 1,
       mentions: 0,
+      kind: "server",
     });
   });
 
@@ -279,5 +280,21 @@ describe("activityRoutePath", () => {
     expect(activityRoutePath(legacy, SERVER)).toBe(
       `/app/server/${SERVER}/channel/${legacy}`,
     );
+  });
+});
+
+describe("wantsActivityToast", () => {
+  it("toasts a conversation only while the tab is visible", async () => {
+    const { wantsActivityToast } = await import("./notifications");
+    const context = { selectedChannelId: null, documentVisible: true };
+    expect(wantsActivityToast({ kind: "dm" }, context)).toBe(true);
+    expect(wantsActivityToast({ kind: "group" }, context)).toBe(true);
+    // A server channel's badge is its signal; a hall would bury the screen.
+    expect(wantsActivityToast({ kind: "server" }, context)).toBe(false);
+    expect(wantsActivityToast({}, context)).toBe(false);
+    // Hidden tab: the OS banner path owns it.
+    expect(
+      wantsActivityToast({ kind: "dm" }, { ...context, documentVisible: false }),
+    ).toBe(false);
   });
 });
