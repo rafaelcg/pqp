@@ -161,7 +161,7 @@ export function DmToasts({
             aria-label={t("dmToast.aria", { name: title })}
             data-dm-toast={card.channelId}
             className={cn(
-              "pointer-events-auto flex w-full max-w-sm items-center gap-3 rounded-xl border border-ink-4/70 bg-ink-2 p-3 shadow-[var(--shadow-popover,0_12px_32px_rgba(0,0,0,0.45))]",
+              "pointer-events-auto flex w-full max-w-sm items-center gap-3 rounded-xl border border-ink-4/70 bg-ink-2 p-3 shadow-[var(--shadow-popover)]",
               card.leaving ? "animate-toast-out" : "animate-toast-in",
             )}
           >
