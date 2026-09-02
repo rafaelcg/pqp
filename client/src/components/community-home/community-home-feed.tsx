@@ -1,4 +1,4 @@
-import type { PublicUser } from "@pqp/shared";
+import type { Gif, PublicUser } from "@pqp/shared";
 import {
   Archive,
   CalendarClock,
@@ -13,10 +13,12 @@ import {
   PinOff,
   RotateCcw,
   Send,
+  Smile,
   Trash2,
   Upload,
   X,
 } from "lucide-react";
+import { ImagePlay } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -25,6 +27,9 @@ import {
   useState,
   type FormEvent,
 } from "react";
+import { EmojiPickerPanel } from "@/components/chat/emoji-picker";
+import { GifPickerPanel } from "@/components/chat/gif-picker";
+import { GifAttachment } from "@/components/chat/message-list";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { Button } from "@/components/ui/button";
 import {
@@ -65,6 +70,7 @@ import {
   type CommunityHomeVisibility,
   type UploadedHomeMedia,
 } from "@/lib/community-home";
+import { gifMessageMedia } from "@/lib/gif-media";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import {
@@ -139,6 +145,24 @@ function scheduledLabel(iso: string, timezone: string | null): string {
   } catch {
     return new Date(iso).toLocaleString();
   }
+}
+
+/**
+ * Put a picked emoji where the caret is, not at the end. Returns the new
+ * value and where the caret should land, so the caller can restore it after
+ * React re-renders the controlled field.
+ */
+function insertAtCaret(
+  field: HTMLInputElement | HTMLTextAreaElement | null,
+  value: string,
+  insert: string,
+): { next: string; caret: number } {
+  const start = field?.selectionStart ?? value.length;
+  const end = field?.selectionEnd ?? value.length;
+  return {
+    next: value.slice(0, start) + insert + value.slice(end),
+    caret: start + insert.length,
+  };
 }
 
 function errorMessage(error: unknown, fallback: string): string {
@@ -346,9 +370,15 @@ function CommentRow({
             </button>
           )}
         </div>
-        <p className="whitespace-pre-wrap break-words text-paper-muted">
-          {comment.body}
-        </p>
+        {/* A comment that is nothing but a GIF link is media, not prose —
+            the same rule chat uses, and the same renderer. */}
+        {gifMessageMedia(comment.body) ? (
+          <GifAttachment media={gifMessageMedia(comment.body)!} />
+        ) : (
+          <p className="whitespace-pre-wrap break-words text-paper-muted">
+            {comment.body}
+          </p>
+        )}
       </div>
     </li>
   );
@@ -378,6 +408,17 @@ function CommentsBlock({
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [emojiOpen, setEmojiOpen] = useState(false);
+  const [gifOpen, setGifOpen] = useState(false);
+  /**
+   * Which way the GIF panel opens. A comment box can sit anywhere in a
+   * scrolling feed, unlike the chat composer which is always at the bottom,
+   * so "always upward" put the panel off the top of the pane on the first
+   * post. Measured when it opens: below if there is room, above otherwise.
+   */
+  const [gifBelow, setGifBelow] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const pickerAnchorRef = useRef<HTMLDivElement>(null);
 
   const shown = expanded && all ? all : post.commentTeaser;
   const hiddenCount = Math.max(0, post.commentCount - post.commentTeaser.length);
@@ -406,9 +447,7 @@ function CommentsBlock({
     }
   }
 
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    const body = draft.trim();
+  async function send(body: string) {
     if (!body || sending) {
       return;
     }
@@ -429,6 +468,24 @@ function CommentsBlock({
     } finally {
       setSending(false);
     }
+  }
+
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    void send(draft.trim());
+  }
+
+  function addEmoji(emoji: string) {
+    const { next, caret } = insertAtCaret(inputRef.current, draft, emoji);
+    setDraft(next);
+    setEmojiOpen(false);
+    // After React writes the controlled value, put the caret back where the
+    // emoji went rather than at the end of the line.
+    window.setTimeout(() => {
+      const field = inputRef.current;
+      field?.focus();
+      field?.setSelectionRange(caret, caret);
+    }, 0);
   }
 
   async function remove(comment: CommunityHomeComment) {
@@ -480,8 +537,9 @@ function CommentsBlock({
           {t("communityHome.comments.off")}
         </p>
       ) : (
-        <form className="mt-2 flex gap-2" onSubmit={(event) => void submit(event)}>
+        <form className="mt-2 flex items-center gap-2" onSubmit={submit}>
           <input
+            ref={inputRef}
             className="min-w-0 flex-1 rounded-lg border border-ink-4 bg-ink px-3 py-1.5 text-sm placeholder:text-paper-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
             value={draft}
             maxLength={COMMUNITY_HOME_COMMENT_MAX}
@@ -489,6 +547,68 @@ function CommentsBlock({
             placeholder={t("communityHome.comments.placeholder")}
             data-home-comment-input
           />
+          {/* Anchored to this box: both panels place themselves against their
+              parent, so they open above the comment row rather than at the
+              bottom of the feed. */}
+          <div
+            ref={pickerAnchorRef}
+            className="relative flex shrink-0 items-center gap-0.5"
+          >
+            <button
+              type="button"
+              aria-label={t("composer.addEmoji")}
+              title={t("composer.addEmoji")}
+              className="rounded-md p-1.5 text-paper-muted hover:bg-ink-4 hover:text-paper"
+              onClick={() => {
+                setGifOpen(false);
+                setEmojiOpen((open) => !open);
+              }}
+              data-home-comment-emoji
+            >
+              <Smile className="h-4 w-4" aria-hidden />
+            </button>
+            <button
+              type="button"
+              aria-label={t("composer.addGif")}
+              title={t("composer.addGif")}
+              className="rounded-md p-1.5 text-paper-muted hover:bg-ink-4 hover:text-paper"
+              onClick={() => {
+                setEmojiOpen(false);
+                const rect = pickerAnchorRef.current?.getBoundingClientRect();
+                // 22rem panel plus a margin; below only when it fits there.
+                setGifBelow(
+                  rect ? window.innerHeight - rect.bottom > 380 : false,
+                );
+                setGifOpen((open) => !open);
+              }}
+              data-home-comment-gif
+            >
+              <ImagePlay className="h-4 w-4" aria-hidden />
+            </button>
+            {emojiOpen && (
+              <EmojiPickerPanel
+                onSelect={addEmoji}
+                onClose={() => setEmojiOpen(false)}
+              />
+            )}
+            {gifOpen && (
+              <GifPickerPanel
+                className={cn(
+                  "absolute right-0",
+                  gifBelow
+                    ? "top-[calc(100%+0.5rem)]"
+                    : "bottom-[calc(100%+0.5rem)]",
+                )}
+                onSelect={(gif: Gif) => {
+                  setGifOpen(false);
+                  // The URL is the whole comment, which is what makes it
+                  // render as the GIF rather than as a link.
+                  void send(gif.url);
+                }}
+                onClose={() => setGifOpen(false)}
+              />
+            )}
+          </div>
           <Button
             type="submit"
             size="sm"
@@ -767,11 +887,16 @@ export function PostCard({
         </>
       ) : (
         <>
-          {post.body && (
-            <p className="mb-3 whitespace-pre-wrap break-words text-sm leading-relaxed">
-              {post.body}
-            </p>
-          )}
+          {post.body &&
+            (gifMessageMedia(post.body) ? (
+              <div className="mb-3">
+                <GifAttachment media={gifMessageMedia(post.body)!} />
+              </div>
+            ) : (
+              <p className="mb-3 whitespace-pre-wrap break-words text-sm leading-relaxed">
+                {post.body}
+              </p>
+            ))}
           {post.media && <UnlockedMedia media={post.media} />}
         </>
       )}
@@ -949,6 +1074,8 @@ function ComposeCard({
   const [scheduling, setScheduling] = useState(false);
   const [scheduleAt, setScheduleAt] = useState(defaultScheduleValue);
   const [uploading, setUploading] = useState<number | null>(null);
+  const [emojiOpen, setEmojiOpen] = useState(false);
+  const bodyRef = useRef<HTMLTextAreaElement>(null);
   const [busy, setBusy] = useState<ComposeAction | null>(null);
   const [error, setError] = useState<string | null>(null);
   const uploadAbort = useRef<AbortController | null>(null);
@@ -1155,7 +1282,8 @@ function ComposeCard({
           data-home-compose-title
         />
         <textarea
-          className="mb-2 w-full resize-y rounded-lg border border-ink-4 bg-ink px-3 py-2 text-sm placeholder:text-paper-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
+          ref={bodyRef}
+          className="w-full resize-y rounded-lg border border-ink-4 bg-ink px-3 py-2 text-sm placeholder:text-paper-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
           rows={4}
           value={state.body}
           maxLength={COMMUNITY_HOME_BODY_MAX}
@@ -1165,6 +1293,37 @@ function ComposeCard({
           placeholder={t("communityHome.compose.placeholder")}
           data-home-compose-body
         />
+        <div className="relative mb-2 mt-1 flex items-center">
+          <button
+            type="button"
+            aria-label={t("composer.addEmoji")}
+            title={t("composer.addEmoji")}
+            className="rounded-md p-1.5 text-paper-muted hover:bg-ink-4 hover:text-paper"
+            onClick={() => setEmojiOpen((open) => !open)}
+            data-home-compose-emoji
+          >
+            <Smile className="h-4 w-4" aria-hidden />
+          </button>
+          {emojiOpen && (
+            <EmojiPickerPanel
+              onSelect={(emoji) => {
+                const { next, caret } = insertAtCaret(
+                  bodyRef.current,
+                  state.body,
+                  emoji,
+                );
+                setState((prev) => ({ ...prev, body: next }));
+                setEmojiOpen(false);
+                window.setTimeout(() => {
+                  const field = bodyRef.current;
+                  field?.focus();
+                  field?.setSelectionRange(caret, caret);
+                }, 0);
+              }}
+              onClose={() => setEmojiOpen(false)}
+            />
+          )}
+        </div>
 
         {/* Media: one of file (when storage is on) or YouTube. */}
         <div className="mb-2 grid gap-2 sm:grid-cols-2">

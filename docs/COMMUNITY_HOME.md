@@ -100,6 +100,15 @@ See [`BAU_VIP_STRATEGY.md`](./BAU_VIP_STRATEGY.md) for what would replace it.
   before, and only a published post can be pinned. A pinned post leads the
   feed whatever its date, carries a "Pinned" chip, and is the intended home
   for the welcome video an owner wants every new member to meet.
+- **Emoji and GIFs**: the comment box carries the same two pickers the chat
+  composer does (`EmojiPickerPanel`, `GifPickerPanel`, Klipy), and the post
+  composer carries the emoji one. A picked GIF is posted as a comment whose
+  body is only the GIF URL, and a body that is nothing but an allowlisted GIF
+  URL renders as the GIF instead of the text, in posts and comments alike:
+  the same rule and the same `GifAttachment` renderer chat uses, so an
+  arbitrary host stays plain text. The GIF panel opens below the box when
+  there is room and above when there is not, because a comment box can sit
+  anywhere in a scrolling feed.
 - **Cards**: no "free" chip ever; a VIP chip only on a members-only post
   while the VIP flag is on. Heart with a count. The two newest comments under
   the card, "See all N" fetches the rest. Delete is a two-step button, not a

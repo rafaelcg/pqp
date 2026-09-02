@@ -2322,7 +2322,7 @@ const GIF_MAX_HEIGHT_PX = 280;
  * party that would otherwise be told which pqp deployment — and on a
  * self-hosted install, which private hostname — its users are reading.
  */
-function GifAttachment({ media }: { media: GifMedia }) {
+export function GifAttachment({ media }: { media: GifMedia }) {
   const prefersReducedMotion = usePrefersReducedMotion();
   const [isPlaying, setIsPlaying] = useState(false);
   const style = { maxHeight: `${GIF_MAX_HEIGHT_PX}px` };
