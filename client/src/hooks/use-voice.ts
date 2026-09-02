@@ -19,6 +19,7 @@ import {
 import {
   desktopContext,
   desktopPredatesScreenShare,
+  getDesktop,
   isDesktopApp,
 } from "@/lib/desktop";
 import {
@@ -210,6 +211,20 @@ export interface VoiceState {
    * opted in, because nothing else asks for system audio any more.
    */
   isSharingSystemAudio: boolean;
+  /**
+   * True when the last attempt asked for sound and died AFTER the picker
+   * closed, which is the one share failure a person cannot act on by reading:
+   * they chose a screen, got nothing, and the culprit is a toggle they armed
+   * minutes ago on a different bar.
+   *
+   * The UI turns this into a button that shares the same screen without sound.
+   * It has to be a button and not a silent second attempt: `getDisplayMedia`
+   * consumes the click that authorised it, so a retry fired from inside this
+   * failure has no user activation left and would be refused on the spot. A
+   * click has one, and it also explains itself, which a picker reopening on
+   * its own does not.
+   */
+  screenShareAudioFailed: boolean;
   // --- conversation calls ---
   /**
    * Conversations currently ringing this device, oldest first. Lives on the
@@ -527,7 +542,14 @@ function screenShareErrorMessage(err: unknown): string {
     // share only does on Windows, never on macOS. Ticking "share audio" on a
     // source that has no audio to share is the common way to land here, so the
     // copy names the fix rather than the error.
-    return translateMessage("voice.error.shareAudioUnavailable");
+    // Context, because the browser advice is nonsense in the shell: its picker
+    // lists screens and windows and has never had a tab to offer. Telling a
+    // desktop user to pick a Chrome tab is telling them to find something that
+    // is not there.
+    return translateMessage(
+      "voice.error.shareAudioUnavailable",
+      desktopContext(),
+    );
   }
   return err.message;
 }
@@ -631,6 +653,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     localScreenStream: null,
     isSharingScreenAudio: false,
     isSharingSystemAudio: false,
+    screenShareAudioFailed: false,
     incomingCalls: [],
     isCameraOn: false,
     localCameraStream: null,
@@ -1793,6 +1816,7 @@ export function createVoiceController(transport: RealtimeTransport) {
         localScreenStream: null,
         isSharingScreenAudio: false,
     isSharingSystemAudio: false,
+    screenShareAudioFailed: false,
         // Invitations from OTHER conversations are not our call state and
         // survive hanging up, the way a second phone line keeps ringing.
         incomingCalls: state.incomingCalls,
@@ -1908,14 +1932,24 @@ export function createVoiceController(transport: RealtimeTransport) {
         return;
       }
 
+      // A share that succeeds supersedes the last one that failed, and the
+      // offer to retry without sound has to go with it.
+      const retryingAfterAudioFailure = state.screenShareAudioFailed;
+      state.screenShareAudioFailed = false;
+
+      const options = screenCaptureOptions(
+        shareSystemAudio,
+        screenCaptureEnvironment(isDesktopApp(), getDesktop()?.platform ?? null),
+      );
+      // What was actually asked for, not what was ticked. In a browser this is
+      // true even unticked, because a tab share carries the tab's own sound and
+      // that is a request which can fail on its own; in the shell it is only
+      // ever true where the platform can answer it.
+      const askedForAudio = options.audio !== false;
+
       let stream: MediaStream;
       try {
-        stream = await navigator.mediaDevices.getDisplayMedia(
-          screenCaptureOptions(
-            shareSystemAudio,
-            screenCaptureEnvironment(isDesktopApp()),
-          ),
-        );
+        stream = await navigator.mediaDevices.getDisplayMedia(options);
       } catch (err) {
         // A browser that refuses the *shape* of the request rather than the
         // request itself would otherwise cost the user their screen share
@@ -1930,6 +1964,15 @@ export function createVoiceController(transport: RealtimeTransport) {
           (err.name === "TypeError" || err.name === "NotSupportedError");
         if (!shapeRefused) {
           state.error = screenShareErrorMessage(err);
+          // Everything audio can do to a capture, it does to the whole capture:
+          // the video was fine and the person still got nothing. Offer the same
+          // share without sound rather than leaving them to work out that the
+          // toggle on the other bar is what took their screen away. Cancelling
+          // the picker lands here too and is not a failure to recover from.
+          state.screenShareAudioFailed =
+            askedForAudio &&
+            err instanceof Error &&
+            err.name !== "NotAllowedError";
           emit();
           return;
         }
@@ -1969,6 +2012,12 @@ export function createVoiceController(transport: RealtimeTransport) {
       const hasAudio = stream.getAudioTracks().length > 0;
       watchScreenCapture(stream);
       screenCaptureStream = stream;
+      // The red strip is ours and it is now answering a question that has been
+      // resolved. Only the share failure is cleared: an unrelated error is not
+      // this attempt's to dismiss.
+      if (retryingAfterAudioFailure) {
+        state.error = null;
+      }
       state.isSharingScreen = true;
       state.localScreenStream = stream;
       state.isSharingScreenAudio = hasAudio;

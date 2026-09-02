@@ -448,6 +448,55 @@ describe("screen share audio", () => {
     expect(voice.getState().error).not.toBeNull();
   });
 
+  it("offers a silent retry when sound is what killed the capture", async () => {
+    // The 3 Sep 2026 report, in full: "o picker fecha e a stream não começa".
+    // Sound is the only part of a capture that can fail on its own and take the
+    // picture down with it, and the person has no way to know that: the toggle
+    // that did it lives on another bar and was armed minutes earlier. The flag
+    // is what puts a one-click way out into the error banner.
+    displayMedia = async () => {
+      const err = new Error("Could not start audio source");
+      err.name = "NotReadableError";
+      throw err;
+    };
+    const { voice } = await connectedMesh();
+    await voice.startScreenShare(true);
+
+    expect(voice.getState().screenShareAudioFailed).toBe(true);
+  });
+
+  it("does not offer a silent retry when the person cancelled the picker", async () => {
+    // Backing out is not a failure, and a red banner offering to fix it would
+    // be the app arguing with a decision that was made on purpose.
+    displayMedia = async () => {
+      const err = new Error("Permission denied");
+      err.name = "NotAllowedError";
+      throw err;
+    };
+    const { voice } = await connectedMesh();
+    await voice.startScreenShare(true);
+
+    expect(voice.getState().screenShareAudioFailed).toBe(false);
+  });
+
+  it("clears the failed banner once a silent share succeeds", async () => {
+    displayMedia = async () => {
+      const err = new Error("Could not start audio source");
+      err.name = "NotReadableError";
+      throw err;
+    };
+    const { voice } = await connectedMesh();
+    await voice.startScreenShare(true);
+    expect(voice.getState().error).not.toBeNull();
+
+    displayMedia = async () => fakeCapture("screen", false);
+    await voice.startScreenShare(false);
+
+    expect(voice.getState().isSharingScreen).toBe(true);
+    expect(voice.getState().error).toBeNull();
+    expect(voice.getState().screenShareAudioFailed).toBe(false);
+  });
+
   it("explains a failed audio capture instead of quoting the browser", async () => {
     // A real report from the QG, 24 Aug 2026: "Could not start audio source",
     // in English, with no clue attached, and the share dropped even though the

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { en, setActiveCatalogue } from "@/lib/i18n";
 import {
+  canShareScreenAudio,
   detectFullscreenMode,
   screenShareUnavailableMessage,
   screenShareUnavailableReason,
@@ -185,5 +186,41 @@ describe("audio output routing capability", () => {
         outputDeviceCount: 3,
       }),
     ).toBe(false);
+  });
+});
+
+describe("canShareScreenAudio", () => {
+  it("is false in a desktop shell that cannot capture sound", () => {
+    // macOS and Linux shells answer every request with video alone, so the
+    // toggle arms nothing. It used to be worse than nothing: the system picker
+    // skips our handler, the request reached Chromium intact, and an audio
+    // request macOS cannot honour rejected the whole capture (3 Sep 2026).
+    expect(
+      canShareScreenAudio({
+        isDesktopShell: true,
+        shellPlatform: "darwin",
+        supportsRestrictOwnAudio: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("is true in the Windows shell, where loopback is real", () => {
+    expect(
+      canShareScreenAudio({
+        isDesktopShell: true,
+        shellPlatform: "win32",
+        supportsRestrictOwnAudio: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("is true in any browser, because there it governs tab audio", () => {
+    expect(
+      canShareScreenAudio({
+        isDesktopShell: false,
+        shellPlatform: null,
+        supportsRestrictOwnAudio: false,
+      }),
+    ).toBe(true);
   });
 });

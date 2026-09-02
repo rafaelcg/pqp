@@ -19,6 +19,7 @@ export function VoiceChannelStage({
   onToggleCamera,
   onVideoQualityChange,
   onStartScreenShare,
+  onShareWithoutSound,
   onStopScreenShare,
   shareSystemAudio = false,
   onShareSystemAudioChange,
@@ -45,6 +46,7 @@ export function VoiceChannelStage({
   onToggleCamera: () => void;
   onVideoQualityChange: (quality: VideoQuality) => void;
   onStartScreenShare?: () => void;
+  onShareWithoutSound?: () => void;
   onStopScreenShare?: () => void;
   shareSystemAudio?: boolean;
   onShareSystemAudioChange?: (next: boolean) => void;
@@ -75,6 +77,7 @@ export function VoiceChannelStage({
       onToggleCamera={onToggleCamera}
       onVideoQualityChange={onVideoQualityChange}
       onStartScreenShare={onStartScreenShare}
+      onShareWithoutSound={onShareWithoutSound}
       onStopScreenShare={onStopScreenShare}
       shareSystemAudio={shareSystemAudio}
       onShareSystemAudioChange={onShareSystemAudioChange}

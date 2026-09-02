@@ -3568,6 +3568,12 @@ function MainAppContent({
             onStartScreenShare={() =>
               void voice.startScreenShare(shareSystemAudio)
             }
+            onShareWithoutSound={() => {
+              // Disarm the opt-in too: it is what failed, and the next share
+              // this person starts on their own should not repeat it.
+              setShareSystemAudio(false);
+              void voice.startScreenShare(false);
+            }}
             onStopScreenShare={() => void voice.stopScreenShare()}
             shareSystemAudio={shareSystemAudio}
             onShareSystemAudioChange={setShareSystemAudio}
@@ -3607,6 +3613,10 @@ function MainAppContent({
           onToggleCamera={() => void voice.toggleCamera()}
           onVideoQualityChange={handleVideoQualityChange}
           onStartScreenShare={() => void voice.startScreenShare(shareSystemAudio)}
+          onShareWithoutSound={() => {
+            setShareSystemAudio(false);
+            void voice.startScreenShare(false);
+          }}
           onStopScreenShare={() => void voice.stopScreenShare()}
           shareSystemAudio={shareSystemAudio}
           onShareSystemAudioChange={setShareSystemAudio}

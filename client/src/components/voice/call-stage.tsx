@@ -29,6 +29,7 @@ import { SCREEN_SHARE_LIMIT, MESH_VOICE_WARNING } from "@pqp/shared";
 import type { VoiceInputMode, VoiceState } from "@/hooks/use-voice";
 import type { VideoQuality } from "@/lib/video-quality";
 import {
+  canShareScreenAudio,
   detectFullscreenMode,
   screenShareUnavailableMessage,
   supportsScreenShare,
@@ -383,6 +384,12 @@ export interface CallStageProps {
   onToggleCamera: () => void;
   onVideoQualityChange: (quality: VideoQuality) => void;
   onStartScreenShare?: () => void;
+  /**
+   * Start the same share with no sound at all. Offered only after sound is
+   * what killed the last attempt, and separate from `onStartScreenShare`
+   * because it must also disarm the toggle: the tick is what failed.
+   */
+  onShareWithoutSound?: () => void;
   onStopScreenShare?: () => void;
   shareSystemAudio?: boolean;
   onShareSystemAudioChange?: (next: boolean) => void;
@@ -421,6 +428,7 @@ export function CallStage({
   onToggleCamera,
   onVideoQualityChange,
   onStartScreenShare,
+  onShareWithoutSound,
   onStopScreenShare,
   shareSystemAudio = false,
   onShareSystemAudioChange,
@@ -472,6 +480,7 @@ export function CallStage({
       onToggleCamera={onToggleCamera}
       onVideoQualityChange={onVideoQualityChange}
       onStartScreenShare={onStartScreenShare}
+      onShareWithoutSound={onShareWithoutSound}
       shareSystemAudio={shareSystemAudio}
       onShareSystemAudioChange={onShareSystemAudioChange}
       onStopScreenShare={onStopScreenShare}
@@ -506,6 +515,7 @@ function ActiveCall({
   onToggleCamera,
   onVideoQualityChange,
   onStartScreenShare,
+  onShareWithoutSound,
   onStopScreenShare,
   shareSystemAudio = false,
   onShareSystemAudioChange,
@@ -536,6 +546,12 @@ function ActiveCall({
   onToggleCamera: () => void;
   onVideoQualityChange: (quality: VideoQuality) => void;
   onStartScreenShare?: () => void;
+  /**
+   * Start the same share with no sound at all. Offered only after sound is
+   * what killed the last attempt, and separate from `onStartScreenShare`
+   * because it must also disarm the toggle: the tick is what failed.
+   */
+  onShareWithoutSound?: () => void;
   shareSystemAudio?: boolean;
   onShareSystemAudioChange?: (next: boolean) => void;
   onStopScreenShare?: () => void;
@@ -1212,6 +1228,20 @@ function ActiveCall({
               {t("connection.check")}
             </button>
           )}
+          {/* Sound is the only part of a capture that can fail on its own and
+              take the picture with it. One click puts the share back, minus
+              the thing that broke it, and it has to be a click: the picker
+              already spent this attempt's user activation. */}
+          {voiceState.screenShareAudioFailed && onShareWithoutSound && (
+            <button
+              type="button"
+              data-voice-error-share-silent
+              className="rounded-md bg-danger/20 px-2 py-0.5 font-semibold text-danger hover:bg-danger/30"
+              onClick={onShareWithoutSound}
+            >
+              {t("voice.control.shareWithoutSound")}
+            </button>
+          )}
           {voiceState.errorKind === "mic" && (
             <button
               type="button"
@@ -1556,6 +1586,9 @@ function CallControls({
       {canShare &&
         onStartScreenShare &&
         onShareSystemAudioChange &&
+        /* Hidden where the platform cannot deliver it. A dead toggle is not a
+           neutral thing here: arming it used to cost people the whole share. */
+        canShareScreenAudio() &&
         !voiceState.isSharingScreen && (
           /* The second line is the same one the channel bar gives this
              button, because it is the same button and the same consequence.
