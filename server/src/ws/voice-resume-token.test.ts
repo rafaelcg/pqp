@@ -3,6 +3,7 @@ import {
   mintVoiceResumeToken,
   verifyVoiceResumeToken,
   VOICE_RESUME_TTL_MS,
+  VOICE_RESUME_TOKEN_TTL_MS,
 } from "./voice-resume-token.js";
 
 const USER = "00000000-0000-4000-8000-0000000000aa";
@@ -59,7 +60,7 @@ describe("voice resume token", () => {
     ).toBeNull();
   });
 
-  it("rejects an expired token", () => {
+  it("is still valid well after the in-process orphan window", () => {
     process.env.CLERK_SECRET_KEY = "sk_test_resume";
     const now = 1_000_000;
     const token = mintVoiceResumeToken({
@@ -74,6 +75,25 @@ describe("voice resume token", () => {
         token!,
         { userId: USER, peerId: PEER, voiceChannelId: CHANNEL },
         now + VOICE_RESUME_TTL_MS + 1,
+      ),
+    ).not.toBeNull();
+  });
+
+  it("rejects an expired token", () => {
+    process.env.CLERK_SECRET_KEY = "sk_test_resume";
+    const now = 1_000_000;
+    const token = mintVoiceResumeToken({
+      userId: USER,
+      peerId: PEER,
+      voiceChannelId: CHANNEL,
+      transport: "mesh",
+      now,
+    });
+    expect(
+      verifyVoiceResumeToken(
+        token!,
+        { userId: USER, peerId: PEER, voiceChannelId: CHANNEL },
+        now + VOICE_RESUME_TOKEN_TTL_MS + 1,
       ),
     ).toBeNull();
   });

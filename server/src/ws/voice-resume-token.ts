@@ -7,12 +7,21 @@ import type { VoiceRoomTransport } from "@pqp/shared";
  * `peerId` is on every roster. After a process restart the in-memory map is
  * empty, so "claim this unused uuid" would let whoever saw the roster take
  * the slot and force the real owner into a cold join (which drops their
- * audio). The token is the proof. It is derived from `CLERK_SECRET_KEY`,
- * which production already has, so a merge does not need a new Fly secret.
- * Invalid or missing tokens are a cold join, never a 500.
+ * audio). The token is the proof. The signing key is derived from
+ * `CLERK_SECRET_KEY`, which production already has, so a merge does not need
+ * a new Fly secret. Invalid or missing tokens are a cold join, never a 500.
+ *
+ * Two clocks, on purpose:
+ * - `VOICE_RESUME_TTL_MS` is how long *this process* keeps a disconnected
+ *   peer before broadcasting `peer-left`. A radio blip has to come back
+ *   inside that window.
+ * - `VOICE_RESUME_TOKEN_TTL_MS` is how long the HMAC itself is valid. A Fly
+ *   restart empties the map, so reconstruct depends on the token, not the
+ *   orphan timer. It has to outlive a real call, not the 90s blip window.
  */
 
 export const VOICE_RESUME_TTL_MS = 90_000;
+export const VOICE_RESUME_TOKEN_TTL_MS = 8 * 60 * 60 * 1000;
 
 interface ResumeClaims {
   v: 1;
@@ -31,13 +40,17 @@ export interface VerifiedResume {
 }
 
 function resumeSecret(): string | null {
-  if (process.env.CLERK_SECRET_KEY) {
-    return process.env.CLERK_SECRET_KEY;
+  const raw = process.env.CLERK_SECRET_KEY
+    ? process.env.CLERK_SECRET_KEY
+    : process.env.DEV_AUTH_BYPASS === "true"
+      ? "pqp-dev-voice-resume"
+      : null;
+  if (!raw) {
+    return null;
   }
-  if (process.env.DEV_AUTH_BYPASS === "true") {
-    return "pqp-dev-voice-resume";
-  }
-  return null;
+  // Purpose-bound key so this MAC cannot collide with anything else that
+  // later signs with the Clerk secret.
+  return createHmac("sha256", raw).update("pqp-voice-resume").digest("base64url");
 }
 
 function sign(payload: string, secret: string): string {
@@ -71,7 +84,7 @@ export function mintVoiceResumeToken(input: {
     p: input.peerId,
     c: input.voiceChannelId,
     t: input.transport,
-    e: now + VOICE_RESUME_TTL_MS,
+    e: now + VOICE_RESUME_TOKEN_TTL_MS,
   };
   const payload = Buffer.from(JSON.stringify(claims), "utf8").toString(
     "base64url",

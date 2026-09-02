@@ -1,6 +1,7 @@
 import type { VoiceSignalingMessage } from "@pqp/shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RealtimeTransport } from "@/lib/realtime";
+import type { RemotePeer } from "@/lib/peer-connection-manager";
 
 /**
  * The client obeys the room's transport, or leaves and says so.
@@ -17,6 +18,7 @@ const managers: ManagerStub[] = [];
 
 interface ManagerStub {
   peerIds: string[];
+  removedPeerIds: string[];
   disposed: boolean;
   /** Every capture handed to the mesh, in order. `null` means "stop sharing". */
   screenStreams: (MediaStream | null)[];
@@ -28,6 +30,7 @@ interface ManagerStub {
    * wiring is the whole of how a receiver learns a share ended.
    */
   sharingScreen: [string, boolean][];
+  emitState: ((peers: RemotePeer[]) => void) | null;
 }
 
 const playCueMock = vi.hoisted(() => vi.fn());
@@ -44,9 +47,11 @@ vi.mock("@/lib/peer-connection-manager", () => ({
   createPeerConnectionManager: vi.fn(() => {
     const stub: ManagerStub = {
       peerIds: [],
+      removedPeerIds: [],
       disposed: false,
       screenStreams: [],
       sharingScreen: [],
+      emitState: null,
     };
     managers.push(stub);
     return {
@@ -62,13 +67,18 @@ vi.mock("@/lib/peer-connection-manager", () => ({
       setPeerSharingScreen: (peerId: string, sharing: boolean) => {
         stub.sharingScreen.push([peerId, sharing]);
       },
-      onPeerStateChange: () => {},
+      onPeerStateChange: (handler: (peers: RemotePeer[]) => void) => {
+        stub.emitState = handler;
+      },
       connectToPeer: (peerId: string) => {
         if (!stub.peerIds.includes(peerId)) {
           stub.peerIds.push(peerId);
         }
       },
-      removePeer: () => {},
+      removePeer: (peerId: string) => {
+        stub.removedPeerIds.push(peerId);
+        stub.peerIds = stub.peerIds.filter((id) => id !== peerId);
+      },
       handleOffer: async () => {},
       handleAnswer: async () => {},
       handleIceCandidate: async () => {},
@@ -1204,6 +1214,40 @@ describe("voice session resume", () => {
     await settle();
     expect(first.disposed).toBe(true);
     expect(voice.getState().usingSfu).toBe(true);
+  });
+
+  it("drops a failed ghost PC after resume when the roster no longer lists them", async () => {
+    const { voice } = await connected();
+    const mesh = managers[0]!;
+    expect(mesh.peerIds).toEqual([OTHER]);
+
+    voice.notifyDisconnected();
+    voice.handleSignaling(resumedWelcome());
+    await settle();
+    expect(mesh.disposed).toBe(false);
+    expect(mesh.peerIds).toEqual([OTHER]);
+
+    mesh.emitState?.([
+      {
+        peerId: OTHER,
+        connectionState: "failed",
+        stream: null,
+        screenStream: null,
+        cameraStream: null,
+        screenAudioStream: null,
+      },
+    ]);
+    // Still in the allowlist until an authoritative roster arrives: they may
+    // be reconstructing inside the orphan window.
+    expect(mesh.removedPeerIds).toEqual([]);
+
+    voice.handleSignaling({
+      type: "voice-roster",
+      voiceChannelId: CHANNEL,
+      participants: [],
+    });
+    expect(mesh.removedPeerIds).toEqual([OTHER]);
+    expect(mesh.peerIds).toEqual([]);
   });
 
   it("hangs up held media when auth is gone for good", async () => {

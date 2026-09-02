@@ -39,9 +39,11 @@ like a server change to anyone reading it.
 
 A Fly deploy is a rolling restart of a single machine, so every WebSocket goes
 with it. Open chats reconnect on their own. **Web and Electron** keep the media
-session and reattach the same peer id within about 90 seconds, so audio should
-continue. **iOS and Android** still cold-join (new peer id, call drops) until a
-follow-up. Tabs that have not refreshed since this shipped also cold-join.
+session and reattach the same peer id. In the same process that is a 90-second
+orphan window. After a Fly restart the map is empty, so reconstruct uses the
+HMAC token (valid for hours, so a long call still resumes). **iOS and Android**
+still cold-join (new peer id, call drops) until a follow-up. Tabs that have not
+refreshed since this shipped also cold-join.
 
 The PR that added resume still drops everyone once on merge: old clients do not
 send the token. After that refresh, later API deploys should not cut web/Electron

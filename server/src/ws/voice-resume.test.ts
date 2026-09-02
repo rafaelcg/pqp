@@ -154,6 +154,28 @@ describe("voice session resume", () => {
     expect(typesOf(observer)).not.toContain("peer-left");
   });
 
+  it("reattaches a live peer when the new socket arrives before the old one closes", async () => {
+    const channel = randomUUID();
+    const userId = randomUUID();
+    const a = await join(recorder(), userId, channel);
+    const observer = await join(recorder(), randomUUID(), channel);
+    const peerId = frame(a, "welcome")?.peerId as string;
+    const token = frame(a, "welcome")?.resumeToken as string;
+
+    observer.frames.length = 0;
+    const resumed = await join(recorder(), userId, channel, {
+      resumePeerId: peerId,
+      resumeToken: token,
+    });
+    expect(frame(resumed, "welcome")?.peerId).toBe(peerId);
+    expect(frame(resumed, "welcome")?.resumed).toBe(true);
+    expect(typesOf(observer)).not.toContain("peer-left");
+
+    observer.frames.length = 0;
+    removeVoicePeerBySocket(a.socket);
+    expect(typesOf(observer)).not.toContain("peer-left");
+  });
+
   it("broadcasts peer-left once the orphan TTL expires", async () => {
     const channel = randomUUID();
     const userId = randomUUID();

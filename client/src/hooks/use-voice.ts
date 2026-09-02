@@ -1208,6 +1208,35 @@ export function createVoiceController(transport: RealtimeTransport) {
     }
   }
 
+  /**
+   * After a reconstruct, peers who never resume (iOS, Android, an old tab)
+   * leave an RTCPeerConnection that goes `failed` and stays on the stage.
+   * The new process cannot send `peer-left` for ids it never knew. Drop a
+   * PC only when it has already failed *and* the authoritative roster no
+   * longer lists it. Healthy or connecting PCs stay: that peer may still
+   * be reconstructing inside the 90s window.
+   */
+  function pruneFailedGhostPeers(): void {
+    if (holdingMedia || !manager) {
+      return;
+    }
+    const ghosts = state.remotePeers.filter(
+      (peer) =>
+        peer.connectionState === "failed" && !knownPeerIds.has(peer.peerId),
+    );
+    for (const peer of ghosts) {
+      knownPeerIds.delete(peer.peerId);
+      identities.delete(peer.peerId);
+      const entry = remoteAnalysers.get(peer.peerId);
+      if (entry) {
+        entry.dispose();
+        remoteAnalysers.delete(peer.peerId);
+      }
+      manager.removePeer(peer.peerId);
+      playCue("voiceLeave");
+    }
+  }
+
   function startMeshSession(peerId: string, peers: VoiceParticipant[]) {
     manager = createPeerConnectionManager(peerId, sendRelay, iceServers);
     // Before any track is published, so a camera carried across a reconnect
@@ -1236,6 +1265,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     manager.onPeerStateChange((remote) => {
       state.remotePeers = remote;
       syncRemoteAnalysers(remote);
+      pruneFailedGhostPeers();
       emit();
     });
     for (const peer of peers) {
@@ -1357,6 +1387,7 @@ export function createVoiceController(transport: RealtimeTransport) {
             applyCameraStreamIds(message.participants);
             applyScreenAudioStreamIds(message.participants);
             applySharingScreen(message.participants);
+            pruneFailedGhostPeers();
           }
         }
         emit();

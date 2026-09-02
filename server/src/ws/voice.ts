@@ -690,9 +690,10 @@ function planVoiceResume(
     ) {
       return { kind: "cold" };
     }
-    if (!existing.orphanedAt && existing.socket !== socket) {
-      return { kind: "cold" };
-    }
+    // The token already proves this user owns the peer. A Wi-Fi blip can
+    // reconnect before the heartbeat notices the old socket died, so the
+    // peer is still marked live. Adopt the new socket rather than cold-
+    // joining into a second seat.
     return { kind: "reattach", peer: existing };
   }
 
@@ -769,6 +770,13 @@ async function reattachVoicePeer(
   const previous = socketToPeerId.get(socket);
   if (previous && previous !== peer.id) {
     removePeer(previous);
+  }
+  const previousSocket = peer.socket;
+  if (previousSocket !== socket) {
+    // Drop the old mapping *before* overwriting `peer.socket`. Otherwise the
+    // old socket's later `close` looks up this peer id and orphans the seat
+    // we just resumed onto.
+    socketToPeerId.delete(previousSocket);
   }
   cancelOrphan(peer);
   peer.socket = socket;
