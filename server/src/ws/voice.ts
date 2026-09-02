@@ -47,6 +47,7 @@ import {
   mintVoiceResumeToken,
   verifyVoiceResumeToken,
   VOICE_RESUME_TTL_MS,
+  VOICE_RESUME_TOKEN_TTL_MS,
 } from "./voice-resume-token.js";
 
 /** Re-exported so tests can fake the orphan window without importing the token module. */
@@ -118,7 +119,7 @@ interface VoicePeer {
  */
 const peers = new Map<string, VoicePeer>();
 const socketToPeerId = new Map<WebSocket, string>();
-/** Peer ids removed in this process (leave / kick / TTL). Blocks reconstruct. */
+/** Peer ids removed in this process (leave / kick / TTL). Blocks reconstruct for the token's life so a hangup cannot resurrect the id. */
 const retiredPeerIds = new Map<string, ReturnType<typeof setTimeout>>();
 
 /**
@@ -216,7 +217,7 @@ function retirePeerId(peerId: string): void {
     peerId,
     setTimeout(() => {
       retiredPeerIds.delete(peerId);
-    }, VOICE_RESUME_TTL_MS),
+    }, VOICE_RESUME_TOKEN_TTL_MS),
   );
 }
 
@@ -933,36 +934,42 @@ export async function handleVoiceMessage(
           ? resume.peerId
           : undefined;
 
-    // Cold join after a blip: drop this user's orphan in the same channel so
-    // an old client that cannot resume does not occupy two slots until TTL.
-    // Must run before the mesh ceiling. Orphans still count as occupying, and
-    // eight leftover seats of the same account (dev bypass, e2e, a client that
-    // never sent the token) would otherwise refuse the next cold join as full.
-    if (resume.kind === "cold") {
+    // Occupying count for the mesh ceiling. A resume reattaches an existing
+    // slot: that peer must not count against itself.
+    const occupyingOf = () =>
+      getRoomPeers(payload.voiceChannelId).filter((p) => {
+        if (p.socket === socket) {
+          return false;
+        }
+        if (resumePeerId && p.id === resumePeerId) {
+          return false;
+        }
+        return true;
+      });
+
+    // Cold join after a blip: drop this user's orphans only when they are
+    // what makes the mesh full. A phone that cannot resume must not evict a
+    // holding web/Electron seat when the room still has space. Two seats for
+    // 90s is cosmetic; a rebuilt call is not. When the ghosts *are* the cap
+    // (e2e leftover Dev Users, a client that never sent the token) sweep so
+    // the next join is not refused as full.
+    let occupying = occupyingOf();
+    const meshIsFull = () =>
+      transport === "mesh" && occupying.length >= MESH_VOICE_LIMIT;
+    if (resume.kind === "cold" && meshIsFull()) {
       for (const ghost of getRoomPeers(payload.voiceChannelId)) {
         if (ghost.userId === user.id && ghost.orphanedAt !== undefined) {
           removePeer(ghost.id);
         }
       }
+      occupying = occupyingOf();
     }
 
     // Enforce the mesh ceiling server-side. Above it, each client would carry
     // one Opus uplink per peer and quality collapses — reject instead. The
     // ceiling is a property of the mesh, so it does not apply once media is
-    // routed through an SFU. A resume reattaches an existing slot: that peer
-    // must not count against itself (its socket is a dead object after orphan).
-    const occupying = getRoomPeers(payload.voiceChannelId).filter((p) => {
-      if (p.socket === socket) {
-        return false;
-      }
-      if (resumePeerId && p.id === resumePeerId) {
-        return false;
-      }
-      return true;
-    });
-    const roomIsFull =
-      transport === "mesh" && occupying.length >= MESH_VOICE_LIMIT;
-    if (roomIsFull) {
+    // routed through an SFU.
+    if (meshIsFull()) {
       logEvent("voice.roomFull", {
         userId: user.id,
         voiceChannelId: payload.voiceChannelId,
@@ -1036,6 +1043,24 @@ export async function handleVoiceMessage(
       if (peer.socket === socket) {
         removePeer(peer.id);
         return;
+      }
+    }
+    // Hangup while `/ws` was down: this socket never owned the peer. The
+    // resume pair proves this user still owns that orphan; drop it now so
+    // the roster does not keep a 90s ghost.
+    const claimed = payload.resumePeerId;
+    if (claimed && payload.resumeToken) {
+      const peer = peers.get(claimed);
+      if (
+        peer &&
+        peer.userId === user.id &&
+        verifyVoiceResumeToken(payload.resumeToken, {
+          userId: user.id,
+          peerId: claimed,
+          voiceChannelId: peer.voiceChannelId,
+        })
+      ) {
+        removePeer(claimed);
       }
     }
     return;

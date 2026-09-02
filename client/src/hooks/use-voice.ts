@@ -553,6 +553,15 @@ export function createVoiceController(transport: RealtimeTransport) {
     });
   }
 
+  function sendLeave() {
+    transport.sendVoice({
+      type: "leave-voice-room",
+      ...(state.peerId && resumeToken
+        ? { resumePeerId: state.peerId, resumeToken }
+        : {}),
+    });
+  }
+
   function clearResumeGrace() {
     if (resumeGraceId) {
       clearTimeout(resumeGraceId);
@@ -610,7 +619,7 @@ export function createVoiceController(transport: RealtimeTransport) {
         void teardownSfu();
         manager?.dispose();
         manager = null;
-        transport.sendVoice({ type: "leave-voice-room" });
+        sendLeave();
         state.error =
           "Voice connection timed out. Is the server running and WebSocket connected?";
         state.status = "idle";
@@ -635,6 +644,7 @@ export function createVoiceController(transport: RealtimeTransport) {
   function refuseTransport(failure: VoiceTransportFailure) {
     clearJoinTimeout();
     clearResumeGrace();
+    sendLeave();
     holdingMedia = false;
     resumeToken = null;
     joinGeneration++;
@@ -643,7 +653,6 @@ export function createVoiceController(transport: RealtimeTransport) {
     knownPeerIds.clear();
     stopSpeakingLoop();
     disposeRemoteAnalysers();
-    transport.sendVoice({ type: "leave-voice-room" });
     manager?.dispose();
     manager = null;
     void teardownSfu();
@@ -1268,6 +1277,13 @@ export function createVoiceController(transport: RealtimeTransport) {
       pruneFailedGhostPeers();
       emit();
     });
+    attachMeshPeers(peers);
+  }
+
+  function attachMeshPeers(peers: VoiceParticipant[]) {
+    if (!manager) {
+      return;
+    }
     for (const peer of peers) {
       manager.connectToPeer(peer.peerId, toIdentity(peer));
       manager.setPeerCameraStreamId(peer.peerId, peer.cameraStreamId ?? null);
@@ -1288,6 +1304,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     }
     clearJoinTimeout();
     clearResumeGrace();
+    sendLeave();
     holdingMedia = false;
     resumeToken = null;
     joinGeneration++;
@@ -1297,7 +1314,6 @@ export function createVoiceController(transport: RealtimeTransport) {
     stopSpeakingLoop();
     const closingAnalysers = [...remoteAnalysers.values()];
     remoteAnalysers.clear();
-    transport.sendVoice({ type: "leave-voice-room" });
     manager?.dispose();
     manager = null;
     void teardownSfu();
@@ -1402,23 +1418,20 @@ export function createVoiceController(transport: RealtimeTransport) {
         });
         emit();
         break;
-      case "voice-room-full":
-        clearJoinTimeout();
-        stopMicPipeline(pipeline);
-        pipeline = null;
-        intendedChannelId = null;
+      case "voice-room-full": {
+        const limit = message.limit;
+        leaveCall();
         state.error = translateMessage("voice.error.channelFull", {
-          limit: message.limit,
+          limit,
         });
-        state.status = "idle";
-        state.voiceChannelId = null;
         emit();
         break;
+      }
       case "welcome": {
         // Drop a welcome that arrives after we already gave up (join timeout)
         // or left — otherwise it would flip us back to "connected" with no mic.
         if (state.status === "idle") {
-          transport.sendVoice({ type: "leave-voice-room" });
+          sendLeave();
           return;
         }
         if (message.resumeToken) {
@@ -1436,8 +1449,14 @@ export function createVoiceController(transport: RealtimeTransport) {
           Boolean(message.resumed) &&
           peerId === state.peerId &&
           !transportChanged;
+        const sfuStillUp = Boolean(state.usingSfu && sfu?.isConnected());
+        const meshStillUp = Boolean(manager && !state.usingSfu);
+        const keepSession =
+          isResume &&
+          (holdingMedia || state.status === "connected") &&
+          (sfuStillUp || meshStillUp);
 
-        if (isResume && (holdingMedia || state.status === "connected")) {
+        if (keepSession) {
           holdingMedia = false;
           clearResumeGrace();
           state.peerId = peerId;
@@ -1447,8 +1466,15 @@ export function createVoiceController(transport: RealtimeTransport) {
           state.status = "connected";
           for (const peer of welcomePeers) {
             knownPeerIds.add(peer.peerId);
+            identities.set(peer.peerId, toIdentity(peer));
+          }
+          if (meshStillUp) {
+            attachMeshPeers(welcomePeers);
           }
           applyScreenShareRoster([message.self, ...welcomePeers]);
+          applyCameraStreamIds([message.self, ...welcomePeers]);
+          applyScreenAudioStreamIds([message.self, ...welcomePeers]);
+          applySharingScreen([message.self, ...welcomePeers]);
           redeclareLocalMedia();
           emit();
           break;
@@ -1665,7 +1691,7 @@ export function createVoiceController(transport: RealtimeTransport) {
   if (typeof globalThis.window?.addEventListener === "function") {
     globalThis.window.addEventListener("pagehide", () => {
       if (intendedChannelId && state.status !== "idle") {
-        transport.sendVoice({ type: "leave-voice-room" });
+        sendLeave();
       }
     });
   }
@@ -1828,9 +1854,29 @@ export function createVoiceController(transport: RealtimeTransport) {
       clearResumeGrace();
       resumeGraceId = setTimeout(() => {
         resumeGraceId = null;
-        if (holdingMedia) {
-          leaveCall();
+        if (!holdingMedia) {
+          return;
         }
+        // Outage lasted longer than the orphan window. Drop the held session
+        // but keep the channel so reconnect cold-joins instead of hanging up.
+        holdingMedia = false;
+        resumeToken = null;
+        knownPeerIds.clear();
+        stopSpeakingLoop();
+        const closingAnalysers = [...remoteAnalysers.values()];
+        remoteAnalysers.clear();
+        manager?.dispose();
+        manager = null;
+        void teardownSfu();
+        for (const entry of closingAnalysers) {
+          entry.dispose();
+        }
+        state.peerId = null;
+        state.self = null;
+        state.remotePeers = [];
+        state.usingSfu = false;
+        state.status = "joining";
+        emit();
       }, VOICE_RESUME_GRACE_MS);
       emit();
     },

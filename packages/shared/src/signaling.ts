@@ -381,6 +381,13 @@ export const joinVoiceRoomMessageSchema = z.object({
 
 export const leaveVoiceRoomMessageSchema = z.object({
   type: z.literal("leave-voice-room"),
+  /**
+   * Same pair as `join-voice-room`. Optional: a live socket already maps to
+   * the peer. When the socket is new (hangup while `/ws` was down) the server
+   * verifies these and removes that orphan instead of waiting out the TTL.
+   */
+  resumePeerId: z.string().uuid().optional(),
+  resumeToken: z.string().min(1).optional(),
 });
 
 export const setSharingScreenMessageSchema = z.object({

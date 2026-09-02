@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   joinVoiceRoomMessageSchema,
+  leaveVoiceRoomMessageSchema,
   setSharingScreenMessageSchema,
   voiceParticipantSchema,
   welcomeMessageSchema,
@@ -87,6 +88,14 @@ describe("voice resume fields are optional additions", () => {
       },
     });
     expect(parsed.resumed).toBeUndefined();
+    expect(parsed.resumeToken).toBeUndefined();
+  });
+
+  it("accepts a leave from a client that has never heard of resume", () => {
+    const parsed = leaveVoiceRoomMessageSchema.parse({
+      type: "leave-voice-room",
+    });
+    expect(parsed.resumePeerId).toBeUndefined();
     expect(parsed.resumeToken).toBeUndefined();
   });
 });

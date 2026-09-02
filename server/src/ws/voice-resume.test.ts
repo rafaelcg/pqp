@@ -326,6 +326,72 @@ describe("voice session resume", () => {
     expect(frame(observer, "peer-left")?.peerId).toBe(peerId);
   });
 
+  it("does not reconstruct a retired id in the same process after the orphan TTL", async () => {
+    const channel = randomUUID();
+    const userId = randomUUID();
+    const a = await join(recorder(), userId, channel);
+    const peerId = frame(a, "welcome")?.peerId as string;
+    const token = frame(a, "welcome")?.resumeToken as string;
+
+    vi.useFakeTimers();
+    removeVoicePeerBySocket(a.socket);
+    await vi.advanceTimersByTimeAsync(VOICE_RESUME_TTL_MS + 1);
+
+    const again = await join(recorder(), userId, channel, {
+      resumePeerId: peerId,
+      resumeToken: token,
+    });
+    expect(frame(again, "welcome")?.peerId).not.toBe(peerId);
+    expect(frame(again, "welcome")?.resumed).toBeUndefined();
+  });
+
+  it("does not evict a same-user orphan on cold join when the mesh has space", async () => {
+    const channel = randomUUID();
+    const userId = randomUUID();
+    const holding = await join(recorder(), userId, channel);
+    const observer = await join(recorder(), randomUUID(), channel);
+    const peerId = frame(holding, "welcome")?.peerId as string;
+    const token = frame(holding, "welcome")?.resumeToken as string;
+
+    observer.frames.length = 0;
+    removeVoicePeerBySocket(holding.socket);
+
+    const phone = await join(recorder(), userId, channel);
+    expect(frame(phone, "welcome")?.peerId).not.toBe(peerId);
+    expect(typesOf(observer)).not.toContain("peer-left");
+
+    const resumed = await join(recorder(), userId, channel, {
+      resumePeerId: peerId,
+      resumeToken: token,
+    });
+    expect(frame(resumed, "welcome")?.peerId).toBe(peerId);
+    expect(frame(resumed, "welcome")?.resumed).toBe(true);
+  });
+
+  it("removes an orphan when leave carries the resume pair on a new socket", async () => {
+    const channel = randomUUID();
+    const userId = randomUUID();
+    const a = await join(recorder(), userId, channel);
+    const observer = await join(recorder(), randomUUID(), channel);
+    const peerId = frame(a, "welcome")?.peerId as string;
+    const token = frame(a, "welcome")?.resumeToken as string;
+
+    observer.frames.length = 0;
+    removeVoicePeerBySocket(a.socket);
+    expect(typesOf(observer)).not.toContain("peer-left");
+
+    const later = recorder();
+    await handleVoiceMessage(
+      { socket: later.socket, user: asUser(userId) },
+      {
+        type: "leave-voice-room",
+        resumePeerId: peerId,
+        resumeToken: token,
+      },
+    );
+    expect(frame(observer, "peer-left")?.peerId).toBe(peerId);
+  });
+
   it("removes a kicked peer immediately and refuses reconstruct of that id", async () => {
     const channel = randomUUID();
     const userId = randomUUID();

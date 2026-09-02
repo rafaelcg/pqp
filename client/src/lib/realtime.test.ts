@@ -208,7 +208,9 @@ describe("createRealtimeTransport", () => {
   it("reports reconnected=true only on subsequent connects", async () => {
     const seen: boolean[] = [];
     const transport = createRealtimeTransport();
-    transport.onReady((reconnected) => seen.push(reconnected));
+    transport.onReady((reconnected) => {
+      seen.push(reconnected);
+    });
     transport.connect(async () => "t");
     await flush();
     sockets[0]!.accept();
@@ -374,5 +376,80 @@ describe("createRealtimeTransport", () => {
     await flush();
 
     expect(lost).toBe(1);
+  });
+
+  it("does not hang up when a later token fetch fails offline", async () => {
+    let issued = 0;
+    let lost = 0;
+    vi.stubGlobal("navigator", { onLine: false });
+    const transport = createRealtimeTransport();
+    transport.onAuthUnavailable(() => {
+      lost += 1;
+    });
+    transport.connect(async () => (issued++ === 0 ? "t" : null));
+    await flush();
+    sockets[0]!.accept();
+
+    sockets[0]!.close(1006);
+    await vi.advanceTimersByTimeAsync(2_000);
+    await flush();
+
+    expect(lost).toBe(0);
+  });
+
+  it("does not hang up when a later token fetch throws", async () => {
+    let issued = 0;
+    let lost = 0;
+    const transport = createRealtimeTransport();
+    transport.onAuthUnavailable(() => {
+      lost += 1;
+    });
+    transport.connect(async () => {
+      if (issued++ === 0) {
+        return "t";
+      }
+      throw new Error("offline");
+    });
+    await flush();
+    sockets[0]!.accept();
+
+    sockets[0]!.close(1006);
+    await vi.advanceTimersByTimeAsync(2_000);
+    await flush();
+
+    expect(lost).toBe(0);
+  });
+
+  it("sends the ready-handler join before voice frames queued during the outage", async () => {
+    const channel = "00000000-0000-4000-8000-0000000000aa";
+    const transport = createRealtimeTransport();
+    transport.onReady(async (reconnected) => {
+      if (reconnected) {
+        transport.sendVoice({
+          type: "join-voice-room",
+          voiceChannelId: channel,
+        });
+      }
+    });
+    transport.connect(async () => "t");
+    await flush();
+    sockets[0]!.accept();
+
+    sockets[0]!.close(1006);
+    transport.sendVoice({
+      type: "ice-candidate",
+      from: "a",
+      to: "b",
+      candidate: null,
+    });
+    await vi.advanceTimersByTimeAsync(2_000);
+    await flush();
+    sockets[1]!.accept();
+    await flush();
+
+    const types = sockets[1]!.sent
+      .map((raw) => JSON.parse(raw).type)
+      .filter((type) => type !== "auth");
+    expect(types).toEqual(["join-voice-room", "ice-candidate"]);
   });
 });

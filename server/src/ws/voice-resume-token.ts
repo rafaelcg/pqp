@@ -113,14 +113,16 @@ export function verifyVoiceResumeToken(
   if (!equal(mac, sign(payload, secret))) {
     return null;
   }
-  let claims: ResumeClaims;
+  let parsed: unknown;
   try {
-    claims = JSON.parse(
-      Buffer.from(payload, "base64url").toString("utf8"),
-    ) as ResumeClaims;
+    parsed = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
   } catch {
     return null;
   }
+  if (!parsed || typeof parsed !== "object") {
+    return null;
+  }
+  const claims = parsed as ResumeClaims;
   if (claims.v !== 1 || claims.e < now) {
     return null;
   }

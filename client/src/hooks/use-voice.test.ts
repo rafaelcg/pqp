@@ -1069,7 +1069,7 @@ describe("voice session resume", () => {
 
   function resumedWelcome(
     extra?: Partial<{ transport: "mesh" | "livekit"; peerId: string }>,
-  ): VoiceSignalingMessage {
+  ): Extract<VoiceSignalingMessage, { type: "welcome" }> {
     const peerId = extra?.peerId ?? PEER;
     return {
       ...welcome(extra?.transport ?? "mesh"),
@@ -1265,6 +1265,96 @@ describe("voice session resume", () => {
     (globalThis as unknown as { window: { dispatchEvent: (e: { type: string }) => void } }).window.dispatchEvent(
       { type: "pagehide" },
     );
-    expect(sent.map((m) => m.type)).toContain("leave-voice-room");
+    expect(sent).toContainEqual({
+      type: "leave-voice-room",
+      resumePeerId: PEER,
+      resumeToken: TOKEN,
+    });
+  });
+
+  it("connects mesh peers that arrived during the outage", async () => {
+    const arrived = "00000000-0000-4000-8000-0000000000ee";
+    const { voice } = await connected();
+    expect(managers[0]?.peerIds).toEqual([OTHER]);
+
+    voice.notifyDisconnected();
+    voice.handleSignaling({
+      ...resumedWelcome(),
+      peers: [
+        {
+          peerId: OTHER,
+          userId: "00000000-0000-4000-8000-0000000000dd",
+          displayName: "Other",
+          avatarUrl: null,
+          sharingScreen: false,
+          muted: false,
+          deafened: false,
+        },
+        {
+          peerId: arrived,
+          userId: "00000000-0000-4000-8000-0000000000ee",
+          displayName: "Arrived",
+          avatarUrl: null,
+          sharingScreen: false,
+          muted: false,
+          deafened: false,
+        },
+      ],
+    });
+    await settle();
+
+    expect(managers).toHaveLength(1);
+    expect(managers[0]?.disposed).toBe(false);
+    expect(managers[0]?.peerIds).toEqual([OTHER, arrived]);
+  });
+
+  it("tears down held media when the room is full", async () => {
+    const { voice, sent } = await connected();
+    voice.notifyDisconnected();
+    sent.length = 0;
+    voice.handleSignaling({
+      type: "voice-room-full",
+      voiceChannelId: CHANNEL,
+      limit: 8,
+    });
+    expect(managers[0]?.disposed).toBe(true);
+    expect(voice.getState().status).toBe("idle");
+    expect(sent[0]).toMatchObject({
+      type: "leave-voice-room",
+      resumePeerId: PEER,
+      resumeToken: TOKEN,
+    });
+  });
+
+  it("cold-rejoins after the grace window instead of hanging up", async () => {
+    const { voice, sent } = await connected();
+    vi.useFakeTimers();
+    try {
+      voice.notifyDisconnected();
+      expect(voice.getState().status).toBe("connected");
+      await vi.advanceTimersByTimeAsync(90_000);
+      expect(voice.getState().status).toBe("joining");
+      expect(voice.getState().voiceChannelId).toBe(CHANNEL);
+      expect(managers[0]?.disposed).toBe(true);
+      sent.length = 0;
+      await voice.notifyReconnected();
+      expect(sent[0]).toMatchObject({
+        type: "join-voice-room",
+        voiceChannelId: CHANNEL,
+      });
+      expect(sent[0]).not.toHaveProperty("resumePeerId");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("hangs up on voice-join-refused", async () => {
+    const { voice } = await connected();
+    voice.handleSignaling({
+      type: "voice-join-refused",
+      voiceChannelId: CHANNEL,
+    });
+    expect(voice.getState().status).toBe("idle");
+    expect(managers[0]?.disposed).toBe(true);
   });
 });

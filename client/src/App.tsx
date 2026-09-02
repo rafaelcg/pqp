@@ -1926,7 +1926,7 @@ function MainAppContent({
           // way; the panel's window is refreshed by its next open.
           threadChat.resubscribe();
           // Join with resumePeerId before any other voice frames.
-          void voice.notifyReconnected();
+          const rejoin = voice.notifyReconnected();
           if (channelId) {
             void fetchMessages(channelId)
               .then((page) => {
@@ -1939,6 +1939,7 @@ function MainAppContent({
                 // Next reconnect will retry.
               });
           }
+          return rejoin;
         });
 
         transport.connect(() => resolveTokenRef.current());

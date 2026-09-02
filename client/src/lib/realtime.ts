@@ -64,7 +64,7 @@ export interface RealtimeTransport {
    * the first connect of a session, so callers can re-subscribe and re-sync
    * state that went stale while the socket was down.
    */
-  onReady(handler: (reconnected: boolean) => void): void;
+  onReady(handler: (reconnected: boolean) => void | Promise<void>): void;
   onError(handler: (message: string) => void): void;
   /** Fired once when an established connection is lost (before reconnect attempts). */
   onClose(handler: () => void): void;
@@ -82,7 +82,7 @@ export interface RealtimeTransport {
 export function createRealtimeTransport(): RealtimeTransport {
   let socket: WebSocket | null = null;
   let handler: MessageHandler | null = null;
-  let readyHandler: ((reconnected: boolean) => void) | null = null;
+  let readyHandler: ((reconnected: boolean) => void | Promise<void>) | null = null;
   let errorHandler: ((message: string) => void) | null = null;
   let closeHandler: (() => void) | null = null;
   let authUnavailableHandler: (() => void) | null = null;
@@ -257,9 +257,11 @@ export function createRealtimeTransport(): RealtimeTransport {
     setPendingStatus();
 
     let token: string | null = null;
+    let tokenFetchFailed = false;
     try {
       token = await tokenProvider();
     } catch {
+      tokenFetchFailed = true;
       token = null;
     }
     if (manualClose || socket) {
@@ -267,7 +269,13 @@ export function createRealtimeTransport(): RealtimeTransport {
     }
     if (!token) {
       setStatus("unauthorized");
-      if (hasConnectedOnce) {
+      // Clerk returns null (or throws) when the refresh cannot run offline.
+      // That is a blip, not sign-out. Hang up only when we are online and the
+      // provider resolved to null — the session is actually gone.
+      const offline =
+        tokenFetchFailed ||
+        (typeof navigator !== "undefined" && navigator.onLine === false);
+      if (hasConnectedOnce && !offline) {
         authUnavailableHandler?.();
       }
       scheduleReconnect();
@@ -317,8 +325,20 @@ export function createRealtimeTransport(): RealtimeTransport {
           hasConnectedOnce = true;
           setStatus("online");
           startKeepalive(ws);
-          flushQueues();
-          readyHandler?.(reconnected);
+          // Join (and any other ready work) must go out before queued offers
+          // / ICE from the outage. Those frames are dropped if they arrive
+          // before this socket owns a peer. A sync handler still flushes in
+          // this turn; a promise delays the flush until join is sent.
+          const afterReady = readyHandler?.(reconnected);
+          if (afterReady && typeof afterReady.then === "function") {
+            void afterReady.finally(() => {
+              if (ws === socket && isReady) {
+                flushQueues();
+              }
+            });
+          } else {
+            flushQueues();
+          }
           return;
         }
 
@@ -440,7 +460,7 @@ export function createRealtimeTransport(): RealtimeTransport {
       handler = nextHandler;
     },
 
-    onReady(nextHandler: (reconnected: boolean) => void) {
+    onReady(nextHandler: (reconnected: boolean) => void | Promise<void>) {
       readyHandler = nextHandler;
     },
 
