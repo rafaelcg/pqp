@@ -30,6 +30,7 @@ import { translateMessage, type MessageKey } from "@/lib/i18n";
 import {
   buildAudioConstraints,
   defaultMicProcessing,
+  listAudioDevices,
   sameMicProcessing,
   type MicProcessing,
 } from "@/lib/audio-devices";
@@ -139,6 +140,18 @@ export interface VoiceState {
    */
   isTransmitting: boolean;
   error: string | null;
+  /**
+   * Set when `error` is about the microphone: the stage then offers a way
+   * into voice settings next to the message, since picking another device
+   * is the fix for every one of those.
+   */
+  errorKind: "mic" | null;
+  /**
+   * Good news worth a line: the saved microphone could not start and the
+   * call went ahead on another one. Says which, so nobody wonders why the
+   * headset is silent. Cleared on leave.
+   */
+  notice: string | null;
   voiceChannelId: string | null;
   self: VoiceParticipant | null;
   speakingPeerIds: string[];
@@ -278,32 +291,133 @@ function isMissingDeviceError(err: unknown): boolean {
   );
 }
 
+/**
+ * The device is there but will not start.
+ *
+ * `NotReadableError` ("Could not start audio source") is what Chromium and
+ * Firefox throw when the microphone exists and permission is granted but the
+ * OS will not hand it over: another app holds it exclusively, a driver
+ * hiccup, a Bluetooth headset that is paired but asleep, a USB interface
+ * that answered enumeration and then died. `AbortError` is the same story
+ * from Safari. A person in the QG hit this on 1 Sep 2026 and found the fix
+ * themselves: pick a different microphone. So do that for them.
+ */
+function isUnreadableDeviceError(err: unknown): boolean {
+  return (
+    err instanceof Error &&
+    (err.name === "NotReadableError" ||
+      err.name === "AbortError" ||
+      err.name === "TrackStartError")
+  );
+}
+
+/** Every microphone on the machine failed to start. Carries the first error. */
+export class MicUnreadableError extends Error {
+  constructor(readonly original: unknown) {
+    super("No microphone could be started");
+    this.name = "MicUnreadableError";
+  }
+}
+
+/** How many other microphones to try after the chosen one and the default. */
+const MIC_FALLBACK_ATTEMPTS = 3;
+
+async function openMic(
+  deviceId: string | undefined,
+  processing: MicProcessing,
+): Promise<MediaStream> {
+  return navigator.mediaDevices.getUserMedia({
+    audio: buildAudioConstraints(deviceId, processing),
+    video: false,
+  });
+}
+
+/** The label of the microphone behind a live stream, for the notice. */
+function micLabel(stream: MediaStream): string | null {
+  const track = stream.getAudioTracks()[0];
+  const label = track?.label?.trim();
+  return label ? label : null;
+}
+
+/**
+ * Open the microphone, and when the one asked for will not start, walk the
+ * others before giving up.
+ *
+ * The ladder, in order:
+ *  1. the chosen device (or the default when none is chosen);
+ *  2. a chosen device that no longer exists: the default, and forget the id
+ *     (`isMissingDeviceError`, the unplugged-headset case);
+ *  3. a device that exists but will not start: the default, then every other
+ *     microphone the browser lists, a few at most, and forget the id;
+ *  4. nothing started: `MicUnreadableError`, which the stage turns into
+ *     "pick another microphone" with a button into voice settings.
+ *
+ * Permission refusals are never retried: a second prompt right after a
+ * refusal is the one thing that makes people block a site for good.
+ *
+ * `onFallback` fires with the label of whatever did start when it is not the
+ * one asked for, so the call can say "using the built-in microphone".
+ */
 async function createMicPipeline(
   deviceId: string | undefined,
   inputVolume: number,
   processing: MicProcessing,
   onDeviceGone?: () => void,
+  onFallback?: (label: string | null) => void,
 ): Promise<MicPipeline> {
   let rawStream: MediaStream;
   try {
-    rawStream = await navigator.mediaDevices.getUserMedia({
-      audio: buildAudioConstraints(deviceId, processing),
-      video: false,
-    });
+    rawStream = await openMic(deviceId, processing);
   } catch (err) {
-    // Only retry when a specific device was asked for. With no `deviceId` there
-    // is nothing to fall back to, and a NotFoundError genuinely means the
-    // machine has no microphone at all, which is a real error worth showing.
-    if (!deviceId || !isMissingDeviceError(err)) {
+    if (err instanceof Error && err.name === "NotAllowedError") {
       throw err;
     }
-    rawStream = await navigator.mediaDevices.getUserMedia({
-      audio: buildAudioConstraints(undefined, processing),
-      video: false,
-    });
+    const missing = isMissingDeviceError(err);
+    const unreadable = isUnreadableDeviceError(err);
+    // With no device chosen, NotFoundError means the machine has no
+    // microphone at all: a real error worth showing, nothing to fall back to.
+    if (!(deviceId && missing) && !unreadable) {
+      throw err;
+    }
+
+    const tried = new Set<string>(deviceId ? [deviceId] : []);
+    const candidates: (string | undefined)[] = [];
+    if (deviceId) {
+      candidates.push(undefined);
+    }
+    if (unreadable) {
+      try {
+        const { inputs } = await listAudioDevices();
+        for (const input of inputs) {
+          if (input.deviceId && !tried.has(input.deviceId)) {
+            candidates.push(input.deviceId);
+            tried.add(input.deviceId);
+          }
+        }
+      } catch {
+        // No enumeration: the default alone is the whole ladder.
+      }
+    }
+
+    let opened: MediaStream | null = null;
+    for (const candidate of candidates.slice(0, MIC_FALLBACK_ATTEMPTS + 1)) {
+      try {
+        opened = await openMic(candidate, processing);
+        break;
+      } catch (next) {
+        if (next instanceof Error && next.name === "NotAllowedError") {
+          throw next;
+        }
+      }
+    }
+    if (!opened) {
+      throw unreadable ? new MicUnreadableError(err) : err;
+    }
+    rawStream = opened;
     // Forget the dead id so the next join does not repeat the round trip, and
     // so Settings stops showing a selection that resolves to nothing.
     onDeviceGone?.();
+    onFallback?.(micLabel(rawStream));
   }
 
   const audioContext = new AudioContext();
@@ -364,6 +478,12 @@ function micErrorMessage(err: unknown): string {
   // does mean the machine has no working microphone at all.
   if (err.name === "NotFoundError") {
     return translateMessage("voice.error.micMissing");
+  }
+  // Every microphone was tried and none would start (see createMicPipeline).
+  // Name the fix, not the error: another app may be holding the mic, or the
+  // device needs re-plugging, and Settings is where a different one is picked.
+  if (err.name === "MicUnreadableError" || isUnreadableDeviceError(err)) {
+    return translateMessage("voice.error.micUnreadable", desktopContext());
   }
   // A browser's own message, in the browser's own language. Better than a
   // generic sentence that throws away what actually went wrong.
@@ -494,6 +614,8 @@ export function createVoiceController(transport: RealtimeTransport) {
     // No mic yet, so nothing is going anywhere. `join` recomputes it.
     isTransmitting: false,
     error: null,
+    errorKind: null,
+    notice: null,
     voiceChannelId: null,
     self: null,
     speakingPeerIds: [],
@@ -743,6 +865,11 @@ export function createVoiceController(transport: RealtimeTransport) {
         audioOptions.inputVolume,
         audioOptions.processing,
         forgetInputDevice,
+        (label) => {
+          state.notice = label
+            ? translateMessage("voice.notice.micFallback", { label })
+            : translateMessage("voice.notice.micFallbackUnnamed");
+        },
       );
       stopMicPipeline(pipeline);
       pipeline = next;
@@ -1523,6 +1650,8 @@ export function createVoiceController(transport: RealtimeTransport) {
         playCue("voiceJoin");
       }
       state.error = null;
+      state.errorKind = null;
+      state.notice = null;
       state.transportFailure = null;
       state.status = "joining";
       // A channel switch calls join() without leave(), so the previous room's
@@ -1578,6 +1707,11 @@ export function createVoiceController(transport: RealtimeTransport) {
           audioOptions.inputVolume,
           audioOptions.processing,
           forgetInputDevice,
+          (label) => {
+            state.notice = label
+              ? translateMessage("voice.notice.micFallback", { label })
+              : translateMessage("voice.notice.micFallbackUnnamed");
+          },
         );
 
         // Abandoned (left, timed out, or superseded) while the permission
@@ -1599,6 +1733,7 @@ export function createVoiceController(transport: RealtimeTransport) {
         pipeline = null;
         intendedChannelId = null;
         state.error = micErrorMessage(err);
+        state.errorKind = "mic";
         state.status = "idle";
         state.voiceChannelId = null;
         emit();
@@ -1641,6 +1776,8 @@ export function createVoiceController(transport: RealtimeTransport) {
         inputMode: state.inputMode,
         isTransmitting: false,
         error: null,
+        errorKind: null,
+        notice: null,
         voiceChannelId: null,
         self: null,
         speakingPeerIds: [],

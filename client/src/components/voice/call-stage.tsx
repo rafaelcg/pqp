@@ -63,6 +63,7 @@ import { isScreenShareAtCap } from "@/lib/screen-share-roster";
 import { useTranslation, type MessageKey, type MessageVars } from "@/lib/i18n";
 import { PeerTileControls } from "@/components/voice/peer-tile-controls";
 import { startSoundLoop, stopSoundLoop } from "@/lib/sounds";
+import { requestSettingsSection } from "@/lib/settings-request";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
@@ -1190,8 +1191,33 @@ function ActiveCall({
 
       {/* --- overlays -------------------------------------------------------- */}
       {voiceState.error && (
-        <p className="absolute inset-x-0 top-0 z-20 bg-danger/15 px-3 py-1.5 text-center text-xs text-danger">
-          {voiceState.error}
+        <div
+          role="alert"
+          data-voice-error
+          className="absolute inset-x-0 top-0 z-20 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 bg-danger/15 px-3 py-1.5 text-center text-xs text-danger"
+        >
+          <span>{voiceState.error}</span>
+          {/* Every microphone error is fixed by picking another microphone,
+              so the banner carries the door to where that happens. */}
+          {voiceState.errorKind === "mic" && (
+            <button
+              type="button"
+              data-voice-error-settings
+              className="rounded-md bg-danger/20 px-2 py-0.5 font-semibold text-danger hover:bg-danger/30"
+              onClick={() => requestSettingsSection("voice")}
+            >
+              {t("voice.error.openVoiceSettings")}
+            </button>
+          )}
+        </div>
+      )}
+      {!voiceState.error && voiceState.notice && (
+        <p
+          role="status"
+          data-voice-notice
+          className="absolute inset-x-0 top-0 z-20 bg-ink/70 px-3 py-1.5 text-center text-xs text-paper-muted backdrop-blur-sm"
+        >
+          {voiceState.notice}
         </p>
       )}
 
@@ -1199,7 +1225,7 @@ function ActiveCall({
         className={cn(
           "pointer-events-none absolute inset-x-0 top-0 z-10 flex items-start justify-between gap-2 bg-gradient-to-b from-ink/70 to-transparent px-3 py-2 transition-opacity duration-300 motion-reduce:transition-none",
           controlsIdle && "opacity-0",
-          voiceState.error && "mt-7",
+          (voiceState.error || voiceState.notice) && "mt-7",
         )}
       >
         <div className="min-w-0">
