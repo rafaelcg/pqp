@@ -522,7 +522,11 @@ function CommentsBlock({
               <p className="font-semibold text-paper">
                 {comment.author.displayName}
               </p>
-              <p className="line-clamp-2 text-paper-muted">{comment.body}</p>
+              {gifMessageMedia(comment.body) ? (
+                <GifAttachment media={gifMessageMedia(comment.body)!} />
+              ) : (
+                <p className="line-clamp-2 text-paper-muted">{comment.body}</p>
+              )}
             </li>
           ))}
         </ul>
@@ -541,7 +545,7 @@ function CommentsBlock({
         </ul>
       )}
 
-      {(hiddenCount > 0 || expanded || post.commentCount > 0) && (
+      {(hiddenCount > 0 || expanded) && (
         <button
           type="button"
           className="mt-2 text-xs text-paper-muted hover:text-paper"
@@ -560,7 +564,7 @@ function CommentsBlock({
         <p className="mt-2 text-xs text-paper-muted" data-home-comments-off>
           {t("communityHome.comments.off")}
         </p>
-      ) : expanded ? (
+      ) : (
         <form className="mt-2 flex items-center gap-2" onSubmit={submit}>
           <input
             ref={inputRef}
@@ -642,7 +646,7 @@ function CommentsBlock({
             {t("communityHome.comments.submit")}
           </Button>
         </form>
-      ) : null}
+      )}
       {error && <p className="mt-1 text-xs text-danger">{error}</p>}
     </div>
   );
