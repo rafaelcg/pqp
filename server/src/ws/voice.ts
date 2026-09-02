@@ -663,7 +663,6 @@ function planVoiceResume(
     resumePeerId?: string;
     resumeToken?: string;
   },
-  socket: WebSocket,
   capabilities: VoiceRoomTransport[],
 ): VoiceResumePlan {
   const claimed = payload.resumePeerId;
@@ -898,7 +897,7 @@ export async function handleVoiceMessage(
       "mesh",
       "livekit",
     ];
-    const resume = planVoiceResume(user.id, payload, socket, capabilities);
+    const resume = planVoiceResume(user.id, payload, capabilities);
     const transport =
       resume.kind === "reconstruct"
         ? (roomTransports.get(payload.voiceChannelId) ?? resume.transport)
