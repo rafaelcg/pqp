@@ -1997,6 +1997,45 @@ function YourDataSection({
           </span>
         </div>
       </div>
+
+      <div>
+        <p className="text-sm font-medium text-paper">{t("settings.data.legal")}</p>
+        <p className="mt-1 text-xs text-paper-muted">
+          {t("settings.data.legalHint")}
+        </p>
+        <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm">
+          <li>
+            <a
+              href="/privacy"
+              target="_blank"
+              rel="noreferrer"
+              className="text-signal underline-offset-2 hover:underline"
+            >
+              {t("settings.data.privacy")}
+            </a>
+          </li>
+          <li>
+            <a
+              href="/terms"
+              target="_blank"
+              rel="noreferrer"
+              className="text-signal underline-offset-2 hover:underline"
+            >
+              {t("settings.data.terms")}
+            </a>
+          </li>
+          <li>
+            <a
+              href="/cookies"
+              target="_blank"
+              rel="noreferrer"
+              className="text-signal underline-offset-2 hover:underline"
+            >
+              {t("settings.data.cookies")}
+            </a>
+          </li>
+        </ul>
+      </div>
     </div>
   );
 }
