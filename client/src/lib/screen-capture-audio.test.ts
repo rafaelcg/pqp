@@ -2,24 +2,36 @@ import { describe, expect, it } from "vitest";
 import {
   capturesSystemAudio,
   screenCaptureOptions,
+  shellCarriesScreenAudio,
   type ScreenCaptureEnvironment,
 } from "./screen-capture-audio";
 
 const browser: ScreenCaptureEnvironment = {
   isDesktopShell: false,
+  shellPlatform: null,
   supportsRestrictOwnAudio: true,
 };
 const oldBrowser: ScreenCaptureEnvironment = {
   isDesktopShell: false,
+  shellPlatform: null,
   supportsRestrictOwnAudio: false,
 };
+/** The installed v0.1.3 build on Windows: loopback is real there. */
 const shell: ScreenCaptureEnvironment = {
   isDesktopShell: true,
+  shellPlatform: "win32",
   supportsRestrictOwnAudio: false,
 };
 const newShell: ScreenCaptureEnvironment = {
   isDesktopShell: true,
+  shellPlatform: "win32",
   supportsRestrictOwnAudio: true,
+};
+/** The same build on macOS, where no capture can carry the machine's sound. */
+const macShell: ScreenCaptureEnvironment = {
+  isDesktopShell: true,
+  shellPlatform: "darwin",
+  supportsRestrictOwnAudio: false,
 };
 
 describe("screenCaptureOptions", () => {
@@ -85,6 +97,23 @@ describe("screenCaptureOptions", () => {
     expect(screenCaptureOptions(true, newShell).audio).toMatchObject({
       restrictOwnAudio: true,
     });
+  });
+
+  it("asks a macOS shell for no audio even when the user opted in", () => {
+    // The 3 Sep 2026 report: ticking the box made the picker close and nothing
+    // happen. `useSystemPicker: true` means our video-only handler is skipped,
+    // the request reaches Chromium intact, and macOS has no system audio to
+    // give — which rejects the capture whole, video included.
+    expect(screenCaptureOptions(true, macShell).audio).toBe(false);
+    expect(screenCaptureOptions(true, macShell).systemAudio).toBe("exclude");
+  });
+
+  it("knows which shells can carry sound at all", () => {
+    expect(shellCarriesScreenAudio(shell)).toBe(true);
+    expect(shellCarriesScreenAudio(macShell)).toBe(false);
+    // A browser is not a shell, and the answer here is about the shell only:
+    // tab audio is a browser's own path and is never decided by this.
+    expect(shellCarriesScreenAudio(browser)).toBe(false);
   });
 
   it("never offers our own tab as a surface", () => {
