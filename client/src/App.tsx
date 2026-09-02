@@ -1,5 +1,5 @@
 import { SignInButton, SignUpButton, useAuth, useUser } from "@clerk/clerk-react";
-import { FileText, Lock, Menu, Phone, Pin, Shield, Users, Video, WifiOff } from "lucide-react";
+import { FileText, Lock, Menu, Phone, Pin, Shield, Users, Video } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
@@ -44,6 +44,8 @@ import { WebhooksPanel } from "@/components/layout/webhooks-panel";
 import { ChannelMetaDialog } from "@/components/layout/channel-meta-dialog";
 import { DmCallStage } from "@/components/dm/dm-call-stage";
 import { IncomingCallOverlay } from "@/components/dm/incoming-call-overlay";
+import { ConnectionBanner } from "@/components/layout/connection-banner";
+import { ConnectionDoctorDialog } from "@/components/layout/connection-doctor-dialog";
 import { DmToasts } from "@/components/dm/dm-toasts";
 import { WhatsNewPrompt } from "@/components/layout/whats-new-prompt";
 import { DmList } from "@/components/layout/dm-list";
@@ -202,7 +204,10 @@ import {
 import type { MentionCandidate } from "@/lib/mention-autocomplete";
 import { usernameFromTag } from "@/lib/author-display";
 import { devAuthToken, getAuthToken, isDevAuthBypassEnabled } from "@/lib/dev-auth";
-import { onSettingsRequest } from "@/lib/settings-request";
+import {
+  onConnectionCheckRequest,
+  onSettingsRequest,
+} from "@/lib/settings-request";
 import { getDesktop } from "@/lib/desktop";
 import {
   describeActivity,
@@ -441,6 +446,34 @@ function MainAppContent({
     null,
   );
   const [connection, setConnection] = useState<RealtimeStatus>("idle");
+  // The connection check dialog; opened from the banner, the voice stage's
+  // timeout, and voice settings (through the request bus).
+  const [doctorOpen, setDoctorOpen] = useState(false);
+  useEffect(() => onConnectionCheckRequest(() => setDoctorOpen(true)), []);
+  /**
+   * "Sign in again" for a session the server keeps refusing.
+   *
+   * Through the Clerk global rather than `useClerk()`: `ClerkProvider` is
+   * not mounted under the dev auth bypass, so the hook would throw in local
+   * development, and this handler has to exist in both modes. Clerk's own
+   * sign-out clears the session on this device and lands on the homepage,
+   * which reads as having left rather than as an error; the bypass has no
+   * session to clear, so it simply reloads.
+   */
+  const signInAgain = useCallback(() => {
+    const clerk = (
+      window as unknown as {
+        Clerk?: { signOut?: (options?: { redirectUrl?: string }) => Promise<void> };
+      }
+    ).Clerk;
+    if (!isDevAuthBypassEnabled() && clerk?.signOut) {
+      void clerk.signOut({ redirectUrl: "/" }).catch(() => {
+        window.location.replace("/");
+      });
+      return;
+    }
+    window.location.reload();
+  }, []);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   // Non-null while a caller wants a specific section on open — the user
@@ -3804,6 +3837,15 @@ function MainAppContent({
       )}
 
 
+      <ConnectionDoctorDialog
+        open={doctorOpen}
+        onClose={() => setDoctorOpen(false)}
+        transport={transport}
+        getToken={() => resolveTokenRef.current()}
+        onSignInAgain={signInAgain}
+        appVersion="web"
+      />
+
       {/* Also at the root: a DM finds you wherever you are in the app. */}
       <DmToasts
         conversations={conversations}
@@ -3951,17 +3993,13 @@ function MainAppContent({
           </div>
         )}
 
-        {(connection === "reconnecting" || connection === "unauthorized") && (
-          <div
-            className="flex items-center justify-center gap-2 border-b border-warning/30 bg-warning/10 px-4 py-1.5 text-xs text-warning"
-            role="status"
-          >
-            <WifiOff className="h-3.5 w-3.5" />
-            {connection === "unauthorized"
-              ? t("connection.unauthorized")
-              : t("connection.reconnecting")}
-          </div>
-        )}
+        <ConnectionBanner
+          status={connection}
+          refusedRepeatedly={transport.getUnauthorizedStreak() >= 2}
+          onRetry={() => transport.retryNow()}
+          onCheck={() => setDoctorOpen(true)}
+          onSignInAgain={signInAgain}
+        />
 
         {appError && (
           <div className="flex items-start gap-3 border-b border-danger/40 bg-danger/10 px-4 py-2 text-sm text-danger">

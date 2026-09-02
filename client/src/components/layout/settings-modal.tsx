@@ -120,6 +120,7 @@ import {
 import { resolveUploadedImageUrl } from "@/lib/avatar";
 import { uploadUserBanner } from "@/lib/banner-upload";
 import { queuePreferenceSync } from "@/lib/preferences";
+import { requestConnectionCheck } from "@/lib/settings-request";
 import { cn } from "@/lib/utils";
 
 export interface LocalSettings {
@@ -735,6 +736,7 @@ function VoiceSection({
 }) {
   const { t } = useTranslation();
   const canSelectOutput = supportsAudioOutputSelection();
+  const checkConnection = () => requestConnectionCheck();
   // Probed once: whether this machine has a keyboard worth binding does not
   // change while the dialog is open, and re-evaluating it per render would run
   // a media query on every slider tick.
@@ -749,6 +751,22 @@ function VoiceSection({
           {devicesError}
         </p>
       )}
+
+      {/* The way out of "stuck on connecting": five checks and the fix. */}
+      <div className="flex flex-wrap items-center gap-3 rounded-lg border border-ink-4 bg-ink-3/40 px-3 py-2">
+        <p className="min-w-0 flex-1 text-xs text-paper-muted">
+          {t("connection.checkHint")}
+        </p>
+        <Button
+          type="button"
+          size="sm"
+          variant="secondary"
+          onClick={checkConnection}
+          data-settings-check-connection
+        >
+          {t("connection.check")}
+        </Button>
+      </div>
 
       <label className="block">
         <span className="mb-2 block text-xs uppercase tracking-wide text-paper-muted">
