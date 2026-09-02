@@ -202,6 +202,7 @@ import {
 import type { MentionCandidate } from "@/lib/mention-autocomplete";
 import { usernameFromTag } from "@/lib/author-display";
 import { devAuthToken, getAuthToken, isDevAuthBypassEnabled } from "@/lib/dev-auth";
+import { onSettingsRequest } from "@/lib/settings-request";
 import { getDesktop } from "@/lib/desktop";
 import {
   describeActivity,
@@ -447,6 +448,16 @@ function MainAppContent({
   // The gear clears it so the dialog keeps its sticky last-visited section.
   const [settingsSection, setSettingsSection] =
     useState<SettingsSectionId | null>(null);
+  // Deep components ask for a section through `requestSettingsSection`
+  // (the call stage's mic banner), rather than a prop through two wrappers.
+  useEffect(
+    () =>
+      onSettingsRequest((section) => {
+        setSettingsSection(section);
+        setSettingsOpen(true);
+      }),
+    [],
+  );
   const [serverSettingsOpen, setServerSettingsOpen] = useState(false);
   const [inviteMode, setInviteMode] = useState<"create" | "join" | null>(null);
   const [inviteCodeFromUrl, setInviteCodeFromUrl] = useState<string | null>(null);

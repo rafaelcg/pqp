@@ -969,6 +969,144 @@ describe("lobby presence sounds", () => {
     ).toBeUndefined();
   });
 
+  it("tries the default when the saved mic will not start, and says which mic it used", async () => {
+    // The QG case of 1 Sep 2026: the device is there, permission is granted,
+    // and the OS still refuses it (another app holds it). The person fixed it
+    // by picking a different microphone; the join should do that itself.
+    const unreadable = Object.assign(new Error("Could not start audio source"), {
+      name: "NotReadableError",
+    });
+    const getUserMedia = vi.fn(async (constraints: MediaStreamConstraints) => {
+      const audio = constraints.audio as MediaTrackConstraints;
+      if (audio && audio.deviceId) {
+        throw unreadable;
+      }
+      const stream = fakeStream("mic");
+      Object.defineProperty(stream.getAudioTracks()[0]!, "label", {
+        value: "MacBook Pro Microphone",
+      });
+      return stream;
+    });
+    Object.defineProperty(globalThis.navigator, "mediaDevices", {
+      configurable: true,
+      value: {
+        getUserMedia,
+        enumerateDevices: async () => [],
+        getSupportedConstraints: () => ({ restrictOwnAudio: true }),
+        getDisplayMedia: async () => fakeCapture("screen", false),
+      },
+    });
+
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    await voice.join(CHANNEL, { inputDeviceId: "busy-headset" });
+
+    expect(getUserMedia).toHaveBeenCalledTimes(2);
+    expect(voice.getState().status).not.toBe("idle");
+    expect(voice.getState().error).toBeNull();
+    expect(voice.getState().notice).toContain("MacBook Pro Microphone");
+  });
+
+  it("walks the other microphones when the default will not start either", async () => {
+    const unreadable = Object.assign(new Error("Could not start audio source"), {
+      name: "NotReadableError",
+    });
+    const getUserMedia = vi.fn(async (constraints: MediaStreamConstraints) => {
+      const audio = constraints.audio as MediaTrackConstraints;
+      const exact = (audio?.deviceId as { exact?: string } | undefined)?.exact;
+      if (exact === "usb-interface") {
+        return fakeStream("mic");
+      }
+      throw unreadable;
+    });
+    Object.defineProperty(globalThis.navigator, "mediaDevices", {
+      configurable: true,
+      value: {
+        getUserMedia,
+        enumerateDevices: async () => [
+          { kind: "audioinput", deviceId: "busy-headset", label: "Headset" },
+          { kind: "audioinput", deviceId: "usb-interface", label: "USB Audio" },
+          { kind: "audiooutput", deviceId: "speakers", label: "Speakers" },
+        ],
+        getSupportedConstraints: () => ({ restrictOwnAudio: true }),
+        getDisplayMedia: async () => fakeCapture("screen", false),
+      },
+    });
+
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    await voice.join(CHANNEL, { inputDeviceId: "busy-headset" });
+
+    // Chosen, default, then the one other input: never the chosen one twice.
+    const asked = getUserMedia.mock.calls.map(
+      (call) =>
+        ((call[0].audio as MediaTrackConstraints).deviceId as
+          | { exact: string }
+          | undefined)?.exact ?? "default",
+    );
+    expect(asked).toEqual(["busy-headset", "default", "usb-interface"]);
+    expect(voice.getState().status).not.toBe("idle");
+    expect(voice.getState().error).toBeNull();
+    expect(voice.getState().notice).toBeTruthy();
+  });
+
+  it("names the fix when no microphone will start, and marks the error as a mic error", async () => {
+    const unreadable = Object.assign(new Error("Could not start audio source"), {
+      name: "NotReadableError",
+    });
+    const getUserMedia = vi.fn(async () => {
+      throw unreadable;
+    });
+    Object.defineProperty(globalThis.navigator, "mediaDevices", {
+      configurable: true,
+      value: {
+        getUserMedia,
+        enumerateDevices: async () => [
+          { kind: "audioinput", deviceId: "a", label: "A" },
+          { kind: "audioinput", deviceId: "b", label: "B" },
+        ],
+        getSupportedConstraints: () => ({ restrictOwnAudio: true }),
+        getDisplayMedia: async () => fakeCapture("screen", false),
+      },
+    });
+
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    await voice.join(CHANNEL);
+
+    expect(voice.getState().status).toBe("idle");
+    expect(voice.getState().errorKind).toBe("mic");
+    // Not the browser's "Could not start audio source": the fix, in our words.
+    expect(voice.getState().error).toMatch(/microphone/i);
+    expect(voice.getState().error).not.toMatch(/audio source/);
+  });
+
+  it("does not retry after a permission refusal", async () => {
+    const refused = Object.assign(new Error("Permission denied"), {
+      name: "NotAllowedError",
+    });
+    const getUserMedia = vi.fn(async () => {
+      throw refused;
+    });
+    Object.defineProperty(globalThis.navigator, "mediaDevices", {
+      configurable: true,
+      value: {
+        getUserMedia,
+        enumerateDevices: async () => [
+          { kind: "audioinput", deviceId: "a", label: "A" },
+        ],
+        getSupportedConstraints: () => ({ restrictOwnAudio: true }),
+        getDisplayMedia: async () => fakeCapture("screen", false),
+      },
+    });
+
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    await voice.join(CHANNEL, { inputDeviceId: "a" });
+    expect(getUserMedia).toHaveBeenCalledTimes(1);
+    expect(voice.getState().errorKind).toBe("mic");
+  });
+
   it("plays join when someone else enters the lobby, leave when they go", async () => {
     const { transport } = createTransport();
     const voice = createVoiceController(transport);
