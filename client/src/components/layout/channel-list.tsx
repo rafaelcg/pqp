@@ -177,6 +177,8 @@ interface ChannelListProps {
   communityHomeEnabled?: boolean;
   /** "NEW" chip until the row is opened once on this server. */
   communityHomeShowNew?: boolean;
+  /** Unread published posts. Outranks the "New" chip: a number says more. */
+  communityHomeUnread?: number;
   communityHomeSelected?: boolean;
   onSelectCommunityHome?: () => void;
 }
@@ -212,6 +214,7 @@ export function ChannelList({
   onMobileClose,
   communityHomeEnabled = false,
   communityHomeShowNew = false,
+  communityHomeUnread = 0,
   communityHomeSelected = false,
   onSelectCommunityHome,
 }: ChannelListProps) {
@@ -688,10 +691,22 @@ export function ChannelList({
                       <span className="truncate text-sm font-semibold text-paper">
                         {t("communityHome.channelName")}
                       </span>
-                      {communityHomeShowNew && (
-                        <span className="shrink-0 rounded bg-signal/15 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-signal">
-                          {t("communityHome.badge.new")}
+                      {communityHomeUnread > 0 ? (
+                        <span
+                          className="ml-auto min-w-4 shrink-0 rounded-full bg-danger px-1 py-0.5 text-center text-[10px] font-bold leading-none text-paper"
+                          aria-label={t("communityHome.badge.unread", {
+                            count: communityHomeUnread,
+                          })}
+                          data-community-home-unread
+                        >
+                          {formatBadgeCount(communityHomeUnread)}
                         </span>
+                      ) : (
+                        communityHomeShowNew && (
+                          <span className="shrink-0 rounded bg-signal/15 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-signal">
+                            {t("communityHome.badge.new")}
+                          </span>
+                        )
                       )}
                     </span>
                     <span className="block truncate text-[10px] text-paper-muted">

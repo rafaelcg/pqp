@@ -47,6 +47,7 @@ function post(overrides: Partial<CommunityHomePost> = {}): CommunityHomePost {
     likedByMe: false,
     commentCount: 0,
     commentTeaser: [],
+    pinned: false,
     scheduledAt: null,
     scheduleTimezone: null,
     publishedAt: now,
@@ -163,6 +164,104 @@ describe("PostCard", () => {
     expect(html.match(/data-home-comment(?![s-])/g)?.length).toBe(2);
     expect(html).toContain("data-home-comments-toggle");
     expect(html).toContain("See all 5 comments");
+  });
+
+  it("a pinned post says so, and staff get the unpin control", () => {
+    const html = render(
+      <PostCard
+        post={post({ pinned: true })}
+        me={me}
+        locked={false}
+        canManageServer
+        vipEnabled={false}
+        onTogglePin={() => {}}
+      />,
+    );
+    expect(html).toContain("data-home-pinned-chip");
+    expect(html).toContain("data-home-pin");
+    expect(html).toContain("Pinned");
+  });
+
+  it("a member sees the pinned chip but no pin control", () => {
+    const html = render(
+      <PostCard
+        post={post({ pinned: true })}
+        me={me}
+        locked={false}
+        canManageServer={false}
+        vipEnabled={false}
+      />,
+    );
+    expect(html).toContain("data-home-pinned-chip");
+    expect(html).not.toContain("data-home-pin>");
+  });
+
+  it("a comment that is only a GIF link renders as the GIF, not as a URL", () => {
+    const gif = "https://static.klipy.com/gif/abc123.gif";
+    const html = render(
+      <PostCard
+        post={post({
+          commentCount: 1,
+          commentTeaser: [
+            {
+              id: "dddddddd-dddd-4ddd-8ddd-ddddddddddd9",
+              author,
+              body: gif,
+              createdAt: "2026-09-02T12:00:00.000Z",
+            },
+          ],
+        })}
+        me={me}
+        locked={false}
+        canManageServer={false}
+        vipEnabled={false}
+        onPatch={() => {}}
+      />,
+    );
+    // The image, and no visible link text.
+    expect(html).toContain(`src="${gif}"`);
+    expect(html).not.toContain(`>${gif}<`);
+
+    // A URL on a host we do not embed stays text, which is the allowlist
+    // doing its job rather than a broken image from anywhere.
+    const elsewhere = "https://example.com/not-a-gif-host.gif";
+    const plain = render(
+      <PostCard
+        post={post({
+          commentCount: 1,
+          commentTeaser: [
+            {
+              id: "dddddddd-dddd-4ddd-8ddd-dddddddddd10",
+              author,
+              body: elsewhere,
+              createdAt: "2026-09-02T12:00:00.000Z",
+            },
+          ],
+        })}
+        me={me}
+        locked={false}
+        canManageServer={false}
+        vipEnabled={false}
+        onPatch={() => {}}
+      />,
+    );
+    expect(plain).not.toContain(`src="${elsewhere}"`);
+    expect(plain).toContain(elsewhere);
+  });
+
+  it("offers emoji and GIF on the comment box", () => {
+    const html = render(
+      <PostCard
+        post={post()}
+        me={me}
+        locked={false}
+        canManageServer={false}
+        vipEnabled={false}
+        onPatch={() => {}}
+      />,
+    );
+    expect(html).toContain("data-home-comment-emoji");
+    expect(html).toContain("data-home-comment-gif");
   });
 
   it("staff see edit and delete; members do not", () => {

@@ -95,6 +95,7 @@ import {
   parseDiscordTemplateCode,
   claimCommunityHomeMediaSchema,
   COMMUNITY_HOME_MAX_BYTES,
+  pinCommunityHomePostSchema,
   createCommunityHomeCommentSchema,
   createCommunityHomeMediaUploadSchema,
   createCommunityHomePostSchema,
@@ -201,6 +202,9 @@ import {
   addCommunityHomeComment,
   claimCommunityHomeMediaUpload,
   CommunityHomeError,
+  countUnreadCommunityHomePosts,
+  markCommunityHomeRead,
+  setCommunityHomePostPinned,
   createCommunityHomePost,
   deleteCommunityHomeComment,
   deleteCommunityHomePost,
@@ -501,6 +505,20 @@ const searchLimiter = createRateLimiter({ capacity: 30, refillPerSecond: 1 });
  */
 const uploadLimiter = createRateLimiter({ capacity: 10, refillPerSecond: 0.1 });
 /**
+ * Baú write budgets, tighter than the global one because each of these is
+ * cheap to send and expensive to serve: a comment is read by every member of
+ * the server, and a post is fanned out to all of them.
+ *
+ * A burst is allowed (people do reply twice in a row); a sustained flood is
+ * not. The global `writeLimiter` still applies underneath.
+ */
+const homeCommentLimiter = createRateLimiter({
+  capacity: 6,
+  refillPerSecond: 0.2,
+});
+const homeLikeLimiter = createRateLimiter({ capacity: 20, refillPerSecond: 1 });
+const homePostLimiter = createRateLimiter({ capacity: 10, refillPerSecond: 0.05 });
+/**
  * User discovery is an enumeration surface over every account on the instance,
  * and unlike message search it is not scoped to anything the caller already
  * belongs to — it is the one endpoint that answers questions about people the
@@ -630,6 +648,9 @@ export function resetApiRateLimits(): void {
   connectionLimiter.reset();
   searchLimiter.reset();
   uploadLimiter.reset();
+  homeCommentLimiter.reset();
+  homeLikeLimiter.reset();
+  homePostLimiter.reset();
   userSearchLimiter.reset();
   exportLimiter.reset();
   discordImportLimiter.reset();
@@ -2396,6 +2417,19 @@ async function notifyHome(serverId: string): Promise<void> {
  * 503, because with the flag off the surface does not exist here and the
  * paths below name nothing.
  */
+/** Spend one token from a Baú budget, or answer 429 with a Retry-After. */
+function takeHomeBudget(
+  limiter: { take: (key: string) => boolean; retryAfter: (key: string) => number },
+  res: ServerResponse,
+  userId: string,
+): void {
+  const key = `home:${userId}`;
+  if (!limiter.take(key)) {
+    res.setHeader("Retry-After", String(limiter.retryAfter(key)));
+    throw new HttpError(429, "Slow down");
+  }
+}
+
 function requireCommunityHome(): void {
   if (!isCommunityHomeEnabled()) {
     throw new NotFound("Not found");
@@ -2491,9 +2525,10 @@ router.get(
 
 router.post(
   "/api/servers/:serverId/home/posts",
-  async ({ req, user }, { serverId }) => {
+  async ({ req, res, user }, { serverId }) => {
     requireCommunityHome();
     await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+    takeHomeBudget(homePostLimiter, res, user.id);
     const raw = createCommunityHomePostSchema.parse(await readJsonBody(req));
     try {
       const post = await createCommunityHomePost(serverId!, user.id, {
@@ -2563,6 +2598,59 @@ router.delete(
       await deleteCommunityHomePost(serverId!, postId!, user.id);
       await notifyHome(serverId!);
       return { ok: true };
+    } catch (error) {
+      mapCommunityHomeError(error);
+    }
+  },
+);
+
+/**
+ * The Baú badge: how many posts this person has not seen. Its own endpoint
+ * rather than a field on the feed, because the sidebar row needs the number
+ * without loading the posts.
+ */
+router.get(
+  "/api/servers/:serverId/home/unread",
+  async ({ user }, { serverId }) => {
+    requireCommunityHome();
+    await requireServerMember(serverId!, user.id);
+    try {
+      return { count: await countUnreadCommunityHomePosts(serverId!, user.id) };
+    } catch (error) {
+      mapCommunityHomeError(error);
+    }
+  },
+);
+
+router.post(
+  "/api/servers/:serverId/home/read",
+  async ({ user }, { serverId }) => {
+    requireCommunityHome();
+    await requireServerMember(serverId!, user.id);
+    try {
+      await markCommunityHomeRead(serverId!, user.id);
+      return { ok: true };
+    } catch (error) {
+      mapCommunityHomeError(error);
+    }
+  },
+);
+
+router.post(
+  "/api/servers/:serverId/home/posts/:postId/pin",
+  async ({ req, user }, { serverId, postId }) => {
+    requireCommunityHome();
+    await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+    const body = pinCommunityHomePostSchema.parse(await readJsonBody(req));
+    try {
+      const post = await setCommunityHomePostPinned(
+        serverId!,
+        postId!,
+        user.id,
+        body.pinned,
+      );
+      await notifyHome(serverId!);
+      return { post };
     } catch (error) {
       mapCommunityHomeError(error);
     }
@@ -2645,9 +2733,10 @@ router.get(
 
 router.post(
   "/api/servers/:serverId/home/posts/:postId/comments",
-  async ({ req, user }, { serverId, postId }) => {
+  async ({ req, res, user }, { serverId, postId }) => {
     requireCommunityHome();
     await requireServerMember(serverId!, user.id);
+    takeHomeBudget(homeCommentLimiter, res, user.id);
     const raw = createCommunityHomeCommentSchema.parse(await readJsonBody(req));
     let body: string;
     try {
@@ -2665,7 +2754,11 @@ router.post(
         user.id,
         body,
       );
-      await notifyHome(serverId!);
+      // Deliberately no fan-out. The frame carries no payload, so every
+      // member would refetch the whole feed for one comment on one card —
+      // an amplifier a single chatty person could point at the server. The
+      // commenter sees their own comment immediately; everyone else sees it
+      // on their next load, which is what a comment list is for.
       return created({ comment });
     } catch (error) {
       mapCommunityHomeError(error);
@@ -2695,9 +2788,10 @@ router.delete(
 
 router.post(
   "/api/servers/:serverId/home/posts/:postId/likes",
-  async ({ user }, { serverId, postId }) => {
+  async ({ res, user }, { serverId, postId }) => {
     requireCommunityHome();
     await requireServerMember(serverId!, user.id);
+    takeHomeBudget(homeLikeLimiter, res, user.id);
     try {
       // No fan-out: a like on a 300-member server would make 300 clients
       // refetch the feed. The actor gets the new count in the response and

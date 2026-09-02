@@ -17,8 +17,15 @@ import { openApp } from "./fixtures";
 
 const API = process.env.E2E_API_URL ?? "http://localhost:3101";
 const DEV_TOKEN = "dev-local-token";
-const OWNER = "home-owner";
-const MEMBER = "home-member";
+/**
+ * Fresh identities per run. These accounts carry server-side preferences (the
+ * Baú intro card's "dismissed" stamp among them), and the e2e database is not
+ * truncated between runs, so fixed suffixes made "shows on first visit" pass
+ * once and fail forever after.
+ */
+const STAMP = Date.now().toString(36);
+const OWNER = `home-owner-${STAMP}`;
+const MEMBER = `home-member-${STAMP}`;
 
 test.setTimeout(90_000);
 
@@ -123,6 +130,17 @@ async function seedPost(
   }
   const { post: created } = (await res.json()) as { post: { id: string } };
   return created.id;
+}
+
+async function pinPost(serverId: string, postId: string): Promise<void> {
+  const res = await fetch(`${API}/api/servers/${serverId}/home/posts/${postId}/pin`, {
+    method: "POST",
+    headers: headers(OWNER),
+    body: JSON.stringify({ pinned: true }),
+  });
+  if (!res.ok) {
+    throw new Error(`could not pin: ${res.status}`);
+  }
 }
 
 async function seedComment(serverId: string, postId: string, body: string) {
@@ -255,6 +273,53 @@ test.describe("Baú", () => {
     await page.reload();
     await expect(feed).toBeVisible({ timeout: 20_000 });
     await expect(feed.locator("[data-home-intro]")).toHaveCount(0);
+  });
+
+  test("a pinned post leads the feed and says so", async ({ page }) => {
+    const serverId = await seedCommunity(`Mesa Pin ${Date.now()}`);
+    const welcome = await seedPost(serverId, {
+      title: "Bem-vindo ao Baú",
+      body: "o vídeo de boas-vindas",
+    });
+    await seedPost(serverId, { title: "Post mais novo", body: "depois" });
+    await pinPost(serverId, welcome);
+
+    await openAs(page, MEMBER, serverId, { communityHome: "1" });
+    const feed = page.locator("[data-community-home-feed]");
+    await expect(feed).toBeVisible({ timeout: 20_000 });
+
+    // Pinned first, even though the other post is newer.
+    const first = feed.locator("[data-home-post]").first();
+    await expect(first).toContainText("Bem-vindo ao Baú");
+    await expect(first.locator("[data-home-pinned-chip]")).toBeVisible();
+    // Members never get the pin control.
+    await expect(feed.locator("[data-home-pin]")).toHaveCount(0);
+  });
+
+  test("a new post badges the Baú row while you are reading elsewhere", async ({
+    page,
+  }) => {
+    const serverId = await seedCommunity(`Mesa Badge ${Date.now()}`);
+    // First visit lands on the Baú, which marks it read: no badge yet.
+    await openAs(page, MEMBER, serverId, { communityHome: "1" });
+    await expect(page.locator("[data-community-home-feed]")).toBeVisible({
+      timeout: 20_000,
+    });
+    await expect(page.locator("[data-community-home-unread]")).toHaveCount(0);
+
+    // Step off the Baú, then somebody publishes.
+    await page.getByRole("button", { name: "general" }).first().click();
+    await expect(page.locator("[data-community-home-feed]")).toHaveCount(0);
+    await seedPost(serverId, { title: "Enquanto isso", body: "novo" });
+
+    const badge = page.locator("[data-community-home-unread]");
+    await expect(badge).toBeVisible({ timeout: 20_000 });
+    await expect(badge).toHaveText("1");
+
+    // Opening the Baú clears it.
+    await page.locator("[data-community-home-row]").click();
+    await expect(page.locator("[data-community-home-feed]")).toBeVisible();
+    await expect(badge).toHaveCount(0);
   });
 
   test("server that never opted in: no Baú row even with the flag on", async ({

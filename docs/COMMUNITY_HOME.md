@@ -64,10 +64,16 @@ See [`BAU_VIP_STRATEGY.md`](./BAU_VIP_STRATEGY.md) for what would replace it.
 ## What is in the pane
 
 - **Row** in the channel list above TEXT on every server that opted in while
-  the flag is on.
-  Landing on Baú is community-only: `isCommunity` servers open on the feed,
-  private halls still open on the first text channel
-  (`client/src/lib/community-home/landing.ts`).
+  the flag is on, with a red count of published posts this person has not
+  seen (`GET …/home/unread`; own posts never count, and the VIP filter
+  matches the feed so the badge cannot promise a post the feed will not
+  show). Opening the feed stamps `community_home_reads` and clears it. The
+  count outranks the "New" chip: a number says more.
+  Landing (`client/src/lib/community-home/landing.ts`): a community opens on
+  the feed every time; any other server with Baú on opens on it **once**, the
+  first time that person has never opened its Baú (the same localStorage mark
+  that drives the "New" chip), then goes back to the first text channel. That
+  first landing is what makes a new member meet the pinned post.
 - **Intro card** for members, once per account
   (`preferences.communityHomeIntroDismissedAt`, not `localStorage`, so a new
   browser does not re-offer it). Says what the Baú is, that likes and comments
@@ -89,10 +95,54 @@ See [`BAU_VIP_STRATEGY.md`](./BAU_VIP_STRATEGY.md) for what would replace it.
   the instant plus the IANA name).
 - **Drafts tab**: drafts and scheduled posts with Publish now / Unschedule /
   Edit / Delete.
+- **Pinned post**: one per server, enforced by a partial unique index rather
+  than by hope. Staff pin from the card; pinning replaces whatever was pinned
+  before, and only a published post can be pinned. A pinned post leads the
+  feed whatever its date, carries a "Pinned" chip, and is the intended home
+  for the welcome video an owner wants every new member to meet.
+- **Emoji and GIFs**: the comment box carries the same two pickers the chat
+  composer does (`EmojiPickerPanel`, `GifPickerPanel`, Klipy), and the post
+  composer carries the emoji one. A picked GIF is posted as a comment whose
+  body is only the GIF URL, and a body that is nothing but an allowlisted GIF
+  URL renders as the GIF instead of the text, in posts and comments alike:
+  the same rule and the same `GifAttachment` renderer chat uses, so an
+  arbitrary host stays plain text. The GIF panel opens below the box when
+  there is room and above when there is not, because a comment box can sit
+  anywhere in a scrolling feed.
 - **Cards**: no "free" chip ever; a VIP chip only on a members-only post
   while the VIP flag is on. Heart with a count. The two newest comments under
   the card, "See all N" fetches the rest. Delete is a two-step button, not a
   browser dialog.
+
+## Limits
+
+What a member can do, and how much of it. The global per-user write budget
+(`writeLimiter`, 30 burst / 2 per second) still applies underneath all of it.
+
+| Thing | Limit | Why |
+|---|---|---|
+| Title | 200 chars | `safeText`, rejected not truncated |
+| Body | 4000 chars | same |
+| Teaser | 500 chars | same |
+| Comment | 1000 chars | the outer schema accepts twice that so a paste gets a 400 rather than a silent cut |
+| Comments | 6 burst, 1 per 5 s | a person replying twice is fine; a script is not |
+| Likes | 20 burst, 1 per second | one tap each; the cap stops a script, not a person |
+| Publishing | 10 burst, 1 per 20 s | staff-only and rare; the fan-out is the expensive part |
+| Media upload | shared `uploadLimiter` | 10 burst, 1 per 10 s |
+| Feed read | 50 posts | `COMMUNITY_HOME_FEED_LIMIT`; the pinned post always rides along |
+| Drafts read | 50 | same constant |
+| Comments read | newest 200 | read oldest-first inside the page |
+
+**Blocked people are gone, not greyed.** A comment by somebody the viewer has
+blocked is excluded in SQL from the count, the two-comment teaser and the
+full list, so a card can never say "3 comments" and show two. One direction
+only, as everywhere else: blocking hides them from you, not you from them.
+
+**A comment does not fan out.** Publishing, pinning and deleting do (the feed
+changed shape for everyone); a comment does not, because the WS frame carries
+no payload and every member would refetch the whole feed for one comment on
+one card. The commenter sees their own immediately; everyone else on their
+next load.
 
 ## Media
 
@@ -124,8 +174,10 @@ self-host without storage, not a bug.
 
 ## Tests
 
-- `server/src/services/community-home.test.ts`: flag off 404s, config answers
-  200, member vs staff vs VIP visibility (including comment words), VIP flag
+- `server/src/services/community-home.test.ts`: pinning leads the feed and
+  replaces the previous pin, a draft cannot be pinned, a member cannot pin,
+  unread counts and clears on read and never counts your own; flag off 404s,
+  config answers 200, member vs staff vs VIP visibility (including comment words), VIP flag
   off refuses and hides, drafts never reach members, schedule sweep, teaser
   survives an edit, comments and likes.
 - `client/src/components/community-home/community-home-feed.test.tsx`: the
@@ -138,6 +190,11 @@ self-host without storage, not a bug.
 
 ## Not here yet (see the strategy doc)
 
-Checkout, plans and prices, polls as a post type, pagination of the feed,
+**Reporting a Baú post or comment.** `createReportSchema` covers `message`,
+`user` and `server` only, so the in-product path for bad content in a Baú is
+to report the *person*. Worth closing before this is on by default for
+strangers; the queue and the moderation surfaces already exist.
+
+Checkout, plans and prices, polls as a post type, older pages of the feed,
 push or email on publish, Electron / Android / iOS surfaces (web only for now;
 the native apps show nothing and lose nothing).

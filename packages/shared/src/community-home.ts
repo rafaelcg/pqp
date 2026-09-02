@@ -28,6 +28,16 @@ import {
  */
 export const COMMUNITY_HOME_MAX_BYTES = 100 * 1024 * 1024;
 
+/**
+ * How many posts one feed read returns. The Baú is a durable archive, so
+ * "every post since the server was made" is a page that only grows; the
+ * client asks for the newest page and the pinned post always rides along.
+ */
+export const COMMUNITY_HOME_FEED_LIMIT = 50;
+
+/** Comments returned for one post. The newest, read oldest-first. */
+export const COMMUNITY_HOME_COMMENTS_LIMIT = 200;
+
 export const COMMUNITY_HOME_TITLE_MAX = 200;
 export const COMMUNITY_HOME_BODY_MAX = 4000;
 export const COMMUNITY_HOME_TEASER_MAX = 500;
@@ -195,6 +205,11 @@ export const communityHomePostSchema = z.object({
   commentCount: z.number().int().nonnegative(),
   /** Up to two newest comments for the card teaser. */
   commentTeaser: z.array(communityHomeCommentSchema).max(2),
+  /**
+   * Kept at the top of the feed. At most one per server: the welcome post,
+   * the house rules, the video that explains what this Baú is for.
+   */
+  pinned: z.boolean(),
   scheduledAt: z.string().nullable(),
   /** IANA timezone the author picked when scheduling (display + compose). */
   scheduleTimezone: z.string().nullable(),
@@ -274,6 +289,25 @@ export const scheduleCommunityHomePostSchema = z.object({
 
 export type ScheduleCommunityHomePostRequest = z.infer<
   typeof scheduleCommunityHomePostSchema
+>;
+
+/** Pin or unpin. Pinning replaces whatever was pinned before. */
+export const pinCommunityHomePostSchema = z.object({
+  pinned: z.boolean(),
+});
+
+export type PinCommunityHomePostRequest = z.infer<
+  typeof pinCommunityHomePostSchema
+>;
+
+/** `GET /api/servers/:id/home/unread`: published posts since this person last
+ * opened the feed, their own excluded. */
+export const communityHomeUnreadResponseSchema = z.object({
+  count: z.number().int().nonnegative(),
+});
+
+export type CommunityHomeUnreadResponse = z.infer<
+  typeof communityHomeUnreadResponseSchema
 >;
 
 export const createCommunityHomeCommentSchema = z.object({

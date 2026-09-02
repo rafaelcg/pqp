@@ -3186,6 +3186,29 @@ CREATE TABLE IF NOT EXISTS community_home_comments (
 CREATE INDEX IF NOT EXISTS idx_community_home_comments_post
   ON community_home_comments (post_id, created_at DESC);
 
+-- The one post an owner keeps at the top: a welcome, a video, the rules. A
+-- timestamp rather than a boolean so the feed can order by it and support can
+-- see when it was set.
+ALTER TABLE community_home_posts ADD COLUMN IF NOT EXISTS pinned_at TIMESTAMPTZ;
+
+-- ONE PINNED POST PER SERVER, enforced here rather than in the service: a
+-- wall of pinned posts is just a feed with extra steps, and two writers
+-- racing to pin must not both win. The service unpins the previous one in the
+-- same transaction, so this index is the backstop, not the error path.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_community_home_posts_pinned_one
+  ON community_home_posts (server_id)
+  WHERE pinned_at IS NOT NULL;
+
+-- How far each person has read this server's Baú. Mirrors `channel_reads`:
+-- one row per (server, person), stamped when the feed is opened. The unread
+-- count is derived from it, never stored, so it cannot drift.
+CREATE TABLE IF NOT EXISTS community_home_reads (
+  server_id UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (server_id, user_id)
+);
+
 CREATE TABLE IF NOT EXISTS community_home_likes (
   post_id UUID NOT NULL REFERENCES community_home_posts(id) ON DELETE CASCADE,
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
