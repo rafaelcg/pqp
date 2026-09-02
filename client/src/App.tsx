@@ -201,6 +201,10 @@ import type { MentionCandidate } from "@/lib/mention-autocomplete";
 import { usernameFromTag, rankBadges } from "@/lib/author-display";
 import { devAuthToken, getAuthToken, isDevAuthBypassEnabled } from "@/lib/dev-auth";
 import {
+  fetchCommunityHomeUnread,
+  markCommunityHomeRead,
+} from "@/lib/api";
+import {
   COMMUNITY_HOME_CHANNEL_ID,
   COMMUNITY_HOME_CONFIG_OFF,
   isCommunityHomeChannelId,
@@ -538,6 +542,8 @@ function MainAppContent({
   const communityHomeConfigRef = useRef(COMMUNITY_HOME_CONFIG_OFF);
   // "NEW" chip on the Baú row until it is opened once per server.
   const [communityHomeRowNew, setCommunityHomeRowNew] = useState(false);
+  /** Unread Baú posts for the open server, for the sidebar row's badge. */
+  const [communityHomeUnread, setCommunityHomeUnread] = useState(0);
   const communityHomeOn = useCallback(
     () =>
       isCommunityHomeEnabled({
@@ -1622,6 +1628,7 @@ function MainAppContent({
                   channelList,
                   communityHomeOn() && first.communityHomeEnabled === true,
                   Boolean(first.isCommunity),
+                  isCommunityHomeRowNew(first.id),
                 );
             initialChannelId = land?.id ?? null;
             void loadUnread(first.id);
@@ -2136,6 +2143,7 @@ function MainAppContent({
           list,
           communityHomeOn() && server?.communityHomeEnabled === true,
           Boolean(server?.isCommunity),
+          isCommunityHomeRowNew(serverId),
         );
         if (land) {
           await selectChannel(land.id, serverId);
@@ -2579,6 +2587,7 @@ function MainAppContent({
             list,
             communityHomeOn() && targetServer?.communityHomeEnabled === true,
             Boolean(targetServer?.isCommunity),
+            isCommunityHomeRowNew(targetServerId),
           );
           if (land) {
             await selectChannel(land.id, targetServerId);
@@ -2685,6 +2694,47 @@ function MainAppContent({
     }
     setCommunityHomeRowNew(isCommunityHomeRowNew(selectedServerId));
   }, [communityHomeEnabled, communityHomeOpen, selectedServerId]);
+
+  /**
+   * The Baú badge for the open server.
+   *
+   * Looking at the feed IS reading it: the count goes to zero and the read
+   * mark is stamped on the API, so it stays zero on the next device. Looking
+   * elsewhere refetches the count. `communityHomeUpdateNudge` is in the deps
+   * so a post published while this tab is open lands in whichever of the two
+   * halves applies, rather than waiting for a navigation.
+   */
+  useEffect(() => {
+    if (!communityHomeEnabled || !selectedServerId) {
+      setCommunityHomeUnread(0);
+      return;
+    }
+    if (communityHomeOpen) {
+      setCommunityHomeUnread(0);
+      void markCommunityHomeRead(selectedServerId).catch(() => {
+        // A failed mark costs one repeated badge, never a wrong feed.
+      });
+      return;
+    }
+    let cancelled = false;
+    void fetchCommunityHomeUnread(selectedServerId)
+      .then(({ count }) => {
+        if (!cancelled) {
+          setCommunityHomeUnread(count);
+        }
+      })
+      .catch(() => {
+        // Flag off, or a blip: no badge is better than a wrong one.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    communityHomeEnabled,
+    communityHomeOpen,
+    selectedServerId,
+    communityHomeUpdateNudge,
+  ]);
 
   /**
    * The Baú intro card is put away. Same optimistic shape as `settleFirstRun`:
@@ -4047,6 +4097,7 @@ function MainAppContent({
           footer={sidebarFooter}
           communityHomeEnabled={communityHomeEnabled}
           communityHomeShowNew={communityHomeRowNew}
+          communityHomeUnread={communityHomeUnread}
           communityHomeSelected={communityHomeOpen}
           onSelectCommunityHome={() => {
             if (selectedServerId) {
@@ -4440,6 +4491,7 @@ function MainAppContent({
             newChannels,
             communityHomeOn() && server.communityHomeEnabled === true,
             Boolean(server.isCommunity),
+            isCommunityHomeRowNew(server.id),
           );
           if (land) {
             await selectChannel(land.id, server.id);

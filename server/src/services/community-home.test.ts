@@ -94,6 +94,7 @@ interface PostBody {
   commentTeaser: { body: string }[];
   likeCount: number;
   likedByMe: boolean;
+  pinned: boolean;
 }
 
 describeDb("community home (Baú)", () => {
@@ -362,6 +363,182 @@ describeDb("community home (Baú)", () => {
       const feed = await call<{ posts: PostBody[] }>(owner, "GET", `${base()}/posts`);
       expect(feed.body.posts.map((p) => p.title)).toEqual(["Livre"]);
     });
+  });
+
+  // ------------------------------------------------------- spam and scale
+
+  it("stops a comment flood without stopping a conversation", async () => {
+    const post = await publish({ title: "Papo", body: "x" });
+    const say = (body: string) =>
+      call(member, "POST", `${base()}/posts/${post.id}/comments`, { body });
+
+    // A burst is a person replying; the budget allows it.
+    for (let i = 0; i < 6; i += 1) {
+      expect((await say(`comentário ${i}`)).status).toBe(201);
+    }
+    // Sustained is a script.
+    const flooded = await say("e mais um");
+    expect(flooded.status).toBe(429);
+  });
+
+  it("refuses a comment longer than the limit rather than truncating it", async () => {
+    const post = await publish({ title: "Papo", body: "x" });
+    const tooLong = await call(member, "POST", `${base()}/posts/${post.id}/comments`, {
+      body: "a".repeat(1001),
+    });
+    expect(tooLong.status).toBe(400);
+    const enormous = await call(member, "POST", `${base()}/posts/${post.id}/comments`, {
+      body: "a".repeat(50_000),
+    });
+    expect(enormous.status).toBe(400);
+  });
+
+  it("caps the feed rather than returning every post a server ever had", async () => {
+    // Straight into the table: the point is the read path, and the write
+    // path's own budget would (correctly) refuse sixty posts in a row.
+    await getPool().query(
+      `INSERT INTO community_home_posts
+         (server_id, author_id, title, body, status, published_at)
+       SELECT $1, $2, 'post ' || g, 'corpo', 'published', NOW() - (g || ' minutes')::interval
+         FROM generate_series(1, 60) AS g`,
+      [serverId, owner.id],
+    );
+    const feed = await call<{ posts: PostBody[] }>(member, "GET", `${base()}/posts`);
+    expect(feed.body.posts).toHaveLength(50);
+    // Newest first, so the page is the useful end.
+    expect(feed.body.posts[0]!.title).toBe("post 1");
+  });
+
+  it("hides a blocked person's comments, and does not count them either", async () => {
+    const post = await publish({ title: "Papo", body: "x" });
+    await call(member, "POST", `${base()}/posts/${post.id}/comments`, {
+      body: "do membro",
+    });
+    await call(vip, "POST", `${base()}/posts/${post.id}/comments`, {
+      body: "do vip",
+    });
+
+    const seen = await call<{ posts: PostBody[] }>(member, "GET", `${base()}/posts`);
+    expect(seen.body.posts[0]!.commentCount).toBe(2);
+
+    // `member` blocks `vip`.
+    expect(
+      (await call(member, "POST", "/api/blocks", { userId: vip.id })).status,
+    ).toBeLessThan(300);
+
+    const after = await call<{ posts: PostBody[] }>(member, "GET", `${base()}/posts`);
+    // A card that says 2 and shows 1 is how a blocked person keeps a
+    // presence on your screen: the count moves too.
+    expect(after.body.posts[0]!.commentCount).toBe(1);
+    expect(after.body.posts[0]!.commentTeaser.map((c) => c.body)).toEqual([
+      "do membro",
+    ]);
+
+    const list = await call<{ comments: { body: string }[] }>(
+      member,
+      "GET",
+      `${base()}/posts/${post.id}/comments`,
+    );
+    expect(list.body.comments.map((c) => c.body)).toEqual(["do membro"]);
+
+    // The person who did the blocking is the only one whose view changes.
+    const vipView = await call<{ posts: PostBody[] }>(vip, "GET", `${base()}/posts`);
+    expect(vipView.body.posts[0]!.commentCount).toBe(2);
+  });
+
+  // ------------------------------------------------------------- pinning
+
+  it("a pinned post leads the feed whatever its date, and only one can be pinned", async () => {
+    const welcome = await publish({ title: "Bem-vindo", body: "o vídeo" });
+    // Two later posts, so date order alone would bury the welcome.
+    await publish({ title: "Segundo", body: "x" });
+    const third = await publish({ title: "Terceiro", body: "y" });
+
+    const pinned = await call<{ post: PostBody }>(
+      owner,
+      "POST",
+      `${base()}/posts/${welcome.id}/pin`,
+      { pinned: true },
+    );
+    expect(pinned.status).toBe(200);
+    expect(pinned.body.post.pinned).toBe(true);
+
+    const feed = await call<{ posts: PostBody[] }>(member, "GET", `${base()}/posts`);
+    expect(feed.body.posts.map((p) => p.title)).toEqual([
+      "Bem-vindo",
+      "Terceiro",
+      "Segundo",
+    ]);
+
+    // Pinning another one replaces it: the top slot is a slot, not a pile.
+    await call(owner, "POST", `${base()}/posts/${third.id}/pin`, { pinned: true });
+    const after = await call<{ posts: PostBody[] }>(member, "GET", `${base()}/posts`);
+    expect(after.body.posts.map((p) => p.title)).toEqual([
+      "Terceiro",
+      "Segundo",
+      "Bem-vindo",
+    ]);
+    expect(after.body.posts.filter((p) => p.pinned)).toHaveLength(1);
+
+    // And unpinning gives the feed back to the dates.
+    await call(owner, "POST", `${base()}/posts/${third.id}/pin`, { pinned: false });
+    const plain = await call<{ posts: PostBody[] }>(member, "GET", `${base()}/posts`);
+    expect(plain.body.posts.map((p) => p.title)).toEqual([
+      "Terceiro",
+      "Segundo",
+      "Bem-vindo",
+    ]);
+    expect(plain.body.posts.some((p) => p.pinned)).toBe(false);
+  });
+
+  it("refuses to pin a draft, and refuses a member outright", async () => {
+    const draft = await call<{ post: PostBody }>(owner, "POST", `${base()}/posts`, {
+      title: "rascunho",
+      body: "ainda não",
+    });
+    expect(
+      (
+        await call(owner, "POST", `${base()}/posts/${draft.body.post.id}/pin`, {
+          pinned: true,
+        })
+      ).status,
+    ).toBe(400);
+
+    const post = await publish({ title: "Livre", body: "x" });
+    expect(
+      (await call(member, "POST", `${base()}/posts/${post.id}/pin`, { pinned: true }))
+        .status,
+    ).toBe(403);
+  });
+
+  // -------------------------------------------------------------- unread
+
+  it("counts posts a person has not seen, ignores their own, and clears on read", async () => {
+    const unread = () =>
+      call<{ count: number }>(member, "GET", `${base()}/unread`);
+
+    // Nothing published yet.
+    expect((await unread()).body.count).toBe(0);
+
+    await publish({ title: "Um", body: "x" });
+    await publish({ title: "Dois", body: "y" });
+    expect((await unread()).body.count).toBe(2);
+
+    // Opening the feed is reading it.
+    expect((await call(member, "POST", `${base()}/read`)).status).toBe(200);
+    expect((await unread()).body.count).toBe(0);
+
+    // A later post counts again.
+    await publish({ title: "Três", body: "z" });
+    expect((await unread()).body.count).toBe(1);
+
+    // The author never badges themselves for their own post.
+    const ownerUnread = await call<{ count: number }>(
+      owner,
+      "GET",
+      `${base()}/unread`,
+    );
+    expect(ownerUnread.body.count).toBe(0);
   });
 
   // ------------------------------------------------------ edits and media

@@ -13,6 +13,8 @@ import type {
   CommunityHomeComment,
   CommunityHomeCommentsResponse,
   CommunityHomeConfig,
+  CommunityHomeUnreadResponse,
+  PinCommunityHomePostRequest,
   ServerCommunityHomeConfig,
   UpdateServerCommunityHomeConfig,
   CommunityHomeLikeResponse,
@@ -1380,6 +1382,25 @@ export const updateCommunityHomePost = (
 
 export const deleteCommunityHomePost = (serverId: string, postId: string) =>
   del<{ ok: boolean }>(`/api/servers/${serverId}/home/posts/${postId}`);
+
+/** The sidebar badge: posts this person has not seen. Cheap, no posts. */
+export const fetchCommunityHomeUnread = (serverId: string) =>
+  apiFetch<CommunityHomeUnreadResponse>(`/api/servers/${serverId}/home/unread`);
+
+/** Stamp the feed read up to now. Fire and forget; the badge is not truth. */
+export const markCommunityHomeRead = (serverId: string) =>
+  post<{ ok: boolean }>(`/api/servers/${serverId}/home/read`);
+
+/** Keep one post at the top. Pinning replaces whatever was pinned before. */
+export const pinCommunityHomePost = (
+  serverId: string,
+  postId: string,
+  body: PinCommunityHomePostRequest,
+) =>
+  post<CommunityHomePostResponse>(
+    `/api/servers/${serverId}/home/posts/${postId}/pin`,
+    body,
+  );
 
 export const publishCommunityHomePost = (serverId: string, postId: string) =>
   post<CommunityHomePostResponse>(

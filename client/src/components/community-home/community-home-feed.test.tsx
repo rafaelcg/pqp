@@ -47,6 +47,7 @@ function post(overrides: Partial<CommunityHomePost> = {}): CommunityHomePost {
     likedByMe: false,
     commentCount: 0,
     commentTeaser: [],
+    pinned: false,
     scheduledAt: null,
     scheduleTimezone: null,
     publishedAt: now,
@@ -163,6 +164,36 @@ describe("PostCard", () => {
     expect(html.match(/data-home-comment(?![s-])/g)?.length).toBe(2);
     expect(html).toContain("data-home-comments-toggle");
     expect(html).toContain("See all 5 comments");
+  });
+
+  it("a pinned post says so, and staff get the unpin control", () => {
+    const html = render(
+      <PostCard
+        post={post({ pinned: true })}
+        me={me}
+        locked={false}
+        canManageServer
+        vipEnabled={false}
+        onTogglePin={() => {}}
+      />,
+    );
+    expect(html).toContain("data-home-pinned-chip");
+    expect(html).toContain("data-home-pin");
+    expect(html).toContain("Pinned");
+  });
+
+  it("a member sees the pinned chip but no pin control", () => {
+    const html = render(
+      <PostCard
+        post={post({ pinned: true })}
+        me={me}
+        locked={false}
+        canManageServer={false}
+        vipEnabled={false}
+      />,
+    );
+    expect(html).toContain("data-home-pinned-chip");
+    expect(html).not.toContain("data-home-pin>");
   });
 
   it("staff see edit and delete; members do not", () => {

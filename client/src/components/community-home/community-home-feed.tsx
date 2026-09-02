@@ -9,6 +9,8 @@ import {
   Menu,
   MessageCircle,
   Pencil,
+  Pin,
+  PinOff,
   RotateCcw,
   Send,
   Trash2,
@@ -34,6 +36,7 @@ import {
   fetchCommunityHomeComments,
   fetchCommunityHomeDrafts,
   fetchCommunityHomePosts,
+  pinCommunityHomePost,
   publishCommunityHomePost,
   scheduleCommunityHomePost,
   toggleCommunityHomeLike,
@@ -516,6 +519,7 @@ type PostCardProps = {
   onDelete?: (post: CommunityHomePost) => void;
   onPublishNow?: (post: CommunityHomePost) => void;
   onUnpublish?: (post: CommunityHomePost) => void;
+  onTogglePin?: (post: CommunityHomePost) => void;
 };
 
 /**
@@ -539,6 +543,7 @@ export function PostCard({
   onDelete,
   onPublishNow,
   onUnpublish,
+  onTogglePin,
 }: PostCardProps) {
   const { t } = useTranslation();
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -615,6 +620,15 @@ export function PostCard({
                 {t("communityHome.visibility.members")}
               </span>
             )}
+            {post.pinned && (
+              <span
+                className="inline-flex items-center gap-1 rounded bg-signal/15 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-signal"
+                data-home-pinned-chip
+              >
+                <Pin className="h-2.5 w-2.5" aria-hidden />
+                {t("communityHome.pinned")}
+              </span>
+            )}
             {post.status === "draft" && (
               <span className="rounded border border-ink-4 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-paper-muted">
                 {t("communityHome.status.draft")}
@@ -657,6 +671,31 @@ export function PostCard({
               >
                 {t("communityHome.drafts.unschedule")}
               </Button>
+            )}
+            {onTogglePin && post.status === "published" && (
+              <button
+                type="button"
+                className={cn(
+                  "rounded-md p-1.5 hover:bg-ink-4",
+                  post.pinned
+                    ? "text-signal"
+                    : "text-paper-muted hover:text-paper",
+                )}
+                aria-label={t(
+                  post.pinned ? "communityHome.unpin" : "communityHome.pin",
+                )}
+                title={t(
+                  post.pinned ? "communityHome.unpin" : "communityHome.pin",
+                )}
+                onClick={() => onTogglePin(post)}
+                data-home-pin
+              >
+                {post.pinned ? (
+                  <PinOff className="h-3.5 w-3.5" aria-hidden />
+                ) : (
+                  <Pin className="h-3.5 w-3.5" aria-hidden />
+                )}
+              </button>
             )}
             {onEdit && (
               <button
@@ -872,6 +911,8 @@ function previewPost(state: ComposeState, me: PublicUser, serverId: string, isOw
     likedByMe: false,
     commentCount: 0,
     commentTeaser: [],
+    // The preview is a draft on screen: pinning happens on a real post.
+    pinned: false,
     scheduledAt: null,
     scheduleTimezone: null,
     publishedAt: now,
@@ -1526,6 +1567,43 @@ export function CommunityHomeFeed({
     }
   }
 
+  async function togglePin(post: CommunityHomePost) {
+    const result = await withAction(() =>
+      pinCommunityHomePost(serverId, post.id, { pinned: !post.pinned }),
+    );
+    if (!result) {
+      return;
+    }
+    // One pinned post per server: whatever was pinned before is not any more,
+    // so clear the flag locally rather than waiting for the refetch.
+    setPosts((previous) =>
+      previous
+        ? previous
+            .map((p) =>
+              p.id === result.post.id
+                ? result.post
+                : result.post.pinned
+                  ? { ...p, pinned: false }
+                  : p,
+            )
+            .sort((a, b) => {
+              if (a.pinned !== b.pinned) {
+                return a.pinned ? -1 : 1;
+              }
+              return (
+                new Date(b.publishedAt ?? b.createdAt).getTime() -
+                new Date(a.publishedAt ?? a.createdAt).getTime()
+              );
+            })
+        : previous,
+    );
+    setNotice(
+      result.post.pinned
+        ? "communityHome.notice.pinned"
+        : "communityHome.notice.unpinned",
+    );
+  }
+
   async function unschedule(post: CommunityHomePost) {
     const result = await withAction(() =>
       unpublishCommunityHomePost(serverId, post.id),
@@ -1807,6 +1885,9 @@ export function CommunityHomeFeed({
                   onEdit={canManageServer ? beginEdit : undefined}
                   onDelete={
                     canManageServer ? (target) => void removePost(target) : undefined
+                  }
+                  onTogglePin={
+                    canManageServer ? (target) => void togglePin(target) : undefined
                   }
                 />
               ))}

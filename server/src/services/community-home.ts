@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
+  COMMUNITY_HOME_COMMENTS_LIMIT,
+  COMMUNITY_HOME_FEED_LIMIT,
   COMMUNITY_HOME_MAX_BYTES,
   communityHomeMediaKindFromContentType,
   hasPermission,
@@ -117,6 +119,7 @@ interface PostRow {
   media_youtube_url: string | null;
   scheduled_at: Date | null;
   schedule_timezone: string | null;
+  pinned_at: Date | null;
   published_at: Date | null;
   created_at: Date;
   updated_at: Date;
@@ -141,13 +144,30 @@ interface CommentRow {
   avatar_url: string | null;
 }
 
+/**
+ * A comment written by somebody the viewer has blocked is not theirs to
+ * read, and must not be counted either: a card that says "3 comments" and
+ * shows two is how a blocked person keeps a presence on your screen.
+ *
+ * One direction only, like the rest of the product: blocking hides them from
+ * you, not you from them. Applied in SQL rather than after the fact so the
+ * count, the teaser and the full list can never disagree.
+ */
+function notBlockedSql(viewerParam: string): string {
+  return `AND NOT EXISTS (
+    SELECT 1 FROM user_blocks b
+     WHERE b.user_id = ${viewerParam} AND b.blocked_user_id = c.author_id
+  )`;
+}
+
 /** `$1` = viewer id in the liked_by_me subquery. Caller supplies the rest. */
 function postSelectSql(viewerParam: string): string {
   return `
   p.id, p.server_id, p.author_id, p.title, p.body, p.teaser, p.visibility,
   p.status, p.comments_enabled, p.media_kind, p.media_name, p.media_content_type,
   p.media_byte_size, p.media_storage_key, p.media_youtube_url,
-  p.scheduled_at, p.schedule_timezone, p.published_at, p.created_at, p.updated_at,
+  p.scheduled_at, p.schedule_timezone, p.pinned_at, p.published_at,
+  p.created_at, p.updated_at,
   u.display_name, u.username, u.discriminator, u.avatar_url,
   s.owner_id AS server_owner_id,
   (SELECT COUNT(*)::text FROM community_home_likes l WHERE l.post_id = p.id) AS like_count,
@@ -155,7 +175,8 @@ function postSelectSql(viewerParam: string): string {
     SELECT 1 FROM community_home_likes l
      WHERE l.post_id = p.id AND l.user_id = ${viewerParam}
   ) AS liked_by_me,
-  (SELECT COUNT(*)::text FROM community_home_comments c WHERE c.post_id = p.id) AS comment_count
+  (SELECT COUNT(*)::text FROM community_home_comments c
+    WHERE c.post_id = p.id ${notBlockedSql(viewerParam)}) AS comment_count
   FROM community_home_posts p
   JOIN users u ON u.id = p.author_id
   JOIN servers s ON s.id = p.server_id
@@ -176,6 +197,8 @@ export type HomeViewerCaps = {
   canManage: boolean;
   isVip: boolean;
   isOwner: boolean;
+  /** Carried so the hydrators can filter by this viewer's block list. */
+  viewerId: string;
 };
 
 export async function resolveHomeViewerCaps(
@@ -202,6 +225,7 @@ export async function resolveHomeViewerCaps(
     canManage,
     isVip: Boolean(vip.rows[0]),
     isOwner,
+    viewerId: userId,
   };
 }
 
@@ -279,6 +303,7 @@ function toComment(row: CommentRow): CommunityHomeComment {
 
 async function loadCommentTeasers(
   postIds: string[],
+  viewerId: string,
 ): Promise<Map<string, CommunityHomeComment[]>> {
   const map = new Map<string, CommunityHomeComment[]>();
   if (postIds.length === 0) {
@@ -291,11 +316,11 @@ async function loadCommentTeasers(
               ROW_NUMBER() OVER (PARTITION BY c.post_id ORDER BY c.created_at DESC) AS rn
          FROM community_home_comments c
          JOIN users u ON u.id = c.author_id
-        WHERE c.post_id = ANY($1::uuid[])
+        WHERE c.post_id = ANY($1::uuid[]) ${notBlockedSql("$2")}
      ) ranked
      WHERE rn <= 2
      ORDER BY created_at ASC`,
-    [postIds],
+    [postIds, viewerId],
   );
   for (const row of result.rows) {
     const list = map.get(row.post_id) ?? [];
@@ -346,6 +371,7 @@ function toPost(
     // A locked viewer gets the count but not the words: a comment on a VIP
     // post can quote the clip, and that is the exact thing the lock hides.
     commentTeaser: locked ? [] : teaser,
+    pinned: row.pinned_at != null,
     scheduledAt: row.scheduled_at?.toISOString() ?? null,
     scheduleTimezone: row.schedule_timezone,
     publishedAt: row.published_at?.toISOString() ?? null,
@@ -363,7 +389,10 @@ async function hydratePosts(
   }
   const serverId = rows[0]!.server_id;
   const [teasers, badges] = await Promise.all([
-    loadCommentTeasers(rows.map((r) => r.id)),
+    loadCommentTeasers(
+      rows.map((r) => r.id),
+      caps.viewerId,
+    ),
     authorBadgeMap(
       serverId,
       rows.map((r) => r.author_id),
@@ -395,10 +424,122 @@ export async function listCommunityHomePosts(
   const result = await getPool().query<PostRow>(
     `SELECT ${postSelectSql("$1")}
       WHERE p.server_id = $2 AND p.status = 'published'${visibilityFilter}
-      ORDER BY p.published_at DESC NULLS LAST, p.created_at DESC`,
-    [viewerId, serverId],
+      -- The pinned post first, whatever its date: it is there to be the first
+      -- thing a new member reads. Everything else newest first, as before.
+      ORDER BY p.pinned_at IS NULL, p.published_at DESC NULLS LAST,
+               p.created_at DESC
+      LIMIT $3`,
+    [viewerId, serverId, COMMUNITY_HOME_FEED_LIMIT],
   );
   return hydratePosts(result.rows, caps);
+}
+
+/**
+ * Keep one post at the top of this server's feed, or let it go.
+ *
+ * Pinning unpins whatever was pinned before, in the same transaction, so the
+ * unique index in `schema.sql` never has to reject anything. Only a published
+ * post can be pinned: a pinned draft would be a top slot nobody can see.
+ */
+export async function setCommunityHomePostPinned(
+  serverId: string,
+  postId: string,
+  actorId: string,
+  pinned: boolean,
+): Promise<CommunityHomePost> {
+  const canManage = await memberHasPermission(
+    serverId,
+    actorId,
+    Permission.MANAGE_SERVER,
+  );
+  if (!canManage) {
+    throw new CommunityHomeError("forbidden", "Staff only");
+  }
+  const pool = getPool();
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const existing = await client.query<{ status: CommunityHomePostStatus }>(
+      `SELECT status FROM community_home_posts
+        WHERE id = $1 AND server_id = $2
+        FOR UPDATE`,
+      [postId, serverId],
+    );
+    const row = existing.rows[0];
+    if (!row) {
+      throw new CommunityHomeError("not_found", "Post not found");
+    }
+    if (pinned && row.status !== "published") {
+      throw new CommunityHomeError(
+        "invalid",
+        "Only a published post can be pinned",
+      );
+    }
+    if (pinned) {
+      await client.query(
+        `UPDATE community_home_posts SET pinned_at = NULL, updated_at = NOW()
+          WHERE server_id = $1 AND pinned_at IS NOT NULL AND id <> $2`,
+        [serverId, postId],
+      );
+    }
+    await client.query(
+      `UPDATE community_home_posts
+          SET pinned_at = $3, updated_at = NOW()
+        WHERE id = $1 AND server_id = $2`,
+      [postId, serverId, pinned ? new Date().toISOString() : null],
+    );
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+  return getCommunityHomePost(serverId, postId, actorId);
+}
+
+/**
+ * How many published posts landed since this person last opened the feed.
+ *
+ * Their own posts never count — an owner does not need a badge telling them
+ * they posted — and the VIP filter matches the feed, so the number can never
+ * promise a post the feed will not show. No read row means everything is
+ * unread, which is the honest answer for somebody who has never opened it.
+ */
+export async function countUnreadCommunityHomePosts(
+  serverId: string,
+  viewerId: string,
+): Promise<number> {
+  const visibilityFilter = isCommunityHomeVipEnabled()
+    ? ""
+    : " AND p.visibility = 'free'";
+  const result = await getPool().query<{ n: string }>(
+    `SELECT COUNT(*)::text AS n
+       FROM community_home_posts p
+       LEFT JOIN community_home_reads r
+         ON r.server_id = p.server_id AND r.user_id = $1
+      WHERE p.server_id = $2
+        AND p.status = 'published'
+        AND p.author_id <> $1
+        AND (r.last_seen_at IS NULL OR p.published_at > r.last_seen_at)
+        ${visibilityFilter}`,
+    [viewerId, serverId],
+  );
+  return Number(result.rows[0]?.n ?? 0);
+}
+
+/** Stamp the feed as read up to now. Never fans out: it is one person's mark. */
+export async function markCommunityHomeRead(
+  serverId: string,
+  viewerId: string,
+): Promise<void> {
+  await getPool().query(
+    `INSERT INTO community_home_reads (server_id, user_id, last_seen_at)
+     VALUES ($1, $2, NOW())
+     ON CONFLICT (server_id, user_id)
+     DO UPDATE SET last_seen_at = NOW()`,
+    [serverId, viewerId],
+  );
 }
 
 export async function listCommunityHomeDrafts(
@@ -412,8 +553,9 @@ export async function listCommunityHomeDrafts(
   const result = await getPool().query<PostRow>(
     `SELECT ${postSelectSql("$1")}
       WHERE p.server_id = $2 AND p.status IN ('draft', 'scheduled')
-      ORDER BY p.updated_at DESC`,
-    [viewerId, serverId],
+      ORDER BY p.updated_at DESC
+      LIMIT $3`,
+    [viewerId, serverId, COMMUNITY_HOME_FEED_LIMIT],
   );
   return hydratePosts(result.rows, caps);
 }
@@ -1044,14 +1186,20 @@ export async function listCommunityHomeComments(
   if (!post.commentsEnabled && !(await resolveHomeViewerCaps(serverId, viewerId)).canManage) {
     return [];
   }
+  // The newest page, read oldest-first: a thread that outgrows the page is
+  // one whose beginning nobody is scrolling to anyway.
   const result = await getPool().query<CommentRow>(
-    `SELECT c.id, c.body, c.created_at, c.author_id,
-            u.display_name, u.username, u.discriminator, u.avatar_url
-       FROM community_home_comments c
-       JOIN users u ON u.id = c.author_id
-      WHERE c.post_id = $1
-      ORDER BY c.created_at ASC`,
-    [postId],
+    `SELECT * FROM (
+       SELECT c.id, c.body, c.created_at, c.author_id,
+              u.display_name, u.username, u.discriminator, u.avatar_url
+         FROM community_home_comments c
+         JOIN users u ON u.id = c.author_id
+        WHERE c.post_id = $1 ${notBlockedSql("$2")}
+        ORDER BY c.created_at DESC
+        LIMIT $3
+     ) recent
+     ORDER BY created_at ASC`,
+    [postId, viewerId, COMMUNITY_HOME_COMMENTS_LIMIT],
   );
   return result.rows.map(toComment);
 }
