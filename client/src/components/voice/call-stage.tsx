@@ -63,7 +63,10 @@ import { isScreenShareAtCap } from "@/lib/screen-share-roster";
 import { useTranslation, type MessageKey, type MessageVars } from "@/lib/i18n";
 import { PeerTileControls } from "@/components/voice/peer-tile-controls";
 import { startSoundLoop, stopSoundLoop } from "@/lib/sounds";
-import { requestSettingsSection } from "@/lib/settings-request";
+import {
+  requestConnectionCheck,
+  requestSettingsSection,
+} from "@/lib/settings-request";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
@@ -1199,6 +1202,16 @@ function ActiveCall({
           <span>{voiceState.error}</span>
           {/* Every microphone error is fixed by picking another microphone,
               so the banner carries the door to where that happens. */}
+          {voiceState.errorKind === "connection" && (
+            <button
+              type="button"
+              data-voice-error-check
+              className="rounded-md bg-danger/20 px-2 py-0.5 font-semibold text-danger hover:bg-danger/30"
+              onClick={() => requestConnectionCheck()}
+            >
+              {t("connection.check")}
+            </button>
+          )}
           {voiceState.errorKind === "mic" && (
             <button
               type="button"

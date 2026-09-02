@@ -310,3 +310,45 @@ describe("createRealtimeTransport", () => {
     expect(received).toHaveLength(1);
   });
 });
+
+describe("connection check hooks", () => {
+  it("counts refused tokens in a row and resets on a ready socket", async () => {
+    const transport = createRealtimeTransport();
+    transport.connect(async () => "token");
+    await flush();
+    expect(transport.getUnauthorizedStreak()).toBe(0);
+    sockets[0]!.open();
+    sockets[0]!.close(4401);
+    await flush();
+    expect(transport.getUnauthorizedStreak()).toBe(1);
+    expect(transport.getLastClose()?.code).toBe(4401);
+    expect(transport.getStatus()).toBe("unauthorized");
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    await flush();
+    sockets[1]!.open();
+    sockets[1]!.close(4401);
+    await flush();
+    expect(transport.getUnauthorizedStreak()).toBe(2);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    await flush();
+    sockets[2]!.accept();
+    await flush();
+    expect(transport.getUnauthorizedStreak()).toBe(0);
+    expect(transport.getStatus()).toBe("online");
+  });
+
+  it("retryNow skips the backoff", async () => {
+    const transport = createRealtimeTransport();
+    transport.connect(async () => "token");
+    await flush();
+    sockets[0]!.open();
+    sockets[0]!.close(1006);
+    await flush();
+    expect(sockets).toHaveLength(1);
+    transport.retryNow();
+    await flush();
+    expect(sockets).toHaveLength(2);
+  });
+});

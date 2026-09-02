@@ -24,3 +24,19 @@ export function onSettingsRequest(listener: Listener): () => void {
     listeners.delete(listener);
   };
 }
+
+/** "Run the connection check", from the voice stage or voice settings. */
+const checkListeners = new Set<() => void>();
+
+export function requestConnectionCheck(): void {
+  for (const listener of checkListeners) {
+    listener();
+  }
+}
+
+export function onConnectionCheckRequest(listener: () => void): () => void {
+  checkListeners.add(listener);
+  return () => {
+    checkListeners.delete(listener);
+  };
+}

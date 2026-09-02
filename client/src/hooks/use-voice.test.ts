@@ -244,6 +244,9 @@ function createTransport() {
     onStatusChange: () => {},
     getStatus: () => "online",
     isConnected: () => true,
+    retryNow: () => {},
+    getLastClose: () => null,
+    getUnauthorizedStreak: () => 0,
   };
   return { transport, sent };
 }

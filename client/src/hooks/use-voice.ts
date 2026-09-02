@@ -145,7 +145,7 @@ export interface VoiceState {
    * into voice settings next to the message, since picking another device
    * is the fix for every one of those.
    */
-  errorKind: "mic" | null;
+  errorKind: "mic" | "connection" | null;
   /**
    * Good news worth a line: the saved microphone could not start and the
    * call went ahead on another one. Says which, so nobody wonders why the
@@ -695,8 +695,8 @@ export function createVoiceController(transport: RealtimeTransport) {
         manager?.dispose();
         manager = null;
         transport.sendVoice({ type: "leave-voice-room" });
-        state.error =
-          "Voice connection timed out. Is the server running and WebSocket connected?";
+        state.error = translateMessage("voice.error.joinTimeout");
+        state.errorKind = "connection";
         state.status = "idle";
         state.peerId = null;
         state.self = null;

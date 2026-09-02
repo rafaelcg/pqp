@@ -53,6 +53,9 @@ function createTransport() {
     onStatusChange: () => {},
     getStatus: () => (state.connected ? "online" : "reconnecting"),
     isConnected: () => state.connected,
+    retryNow: () => {},
+    getLastClose: () => null,
+    getUnauthorizedStreak: () => 0,
   };
   return { transport, sent, state };
 }
