@@ -122,6 +122,7 @@ import {
   getVoicePeer,
   getVoicePeerIdentities,
   notifyVoiceModeration,
+  refreshVoiceIdentity,
 } from "../ws/voice.js";
 // --- voice moderation ---
 import { setSfuUserMuted } from "../voice/admin.js";
@@ -1092,6 +1093,13 @@ function announceProfile(updated: DbUser): void {
     username: updated.username,
     tag: formatUserTag(updated.username, updated.discriminator),
     avatarUrl: updated.avatar_url,
+  });
+  // The frame above repaints chat, the member list and the person's own
+  // panel. A call they are already in copied their label when they joined,
+  // so without this it keeps showing the old one to everybody in the room.
+  void refreshVoiceIdentity(updated.id, {
+    display_name: updated.display_name,
+    avatar_url: updated.avatar_url,
   });
 }
 
@@ -3774,6 +3782,15 @@ router.patch(
         await requireOutranked(serverId!, user.id, userId!, "kick");
       }
       await setMemberNickname(serverId!, userId!, body.nickname);
+      // A nickname is what this person is called in this server, calls
+      // included: refresh any room they are sitting in right now.
+      const renamed = await getUserById(userId!);
+      if (renamed) {
+        void refreshVoiceIdentity(userId!, {
+          display_name: renamed.display_name,
+          avatar_url: renamed.avatar_url,
+        });
+      }
       await logAudit({
         serverId: serverId!,
         actorId: user.id,

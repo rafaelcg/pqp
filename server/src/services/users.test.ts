@@ -26,6 +26,8 @@ const {
   placeholderDisplayName,
   upsertUser,
   updateProfile,
+  resolveMemberName,
+  setMemberNickname,
 } = await import("./users.js");
 
 /**
@@ -446,5 +448,57 @@ describeDb("the email scrub migration", () => {
     await initDb();
 
     expect((await read("user_again")).display_name).toBe("chosen@example.com");
+  });
+});
+
+describeDb("resolveMemberName", () => {
+  beforeAll(async () => {
+    await initDb();
+  });
+
+  beforeEach(async () => {
+    await getPool().query(`TRUNCATE users RESTART IDENTITY CASCADE`);
+  });
+
+  afterAll(async () => {
+    await closePool();
+  });
+
+  async function member(): Promise<{ serverId: string; user: { id: string; display_name: string } }> {
+    const user = await upsertUser({
+      clerkId: `clerk-${Math.random()}`,
+      displayName: "Rafael Cammarano",
+      avatarUrl: null,
+    });
+    const { createServer } = await import("./servers.js");
+    const created = await createServer("Mesa", user.id);
+    return {
+      serverId: created.server.id,
+      user: { id: user.id, display_name: user.display_name },
+    };
+  }
+
+  it("prefers the nickname set in that server", async () => {
+    const { serverId, user } = await member();
+    expect(await resolveMemberName(serverId, user)).toBe("Rafael Cammarano");
+
+    await setMemberNickname(serverId, user.id, "Qriox");
+    expect(await resolveMemberName(serverId, user)).toBe("Qriox");
+  });
+
+  it("falls back to the account name for a blank nickname or none at all", async () => {
+    const { serverId, user } = await member();
+    await setMemberNickname(serverId, user.id, "   ");
+    expect(await resolveMemberName(serverId, user)).toBe("Rafael Cammarano");
+
+    await setMemberNickname(serverId, user.id, null);
+    expect(await resolveMemberName(serverId, user)).toBe("Rafael Cammarano");
+  });
+
+  it("has no nickname to apply outside a server", async () => {
+    const { serverId, user } = await member();
+    await setMemberNickname(serverId, user.id, "Qriox");
+    // A conversation call belongs to no server.
+    expect(await resolveMemberName(null, user)).toBe("Rafael Cammarano");
   });
 });

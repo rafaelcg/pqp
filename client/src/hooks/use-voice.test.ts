@@ -28,6 +28,8 @@ interface ManagerStub {
    * wiring is the whole of how a receiver learns a share ended.
    */
   sharingScreen: [string, boolean][];
+  /** Renames pushed onto live peers, so a profile edit can be observed. */
+  identities: [string, { displayName: string; avatarUrl: string | null }][];
 }
 
 const playCueMock = vi.hoisted(() => vi.fn());
@@ -47,6 +49,7 @@ vi.mock("@/lib/peer-connection-manager", () => ({
       disposed: false,
       screenStreams: [],
       sharingScreen: [],
+      identities: [],
     };
     managers.push(stub);
     return {
@@ -64,6 +67,10 @@ vi.mock("@/lib/peer-connection-manager", () => ({
       },
       onPeerStateChange: () => {},
       connectToPeer: (peerId: string) => stub.peerIds.push(peerId),
+      setPeerIdentity: (
+        peerId: string,
+        identity: { displayName: string; avatarUrl: string | null },
+      ) => stub.identities.push([peerId, identity]),
       removePeer: () => {},
       handleOffer: async () => {},
       handleAnswer: async () => {},
@@ -1135,6 +1142,48 @@ describe("lobby presence sounds", () => {
       peerId: other.peerId,
     } as never);
     expect(playCueMock).toHaveBeenCalledWith("voiceLeave");
+  });
+
+  it("renames a peer in place, with no join cue and no new connection", async () => {
+    // The bug this pins: a nickname or a profile rename reached every surface
+    // except the call, because the label is copied onto the peer at join.
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    await voice.join(CHANNEL);
+    // The mesh only exists once the room has welcomed us, and the mesh is
+    // what holds a tile's label.
+    voice.handleSignaling(welcome("mesh"));
+    await settle();
+    const other = {
+      peerId: "peer-2",
+      userId: "22222222-2222-4222-8222-222222222222",
+      displayName: "Rafael Cammarano",
+      avatarUrl: null,
+      sharingScreen: false,
+      muted: false,
+      deafened: false,
+    };
+    voice.handleSignaling({ type: "peer-joined", peer: other } as never);
+    playCueMock.mockClear();
+
+    voice.handleSignaling({
+      type: "peer-updated",
+      peer: { ...other, displayName: "Qriox", avatarUrl: "https://x.test/a.png" },
+    } as never);
+
+    // The mesh holds the label for the tile, so that is where the rename
+    // has to land (`remotePeers` itself is the manager's own state, stubbed
+    // out here).
+    const manager = managers.at(-1)!;
+    expect(manager.identities).toContainEqual([
+      "peer-2",
+      expect.objectContaining({
+        displayName: "Qriox",
+        avatarUrl: "https://x.test/a.png",
+      }),
+    ]);
+    // Nobody walked in, so nobody hears anybody walk in.
+    expect(playCueMock).not.toHaveBeenCalledWith("voiceJoin");
   });
 
   it("plays leave when you hang up", async () => {
