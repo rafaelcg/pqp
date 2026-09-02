@@ -926,6 +926,19 @@ export async function handleVoiceMessage(
           ? resume.peerId
           : undefined;
 
+    // Cold join after a blip: drop this user's orphan in the same channel so
+    // an old client that cannot resume does not occupy two slots until TTL.
+    // Must run before the mesh ceiling. Orphans still count as occupying, and
+    // eight leftover seats of the same account (dev bypass, e2e, a client that
+    // never sent the token) would otherwise refuse the next cold join as full.
+    if (resume.kind === "cold") {
+      for (const ghost of getRoomPeers(payload.voiceChannelId)) {
+        if (ghost.userId === user.id && ghost.orphanedAt !== undefined) {
+          removePeer(ghost.id);
+        }
+      }
+    }
+
     // Enforce the mesh ceiling server-side. Above it, each client would carry
     // one Opus uplink per peer and quality collapses — reject instead. The
     // ceiling is a property of the mesh, so it does not apply once media is
@@ -959,16 +972,6 @@ export async function handleVoiceMessage(
     if (resume.kind === "reattach") {
       await reattachVoicePeer(resume.peer, socket, user);
       return;
-    }
-
-    // Cold join after a blip: drop this user's orphan in the same channel so
-    // an old client that cannot resume does not occupy two slots until TTL.
-    if (resume.kind === "cold") {
-      for (const ghost of getRoomPeers(payload.voiceChannelId)) {
-        if (ghost.userId === user.id && ghost.orphanedAt !== undefined) {
-          removePeer(ghost.id);
-        }
-      }
     }
 
     const currentPeerId = socketToPeerId.get(socket);

@@ -243,6 +243,22 @@ describe("voice session resume", () => {
     expect(frame(again, "welcome")?.resumed).toBeUndefined();
   });
 
+  it("cold-joins after the same user's orphans have filled the mesh", async () => {
+    const channel = randomUUID();
+    const userId = randomUUID();
+    const seats: Recorder[] = [];
+    for (let i = 0; i < MESH_VOICE_LIMIT; i++) {
+      seats.push(await join(recorder(), userId, channel));
+    }
+    for (const rec of seats) {
+      removeVoicePeerBySocket(rec.socket);
+    }
+
+    const again = await join(recorder(), userId, channel);
+    expect(frame(again, "welcome")).toBeTruthy();
+    expect(typesOf(again)).not.toContain("voice-room-full");
+  });
+
   it("admits a resume into a full mesh of orphans", async () => {
     const channel = randomUUID();
     const occupants: { rec: Recorder; userId: string; peerId: string; token: string }[] =
