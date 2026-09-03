@@ -232,3 +232,34 @@ export function capturesSystemAudio(input: {
 }): boolean {
   return input.hasAudio && input.displaySurface === "monitor";
 }
+
+/**
+ * Does a share we are RECEIVING carry sound?
+ *
+ * WHY THIS EXISTS. The presenter has always been told when their own share is
+ * silent ("Você está transmitindo (sem som)"). The person watching was told
+ * nothing, so the only move available to somebody staring at a silent stream
+ * was to ask in chat, which they did, over and over: "dá pra ouvir o som do
+ * compartilhamento? pq não to conseguindo ouvir" (QG, 3 Sep 2026, and a dozen
+ * times before it).
+ *
+ * The old reason for the silence was that whether a peer's share carries sound
+ * is "their business, and we would only be guessing". That was true of what
+ * they PICKED and is not true of what we RECEIVED: the audio track either
+ * arrived on this machine or it did not. Reading it is a fact, not a guess.
+ *
+ * `ended` tracks do not count. A track that has stopped is one the presenter
+ * turned off mid-share, and the viewer's answer to "can I hear this" is the
+ * same as if it had never come. `muted` is deliberately NOT consulted: on a
+ * remote track it means "no data this instant", which is briefly true for
+ * every healthy track right after it arrives, and reading it would flash "sem
+ * som" over a share that is about to be perfectly audible.
+ *
+ * Takes the tracks rather than the stream so the decision is testable without
+ * a MediaStream, which jsdom does not implement.
+ */
+export function shareStreamHasAudio(
+  audioTracks: readonly { readyState?: string }[],
+): boolean {
+  return audioTracks.some((track) => track.readyState !== "ended");
+}

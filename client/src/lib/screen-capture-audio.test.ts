@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   capturesSystemAudio,
   screenCaptureOptions,
+  shareStreamHasAudio,
   shellCarriesScreenAudio,
   type ScreenCaptureEnvironment,
 } from "./screen-capture-audio";
@@ -167,5 +168,33 @@ describe("capturesSystemAudio", () => {
     expect(
       capturesSystemAudio({ displaySurface: null, hasAudio: true }),
     ).toBe(false);
+  });
+});
+describe("shareStreamHasAudio", () => {
+  it("is false when the share arrived with no audio track", () => {
+    // The whole reason this exists: the viewer of a silent share used to be
+    // told nothing and had to ask in chat.
+    expect(shareStreamHasAudio([])).toBe(false);
+  });
+
+  it("is true for a live audio track", () => {
+    expect(shareStreamHasAudio([{ readyState: "live" }])).toBe(true);
+  });
+
+  it("does not count a track the presenter already stopped", () => {
+    expect(shareStreamHasAudio([{ readyState: "ended" }])).toBe(false);
+  });
+
+  it("counts a track whose readyState the engine does not report", () => {
+    // Absent is not "ended". Guessing silence over a share that is audible is
+    // the worse of the two mistakes: it sends somebody to ask the presenter to
+    // fix a thing that is not broken.
+    expect(shareStreamHasAudio([{}])).toBe(true);
+  });
+
+  it("is true when one of several tracks is still live", () => {
+    expect(
+      shareStreamHasAudio([{ readyState: "ended" }, { readyState: "live" }]),
+    ).toBe(true);
   });
 });
