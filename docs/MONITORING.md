@@ -22,7 +22,7 @@ Why this and not something else:
 | Channel | Verdict |
 |---|---|
 | **GitHub Issues** | **Chosen.** Free and unmetered on a public repo. Notifies by email *and* mobile push. The issue thread is the incident history, permanently and searchably. And github.com is a separate failure domain from Fly and Cloudflare, so it still works during the outage it is reporting. |
-| Email to `contato@pqp.gg` | Rejected: **it currently bounces.** Cloudflare Email Routing has the DNS records but no verified destination address, so alerts would be written into a black hole — the worst possible outcome, because it *looks* like it works. |
+| Email to `contato@pqp.gg` | Rejected as the alert channel. Cloudflare Email Routing destination is verified and `contato@pqp.gg` delivers (as of 2026-08-29), but that address is for human contact — do **not** route automated or provider alerts there. GitHub Issues remain the chosen channel above. |
 | A webhook into pqp itself | Rejected as circular. pqp has Discord-compatible incoming webhooks, but "the API is down" is the single most likely alert, and the API would be the thing delivering it. It fails exactly when it matters. |
 
 ### The no-crying-wolf rules
@@ -138,7 +138,7 @@ Server side: `server/src/services/readiness.ts` (the whole decision, tested in
 | Method | `GET` (or `HEAD`; both are answered) | |
 | Timeout | 10–30 seconds | The endpoint answers in milliseconds; a long timeout only avoids false alarms from the monitor's own network. |
 | Alert threshold | Alert after **2** failures if the plan offers it | Belt and braces on top of the server-side grace window. |
-| Alert contacts | An email you actually read, **not** `contato@pqp.gg` | That address currently bounces — see the table at the top of this document. |
+| Alert contacts | An email you actually read, **not** `contato@pqp.gg` | Delivery works (as of 2026-08-29), but keep provider alerts off that address — see the table at the top of this document. |
 | SSL expiry alerts | On | Free second opinion on `tls-expiry`. |
 
 Do **not** point UptimeRobot at `/health` (it is Fly's, and it exposes the
@@ -417,16 +417,18 @@ this repo cannot reach.
 
 **Clerk** (dashboard.clerk.com)
 - Usage / plan-limit warning emails for the production instance.
-- Make sure the billing email is one you actually read, since it is *not*
-  `contato@pqp.gg` while that address bounces.
+- Make sure the billing email is one you actually read — do **not** use
+  `contato@pqp.gg` for Clerk alerts (delivery works as of 2026-08-29, but that
+  address is for human contact, not provider alerts).
 
 **Porkbun** (porkbun.com)
 - Confirm auto-renew is on for `pqp.gg` **and** that renewal-reminder emails go
   to a working address.
 
-**Cloudflare Email Routing** — fixing `contato@pqp.gg` is worth doing on its own
-merits: several of the alerts above are delivered by email to an address that
-currently bounces.
+**Cloudflare Email Routing** — destination verified; `contato@pqp.gg` delivers
+as of 2026-08-29. Still do **not** route the provider alerts above there — use
+an address you actually read for automated email; keep `contato@` for human
+contact.
 
 ---
 

@@ -27,7 +27,7 @@ export const termsPtBr: LegalDocument = {
   description:
     "Termos de uso do serviço hospedado pqp.gg: o que o pqp é de verdade, quem pode usar (18+), uso aceitável, moderação, denúncias e remoção de conteúdo.",
   heading: "Termos de Uso",
-  updated: "7 de agosto de 2026",
+  updated: "2 de setembro de 2026",
   sections: [
     {
       id: "intro",
@@ -46,15 +46,18 @@ export const termsPtBr: LegalDocument = {
     },
     {
       id: "before-you-move",
-      sourceRev: "f2ff7d1f",
+      sourceRev: "11ab44a2",
       heading: "Leia isto antes de trazer a sua galera pra cá",
       body: (
         <>
           <p>
             O pqp é um projeto pessoal, feito por diversão por uma pessoa no
-            tempo livre dela. Não tem empresa por trás, não tem investimento,
-            não tem receita e não tem equipe de suporte — quem lê o seu e-mail é
-            quem escreveu o código. O serviço é oferecido{" "}
+            tempo livre dela, com a família ajudando no produto. Não tem
+            empresa, não tem produto pago e não tem equipe de suporte. Quem lê o
+            seu e-mail é quem escreveu o código. Dá para mandar um presente
+            para a hospedagem pelo GitHub Sponsors ou Pix, em{" "}
+            <Link to="/apoie">/apoie</Link>. Isso não destrava nada: sem selo,
+            sem recurso extra, sem reembolso. O serviço é oferecido{" "}
             <strong>no estado em que se encontra</strong>: não existe garantia
             de disponibilidade, não existe nível de serviço nenhum e não existe
             promessa de que o pqp.gg vai estar de pé no ano que vem. Recursos
@@ -72,7 +75,7 @@ export const termsPtBr: LegalDocument = {
     },
     {
       id: "age",
-      sourceRev: "c8621238",
+      sourceRev: "9c06c23c",
       heading: "Você precisa ter 18 anos ou mais",
       body: (
         <>
@@ -87,8 +90,12 @@ export const termsPtBr: LegalDocument = {
           </p>
           <p>
             Se a gente souber que uma conta é de alguém com menos de 18 anos,
-            ela vai ser encerrada e os dados ligados a ela apagados, sem aviso e
-            sem recurso. A gente pode fazer o mesmo quando tiver uma suspeita de
+            ela vai ser encerrada e os dados ligados a ela apagados, sem aviso.
+            Encerramento por segurança de menor não tem recurso. Se você
+            digitou a data errada na checagem de 18 anos, escreva para{" "}
+            <strong>contato@pqp.gg</strong> pelo e-mail dessa conta: isso é
+            data digitada errada, não recurso de uma decisão de segurança de
+            menor. A gente também pode encerrar quando tiver uma suspeita de
             boa-fé de que o titular da conta tem menos de 18 anos — por exemplo,
             pelo que a pessoa fala no chat ou por uma denúncia que a gente
             recebe.
@@ -115,20 +122,22 @@ export const termsPtBr: LegalDocument = {
     },
     {
       id: "service",
-      sourceRev: "ff8416fd",
+      sourceRev: "13359b9c",
       heading: "O serviço",
       body: (
         <p>
           O pqp é um produto de chat e voz em tempo real: servidores, canais de
-          texto e de voz, mensagens diretas, convites e o que vem junto. É de
-          graça, e hoje não existe plano pago. A gente pode mudar, pausar ou
-          encerrar qualquer parte disso.
+          texto e de voz, mensagens diretas, convites, perfil público opcional,
+          contas de jogo ligadas se você quiser, e o que vem junto. É de graça,
+          e não existe plano pago. Uma contribuição em{" "}
+          <Link to="/apoie">/apoie</Link> não muda isso. A gente pode mudar,
+          pausar ou encerrar qualquer parte disso.
         </p>
       ),
     },
     {
       id: "accounts",
-      sourceRev: "d26463d1",
+      sourceRev: "cb22aa2b",
       heading: "Contas",
       body: (
         <>
@@ -207,18 +216,22 @@ export const termsPtBr: LegalDocument = {
     },
     {
       id: "your-content",
-      sourceRev: "bb46aab7",
+      sourceRev: "3ab311f9",
       heading: "O seu conteúdo",
       body: (
         <p>
           Você continua dono das mensagens, dos arquivos e do resto do conteúdo
-          que publica. Você nos concede uma licença limitada e não exclusiva
-          para hospedar, armazenar, transmitir e exibir esse conteúdo para o
-          produto funcionar — por exemplo, mostrar o seu histórico de mensagens
-          para os membros do seu servidor. Essa licença existe para operar o
-          serviço e termina quando o conteúdo é apagado, exceto pelas cópias que
-          a gente precise manter para cumprir uma obrigação legal. Você é
-          responsável pelo que publica e por ter o direito de publicar.
+          que publica, inclusive um perfil público, um banner, depoimentos e um
+          layout do Discord que você cola ao criar um servidor. Você nos concede
+          uma licença limitada e não exclusiva para hospedar, armazenar,
+          transmitir e exibir esse conteúdo para o produto funcionar — por
+          exemplo, mostrar o seu histórico de mensagens para os membros do seu
+          servidor, ou mostrar um depoimento aprovado numa página pública que
+          você publicou. Essa licença existe para operar o serviço e termina
+          quando o conteúdo é apagado, exceto pelas cópias que a gente precise
+          manter para cumprir uma obrigação legal. Você é responsável pelo
+          que publica e por ter o direito de publicar, inclusive qualquer ícone
+          de servidor que você importar.
         </p>
       ),
     },
@@ -266,13 +279,20 @@ export const termsPtBr: LegalDocument = {
     },
     {
       id: "reporting",
-      sourceRev: "aeddd920",
+      sourceRev: "357c1d96",
       heading: "Como denunciar abuso",
       body: (
         <>
           <p>
-            Para denunciar um conteúdo, uma pessoa ou um servidor inteiro,
-            escreva para <strong>contato@pqp.gg</strong>. Inclua:
+            Se você tem conta, use a ação <strong>Denunciar</strong> numa
+            mensagem, num membro ou no cartão de uma comunidade. Esse é o canal
+            de denúncia. Ele manda um recorte do conteúdo denunciado para quem
+            pode agir.
+          </p>
+          <p>
+            Você também pode escrever para <strong>contato@pqp.gg</strong>. É
+            assim que se denuncia sem ter conta, e como denunciar uma conta que
+            você acredita ser de menor de idade. Inclua:
           </p>
           <ul>
             <li>
@@ -286,11 +306,6 @@ export const termsPtBr: LegalDocument = {
             <li>Por que isso quebra estes termos, em uma ou duas frases</li>
             <li>Prints, se você tiver, e mais ou menos quando aconteceu</li>
           </ul>
-          <p>
-            A gente está construindo um botão de denúncia dentro do app; até ele
-            existir, o e-mail é o canal de denúncia. Você pode denunciar sem ter
-            conta.
-          </p>
           <p>
             <strong>O que acontece depois, sem enfeite.</strong> Uma pessoa lê
             as denúncias. Não existe equipe de moderação, não existe escala e
@@ -389,17 +404,20 @@ export const termsPtBr: LegalDocument = {
     },
     {
       id: "voice",
-      sourceRev: "273019a2",
+      sourceRev: "3598afd0",
       heading: "Voz e mídia",
       body: (
         <p>
-          A voz usa WebRTC. Na configuração que o pqp.gg roda hoje, o áudio vai
-          direto entre os participantes: não passa pelos nossos servidores, não
-          é gravado por eles nem armazenado neles. Esse desenho tem um teto
-          prático: cada pessoa no canal se conecta com todas as outras, então um
-          canal de voz cheio pesa na conexão de todo mundo. A qualidade depende
-          da sua rede e da rede das outras pessoas, e a gente não garante áudio
-          sem interrupção. Veja a{" "}
+          A voz usa WebRTC. Na configuração que o pqp.gg roda hoje, o áudio e o
+          vídeo de tela compartilhada vão direto entre os participantes: não
+          passam pelos nossos servidores, não são gravados por eles nem
+          armazenados neles. Uma watch party sincroniza um vídeo do YouTube no
+          aparelho de cada um; a gente não hospeda esse stream. Esse desenho tem
+          um teto prático: cada pessoa no canal se conecta com todas as outras,
+          então um canal de voz cheio pesa na conexão de todo mundo. A qualidade
+          depende da sua rede e da rede das outras pessoas, e a gente não
+          garante áudio sem interrupção. Você responde pelo que compartilha na
+          tela e pelo que toca numa watch party. Veja a{" "}
           <Link to="/privacy">Política de Privacidade</Link> para o que isso
           significa para os seus dados.
         </p>
