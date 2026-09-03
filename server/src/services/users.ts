@@ -945,6 +945,34 @@ export async function updateMemberRole(
   await bumpPermissionsVersion(serverId);
 }
 
+/**
+ * What one person is called inside one server: their nickname there, or the
+ * name on their account.
+ *
+ * The same `COALESCE(NULLIF(nickname, ''), display_name)` that messages,
+ * polls and reactions already do in their own queries, as a function, because
+ * voice needed it too and was the one surface that did not have it — so a
+ * member with a nickname had their account name read out to the whole call.
+ *
+ * `serverId` is null for a conversation call, which belongs to no server and
+ * therefore has no nickname to apply.
+ */
+export async function resolveMemberName(
+  serverId: string | null,
+  user: { id: string; display_name: string },
+): Promise<string> {
+  if (!serverId) {
+    return user.display_name;
+  }
+  const result = await getPool().query<{ nickname: string | null }>(
+    `SELECT nickname FROM server_members
+      WHERE server_id = $1 AND user_id = $2`,
+    [serverId, user.id],
+  );
+  const nickname = result.rows[0]?.nickname?.trim();
+  return nickname ? nickname : user.display_name;
+}
+
 export async function setMemberNickname(
   serverId: string,
   userId: string,

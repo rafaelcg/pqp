@@ -1538,6 +1538,30 @@ export function createVoiceController(transport: RealtimeTransport) {
         );
         playCue("voiceJoin");
         break;
+      case "peer-updated": {
+        // A rename or a new picture, not an arrival: no join cue, no new
+        // connection, and the tile keeps whatever media it already has.
+        const identity = toIdentity(message.peer);
+        identities.set(message.peer.peerId, identity);
+        manager?.setPeerIdentity(message.peer.peerId, identity);
+        if (state.self?.peerId === message.peer.peerId) {
+          state.self = message.peer;
+        }
+        // The SFU path builds `remotePeers` from LiveKit events, which a
+        // rename is not one of, so patch the roster we are already holding
+        // rather than waiting for the next thing to happen in the room.
+        state.remotePeers = state.remotePeers.map((peer) =>
+          peer.peerId === message.peer.peerId
+            ? {
+                ...peer,
+                displayName: message.peer.displayName,
+                avatarUrl: message.peer.avatarUrl,
+              }
+            : peer,
+        );
+        emit();
+        break;
+      }
       case "peer-left":
         knownPeerIds.delete(message.peerId);
         identities.delete(message.peerId);

@@ -99,6 +99,17 @@ export const peerJoinedMessageSchema = z.object({
   peer: voiceParticipantSchema,
 });
 
+/**
+ * A peer already in the room now shows a different name or picture.
+ *
+ * Separate from `peer-joined` rather than a re-send of it: the client plays
+ * the join cue on that one, and a rename is not somebody walking in.
+ */
+export const peerUpdatedMessageSchema = z.object({
+  type: z.literal("peer-updated"),
+  peer: voiceParticipantSchema,
+});
+
 export const peerLeftMessageSchema = z.object({
   type: z.literal("peer-left"),
   peerId: z.string(),
@@ -274,6 +285,7 @@ export type VoiceModerationMessage = z.infer<typeof voiceModerationMessageSchema
 export const voiceSignalingMessageSchema = z.discriminatedUnion("type", [
   welcomeMessageSchema,
   peerJoinedMessageSchema,
+  peerUpdatedMessageSchema,
   peerLeftMessageSchema,
   voiceRosterMessageSchema,
   voiceRoomFullMessageSchema,
@@ -298,6 +310,7 @@ export type VoiceTransportUnsupportedMessage = z.infer<
 >;
 export type WelcomeMessage = z.infer<typeof welcomeMessageSchema>;
 export type PeerJoinedMessage = z.infer<typeof peerJoinedMessageSchema>;
+export type PeerUpdatedMessage = z.infer<typeof peerUpdatedMessageSchema>;
 export type PeerLeftMessage = z.infer<typeof peerLeftMessageSchema>;
 export type VoiceRosterMessage = z.infer<typeof voiceRosterMessageSchema>;
 export type VoiceRoomFullMessage = z.infer<typeof voiceRoomFullMessageSchema>;
