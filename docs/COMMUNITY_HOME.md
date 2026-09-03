@@ -58,6 +58,16 @@ the client never reconstructs a locked post from what it has. The staff-only
 only changes how a manager's own screen renders `post.locked`; it exists so
 staff can check the teaser without a second account.
 
+Staff CMS opens from the header **pen** (`MANAGE_SERVER`). Compact header is
+four slots: drawer mark · title (Home / Baú) · staff pen · overflow. Inspector
+and drafts live in that overflow — never Feed|Compose|Drafts tabs, never a
+second viewer row, never a FAB. Dirty close of compose saves a draft into
+overflow; drafts never mix into the member feed.
+
+Card footers are like + comment count only. Join-call chrome stays off Baú
+cards. Comment teasers on the card are 0–2 (owner reply else oldest, 2-line
+clamp); the rest opens on detail tap.
+
 The unlock CTA is disabled and reads "VIP, coming soon". There is no checkout.
 See [`BAU_VIP_STRATEGY.md`](./BAU_VIP_STRATEGY.md) for what would replace it.
 

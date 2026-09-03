@@ -1,6 +1,5 @@
 import type { Gif, PublicUser } from "@pqp/shared";
 import {
-  Archive,
   CalendarClock,
   Download,
   Eye,
@@ -8,6 +7,7 @@ import {
   Lock,
   Menu,
   MessageCircle,
+  MoreHorizontal,
   Pencil,
   Pin,
   PinOff,
@@ -84,13 +84,12 @@ import {
  * and written to the API; the component owns no truth of its own beyond
  * what is in flight.
  *
- * Shape of the pane:
- *   header   Baú · server name · (staff) Feed | Compose | Drafts
- *   body     intro card (until dismissed) · posts · empty states
+ * Shape of the pane (chrome lock):
+ *   header   drawer · title (Home/Baú) · staff pen · staff overflow
+ *   body     intro · posts · empty states; compose/drafts via pen/overflow
  *
- * Comments are deliberately not chat. A card shows the two newest and a
- * "see all" link; the full list is fetched only when asked for. That is what
- * keeps a popular post from turning the feed into #geral.
+ * Comments are deliberately not chat. A card shows 0–2 teasers (owner reply
+ * else oldest, 2-line clamp); the rest opens on detail tap.
  */
 
 type Props = {
@@ -385,10 +384,10 @@ function CommentRow({
 }
 
 /**
- * The comment block under a published post.
+ * Comments under a published post.
  *
- * Collapsed: count + the two newest. Expanded: the whole list, fetched on
- * demand. The composer is a single line, never a full chat input.
+ * Card: 0–2 teasers (API-ordered: owner reply else oldest), 2-line clamp.
+ * Detail tap expands the full list + composer. Not a newest accordion.
  */
 function CommentsBlock({
   post,
@@ -420,8 +419,11 @@ function CommentsBlock({
   const inputRef = useRef<HTMLInputElement>(null);
   const pickerAnchorRef = useRef<HTMLDivElement>(null);
 
-  const shown = expanded && all ? all : post.commentTeaser;
-  const hiddenCount = Math.max(0, post.commentCount - post.commentTeaser.length);
+  const teasers = post.commentsEnabled
+    ? post.commentTeaser.slice(0, 2)
+    : [];
+  const shown = expanded && all ? all : teasers;
+  const hiddenCount = Math.max(0, post.commentCount - teasers.length);
 
   async function expand() {
     if (expanded) {
@@ -460,7 +462,12 @@ function CommentsBlock({
         { body },
       );
       setDraft("");
-      const teaser = [...post.commentTeaser, comment].slice(-2);
+      // Keep card teasers stable (oldest/owner set from the API). New words
+      // land in the detail list; refill the teaser only when still under 2.
+      const teaser =
+        post.commentTeaser.length < 2
+          ? [...post.commentTeaser, comment].slice(0, 2)
+          : post.commentTeaser;
       onPatch({ commentTeaser: teaser, commentCount: post.commentCount + 1 });
       setAll((previous) => (previous ? [...previous, comment] : previous));
     } catch (error) {
@@ -505,7 +512,27 @@ function CommentsBlock({
 
   return (
     <div className="mt-3 border-t border-ink-4/60 pt-3" data-home-comments>
-      {shown.length > 0 && (
+      {!expanded && teasers.length > 0 && (
+        <ul className="space-y-1.5" data-home-comment-teaser>
+          {teasers.map((comment) => (
+            <li
+              key={comment.id}
+              className="rounded-lg bg-ink/60 px-3 py-2 text-sm"
+            >
+              <p className="font-semibold text-paper">
+                {comment.author.displayName}
+              </p>
+              {gifMessageMedia(comment.body) ? (
+                <GifAttachment media={gifMessageMedia(comment.body)!} />
+              ) : (
+                <p className="line-clamp-2 text-paper-muted">{comment.body}</p>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {expanded && shown.length > 0 && (
         <ul className="space-y-2">
           {shown.map((comment) => (
             <CommentRow
@@ -525,6 +552,7 @@ function CommentsBlock({
           onClick={() => void expand()}
           disabled={loading}
           data-home-comments-toggle
+          data-home-comments-open
         >
           {expanded
             ? t("communityHome.comments.showLess")
@@ -1243,6 +1271,18 @@ function ComposeCard({
   const editingPublished = state.editingStatus === "published";
   const preview = previewPost(state, me, serverId, isOwner);
 
+  async function handleClose() {
+    if (busy) {
+      return;
+    }
+    // Dirty close → draft in overflow. Never auto-unpublish a live post.
+    if (canSaveDraft && !editingPublished) {
+      await run("draft");
+      return;
+    }
+    onCancelEdit();
+  }
+
   return (
     <div className="space-y-3" data-home-compose-panel>
       <form
@@ -1259,16 +1299,16 @@ function ComposeCard({
               ? t("communityHome.compose.editTitle")
               : t("communityHome.compose.title")}
           </p>
-          {editing && (
-            <button
-              type="button"
-              className="inline-flex items-center gap-1 text-xs text-paper-muted hover:text-paper"
-              onClick={onCancelEdit}
-            >
-              <X className="h-3.5 w-3.5" aria-hidden />
-              {t("communityHome.compose.cancel")}
-            </button>
-          )}
+          <button
+            type="button"
+            className="inline-flex items-center gap-1 text-xs text-paper-muted hover:text-paper"
+            aria-label={t("common.close")}
+            onClick={() => void handleClose()}
+            data-home-compose-close
+          >
+            <X className="h-3.5 w-3.5" aria-hidden />
+            {t("communityHome.compose.cancel")}
+          </button>
         </div>
 
         <input
@@ -1675,8 +1715,7 @@ export function CommunityHomeFeed({
 
   // The inspector exists only for staff on a VIP-enabled instance; anybody
   // else always sees `post.locked` as the API computed it for them.
-  const inspectorActive = vipEnabled && canManageServer;
-  const inspectorMode = inspectorActive ? inspector : "auto";
+  const inspectorMode = canManageServer ? inspector : "auto";
 
   function patchPost(id: string, patch: Partial<CommunityHomePost>) {
     setPosts((previous) =>
@@ -1804,75 +1843,116 @@ export function CommunityHomeFeed({
     }
   }
 
+  const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
+
   const feedEmpty = posts !== null && posts.length === 0;
   const showIntro = !introDismissed && !canManageServer;
 
-  const tabs: { id: StaffTab; label: MessageKey; count?: number }[] = [
-    { id: "feed", label: "communityHome.tabs.feed" },
-    { id: "compose", label: "communityHome.tabs.compose" },
-    { id: "drafts", label: "communityHome.tabs.drafts", count: drafts.length },
-  ];
-  const staffTabs = (
-    <div
-      className="flex items-center gap-0.5 rounded-lg border border-ink-4 bg-ink-3 p-0.5 text-[11px]"
-      role="tablist"
-      data-home-staff-tabs
-    >
-      {tabs.map((tab) => (
-        <button
-          key={tab.id}
-          type="button"
-          role="tab"
-          aria-selected={staffTab === tab.id}
-          className={cn(
-            "rounded-md px-2 py-1 text-paper-muted transition-colors",
-            staffTab === tab.id && "bg-ink-4 font-semibold text-paper",
-          )}
-          onClick={() => setStaffTab(tab.id)}
-          data-home-staff-tab={tab.id}
-        >
-          {t(tab.label)}
-          {tab.count ? (
-            <span className="ml-1 tabular-nums opacity-70">{tab.count}</span>
-          ) : null}
-        </button>
-      ))}
-    </div>
-  );
+  function openCompose() {
+    setHeaderMenuOpen(false);
+    setStaffTab("compose");
+  }
+
+  function openDrafts() {
+    setHeaderMenuOpen(false);
+    setStaffTab("drafts");
+  }
 
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-community-home-feed>
       <header className="flex h-14 shrink-0 items-center gap-3 border-b border-ink-4/60 px-4">
-        {onOpenNav && (
-          <button
-            type="button"
-            className="rounded-md p-1.5 hover:bg-ink-3 md:hidden"
-            aria-label={t("empty.openNav")}
-            onClick={onOpenNav}
-          >
-            <Menu className="h-5 w-5" />
-          </button>
-        )}
-        <Archive aria-hidden="true" className="h-5 w-5 shrink-0 text-paper-muted" />
-        <div className="min-w-0">
-          <h1 className="truncate font-display text-base font-bold leading-tight">
-            {t("communityHome.title")}
-          </h1>
-          <p className="truncate text-[11px] text-paper-muted">
-            {t("communityHome.subtitle", { name: serverName })}
-          </p>
+        <div className="flex h-11 w-11 shrink-0 items-center justify-center">
+          {onOpenNav && (
+            <button
+              type="button"
+              className="inline-flex h-11 w-11 items-center justify-center rounded-md text-paper-muted hover:bg-ink-3 hover:text-paper md:hidden"
+              aria-label={t("empty.openNav")}
+              onClick={onOpenNav}
+              data-home-drawer-mark
+            >
+              <Menu className="h-5 w-5" aria-hidden />
+            </button>
+          )}
         </div>
-        {/* Desktop: tabs sit in the header. A phone puts them on their own
-            row below, otherwise three tabs squeeze the title to one letter. */}
-        {canManageServer && (
-          <div className="ml-auto hidden shrink-0 sm:block">{staffTabs}</div>
+        <h1 className="min-w-0 flex-1 font-display text-base font-bold text-paper">
+          {t("communityHome.title")}
+        </h1>
+        {canManageServer ? (
+          <>
+            <button
+              type="button"
+              className="inline-flex h-11 w-11 items-center justify-center rounded-md text-paper-muted hover:bg-ink-3 hover:text-paper"
+              aria-label={t("communityHome.compose.title")}
+              onClick={openCompose}
+              data-home-staff-pen
+            >
+              <Pencil className="h-4 w-4" aria-hidden />
+            </button>
+            <div className="relative">
+              <button
+                type="button"
+                className="inline-flex h-11 w-11 items-center justify-center rounded-md text-paper-muted hover:bg-ink-3 hover:text-paper"
+                aria-label={t("chat.more")}
+                aria-expanded={headerMenuOpen}
+                onClick={() => setHeaderMenuOpen((open) => !open)}
+                data-home-staff-overflow
+              >
+                <MoreHorizontal className="h-4 w-4" aria-hidden />
+              </button>
+              {headerMenuOpen && (
+                <div
+                  className="absolute right-0 z-30 mt-1 w-52 rounded-lg border border-ink-4 bg-ink-2 p-1 shadow-xl"
+                  data-home-staff-overflow-menu
+                >
+                  <p className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-paper-muted">
+                    {t("communityHome.inspector.title")}
+                  </p>
+                  {(
+                    [
+                      ["auto", "communityHome.viewer.auto"],
+                      ["owner", "communityHome.viewer.owner"],
+                      ["members", "communityHome.viewer.members"],
+                    ] as const
+                  ).map(([mode, key]) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      className={cn(
+                        "w-full rounded-md px-2 py-1.5 text-left text-xs text-paper-muted hover:bg-ink-3 hover:text-paper",
+                        inspector === mode && "bg-ink-3 font-semibold text-paper",
+                      )}
+                      onClick={() => {
+                        setInspector(mode);
+                        saveCommunityHomeViewerMode(mode);
+                        setHeaderMenuOpen(false);
+                      }}
+                      data-home-inspector-mode={mode}
+                    >
+                      {t(key)}
+                    </button>
+                  ))}
+                  <div className="my-1 border-t border-ink-4" />
+                  <button
+                    type="button"
+                    className="w-full rounded-md px-2 py-1.5 text-left text-xs text-paper-muted hover:bg-ink-3 hover:text-paper"
+                    onClick={openDrafts}
+                    data-home-open-drafts
+                  >
+                    {t("communityHome.tabs.drafts")}
+                    {drafts.length > 0 ? (
+                      <span className="ml-1 tabular-nums opacity-70">
+                        {drafts.length}
+                      </span>
+                    ) : null}
+                  </button>
+                </div>
+              )}
+            </div>
+          </>
+        ) : (
+          <div className="h-11 w-11 shrink-0" aria-hidden />
         )}
       </header>
-      {canManageServer && (
-        <div className="flex shrink-0 justify-end border-b border-ink-4/60 px-3 py-2 sm:hidden">
-          {staffTabs}
-        </div>
-      )}
 
       <div className="min-h-0 flex-1 overflow-y-auto px-3 py-4 sm:px-4">
         <div
@@ -1956,39 +2036,6 @@ export function CommunityHomeFeed({
                   vipEnabled={vipEnabled}
                   onDismiss={onDismissIntro}
                 />
-              )}
-
-              {inspectorActive && posts && posts.length > 0 && (
-                <div
-                  className="flex flex-wrap items-center gap-2 self-end text-[11px] text-paper-muted"
-                  data-home-viewer-tabs
-                >
-                  <span>{t("communityHome.viewer.label")}</span>
-                  <div className="inline-flex items-center gap-0.5 rounded-lg border border-ink-4 bg-ink-3 p-0.5">
-                    {(
-                      [
-                        ["auto", "communityHome.viewer.auto"],
-                        ["members", "communityHome.viewer.members"],
-                      ] as const
-                    ).map(([mode, labelKey]) => (
-                      <button
-                        key={mode}
-                        type="button"
-                        className={cn(
-                          "rounded-md px-2 py-1",
-                          inspector === mode && "bg-ink-4 font-semibold text-paper",
-                        )}
-                        onClick={() => {
-                          setInspector(mode);
-                          saveCommunityHomeViewerMode(mode);
-                        }}
-                        data-home-viewer-tab={mode}
-                      >
-                        {t(labelKey)}
-                      </button>
-                    ))}
-                  </div>
-                </div>
               )}
 
               {loadError && (

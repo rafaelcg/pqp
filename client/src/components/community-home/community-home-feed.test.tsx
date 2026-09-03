@@ -138,7 +138,7 @@ describe("PostCard", () => {
     expect(shut).not.toContain("sessao-11-clip.webm");
   });
 
-  it("shows only the two newest comments the API sent, plus a see-all when more exist", () => {
+  it("shows only two card teasers clamped, with detail via see-all", () => {
     const comment = (id: string, body: string) => ({
       id,
       author,
@@ -152,6 +152,7 @@ describe("PostCard", () => {
           commentTeaser: [
             comment("dddddddd-dddd-4ddd-8ddd-ddddddddddd1", "primeiro"),
             comment("dddddddd-dddd-4ddd-8ddd-ddddddddddd2", "segundo"),
+            comment("dddddddd-dddd-4ddd-8ddd-ddddddddddd3", "should hide"),
           ],
         })}
         me={me}
@@ -161,9 +162,14 @@ describe("PostCard", () => {
         onPatch={() => {}}
       />,
     );
-    expect(html.match(/data-home-comment(?![s-])/g)?.length).toBe(2);
+    expect(html).toContain("data-home-comment-teaser");
+    expect(html).toContain("line-clamp-2");
+    expect(html).toContain("primeiro");
+    expect(html).toContain("segundo");
+    expect(html).not.toContain("should hide");
     expect(html).toContain("data-home-comments-toggle");
-    expect(html).toContain("See all 5 comments");
+    expect(html).not.toContain("Join the call");
+    expect(html).not.toContain("entrar na call");
   });
 
   it("a pinned post says so, and staff get the unpin control", () => {
