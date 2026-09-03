@@ -28,6 +28,7 @@ import {
 import { SCREEN_SHARE_LIMIT, MESH_VOICE_WARNING } from "@pqp/shared";
 import type { VoiceInputMode, VoiceState } from "@/hooks/use-voice";
 import type { VideoQuality } from "@/lib/video-quality";
+import { shareStreamHasAudio } from "@/lib/screen-capture-audio";
 import {
   canShareScreenAudio,
   detectFullscreenMode,
@@ -641,6 +642,17 @@ function ActiveCall({
     ) ?? screenTiles[0];
   const screenStream = focusedTile?.stream ?? null;
   const presenterName = focusedTile?.presenterName;
+  // Whose tile is on the big slot, which is not the same question as "am I
+  // sharing": a presenter watching somebody else's share was being told they
+  // were the one presenting.
+  const focusedIsLocal =
+    focusedTile != null && focusedTile.peerId === voiceState.peerId;
+  const receivedShareHasAudio = useReceivedShareAudio(
+    focusedIsLocal ? null : screenStream,
+  );
+  const focusedShareHasAudio = focusedIsLocal
+    ? voiceState.isSharingScreenAudio
+    : receivedShareHasAudio;
   const splitTwo =
     screenShareStageLayout(screenTiles.length, wide) === "split";
 
@@ -1290,17 +1302,19 @@ function ActiveCall({
             ))}
             {presenterName && screenStream && (
               <span className="ml-2 text-signal">
-                {voiceState.isSharingScreen
+                {focusedIsLocal
                   ? t("voice.share.youPresenting")
                   : t("voice.share.peerPresenting", { name: presenterName })}
-                {/* Only about our own share: whether someone else's carries
-                    sound is their business, and we would only be guessing. */}
-                {voiceState.isSharingScreen &&
-                  !voiceState.isSharingScreenAudio && (
-                    <span className="ml-1 text-paper-muted">
-                      ({t("voice.share.noAudioShort")})
-                    </span>
-                  )}
+                {/* Said to whoever is looking at the tile, about the tile they
+                    are looking at. For our own share we know what we captured;
+                    for somebody else's we know what arrived on this machine,
+                    which is the same question the person asking "why can't I
+                    hear it" is trying to answer. */}
+                {!focusedShareHasAudio && (
+                  <span className="ml-1 text-paper-muted">
+                    ({t("voice.share.noAudioShort")})
+                  </span>
+                )}
                 {/* Said while it is happening. The presenter's own machine is
                     playing what they shared, so they are the one person who
                     cannot hear the echo they are causing. */}
@@ -1343,6 +1357,50 @@ function ActiveCall({
  * quality control has anything to report to a watcher is whether a stream is
  * really there.
  */
+/**
+ * Whether a share we are receiving is carrying sound, kept current.
+ *
+ * A remote screen's audio track does not have to arrive with its video. In the
+ * mesh it lands on a later renegotiation, so a value read once at render is a
+ * value that says "sem som" over a share that gained sound a second later.
+ * `addtrack` / `removetrack` on the MediaStream are what make the label
+ * correct instead of merely first.
+ *
+ * Null for our own share: what we captured is already known from state, and
+ * reading our own tracks back would answer a slightly different question.
+ */
+function useReceivedShareAudio(stream: MediaStream | null): boolean {
+  const [hasAudio, setHasAudio] = useState(() =>
+    shareStreamHasAudio(stream?.getAudioTracks() ?? []),
+  );
+
+  useEffect(() => {
+    const sync = () =>
+      setHasAudio(shareStreamHasAudio(stream?.getAudioTracks() ?? []));
+    sync();
+    if (!stream) {
+      return;
+    }
+    stream.addEventListener("addtrack", sync);
+    stream.addEventListener("removetrack", sync);
+    // A track the presenter stops mid-share fires `ended` on the track itself
+    // and nothing on the stream, so the stream listeners alone would miss it.
+    const tracks = stream.getAudioTracks();
+    for (const track of tracks) {
+      track.addEventListener("ended", sync);
+    }
+    return () => {
+      stream.removeEventListener("addtrack", sync);
+      stream.removeEventListener("removetrack", sync);
+      for (const track of tracks) {
+        track.removeEventListener("ended", sync);
+      }
+    };
+  }, [stream]);
+
+  return hasAudio;
+}
+
 function receivingVideo(voiceState: VoiceState): boolean {
   return voiceState.remotePeers.some(
     (peer) => peer.cameraStream !== null || peer.screenStream !== null,
