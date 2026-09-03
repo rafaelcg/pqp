@@ -11,7 +11,7 @@ export const privacyEn: LegalDocument = {
   description:
     "How pqp.gg handles personal data: what we collect, our legal bases, where it is processed, retention, and your rights under the LGPD and UK data protection law.",
   heading: "Privacy Policy",
-  updated: "31 August 2026",
+  updated: "2 September 2026",
   sections: [
     {
       id: "intro",
@@ -130,8 +130,10 @@ export const privacyEn: LegalDocument = {
             — though nothing stops you typing it into a field yourself, such as
             your display name or a message, and if you do, it is stored like any
             other text you write. What we store on our side is: a Clerk user
-            identifier, your display name, your <code>name#1234</code> handle,
-            an avatar URL, the <em>domains</em> of your verified email addresses
+            identifier, your display name, your <code>name#1234</code> tag,
+            an optional public <code>@handle</code> if you claimed one, an
+            avatar URL, an optional profile banner, the <em>domains</em> of
+            your verified email addresses
             (for example <code>empresa.com.br</code>, used for company-domain
             server joins — never the mailbox itself), your DM privacy setting,
             and when the account was created. If the link that first brought
@@ -159,12 +161,50 @@ export const privacyEn: LegalDocument = {
             typed.
           </p>
           <p>
+            <strong>Public profile.</strong> If you claim a unique{" "}
+            <code>@handle</code>, we publish a thin page at{" "}
+            <code>pqp.gg/@that-handle</code> that anyone on the internet can open
+            without signing in: display name, avatar, optional banner, join
+            month (not the day), public-community badges, approved depoimentos,
+            and any game connection you marked public. It does not include
+            your id, your <code>name#1234</code> tag, your email, or whether
+            you are online. A listed community can have a similar poster at{" "}
+            <code>pqp.gg/c/slug</code>: name, tagline, pictures, member count,
+            never a member list. Unfurlers (WhatsApp, Twitter, and the rest)
+            get Open Graph tags injected at the edge so the card is not a
+            blank SPA.
+          </p>
+          <p>
+            <strong>Game connections.</strong> Steam, Battle.net, and Twitch
+            are optional. Connecting one is not a second login. We store the
+            provider, that provider&apos;s user id, the display name and
+            picture they gave us, an optional profile URL, the visibility you
+            chose, and when you connected. Access tokens are used once to learn
+            who you are, then discarded. The default visibility is people who
+            already share a server or a friendship with you.{" "}
+            <strong>Public</strong> also puts it on the public page, including a
+            Steam profile URL if you opt in. Disconnecting deletes the row.
+          </p>
+          <p>
+            <strong>Depoimentos.</strong> A friend can write a short note for
+            your profile. It is not public until you approve it. The public page
+            shows the newest six approved notes as a name, a picture, and
+            (only if they claimed one) their handle — not their id or tag.
+            Deleting your account removes notes you wrote from other people&apos;s
+            pages, and removes the notes on yours.
+          </p>
+          <p>
             <strong>Files and images.</strong> When file attachments are
             enabled, we store the filename, type, size, and dimensions in our
             database, and the file itself in S3-compatible object storage.
-            Attachments are <strong>enabled</strong> on pqp.gg today. GIFs
+            Attachments are <strong>            enabled</strong> on pqp.gg today. A profile banner uses the same
+            storage. GIFs
             picked from the GIF search are stored as a link to the GIF provider,
-            not as a copy.
+            not as a copy. When image scanning is configured, a freshly uploaded
+            image is checked before it is visible in a channel. A match can
+            drop the file without a person reading it. That is a check of the
+            file, not a decision about you as a person. Avatars and banners are
+            not scanned today.
           </p>
           <p>
             <strong>Settings.</strong> Notification preferences, theme,
@@ -245,11 +285,14 @@ export const privacyEn: LegalDocument = {
           <p>
             One event is sent to Google, once: when an account is created, the
             tag reports that a sign-up happened. It carries no name, no email,
-            no user id and nothing you typed. We do not upload account data to
-            Google, we have not switched on enhanced conversions or any
-            customer-data matching, and we run no remarketing or audience lists.
-            Signing in again sends nothing, and neither does anything you do
-            inside the app.
+            no user id and nothing you typed. Google still sees your IP address
+            and which page you loaded, which is what any third-party script
+            sees. If you arrived from an ad, we also store the{" "}
+            <code>gclid</code> on the account once, with the other campaign
+            parameters. We do not upload account data to Google, we have not
+            switched on enhanced conversions or any customer-data matching, and
+            we run no remarketing or audience lists. Signing in again sends
+            nothing, and neither does anything you do inside the app.
           </p>
           <p>
             Google is a third party here and handles what it receives, including
@@ -299,13 +342,18 @@ export const privacyEn: LegalDocument = {
             by us on any path — see below.
           </li>
           <li>
-            <strong>No stored IP addresses.</strong> There is no IP address
-            column anywhere in our database.
+            <strong>No stored IP addresses in our database.</strong> There is
+            no IP address column on the pqp.gg API. Third parties listed below
+            still see your IP when your browser talks to them. The Android
+            download button on pqp.gg also sends a count to our operator
+            dashboard, which rate-limits that count by IP for a minute.
           </li>
           <li>
-            <strong>No automated decisions about you.</strong> Nothing here
-            profiles you or decides anything about you automatically. Moderation
-            decisions are made by a person.
+            <strong>No automated decisions about you as a person.</strong>{" "}
+            Nothing here profiles you or decides whether you may keep an
+            account. Moderation of people is done by a person. If image
+            scanning is on, a file can be dropped or flagged by that check
+            before a person sees it. That is a check of the file.
           </li>
         </ul>
       ),
@@ -337,8 +385,10 @@ export const privacyEn: LegalDocument = {
               parties see the IP addresses of the people on the call, and the
               TURN relay carries the media — but it is still encrypted between
               the participants, so the relay cannot listen to it. Our STUN/TURN
-              providers today are <strong>ExpressTURN</strong>, plus public STUN
-              servers run by Google and Cloudflare.
+              providers today are <strong>Cloudflare Realtime TURN</strong>,
+              then Metered / Open Relay if Cloudflare is not configured, then
+              a static relay (ExpressTURN on pqp.gg) as the fallback, plus
+              public STUN servers run by Google and Cloudflare.
             </li>
             <li>
               <strong>Large calls.</strong> Because every participant connects
@@ -420,8 +470,9 @@ export const privacyEn: LegalDocument = {
             <li>
               <strong>Measuring our advertising.</strong> Counting how many
               sign-ups an ad campaign produced, through the Google Ads
-              conversion tag described above. It counts an event; it does not
-              identify you to us or to Google.{" "}
+              conversion tag described above. It counts an event. The event
+              carries no name, email or user id. Google still sees your IP
+              and the page, as set out under &quot;Advertising measurement&quot;.{" "}
               <em>
                 (Basis: legitimate interest, art. 7, IX. Object by blocking the
                 tag in your browser, or by writing to us.)
@@ -429,7 +480,8 @@ export const privacyEn: LegalDocument = {
             </li>
             <li>
               <strong>Anything optional you switch on</strong>, like desktop
-              notifications, which your browser asks you to allow separately.{" "}
+              notifications, which your browser asks you to allow separately,
+              or a game account you choose to connect.{" "}
               <em>
                 (Basis: your consent, art. 7, I — withdraw it any time in
                 Settings or in your browser.)
@@ -470,8 +522,13 @@ export const privacyEn: LegalDocument = {
               <strong>São Paulo, Brazil (Fly region gru)</strong>.
             </li>
             <li>
+              <strong>Umami</strong> — cookieless visit counts, hosted by its
+              makers in the EU. Set out under &quot;Site analytics&quot; above.
+            </li>
+            <li>
               <strong>Cloudflare</strong> — serves the web app and the marketing
-              site.
+              site. Cloudflare Web Analytics, if enabled on the zone, is
+              injected at their edge rather than bundled in our source.
             </li>
             <li>
               <strong>Cloudflare R2</strong> — object storage for file
@@ -481,7 +538,8 @@ export const privacyEn: LegalDocument = {
               address while a file transfers.
             </li>
             <li>
-              <strong>ExpressTURN</strong>, plus Google and Cloudflare public
+              <strong>Cloudflare Realtime TURN</strong>, Metered / Open Relay,
+              or ExpressTURN as fallback, plus Google and Cloudflare public
               STUN — voice connection setup and relay, as described above.
             </li>
           </ul>
@@ -509,6 +567,22 @@ export const privacyEn: LegalDocument = {
               of pqp.gg, so Google sees your IP address and which page you
               loaded, and it is told once when an account is created. Set out in
               full under &quot;Advertising measurement&quot; above.
+            </li>
+            <li>
+              <strong>Steam, Battle.net, and Twitch</strong> — only if you
+              click Connect. Your browser goes to that provider and comes back
+              with proof of who you are. We do not keep their access tokens.
+            </li>
+            <li>
+              <strong>GitHub Sponsors</strong> and your bank, if you donate —
+              those payments happen on their sites, not on pqp. We do not
+              receive a list of who gave.
+            </li>
+            <li>
+              <strong>The Android download counter</strong> on pqp.gg posts a
+              one-byte beacon to our operator dashboard when you tap the APK
+              button. It carries no account. The dashboard rate-limits by IP
+              for a minute.
             </li>
           </ul>
           <p>
@@ -687,8 +761,8 @@ export const privacyEn: LegalDocument = {
               <strong>
                 Correction of incomplete or out-of-date data (art. 18, III)
               </strong>{" "}
-              — self-serve: change your display name, handle, avatar and
-              settings in Settings inside the app. For anything you cannot
+              — self-serve: change your display name, tag, public handle, avatar,
+              banner and settings in Settings inside the app. For anything you cannot
               change there, email us.
             </li>
             <li>
@@ -706,9 +780,12 @@ export const privacyEn: LegalDocument = {
               machine-readable JSON file. It holds your profile, your settings,
               your 18+ declaration, the servers you are in and your role in
               each, every message you wrote with the channel and server it was
-              in and the files attached to it, the conversations you took part
+              in and the files attached to it, linked game accounts, the
+              conversations you took part
               in, who you have blocked, reports you filed, and moderation
-              actions you took. Very large accounts are capped, and the file
+              actions you took. It does not yet include your public{" "}
+              <code>@handle</code>, your banner, or depoimentos. For those,
+              email us. Very large accounts are capped, and the file
               says so when it has been cut short. (Server <em>owners</em> can
               also export a whole server from Server Settings, but that is an
               owner tool covering everyone&apos;s messages in that server — it
@@ -719,8 +796,8 @@ export const privacyEn: LegalDocument = {
                 Deletion of data processed with consent (art. 18, VI)
               </strong>{" "}
               — self-serve: <strong>Delete my account</strong> in Settings,
-              under &quot;Your data&quot;. You confirm by typing your own
-              handle. It is permanent, there is no undo and no backup to restore
+              under &quot;Your data&quot;. You confirm by typing your own{" "}
+              <code>name#1234</code> tag. It is permanent, there is no undo and no backup to restore
               from, and it is real deletion rather than a hidden account: your
               profile, settings, every message you wrote anywhere, your
               reactions, mentions, read markers, memberships, conversation
@@ -834,6 +911,11 @@ export const privacyEn: LegalDocument = {
           <li>
             <strong>Downloading your data, and deleting your account</strong> —
             in Settings, under &quot;Your data&quot;. Both are described above.
+          </li>
+          <li>
+            <strong>Public handle and game connections.</strong> Claiming a
+            handle is optional. Connection visibility is hidden, shared, or
+            public. Disconnecting a game account deletes that row.
           </li>
         </ul>
       ),
