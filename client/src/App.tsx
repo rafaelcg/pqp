@@ -140,8 +140,6 @@ import {
   fetchUnread,
   fetchVoiceBackend,
   hideConversation,
-  fetchCommunityHomeUnread,
-  markCommunityHomeRead,
   joinCommunity as joinCommunityApi,
   joinInvite,
   leaveServer,
