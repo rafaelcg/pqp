@@ -21,6 +21,7 @@ const SERVER: Server = {
   iconUrl: null,
   bannerUrl: null,
   isCommunity: true,
+  communityHomeEnabled: false,
   showOnProfile: true,
 };
 

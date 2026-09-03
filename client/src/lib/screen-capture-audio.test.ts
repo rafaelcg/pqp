@@ -33,6 +33,10 @@ const macShell: ScreenCaptureEnvironment = {
   shellPlatform: "darwin",
   supportsRestrictOwnAudio: false,
 };
+const newShell: ScreenCaptureEnvironment = {
+  isDesktopShell: true,
+  supportsRestrictOwnAudio: true,
+};
 
 describe("screenCaptureOptions", () => {
   it("does not ask for the machine's audio unless the user opted in", () => {
@@ -115,6 +119,7 @@ describe("screenCaptureOptions", () => {
     // tab audio is a browser's own path and is never decided by this.
     expect(shellCarriesScreenAudio(browser)).toBe(false);
   });
+
 
   it("never offers our own tab as a surface", () => {
     expect(screenCaptureOptions(true, browser).selfBrowserSurface).toBe(
