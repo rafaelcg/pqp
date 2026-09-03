@@ -144,6 +144,13 @@ export type SoundPreferences = z.infer<typeof soundPreferencesSchema>;
 export const FAVORITE_CHANNELS_PER_SERVER_MAX = 50;
 
 /**
+ * Cap on conversation ids pinned to the Home rail. The rail is 72px and a
+ * person, not a hall: past this the faces stop being a shortcut and start being
+ * a second conversation list.
+ */
+export const PINNED_CONVERSATIONS_MAX = 15;
+
+/**
  * Settings that belong to the person rather than to the machine they are on,
  * stored as one JSONB blob so adding a preference stays a schema change here
  * instead of a database migration.
@@ -301,6 +308,18 @@ export const userPreferencesSchema = z.object({
       z.string().uuid(),
       z.array(z.string().uuid()).max(FAVORITE_CHANNELS_PER_SERVER_MAX),
     )
+    .optional(),
+  /**
+   * Conversations pinned to the left rail, under Home and above the halls.
+   * The array is the order they appear. Replaced as a whole on write.
+   *
+   * Same reason as `favoriteChannels`: this person's shortcuts, not a
+   * channel property, and they have to follow them across devices. Cap keeps
+   * the rail from becoming a second DM list.
+   */
+  pinnedConversations: z
+    .array(z.string().uuid())
+    .max(PINNED_CONVERSATIONS_MAX)
     .optional(),
 });
 

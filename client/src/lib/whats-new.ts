@@ -12,7 +12,7 @@
 export const WHATS_NEW_STORAGE_KEY = "pqp:whats-new";
 
 /** Bump this when the next ship needs its own card. Unseen packs show again. */
-export const WHATS_NEW_PACK_ID = "chance-polls";
+export const WHATS_NEW_PACK_ID = "novidades-rail";
 
 export function browserLocalStorage(): Storage | null {
   try {

@@ -14,6 +14,7 @@ import {
   usernameSchema,
   userPreferencesSchema,
   FAVORITE_CHANNELS_PER_SERVER_MAX,
+  PINNED_CONVERSATIONS_MAX,
 } from "./api.js";
 import { messageCreateMessageSchema } from "./chat.js";
 import { gifSchema, isGifMediaUrl, stillGifUrl } from "./gifs.js";
@@ -304,6 +305,29 @@ describe("userPreferencesSchema", () => {
               `11111111-1111-4111-8111-${String(i).padStart(12, "0")}`,
           ),
         },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("accepts pinned conversation ids, capped", () => {
+    const channelId = "11111111-1111-4111-8111-111111111111";
+    expect(
+      userPreferencesSchema.safeParse({
+        pinnedConversations: [channelId],
+      }).success,
+    ).toBe(true);
+    expect(
+      userPreferencesSchema.safeParse({
+        pinnedConversations: ["not-a-uuid"],
+      }).success,
+    ).toBe(false);
+    expect(
+      userPreferencesSchema.safeParse({
+        pinnedConversations: Array.from(
+          { length: PINNED_CONVERSATIONS_MAX + 1 },
+          (_, i) =>
+            `11111111-1111-4111-8111-${String(i).padStart(12, "0")}`,
+        ),
       }).success,
     ).toBe(false);
   });

@@ -17,6 +17,24 @@ Read [`docs/I18N.md`](./docs/I18N.md) before adding copy.
 
 Read [`docs/CONNECTIONS.md`](./docs/CONNECTIONS.md) before adding a provider. Steam is OpenID 2.0. Battle.net and Twitch are OAuth. None of those is a Clerk login.
 
+## Release notes (What's New / `/blog`)
+
+The sparkle in the app and `/blog` are the same notes. Markdown in the repo, written in the PR that ships the thing, then never edited. Mechanics: the header of `client/src/lib/blog/posts.ts`.
+
+A person in the QG should be able to find out what changed without being told. That is the bar. Not every PR.
+
+**Write a note (or a section on an unpublished one) when** people can see or use it on pqp.gg, TestFlight, the Android APK, or the desktop app: a new control, a new page, a behavior they will notice, a bug they were living with that is now gone.
+
+**Do not write a note for** CI, tests, refactors, types, docs, the operator dashboard, staging-only work, a flag that is off in production, or a native gap that is not in the build people actually install. Provider swaps and secret wiring are ops, not a note, unless the button itself appears or disappears.
+
+**Do not claim it until it reached people.** Date is that day, not the merge day. If the key is not on Fly, the APK was not rebuilt, or the flag is off, leave it out or put it under "Ainda não" / "Not yet" only if this ship makes people look for it.
+
+**Batch.** Not one post per PR. Prefer adding a section to a note that is still only on this branch. Never edit a post already on `main`. A two-sentence ship can wait for the next pile. Say that in the PR instead of opening a four-line post.
+
+**Copy.** Both `pt-BR` and `en`. PT-BR like the QG. No em dashes. Only write what that client actually has (web is not iPhone is not Android).
+
+**Screenshots.** Nice to have, not required. If you can capture the new UI, put webp/png/gif in `client/public/blog/<slug>/` and reference `/blog/<slug>/file.webp`. Do not skip the note because a shot was awkward (needs two people, a native device, a production key). Write the note anyway.
+
 ## How we ship
 
 New work goes on a new branch off latest `main`. One feature per branch.
