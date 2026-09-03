@@ -4,6 +4,7 @@ import { PINNED_CONVERSATIONS_MAX } from "@pqp/shared";
 import {
   addPinnedConversation,
   isPinnedConversation,
+  prunePinnedConversations,
   removePinnedConversation,
   visiblePinnedConversations,
 } from "./pinned-conversations";
@@ -42,9 +43,11 @@ describe("visiblePinnedConversations", () => {
     ).toEqual([bob, alice]);
   });
 
-  it("treats a missing list as empty", () => {
-    expect(visiblePinnedConversations([alice], undefined)).toEqual([]);
-    expect(visiblePinnedConversations([alice], [])).toEqual([]);
+  it("drops ids that are no longer in the conversation list", () => {
+    expect(prunePinnedConversations([BOB, GHOST, ALICE], [alice, carol])).toEqual(
+      [ALICE],
+    );
+    expect(prunePinnedConversations(undefined, [alice])).toEqual([]);
   });
 });
 
@@ -52,6 +55,17 @@ describe("addPinnedConversation / removePinnedConversation", () => {
   it("appends a new id and is a no-op when already pinned", () => {
     expect(addPinnedConversation([ALICE], BOB)).toEqual([ALICE, BOB]);
     expect(addPinnedConversation([ALICE], ALICE)).toEqual([ALICE]);
+  });
+
+  it("lets a new pin through after ghosts are dropped", () => {
+    const live = Array.from(
+      { length: PINNED_CONVERSATIONS_MAX },
+      (_, i) => dm(`11111111-1111-4111-8111-${String(i).padStart(12, "0")}`),
+    );
+    const stored = [...live.map((one) => one.channelId), GHOST];
+    const pruned = prunePinnedConversations(stored, live.slice(0, -1));
+    expect(pruned).toHaveLength(PINNED_CONVERSATIONS_MAX - 1);
+    expect(addPinnedConversation(pruned, CAROL)).toContain(CAROL);
   });
 
   it("ignores a new pin past the cap rather than dropping the oldest", () => {

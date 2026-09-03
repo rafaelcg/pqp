@@ -183,6 +183,7 @@ import {
   addPinnedConversation,
   isPinnedConversation,
   PINNED_CONVERSATIONS_MAX,
+  prunePinnedConversations,
   removePinnedConversation,
   visiblePinnedConversations,
 } from "@/lib/pinned-conversations";
@@ -2376,10 +2377,7 @@ function MainAppContent({
     queuePreferenceSync({ favoriteChannels: next }, { immediate: true });
   }
 
-  function handlePinnedConversationsChange(ids: string[]) {
-    if (!user) {
-      return;
-    }
+  const handlePinnedConversationsChange = useCallback((ids: string[]) => {
     setUser((previous) =>
       previous
         ? {
@@ -2389,10 +2387,13 @@ function MainAppContent({
         : previous,
     );
     queuePreferenceSync({ pinnedConversations: ids }, { immediate: true });
-  }
+  }, []);
 
   function handleTogglePinnedConversation(channelId: string) {
-    const current = user?.preferences?.pinnedConversations;
+    const stored = user?.preferences?.pinnedConversations;
+    const current = conversationsLoading
+      ? [...(stored ?? [])]
+      : prunePinnedConversations(stored, conversations);
     if (isPinnedConversation(current, channelId)) {
       handlePinnedConversationsChange(
         removePinnedConversation(current, channelId),
@@ -2400,7 +2401,7 @@ function MainAppContent({
       return;
     }
     const next = addPinnedConversation(current, channelId);
-    if (next.length === (current?.length ?? 0)) {
+    if (next.length === current.length) {
       setClaimedHandle(null);
       setAppNotice(
         t("chrome.pinConversationFull", { count: PINNED_CONVERSATIONS_MAX }),
@@ -2409,6 +2410,8 @@ function MainAppContent({
     }
     handlePinnedConversationsChange(next);
   }
+
+  const closeWhatsNew = useCallback(() => setWhatsNewOpen(false), []);
 
   function handleOpenWhatsNew() {
     setDirectoryOpen(false);
@@ -3224,14 +3227,20 @@ function MainAppContent({
       conversationsRef.current = remaining;
       if (isPinnedConversation(user?.preferences?.pinnedConversations, channelId)) {
         handlePinnedConversationsChange(
-          removePinnedConversation(user?.preferences?.pinnedConversations, channelId),
+          prunePinnedConversations(
+            removePinnedConversation(
+              user?.preferences?.pinnedConversations,
+              channelId,
+            ),
+            remaining,
+          ),
         );
       }
       if (selectedChannelIdRef.current === channelId) {
         selectHome();
       }
     },
-    [selectHome, user],
+    [handlePinnedConversationsChange, selectHome, user],
   );
 
   const blockedUserIds = useMemo(
@@ -4179,7 +4188,7 @@ function MainAppContent({
         onSelectPinned={(channelId) => {
           setWhatsNewOpen(false);
           void selectConversation(channelId);
-          setMobileNavOpen(true);
+          setMobileNavOpen(false);
         }}
         onUnpinConversation={handleTogglePinnedConversation}
         onSelectHome={() => {
@@ -4213,7 +4222,7 @@ function MainAppContent({
           mobileOpen={mobileNavOpen}
           onMobileClose={() => setMobileNavOpen(false)}
           onMobileOpen={() => setMobileNavOpen(true)}
-          onClose={() => setWhatsNewOpen(false)}
+          onClose={closeWhatsNew}
           footer={sidebarFooter}
         />
       ) : (

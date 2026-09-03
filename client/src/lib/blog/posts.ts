@@ -67,13 +67,13 @@ export const POSTS: readonly BlogPost[] = [
     slug: "favoritos-camera-e-o-dm-te-acha",
     date: "2026-09-03",
     title: {
-      "pt-BR": "O Baú, favoritos, e o DM te acha",
-      en: "The Baú, favorites, and DMs that find you",
+      "pt-BR": "O Baú, e o DM na barra",
+      en: "The Baú, and DMs on the rail",
     },
     summary: {
       "pt-BR":
-        "O Baú da comunidade, estrela no canal, cargo VIP, um clique pra entrar na voz, câmera no palco, o DM te avisa, GIF no chat, APK no Android, e um teste pra quando a call não entra.",
-      en: "The community Baú, star a channel, a VIP cargo, one click into voice, cameras on the stage, DMs that find you, GIFs in chat, an Android APK, and a check when the call will not join.",
+        "O Baú da comunidade, DM fixado na barra, APK no Android, e o que de agosto não ganhou post.",
+      en: "The community Baú, pin a DM to the rail, an Android APK, and what August never got a note for.",
     },
   },
   {
