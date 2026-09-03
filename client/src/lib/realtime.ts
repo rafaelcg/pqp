@@ -49,6 +49,12 @@ function enqueueBounded<T>(queue: T[], message: T, max: number) {
   }
 }
 
+export interface RealtimeClose {
+  code: number;
+  reason: string;
+  at: number;
+}
+
 export interface RealtimeTransport {
   connect(tokenProvider: TokenProvider): void;
   disconnect(): void;
@@ -71,6 +77,15 @@ export interface RealtimeTransport {
   /** Connection state for UI — drives the "reconnecting" banner. */
   onStatusChange(handler: (status: RealtimeStatus) => void): void;
   getStatus(): RealtimeStatus;
+  /** Skip the backoff and try to connect right now (the banner's Retry). */
+  retryNow(): void;
+  /** The last socket close, for the connection check's report. */
+  getLastClose(): RealtimeClose | null;
+  /**
+   * How many connects in a row ended in a refused or missing token. A
+   * session that keeps being refused is not a blip and the UI should say so.
+   */
+  getUnauthorizedStreak(): number;
   isConnected(): boolean;
 }
 
@@ -94,6 +109,8 @@ export function createRealtimeTransport(): RealtimeTransport {
   let missedPongs = 0;
   const chatQueue: ChatClientMessage[] = [];
   const voiceQueue: VoiceClientMessage[] = [];
+  let lastClose: RealtimeClose | null = null;
+  let unauthorizedStreak = 0;
 
   function setStatus(next: RealtimeStatus) {
     if (status === next) {
@@ -218,6 +235,7 @@ export function createRealtimeTransport(): RealtimeTransport {
 
     if (authFailed) {
       // Still retried below — the token provider refreshes on the next attempt.
+      unauthorizedStreak += 1;
       setStatus("unauthorized");
       errorHandler?.(translateMessage("connection.authFailed"));
       scheduleReconnect();
@@ -249,6 +267,7 @@ export function createRealtimeTransport(): RealtimeTransport {
       return;
     }
     if (!token) {
+      unauthorizedStreak += 1;
       setStatus("unauthorized");
       scheduleReconnect();
       return;
@@ -293,6 +312,7 @@ export function createRealtimeTransport(): RealtimeTransport {
         if (message.type === "ready") {
           isReady = true;
           reconnectAttempt = 0;
+          unauthorizedStreak = 0;
           const reconnected = hasConnectedOnce;
           hasConnectedOnce = true;
           setStatus("online");
@@ -323,6 +343,11 @@ export function createRealtimeTransport(): RealtimeTransport {
     };
 
     ws.onclose = (event) => {
+      lastClose = {
+        code: event.code,
+        reason: event.reason ?? "",
+        at: Date.now(),
+      };
       handleConnectionLoss(ws, event.code === 4401);
     };
   }
@@ -438,6 +463,23 @@ export function createRealtimeTransport(): RealtimeTransport {
 
     getStatus() {
       return status;
+    },
+
+    retryNow() {
+      if (manualClose || socket) {
+        return;
+      }
+      clearReconnectTimer();
+      reconnectAttempt = 0;
+      void connectSocket();
+    },
+
+    getLastClose() {
+      return lastClose;
+    },
+
+    getUnauthorizedStreak() {
+      return unauthorizedStreak;
     },
 
     isConnected() {

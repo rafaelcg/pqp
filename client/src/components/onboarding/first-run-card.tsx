@@ -1,4 +1,5 @@
 import { Check, ImagePlus, ServerIcon, UserPlus, X } from "lucide-react";
+import type { CSSProperties } from "react";
 import type { User } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
@@ -101,7 +102,7 @@ export function FirstRunCard({
     <section
       data-first-run
       aria-labelledby="first-run-title"
-      className="animate-rise mb-6 max-w-2xl rounded-xl border border-ink-4 bg-ink-3/40 p-4 sm:p-5"
+      className="animate-rise mb-6 max-w-2xl rounded-2xl border border-ink-4 bg-ink-3/40 p-4 sm:p-5"
     >
       <div className="mb-4 flex items-start gap-3">
         <h2
@@ -123,7 +124,7 @@ export function FirstRunCard({
       </div>
 
       <ul className="space-y-3">
-        {rows.map((row) => {
+        {rows.map((row, index) => {
           const done = doneById.get(row.id) ?? false;
           const Icon = done ? Check : row.icon;
           return (
@@ -131,7 +132,10 @@ export function FirstRunCard({
               key={row.id}
               data-first-run-task={row.id}
               data-done={done ? "true" : "false"}
-              className="flex gap-3"
+              // Rows land one after another (70 ms apart, see `.animate-rise`),
+              // which reads as a list arriving rather than a block appearing.
+              style={{ "--stagger": index + 1 } as CSSProperties}
+              className="animate-rise flex gap-3"
             >
               <span
                 aria-hidden="true"

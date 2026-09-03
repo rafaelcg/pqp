@@ -59,7 +59,6 @@ test.describe("voice state badges", () => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await openApp(page);
     await page.getByRole("button", { name: /lobby/ }).first().click();
-    await page.getByRole("button", { name: "Join Voice" }).click();
     await expect(page.getByTestId("call-stage-collapsed")).toBeVisible({ timeout: 20_000 });
 
     // The observer is a separate browser context that never joins voice.

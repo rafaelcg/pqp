@@ -97,6 +97,8 @@ gh secret set VITE_WS_URL
 
 Do **not** put `CLERK_SECRET_KEY`, database URLs, TURN credentials, or `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` in Pages/client secrets for the static deploy.
 
+**Donations page (hosted-only).** `VITE_SPONSOR_URL`, `VITE_PIX_KEY` and `VITE_PIX_BRCODE` build the `/apoie` and `/support` page and its footer link. `deploy-web.yml` sets the Sponsors URL inline and reads the two Pix values from repository **variables** (`gh variable set VITE_PIX_KEY`), not secrets, because all three are public and printed on the page. Leave all three empty on a self-host: with the sponsor URL and the Pix key both empty, the routes redirect to `/` and the footer link disappears, so a fork never carries pqp.gg's donation links, the same rule as the analytics and advertising tags. See `client/src/lib/support-links.ts`.
+
 ## Server-side env (Railway / Docker / VPS)
 
 These live on the API, never in the client build. Names only — see [`../.env.example`](../.env.example).

@@ -1,5 +1,5 @@
 import { SignInButton, SignUpButton, useAuth, useUser } from "@clerk/clerk-react";
-import { FileText, Lock, Menu, Phone, Pin, Shield, Users, Video, WifiOff } from "lucide-react";
+import { FileText, Lock, Menu, Phone, Pin, Shield, Users, Video } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
@@ -44,6 +44,9 @@ import { WebhooksPanel } from "@/components/layout/webhooks-panel";
 import { ChannelMetaDialog } from "@/components/layout/channel-meta-dialog";
 import { DmCallStage } from "@/components/dm/dm-call-stage";
 import { IncomingCallOverlay } from "@/components/dm/incoming-call-overlay";
+import { ConnectionBanner } from "@/components/layout/connection-banner";
+import { ConnectionDoctorDialog } from "@/components/layout/connection-doctor-dialog";
+import { DmToasts } from "@/components/dm/dm-toasts";
 import { WhatsNewPrompt } from "@/components/layout/whats-new-prompt";
 import { DmList } from "@/components/layout/dm-list";
 import { FriendsView } from "@/components/friends/friends-view";
@@ -62,6 +65,7 @@ import { ProfilePopoverProvider } from "@/components/user/user-profile-popover";
 import type { ProfileModerationContext } from "@/components/user/profile-relations";
 import { PinnedMessagesPanel } from "@/components/chat/pinned-messages-panel";
 import { ServerRail } from "@/components/layout/server-rail";
+import { WhatsNewView } from "@/components/layout/whats-new-view";
 import { AgeGateDialog } from "@/components/user/age-gate-dialog";
 import { OnboardingFlow } from "@/components/onboarding/onboarding-flow";
 import { NewDmDialog } from "@/components/user/new-dm-dialog";
@@ -69,9 +73,14 @@ import { CargosHint } from "@/components/layout/cargos-hint";
 import { MobileBetaHint } from "@/components/layout/mobile-beta-hint";
 import { QgHint } from "@/components/layout/qg-hint";
 import { winningCornerHint } from "@/lib/corner-hints";
+import { useUpdatePromptShowing } from "@/lib/update-prompt-state";
 import { isAutomatedBrowser } from "@/lib/cargos-hint";
 import { shouldShowMobileBetaHint } from "@/lib/mobile-beta-hint";
-import { isWhatsNewSeen } from "@/lib/whats-new";
+import { isWhatsNewSeen, rememberWhatsNew } from "@/lib/whats-new";
+import {
+  hasUnseenWhatsNew,
+  rememberWhatsNewFeed,
+} from "@/lib/whats-new-feed";
 import { ServerSettingsDialog } from "@/components/layout/server-settings-dialog";
 import { CreateServerDialog } from "@/components/layout/create-server-dialog";
 import {
@@ -119,6 +128,7 @@ import {
   deleteChannel,
   fetchBlocks,
   fetchChannels,
+  fetchCommunityHomeUnread,
   fetchConversations,
   fetchIceServers,
   fetchMe,
@@ -130,12 +140,15 @@ import {
   fetchUnread,
   fetchVoiceBackend,
   hideConversation,
+  fetchCommunityHomeUnread,
+  markCommunityHomeRead,
   joinCommunity as joinCommunityApi,
   joinInvite,
   leaveServer,
   lookupCommunityBySlug,
   lookupUserByHandle,
   markChannelRead,
+  markCommunityHomeRead,
   moveChannel,
   setAuthTokenProvider,
   unblockUser,
@@ -168,6 +181,13 @@ import {
   favoritesForServer,
   writeFavoritesForServer,
 } from "@/lib/channel-favorites";
+import {
+  addPinnedConversation,
+  isPinnedConversation,
+  PINNED_CONVERSATIONS_MAX,
+  removePinnedConversation,
+  visiblePinnedConversations,
+} from "@/lib/pinned-conversations";
 import { queuePreferenceSync } from "@/lib/preferences";
 import { browserStorage, hasArrived, rememberArrival } from "@/lib/arrival";
 import { takeAcquisition } from "@/lib/acquisition";
@@ -201,9 +221,9 @@ import type { MentionCandidate } from "@/lib/mention-autocomplete";
 import { usernameFromTag, rankBadges } from "@/lib/author-display";
 import { devAuthToken, getAuthToken, isDevAuthBypassEnabled } from "@/lib/dev-auth";
 import {
-  fetchCommunityHomeUnread,
-  markCommunityHomeRead,
-} from "@/lib/api";
+  onConnectionCheckRequest,
+  onSettingsRequest,
+} from "@/lib/settings-request";
 import {
   COMMUNITY_HOME_CHANNEL_ID,
   COMMUNITY_HOME_CONFIG_OFF,
@@ -421,6 +441,10 @@ function MainAppContent({
    * exactly that when closed.
    */
   const [directoryOpen, setDirectoryOpen] = useState(false);
+  const [whatsNewOpen, setWhatsNewOpen] = useState(false);
+  const [whatsNewUnread, setWhatsNewUnread] = useState(() =>
+    hasUnseenWhatsNew(),
+  );
   const [selectedChannelId, setSelectedChannelId] = useState<string | null>(null);
   const [conversations, setConversations] = useState<DmSummary[]>([]);
   const [conversationsLoading, setConversationsLoading] = useState(false);
@@ -453,6 +477,34 @@ function MainAppContent({
     null,
   );
   const [connection, setConnection] = useState<RealtimeStatus>("idle");
+  // The connection check dialog; opened from the banner, the voice stage's
+  // timeout, and voice settings (through the request bus).
+  const [doctorOpen, setDoctorOpen] = useState(false);
+  useEffect(() => onConnectionCheckRequest(() => setDoctorOpen(true)), []);
+  /**
+   * "Sign in again" for a session the server keeps refusing.
+   *
+   * Through the Clerk global rather than `useClerk()`: `ClerkProvider` is
+   * not mounted under the dev auth bypass, so the hook would throw in local
+   * development, and this handler has to exist in both modes. Clerk's own
+   * sign-out clears the session on this device and lands on the homepage,
+   * which reads as having left rather than as an error; the bypass has no
+   * session to clear, so it simply reloads.
+   */
+  const signInAgain = useCallback(() => {
+    const clerk = (
+      window as unknown as {
+        Clerk?: { signOut?: (options?: { redirectUrl?: string }) => Promise<void> };
+      }
+    ).Clerk;
+    if (!isDevAuthBypassEnabled() && clerk?.signOut) {
+      void clerk.signOut({ redirectUrl: "/" }).catch(() => {
+        window.location.replace("/");
+      });
+      return;
+    }
+    window.location.reload();
+  }, []);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   // Non-null while a caller wants a specific section on open — the user
@@ -460,6 +512,16 @@ function MainAppContent({
   // The gear clears it so the dialog keeps its sticky last-visited section.
   const [settingsSection, setSettingsSection] =
     useState<SettingsSectionId | null>(null);
+  // Deep components ask for a section through `requestSettingsSection`
+  // (the call stage's mic banner), rather than a prop through two wrappers.
+  useEffect(
+    () =>
+      onSettingsRequest((section) => {
+        setSettingsSection(section);
+        setSettingsOpen(true);
+      }),
+    [],
+  );
   const [serverSettingsOpen, setServerSettingsOpen] = useState(false);
   const [inviteMode, setInviteMode] = useState<"create" | "join" | null>(null);
   const [inviteCodeFromUrl, setInviteCodeFromUrl] = useState<string | null>(null);
@@ -501,7 +563,7 @@ function MainAppContent({
    * waits). A refresh reads storage again and the queue moves on.
    */
   const [wantsMobileBeta] = useState(() => shouldShowMobileBetaHint());
-  const [wantsWhatsNew] = useState(
+  const [wantsWhatsNew, setWantsWhatsNew] = useState(
     () => !isAutomatedBrowser() && !isWhatsNewSeen(),
   );
   const [membersOpen, setMembersOpen] = useState(false);
@@ -2316,6 +2378,50 @@ function MainAppContent({
     queuePreferenceSync({ favoriteChannels: next }, { immediate: true });
   }
 
+  function handlePinnedConversationsChange(ids: string[]) {
+    if (!user) {
+      return;
+    }
+    setUser((previous) =>
+      previous
+        ? {
+            ...previous,
+            preferences: { ...previous.preferences, pinnedConversations: ids },
+          }
+        : previous,
+    );
+    queuePreferenceSync({ pinnedConversations: ids }, { immediate: true });
+  }
+
+  function handleTogglePinnedConversation(channelId: string) {
+    const current = user?.preferences?.pinnedConversations;
+    if (isPinnedConversation(current, channelId)) {
+      handlePinnedConversationsChange(
+        removePinnedConversation(current, channelId),
+      );
+      return;
+    }
+    const next = addPinnedConversation(current, channelId);
+    if (next.length === (current?.length ?? 0)) {
+      setClaimedHandle(null);
+      setAppNotice(
+        t("chrome.pinConversationFull", { count: PINNED_CONVERSATIONS_MAX }),
+      );
+      return;
+    }
+    handlePinnedConversationsChange(next);
+  }
+
+  function handleOpenWhatsNew() {
+    setDirectoryOpen(false);
+    setWhatsNewOpen(true);
+    rememberWhatsNewFeed();
+    setWhatsNewUnread(false);
+    rememberWhatsNew();
+    setWantsWhatsNew(false);
+    setMobileNavOpen(false);
+  }
+
   const dropServer = useCallback(
     async (serverId: string) => {
       const nextServers = servers.filter((s) => s.id !== serverId);
@@ -3118,11 +3224,16 @@ function MainAppContent({
       );
       setConversations(remaining);
       conversationsRef.current = remaining;
+      if (isPinnedConversation(user?.preferences?.pinnedConversations, channelId)) {
+        handlePinnedConversationsChange(
+          removePinnedConversation(user?.preferences?.pinnedConversations, channelId),
+        );
+      }
       if (selectedChannelIdRef.current === channelId) {
         selectHome();
       }
     },
-    [selectHome],
+    [selectHome, user],
   );
 
   const blockedUserIds = useMemo(
@@ -3217,6 +3328,25 @@ function MainAppContent({
 
   const conversationUnread = conversationUnreadTotals(conversations, unread);
 
+  const pinnedConversations = useMemo(
+    () =>
+      visiblePinnedConversations(
+        conversations,
+        user?.preferences?.pinnedConversations,
+      ),
+    [conversations, user?.preferences?.pinnedConversations],
+  );
+  const pinnedChannelIds = useMemo(
+    () => new Set(pinnedConversations.map((one) => one.channelId)),
+    [pinnedConversations],
+  );
+  const selectedPinnedId =
+    !whatsNewOpen &&
+    selectedChannelId &&
+    pinnedChannelIds.has(selectedChannelId)
+      ? selectedChannelId
+      : null;
+
   /**
    * Conversations with somebody in their voice room right now, for the phone
    * affordance in the DM sidebar. Occupancy frames for a conversation only
@@ -3233,6 +3363,8 @@ function MainAppContent({
     }
     return ids;
   }, [conversations, voiceState.occupancy]);
+
+  const updatePromptShowing = useUpdatePromptShowing();
 
   const handleQgHintShowingChange = useCallback((showing: boolean) => {
     setQgHintReady(true);
@@ -3324,10 +3456,11 @@ function MainAppContent({
   const canManageNicknames = perms.can(Permission.MANAGE_NICKNAMES);
   /**
    * One corner card. QG first (the house), then the phone-app invite,
-   * then dice/polls, then cargos. WhatsNew used to mount outside this
-   * queue and stack on the others; it does not any more.
+   * then Novidades on the rail, then cargos. WhatsNew used to mount
+   * outside this queue and stack on the others; it does not any more.
    */
   const cornerHint = winningCornerHint({
+    update: updatePromptShowing,
     qg: qgHintShowing,
     mobileBeta: wantsMobileBeta,
     whatsNew: wantsWhatsNew,
@@ -3696,6 +3829,12 @@ function MainAppContent({
             onStartScreenShare={() =>
               void voice.startScreenShare(shareSystemAudio)
             }
+            onShareWithoutSound={() => {
+              // Disarm the opt-in too: it is what failed, and the next share
+              // this person starts on their own should not repeat it.
+              setShareSystemAudio(false);
+              void voice.startScreenShare(false);
+            }}
             onStopScreenShare={() => void voice.stopScreenShare()}
             shareSystemAudio={shareSystemAudio}
             onShareSystemAudioChange={setShareSystemAudio}
@@ -3735,6 +3874,10 @@ function MainAppContent({
           onToggleCamera={() => void voice.toggleCamera()}
           onVideoQualityChange={handleVideoQualityChange}
           onStartScreenShare={() => void voice.startScreenShare(shareSystemAudio)}
+          onShareWithoutSound={() => {
+            setShareSystemAudio(false);
+            void voice.startScreenShare(false);
+          }}
           onStopScreenShare={() => void voice.stopScreenShare()}
           shareSystemAudio={shareSystemAudio}
           onShareSystemAudioChange={setShareSystemAudio}
@@ -3965,6 +4108,22 @@ function MainAppContent({
       )}
 
 
+      <ConnectionDoctorDialog
+        open={doctorOpen}
+        onClose={() => setDoctorOpen(false)}
+        transport={transport}
+        getToken={() => resolveTokenRef.current()}
+        onSignInAgain={signInAgain}
+        appVersion="web"
+      />
+
+      {/* Also at the root: a DM finds you wherever you are in the app. */}
+      <DmToasts
+        conversations={conversations}
+        selectedChannelId={selectedChannelId}
+        onOpen={(channelId) => void selectConversation(channelId)}
+      />
+
       {/* Also at the root: a call rings you wherever you are in the app. */}
       <IncomingCallOverlay
         calls={voiceState.incomingCalls}
@@ -3990,9 +4149,11 @@ function MainAppContent({
 
       <ServerRail
         servers={servers}
-        selectedServerId={selectedServerId}
+        selectedServerId={whatsNewOpen ? null : selectedServerId}
         serverUnread={serverUnread}
-        homeSelected={selection.kind === "dm"}
+        homeSelected={
+          selection.kind === "dm" && !whatsNewOpen && selectedPinnedId === null
+        }
         homeUnread={conversationUnread}
         // Requests AND depoimentos waiting to be answered — see `waitingOnYou`
         // for why the two are one number on this badge and not two.
@@ -4004,13 +4165,32 @@ function MainAppContent({
         // Absent entirely with the flag off, which is what makes the compass
         // not exist rather than exist-and-refuse.
         onOpenCommunities={
-          communitiesEnabled ? () => setDirectoryOpen(true) : undefined
+          communitiesEnabled
+            ? () => {
+                setWhatsNewOpen(false);
+                setDirectoryOpen(true);
+              }
+            : undefined
         }
+        whatsNewSelected={whatsNewOpen}
+        whatsNewUnread={whatsNewUnread}
+        onOpenWhatsNew={handleOpenWhatsNew}
+        pinnedConversations={pinnedConversations}
+        pinnedUnread={unread}
+        selectedPinnedId={selectedPinnedId}
+        onSelectPinned={(channelId) => {
+          setWhatsNewOpen(false);
+          void selectConversation(channelId);
+          setMobileNavOpen(true);
+        }}
+        onUnpinConversation={handleTogglePinnedConversation}
         onSelectHome={() => {
+          setWhatsNewOpen(false);
           selectHome();
           setMobileNavOpen(true);
         }}
         onSelectServer={(id) => {
+          setWhatsNewOpen(false);
           setSelection({ kind: "server", serverId: id });
           void loadChannels(id);
           setMobileNavOpen(true);
@@ -4020,6 +4200,7 @@ function MainAppContent({
         onInvite={openInviteForServer}
         onOpenMembers={openMembersForServer}
         onOpenSettings={(id) => {
+          setWhatsNewOpen(false);
           setSelection({ kind: "server", serverId: id });
           setServerSettingsOpen(true);
         }}
@@ -4029,6 +4210,16 @@ function MainAppContent({
         }
       />
 
+      {whatsNewOpen ? (
+        <WhatsNewView
+          mobileOpen={mobileNavOpen}
+          onMobileClose={() => setMobileNavOpen(false)}
+          onMobileOpen={() => setMobileNavOpen(true)}
+          onClose={() => setWhatsNewOpen(false)}
+          footer={sidebarFooter}
+        />
+      ) : (
+        <>
       {selection.kind === "dm" ? (
         <DmList
           conversations={conversations}
@@ -4046,6 +4237,8 @@ function MainAppContent({
           friendRequestCount={friends.data.incoming.length}
           onOpenFriends={selectHome}
           onHideConversation={(id) => void handleHideConversation(id)}
+          pinnedChannelIds={pinnedChannelIds}
+          onTogglePin={handleTogglePinnedConversation}
           onBlockUser={(person) => void handleBlockUser(person.id)}
           onUnblockUser={(id) => void handleUnblockUser(id)}
           onStartCall={handleStartConversationCall}
@@ -4101,6 +4294,7 @@ function MainAppContent({
           communityHomeSelected={communityHomeOpen}
           onSelectCommunityHome={() => {
             if (selectedServerId) {
+              setWhatsNewOpen(false);
               markCommunityHomeRowSeen(selectedServerId);
               setCommunityHomeRowNew(false);
               void selectChannel(COMMUNITY_HOME_CHANNEL_ID, selectedServerId);
@@ -4116,17 +4310,13 @@ function MainAppContent({
           </div>
         )}
 
-        {(connection === "reconnecting" || connection === "unauthorized") && (
-          <div
-            className="flex items-center justify-center gap-2 border-b border-warning/30 bg-warning/10 px-4 py-1.5 text-xs text-warning"
-            role="status"
-          >
-            <WifiOff className="h-3.5 w-3.5" />
-            {connection === "unauthorized"
-              ? t("connection.unauthorized")
-              : t("connection.reconnecting")}
-          </div>
-        )}
+        <ConnectionBanner
+          status={connection}
+          refusedRepeatedly={transport.getUnauthorizedStreak() >= 2}
+          onRetry={() => transport.retryNow()}
+          onCheck={() => setDoctorOpen(true)}
+          onSignInAgain={signInAgain}
+        />
 
         {appError && (
           <div className="flex items-start gap-3 border-b border-danger/40 bg-danger/10 px-4 py-2 text-sm text-danger">
@@ -4291,6 +4481,8 @@ function MainAppContent({
 
         {selectedChannel?.type === "voice" && chatPane}
       </main>
+        </>
+      )}
 
       {/* A SIBLING OF `<main>`, not a child of the chat pane. The root is the
           app's flex row (rail | channels | chat), so slotting the roster here
@@ -4300,7 +4492,7 @@ function MainAppContent({
           inside `<main>` and simply gets a narrower box. A thread takes this
           same slot: overlaying it on the transcript while the roster stayed
           put is what crushed #avisos on the QG. */}
-      {openThread && (
+      {openThread && !whatsNewOpen && (
         <ThreadPanel
           thread={openThread.thread}
           origin={openThread.origin}
@@ -4349,7 +4541,7 @@ function MainAppContent({
           }}
         />
       )}
-      {memberSidebarAvailable && !openThread && (
+      {memberSidebarAvailable && !openThread && !whatsNewOpen && (
         <MemberSidebar
           open={memberSidebar.open}
           wide={memberSidebar.wide}
@@ -4658,7 +4850,10 @@ function MainAppContent({
           setServerSettingsOpen(true);
         }}
       />
-      <WhatsNewPrompt enabled={cornerHint === "whatsNew"} />
+      <WhatsNewPrompt
+        enabled={cornerHint === "whatsNew"}
+        onOpen={handleOpenWhatsNew}
+      />
       <MobileBetaHint enabled={cornerHint === "mobileBeta"} />
       <QgHint
         onShowingChange={handleQgHintShowingChange}

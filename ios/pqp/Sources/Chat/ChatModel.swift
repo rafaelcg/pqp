@@ -65,6 +65,15 @@ final class ChatModel {
         return current.createdAt.timeIntervalSince(previous.createdAt) < 300
     }
 
+    /// Whether the message at `index` is the first of its calendar day in the
+    /// loaded transcript. The first loaded message always is: the day has to
+    /// be named somewhere above it, and the row moves up as history loads.
+    func startsDay(at index: Int) -> Bool {
+        guard index >= 0, index < messages.count else { return false }
+        guard index > 0 else { return true }
+        return !DayLabels.isSameDay(messages[index - 1].createdAt, messages[index].createdAt)
+    }
+
     /// Cache first, then network.
     ///
     /// The old shape of this method is what the owner was complaining about:
@@ -514,7 +523,7 @@ final class ChatModel {
         // transcript's: if this channel is one you have just lost, the server
         // has already evicted this socket from it, so nothing more arrives here
         // either way.
-        case .friendActivity, .permissionsUpdate,
+        case .friendActivity, .permissionsUpdate, .communityHomeUpdate,
              .presence, .activity, .other,
              .voiceWelcome, .voicePeerJoined, .voicePeerLeft, .voiceRoster,
              .voiceRoomFull, .voiceTransportUnsupported, .voiceScreenShareDenied,

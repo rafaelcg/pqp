@@ -17,6 +17,12 @@ Read [`docs/I18N.md`](./docs/I18N.md) before adding copy.
 
 Read [`docs/CONNECTIONS.md`](./docs/CONNECTIONS.md) before adding a provider. Steam is OpenID 2.0. Battle.net and Twitch are OAuth. None of those is a Clerk login.
 
+## Release notes (What's New / `/blog`)
+
+The sparkle in the app and `/blog` are the same markdown. Mechanics: the header of `client/src/lib/blog/posts.ts`.
+
+Do **not** write a What's New post in a feature PR. Notes are a weekly catch-up, not a per-PR duty. When Andre asks to catch up, follow [`.cursor/skills/whats-new/SKILL.md`](.cursor/skills/whats-new/SKILL.md). Never edit a post already on `main`.
+
 ## How we ship
 
 New work goes on a new branch off latest `main`. One feature per branch.

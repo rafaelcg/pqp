@@ -116,6 +116,7 @@ const DEFAULT_PREFERENCES = {
     outgoingCall: true,
   },
   favoriteChannels: {},
+  pinnedConversations: [],
 } as const;
 
 /**

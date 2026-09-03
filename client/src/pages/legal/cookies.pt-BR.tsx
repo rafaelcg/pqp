@@ -17,17 +17,17 @@ export const cookiesPtBr: LegalDocument = {
   description:
     "Exatamente quais cookies, chaves de armazenamento local e caches o pqp.gg coloca no seu dispositivo, e quais terceiros o seu navegador contata.",
   heading: "Aviso de cookies",
-  updated: "31 de agosto de 2026",
+  updated: "2 de setembro de 2026",
   sections: [
     {
       id: "intro",
-      sourceRev: "8837c08b",
+      sourceRev: "7e334fe7",
       body: (
         <p>
-          Este aviso lista tudo o que o <strong>pqp.gg</strong> guarda no seu
-          dispositivo e todo terceiro que o seu navegador contata enquanto você
-          usa o serviço. É uma lista completa, não um resumo por categoria.
-          Instâncias self-hosted podem ser diferentes, dependendo de como foram
+          Este aviso lista os cookies, as chaves de armazenamento e os
+          terceiros que o <strong>pqp.gg</strong> usa hoje. Se uma chave
+          faltar, isso é um bug nesta página, não um segredo. Instâncias
+          self-hosted podem ser diferentes, dependendo de como foram
           configuradas.
         </p>
       ),
@@ -89,7 +89,7 @@ export const cookiesPtBr: LegalDocument = {
     },
     {
       id: "local-storage",
-      sourceRev: "cf095865",
+      sourceRev: "8f68d18c",
       heading: "Armazenamento local",
       body: (
         <>
@@ -154,12 +154,50 @@ export const cookiesPtBr: LegalDocument = {
               conta, e nunca sai do seu dispositivo. Se você nunca se cadastrar,
               ele nunca chega a ser gravado.
             </li>
+            <li>
+              <code>pqp-sounds</code> — se os sons de mensagem e de chamada tocam
+              neste dispositivo.
+            </li>
+            <li>
+              <code>pqp:arrived-servers</code> — servidores em que você já
+              entrou, para o cartão de primeira visita não aparecer duas vezes.
+            </li>
+            <li>
+              <code>pqp:member-sidebar</code> — se a lista de membros está
+              aberta neste dispositivo.
+            </li>
+            <li>
+              <code>pqp:call-rating-asked</code> — quando a gente pediu pela
+              última vez para você avaliar uma chamada, para o aviso não
+              insistir em todo desligar.
+            </li>
+            <li>
+              <code>pqp:whats-new</code>, <code>pqp:download-hint-dismissed</code>,{" "}
+              <code>pqp:mobile-beta-hint-2026-08</code>,{" "}
+              <code>pqp:qg-hint-2026-08</code>,{" "}
+              <code>pqp:cargos-hint-2026-08</code> — cartões e dicas do produto
+              que você fechou, para ficarem fechados.
+            </li>
+            <li>
+              <code>pqp:pending-handle-claim</code>,{" "}
+              <code>pqp:pending-handle-add</code>,{" "}
+              <code>pqp:pending-community-join</code> — um handle público ou
+              uma comunidade que você quis reivindicar ou entrar antes de
+              entrar na conta, para a gente terminar isso depois do cadastro.
+              Apagados depois de usados.
+            </li>
           </ul>
           <p>
             A maior parte dessas configurações também é salva na sua conta no
             nosso servidor, para acompanhar você em outro dispositivo — veja a{" "}
             <Link to="/privacy">Política de Privacidade</Link>. O Clerk também
             guarda entradas próprias aqui, para a sessão.
+          </p>
+          <p>
+            O <strong>armazenamento de sessão</strong> (some quando você fecha a
+            aba) guarda <code>pqp.connection.callback</code> e{" "}
+            <code>pqp.connection.error</code> no pulo de conectar Steam,
+            Battle.net ou Twitch, que sai do pqp.gg e volta.
           </p>
           <p>
             <strong>Rascunho de mensagem não é guardado.</strong> O que estiver
@@ -184,7 +222,7 @@ export const cookiesPtBr: LegalDocument = {
     },
     {
       id: "third-parties",
-      sourceRev: "43d8adbf",
+      sourceRev: "a8512e98",
       heading: "Terceiros que o seu navegador contata",
       body: (
         <>
@@ -230,6 +268,16 @@ export const cookiesPtBr: LegalDocument = {
               &quot;Cookies&quot; de{" "}
               <code>www.googletagmanager.com</code>, em toda página do pqp.gg.
             </li>
+            <li>
+              <strong>Steam, Battle.net e Twitch</strong> — só se você clicar
+              em Conectar. O navegador sai do pqp.gg, entra no provedor e volta.
+              A gente não guarda os tokens de acesso deles.
+            </li>
+            <li>
+              <strong>O botão de download do APK Android</strong> no pqp.gg
+              manda uma contagem de um byte para o painel do operador. Nenhuma
+              conta viaja junto. O painel limita por IP durante um minuto.
+            </li>
           </ul>
           <p>
             As imagens de prévia de link são a exceção: a gente passa essas pelo
@@ -241,18 +289,20 @@ export const cookiesPtBr: LegalDocument = {
     },
     {
       id: "not-used",
-      sourceRev: "faffa6e0",
+      sourceRev: "ed412a3d",
       heading: "O que a gente não usa",
       body: (
         <>
           <p>
             Nenhum pixel de retargeting ou remarketing, nenhuma lista de
             público, nenhuma gravação de sessão, nenhum SDK de relatório de
-            erro, nenhuma impressão digital de dispositivo e nenhum serviço de
-            push. As notificações no desktop são disparadas localmente pelo seu
-            próprio navegador e não passam por mais ninguém. A tag do Google
-            descrita em &quot;Cookies&quot; acima é a única peça de maquinaria
-            de publicidade aqui, e ela só conta cadastros.
+            erro e nenhuma impressão digital de dispositivo. As notificações no
+            desktop são disparadas localmente pelo seu próprio navegador. Push
+            no telefone e na web existe quando a API hospedada está configurada
+            com VAPID ou APNs; isso passa pela Apple ou pelo serviço de push do
+            navegador, não por um SDK de analytics de terceiro. A tag do
+            Google descrita em &quot;Cookies&quot; acima é a única peça de
+            maquinaria de publicidade aqui, e ela só conta cadastros.
           </p>
           <p>
             A gente usa o <strong>Cloudflare Web Analytics</strong> para contar

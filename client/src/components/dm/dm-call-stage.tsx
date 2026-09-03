@@ -29,6 +29,7 @@ export function DmCallStage({
   onToggleCamera,
   onVideoQualityChange,
   onStartScreenShare,
+  onShareWithoutSound,
   onStopScreenShare,
   shareSystemAudio = false,
   onShareSystemAudioChange,
@@ -49,6 +50,7 @@ export function DmCallStage({
   onToggleCamera: () => void;
   onVideoQualityChange: (quality: VideoQuality) => void;
   onStartScreenShare?: () => void;
+  onShareWithoutSound?: () => void;
   shareSystemAudio?: boolean;
   onShareSystemAudioChange?: (next: boolean) => void;
   onStopScreenShare?: () => void;
@@ -117,6 +119,7 @@ export function DmCallStage({
       onToggleCamera={onToggleCamera}
       onVideoQualityChange={onVideoQualityChange}
       onStartScreenShare={onStartScreenShare}
+      onShareWithoutSound={onShareWithoutSound}
       onStopScreenShare={onStopScreenShare}
       shareSystemAudio={shareSystemAudio}
       onShareSystemAudioChange={onShareSystemAudioChange}

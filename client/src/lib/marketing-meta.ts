@@ -345,7 +345,7 @@ export const TELA_FAQ: Record<
     {
       question: "O que vocês guardam sobre mim?",
       answer:
-        "Menos do que você imagina, e tudo está listado em linguagem simples na política de privacidade em pqp.gg/privacy. Sem rastreador de anúncio e sem cookie de analytics.",
+        "Menos do que você imagina, e tudo está listado em linguagem simples na política de privacidade em pqp.gg/privacy. O pqp.gg hospedado usa analytics sem cookie (Umami) e uma tag de conversão do Google Ads que só conta cadastros. Sem remarketing e sem lista de público.",
     },
   ],
   en: [
@@ -377,7 +377,7 @@ export const TELA_FAQ: Record<
     {
       question: "What do you keep about me?",
       answer:
-        "Less than you would expect, and all of it is listed in plain language in the privacy policy at pqp.gg/privacy. No ad trackers and no analytics cookies.",
+        "Less than you would expect, and all of it is listed in plain language in the privacy policy at pqp.gg/privacy. Hosted pqp.gg uses cookie-less analytics (Umami) and a Google Ads conversion tag that only counts sign-ups. No remarketing, no audience lists.",
     },
   ],
 };

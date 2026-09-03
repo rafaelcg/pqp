@@ -64,6 +64,39 @@
     <string name="chat_attachment_unsupported">This server does not take that kind of file.</string>
     <string name="chat_attachment_too_many">A message carries at most %1$d files.</string>
     <string name="chat_attachment_unreadable">That file could not be read.</string>
+    <!-- The row between two calendar days. Older days are formatted dates. -->
+    <string name="chat_day_today">Today</string>
+    <string name="chat_day_yesterday">Yesterday</string>
+
+    <!-- Baú (Community Home): the feed of posts that stay, above a server's
+         text channels. Read-only on the phone: liking and commenting are the
+         only verbs, staff post from the web. -->
+    <string name="bau_title">Baú</string>
+    <string name="bau_row_hint">Posts that stay. Not chat.</string>
+    <string name="bau_subtitle">Posts from %1$s that stay put</string>
+    <string name="bau_empty">Nothing in the Baú yet. When the staff of %1$s posts, it shows up here.</string>
+    <string name="bau_load_failed">Could not load the Baú. %1$s</string>
+    <string name="bau_badge_owner">owner</string>
+    <string name="bau_badge_staff">staff</string>
+    <string name="bau_vip_chip">VIP</string>
+    <string name="bau_locked_title">VIP post</string>
+    <string name="bau_locked_body">The full post is for members with the VIP cargo.</string>
+    <string name="bau_unlock_cta">VIP, coming soon</string>
+    <string name="bau_like">Like</string>
+    <string name="bau_unlike">Remove like</string>
+    <string name="bau_comments">Comments</string>
+    <string name="bau_comments_view_one">See %1$d comment</string>
+    <string name="bau_comments_view_all">See all %1$d comments</string>
+    <string name="bau_comments_show_less">Show fewer</string>
+    <string name="bau_comment_placeholder">Write a comment</string>
+    <string name="bau_comment_submit">Comment</string>
+    <string name="bau_comment_failed">Could not post the comment.</string>
+    <string name="bau_comments_off">Comments are off on this post.</string>
+    <string name="bau_media_file">File</string>
+    <string name="bau_media_image">Image</string>
+    <string name="bau_media_video">Play video</string>
+    <string name="bau_media_youtube">Watch on YouTube</string>
+    <string name="bau_media_unavailable">Media unavailable right now.</string>
 
     <!-- Attachments -->
     <!-- Accessible name for an animated image. %1$s is its filename or, for a

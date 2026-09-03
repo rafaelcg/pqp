@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { RefreshCw } from "lucide-react";
+import { CornerCard } from "@/components/layout/corner-card";
 import { Button } from "@/components/ui/button";
 import { useTranslation } from "@/lib/i18n";
 import {
@@ -7,6 +8,7 @@ import {
   type ServiceWorkerControls,
 } from "@/lib/register-sw";
 import { snoozeRemainingMs } from "@/lib/update-snooze";
+import { setUpdatePromptShowing } from "@/lib/update-prompt-state";
 
 /**
  * "A new version is ready" — the visible half of `registerType: "prompt"`.
@@ -46,39 +48,51 @@ export function UpdatePrompt() {
     return () => clearTimeout(timer);
   }, [snoozedAt]);
 
-  if (!needsRefresh || snoozedAt !== null) {
-    return null;
-  }
+  const show = needsRefresh && snoozedAt === null;
+
+  // Tell the corner-hint queue inside App to yield while this is up.
+  useEffect(() => {
+    setUpdatePromptShowing(show);
+    return () => setUpdatePromptShowing(false);
+  }, [show]);
 
   return (
-    <div
-      role="status"
-      className="fixed inset-x-3 bottom-3 z-50 mx-auto flex max-w-md items-center gap-2 rounded-lg border border-ink-4 bg-ink-2 px-4 py-3 shadow-lg sm:inset-x-auto sm:right-4"
-      style={{ marginBottom: "env(safe-area-inset-bottom)" }}
-    >
-      <RefreshCw className="h-4 w-4 shrink-0 text-signal" aria-hidden="true" />
-      <p className="min-w-0 flex-1 text-sm text-paper">
-        {t("update.ready")}
-      </p>
-      <Button
-        size="sm"
-        disabled={updating}
-        onClick={() => {
-          setUpdating(true);
-          // The worker takes over and reloads the page itself.
-          void controlsRef.current?.update();
-        }}
-      >
-        {updating ? t("update.updating") : t("update.reload")}
-      </Button>
-      <Button
-        size="sm"
-        variant="ghost"
-        aria-label={t("update.dismiss")}
-        onClick={() => setSnoozedAt(Date.now())}
-      >
-        {t("update.later")}
-      </Button>
-    </div>
+    <CornerCard
+      open={show}
+      onClose={() => setSnoozedAt(Date.now())}
+      label={t("update.ready")}
+      dismissLabel={t("update.dismiss")}
+      dataAttribute="update"
+      tone="status"
+      title={
+        <span className="flex items-center gap-2">
+          <RefreshCw className="h-4 w-4 shrink-0 text-signal" aria-hidden="true" />
+          {t("update.ready")}
+        </span>
+      }
+      footer={
+        <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            className="cta-lift rounded-full px-4"
+            disabled={updating}
+            onClick={() => {
+              setUpdating(true);
+              // The worker takes over and reloads the page itself.
+              void controlsRef.current?.update();
+            }}
+          >
+            {updating ? t("update.updating") : t("update.reload")}
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => setSnoozedAt(Date.now())}
+          >
+            {t("update.later")}
+          </Button>
+        </div>
+      }
+    />
   );
 }

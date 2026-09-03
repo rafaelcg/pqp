@@ -37,6 +37,15 @@ interface ImportMetaEnv {
    */
   readonly VITE_GOOGLE_ADS_ID?: string;
   readonly VITE_GOOGLE_ADS_SIGNUP_LABEL?: string;
+  /**
+   * The donation page (`/apoie`, `/support`). Hosted-only: a GitHub Sponsors
+   * URL, a Pix random key and, optionally, the "Pix copia e cola" payload.
+   * The page and its footer link exist only when the URL or the key is set,
+   * so a self-hosted build never carries our links. See `lib/support-links.ts`.
+   */
+  readonly VITE_SPONSOR_URL?: string;
+  readonly VITE_PIX_KEY?: string;
+  readonly VITE_PIX_BRCODE?: string;
 }
 
 interface ImportMeta {

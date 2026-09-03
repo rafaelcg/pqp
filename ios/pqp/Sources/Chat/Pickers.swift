@@ -218,7 +218,9 @@ struct ExpressionContent: View {
     private var searchField: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass").foregroundStyle(Palette.paperMuted)
-            TextField(tab == .emoji ? "Search emoji" : "Search GIFs", text: $query)
+            // "Search KLIPY", per Klipy's attribution guidelines, the same
+            // placeholder the web picker carries.
+            TextField(tab == .emoji ? "Search emoji" : "Search KLIPY", text: $query)
                 .textFieldStyle(.plain)
                 .foregroundStyle(Palette.paper)
                 .autocorrectionDisabled()
@@ -474,6 +476,22 @@ private struct GifGrid: View {
             }
 
             Spacer(minLength: 0)
+
+            // Klipy's official lockup, per their attribution guidelines: the
+            // same asset the web picker's footer carries. The app is dark by
+            // design, so the white artwork is the only one bundled; it is a
+            // template so it takes the muted paper tint rather than pure white.
+            Image("PoweredByKlipy")
+                .renderingMode(.template)
+                .resizable()
+                .scaledToFit()
+                .frame(height: 12)
+                .foregroundStyle(Palette.paperMuted)
+                .opacity(0.7)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, Metrics.hPadding)
+                .padding(.vertical, 6)
+                .accessibilityLabel("Powered by KLIPY")
         }
         .task { await load(query) }
         .onChange(of: query) { _, value in schedule(value) }

@@ -67,6 +67,9 @@ const DownloadPage = lazy(() =>
 const TelaPage = lazy(() =>
   import("./pages/tela-page").then((m) => ({ default: m.TelaPage })),
 );
+const ApoieRoute = lazy(() =>
+  import("./pages/apoie-page").then((m) => ({ default: m.ApoieRoute })),
+);
 const BlogPage = lazy(() =>
   import("./pages/blog-page").then((m) => ({ default: m.BlogPage })),
 );
@@ -174,6 +177,13 @@ function AppRoutes({ devBypass = false }: { devBypass?: boolean }) {
           <Route path="/tela" element={<TelaPage />} />
           <Route path="/beta" element={<BetaPage />} />
           <Route path="/android" element={<AndroidPage />} />
+          {/* `/apoie` and `/support`: one donation page under two names, like
+              `/garanta` and `/claim` below. `ApoieRoute` renders it only when
+              the build carries a Sponsors URL or a Pix key (hosted-only, see
+              `lib/support-links.ts`); on every other build, a self-host most
+              of all, both paths redirect to `/`. */}
+          <Route path="/apoie" element={<ApoieRoute />} />
+          <Route path="/support" element={<ApoieRoute />} />
           <Route path="/download" element={<DownloadPage />} />
           {/* Static before dynamic, and both before `/:handleSegment`. React
               Router ranks a static segment above a parameter, so `/blog/x`

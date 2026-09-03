@@ -244,12 +244,21 @@ struct ChatView: View {
                     }
 
                     ForEach(Array(model.messages.enumerated()), id: \.element.id) { index, message in
+                        // A new calendar day opens with a row that says which
+                        // day, the way the web transcript does. The oldest
+                        // loaded message always opens one: the day has to be
+                        // named somewhere above the first thing said in it,
+                        // and the row moves up when older history arrives.
+                        if model.startsDay(at: index) {
+                            DaySeparator(date: message.createdAt)
+                        }
                         MessageRow(
                             message: message,
                             // Consecutive messages from one person collapse into
                             // a block, the way the web client groups them — a
                             // repeated avatar every line eats a phone screen.
-                            isGrouped: model.isGrouped(at: index),
+                            // A day boundary always breaks the block.
+                            isGrouped: model.isGrouped(at: index) && !model.startsDay(at: index),
                             onToggleReaction: { emoji in
                                 Task { await model.toggleReaction(emoji, on: message) }
                             },
@@ -625,6 +634,31 @@ struct Composer: View {
     }
 }
 
+/// The row that names a day.
+///
+/// Between two hairlines rather than on a pill, because a pill is what a
+/// message bubble would be and this is not a message: it is the transcript's
+/// own rule, the same one the web draws. The time on each message stays where
+/// it is; this only says which day those times belong to.
+struct DaySeparator: View {
+    let date: Date
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Rectangle().fill(Palette.border).frame(height: 1)
+            Text(DayLabels.label(for: date))
+                .font(Typography.caption)
+                .foregroundStyle(Palette.paperMuted)
+                .lineLimit(1)
+                .fixedSize()
+            Rectangle().fill(Palette.border).frame(height: 1)
+        }
+        .padding(.vertical, 10)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("chat.day")
+    }
+}
+
 struct MessageRow: View {
     let message: Message
     let isGrouped: Bool
@@ -694,6 +728,16 @@ struct MessageRow: View {
                         .font(Typography.callout)
                         .italic()
                         .foregroundStyle(Palette.paperMuted)
+                } else if let gifURL = GifLinks.mediaBody(message.body) {
+                    // A body that is nothing but a GIF link is the picture,
+                    // not the link. Both other clients do this, and without it
+                    // a pasted Klipy URL reads here as a hundred characters of
+                    // text where everyone else sees a GIF move. See `GifLinks`
+                    // for the allowlist and why there is one.
+                    AnimatedImageView(url: gifURL)
+                        .frame(maxWidth: 260, maxHeight: 260)
+                        .clipShape(RoundedRectangle(cornerRadius: Metrics.cornerRadiusSmall, style: .continuous))
+                        .accessibilityLabel(Text("GIF"))
                 } else if let chance = message.chance {
                     ChanceCard(chance: chance)
                 } else if !message.body.isEmpty {
@@ -994,7 +1038,7 @@ struct ChanceCard: View {
                         dieView(value: face.value, sides: face.sides)
                     }
                 }
-                Text("\(chance.total ?? 0)")
+                Text(verbatim: "\(chance.total ?? 0)")
                     .font(Typography.display(28))
                     .foregroundStyle(totalColor)
                     .monospacedDigit()
@@ -1078,7 +1122,9 @@ struct ChanceCard: View {
     private func dieView(value: Int, sides: Int) -> some View {
         let crit20 = sides == 20 && value == 20
         let crit1 = sides == 20 && value == 1
-        Text("\(value)")
+        // Explicit: a body with `let`s ahead of the view is not a single
+        // expression, and Swift 6 refuses to infer the opaque type without it.
+        return Text(verbatim: "\(value)")
             .font(Typography.title(16))
             .monospacedDigit()
             .foregroundStyle(crit20 ? Palette.signal : crit1 ? Palette.danger : Palette.ink)

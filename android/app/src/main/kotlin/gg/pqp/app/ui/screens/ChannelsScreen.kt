@@ -50,12 +50,15 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import gg.pqp.app.R
+import gg.pqp.app.bau.CommunityHomeConfig
+import gg.pqp.app.bau.CommunityHomeConfigs
 import gg.pqp.app.core.Channel
 import gg.pqp.app.core.SessionStore
 import gg.pqp.app.ui.components.Avatar
@@ -95,8 +98,20 @@ fun ChannelsScreen(
     serverName: String,
     onBack: () -> Unit,
     onOpenChannel: (Channel) -> Unit,
+    onOpenBau: () -> Unit = {},
 ) {
     var channels by remember { mutableStateOf<List<Channel>?>(null) }
+
+    // The Baú row needs two yeses: the instance flag, asked once per session,
+    // and this server's own switch, which rides on the row `/api/servers`
+    // already delivered. Either no, and the row is not drawn; there is
+    // nothing to tap into on a server that would 404 it.
+    val servers by session.servers.collectAsStateWithLifecycle()
+    var communityHome by remember { mutableStateOf(CommunityHomeConfig()) }
+    LaunchedEffect(session) { communityHome = CommunityHomeConfigs.resolve(session.api) }
+    val showBau = communityHome.enabled &&
+        servers.firstOrNull { it.id == serverId }?.communityHomeEnabled == true
+
     val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior(rememberTopAppBarState())
     val context = LocalContext.current
     val snackbars = remember { SnackbarHostState() }
@@ -243,7 +258,7 @@ fun ChannelsScreen(
                 contentAlignment = Alignment.Center,
             ) { CircularProgressIndicator() }
 
-            list.isEmpty() -> Box(Modifier.padding(padding)) {
+            list.isEmpty() && !showBau -> Box(Modifier.padding(padding)) {
                 EmptyState(stringResource(R.string.channels_empty), icon = PqpIcons.TextChannel)
             }
 
@@ -253,6 +268,15 @@ fun ChannelsScreen(
                     modifier = Modifier.fillMaxSize().padding(padding),
                     contentPadding = PaddingValues(bottom = Spacing.xl),
                 ) {
+                    // Above TEXT, where the web sidebar puts it. It is not a
+                    // channel and is not drawn as one: it carries its own hint
+                    // so nobody opens it expecting to type.
+                    if (showBau) {
+                        item(key = "bau") {
+                            Spacer(Modifier.height(Spacing.sm))
+                            BauRow(onClick = onOpenBau)
+                        }
+                    }
                     sections.forEachIndexed { index, section ->
                         item(key = "header-${section.key}") {
                             SectionHeader(
@@ -286,6 +310,55 @@ fun ChannelsScreen(
                     }
                 }
             }
+        }
+    }
+}
+
+/**
+ * The Baú's row. Same pill as a channel, so it sits in the list, but with a
+ * second line: the one thing a person needs to know before tapping is that
+ * this is not a place to type.
+ */
+@Composable
+private fun BauRow(onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = Spacing.railInset)
+            .heightIn(min = Sizes.channelRow)
+            .clip(MaterialTheme.shapes.small)
+            .clickable(onClick = onClick)
+            .padding(horizontal = Spacing.md, vertical = Spacing.xs)
+            .testTag("channels.bau"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier.size(Sizes.iconInline),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = PqpIcons.Bau,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(Sizes.iconInline),
+            )
+        }
+        Spacer(Modifier.width(Spacing.sm + 2.dp))
+        Column {
+            Text(
+                text = stringResource(R.string.bau_title),
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = stringResource(R.string.bau_row_hint),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }

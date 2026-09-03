@@ -29,6 +29,7 @@ import { SCREEN_SHARE_LIMIT, MESH_VOICE_WARNING } from "@pqp/shared";
 import type { VoiceInputMode, VoiceState } from "@/hooks/use-voice";
 import type { VideoQuality } from "@/lib/video-quality";
 import {
+  canShareScreenAudio,
   detectFullscreenMode,
   screenShareUnavailableMessage,
   supportsScreenShare,
@@ -63,6 +64,10 @@ import { isScreenShareAtCap } from "@/lib/screen-share-roster";
 import { useTranslation, type MessageKey, type MessageVars } from "@/lib/i18n";
 import { PeerTileControls } from "@/components/voice/peer-tile-controls";
 import { startSoundLoop, stopSoundLoop } from "@/lib/sounds";
+import {
+  requestConnectionCheck,
+  requestSettingsSection,
+} from "@/lib/settings-request";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
@@ -379,6 +384,12 @@ export interface CallStageProps {
   onToggleCamera: () => void;
   onVideoQualityChange: (quality: VideoQuality) => void;
   onStartScreenShare?: () => void;
+  /**
+   * Start the same share with no sound at all. Offered only after sound is
+   * what killed the last attempt, and separate from `onStartScreenShare`
+   * because it must also disarm the toggle: the tick is what failed.
+   */
+  onShareWithoutSound?: () => void;
   onStopScreenShare?: () => void;
   shareSystemAudio?: boolean;
   onShareSystemAudioChange?: (next: boolean) => void;
@@ -417,6 +428,7 @@ export function CallStage({
   onToggleCamera,
   onVideoQualityChange,
   onStartScreenShare,
+  onShareWithoutSound,
   onStopScreenShare,
   shareSystemAudio = false,
   onShareSystemAudioChange,
@@ -468,6 +480,7 @@ export function CallStage({
       onToggleCamera={onToggleCamera}
       onVideoQualityChange={onVideoQualityChange}
       onStartScreenShare={onStartScreenShare}
+      onShareWithoutSound={onShareWithoutSound}
       shareSystemAudio={shareSystemAudio}
       onShareSystemAudioChange={onShareSystemAudioChange}
       onStopScreenShare={onStopScreenShare}
@@ -502,6 +515,7 @@ function ActiveCall({
   onToggleCamera,
   onVideoQualityChange,
   onStartScreenShare,
+  onShareWithoutSound,
   onStopScreenShare,
   shareSystemAudio = false,
   onShareSystemAudioChange,
@@ -532,6 +546,12 @@ function ActiveCall({
   onToggleCamera: () => void;
   onVideoQualityChange: (quality: VideoQuality) => void;
   onStartScreenShare?: () => void;
+  /**
+   * Start the same share with no sound at all. Offered only after sound is
+   * what killed the last attempt, and separate from `onStartScreenShare`
+   * because it must also disarm the toggle: the tick is what failed.
+   */
+  onShareWithoutSound?: () => void;
   shareSystemAudio?: boolean;
   onShareSystemAudioChange?: (next: boolean) => void;
   onStopScreenShare?: () => void;
@@ -1190,8 +1210,57 @@ function ActiveCall({
 
       {/* --- overlays -------------------------------------------------------- */}
       {voiceState.error && (
-        <p className="absolute inset-x-0 top-0 z-20 bg-danger/15 px-3 py-1.5 text-center text-xs text-danger">
-          {voiceState.error}
+        <div
+          role="alert"
+          data-voice-error
+          className="absolute inset-x-0 top-0 z-20 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 bg-danger/15 px-3 py-1.5 text-center text-xs text-danger"
+        >
+          <span>{voiceState.error}</span>
+          {/* Every microphone error is fixed by picking another microphone,
+              so the banner carries the door to where that happens. */}
+          {voiceState.errorKind === "connection" && (
+            <button
+              type="button"
+              data-voice-error-check
+              className="rounded-md bg-danger/20 px-2 py-0.5 font-semibold text-danger hover:bg-danger/30"
+              onClick={() => requestConnectionCheck()}
+            >
+              {t("connection.check")}
+            </button>
+          )}
+          {/* Sound is the only part of a capture that can fail on its own and
+              take the picture with it. One click puts the share back, minus
+              the thing that broke it, and it has to be a click: the picker
+              already spent this attempt's user activation. */}
+          {voiceState.screenShareAudioFailed && onShareWithoutSound && (
+            <button
+              type="button"
+              data-voice-error-share-silent
+              className="rounded-md bg-danger/20 px-2 py-0.5 font-semibold text-danger hover:bg-danger/30"
+              onClick={onShareWithoutSound}
+            >
+              {t("voice.control.shareWithoutSound")}
+            </button>
+          )}
+          {voiceState.errorKind === "mic" && (
+            <button
+              type="button"
+              data-voice-error-settings
+              className="rounded-md bg-danger/20 px-2 py-0.5 font-semibold text-danger hover:bg-danger/30"
+              onClick={() => requestSettingsSection("voice")}
+            >
+              {t("voice.error.openVoiceSettings")}
+            </button>
+          )}
+        </div>
+      )}
+      {!voiceState.error && voiceState.notice && (
+        <p
+          role="status"
+          data-voice-notice
+          className="absolute inset-x-0 top-0 z-20 bg-ink/70 px-3 py-1.5 text-center text-xs text-paper-muted backdrop-blur-sm"
+        >
+          {voiceState.notice}
         </p>
       )}
 
@@ -1199,7 +1268,7 @@ function ActiveCall({
         className={cn(
           "pointer-events-none absolute inset-x-0 top-0 z-10 flex items-start justify-between gap-2 bg-gradient-to-b from-ink/70 to-transparent px-3 py-2 transition-opacity duration-300 motion-reduce:transition-none",
           controlsIdle && "opacity-0",
-          voiceState.error && "mt-7",
+          (voiceState.error || voiceState.notice) && "mt-7",
         )}
       >
         <div className="min-w-0">
@@ -1517,6 +1586,9 @@ function CallControls({
       {canShare &&
         onStartScreenShare &&
         onShareSystemAudioChange &&
+        /* Hidden where the platform cannot deliver it. A dead toggle is not a
+           neutral thing here: arming it used to cost people the whole share. */
+        canShareScreenAudio() &&
         !voiceState.isSharingScreen && (
           /* The second line is the same one the channel bar gives this
              button, because it is the same button and the same consequence.

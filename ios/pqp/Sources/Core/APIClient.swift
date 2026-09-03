@@ -171,6 +171,9 @@ actor APIClient {
     /// CommunitiesAPI.swift. A feature flag cannot change while the app runs, and
     /// this one gates a button that is on screen every time the hub is.
     var communityConfigCache: CommunityConfig?
+    /// The Baú's instance flags, memoised beside its endpoints in
+    /// CommunityHomeAPI.swift. Gates a row on every server's channel list.
+    var communityHomeConfigCache: CommunityHomeConfig?
 
     init(
         backend: Backend = .current,

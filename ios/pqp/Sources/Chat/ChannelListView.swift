@@ -20,6 +20,11 @@ struct ChannelListView: View {
     @State private var unread: [String: UnreadEntry] = [:]
     @State private var isLoading = true
     @State private var error: String?
+    /// The Baú's instance flags. Nil until asked; off on any failure. The row
+    /// needs this AND the server's own switch, so a deployment without the
+    /// feature (production until PR #176) draws nothing and loses nothing.
+    @State private var communityHome: CommunityHomeConfig?
+    private var showsBau: Bool { (communityHome?.enabled ?? false) && current.communityHomeEnabled }
     @State private var showingInvites = false
     @State private var showingSearch = false
     @State private var showingMembers = false
@@ -82,6 +87,20 @@ struct ChannelListView: View {
                     }
 
                     LazyVStack(alignment: .leading, spacing: 8) {
+                        // Above TEXT, where the web sidebar puts it. Not a
+                        // channel and not drawn as one: the row carries its own
+                        // hint so nobody opens it expecting to type.
+                        if showsBau, let config = communityHome {
+                            NavigationLink {
+                                CommunityHomeView(server: current, config: config)
+                            } label: {
+                                BauRow()
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("channels.bau")
+                            .padding(.top, 4)
+                        }
+
                         if !textChannels.isEmpty {
                             SectionLabel(text: String(localized: "Text"))
                                 .padding(.horizontal, 4)
@@ -404,6 +423,11 @@ struct ChannelListView: View {
         }
         isLoading = true
         error = nil
+        // Memoised on the client, so this is one round trip per session, not
+        // per open. Asked before the channels so the row is there when they are.
+        if communityHome == nil {
+            communityHome = await session.api.communityHomeConfig()
+        }
         do {
             channels = try await session.api.channels(serverId: server.id)
             // Unread is a separate call and failing it must not blank the
@@ -491,6 +515,36 @@ private struct CommunityBanner: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(name)
+    }
+}
+
+/// The Baú's row. Same surface as a channel row, so it sits in the list, with
+/// a second line: the one thing a person needs to know before tapping is that
+/// this is not a place to type.
+struct BauRow: View {
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "archivebox")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(Palette.paperMuted)
+                .frame(width: 20)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Baú")
+                    .font(Typography.bodyMedium)
+                    .foregroundStyle(Palette.paper)
+                    .lineLimit(1)
+                Text("Posts that stay. Not chat.")
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.paperMuted)
+                    .lineLimit(1)
+            }
+
+            Spacer()
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .pqpSurface(cornerRadius: Metrics.cornerRadiusSmall)
     }
 }
 

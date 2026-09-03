@@ -19,7 +19,7 @@ import {
 } from "@/hooks/use-notifications";
 import { useTranslation } from "@/lib/i18n";
 import { conversationTitle } from "@/lib/conversations";
-import { cn } from "@/lib/utils";
+import { cn, formatFullTimestamp, formatRecency } from "@/lib/utils";
 
 const EMPTY_UNREAD: UnreadState = { count: 0, mentions: 0 };
 
@@ -45,6 +45,9 @@ interface DmListProps {
    */
   friendRequestCount?: number;
   onHideConversation: (channelId: string) => void;
+  /** Channel ids currently pinned to the rail, so the row can offer unpin. */
+  pinnedChannelIds?: ReadonlySet<string>;
+  onTogglePin?: (channelId: string) => void;
   onBlockUser: (user: PublicUser) => void;
   onUnblockUser: (userId: string) => void;
   // --- conversation calls ---
@@ -79,6 +82,8 @@ export function DmList({
   onOpenFriends,
   friendRequestCount = 0,
   onHideConversation,
+  pinnedChannelIds,
+  onTogglePin,
   onBlockUser,
   onUnblockUser,
   onStartCall,
@@ -191,6 +196,12 @@ export function DmList({
                 onMobileClose?.();
               }}
               onHide={() => onHideConversation(conversation.channelId)}
+              pinned={pinnedChannelIds?.has(conversation.channelId) ?? false}
+              onTogglePin={
+                onTogglePin
+                  ? () => onTogglePin(conversation.channelId)
+                  : undefined
+              }
               onBlock={onBlockUser}
               onUnblock={onUnblockUser}
               hasActiveCall={
@@ -221,6 +232,8 @@ function ConversationRow({
   blockedUserIds,
   onSelect,
   onHide,
+  pinned,
+  onTogglePin,
   onBlock,
   onUnblock,
   hasActiveCall = false,
@@ -232,6 +245,8 @@ function ConversationRow({
   blockedUserIds: ReadonlySet<string>;
   onSelect: () => void;
   onHide: () => void;
+  pinned?: boolean;
+  onTogglePin?: () => void;
   onBlock: (user: PublicUser) => void;
   onUnblock: (userId: string) => void;
   hasActiveCall?: boolean;
@@ -284,6 +299,17 @@ function ConversationRow({
           },
         ]
       : []),
+    ...(onTogglePin
+      ? [
+          {
+            id: "pin",
+            label: pinned
+              ? t("chrome.unpinConversation")
+              : t("chrome.pinConversation"),
+            onSelect: onTogglePin,
+          },
+        ]
+      : []),
     {
       id: "copy-id",
       label: t("dm.copyId"),
@@ -317,6 +343,10 @@ function ConversationRow({
   const muted = notifications.level === "none";
   const hasUnread = !selected && unread.count > 0;
   const mentions = selected || muted ? 0 : unread.mentions;
+  // A DM is addressed to you, so every unread one earns a count, not just the
+  // mentions a server channel would badge. The mention count wins when both
+  // exist, since it is the more specific claim.
+  const badge = mentions > 0 ? mentions : muted || selected ? 0 : unread.count;
 
   return (
     <ContextMenu items={items}>
@@ -351,18 +381,40 @@ function ConversationRow({
           {blocked && <span className="sr-only">{t("chrome.blockedSr")}</span>}
           {hasUnread && !muted && <span className="sr-only">{t("chrome.unreadSr")}</span>}
           {muted && <span className="sr-only">{t("chrome.mutedSr")}</span>}
-          <span className="ml-auto flex shrink-0 items-center gap-1">
+          <span className="ml-auto flex shrink-0 items-center gap-1.5">
             {conversation.kind === "group" && (
               <span className="rounded bg-ink-4 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-paper-muted">
                 {conversation.participants.length + 1}
               </span>
             )}
-            {mentions > 0 && (
-              <span
-                className="min-w-4 rounded-full bg-danger px-1 py-0.5 text-center text-[10px] font-bold leading-none text-paper"
-                aria-label={t("chrome.unreadMentions", { count: mentions })}
+            {/* When the last message landed: a time only if that was today,
+                otherwise the day, so an old thread never passes for a fresh
+                one. Steps aside for the hover actions. */}
+            {conversation.lastMessageAt && (
+              <time
+                dateTime={conversation.lastMessageAt}
+                title={formatFullTimestamp(conversation.lastMessageAt)}
+                className={cn(
+                  "text-[11px] tabular-nums transition-opacity group-hover:opacity-0 group-focus-within:opacity-0",
+                  hasUnread && !muted ? "text-paper" : "text-paper-muted",
+                )}
+                data-dm-recency
               >
-                {formatBadgeCount(mentions)}
+                {formatRecency(conversation.lastMessageAt)}
+              </time>
+            )}
+            {badge > 0 && (
+              <span
+                key={badge}
+                className="min-w-4 animate-badge-pop rounded-full bg-danger px-1 py-0.5 text-center text-[10px] font-bold leading-none text-paper"
+                aria-label={
+                  mentions > 0
+                    ? t("chrome.unreadMentions", { count: mentions })
+                    : t("notify.messages", { count: badge })
+                }
+                data-dm-unread
+              >
+                {formatBadgeCount(badge)}
               </span>
             )}
           </span>

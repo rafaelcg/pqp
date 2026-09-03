@@ -93,14 +93,45 @@ export interface ScreenCaptureEnvironment {
    */
   isDesktopShell: boolean;
   /**
+   * `process.platform` as the shell reported it (`window.pqpDesktop.platform`),
+   * null in a browser. It decides whether asking the shell for audio can be
+   * answered at all: see `shellCarriesScreenAudio`.
+   */
+  shellPlatform: string | null;
+  /**
    * Whether this browser knows the `restrictOwnAudio` constraint, i.e.
    * `navigator.mediaDevices.getSupportedConstraints().restrictOwnAudio`.
    */
   supportsRestrictOwnAudio: boolean;
 }
 
+/**
+ * Can a capture inside the desktop shell carry the machine's sound at all?
+ *
+ * Windows only, and that is not our rule: Chromium's loopback device is WASAPI,
+ * which exists on no other platform, so `electron/lib/display-sources.js` answers
+ * every macOS and Linux request with video alone.
+ *
+ * THE BUG THIS ANSWERS (reported 3 Sep 2026, "o picker fecha e a stream não
+ * começa"). The shell being video-only is not the same as the *page* being
+ * video-only. `setDisplayMediaRequestHandler` is registered with
+ * `useSystemPicker: true`, and where the OS picker is used the handler is
+ * skipped, so the renderer's audio request goes straight to Chromium with
+ * nothing in between to strip it. On macOS there is no system audio to give,
+ * and an audio request that cannot be honoured rejects the WHOLE capture,
+ * video included. The person ticks "share sound", picks a screen, and gets
+ * nothing at all — while the same tick on Windows works.
+ *
+ * So the renderer has to know the platform too. Asking for audio only where it
+ * can be delivered is the difference between a silent share and no share.
+ */
+export function shellCarriesScreenAudio(env: ScreenCaptureEnvironment): boolean {
+  return env.isDesktopShell && env.shellPlatform === "win32";
+}
+
 export function screenCaptureEnvironment(
   isDesktopShell: boolean,
+  shellPlatform: string | null = null,
 ): ScreenCaptureEnvironment {
   let supportsRestrictOwnAudio = false;
   try {
@@ -111,7 +142,7 @@ export function screenCaptureEnvironment(
     // No `mediaDevices` at all. The caller is about to fail for a much larger
     // reason than a missing constraint; answering "no" is the safe shape.
   }
-  return { isDesktopShell, supportsRestrictOwnAudio };
+  return { isDesktopShell, shellPlatform, supportsRestrictOwnAudio };
 }
 
 /**
@@ -139,6 +170,12 @@ export function screenCaptureOptions(
   if (env.supportsRestrictOwnAudio) {
     audio.restrictOwnAudio = true;
   }
+  // An opt-in the platform cannot honour is worse than no opt-in: it does not
+  // degrade to a silent share, it fails the capture. In the shell the tick only
+  // counts on Windows; in a browser it always counts, because there the audio
+  // the tick governs is a tab's own sound, which every platform can hand over.
+  const carriesAudio =
+    shareSystemAudio && (!env.isDesktopShell || shellCarriesScreenAudio(env));
   return {
     // `video: true` used to be the whole of this, and it is why a share arrived
     // as a slideshow. With no frameRate asked for, a capture of a large surface
@@ -154,9 +191,11 @@ export function screenCaptureOptions(
     },
     // In the shell, "no audio asked for" is the only way to stop it answering
     // with Windows loopback, and it costs nothing there: its picker has no tab
-    // surfaces to offer tab audio from.
-    audio: env.isDesktopShell && !shareSystemAudio ? false : audio,
-    systemAudio: shareSystemAudio ? "include" : "exclude",
+    // surfaces to offer tab audio from. It is also the only way to stop the
+    // system picker, which skips our handler entirely, from carrying the
+    // request to a platform that will reject the whole capture over it.
+    audio: env.isDesktopShell && !carriesAudio ? false : audio,
+    systemAudio: carriesAudio ? "include" : "exclude",
     // Sharing the pqp tab itself would put the call's own picture back into the
     // call, and the loop gets louder every trip; the picker not offering that
     // tab is a cheaper answer than a hall of mirrors nobody can locate.

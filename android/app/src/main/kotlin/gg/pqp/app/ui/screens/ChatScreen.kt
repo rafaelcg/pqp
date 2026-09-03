@@ -98,6 +98,8 @@ import gg.pqp.app.push.VisibleChannel
 import gg.pqp.app.reports.ReportTarget
 import gg.pqp.app.reports.ui.ReportSheet
 import gg.pqp.app.ui.chat.ChanceCard
+import gg.pqp.app.ui.chat.DayLabel
+import gg.pqp.app.ui.chat.DayLabels
 import gg.pqp.app.ui.components.Avatar
 import gg.pqp.app.ui.components.ChromeDivider
 import gg.pqp.app.ui.components.EmptyState
@@ -306,19 +308,33 @@ fun ChatScreen(
                             // The list is reversed, so the *previous* message in
                             // reading order is the next one in this list.
                             val previous = rows.getOrNull(index + 1)
-                            MessageRow(
-                                message = message,
-                                grouped = shouldGroup(previous, message),
-                                onOpenActions = { acting = message },
-                                onToggleReaction = { emoji ->
-                                    model.toggleReaction(message.id, emoji, me)
-                                },
-                                // Only reached when a video attachment's
-                                // presigned URL has expired, which is why it is
-                                // the client and not a callback: nothing here
-                                // knows the id to re-mint until a player fails.
-                                api = session.api,
-                            )
+                            // A new calendar day opens with a row that says
+                            // which day, the way the web transcript does. The
+                            // oldest loaded message always opens one: the day
+                            // has to be named somewhere above the first thing
+                            // said in it, and the row moves up when older
+                            // history arrives.
+                            val startsDay = previous == null ||
+                                !DayLabels.isSameDay(previous.createdAt, message.createdAt)
+                            // One item, not two: the separator belongs to the
+                            // message that opens the day, and keying it on the
+                            // message keeps it from being recycled apart from it.
+                            Column {
+                                if (startsDay) DaySeparator(message.createdAt)
+                                MessageRow(
+                                    message = message,
+                                    grouped = !startsDay && shouldGroup(previous, message),
+                                    onOpenActions = { acting = message },
+                                    onToggleReaction = { emoji ->
+                                        model.toggleReaction(message.id, emoji, me)
+                                    },
+                                    // Only reached when a video attachment's
+                                    // presigned URL has expired, which is why it is
+                                    // the client and not a callback: nothing here
+                                    // knows the id to re-mint until a player fails.
+                                    api = session.api,
+                                )
+                            }
                         }
 
                         if (state.hasMore) {
@@ -467,6 +483,40 @@ private fun shouldGroup(previous: Message?, message: Message): Boolean {
 }
 
 private val TIME_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
+
+/**
+ * The row that names a day.
+ *
+ * Between two hairlines rather than on a pill, because a pill is what a message
+ * bubble would be and this is not a message: it is the transcript's own rule,
+ * the same one the web draws. The time on each message stays where it is; this
+ * only says which day those times belong to.
+ */
+@Composable
+private fun DaySeparator(iso: String) {
+    val label = when (val day = DayLabels.labelFor(iso)) {
+        DayLabel.Today -> stringResource(R.string.chat_day_today)
+        DayLabel.Yesterday -> stringResource(R.string.chat_day_yesterday)
+        is DayLabel.Dated -> day.text
+        null -> return
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = Spacing.gutter, vertical = Spacing.md)
+            .testTag("day-separator"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        ChromeDivider(Modifier.weight(1f))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = Spacing.md),
+        )
+        ChromeDivider(Modifier.weight(1f))
+    }
+}
 
 /**
  * How far in from the page gutter a message's text starts: the avatar, then the

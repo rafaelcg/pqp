@@ -6,8 +6,9 @@
 
 [![CI](https://github.com/rafaelcg/pqp/actions/workflows/ci.yml/badge.svg)](https://github.com/rafaelcg/pqp/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/rafaelcg/pqp)](https://github.com/rafaelcg/pqp/releases/latest)
+[![Sponsor](https://img.shields.io/badge/GitHub-Sponsor-ea4aaa?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/rafaelcg)
 
-[**pqp.gg**](https://pqp.gg) · [Download for desktop](https://github.com/rafaelcg/pqp/releases/latest) · [Architecture](./ARCHITECTURE.md) · [Deploy your own](./docs/DEPLOY.md)
+[**pqp.gg**](https://pqp.gg) · [Download for desktop](https://github.com/rafaelcg/pqp/releases/latest) · [Architecture](./ARCHITECTURE.md) · [Deploy your own](./docs/DEPLOY.md) · [Support the project](https://pqp.gg/apoie)
 
 </div>
 
@@ -142,6 +143,15 @@ content-safety runbook and moderation posture live in
 [docs/CONTENT_SAFETY.md](./docs/CONTENT_SAFETY.md). Terms and privacy are
 bilingual at [pqp.gg/terms](https://pqp.gg/terms) and
 [pqp.gg/privacy](https://pqp.gg/privacy).
+
+## Apoie o projeto / Support the project
+
+pqp.gg is built by two brothers and the hosting comes out of our pockets. If it is
+useful to you and you want to help with that bill, there is
+[GitHub Sponsors](https://github.com/sponsors/rafaelcg) and, for Pix,
+[pqp.gg/apoie](https://pqp.gg/apoie). A donation is a gift toward hosting costs:
+it unlocks nothing, there are no tiers and no perks, and self-hosting stays free
+with every feature.
 
 ## Contributing
 

@@ -27,7 +27,7 @@ export const privacyPtBr: LegalDocument = {
   description:
     "Como o pqp.gg trata dados pessoais: o que a gente coleta, as bases legais, onde os dados são tratados, por quanto tempo ficam e os seus direitos sob a LGPD e a lei de proteção de dados do Reino Unido.",
   heading: "Política de Privacidade",
-  updated: "31 de agosto de 2026",
+  updated: "2 de setembro de 2026",
   sections: [
     {
       id: "intro",
@@ -138,7 +138,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "what-we-collect",
-      sourceRev: "be10efc1",
+      sourceRev: "fbe4bff7",
       heading: "O que a gente coleta",
       body: (
         <>
@@ -156,8 +156,9 @@ export const privacyPtBr: LegalDocument = {
             nome de exibição ou uma mensagem, e, se fizer isso, ele fica
             guardado como qualquer outro texto que você escreve. O que a gente
             guarda do nosso lado é: um identificador de usuário do Clerk, o seu
-            nome de exibição, a sua tag <code>name#1234</code>, a URL de um
-            avatar, os <em>domínios</em> dos seus e-mails verificados (por
+            nome de exibição, a sua tag <code>name#1234</code>, um{" "}
+            <code>@handle</code> público opcional se você tiver reivindicado um,
+            a URL de um avatar, um banner de perfil opcional, os <em>domínios</em> dos seus e-mails verificados (por
             exemplo <code>empresa.com.br</code>, usado para entrar em servidores
             por domínio de empresa — nunca a caixa de e-mail em si), a sua
             configuração de privacidade de DM, e quando a conta foi criada. Se
@@ -186,13 +187,52 @@ export const privacyPtBr: LegalDocument = {
             o motivo em texto livre que um moderador digitou.
           </p>
           <p>
+            <strong>Perfil público.</strong> Se você reivindica um{" "}
+            <code>@handle</code> único, a gente publica uma página enxuta em{" "}
+            <code>pqp.gg/@esse-handle</code> que qualquer pessoa na internet
+            abre sem entrar: nome de exibição, avatar, banner opcional, mês de
+            entrada (não o dia), selos de comunidades públicas, depoimentos
+            aprovados, e qualquer conta de jogo que você marcou como pública.
+            Não entra o seu id, a sua tag <code>name#1234</code>, o e-mail
+            nem se você está online. Uma comunidade listada pode ter um cartaz
+            parecido em <code>pqp.gg/c/slug</code>: nome, tagline, fotos,
+            quantidade de membros, nunca a lista de membros. Os desenroladores
+            (WhatsApp, Twitter e o resto) recebem tags Open Graph no edge para
+            o cartão não ser um SPA em branco.
+          </p>
+          <p>
+            <strong>Contas de jogo.</strong> Steam, Battle.net e Twitch são
+            opcionais. Ligar uma não é um segundo login. A gente guarda o
+            provedor, o id da pessoa naquele provedor, o nome e a foto que
+            eles mandaram, uma URL de perfil opcional, a visibilidade que você
+            escolheu e quando ligou. Os tokens de acesso são usados uma vez para
+            saber quem você é e depois descartados. A visibilidade padrão é
+            quem já divide um servidor ou uma amizade com você.{" "}
+            <strong>Pública</strong> também coloca isso na página pública,
+            inclusive uma URL de perfil Steam se você optar. Desconectar apaga
+            a linha.
+          </p>
+          <p>
+            <strong>Depoimentos.</strong> Um amigo pode escrever um recado curto
+            para o seu perfil. Não fica público até você aprovar. A página
+            pública mostra os seis mais novos aprovados como nome, foto e
+            (só se a pessoa tiver reivindicado um) o handle — sem id nem tag.
+            Apagar a sua conta tira os recados que você escreveu das páginas de
+            outras pessoas, e tira os recados da sua.
+          </p>
+          <p>
             <strong>Arquivos e imagens.</strong> Quando os anexos de arquivo
             estão ligados, a gente guarda o nome do arquivo, o tipo, o tamanho e
             as dimensões no nosso banco de dados, e o arquivo em si em
             armazenamento de objetos compatível com S3. Os anexos estão{" "}
-            <strong>ligados</strong> no pqp.gg hoje. GIFs escolhidos na busca de
-            GIF são guardados como um link para o provedor do GIF, não como
-            cópia.
+            <strong>ligados</strong> no pqp.gg hoje. Um banner de perfil usa o
+            mesmo armazenamento. GIFs escolhidos na busca de GIF são guardados
+            como um link para o provedor do GIF, não como cópia. Quando a
+            varredura de imagem está configurada, uma imagem recém-enviada é
+            checada antes de aparecer no canal. Um match pode derrubar o
+            arquivo sem uma pessoa ler. Isso é uma checagem do arquivo, não uma
+            decisão sobre você como pessoa. Avatares e banners não são
+            varridos hoje.
           </p>
           <p>
             <strong>Configurações.</strong> Preferências de notificação, tema,
@@ -276,11 +316,15 @@ export const privacyPtBr: LegalDocument = {
           <p>
             Um evento é enviado ao Google, uma vez: quando uma conta é criada, a
             tag informa que houve um cadastro. Ele não leva nome, nem e-mail,
-            nem id de usuário, nem nada que você digitou. A gente não envia
-            dados da sua conta para o Google, não ativou conversões aprimoradas
-            nem nenhum cruzamento com dados de clientes, e não roda remarketing
-            nem listas de público. Entrar de novo não envia nada, e nada do que
-            você faz dentro do app envia também.
+            nem id de usuário, nem nada que você digitou. O Google ainda vê o
+            seu endereço IP e qual página você abriu, que é o que qualquer
+            script de terceiro vê. Se você chegou por um anúncio, a gente
+            também guarda o <code>gclid</code> na conta uma vez, junto com os
+            outros parâmetros de campanha. A gente não envia dados da sua
+            conta para o Google, não ativou conversões aprimoradas nem nenhum
+            cruzamento com dados de clientes, e não roda remarketing nem listas
+            de público. Entrar de novo não envia nada, e nada do que você faz
+            dentro do app envia também.
           </p>
           <p>
             O Google é um terceiro aqui e trata o que recebe, inclusive o seu
@@ -301,7 +345,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "what-we-dont-do",
-      sourceRev: "0322d1cf",
+      sourceRev: "ac93c305",
       heading: "O que a gente não faz",
       body: (
         <ul>
@@ -333,20 +377,26 @@ export const privacyPtBr: LegalDocument = {
             armazenada pela gente, por caminho nenhum — veja abaixo.
           </li>
           <li>
-            <strong>Sem endereço IP guardado.</strong> Não existe coluna de
-            endereço IP em lugar nenhum do nosso banco de dados.
+            <strong>Sem endereço IP na nossa base.</strong> Não existe coluna de
+            endereço IP na API do pqp.gg. Os terceiros listados abaixo ainda vêem
+            o seu IP quando o seu navegador fala com eles. O botão de download
+            do Android no pqp.gg também manda uma contagem para o painel de
+            operação, que limita essa contagem por IP por um minuto.
           </li>
           <li>
-            <strong>Sem decisão automatizada sobre você.</strong> Nada aqui
-            traça o seu perfil nem decide nada sobre você de forma automática.
-            Decisões de moderação são tomadas por uma pessoa.
+            <strong>Sem decisão automatizada sobre você como pessoa.</strong>{" "}
+            Nada aqui traça o seu perfil nem decide se você pode ficar com a
+            conta. Moderação de pessoas é feita por uma pessoa. Se a varredura
+            de imagem estiver ligada, um arquivo pode ser derrubado ou
+            sinalizado por essa checagem antes de uma pessoa ver. Isso é uma
+            checagem do arquivo.
           </li>
         </ul>
       ),
     },
     {
       id: "voice",
-      sourceRev: "1b3f66cc",
+      sourceRev: "99fd73b2",
       heading: "Chamadas de voz",
       body: (
         <>
@@ -374,8 +424,10 @@ export const privacyPtBr: LegalDocument = {
               pessoas na chamada, e o relay TURN carrega a mídia — mas ela
               continua criptografada entre os participantes, então o relay não
               consegue escutar. Os nossos provedores de STUN/TURN hoje são a{" "}
-              <strong>ExpressTURN</strong>, mais os servidores STUN públicos do
-              Google e da Cloudflare.
+              <strong>Cloudflare Realtime TURN</strong>, depois Metered / Open
+              Relay se a Cloudflare não estiver configurada, depois um relay
+              estático (ExpressTURN no pqp.gg) como fallback, mais os
+              servidores STUN públicos do Google e da Cloudflare.
             </li>
             <li>
               <strong>Chamadas grandes.</strong> Como cada participante se
@@ -392,7 +444,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "legal-bases",
-      sourceRev: "b4d9162b",
+      sourceRev: "6de9cf53",
       heading: "Por que a gente trata os seus dados, e a base legal",
       body: (
         <>
@@ -458,8 +510,9 @@ export const privacyPtBr: LegalDocument = {
             <li>
               <strong>Medir a nossa publicidade.</strong> Contar quantos
               cadastros uma campanha de anúncio produziu, pela tag de conversão
-              do Google Ads descrita acima. Ela conta um evento; não identifica
-              você para a gente nem para o Google.{" "}
+              do Google Ads descrita acima. Ela conta um evento. O evento não
+              leva nome, e-mail nem id de usuário. O Google ainda vê o seu IP e
+              a página, como está em &quot;Medição de publicidade&quot;.{" "}
               <em>
                 (Base: legítimo interesse, art. 7, IX. Para se opor, bloqueie a
                 tag no navegador ou escreva para a gente.)
@@ -468,7 +521,7 @@ export const privacyPtBr: LegalDocument = {
             <li>
               <strong>Qualquer coisa opcional que você ligar</strong>, como as
               notificações no desktop, que o seu navegador pede permissão em
-              separado.{" "}
+              separado, ou uma conta de jogo que você escolhe ligar.{" "}
               <em>
                 (Base: o seu consentimento, art. 7, I — retire quando quiser em{" "}
                 <span lang="en">Settings</span> ou no navegador.)
@@ -492,7 +545,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "who-sees",
-      sourceRev: "fac060aa",
+      sourceRev: "f444dc8b",
       heading: "Quem mais vê os seus dados",
       body: (
         <>
@@ -511,8 +564,14 @@ export const privacyPtBr: LegalDocument = {
               <strong>São Paulo, Brasil (região gru da Fly)</strong>.
             </li>
             <li>
+              <strong>Umami</strong> — contagem de visitas sem cookie, hospedado
+              pelos próprios autores na UE. Está em &quot;Analytics do
+              site&quot; acima.
+            </li>
+            <li>
               <strong>Cloudflare</strong> — serve o app web e o site
-              institucional.
+              institucional. O Cloudflare Web Analytics, se estiver ligado na
+              zona, é injetado no edge deles em vez de ir no nosso código.
             </li>
             <li>
               <strong>Cloudflare R2</strong> — armazenamento de objetos para os
@@ -523,7 +582,8 @@ export const privacyPtBr: LegalDocument = {
               é transferido.
             </li>
             <li>
-              <strong>ExpressTURN</strong>, mais os STUN públicos do Google e da
+              <strong>Cloudflare Realtime TURN</strong>, Metered / Open Relay,
+              ou ExpressTURN como fallback, mais os STUN públicos do Google e da
               Cloudflare — estabelecimento e retransmissão da conexão de voz,
               como descrito acima.
             </li>
@@ -554,6 +614,22 @@ export const privacyPtBr: LegalDocument = {
               página do pqp.gg, então o Google vê o seu endereço IP e qual
               página você abriu, e é avisado uma vez quando uma conta é criada.
               Está detalhado em &quot;Medição de publicidade&quot; acima.
+            </li>
+            <li>
+              <strong>Steam, Battle.net e Twitch</strong> — só se você clicar
+              em Conectar. O navegador vai até o provedor e volta com a prova
+              de quem você é. A gente não guarda os tokens de acesso deles.
+            </li>
+            <li>
+              <strong>GitHub Sponsors</strong> e o seu banco, se você doar —
+              esses pagamentos acontecem nos sites deles, não no pqp. A gente
+              não recebe uma lista de quem deu.
+            </li>
+            <li>
+              <strong>O contador de download do Android</strong> no pqp.gg
+              manda um beacon de um byte para o painel do operador quando você
+              toca no botão do APK. Não leva conta. O painel limita por IP
+              durante um minuto.
             </li>
           </ul>
           <p>
@@ -708,7 +784,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "rights",
-      sourceRev: "c13ef77e",
+      sourceRev: "44a6f510",
       heading: "Os seus direitos, e como usar",
       body: (
         <>
@@ -739,8 +815,8 @@ export const privacyPtBr: LegalDocument = {
               <strong>
                 Correção de dados incompletos ou desatualizados (art. 18, III)
               </strong>{" "}
-              — self-service: mude o seu nome de exibição, a sua tag, o seu
-              avatar e as suas configurações em{" "}
+              — self-service: mude o seu nome de exibição, a sua tag, o handle
+              público, o avatar, o banner e as configurações em{" "}
               <span lang="en">Settings</span>, dentro do app. Para o que você
               não conseguir mudar lá, escreva para a gente.
             </li>
@@ -760,10 +836,12 @@ export const privacyPtBr: LegalDocument = {
               configurações, a sua declaração de 18+, os servidores em que você
               está e o seu cargo em cada um, todas as mensagens que você
               escreveu com o canal e o servidor em que estavam e os arquivos
-              anexados a elas, as conversas de que você participou, quem você
-              bloqueou, as denúncias que você fez e as ações de moderação que
-              você tomou. Contas muito grandes têm um limite, e o arquivo avisa
-              quando foi cortado. (<em>Donos</em> de servidor também podem
+              anexados a elas, contas de jogo ligadas, as conversas de que você
+              participou, quem você bloqueou, as denúncias que você fez e as
+              ações de moderação que você tomou. Ainda não inclui o seu{" "}
+              <code>@handle</code> público, o banner nem os depoimentos. Para
+              esses, escreva para a gente. Contas muito grandes têm um limite, e
+              o arquivo avisa quando foi cortado. (<em>Donos</em> de servidor também podem
               exportar um servidor inteiro em{" "}
               <span lang="en">Server Settings</span>, mas essa é uma ferramenta
               de dono que cobre as mensagens de todo mundo naquele servidor —
@@ -873,7 +951,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "controls",
-      sourceRev: "b7056055",
+      sourceRev: "4cdbb093",
       heading: "Controles que você tem no app hoje",
       body: (
         <ul>
@@ -900,6 +978,12 @@ export const privacyPtBr: LegalDocument = {
             <span lang="en">Settings</span>, na seção{" "}
             <span lang="en">&quot;Your data&quot;</span>. Os dois estão
             descritos acima.
+          </li>
+          <li>
+            <strong>Handle público e contas de jogo.</strong> Reivindicar um
+            handle é opcional. A visibilidade da conexão é escondida,
+            compartilhada ou pública. Desligar uma conta de jogo apaga aquela
+            linha.
           </li>
         </ul>
       ),
