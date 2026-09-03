@@ -1,55 +1,61 @@
-A week of repairs. Most of what shipped is not a new thing to click. It is a thing that used to break and now sorts itself out, or at least tells you what to do about it.
+A week of repairs. Most of what shipped is not a new thing to click. It is a thing that used to break and now sorts itself out, or at least tells you what to do about it. The full list is at the end.
 
 ## The stubborn microphone
 
 Somebody could not get into a voice channel. They changed the microphone in settings and it worked. The problem is that they had to work that out alone.
 
-Now pqp walks the microphones in order: the one you picked, the system default, then every other one the browser lists. The first that opens wins, and the call tells you which it landed on. If none of them open, the message stops being "Could not start audio source" in English and starts saying what it usually is: another app holding the mic, or a bluetooth headset that went to sleep. A button next to it goes straight to voice settings.
+Now pqp tries the microphones in order: the one you picked, the computer's default, then whatever else is there. The first that opens wins, and the call tells you which one it landed on. If none of them open, the message stops being an error in English and starts saying what it usually is: another program holding the mic, or a bluetooth headset that went to sleep. Next to it is a button straight to voice settings.
 
-One thing it no longer does: ask for permission again after you said no. Asking twice in a row is the fastest way for a site to get blocked for good.
+One thing it no longer does: ask for permission again after you said no. Asking twice in a row is the fastest way for a site to end up blocked for good.
 
 ## The "connecting" that never finished
 
-Someone was stuck on "connecting" in the desktop app and on their phone, on two different networks. The API was up for everyone else.
+Someone was stuck on "connecting" on their computer and their phone, on two different networks. The server was up for everyone else.
 
-From the client, four very different things look like that same spinner: a refused session, a token that never comes back (a DNS filter or an ad blocker sitting on the sign-in service), HTTPS allowed but WebSockets blocked, and a network with no route to a relay. The banner said "reconnecting" to all four, forever.
+Very different problems freeze in the same way, behind the same spinner: your session expired, an ad blocker ate the sign-in, your network allows websites but blocks voice calls, or there is no route to the sound relay. Before, all of them said "reconnecting", forever.
 
-Now there is **Check connection**: five tests, each result landing as it arrives, ending in one sentence that names the problem. There is a button to copy the report and paste it in the QG. If the session was refused twice in a row, you get **Sign in again** instead of an infinite retry.
+Now there is a **Check connection** button. It runs five tests, shows each result as it lands, and finishes with one sentence naming what is stuck. There is a button to copy the result and paste it in the QG, and if your session is genuinely gone you get **Sign in again** instead of an endless retry.
 
 ## Screen sharing with sound
 
 Two problems, one on each side.
 
-On Windows, turning sound on sent the call back into itself and everybody heard their own echo. That one is fixed by the new app (v0.1.4), because the fix lives in the shell rather than the page. Existing installs pick it up on their own.
+On Windows, turning sound on sent the call back into itself and everybody heard their own echo. That is fixed in the new desktop app (v0.1.4). If you already have pqp installed it updates itself.
 
-The other: tick the sound box and the share simply never starts. Audio and video are one request, so a screen with no sound to give takes the whole capture down, picture included. Now the app only asks for sound where it can be delivered, and when it still fails there is a **share without sound** button right there instead of nothing happening.
+The other one: you ticked the sound box, picked a screen, and nothing happened at all. Sound and picture travel in the same request, so a screen with no sound to give took the whole share down, picture included. Now pqp only asks for sound where sound exists, and when it still fails there is a **share without sound** button right there.
 
-## Your name in a call
+## Our privacy policy was wrong
 
-If you have a nickname on a server, the voice channel list showed your real name while the rest of the screen showed the nickname. It is the nickname in both places now, and renaming yourself mid-call updates for everyone already in the room.
+It said there were no trackers at all. That stopped being true when our visit counter and the Google Ads tag shipped, and the text was left behind. Corrected: pqp.gg uses a cookie-less visit counter and a tag that only counts sign-ups. We do not do remarketing and we do not build audience lists. Anyone running pqp on their own server inherits none of it.
 
-## A DM you cannot miss
+## Everything that changed
 
-A direct message arriving while you read a channel was easy to miss: a red dot, and that was it. Now there is a card under the channel header with who sent it and a button to open, its own sound (with its own switch in settings), a count in the tab title, and dates on conversations: today shows the time, yesterday says "Yesterday", older shows the day. A message from last week stopped looking like it just arrived.
+### New
 
-## The rest
+- **Favorite a channel.** Click the star and it moves to the top of your list, so you stop hunting for it.
+- **VIP cargo.** A ready-made lilac cargo for marking whoever you want. It shows separately in the member list and grants no extra powers.
+- **Who is who.** Owner, admin, manager, moderator and VIP now show a mark next to the name.
+- **Camera on a call.** A voice-only call stays a thin bar. Turn on a camera or a screen and it becomes a full stage, with fullscreen and collapse.
+- **One click to join.** Click a voice channel and you are in.
+- **Formatted text in chat.** Bold, lists and code blocks, the same as Discord. Shift+Enter breaks a line without sending.
+- **Bringing a Discord server across.** The copy now also brings each cargo's permissions and the server icon.
+- **Unread counts on the server bar.** A badge with new messages and mentions.
+- **Faster GIFs.** We changed who provides GIF search.
+- **Knowing a DM arrived.** A card appears with who sent it and a button to open, with its own sound you can switch off and a count in the tab title.
+- **Finding out why you cannot connect.** The Check connection button runs five tests and says what is stuck.
+- **Support page.** `/support`, with GitHub Sponsors and Pix. Donating gets you nothing in the app, and it never will.
+- **Shorter welcome.** The several first-run windows became one.
+- **iPhone app updated.** A new TestFlight version went out.
 
-**Favorites.** Star a channel and it moves to the top of the list. It moves, it does not become a copy.
+### Fixed
 
-**VIP cargo.** Lilac, listed on its own, with no extra powers. It is there to mark whoever you want to mark.
-
-**Camera on the call.** A voice-only call stays a slim bar. Turn on a camera or a screen and it grows into the full stage, with fullscreen and collapse.
-
-**One click joins.** Clicking a voice channel row joins it. The phone icon that used to sit there is gone.
-
-**New GIFs.** GIF search changed provider and got faster.
-
-**Support page.** `/support` with GitHub Sponsors and Pix. Donating unlocks nothing, and it is not going to.
-
-**First run.** It was six kinds of window with six kinds of animation. It is one system now.
-
-**Phones.** Android and iOS caught up, and a new TestFlight build went out.
-
-## And the privacy policy
-
-It said there were no trackers at all. That stopped being true when analytics and the Google Ads conversion tag shipped, and the text was left behind. Corrected: hosted pqp.gg uses cookie-less analytics and a tag that counts sign-ups, nothing else. No remarketing, no audience lists. Anyone running pqp on their own server inherits none of it.
+- You could not join a voice channel when your microphone would not open. pqp now tries the others itself and tells you which one it used.
+- When no microphone opens, the message now explains what it usually is instead of showing an error in English.
+- pqp no longer asks for microphone permission again right after you denied it.
+- The "connecting" that never finished now has a way out: retry now, check the connection, or sign in again.
+- Sharing a screen with sound on Windows sent the call back as echo. Fixed in the new desktop app, which updates itself.
+- Ticking "share sound" and the screen never appearing for anyone.
+- The voice channel list showed your real name instead of your nickname on that server.
+- Changing your nickname did not reach people already in a call with you.
+- A direct message from another day looked like it had just arrived.
+- Our privacy policy said there were no trackers at all, which was no longer true.
