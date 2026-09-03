@@ -14,6 +14,7 @@ import {
 import { embedSchema } from "./embeds.js";
 import { friendActivitySchema } from "./friends.js";
 import { permissionsUpdateSchema } from "./permissions.js";
+import { communityHomeUpdateSchema } from "./community-home.js";
 import { sanctionNoticeSchema } from "./sanctions.js";
 import { setIdleMessageSchema } from "./status.js";
 // --- threads ---
@@ -325,6 +326,7 @@ export const chatServerMessageSchema = z.discriminatedUnion("type", [
   // hand a server-wide version bump to whoever happened to be looking at a
   // channel the frame named.
   permissionsUpdateSchema,
+  communityHomeUpdateSchema,
   pollUpdateBroadcastSchema,
 ]);
 
@@ -415,6 +417,9 @@ export const CHAT_CLIENT_MESSAGE_TYPES: readonly string[] =
  * is addressed to a server's members, names no channel, and travels on
  * `chat.permissions`. The payload is a version number; each client refetches
  * its own snapshot. Fanning it out via the channel relay would deliver nothing.
+ *
+ * `community-home-update` is absent for the same reason: server-scoped, no
+ * channel, clients refetch Baú. It travels on `chat.community-home`.
  */
 export const CHAT_SERVER_MESSAGE_TYPES = [
   "message-broadcast",
