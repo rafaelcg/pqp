@@ -7,7 +7,7 @@ import { browserStorage } from "@/lib/arrival";
  * Separate from the corner-card pack id (`pqp:whats-new`): that card is a
  * one-shot spotlight, this is "has anything newer than last visit shipped".
  */
-const STORAGE_KEY = "pqp:whats-new-feed";
+export const WHATS_NEW_FEED_STORAGE_KEY = "pqp:whats-new-feed";
 
 export function newestPostSlug(): string {
   return POSTS[0]?.slug ?? "";
@@ -24,7 +24,7 @@ export function hasUnseenWhatsNew(
     return false;
   }
   try {
-    return storage.getItem(STORAGE_KEY) !== newest;
+    return storage.getItem(WHATS_NEW_FEED_STORAGE_KEY) !== newest;
   } catch {
     return false;
   }
@@ -38,7 +38,7 @@ export function rememberWhatsNewFeed(
     return;
   }
   try {
-    storage?.setItem(STORAGE_KEY, newest);
+    storage?.setItem(WHATS_NEW_FEED_STORAGE_KEY, newest);
   } catch {
     // Session-only: the pip comes back next load, which is fine.
   }

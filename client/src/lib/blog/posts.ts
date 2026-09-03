@@ -18,12 +18,12 @@
  * So: metadata here, prose in `bodies.ts`, and nothing that reaches the edge
  * may import `bodies.ts`.
  *
- * WHY NOT A CMS, OR FRONTMATTER, OR A BUILD STEP. A release note is written by
- * the person who shipped the thing, in the same commit, and is then never
- * edited again. A markdown file next to a typed index gives that workflow a
- * compile error when the two disagree, which is the only guarantee that
- * actually matters here. `posts.test.ts` pins the rest: unique slugs, real
- * dates, both locales present, newest first.
+ * WHY NOT A CMS, OR FRONTMATTER, OR A BUILD STEP. A release note is a weekly
+ * catch-up, not a per-PR file. Write it with the whats-new skill, then never
+ * edit it once it is on `main`. A markdown file next to a typed index gives
+ * that workflow a compile error when the two disagree, which is the only
+ * guarantee that actually matters here. `blog-meta.test.ts` pins the rest:
+ * unique slugs, real dates, both locales present, newest first.
  *
  * ADDING A POST. Write the two markdown files under `content/blog/`, add the
  * entry at the TOP of `POSTS`, add both importers to `BODIES` in `bodies.ts`,

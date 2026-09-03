@@ -2393,9 +2393,20 @@ function MainAppContent({
 
   function handleTogglePinnedConversation(channelId: string) {
     const current = user?.preferences?.pinnedConversations;
-    const next = isPinnedConversation(current, channelId)
-      ? removePinnedConversation(current, channelId)
-      : addPinnedConversation(current, channelId);
+    if (isPinnedConversation(current, channelId)) {
+      handlePinnedConversationsChange(
+        removePinnedConversation(current, channelId),
+      );
+      return;
+    }
+    const next = addPinnedConversation(current, channelId);
+    if (next.length === (current?.length ?? 0)) {
+      setClaimedHandle(null);
+      setAppNotice(
+        t("chrome.pinConversationFull", { count: PINNED_CONVERSATIONS_MAX }),
+      );
+      return;
+    }
     handlePinnedConversationsChange(next);
   }
 
@@ -4202,6 +4213,7 @@ function MainAppContent({
           mobileOpen={mobileNavOpen}
           onMobileClose={() => setMobileNavOpen(false)}
           onMobileOpen={() => setMobileNavOpen(true)}
+          onClose={() => setWhatsNewOpen(false)}
           footer={sidebarFooter}
         />
       ) : (
@@ -4225,10 +4237,6 @@ function MainAppContent({
           onHideConversation={(id) => void handleHideConversation(id)}
           pinnedChannelIds={pinnedChannelIds}
           onTogglePin={handleTogglePinnedConversation}
-          canPinMore={
-            (user?.preferences?.pinnedConversations?.length ?? 0) <
-            PINNED_CONVERSATIONS_MAX
-          }
           onBlockUser={(person) => void handleBlockUser(person.id)}
           onUnblockUser={(id) => void handleUnblockUser(id)}
           onStartCall={handleStartConversationCall}

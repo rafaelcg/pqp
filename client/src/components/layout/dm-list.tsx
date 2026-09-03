@@ -48,8 +48,6 @@ interface DmListProps {
   /** Channel ids currently pinned to the rail, so the row can offer unpin. */
   pinnedChannelIds?: ReadonlySet<string>;
   onTogglePin?: (channelId: string) => void;
-  /** False when the rail is already at the pin cap and this row is not pinned. */
-  canPinMore?: boolean;
   onBlockUser: (user: PublicUser) => void;
   onUnblockUser: (userId: string) => void;
   // --- conversation calls ---
@@ -86,7 +84,6 @@ export function DmList({
   onHideConversation,
   pinnedChannelIds,
   onTogglePin,
-  canPinMore = true,
   onBlockUser,
   onUnblockUser,
   onStartCall,
@@ -205,10 +202,6 @@ export function DmList({
                   ? () => onTogglePin(conversation.channelId)
                   : undefined
               }
-              canPin={
-                (pinnedChannelIds?.has(conversation.channelId) ?? false) ||
-                canPinMore
-              }
               onBlock={onBlockUser}
               onUnblock={onUnblockUser}
               hasActiveCall={
@@ -241,7 +234,6 @@ function ConversationRow({
   onHide,
   pinned,
   onTogglePin,
-  canPin,
   onBlock,
   onUnblock,
   hasActiveCall = false,
@@ -255,7 +247,6 @@ function ConversationRow({
   onHide: () => void;
   pinned?: boolean;
   onTogglePin?: () => void;
-  canPin?: boolean;
   onBlock: (user: PublicUser) => void;
   onUnblock: (userId: string) => void;
   hasActiveCall?: boolean;
@@ -308,7 +299,7 @@ function ConversationRow({
           },
         ]
       : []),
-    ...(onTogglePin && (pinned || canPin)
+    ...(onTogglePin
       ? [
           {
             id: "pin",

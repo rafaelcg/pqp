@@ -38,7 +38,9 @@ logs/
 Thumbs.db
 
 # Editors / tooling
-.cursor/
+.cursor/*
+!.cursor/skills/
+!.cursor/skills/**
 .idea/
 .vscode/
 *.swp

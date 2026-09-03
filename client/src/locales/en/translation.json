@@ -1609,6 +1609,7 @@
   "chrome.unfavoriteChannel": "Remove from favorites",
   "chrome.pinConversation": "Pin to the rail",
   "chrome.unpinConversation": "Unpin from the rail",
+  "chrome.pinConversationFull": "The rail is full ({count}). Unpin one to add another.",
   "chrome.newChannel": "New {name} channel",
   "chrome.newPrivateChannel": "New private {name} channel",
   "chrome.emptyCategory": "Empty. Drag a channel here.",

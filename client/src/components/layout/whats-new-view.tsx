@@ -63,21 +63,22 @@ interface WhatsNewViewProps {
   mobileOpen: boolean;
   onMobileClose: () => void;
   onMobileOpen: () => void;
+  onClose: () => void;
   footer: ReactNode;
 }
 
 /**
  * In-app release notes. A reader, not a channel.
  *
- * The notes are the same files as `/blog`, written in the PR that shipped
- * the thing. There is no composer and no "pqp team" cargo: whoever merges
- * the note is who published it. The rail sparkle opens this; a hall or
- * Home puts the app back.
+ * The notes are the same files as `/blog`. A weekly catch-up, not a per-PR
+ * file. There is no composer and no "pqp team" cargo. The rail sparkle
+ * opens this; a hall, Home, or Escape puts the app back.
  */
 export function WhatsNewView({
   mobileOpen,
   onMobileClose,
   onMobileOpen,
+  onClose,
   footer,
 }: WhatsNewViewProps) {
   const { t, locale } = useTranslation();
@@ -86,6 +87,16 @@ export function WhatsNewView({
     () => POSTS[0]?.slug ?? "",
   );
   const selected = POSTS.find((post) => post.slug === selectedSlug) ?? POSTS[0];
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        onClose();
+      }
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
 
   function selectPost(slug: string) {
     setSelectedSlug(slug);

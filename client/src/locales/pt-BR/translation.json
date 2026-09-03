@@ -1609,6 +1609,7 @@
   "chrome.unfavoriteChannel": "Tirar dos favoritos",
   "chrome.pinConversation": "Fixar na barra",
   "chrome.unpinConversation": "Tirar da barra",
+  "chrome.pinConversationFull": "A barra está cheia ({count}). Tira uma pra caber outra.",
   "chrome.newChannel": "Novo canal de {name}",
   "chrome.newPrivateChannel": "Novo canal privado de {name}",
   "chrome.emptyCategory": "Vazio. Arrasta um canal pra cá.",
