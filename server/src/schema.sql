@@ -3093,3 +3093,162 @@ BEGIN
   RETURN (v_base & v_view) <> 0;
 END;
 $$;
+
+-- ---------------------------------------------------------------- community home (Baú)
+--
+-- Durable media feed per server. Not a channel type. Drafts / scheduled posts
+-- are staff-only; members only ever see status = published. Members-only
+-- visibility strips body/media on the wire unless the viewer has MANAGE_SERVER
+-- or the VIP cargo. Likes are a unique (post_id, user_id) pair, never a counter
+-- column. Media bytes live in object storage under community-home/{serverId}/;
+-- YouTube is URL-only. Schedule is first-class: scheduled_at + IANA timezone,
+-- published by an in-process catch-up on the single Node process (no worker).
+
+CREATE TABLE IF NOT EXISTS community_home_posts (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  server_id UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  author_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title TEXT,
+  body TEXT NOT NULL DEFAULT '',
+  teaser TEXT,
+  visibility TEXT NOT NULL DEFAULT 'free',
+  status TEXT NOT NULL DEFAULT 'draft',
+  comments_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  media_kind TEXT,
+  media_name TEXT,
+  media_content_type TEXT,
+  media_byte_size BIGINT,
+  media_storage_key TEXT,
+  media_youtube_url TEXT,
+  scheduled_at TIMESTAMPTZ,
+  schedule_timezone TEXT,
+  published_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+DO $$
+BEGIN
+  ALTER TABLE community_home_posts DROP CONSTRAINT IF EXISTS community_home_posts_visibility_check;
+  ALTER TABLE community_home_posts
+    ADD CONSTRAINT community_home_posts_visibility_check
+    CHECK (visibility IN ('free', 'members'));
+EXCEPTION
+  WHEN others THEN NULL;
+END $$;
+
+DO $$
+BEGIN
+  ALTER TABLE community_home_posts DROP CONSTRAINT IF EXISTS community_home_posts_status_check;
+  ALTER TABLE community_home_posts
+    ADD CONSTRAINT community_home_posts_status_check
+    CHECK (status IN ('draft', 'published', 'scheduled'));
+EXCEPTION
+  WHEN others THEN NULL;
+END $$;
+
+DO $$
+BEGIN
+  ALTER TABLE community_home_posts DROP CONSTRAINT IF EXISTS community_home_posts_media_kind_check;
+  ALTER TABLE community_home_posts
+    ADD CONSTRAINT community_home_posts_media_kind_check
+    CHECK (
+      media_kind IS NULL
+      OR media_kind IN ('image', 'video', 'youtube', 'file')
+    );
+EXCEPTION
+  WHEN others THEN NULL;
+END $$;
+
+-- Feed: published newest-first per server. Partial so drafts/scheduled stay
+-- out of the hot index members walk.
+CREATE INDEX IF NOT EXISTS idx_community_home_posts_feed
+  ON community_home_posts (server_id, published_at DESC)
+  WHERE status = 'published';
+
+-- Staff drafts list.
+CREATE INDEX IF NOT EXISTS idx_community_home_posts_staff
+  ON community_home_posts (server_id, updated_at DESC);
+
+-- Schedule catch-up: due rows only.
+CREATE INDEX IF NOT EXISTS idx_community_home_posts_due
+  ON community_home_posts (scheduled_at)
+  WHERE status = 'scheduled';
+
+CREATE TABLE IF NOT EXISTS community_home_comments (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  post_id UUID NOT NULL REFERENCES community_home_posts(id) ON DELETE CASCADE,
+  author_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  body TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_community_home_comments_post
+  ON community_home_comments (post_id, created_at DESC);
+
+-- The one post an owner keeps at the top: a welcome, a video, the rules. A
+-- timestamp rather than a boolean so the feed can order by it and support can
+-- see when it was set.
+ALTER TABLE community_home_posts ADD COLUMN IF NOT EXISTS pinned_at TIMESTAMPTZ;
+
+-- ONE PINNED POST PER SERVER, enforced here rather than in the service: a
+-- wall of pinned posts is just a feed with extra steps, and two writers
+-- racing to pin must not both win. The service unpins the previous one in the
+-- same transaction, so this index is the backstop, not the error path.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_community_home_posts_pinned_one
+  ON community_home_posts (server_id)
+  WHERE pinned_at IS NOT NULL;
+
+-- How far each person has read this server's Baú. Mirrors `channel_reads`:
+-- one row per (server, person), stamped when the feed is opened. The unread
+-- count is derived from it, never stored, so it cannot drift.
+CREATE TABLE IF NOT EXISTS community_home_reads (
+  server_id UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (server_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS community_home_likes (
+  post_id UUID NOT NULL REFERENCES community_home_posts(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (post_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_community_home_likes_user
+  ON community_home_likes (user_id);
+
+-- Pending media mint → claim. Same orphan-sweep idea as message_attachments:
+-- an upload never attached to a post is deleted after a grace period.
+CREATE TABLE IF NOT EXISTS community_home_media_uploads (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  server_id UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  uploader_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  storage_key TEXT NOT NULL UNIQUE,
+  filename TEXT NOT NULL,
+  content_type TEXT NOT NULL,
+  byte_size BIGINT NOT NULL,
+  kind TEXT NOT NULL,
+  claimed_post_id UUID REFERENCES community_home_posts(id) ON DELETE SET NULL,
+  verified_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+DO $$
+BEGIN
+  ALTER TABLE community_home_media_uploads DROP CONSTRAINT IF EXISTS community_home_media_uploads_kind_check;
+  ALTER TABLE community_home_media_uploads
+    ADD CONSTRAINT community_home_media_uploads_kind_check
+    CHECK (kind IN ('image', 'video', 'file'));
+EXCEPTION
+  WHEN others THEN NULL;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_community_home_media_unclaimed
+  ON community_home_media_uploads (created_at)
+  WHERE claimed_post_id IS NULL AND verified_at IS NULL;
+
+-- The rollout flag above only decides whether a client may offer Baú at all.
+-- Each server opts in separately, and existing servers stay off.
+ALTER TABLE servers ADD COLUMN IF NOT EXISTS community_home_enabled BOOLEAN NOT NULL DEFAULT FALSE;

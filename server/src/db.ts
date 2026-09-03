@@ -173,6 +173,7 @@ export interface DbServer {
   icon_key?: string | null;
   banner_key?: string | null;
   is_community?: boolean;
+  community_home_enabled?: boolean;
   /** Only present on reads that join the viewer's `server_members` row. */
   show_on_profile?: boolean;
   role?: "owner" | "admin" | "member";

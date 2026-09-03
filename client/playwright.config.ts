@@ -104,6 +104,12 @@ export default defineConfig({
         // two together are the whole contract; a third webServer on a third
         // port would prove nothing extra and double the suite's boot time.
         COMMUNITIES_ENABLED: "true",
+        // Baú, same reasoning. Both halves on so `community-home.spec.ts` can
+        // exercise the VIP lock; the flag-off API is pinned in
+        // `server/src/services/community-home.test.ts`, and the flag-off
+        // chrome via the dev-bypass `?communityHome=0` override.
+        COMMUNITY_HOME_ENABLED: "true",
+        COMMUNITY_HOME_VIP_ENABLED: "true",
         // Object storage, passed through rather than pinned.
         //
         // The webServer `env` REPLACES the environment rather than extending

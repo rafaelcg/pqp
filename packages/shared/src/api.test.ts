@@ -10,6 +10,7 @@ import {
   messageSchema,
   reactionEmojiSchema,
   REPLY_EXCERPT_MAX_LENGTH,
+  serverSchema,
   updateProfileSchema,
   usernameSchema,
   userPreferencesSchema,
@@ -23,6 +24,24 @@ import {
   SEARCH_HIGHLIGHT_CLOSE,
   SEARCH_HIGHLIGHT_OPEN,
 } from "./search.js";
+
+describe("serverSchema", () => {
+  it("defaults Community Home off for responses from an older API", () => {
+    const server = serverSchema.parse({
+      id: "11111111-1111-4111-8111-111111111111",
+      name: "Test server",
+      ownerId: "22222222-2222-4222-8222-222222222222",
+      createdAt: "2026-09-01T00:00:00.000Z",
+      messageRetentionDays: null,
+      ssoEmailDomain: null,
+      iconUrl: null,
+      bannerUrl: null,
+      isCommunity: false,
+      showOnProfile: true,
+    });
+    expect(server.communityHomeEnabled).toBe(false);
+  });
+});
 
 describe("messageBodySchema", () => {
   it("accepts ordinary and multi-line text", () => {

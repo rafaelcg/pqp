@@ -2,6 +2,7 @@ import {
   ChevronRight,
   FolderPlus,
   HeadphoneOff,
+  Archive,
   Lock,
   MicOff,
   Plus,
@@ -167,6 +168,18 @@ interface ChannelListProps {
   footer?: ReactNode;
   mobileOpen?: boolean;
   onMobileClose?: () => void;
+  /**
+   * Baú (Community Home), on when `GET /api/community-home/config` says so.
+   * Pins a Baú row above TEXT on every server. Not a real channel type and
+   * not `COMMUNITIES_ENABLED`.
+   */
+  communityHomeEnabled?: boolean;
+  /** "NEW" chip until the row is opened once on this server. */
+  communityHomeShowNew?: boolean;
+  /** Unread published posts. Outranks the "New" chip: a number says more. */
+  communityHomeUnread?: number;
+  communityHomeSelected?: boolean;
+  onSelectCommunityHome?: () => void;
 }
 
 export function ChannelList({
@@ -198,6 +211,11 @@ export function ChannelList({
   footer,
   mobileOpen = false,
   onMobileClose,
+  communityHomeEnabled = false,
+  communityHomeShowNew = false,
+  communityHomeUnread = 0,
+  communityHomeSelected = false,
+  onSelectCommunityHome,
 }: ChannelListProps) {
   const { t } = useTranslation();
   const visibleFavs = visibleFavoriteChannels(channels, favoriteChannelIds);
@@ -525,9 +543,18 @@ export function ChannelList({
               </span>
             )}
             <div className="min-w-0">
-              <p className="truncate font-display text-base font-bold leading-tight">
-                {server?.name ?? (isLoading ? t("common.loading") : t("chrome.noServer"))}
-              </p>
+              <div className="flex min-w-0 items-center gap-2">
+                <p className="truncate font-display text-base font-bold leading-tight">
+                  {server?.name ?? (isLoading ? t("common.loading") : t("chrome.noServer"))}
+                </p>
+                {/* Says "community" only about a listed community; the Baú
+                    flag being on is not a fact about this server. */}
+                {communityHomeEnabled && server?.isCommunity && (
+                  <span className="shrink-0 rounded bg-signal/15 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-signal">
+                    {t("communityHome.communityBadge")}
+                  </span>
+                )}
+              </div>
               {server?.role && (
                 <p className="mt-0.5 text-[11px] uppercase tracking-wider text-paper-muted">
                   {server.role}
@@ -638,6 +665,60 @@ export function ChannelList({
                   renderRow(channel, visibleFavs, true),
                 )}
               </FavoritesSection>
+            )}
+
+            {communityHomeEnabled && server && onSelectCommunityHome && (
+              <div className="mb-3 px-1">
+                <button
+                  type="button"
+                  data-community-home-row
+                  className={cn(
+                    "flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left transition-colors",
+                    communityHomeSelected
+                      ? "bg-ink-4 text-paper"
+                      : "text-paper-muted hover:bg-ink-4/70 hover:text-paper",
+                  )}
+                  onClick={() => {
+                    onSelectCommunityHome();
+                    onMobileClose?.();
+                  }}
+                >
+                  <Archive
+                    className={cn(
+                      "mt-0.5 h-4 w-4 shrink-0",
+                      communityHomeSelected ? "text-signal" : "text-paper-muted",
+                    )}
+                    aria-hidden
+                  />
+                  <span className="min-w-0 flex-1">
+                    <span className="flex items-center gap-2">
+                      <span className="truncate text-sm font-semibold text-paper">
+                        {t("communityHome.channelName")}
+                      </span>
+                      {communityHomeUnread > 0 ? (
+                        <span
+                          className="ml-auto min-w-4 shrink-0 rounded-full bg-danger px-1 py-0.5 text-center text-[10px] font-bold leading-none text-paper"
+                          aria-label={t("communityHome.badge.unread", {
+                            count: communityHomeUnread,
+                          })}
+                          data-community-home-unread
+                        >
+                          {formatBadgeCount(communityHomeUnread)}
+                        </span>
+                      ) : (
+                        communityHomeShowNew && (
+                          <span className="shrink-0 rounded bg-signal/15 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-signal">
+                            {t("communityHome.badge.new")}
+                          </span>
+                        )
+                      )}
+                    </span>
+                    <span className="block truncate text-[10px] text-paper-muted">
+                      {t("communityHome.channelHint")}
+                    </span>
+                  </span>
+                </button>
+              </div>
             )}
 
             <ChannelSection
