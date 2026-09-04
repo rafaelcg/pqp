@@ -492,6 +492,31 @@ describe("screen share audio", () => {
     expect(voice.getState().error).not.toBeNull();
   });
 
+  it("moves a share's sound without touching the presenter's voice", async () => {
+    // The request, from the QG on 4 Sep 2026: "a separacao das faixas de audio
+    // entre a live do amigo e a voz do amigo". Both sinks used to read the same
+    // number, so turning a loud game down turned the person down with it.
+    const { voice } = await connectedMesh();
+    voice.setPeerVolume("u2", 0.9);
+    voice.setScreenVolume("u2", 0.2);
+
+    expect(voice.getState().peerVolumes["u2"]).toBe(0.9);
+    expect(voice.getState().screenVolumes["u2"]).toBe(0.2);
+
+    // And the other direction: silencing a game leaves the voice alone.
+    voice.setScreenVolume("u2", 0);
+    expect(voice.getState().screenVolumes["u2"]).toBe(0);
+    expect(voice.getState().peerVolumes["u2"]).toBe(0.9);
+  });
+
+  it("clamps a screen volume to the playable range", async () => {
+    const { voice } = await connectedMesh();
+    voice.setScreenVolume("u2", 4);
+    expect(voice.getState().screenVolumes["u2"]).toBe(1);
+    voice.setScreenVolume("u2", -1);
+    expect(voice.getState().screenVolumes["u2"]).toBe(0);
+  });
+
   it("offers a silent retry when sound is what killed the capture", async () => {
     // The 3 Sep 2026 report, in full: "o picker fecha e a stream não começa".
     // Sound is the only part of a capture that can fail on its own and take the
