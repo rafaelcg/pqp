@@ -1140,7 +1140,7 @@ function ChannelRow({
     if (onEditMeta) {
       items.push({
         id: "meta",
-        label: t("chrome.editTopicIcon"),
+        label: t("chrome.channelSettings"),
         onSelect: onEditMeta,
       });
     }
