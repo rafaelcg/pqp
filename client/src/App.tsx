@@ -1,5 +1,5 @@
 import { SignInButton, SignUpButton, useAuth, useUser } from "@clerk/clerk-react";
-import { FileText, Lock, Menu, Phone, Pin, Shield, Users, Video } from "lucide-react";
+import { Lock, Menu, Phone, Pin, Settings, Shield, Users, Video } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
@@ -260,7 +260,7 @@ export type TokenResolver = (options?: {
   forceRefresh?: boolean;
 }) => Promise<string | null>;
 
-/** Equal-width icon tiles in the chat header (pins, topic, call, roster). */
+/** Equal-width icon tiles in the chat header (pins, channel settings, call, roster). */
 const HEADER_ACTION_TILE =
   "flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-paper-muted hover:bg-ink-3 hover:text-paper";
 
@@ -3775,14 +3775,14 @@ function MainAppContent({
               <Pin className="h-4 w-4" />
             </button>
           </Tooltip>
-          {canManageChannels && (
-            <Tooltip label={t("chrome.topic")}>
+          {canManageChannels && selectedChannel.kind === "server" && (
+            <Tooltip label={t("chrome.channelSettings")}>
               <button
                 type="button"
                 className={HEADER_ACTION_TILE}
                 onClick={() => setChannelMetaChannel(selectedChannel)}
               >
-                <FileText className="h-4 w-4" />
+                <Settings className="h-4 w-4" />
               </button>
             </Tooltip>
           )}

@@ -120,9 +120,7 @@ export function ChannelMetaDialog({
     <Dialog
       open={open && channel !== null}
       eyebrow={t("channelMeta.eyebrow")}
-      title={t("channelMeta.title", {
-        name: channel?.name ?? t("channelMeta.titleFallback"),
-      })}
+      title={t("channelMeta.title")}
       description={t("channelMeta.description")}
       size="sm"
       onClose={onClose}
@@ -188,7 +186,7 @@ export function ChannelMetaDialog({
 
         <label className="mb-2 block">
           <span className="mb-1 block text-xs uppercase tracking-wide text-paper-muted">
-            Icon (emoji or image URL)
+            {t("channelMeta.icon")}
           </span>
           <Input
             value={imageUrl}
@@ -196,7 +194,7 @@ export function ChannelMetaDialog({
               setImageUrl(e.target.value);
               setError(null);
             }}
-            placeholder="📡 or https://…"
+            placeholder={t("channelMeta.iconPlaceholder")}
             maxLength={500}
           />
         </label>
@@ -206,7 +204,7 @@ export function ChannelMetaDialog({
             <button
               key={icon}
               type="button"
-              aria-label={`Use ${icon} as the channel icon`}
+              aria-label={t("channelMeta.iconPreset", { icon })}
               aria-pressed={imageUrl === icon}
               className={`flex h-9 w-9 items-center justify-center rounded-md border text-base ${
                 imageUrl === icon
@@ -223,7 +221,7 @@ export function ChannelMetaDialog({
             className="rounded-md border border-ink-4 px-2 text-xs text-paper-muted hover:border-signal/50"
             onClick={() => setImageUrl("")}
           >
-            Clear
+            {t("channelMeta.iconClear")}
           </button>
         </div>
 
