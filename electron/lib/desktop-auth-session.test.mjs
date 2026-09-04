@@ -71,6 +71,14 @@ describe("createDesktopAuthController", () => {
     }
   });
 
+  it("stashes even when send reports the window was missing", () => {
+    const { auth } = controller({
+      send: () => false,
+    });
+    auth.deliverTicket("st_missed");
+    assert.equal(auth.takePendingTicket(), "st_missed");
+  });
+
   it("stashes a delivered ticket until the renderer reads it", async () => {
     const { auth, events } = controller({
       send: (channel, ...args) => {

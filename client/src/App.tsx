@@ -375,10 +375,21 @@ function ClerkAppGate() {
   );
 
   useEffect(() => {
-    if (signIn && queuedTicketRef.current) {
+    if (!signIn) {
+      return;
+    }
+    if (queuedTicketRef.current) {
       void redeemTicket(queuedTicketRef.current);
     }
-  }, [redeemTicket, signIn]);
+    if (!canDesktopAuth || !desktop) {
+      return;
+    }
+    void desktop.getPendingDesktopAuthTicket?.().then((ticket) => {
+      if (ticket) {
+        void redeemTicket(ticket);
+      }
+    });
+  }, [canDesktopAuth, desktop, redeemTicket, signIn]);
 
   useEffect(() => {
     if (!canDesktopAuth || !desktop) {
@@ -388,11 +399,6 @@ function ClerkAppGate() {
       if (status?.active) {
         setWaiting(true);
         setBrowserUrl(status.url);
-      }
-    });
-    void desktop.getPendingDesktopAuthTicket?.().then((ticket) => {
-      if (ticket) {
-        void redeemTicket(ticket);
       }
     });
     const offTicket = desktop.onDesktopAuthTicket?.((ticket) => {

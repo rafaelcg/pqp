@@ -81,6 +81,8 @@ function createDesktopAuthController(deps) {
   }
 
   function deliverTicket(ticket) {
+    // Always stash. send() returning true only means a window exists; a
+    // renderer mid-reload still misses the IPC. takePendingTicket is the ack.
     pendingTicket = ticket;
     deps.send("pqp:desktop-auth-ticket", ticket);
     deps.onDelivered?.();
