@@ -27,6 +27,7 @@ import { DesktopTitleBar } from "./components/layout/desktop-title-bar";
 import { useTheme } from "./hooks/use-theme";
 import { rememberAcquisitionFromLocation } from "./lib/acquisition";
 import { browserStorage } from "./lib/arrival";
+import { desktopSignedOutPath } from "./lib/desktop-auth-flow";
 import { isDesktopApp } from "./lib/desktop";
 import { isDevAuthBypassEnabled } from "./lib/dev-auth";
 import { I18nProvider, useTranslation } from "./lib/i18n";
@@ -330,7 +331,7 @@ function ThemedClerkProvider({
   return (
     <ClerkProvider
       publishableKey={publishableKey}
-      afterSignOutUrl={isDesktopApp() ? "/app" : "/"}
+      afterSignOutUrl={desktopSignedOutPath()}
       signInFallbackRedirectUrl="/app"
       signUpFallbackRedirectUrl="/app"
       appearance={appearance}
