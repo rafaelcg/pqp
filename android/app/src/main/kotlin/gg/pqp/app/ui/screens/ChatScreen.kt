@@ -1,5 +1,6 @@
 package gg.pqp.app.ui.screens
 
+import android.os.SystemClock
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -58,6 +59,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -115,6 +117,7 @@ import gg.pqp.app.ui.theme.TabularFigures
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -131,6 +134,12 @@ fun ChatScreen(
      * channel record) renders a placeholder rather than a bare `#`.
      */
     title: String? = null,
+    /**
+     * The channel's slow mode in seconds, 0 when off or when the caller does
+     * not know (a notification tap, a conversation). Only ever a head start:
+     * the server's `message-rejected` corrects the countdown if this is stale.
+     */
+    slowmodeSeconds: Int = 0,
 ) {
     val context = LocalContext.current
     // Built from the application context, so the reader outlives this
@@ -138,7 +147,7 @@ fun ChatScreen(
     val files = remember(context) { ContentAttachmentFiles(context) }
     val model: ChatViewModel = viewModel(
         key = channelId,
-        factory = ChatViewModel.factory(session, channelId, files),
+        factory = ChatViewModel.factory(session, channelId, files, slowmodeSeconds),
     )
     val state by model.state.collectAsStateWithLifecycle()
     val connection by session.realtime.state.collectAsStateWithLifecycle()
@@ -169,6 +178,18 @@ fun ChatScreen(
 
     val listState = rememberLazyListState()
     var draft by remember { mutableStateOf("") }
+
+    // The server refused a send: the words come back to the box. The box was
+    // cleared when the frame left, so without this the only copy of the
+    // sentence was the optimistic row that just came down. Anything typed
+    // since is kept underneath rather than overwritten, because losing text is
+    // the exact failure this hand-off exists to prevent.
+    LaunchedEffect(state.restoredDraft) {
+        val body = state.restoredDraft ?: return@LaunchedEffect
+        draft = if (draft.isBlank()) body else "$body\n$draft"
+        model.draftRestored()
+    }
+
     var reporting by remember { mutableStateOf<Message?>(null) }
     // The long press opens this; "Report" inside it is what sets `reporting`.
     var acting by remember { mutableStateOf<Message?>(null) }
@@ -260,6 +281,8 @@ fun ChatScreen(
                     attachmentsEnabled = state.attachmentsEnabled,
                     attachments = state.attachments,
                     refusal = state.attachmentRefusal,
+                    sendRefusal = state.sendRefusal,
+                    holdUntilMs = state.sendHoldUntilMs,
                     maxAttachmentBytes = state.maxAttachmentBytes,
                     onAttach = model::attach,
                     onRemoveAttachment = model::removeAttachment,
@@ -846,17 +869,34 @@ private fun Composer(
     attachmentsEnabled: Boolean,
     attachments: List<PendingAttachment>,
     refusal: AttachmentRefusal?,
+    sendRefusal: SendRefusal?,
+    holdUntilMs: Long,
     maxAttachmentBytes: Long,
     onAttach: (String) -> Unit,
     onRemoveAttachment: (String) -> Unit,
     onRetryAttachment: (String) -> Unit,
 ) {
+    // The slow mode countdown, ticked here because a number that changes while
+    // somebody looks at it has to be redrawn by something, and the view model
+    // only knows when the wait ends. Re-read four times a second so the label
+    // never shows a second that has already gone; the loop exits with the
+    // wait, so an idle composer costs nothing.
+    var now by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
+    LaunchedEffect(holdUntilMs) {
+        now = SystemClock.elapsedRealtime()
+        while (holdUntilMs > now) {
+            delay(250)
+            now = SystemClock.elapsedRealtime()
+        }
+    }
+    val waitSeconds = ChatViewModel.remainingWaitSeconds(holdUntilMs, now)
+
     // Whether there is anything to send, which is the one thing this whole
     // surface animates on. It is no longer "is there text": a message may be
     // nothing but a picture, and it may not go while an upload is still
-    // running or has failed.
+    // running or has failed, or while slow mode is counting down.
     val readiness = composerReadiness(value, attachments)
-    val active = readiness == ComposerReadiness.Ready
+    val active = readiness == ComposerReadiness.Ready && waitSeconds == 0
 
     // `OpenMultipleDocuments` rather than `PickVisualMedia`: the allowlist is
     // not only pictures, and a chat app that can send a photo but not a PDF has
@@ -894,6 +934,7 @@ private fun Composer(
                 .imePadding()
                 .navigationBarsPadding(),
         ) {
+            SendRefusalLine(sendRefusal, waitSeconds)
             AttachmentRefusalLine(refusal, maxAttachmentBytes)
             AttachmentStrip(attachments, onRemoveAttachment, onRetryAttachment)
             Row(
@@ -983,6 +1024,50 @@ private fun Composer(
             }
             }
         }
+    }
+}
+
+/**
+ * Why the last send did not land, or how long until the next one may.
+ *
+ * On the composer for the reason [AttachmentRefusalLine] is: it is about the
+ * box the person is looking at. The wait wins over a stale reason, because
+ * while it is counting the number is the useful sentence; once it reaches
+ * zero the view model clears a wait-shaped refusal and the line goes away on
+ * its own. A `sanction-notice` is rendered verbatim: the server wrote that
+ * sentence in the person's language, and a client that shows nothing but the
+ * string is a correct client.
+ */
+@Composable
+private fun SendRefusalLine(refusal: SendRefusal?, waitSeconds: Int) {
+    val rateLimited = refusal is SendRefusal.Rejected && refusal.reason == MessageRejectReason.RateLimited
+    val text = when {
+        waitSeconds > 0 && rateLimited -> stringResource(R.string.chat_reject_rate_limited_wait, waitSeconds)
+        waitSeconds > 0 -> stringResource(R.string.chat_slow_mode_wait, waitSeconds)
+        refusal is SendRefusal.Sanctioned -> refusal.message
+        refusal is SendRefusal.Rejected -> when (refusal.reason) {
+            MessageRejectReason.RateLimited -> stringResource(R.string.chat_reject_rate_limited)
+            MessageRejectReason.NoAccess -> stringResource(R.string.chat_reject_no_access)
+            MessageRejectReason.CannotSend -> stringResource(R.string.chat_reject_cannot_send)
+            MessageRejectReason.Undeliverable -> stringResource(R.string.chat_reject_undeliverable)
+            MessageRejectReason.SlowMode -> stringResource(R.string.chat_reject_slow_mode)
+            null -> stringResource(R.string.chat_reject_generic)
+        }
+        else -> ""
+    }
+    AnimatedVisibility(
+        visible = text.isNotEmpty(),
+        enter = expandVertically(),
+        exit = shrinkVertically(),
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+            modifier = Modifier
+                .padding(start = Spacing.md, end = Spacing.md, top = Spacing.sm)
+                .testTag("composer.refusal"),
+        )
     }
 }
 

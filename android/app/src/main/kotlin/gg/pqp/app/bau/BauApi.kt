@@ -38,6 +38,23 @@ suspend fun ApiClient.addBauComment(serverId: String, postId: String, body: Stri
     ).comment
 
 /**
+ * How many posts this person has not seen. Its own endpoint rather than a
+ * field on the feed, because the channel list needs the number without
+ * loading the posts.
+ */
+suspend fun ApiClient.bauUnread(serverId: String): Int =
+    getJson<BauUnreadResponse>("/api/servers/$serverId/home/unread").count
+
+/**
+ * "I have seen the feed." The read marker is per person and shared across
+ * every client they use, so a Baú read on the phone must say so or the web
+ * keeps a badge up for posts this person has already scrolled past.
+ */
+suspend fun ApiClient.markBauRead(serverId: String) {
+    postJson<BauReadResponse>("/api/servers/$serverId/home/read", "{}")
+}
+
+/**
  * The instance flag, asked once per session.
  *
  * Memoised the way iOS memoises its feature configs: a flag cannot change

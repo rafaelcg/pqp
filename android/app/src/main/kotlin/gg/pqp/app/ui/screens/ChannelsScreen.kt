@@ -55,12 +55,15 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import gg.pqp.app.R
 import gg.pqp.app.bau.CommunityHomeConfig
 import gg.pqp.app.bau.CommunityHomeConfigs
+import gg.pqp.app.bau.bauUnread
 import gg.pqp.app.core.Channel
 import gg.pqp.app.core.SessionStore
+import gg.pqp.app.social.ui.CountBadge
 import gg.pqp.app.ui.components.Avatar
 import gg.pqp.app.ui.components.ChromeDivider
 import gg.pqp.app.ui.components.EmptyState
@@ -73,6 +76,8 @@ import gg.pqp.app.ui.theme.Spacing
 import gg.pqp.app.voice.Refusal
 import gg.pqp.app.voice.VoiceController
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonPrimitive
 
 /**
  * A server's channels.
@@ -198,6 +203,37 @@ fun ChannelsScreen(
         channels = runCatching { session.api.channels(serverId) }.getOrDefault(emptyList())
     }
 
+    // The Baú's unread count, for the badge on its row.
+    //
+    // Fetched on every resume rather than once, because the moment it is most
+    // wrong is the moment this screen comes back from the Baú itself: the feed
+    // marked itself read while this screen sat in the back stack at CREATED,
+    // and a badge that survives the read it is counting is the bug on the web
+    // this whole endpoint pair exists to end. The live nudge covers the other
+    // direction, a post published while somebody is looking at the list.
+    // Zero on any failure, which is the one honest number when the count is
+    // not known, and also what an older server with no route at all answers.
+    var bauUnread by remember { mutableStateOf(0) }
+    LifecycleResumeEffect(serverId, showBau) {
+        if (showBau) {
+            scope.launch {
+                bauUnread = runCatching { session.api.bauUnread(serverId) }.getOrDefault(0)
+            }
+        }
+        onPauseOrDispose { }
+    }
+    LaunchedEffect(serverId, showBau) {
+        if (!showBau) return@LaunchedEffect
+        session.realtime.frames.collect { frame ->
+            when (frame["type"]?.jsonPrimitive?.contentOrNull) {
+                "community-home-update" -> {
+                    if (frame["serverId"]?.jsonPrimitive?.contentOrNull != serverId) return@collect
+                    bauUnread = runCatching { session.api.bauUnread(serverId) }.getOrDefault(0)
+                }
+            }
+        }
+    }
+
     Scaffold(
         modifier = Modifier
             .fillMaxSize()
@@ -274,7 +310,7 @@ fun ChannelsScreen(
                     if (showBau) {
                         item(key = "bau") {
                             Spacer(Modifier.height(Spacing.sm))
-                            BauRow(onClick = onOpenBau)
+                            BauRow(unread = bauUnread, onClick = onOpenBau)
                         }
                     }
                     sections.forEachIndexed { index, section ->
@@ -318,9 +354,13 @@ fun ChannelsScreen(
  * The Baú's row. Same pill as a channel, so it sits in the list, but with a
  * second line: the one thing a person needs to know before tapping is that
  * this is not a place to type.
+ *
+ * The badge is the quiet one. A new post is "there is something here", which
+ * the number already says by existing; the lime is kept for a mention, and
+ * nothing in the Baú can mention anybody.
  */
 @Composable
-private fun BauRow(onClick: () -> Unit) {
+private fun BauRow(unread: Int, onClick: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -344,7 +384,7 @@ private fun BauRow(onClick: () -> Unit) {
             )
         }
         Spacer(Modifier.width(Spacing.sm + 2.dp))
-        Column {
+        Column(Modifier.weight(1f)) {
             Text(
                 text = stringResource(R.string.bau_title),
                 style = MaterialTheme.typography.bodyLarge,
@@ -358,6 +398,14 @@ private fun BauRow(onClick: () -> Unit) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
+            )
+        }
+        if (unread > 0) {
+            Spacer(Modifier.width(Spacing.sm))
+            CountBadge(
+                count = unread,
+                loud = false,
+                modifier = Modifier.testTag("channels.bau.unread"),
             )
         }
     }

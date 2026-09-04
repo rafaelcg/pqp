@@ -61,6 +61,14 @@
     <string name="chat_attachment_unsupported">Este servidor não aceita esse tipo de arquivo.</string>
     <string name="chat_attachment_too_many">Uma mensagem leva no máximo %1$d arquivos.</string>
     <string name="chat_attachment_unreadable">Não foi possível ler esse arquivo.</string>
+    <string name="chat_reject_rate_limited">Você tá mandando rápido demais</string>
+    <string name="chat_reject_rate_limited_wait">Você tá mandando rápido demais. Tenta de novo em %1$ds.</string>
+    <string name="chat_reject_no_access">Você não pode mandar mensagem neste canal</string>
+    <string name="chat_reject_cannot_send">Você não tem permissão pra mandar aqui</string>
+    <string name="chat_reject_undeliverable">Essa mensagem não foi entregue</string>
+    <string name="chat_reject_slow_mode">Slow mode tá ligado.</string>
+    <string name="chat_reject_generic">Falha ao enviar</string>
+    <string name="chat_slow_mode_wait">Slow mode. Espera %1$ds pra mandar de novo.</string>
     <string name="chat_day_today">Hoje</string>
     <string name="chat_day_yesterday">Ontem</string>
 
