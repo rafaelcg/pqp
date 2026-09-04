@@ -119,6 +119,7 @@ export function UserPanel({
     }
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
+        event.preventDefault();
         setOpen(false);
       }
     }

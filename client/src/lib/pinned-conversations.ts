@@ -42,6 +42,22 @@ export function isPinnedConversation(
 }
 
 /**
+ * Drop ids that are not in the live conversation list.
+ *
+ * Only call this on a user-initiated write, with a loaded list. A paint must
+ * not persist this, or a lagging `/api/dms` would wipe a pin the user still has.
+ */
+export function prunePinnedConversations(
+  ids: readonly string[] | undefined,
+  conversations: readonly DmSummary[],
+): string[] {
+  const live = new Set(
+    conversations.map((conversation) => conversation.channelId),
+  );
+  return (ids ?? []).filter((id) => live.has(id));
+}
+
+/**
  * Append, or no-op if already pinned or the cap is full. A new id past the
  * cap is ignored rather than bumping the oldest: pinning is a choice, not a
  * queue.

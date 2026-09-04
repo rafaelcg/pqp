@@ -40,6 +40,6 @@ export function rememberWhatsNewFeed(
   try {
     storage?.setItem(WHATS_NEW_FEED_STORAGE_KEY, newest);
   } catch {
-    // Session-only: the pip comes back next load, which is fine.
+    // No store: fail silent. hasUnseenWhatsNew also returns false, so no pip.
   }
 }

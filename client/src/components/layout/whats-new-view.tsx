@@ -7,7 +7,6 @@ import {
   type ReactNode,
 } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
-import { Link } from "react-router-dom";
 import remarkGfm from "remark-gfm";
 import { Menu, Sparkles, X } from "lucide-react";
 import { BlogMedia } from "@/components/blog/blog-media";
@@ -30,16 +29,16 @@ function isBlogMedia(node: ReactNode): boolean {
 }
 
 const MARKDOWN_COMPONENTS: Components = {
-  a: ({ href, children, ...rest }) =>
-    href?.startsWith("/") ? (
-      <Link to={href} {...rest}>
-        {children}
-      </Link>
-    ) : (
-      <a href={href} {...rest}>
+  a: ({ href, children, ...rest }) => {
+    if (!href) {
+      return <a {...rest}>{children}</a>;
+    }
+    return (
+      <a href={href} target="_blank" rel="noreferrer" {...rest}>
         {children}
       </a>
-    ),
+    );
+  },
   img: ({ src, alt, title }) => {
     if (!src) {
       return null;
@@ -90,9 +89,10 @@ export function WhatsNewView({
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        onClose();
+      if (event.key !== "Escape" || event.defaultPrevented) {
+        return;
       }
+      onClose();
     }
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
@@ -290,12 +290,14 @@ function WhatsNewArticle({
 
         <p className="mt-16 border-t border-ink-4/50 pt-6 text-sm leading-relaxed text-paper-muted">
           {t("whatsNew.feed.origin")}{" "}
-          <Link
-            to={`/blog/${post.slug}`}
+          <a
+            href={`/blog/${post.slug}`}
+            target="_blank"
+            rel="noreferrer"
             className="text-signal underline-offset-2 hover:underline"
           >
             {t("whatsNew.feed.onSite")}
-          </Link>
+          </a>
         </p>
       </article>
     </div>
