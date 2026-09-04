@@ -1,40 +1,38 @@
-O conserto da call já saiu no outro post. Aqui é o que ficou de fora.
+Saiu o Baú. E agora dá pra deixar um DM na barra.
 
 ## Baú
 
-O cantinho de conteúdo da comunidade. Clipes, imagem, PDF, YouTube. A staff posta. O pessoal curte e comenta. Não é chat, e não pinga ninguém.
+Clipes, foto, PDF, YouTube. A staff posta, o pessoal curte e comenta. Fica no Baú, não some no meio do chat.
 
 O dono liga em Configurações da comunidade. Vem desligado.
 
-Tem um post **fixado** no topo. A linha na barra mostra quantos você não viu.
+Dá pra deixar um post no topo. Na barra aparece quantos você ainda não viu.
 
-A staff agenda, guarda rascunho, e vê a prévia. Alguns posts trancam pra quem tem cargo VIP. Pagar por isso ainda não: se o dono te marcou VIP, você vê.
+A staff agenda, guarda rascunho, vê a prévia. Tem post só pra quem o dono marcou VIP. Pagar ainda não existe.
 
 ![Um post no Baú, com foto, curtidas e comentário](/blog/favoritos-camera-e-o-dm-te-acha/bau.jpg "Post da sessão, coração, e um comentário embaixo.")
 
-No site. No iPhone e no Android ainda não.
+Por enquanto só no site. iPhone e Android ainda não.
 
-## Fixar o DM na barra
+## DM na barra
 
-Mensagem direta dá pra **fixar na barra**, embaixo do ícone de DMs, em cima das comunidades. A cara da pessoa fica ali. Clica e abre. Cabe 15.
+Clica com o direito na conversa, **Fixar na barra**. A cara da pessoa fica embaixo do ícone de DMs, em cima das comunidades. Clica e abre. Até 15.
 
-## Android, de verdade
+## Android
 
-[pqp.gg/android](/android). É APK, a Play Store ainda não abriu. Chrome vai avisar. É esperado.
+[pqp.gg/android](/android). É APK. Play Store ainda não. O Chrome vai reclamar, é normal.
 
 ![A página do Android](/blog/favoritos-camera-e-o-dm-te-acha/android.webp "pqp no Android, antes da loja. Baixa o APK.")
 
-## Se você perdeu, de agosto
+## De agosto
 
-Isso saiu e não ganhou post próprio:
-
-- Steam e Twitch no perfil. Configurações, Conexões. Não é o login do pqp. Na página pública só se você deixar. Battle.net ainda não.
+- Steam e Twitch no perfil: Configurações, Conexões. Não é o login do pqp. Na página pública só se você deixar. Battle.net ainda não.
 - Som de menção, de voz, de call. Dá pra desligar em Notificações.
-- Duas pessoas compartilham tela na mesma call.
-- No computador, você escolhe a janela. Não pega mais a tela inteira sem perguntar.
+- Duas pessoas compartilhando tela na mesma call.
+- No PC você escolhe a janela. Não pega a tela inteira sem perguntar.
 
 ## Ainda não
 
-Watch party ainda não dá pra clicar. Tem coisa atrás.
+Watch party ainda não.
 
-Mandar a sua tela do iPhone ainda não. Assistir a dos outros, sim. No Android, mandar já vai.
+Mandar a tela do iPhone ainda não. Ver a dos outros, sim. No Android já manda.

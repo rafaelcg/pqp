@@ -72,8 +72,8 @@ export const POSTS: readonly BlogPost[] = [
     },
     summary: {
       "pt-BR":
-        "O Baú da comunidade, DM fixado na barra, APK no Android, e o que de agosto não ganhou post.",
-      en: "The community Baú, pin a DM to the rail, an Android APK, and what August never got a note for.",
+        "Baú na comunidade, DM na barra, APK no Android, e o que saiu em agosto.",
+      en: "The community Baú, pin a DM to the rail, an Android APK, and what shipped in August.",
     },
   },
   {
