@@ -131,6 +131,7 @@ import {
   postChannelMessage,
   resolveEmbedInBackground,
   resolveStatuses,
+  takeMessageBudget,
 } from "../ws/index.js";
 import {
   // --- voice moderation ---
@@ -3755,6 +3756,17 @@ router.post(
       );
     }
     const body = createChannelMessageSchema.parse(await readJsonBody(req));
+    // The same per-user send bucket the socket charges, on top of the
+    // API-wide `writeLimiter`. Without it HTTP would allow a burst three
+    // times the size the socket does for the same account.
+    const budget = takeMessageBudget(user.id);
+    if (!budget.ok) {
+      res.setHeader(
+        "Retry-After",
+        String(Math.max(1, Math.ceil(budget.retryAfterMs / 1000))),
+      );
+      throw new HttpError(429, "Slow down");
+    }
     const posted = await postChannelMessage({
       author: user,
       channelId: channelId!,
