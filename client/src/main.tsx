@@ -103,10 +103,7 @@ function isUsableClerkPublishableKey(
   value: string | undefined,
 ): value is string {
   if (!value) return false;
-  if (value.includes("your_clerk") || value.includes("your-clerk")) {
-    return false;
-  }
-  return /^(pk_test_|pk_live_)[A-Za-z0-9]{16,}$/.test(value);
+  return !value.includes("your_clerk") && !value.includes("your-clerk");
 }
 
 const publishableKey = isUsableClerkPublishableKey(

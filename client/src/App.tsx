@@ -328,25 +328,46 @@ function ClerkAppGate() {
   const [browserUrl, setBrowserUrl] = useState<string | null>(null);
   const [handoffError, setHandoffError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [authMode, setAuthMode] = useState<"sign-in" | "sign-up">("sign-in");
+  const signInRef = useRef(signIn);
+  const setActiveRef = useRef(setActive);
+  const lastTicketRef = useRef<string | null>(null);
+  const queuedTicketRef = useRef<string | null>(null);
+  signInRef.current = signIn;
+  setActiveRef.current = setActive;
 
   const redeemTicket = useCallback(
     async (ticket: string) => {
-      if (!signIn || !setActive) {
+      const currentSignIn = signInRef.current;
+      const currentSetActive = setActiveRef.current;
+      if (!currentSignIn || !currentSetActive) {
+        queuedTicketRef.current = ticket;
         return;
       }
+      if (lastTicketRef.current === ticket) {
+        return;
+      }
+      lastTicketRef.current = ticket;
+      queuedTicketRef.current = null;
       setHandoffError(null);
       try {
-        const result = await signIn.create({ strategy: "ticket", ticket });
+        const result = await currentSignIn.create({ strategy: "ticket", ticket });
         if (result.createdSessionId) {
-          await setActive({ session: result.createdSessionId });
+          await currentSetActive({ session: result.createdSessionId });
         }
       } catch {
         setWaiting(false);
         setHandoffError(t("signedOut.waiting.error"));
       }
     },
-    [setActive, signIn, t],
+    [t],
   );
+
+  useEffect(() => {
+    if (signIn && setActive && queuedTicketRef.current) {
+      void redeemTicket(queuedTicketRef.current);
+    }
+  }, [redeemTicket, setActive, signIn]);
 
   useEffect(() => {
     if (!canDesktopAuth || !desktop) {
@@ -363,16 +384,28 @@ function ClerkAppGate() {
         void redeemTicket(ticket);
       }
     });
-    return desktop.onDesktopAuthTicket?.((ticket) => {
+    const offTicket = desktop.onDesktopAuthTicket?.((ticket) => {
       void redeemTicket(ticket);
     });
-  }, [canDesktopAuth, desktop, redeemTicket]);
+    const offEnded = desktop.onDesktopAuthEnded?.((reason) => {
+      setWaiting(false);
+      setBrowserUrl(null);
+      if (reason === "expired") {
+        setHandoffError(t("signedOut.waiting.expired"));
+      }
+    });
+    return () => {
+      offTicket?.();
+      offEnded?.();
+    };
+  }, [canDesktopAuth, desktop, redeemTicket, t]);
 
   const startDesktopAuth = useCallback(
     async (mode: "sign-in" | "sign-up") => {
       if (!desktop?.startDesktopAuth) {
         return;
       }
+      setAuthMode(mode);
       setHandoffError(null);
       setCopied(false);
       setWaiting(true);
@@ -420,7 +453,7 @@ function ClerkAppGate() {
                 <Button
                   variant="secondary"
                   onClick={() => {
-                    void startDesktopAuth("sign-in");
+                    void startDesktopAuth(authMode);
                   }}
                 >
                   {t("signedOut.waiting.reopen")}
@@ -632,18 +665,10 @@ function MainAppContent({
       }
     ).Clerk;
     if (!isDevAuthBypassEnabled() && clerk?.signOut) {
-      const desktop = getDesktop();
       const home = isDesktopApp() ? "/app" : "/";
-      void clerk
-        .signOut({ redirectUrl: home })
-        .then(() => {
-          if (desktop?.startDesktopAuth) {
-            void desktop.startDesktopAuth("sign-in");
-          }
-        })
-        .catch(() => {
-          window.location.replace(home);
-        });
+      void clerk.signOut({ redirectUrl: home }).catch(() => {
+        window.location.replace(home);
+      });
       return;
     }
     window.location.reload();
