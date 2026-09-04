@@ -1,4 +1,4 @@
-import { useEffect, useId, useState, type FormEvent } from "react";
+import { useEffect, useId, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import {
   SLOWMODE_SECONDS_PRESETS,
   type Channel,
@@ -6,7 +6,9 @@ import {
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { ChannelIcon } from "@/components/layout/channel-icon";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
+import { cn } from "@/lib/utils";
 
 const SLOWMODE_PRESET_KEYS: Record<number, MessageKey> = {
   0: "channelMeta.slowMode.off",
@@ -28,6 +30,9 @@ function slowModeOptionKey(seconds: number): MessageKey {
 }
 
 const CHANNEL_ICON_PRESETS = ["📡", "💬", "🔊", "🎮", "☕", "🛠️", "🎵", "📌"];
+
+const fieldClass =
+  "h-11 rounded-xl border-ink-4/70 bg-ink text-[15px] focus-visible:ring-signal/40";
 
 /**
  * `null` means the field is fine as it stands — either empty, an emoji/short
@@ -57,6 +62,42 @@ export function validateChannelIconInput(value: string): MessageKey | null {
   return null;
 }
 
+function SettingsGroup({
+  title,
+  hint,
+  hintId,
+  action,
+  children,
+}: {
+  title: string;
+  hint?: string;
+  hintId?: string;
+  action?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <section className="rounded-2xl bg-ink-3/70 px-4 py-3.5">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h3 className="text-[15px] font-semibold leading-tight tracking-tight text-paper">
+            {title}
+          </h3>
+          {hint && (
+            <p
+              id={hintId}
+              className="mt-0.5 text-[13px] leading-snug text-paper-muted"
+            >
+              {hint}
+            </p>
+          )}
+        </div>
+        {action}
+      </div>
+      <div className="mt-3">{children}</div>
+    </section>
+  );
+}
+
 interface ChannelMetaDialogProps {
   open: boolean;
   channel: Channel | null;
@@ -83,6 +124,19 @@ export function ChannelMetaDialog({
   const formId = useId();
   const showSlowMode = channel?.kind === "server" && channel.type === "text";
   const slowModeHintId = `${formId}-slow-mode-hint`;
+  const topicHintId = `${formId}-topic-hint`;
+  const iconHintId = `${formId}-icon-hint`;
+
+  const previewChannel = useMemo(() => {
+    if (!channel) {
+      return null;
+    }
+    return {
+      ...channel,
+      topic: topic.trim() || null,
+      imageUrl: imageUrl.trim() || null,
+    };
+  }, [channel, topic, imageUrl]);
 
   useEffect(() => {
     if (open && channel) {
@@ -116,12 +170,16 @@ export function ChannelMetaDialog({
     }
   }
 
+  const slowModeOptions = SLOWMODE_SECONDS_PRESETS.includes(
+    slowmodeSeconds as (typeof SLOWMODE_SECONDS_PRESETS)[number],
+  )
+    ? SLOWMODE_SECONDS_PRESETS
+    : [slowmodeSeconds, ...SLOWMODE_SECONDS_PRESETS];
+
   return (
     <Dialog
       open={open && channel !== null}
-      eyebrow={t("channelMeta.eyebrow")}
       title={t("channelMeta.title")}
-      description={t("channelMeta.description")}
       size="sm"
       onClose={onClose}
       footer={
@@ -138,95 +196,128 @@ export function ChannelMetaDialog({
       <form
         id={formId}
         onSubmit={(e) => void handleSubmit(e)}
-        className="px-5 py-4"
+        className="space-y-3.5 px-5 py-5"
       >
-        <label className="mb-3 block">
-          <span className="mb-1 block text-xs uppercase tracking-wide text-paper-muted">
-            {t("channelMeta.topic")}
-          </span>
+        {previewChannel && (
+          <div className="flex items-center gap-3 px-0.5 pb-1">
+            <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-ink-3 text-lg">
+              <ChannelIcon channel={previewChannel} className="h-6 w-6" />
+            </div>
+            <div className="min-w-0">
+              <p className="truncate text-[15px] font-semibold tracking-tight">
+                {t("channelMeta.channelName", { name: previewChannel.name })}
+              </p>
+              <p className="text-[13px] text-paper-muted">
+                {previewChannel.type === "voice"
+                  ? t("channelMeta.kind.voice")
+                  : t("channelMeta.kind.text")}
+              </p>
+            </div>
+          </div>
+        )}
+
+        <SettingsGroup
+          title={t("channelMeta.topic")}
+          hint={t("channelMeta.topicHint")}
+          hintId={topicHintId}
+        >
           <Input
             value={topic}
+            aria-describedby={topicHintId}
             onChange={(e) => setTopic(e.target.value)}
             placeholder={t("channelMeta.topicPlaceholder")}
             maxLength={200}
             autoFocus
+            className={fieldClass}
           />
-        </label>
+        </SettingsGroup>
 
         {showSlowMode && (
-          <label className="mb-3 block">
-            <span className="mb-1 block text-xs uppercase tracking-wide text-paper-muted">
-              {t("channelMeta.slowMode")}
-            </span>
+          <SettingsGroup
+            title={t("channelMeta.slowMode")}
+            hint={t("channelMeta.slowMode.hint")}
+            hintId={slowModeHintId}
+          >
             <select
               value={String(slowmodeSeconds)}
               aria-describedby={slowModeHintId}
-              className="h-10 w-full rounded-md border border-ink-4 bg-ink px-3 text-sm text-paper outline-none focus:border-signal"
+              className={cn(
+                "w-full border px-3 text-paper outline-none focus-visible:ring-2",
+                fieldClass,
+              )}
               onChange={(e) => setSlowmodeSeconds(Number(e.target.value))}
             >
-              {(SLOWMODE_SECONDS_PRESETS.includes(
-                slowmodeSeconds as (typeof SLOWMODE_SECONDS_PRESETS)[number],
-              )
-                ? SLOWMODE_SECONDS_PRESETS
-                : [slowmodeSeconds, ...SLOWMODE_SECONDS_PRESETS]
-              ).map((seconds) => (
+              {slowModeOptions.map((seconds) => (
                 <option key={seconds} value={seconds}>
                   {t(slowModeOptionKey(seconds), { seconds })}
                 </option>
               ))}
             </select>
-            <span
-              id={slowModeHintId}
-              className="mt-1 block text-xs text-paper-muted"
-            >
-              {t("channelMeta.slowMode.hint")}
-            </span>
-          </label>
+          </SettingsGroup>
         )}
 
-        <label className="mb-2 block">
-          <span className="mb-1 block text-xs uppercase tracking-wide text-paper-muted">
-            {t("channelMeta.icon")}
-          </span>
-          <Input
-            value={imageUrl}
-            onChange={(e) => {
-              setImageUrl(e.target.value);
-              setError(null);
-            }}
-            placeholder={t("channelMeta.iconPlaceholder")}
-            maxLength={500}
-          />
-        </label>
-
-        <div className="flex flex-wrap gap-1.5">
-          {CHANNEL_ICON_PRESETS.map((icon) => (
-            <button
-              key={icon}
-              type="button"
-              aria-label={t("channelMeta.iconPreset", { icon })}
-              aria-pressed={imageUrl === icon}
-              className={`flex h-9 w-9 items-center justify-center rounded-md border text-base ${
-                imageUrl === icon
-                  ? "border-signal bg-signal/10"
-                  : "border-ink-4 bg-ink hover:border-signal/50"
-              }`}
-              onClick={() => setImageUrl(icon)}
-            >
-              {icon}
-            </button>
-          ))}
-          <button
-            type="button"
-            className="rounded-md border border-ink-4 px-2 text-xs text-paper-muted hover:border-signal/50"
-            onClick={() => setImageUrl("")}
-          >
-            {t("channelMeta.iconClear")}
-          </button>
-        </div>
+        <SettingsGroup
+          title={t("channelMeta.icon")}
+          hint={t("channelMeta.iconHint")}
+          hintId={iconHintId}
+          action={
+            imageUrl ? (
+              <button
+                type="button"
+                className="shrink-0 rounded-md px-1.5 py-0.5 text-[13px] font-medium text-signal hover:text-signal-dim"
+                onClick={() => {
+                  setImageUrl("");
+                  setError(null);
+                }}
+              >
+                {t("channelMeta.iconClear")}
+              </button>
+            ) : null
+          }
+        >
+          <div className="flex flex-wrap gap-1.5" aria-describedby={iconHintId}>
+            {CHANNEL_ICON_PRESETS.map((icon) => (
+              <button
+                key={icon}
+                type="button"
+                aria-label={t("channelMeta.iconPreset", { icon })}
+                aria-pressed={imageUrl === icon}
+                className={cn(
+                  "flex h-11 w-11 items-center justify-center rounded-xl bg-ink text-lg transition-shadow",
+                  imageUrl === icon
+                    ? "ring-2 ring-signal"
+                    : "hover:ring-1 hover:ring-ink-4",
+                )}
+                onClick={() => {
+                  setImageUrl(icon);
+                  setError(null);
+                }}
+              >
+                {icon}
+              </button>
+            ))}
+          </div>
+          <label className="mt-3 block">
+            <span className="mb-1.5 block text-[13px] text-paper-muted">
+              {t("channelMeta.iconUrl")}
+            </span>
+            <Input
+              value={
+                CHANNEL_ICON_PRESETS.includes(imageUrl) ? "" : imageUrl
+              }
+              onChange={(e) => {
+                setImageUrl(e.target.value);
+                setError(null);
+              }}
+              placeholder={t("channelMeta.iconPlaceholder")}
+              maxLength={500}
+              className={fieldClass}
+            />
+          </label>
+        </SettingsGroup>
 
         {error && (
-          <p className="mt-3 text-sm text-danger" role="alert">
+          <p className="px-1 text-sm text-danger" role="alert">
             {error}
           </p>
         )}
